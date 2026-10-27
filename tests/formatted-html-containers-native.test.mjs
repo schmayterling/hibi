@@ -179,6 +179,56 @@ test('skipped inline nodes and disabled html keep quote prefixes hidden', {
   }
 })
 
+test('literal lists keep nested quote markers while active quote prefixes hide', {
+  timeout: 90000,
+}, async () => {
+  const doc =
+    '> - literal a\n>   > literal b\n>   > literal c\n\n> 1. literal d\n>    > literal e\n\n> > - nested a\n> >   > nested b\n> >   > nested c\n'
+  await open('literal-lists.md', doc, 'literal a')
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'hibi:markdown-syntax-disabled',
+      JSON.stringify(['core.bullet-lists', 'core.numbered-lists']),
+    ),
+  )
+  try {
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await waitForAsync(
+      page,
+      () =>
+        document.querySelector('.rich-pane .cm-line')?.textContent ===
+        '- literal a',
+    )
+    assert.deepEqual(
+      await page.locator('.rich-pane .cm-line').allTextContents(),
+      [
+        '- literal a',
+        '  > literal b',
+        '  > literal c',
+        '',
+        '1. literal d',
+        '   > literal e',
+        '',
+        '- nested a',
+        '  > nested b',
+        '  > nested c',
+        '',
+      ],
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      doc,
+    )
+  } finally {
+    await page.evaluate(() =>
+      localStorage.removeItem('hibi:markdown-syntax-disabled'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+  }
+})
+
 test('quoted fences still hide their container markers after html parsing changes', {
   timeout: 60000,
 }, async () => {

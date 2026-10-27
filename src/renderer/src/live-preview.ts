@@ -549,8 +549,16 @@ function inline(
             if (!cursor.childAfter(range.from)) continue
             do {
               if (cursor.from > range.to) break
-              if (cursor.name === 'QuoteMark') builtIn(cursor.node, range)
-              else pending.push(cursor.node.cursor(IterMode.IgnoreMounts))
+              if (cursor.name === 'QuoteMark') {
+                const current = doc.lineAt(cursor.from)
+                const depth = line(current.from).containers.filter(
+                  (node) => node.name === 'Blockquote',
+                ).length
+                // Quotes nested in literal containers stay literal too.
+                const before = doc.sliceString(current.from, cursor.from)
+                if ((before.match(/>/g)?.length ?? 0) < depth)
+                  builtIn(cursor.node, range)
+              } else pending.push(cursor.node.cursor(IterMode.IgnoreMounts))
             } while (cursor.nextSibling())
           }
         }

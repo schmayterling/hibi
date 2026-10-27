@@ -171,23 +171,12 @@ test('installed addon addresses source and rich selections by live view', {
     )
   assert.ok((await scroller.evaluate((pane) => pane.scrollTop)) > 100)
 
-  await page.evaluate(() => {
-    window.viewProbe.events.length = 0
-  })
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(() => {
     const view = window.viewProbe.active()
     const result = view && window.viewProbe.selection(view)
     return result?.ok && result.value.editor === 'source'
   })
-  assert.equal(
-    await page.evaluate(() =>
-      window.viewProbe.events.some(
-        ([kind, selection]) => kind === 'selection' && selection === null,
-      ),
-    ),
-    false,
-  )
   const source = await page.evaluate(() => {
     const view = window.viewProbe.active()
     return window.viewProbe.selection(view).value
@@ -237,6 +226,30 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
+
+  await page.evaluate(() => {
+    window.viewProbe.events.length = 0
+  })
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await page.waitForFunction(() => {
+    const view = window.viewProbe.active()
+    const result = view && window.viewProbe.selection(view)
+    return result?.ok && result.value.editor === 'rich'
+  })
+  assert.equal(
+    await page.evaluate(() =>
+      window.viewProbe.events.some(
+        ([kind, selection]) => kind === 'selection' && selection === null,
+      ),
+    ),
+    false,
+  )
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await page.waitForFunction(() => {
+    const view = window.viewProbe.active()
+    const result = view && window.viewProbe.selection(view)
+    return result?.ok && result.value.editor === 'source'
+  })
 
   await open(second)
   await page.waitForFunction((oldViewId) => {

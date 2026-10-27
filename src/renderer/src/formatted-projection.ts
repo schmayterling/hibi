@@ -25,7 +25,7 @@ type Body = {
 }
 /** Whole-source changes from the projection's properties editor. */
 export const formattedProjectionSource = Annotation.define<string>()
-const refreshProjection = StateEffect.define<null>()
+const refreshProjection = StateEffect.define<Body>()
 
 /** Legacy verbatim projections keep their exact source outside the editable body. */
 export function formattedProjection(
@@ -74,8 +74,13 @@ export function formattedProjection(
   const body = StateField.define<Body>({
     create: read,
     update(value, transaction) {
-      if (transaction.effects.some((effect) => effect.is(refreshProjection)))
-        return read(transaction.state)
+      for (const effect of transaction.effects)
+        if (effect.is(refreshProjection))
+          return {
+            ...effect.value,
+            watchStart: effect.value.watchStart || value.watchStart,
+            watchEnd: effect.value.watchEnd || value.watchEnd,
+          }
       if (!transaction.docChanged) return value
       const replacement = transaction.annotation(formattedProjectionSource)
       if (replacement !== undefined) return read(transaction.state, replacement)
@@ -114,7 +119,7 @@ export function formattedProjection(
     EditorView.domEventHandlers({
       focus(_event, view) {
         if (view.state.field(body).stale)
-          view.dispatch({ effects: refreshProjection.of(null) })
+          view.dispatch({ effects: refreshProjection.of(read(view.state)) })
       },
     }),
     formattedPrefix.of((state) => state.field(body).from),
@@ -151,9 +156,11 @@ export function formattedProjection(
         transaction.annotation(formattedProjectionSource) === undefined
       )
         return []
-      const next = transaction.docChanged
+      let next = transaction.docChanged
         ? transaction.state.field(body)
         : current
+      for (const effect of transaction.effects)
+        if (effect.is(refreshProjection)) next = effect.value
       const clamp = (position: number) =>
         Math.max(next.from, Math.min(next.to, position))
       const selection = transaction.newSelection

@@ -374,5 +374,51 @@ testFormattedEngines(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
       '\uFEFF---\r\ntitle: exact\r\n---\r\nEditable without the addon',
     )
+
+    await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+    await page.locator('#addon-citations').click()
+    await clickMenu(app, 'Settings')
+    await page.waitForFunction(() => window.citationsLoaded === true)
+    const plain = join(profile, 'created.md')
+    await writeFile(plain, 'Plain body\r\n')
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, plain)
+    await clickMenu(app, 'Open…')
+    await page.waitForFunction(
+      async () => (await window.hibi.getDocument()).name === 'created.md',
+    )
+    await waitForDocumentEditor(app, page, { name: 'Document editor' })
+    if (t.formattedEngine === 'codemirror')
+      await bodyEditor.evaluate((element) =>
+        element.cmTile.root.view.dispatch({ selection: { anchor: 0 } }),
+      )
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await replaceSourceText(
+      page,
+      page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
+      prefix + 'New body',
+    )
+    await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+    await waitForDocumentEditor(app, page, { name: 'Document editor' })
+    await bodyEditor.focus()
+    if (t.formattedEngine === 'codemirror')
+      assert.ok(
+        await bodyEditor.evaluate(
+          (element, from) =>
+            element.cmTile.root.view.state.selection.main.from >= from,
+          prefix.replaceAll('\r\n', '\n').length,
+        ),
+      )
+    await replaceRichText(page, bodyEditor, 'Protected body')
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      prefix + 'Protected body',
+    )
   },
 )

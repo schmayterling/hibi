@@ -299,7 +299,8 @@ function table(element: Element): string {
 /**
  * Keep only the selection of clipboard HTML. Native clipboards can wrap it in
  * a page whose `StartFragment` and `EndFragment` comments mark it: what lies
- * outside them goes, and the elements around them stay as its context.
+ * outside them goes with the comments, and the elements around them stay as
+ * its context.
  */
 function cropToFragment(body: HTMLElement) {
   const comments = body.ownerDocument.createTreeWalker(
@@ -315,20 +316,32 @@ function cropToFragment(body: HTMLElement) {
         while (at.previousSibling) at.previousSibling.remove()
       for (let at: Node | null = node; at && at !== body; at = at.parentNode)
         while (at.nextSibling) at.nextSibling.remove()
+      start.parentNode?.removeChild(start)
+      node.parentNode?.removeChild(node)
       return
     }
   }
 }
 
-/** Markdown for pasted HTML. */
-export function htmlToMarkdown(html: string, original?: string) {
-  const document = new DOMParser().parseFromString(html, 'text/html')
+/**
+ * Markdown for pasted HTML. The HTML of `copied`, the latest copy, pastes as
+ * the Markdown it was copied from; changed or older copies convert.
+ */
+export function htmlToMarkdown(
+  html: string,
+  copied?: { html: string; markdown: string },
+) {
+  const parser = new DOMParser()
+  const document = parser.parseFromString(html, 'text/html')
   cropToFragment(document.body)
   if (
-    original !== undefined &&
-    document.body.firstElementChild?.hasAttribute('data-hibi-markdown')
+    copied?.html &&
+    document.body.firstElementChild?.hasAttribute('data-hibi-markdown') &&
+    document.body.isEqualNode(
+      parser.parseFromString(copied.html, 'text/html').body,
+    )
   )
-    return original
+    return copied.markdown
   DOMPurify.sanitize(document.body, { ...renderedHtmlOptions, IN_PLACE: true })
   return blocksOf(document.body).join('\n\n')
 }

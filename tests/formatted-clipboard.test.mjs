@@ -435,6 +435,31 @@ test('incidental copy-marker text does not bypass html conversion', {
   await settled(note)
 })
 
+test('only the latest copy pastes as the markdown it was copied from', {
+  timeout: 30000,
+}, async () => {
+  const source = '__bold__ text'
+  try {
+    await setFixture(source)
+    const copy = await clipboardEvent('copy', 0, null)
+    // Its html restores the copied markdown, whatever text comes with it.
+    await clipboardEvent('paste', 0, 0, {
+      'text/html': copy.html,
+      'text/plain': 'other',
+    })
+    await settled(source + source)
+    // A later copy supersedes it, so its html converts like any other.
+    await clipboardEvent('copy', 0, 2)
+    await clipboardEvent('paste', 0, 0, {
+      'text/html': copy.html,
+      'text/plain': copy.text,
+    })
+    await settled(`**bold** text${source}${source}`)
+  } finally {
+    await setFixture(note)
+  }
+})
+
 test('html in a native clipboard envelope pastes only its fragment, in its context', {
   timeout: 30000,
 }, async () => {

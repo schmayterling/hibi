@@ -1219,21 +1219,6 @@ for (const route of ['paste', 'drop']) {
   })
 }
 
-const rawCopyGaps = {
-  inline: {
-    modified:
-      'formatted gap contracts-003: modified inline html copies must fall back without restoring raw markup',
-    superseded:
-      'formatted gap contracts-004: superseded inline html copies must fall back without restoring raw markup',
-  },
-  block: {
-    modified:
-      'formatted gap contracts-005: modified block html copies must fall back without restoring raw markup',
-    superseded:
-      'formatted gap contracts-006: superseded block html copies must fall back without restoring raw markup',
-  },
-}
-
 for (const level of ['inline', 'block']) {
   test('codemirror: modified and superseded ' +
     level +
@@ -1287,21 +1272,13 @@ for (const level of ['inline', 'block']) {
         ? copied.html
         : copied.html.replace('</div>', 'forged</div>')
       await pasteRawData(rich, { ...copied, html })
-      await t.test(
-        stale
-          ? 'superseded copy rejects raw restoration'
-          : 'modified copy rejects raw restoration',
-        { todo: rawCopyGaps[level][stale ? 'superseded' : 'modified'] },
-        async () => {
-          const pasted = (await page.evaluate(() => window.hibi.getDocument()))
-            .markdown
-          assert.ok(
-            !pasted.includes(fragment),
-            'untrusted copy must not restore literal html',
-          )
-          if (!stale) assert.match(pasted, /forged/)
-        },
+      const pasted = (await page.evaluate(() => window.hibi.getDocument()))
+        .markdown
+      assert.ok(
+        !pasted.includes(fragment),
+        'untrusted copy must not restore literal html',
       )
+      if (!stale) assert.match(pasted, /forged/)
       await inert()
       await clickMenu(app, 'Save')
       await waitForAsync(

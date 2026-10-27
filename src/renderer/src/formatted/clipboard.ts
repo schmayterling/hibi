@@ -27,6 +27,11 @@ const copied = 'data-hibi-markdown'
  * clipboard that can add a format to an earlier copy.
  */
 const renderedLimit = 256 * 1024
+/**
+ * The latest copy in this window. Only its HTML pastes as the Markdown it was
+ * copied from: changed or superseded copies convert like other HTML.
+ */
+let lastCopy = { html: '', markdown: '' }
 const pastedSelection = Annotation.define<EditorSelection>()
 
 /** HTML pastes waiting for the converter, with the selection each replaces. */
@@ -36,6 +41,7 @@ function copy(event: ClipboardEvent, view: EditorView, cut: boolean) {
   const data = event.clipboardData
   const { state } = view
   const ranges = state.selection.ranges.filter((range) => !range.empty)
+  lastCopy = { html: '', markdown: '' }
   // A collapsed selection copies whole lines, as in the source view.
   if (!data || !ranges.length) return false
   const markdown = ranges
@@ -51,10 +57,11 @@ function copy(event: ClipboardEvent, view: EditorView, cut: boolean) {
         markdown,
         tabId ? documentRuntime.get(tabId)?.id : undefined,
       )
-      data.setData(
-        'text/html',
-        `<div ${copied}>${DOMPurify.sanitize(html, renderedHtmlOptions)}</div>`,
-      )
+      lastCopy = {
+        html: `<div ${copied}>${DOMPurify.sanitize(html, renderedHtmlOptions)}</div>`,
+        markdown,
+      }
+      data.setData('text/html', lastCopy.html)
     } catch (error) {
       // The text is on the clipboard either way.
       console.error('Copied HTML could not be rendered:', error)
@@ -71,15 +78,17 @@ function copy(event: ClipboardEvent, view: EditorView, cut: boolean) {
 function paste(event: ClipboardEvent, view: EditorView) {
   const data = event.clipboardData
   const html = data?.getData('text/html')
-  // Plain text, and this view's own copies, paste their text as it is.
+  // Plain text pastes as it is.
   if (!html || view.state.readOnly) return false
   event.preventDefault()
   // The clipboard is only readable during the event.
   const text = data?.getData('text/plain') ?? ''
+  // Copies made while the converter loads come after this paste.
+  const own = lastCopy
   const pending = { view, selection: view.state.selection }
   pastes.add(pending)
   void import('../html-markdown')
-    .then(({ htmlToMarkdown }) => htmlToMarkdown(html, text))
+    .then(({ htmlToMarkdown }) => htmlToMarkdown(html, own))
     .catch((error: unknown) => {
       console.error('Pasted HTML could not be converted:', error)
       return ''

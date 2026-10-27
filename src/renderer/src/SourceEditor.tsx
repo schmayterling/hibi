@@ -51,6 +51,7 @@ import {
   lineNumbers,
   placeholder,
 } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
 import { tags } from '@lezer/highlight'
 import {
   useCallback,
@@ -113,8 +114,11 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { definitionOf } from './formatted/footnote-definitions'
 import {
+  followsLink,
   formattedDocument,
+  formattedFollowLink,
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedSyntax } from './formatted-syntax'
@@ -1138,6 +1142,114 @@ export function SourceEditor({
       })
       return true
     }
+    /** Open the link at a position, as a modified click on it does. */
+    const followLink = (
+      view: EditorView,
+      position: number,
+      wikiTarget?: string,
+    ) => {
+      if (
+        !parserOptions.current.markdownMode ||
+        !parserOptions.current.linksEnabled
+      )
+        return false
+      if (wikiTarget !== undefined) {
+        if (!wikiTarget) return false
+        openLink.current(wikiHref(wikiTarget))
+        return true
+      }
+      // The formatted view also follows bare URLs, which it shows as links.
+      const bare = (node: SyntaxNode) =>
+        formatted &&
+        node.name === 'URL' &&
+        !['Link', 'Autolink', 'Image', 'LinkReference'].includes(
+          node.parent?.name ?? '',
+        )
+      // Footnote references there move to their definitions.
+      const links = formatted
+        ? ['Link', 'Autolink', 'FootnoteReference']
+        : ['Link', 'Autolink']
+      const linkAt = (side: -1 | 1) => {
+        let node = tree(view.state).resolveInner(position, side)
+        while (node.parent && !links.includes(node.name))
+          if (bare(node)) return node
+          else node = node.parent
+        return links.includes(node.name) ? node : null
+      }
+      // The formatted view also looks after the position, where a table cell
+      // gives the start of the link clicked in it.
+      const node = linkAt(-1) ?? (formatted ? linkAt(1) : null)
+      if (!node) {
+        let parent = tree(view.state).resolveInner(position, -1)
+        while (parent.parent) {
+          if (/code|frontmatter/i.test(parent.name)) return false
+          parent = parent.parent
+        }
+        const line = view.state.doc.lineAt(position)
+        for (const match of line.text.matchAll(/!?\[\[([^\]\r\n]+)\]\]/g)) {
+          const from = line.from + match.index
+          if (position < from || position > from + match[0].length) continue
+          const target = (match[1] ?? '').split('|')[0]?.trim() ?? ''
+          if (!target) return false
+          openLink.current(wikiHref(target))
+          return true
+        }
+        return false
+      }
+      if (node.name === 'FootnoteReference') {
+        const label = node.getChild('FootnoteLabel')
+        const at =
+          label &&
+          definitionOf(view.state, view.state.sliceDoc(label.from, label.to))
+        if (at == null) return false
+        view.dispatch({
+          selection: { anchor: at },
+          effects: EditorView.scrollIntoView(at, { y: 'start', yMargin: 48 }),
+          userEvent: 'select',
+        })
+        view.focus()
+        return true
+      }
+      const target = markdownLink(
+        view.state.sliceDoc(node.from, node.to),
+        node.name === 'URL',
+      )
+      if (!target) return false
+      const syntax = parserOptions.current.referenceSyntax
+      if ('label' in target) {
+        if (!syntax) return false
+        const pending = activeReference.current
+        activeReference.current = null
+        if (pending?.link) pending.settle({ status: 'stale' })
+        else if (pending) referenceQueue.current.unshift(pending)
+        referenceQueue.current.unshift({
+          version: session.snapshot().version,
+          syntax: { ...syntax },
+          label: target.label,
+          link: true,
+          settle(result) {
+            if (
+              parserOptions.current.linksEnabled &&
+              result.status === 'resolved' &&
+              result.value?.href
+            )
+              openLink.current(result.value.href)
+          },
+        })
+        requestReference()
+        return true
+      }
+      if (!target.href) return false
+      if (activeReference.current?.link) {
+        const pending = activeReference.current
+        activeReference.current = null
+        pending.settle({ status: 'stale' })
+        requestReference()
+        if (!activeReference.current) sourceFind.current?.releaseMetadata()
+      }
+      openLink.current(target.href)
+      return true
+    }
     const editor = new EditorView({
       parent: host.current,
       ...(place
@@ -1240,6 +1352,8 @@ export function SourceEditor({
                   shift: (view) => indentSource(view, indentLess),
                 },
               ]),
+          // Table cells follow their links through the view's own resolution.
+          formatted ? formattedFollowLink.of(followLink) : [],
           EditorView.domEventHandlers({
             keydown(event, view) {
               // CodeMirror arms Tab focus for two seconds after an unhandled Escape;
@@ -1321,7 +1435,7 @@ export function SourceEditor({
             mousedown(event) {
               if (
                 !formatted ||
-                !event.shiftKey ||
+                !followsLink(event) ||
                 !parserOptions.current.markdownMode ||
                 !parserOptions.current.linksEnabled ||
                 !(event.target instanceof Element) ||
@@ -1334,83 +1448,22 @@ export function SourceEditor({
               return true
             },
             click(event, view) {
-              if (
-                !event.shiftKey ||
-                !parserOptions.current.markdownMode ||
-                !parserOptions.current.linksEnabled
-              )
+              if (formatted ? !followsLink(event) : !event.shiftKey)
                 return false
               const position = view.posAtCoords({
                 x: event.clientX,
                 y: event.clientY,
               })
-              if (position == null) return false
-              let node = tree(view.state).resolveInner(position, -1)
-              const lexical = node
-              while (node.parent && !['Link', 'Autolink'].includes(node.name))
-                node = node.parent
-              if (!['Link', 'Autolink'].includes(node.name)) {
-                let parent = lexical
-                while (parent.parent) {
-                  if (/code|frontmatter/i.test(parent.name)) return false
-                  parent = parent.parent
-                }
-                const line = view.state.doc.lineAt(position)
-                for (const match of line.text.matchAll(
-                  /!?\[\[([^\]\r\n]+)\]\]/g,
-                )) {
-                  const from = line.from + match.index
-                  if (position < from || position > from + match[0].length)
-                    continue
-                  event.preventDefault()
-                  const target = (match[1] ?? '').split('|')[0]?.trim() ?? ''
-                  if (!target) return false
-                  openLink.current(wikiHref(target))
-                  return true
-                }
-                return false
-              }
-              const target = markdownLink(
-                view.state.sliceDoc(node.from, node.to),
-              )
-              if (!target) return false
-              const syntax = parserOptions.current.referenceSyntax
-              if ('label' in target) {
-                if (!syntax) return false
-                event.preventDefault()
-                const pending = activeReference.current
-                activeReference.current = null
-                if (pending?.link) pending.settle({ status: 'stale' })
-                else if (pending) referenceQueue.current.unshift(pending)
-                referenceQueue.current.unshift({
-                  version: session.snapshot().version,
-                  syntax: { ...syntax },
-                  label: target.label,
-                  link: true,
-                  settle(result) {
-                    if (
-                      parserOptions.current.linksEnabled &&
-                      result.status === 'resolved' &&
-                      result.value?.href
-                    )
-                      openLink.current(result.value.href)
-                  },
-                })
-                requestReference()
-                return true
-              }
-              if (!target.href) return false
-              if (activeReference.current?.link) {
-                const pending = activeReference.current
-                activeReference.current = null
-                pending.settle({ status: 'stale' })
-                requestReference()
-                if (!activeReference.current)
-                  sourceFind.current?.releaseMetadata()
-              }
-              event.preventDefault()
-              openLink.current(target.href)
-              return true
+              return position != null && followLink(view, position)
+            },
+            // A Ctrl+Cmd-click arrives as a context menu on macOS.
+            contextmenu(event, view) {
+              if (!formatted || !event.ctrlKey || !event.metaKey) return false
+              const position = view.posAtCoords({
+                x: event.clientX,
+                y: event.clientY,
+              })
+              return position != null && followLink(view, position)
             },
           }),
           keymap.of([

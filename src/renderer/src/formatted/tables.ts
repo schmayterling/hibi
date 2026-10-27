@@ -6,7 +6,7 @@ import {
   Transaction,
 } from '@codemirror/state'
 import {
-  type EditorView,
+  EditorView,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -19,7 +19,9 @@ import {
 import {
   type FormattedContribution,
   type FormattedNodeView,
+  followsLink,
   formattedDocument,
+  formattedFollowLink,
   formattedLiteral,
   formattedMarkdown,
   formattedRenderInputs,
@@ -38,6 +40,7 @@ import {
   type CellHost,
   type CellMove,
   cellInput,
+  markStarts,
   padding,
   renderInline,
   textStarts,
@@ -313,6 +316,8 @@ type Rendered = { element: HTMLTableRowElement; text: string }
 
 /** A cell by table line (0 the header, 2 the first row) and column. */
 type Cell = { line: number; column: number }
+/** Where an edited row was when a change deleted it, in the document now, and the edited column. */
+type Lost = { at: number; column: number }
 
 /** The DOM of one table widget: header, then all rows or the window of rows in view, and the cell being edited. */
 class TableView {
@@ -377,6 +382,8 @@ class TableView {
     this.dom.addEventListener('mouseleave', this.leaveHandle)
     this.dom.addEventListener('dblclick', this.reset)
     this.dom.addEventListener('keydown', this.key)
+    this.dom.addEventListener('click', this.followLink)
+    this.dom.addEventListener('contextmenu', this.followLink)
     this.table.append(this.columns, this.body)
     this.dom.append(this.table)
     this.body.append(this.head)
@@ -384,6 +391,11 @@ class TableView {
     const tables = mounted.get(view) ?? new Set()
     mounted.set(view, tables.add(this))
     this.update(widget)
+  }
+
+  /** Cell positions are valid only for the widget's text snapshot. */
+  get current() {
+    return this.widget.doc === this.view.state.doc
   }
 
   get windowed() {
@@ -706,7 +718,8 @@ class TableView {
   }
 
   /** The cell at a position of the formatted view's document, with the offset in its text. */
-  locate(pos: number): Cell & { offset: number | 'end' } {
+  locate(pos: number): (Cell & { offset: number | 'end' }) | null {
+    if (!this.current) return null
     const { widget } = this
     const snapshot = pos - this.range().from + widget.from
     const index = widget.doc.lineAt(snapshot).number - widget.first
@@ -726,8 +739,9 @@ class TableView {
     return { line, column: 0, offset: 'end' }
   }
 
-  /** A cell's text between its delimiters in the document now; null while its row ends before it. */
+  /** A cell's text between its delimiters now; null while stale or its row ends before it. */
   private span({ line, column }: Cell) {
+    if (!this.current) return null
     const { text, from } = this.widget.line(line)
     const span = cellSpan(this.widget.row(line), column, text.length)
     if (!span) return null
@@ -762,6 +776,7 @@ class TableView {
       line < 0 ||
       line >= this.lines ||
       !this.aligned.length ||
+      !this.current ||
       !writable(this.view.state)
     )
       return false
@@ -807,7 +822,9 @@ class TableView {
     const { from: start, to: end } = this.range()
     if (anchor < start || anchor > end || head < start || head > end)
       return false
-    const { line, column, offset } = this.locate(head)
+    const cell = this.locate(head)
+    if (!cell) return false
+    const { line, column, offset } = cell
     const from = anchor === head ? null : this.locate(anchor)
     if (from && (from.line !== line || from.column !== column)) return false
     return this.edit(
@@ -828,6 +845,7 @@ class TableView {
   private host(): CellHost {
     return {
       main: this.view,
+      current: () => this.current,
       span: () => (this.editing ? this.span(this.editing) : null),
       fill: (text) => this.fill(text),
       move: (move) => this.move(move),
@@ -898,6 +916,7 @@ class TableView {
    * text on the line right after a table would be one of its rows.
    */
   leave(after: boolean) {
+    if (!this.current) return
     const { doc } = this.view.state
     const { from, to } = this.range()
     this.stopEditing()
@@ -951,15 +970,17 @@ class TableView {
       )
   }
 
-  /** Follow the edited row through the formatted view's changes; the edited cell when its row was deleted. */
-  map(changes: ChangeDesc): Cell | null {
+  /** Follow the edited row through the formatted view's changes; where it was when they deleted it. */
+  map(changes: ChangeDesc): Lost | null {
     this.track(changes)
     this.handOver(changes)
     const editing = this.editing
     if (!editing) return null
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
-    return editing.to > editing.from ? null : editing
+    return editing.to > editing.from
+      ? null
+      : { at: editing.from, column: editing.column }
   }
 
   /** Offer this table's size state to the view that shows the table after a change. */
@@ -1192,20 +1213,41 @@ class TableView {
   /**
    * After the formatted view changed under a focused cell editor: edit where
    * a selection it set lands, as after undo, or, when the edited row was
-   * deleted, the row now in its place. Elsewhere, editing ends there.
+   * deleted, the row now in its place, in the table there then. Elsewhere,
+   * editing ends there. Focus moved out of the editor meanwhile stays put.
+   * False while the widget's old snapshot must wait for a redraw.
    */
-  follow(lost: Cell | null) {
+  follow(lost: Lost | null): boolean {
     const editing = this.editing
-    if (editing?.editor.view.composing) return
-    if (!this.dom.isConnected) {
-      this.view.focus()
-      return
-    }
+    if (editing?.editor.view.composing) return true
+    const { view } = this
+    const active = view.root.activeElement
+    if (
+      active &&
+      active !== view.dom.ownerDocument.body &&
+      !view.dom.contains(active)
+    )
+      return true
     if (lost) {
-      if (!this.edit(Math.min(lost.line, this.lines - 1), lost.column, 'end'))
-        this.view.focus()
-      return
+      // The row that starts where the deleted one did, or the last row when
+      // the table now ends just before it.
+      for (const table of mounted.get(view) ?? []) {
+        if (!table.current) return false
+        const { from, to } = table.range()
+        if (lost.at < from || lost.at > to + 1) continue
+        const cell = table.locate(Math.min(lost.at, to))
+        if (!cell) return false
+        if (table.edit(cell.line, lost.column, 'end')) return true
+        break
+      }
+      view.focus()
+      return true
     }
+    if (!this.dom.isConnected) {
+      view.focus()
+      return true
+    }
+    if (!this.current) return false
     const { anchor, head } = this.view.state.selection.main
     const span = editing && this.span(editing)
     if (
@@ -1215,12 +1257,13 @@ class TableView {
       Math.max(anchor, head) <= span.to
     ) {
       editing.editor.select(anchor - span.from, head - span.from)
-      return
+      return true
     }
     if (!this.editAt(anchor, head)) {
       this.stopEditing()
       this.view.focus()
     }
+    return true
   }
 
   /** Show the edited cell's text after the formatted view changed it. */
@@ -1237,9 +1280,10 @@ class TableView {
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
   run(id: string): boolean {
-    if (!writable(this.view.state)) return false
+    if (!this.current || !writable(this.view.state)) return false
     const cell =
       this.editing ?? this.locate(this.view.state.selection.main.head)
+    if (!cell) return false
     const source = this.source()
     let result: TableEdit
     switch (id) {
@@ -1625,7 +1669,8 @@ class TableView {
 
   /** A click edits the clicked cell at the clicked place; shift-click extends the selection. */
   private select = (event: MouseEvent) => {
-    if (event.button !== 0 || !writable(this.view.state)) return
+    if (event.button !== 0 || !this.current || !writable(this.view.state))
+      return
     if (this.handle) {
       event.preventDefault()
       this.drag(event)
@@ -1638,6 +1683,8 @@ class TableView {
     const index = row?.getAttribute('data-line')
     if (!cell || !row || index == null) return
     event.preventDefault()
+    // A click that follows a link neither edits nor selects.
+    if (followsLink(event) && target.closest('.hibi-lp-link')) return
     const line = Number(index),
       column = [...row.children].indexOf(cell)
     const source = this.widget.line(line)
@@ -1674,6 +1721,65 @@ class TableView {
     this.edit(line, column, offset)
   }
 
+  /** Shift- or Ctrl+Cmd-click follows a cell's link, as elsewhere in the formatted view. */
+  private followLink = (event: MouseEvent) => {
+    // A Ctrl+Cmd-click arrives as a context menu on macOS.
+    if (
+      event.type === 'contextmenu'
+        ? !event.ctrlKey || !event.metaKey
+        : !followsLink(event)
+    )
+      return
+    const link = (event.target as Element).closest('.hibi-lp-link')
+    const pos = link && this.dom.contains(link) ? this.linkStart(link) : null
+    const wiki = link?.closest('[data-wiki-link]')
+    const raw = wiki?.getAttribute('data-wiki-link')
+    // An active cell still has the table escape before an alias's pipe.
+    const target =
+      this.editing?.editor.view.dom.contains(link) &&
+      wiki?.getAttribute('data-wiki-alias') === 'true' &&
+      raw?.endsWith('\\')
+        ? raw.slice(0, -1).trim()
+        : (raw ?? undefined)
+    if (
+      pos != null &&
+      this.view.state.facet(formattedFollowLink)?.(this.view, pos, target)
+    )
+      event.preventDefault()
+  }
+
+  /** Where the text of a cell's link starts in the document now. */
+  private linkStart(link: Element) {
+    const editing = this.editing
+    if (editing?.editor.view.dom.contains(link)) {
+      const span = this.span(editing)
+      return span && span.from + editing.editor.view.posAtDOM(link)
+    }
+    const cell = link.closest('th, td')
+    const row = cell?.parentElement
+    const index = row?.getAttribute('data-line')
+    if (!cell || !row || index == null) return null
+    let start: number | undefined
+    for (
+      let wrapper: Element | null = link;
+      wrapper && cell.contains(wrapper);
+      wrapper = wrapper.parentElement
+    ) {
+      if (!wrapper.matches('.hibi-lp-link')) continue
+      start = markStarts.get(wrapper)
+      if (start !== undefined) break
+    }
+    const line = Number(index)
+    const source = this.widget.line(line)
+    const range = this.widget.row(line).cells[[...row.children].indexOf(cell)]
+    if (start === undefined || !range) return null
+    const content = cellContent(source.text.slice(range.from, range.to))
+    const offset = content.source[start]
+    return offset === undefined
+      ? null
+      : this.now(source.from + range.from + offset)
+  }
+
   destroy() {
     this.stopEditing()
     if (this.saving) this.save()
@@ -1684,6 +1790,8 @@ class TableView {
     this.dom.removeEventListener('mouseleave', this.leaveHandle)
     this.dom.removeEventListener('dblclick', this.reset)
     this.dom.removeEventListener('keydown', this.key)
+    this.dom.removeEventListener('click', this.followLink)
+    this.dom.removeEventListener('contextmenu', this.followLink)
   }
 }
 
@@ -1704,38 +1812,56 @@ function tableAt(view: EditorView, pos: number, strict = false) {
 const tableEditing = ViewPlugin.fromClass(
   class {
     readonly view: EditorView
+    /** Focused cell editors that follow their tables' changes once tables redraw. */
+    private following: { table: TableView; lost: Lost | null }[] = []
     constructor(view: EditorView) {
       this.view = view
     }
     update(update: ViewUpdate) {
       const tables = mounted.get(this.view) ?? []
-      // A selection set elsewhere, as by undo, moves a focused cell editor;
-      // not one the formatted view read from the editor's DOM selection.
+      // Undo and keyboard navigation move a focused cell editor; ignore
+      // DOM selection echoes from the unfocused formatted view.
       const selected = update.transactions.some(
         (transaction) =>
           transaction.selection &&
           !transaction.annotation(cellInput) &&
-          !transaction.isUserEvent('select'),
+          (transaction.annotation(Transaction.userEvent) !== 'select' ||
+            transaction.scrollIntoView ||
+            update.view.hasFocus),
       )
+      // Until they follow, deleted rows' places move with every change, and
+      // a selection set since takes their place.
+      for (const pending of this.following)
+        if (selected) pending.lost = null
+        else if (pending.lost && update.docChanged)
+          pending.lost.at = update.changes.mapPos(pending.lost.at, 1)
       for (const table of tables) {
         const focused = table.focused
         // Before tables redraw: the edited rows where they are now.
         const lost = update.docChanged ? table.map(update.changes) : null
         if (focused && (selected || lost))
-          queueMicrotask(() => table.follow(selected ? null : lost))
+          this.following.push({ table, lost: selected ? null : lost })
       }
       if (update.geometryChanged || update.viewportChanged)
         for (const table of tables) table.scrolled()
       if (writable(update.startState) !== writable(update.state))
         for (const table of tables) table.reconfigure()
-      const { main } = update.state.selection
-      if (
-        update.view.hasFocus &&
-        (update.selectionSet || update.focusChanged)
-      ) {
-        const table = tableAt(update.view, main.head, true)
-        if (table) queueMicrotask(() => table.editAt(main.anchor, main.head))
-      }
+      // The cell at the selection is found once tables have redrawn, from the
+      // selection then: until the redraw, tables are where they were before
+      // this update, and it may remove them.
+      if (update.view.hasFocus || this.following.length)
+        queueMicrotask(() => {
+          const following = this.following
+          this.following = []
+          // Old snapshots wait for the next syntax/layout update to retry.
+          for (const pending of following)
+            if (!pending.table.follow(pending.lost))
+              this.following.push(pending)
+          const { view } = this
+          const { main } = view.state.selection
+          if (view.hasFocus)
+            tableAt(view, main.head, true)?.editAt(main.anchor, main.head)
+        })
     }
   },
   {
@@ -1829,6 +1955,18 @@ export const contribution: FormattedContribution = {
   ],
   extension: [
     tableEditing,
+    EditorView.inputHandler.of((view) => {
+      // Mapped widget bounds are current even when its snapshot's length is old.
+      const { node, offset } = view.domAtPos(view.state.selection.main.head)
+      for (const table of mounted.get(view) ?? [])
+        if (
+          !table.current &&
+          (node.childNodes[offset] === table.dom ||
+            node.childNodes[offset - 1] === table.dom)
+        )
+          return true
+      return false
+    }),
     tableActions.of({
       active: (view) => !!tableAt(view, view.state.selection.main.head),
       run: (view, id) =>

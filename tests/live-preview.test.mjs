@@ -1136,6 +1136,79 @@ test('formatting in a giant list stays drawn while an edit inside its window is 
   assert.ok(split.settling, JSON.stringify(split))
 })
 
+test('heading names and outer link wrappers stay mapped through a pending reparse', {
+  timeout: 90000,
+}, async () => {
+  const doc = Array.from(
+    { length: 20000 },
+    (_, i) => `- ## pre[**fix ${i}**](b.md)ed`,
+  ).join('\n')
+  const cdp = await harness.context().newCDPSession(harness)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(
+      doc,
+      { width: 800, height: 600 },
+      {
+        slice: 0,
+        editable: true,
+        history: true,
+      },
+    )
+    preview.scrollTo(preview.view().state.doc.line(10000).from)
+  }, doc)
+  await harness
+    .getByRole('heading', { name: 'prefix 9999ed', exact: true })
+    .waitFor()
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  const pending = await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    const line = view.state.doc.line(10000)
+    const at = line.from + line.text.indexOf('fix') + 3
+    view.focus()
+    view.dispatch({ selection: { anchor: at } })
+    view.dispatch({ changes: { from: at, insert: 'x' } })
+    const headings = [
+      ...view.contentDOM.querySelectorAll('[role="heading"]'),
+    ].filter((node) => node.textContent.includes('fixx 9999'))
+    return {
+      settling: preview.settling(),
+      names: headings.map((node) => node.getAttribute('aria-label')),
+      links: headings.map(
+        (node) => node.querySelectorAll('[role="link"]').length,
+      ),
+    }
+  })
+  assert.ok(pending.settling, JSON.stringify(pending))
+  assert.deepEqual(pending.names, ['prefixx 9999ed'])
+  assert.deepEqual(pending.links, [1])
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  assert.equal(
+    await harness
+      .getByRole('heading', { name: 'prefixx 9999ed', exact: true })
+      .getByRole('link')
+      .count(),
+    1,
+  )
+  assert.ok(await harness.evaluate(() => window.livePreview.undo()))
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  assert.equal(
+    await harness.evaluate(() =>
+      window.livePreview.view().state.doc.toString(),
+    ),
+    doc,
+  )
+  assert.equal(
+    await harness
+      .getByRole('heading', { name: 'prefix 9999ed', exact: true })
+      .getByRole('link')
+      .count(),
+    1,
+  )
+})
+
 test('ordered list numbers in a 20,000-item list come from cached item offsets', {
   timeout: 90000,
 }, async () => {

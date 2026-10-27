@@ -85,10 +85,11 @@ async function hostEditor(t, engine) {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!findPreview()) await setTimeout(30)
   const preview = findPreview()
+  const editor = preview.locator(editorSelector[engine])
   await preview
     .getByRole('textbox', { name: 'Document editor', exact: true })
+    .and(editor)
     .waitFor()
-  const editor = preview.locator(editorSelector[engine])
   assert.equal(await editor.count(), 1, 'the selected formatted view')
   assert.equal(await preview.locator('.editor-toolbar').count(), 1)
   // Mermaid also opens its own diagram files, but Markdown notes still start it.
@@ -287,14 +288,12 @@ async function recoverAddons(t, engine) {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!find()) await setTimeout(30)
   const kept = find()
+  const editor = kept.locator(editorSelector[engine])
   await kept
     .getByRole('textbox', { name: 'Document editor', exact: true })
+    .and(editor)
     .waitFor()
-  assert.equal(
-    await kept.locator(editorSelector[engine]).count(),
-    1,
-    'the selected formatted view',
-  )
+  assert.equal(await editor.count(), 1, 'the selected formatted view')
   const extras = kept.locator(
     'style[data-addon-style="text-extras.text-extras"]',
   )

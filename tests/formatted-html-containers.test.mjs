@@ -5,6 +5,7 @@ import { parser } from '@lezer/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { boundaryParser } from '../src/shared/markdown-boundary-syntax.ts'
+import { ContainerHTML } from '../src/shared/markdown-html-syntax.ts'
 
 const html = '<div>\nhtml line\n</div>'
 const quote = (text) =>
@@ -94,6 +95,45 @@ test('raw html terminators keep their semantics, including blank lines and conta
     worker().parse(escaped).toString(),
     parser.parse(escaped).toString(),
   )
+})
+
+test('html opener classification skips inline scans in wide quoted paragraphs', () => {
+  const measure = (mib) => {
+    const line = {
+      next: 60,
+      indent: 0,
+      baseIndent: 0,
+      pos: 2,
+      text:
+        '> <span>' +
+        'text '.repeat(Math.ceil((mib * 1024 * 1024) / 5)) +
+        '</span>',
+    }
+    const cx = {
+      depth: 2,
+      parentType: (depth) => ({
+        name: depth === 1 ? 'Blockquote' : 'Document',
+      }),
+    }
+    const original = String.prototype.charCodeAt
+    let calls = 0
+    try {
+      String.prototype.charCodeAt = function (...args) {
+        if (++calls > 4096)
+          throw new Error('html opener classification walked inline content')
+        return original.apply(this, args)
+      }
+      assert.equal(ContainerHTML.parseBlock[0].parse(cx, line), false)
+    } finally {
+      String.prototype.charCodeAt = original
+    }
+    return calls
+  }
+  const small = measure(2),
+    large = measure(50)
+  console.log(JSON.stringify({ classificationCharacters: { small, large } }))
+  assert.equal(large, small)
+  assert.ok(large < 4096)
 })
 
 test('a 50 mib quoted html block advances through bounded source ranges', () => {

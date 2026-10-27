@@ -1,5 +1,9 @@
 import { type MarkdownConfig, parser } from '@lezer/markdown'
 
+const blockParser = Object.assign(parser.configure({}), {
+  parseInline: () => [],
+})
+
 /**
  * CommonMark's blank-line HTML blocks end on blank container content too.
  * Keep the upstream opener grammar and the explicit-terminator block kinds.
@@ -11,11 +15,18 @@ export const ContainerHTML: MarkdownConfig = {
       before: 'HTMLBlock',
       parse(cx, line) {
         if (line.next !== 60 || line.indent >= line.baseIndent + 4) return false
+        let quoted = false
+        for (let depth = 0; depth < cx.depth; depth++)
+          if (cx.parentType(depth).name === 'Blockquote') {
+            quoted = true
+            break
+          }
+        if (!quoted) return false
         const first = line.text.slice(line.pos)
         if (/^<(?:[!?]|(?:script|pre|style|textarea)(?:\s|>|$))/i.test(first))
           return false
         // Ask the base grammar whether a blank line ends this opener.
-        const block = parser.parse(`${first}\n\nx`).topNode.firstChild
+        const block = blockParser.parse(`${first}\n\nx`).topNode.firstChild
         if (block?.name !== 'HTMLBlock' || block.to > first.length) return false
         const from = cx.lineStart + line.pos
         let to = cx.lineStart + line.text.length

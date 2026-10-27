@@ -33,6 +33,7 @@ import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
   blockBreak,
+  codeIndent,
   deleteBackward,
   deleteForward,
   exitBlock,
@@ -1444,6 +1445,7 @@ export function livePreview(
     formattedTree.of(syntax.tree),
     follow,
     syntax.extension,
+    codeIndent,
     focused,
     layout,
     EditorView.decorations.compute([layout, 'selection'], (state) =>

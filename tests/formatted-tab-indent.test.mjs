@@ -12,7 +12,10 @@ for (const engine of ['tiptap', 'codemirror'])
   }, async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-tab-indent-'))
     const file = join(profile, 'code.md')
-    const source = '```\n  x\ny\n```'
+    const source =
+      engine === 'codemirror'
+        ? `\`\`\`\n  x\n${'word '.repeat(51).concat('\n').repeat(1024)}y\n\`\`\``
+        : '```\n  x\ny\n```'
     await writeFile(file, source)
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`, file],
@@ -25,7 +28,9 @@ for (const engine of ['tiptap', 'codemirror'])
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await waitForDocumentEditor(app, page)
+    await waitForDocumentEditor(app, page, {
+      name: engine === 'codemirror' ? 'Markdown editor' : 'Document editor',
+    })
     if (engine === 'codemirror') {
       await page.evaluate(() =>
         localStorage.setItem('hibi:formatted-engine', 'codemirror'),
@@ -51,12 +56,13 @@ for (const engine of ['tiptap', 'codemirror'])
         text,
       )
     // The caret before the code's `y`, at the start of its line.
-    const place = () =>
-      editor.evaluate((element) => {
+    const place = async () => {
+      await editor.evaluate((element) => {
         if (element.matches('.cm-content')) {
           const view = element.cmTile.root.view
           view.dispatch({
             selection: { anchor: view.state.doc.toString().lastIndexOf('y') },
+            scrollIntoView: true,
           })
           view.focus()
           return
@@ -70,15 +76,22 @@ for (const engine of ['tiptap', 'codemirror'])
         editor.commands.setTextSelection(at)
         editor.view.focus()
       })
+      if (engine === 'codemirror')
+        await waitForAsync(page, () =>
+          [...document.querySelectorAll('.cm-line.hibi-lp-codeblock')].some(
+            (line) => line.textContent.trim() === 'y',
+          ),
+        )
+    }
     await t.test('code indents with its own unit', async () => {
       await place()
       await page.keyboard.press('Tab')
-      await markdown('```\n  x\n  y\n```')
+      await markdown(source.replace('\ny\n', '\n  y\n'))
       await page.keyboard.press('Tab')
-      await markdown('```\n  x\n    y\n```')
+      await markdown(source.replace('\ny\n', '\n    y\n'))
       // Shift-Tab takes off one unit of the code's indentation.
       await page.keyboard.press('Shift+Tab')
-      await markdown('```\n  x\n  y\n```')
+      await markdown(source.replace('\ny\n', '\n  y\n'))
       await page.keyboard.press('Shift+Tab')
       await markdown(source)
     })

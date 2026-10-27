@@ -1,10 +1,14 @@
 import {
+  countColumn,
   EditorSelection,
   type EditorState,
   findClusterBreak,
+  findColumn,
   type Line,
   type RangeSet,
   type RangeValue,
+  StateEffect,
+  StateField,
   type TransactionSpec,
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
@@ -363,14 +367,78 @@ function delimiterLine(state: EditorState, tree: Tree, line: Line) {
   )
 }
 
-/** Code indents like its first indented line, else with the preferred unit, as in the rich editor. */
-function codeIndentUnit(state: EditorState, code: SyntaxNode) {
-  for (let child = code.firstChild; child; child = child.nextSibling)
-    if (child.name === 'CodeText') {
-      const unit = detectIndentUnit(state.sliceDoc(child.from, child.to))
-      if (unit) return unit
+type CodeIndent = {
+  from: number
+  to: number
+  prefix: string
+  first: { from: number; to: number; unit: string } | null
+}
+const rememberCodeIndent = StateEffect.define<CodeIndent>()
+
+/** One active code block's first indent, independent of its parsed fragments. */
+export const codeIndent = StateField.define<CodeIndent | null>({
+  create: () => null,
+  update(found, { changes, docChanged, effects }) {
+    for (const effect of effects)
+      if (effect.is(rememberCodeIndent)) found = effect.value
+    if (!found || !docChanged) return found
+    // Earlier code or container-prefix edits can change which indent is first.
+    if (changes.touchesRange(found.from, found.first?.to ?? found.to))
+      return null
+    return {
+      ...found,
+      from: changes.mapPos(found.from),
+      to: changes.mapPos(found.to),
+      first: found.first && {
+        ...found.first,
+        from: changes.mapPos(found.first.from),
+        to: changes.mapPos(found.first.to),
+      },
     }
-  return tabIndent.snapshot().unit
+  },
+})
+
+/** Code indents like its first indented source line, even outside the parsed chunk. */
+function codeIndentUnit(state: EditorState, code: SyntaxNode) {
+  const opening = state.doc.lineAt(code.from)
+  let quotes = 0
+  for (let parent = code.parent; parent; parent = parent.parent)
+    if (parent.name === 'Blockquote') quotes++
+  const prefix = `${code.name}:${quotes}`
+  let found = state.field(codeIndent, false)
+  if (
+    found?.from !== opening.from ||
+    found.to !== code.to ||
+    found.prefix !== prefix
+  ) {
+    const fenced = code.name === 'FencedCode'
+    const closing = code.lastChild
+    const end =
+      fenced && closing?.name === 'CodeMark' && closing.from > opening.to
+        ? state.doc.lineAt(closing.from).from - 1
+        : code.to
+    const markers = new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`)
+    found = { from: opening.from, to: code.to, prefix, first: null }
+    for (let pos = fenced ? opening.to + 1 : opening.from; pos <= end; ) {
+      const line = state.doc.lineAt(pos)
+      let start = markers.exec(line.text)?.[0].length ?? 0
+      if (!fenced)
+        start =
+          line.number === opening.number
+            ? code.from - line.from
+            : findColumn(line.text, countColumn(line.text, 4, start) + 4, 4)
+      const unit = detectIndentUnit(line.text.slice(start))
+      if (unit) {
+        found.first = { from: line.from, to: line.to, unit }
+        break
+      }
+      pos = line.to + 1
+    }
+  }
+  return {
+    unit: found.first?.unit ?? tabIndent.snapshot().unit,
+    effects: rememberCodeIndent.of(found),
+  }
 }
 
 /** Where a line's visible content starts: after hidden prefixes such as markers. */
@@ -626,9 +694,10 @@ export function indent(
   }
   const code = around(tree, range.head, ['FencedCode', 'CodeBlock'])
   if (code) {
-    const unit = codeIndentUnit(state, code)
+    const { unit, effects } = codeIndentUnit(state, code)
     if (range.empty && !outdent)
       return {
+        effects,
         changes: { from: range.from, insert: unit },
         selection: EditorSelection.cursor(range.from + unit.length),
         userEvent: 'input.indent',
@@ -670,6 +739,7 @@ export function indent(
     }
     const set = state.changes(changes)
     return {
+      effects,
       changes: set,
       selection: state.selection.map(set, 1),
       userEvent: outdent ? 'delete.dedent' : 'input.indent',

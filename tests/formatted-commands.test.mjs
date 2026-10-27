@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
+import { Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import {
   blockBreak,
+  codeIndent,
   deleteBackward,
   deleteForward,
   exitBlock,
@@ -118,6 +120,94 @@ test('tab nests and outdents list items, indents code and keeps paragraphs out o
     run('|para', (state, tree, hidden) => indent(state, tree, false, hidden)),
     '|para',
   )
+})
+
+test('code indentation survives partial trees, prefix edits and repeated tail keys', () => {
+  const source = `intro\n\n~~~\n  x\n${'word '.repeat(51).concat('\n').repeat(1024)}y\n~~~`
+  let state = EditorState.create({
+    doc: source,
+    selection: { anchor: source.lastIndexOf('y') },
+    extensions: codeIndent,
+  })
+  const press = (unit) => {
+    const tree = markdown.parse(state.doc.toString())
+    const code = tree.topNode.getChild('FencedCode')
+    const opening = code.firstChild,
+      closing = code.lastChild
+    const tail = state.doc.lineAt(state.selection.main.head)
+    // Match a chunked tree whose first CodeText starts near the block's tail.
+    const fragment = new Tree(
+      code.type,
+      [
+        new Tree(opening.type, [], [], opening.to - opening.from),
+        new Tree(code.getChild('CodeText').type, [], [], tail.to - tail.from),
+        new Tree(closing.type, [], [], closing.to - closing.from),
+      ],
+      [0, tail.from - code.from, closing.from - code.from],
+      code.to - code.from,
+    )
+    const partial = new Tree(tree.type, [fragment], [code.from], tree.length)
+    const { head } = state.selection.main
+    const slice = state.sliceDoc.bind(state)
+    const lineAt = state.doc.lineAt.bind(state.doc)
+    let lines = 0
+    Object.defineProperty(state, 'sliceDoc', {
+      configurable: true,
+      value(from, to) {
+        assert.ok(to - from < 16384, 'no whole-block slice for a key')
+        return slice(from, to)
+      },
+    })
+    Object.defineProperty(state.doc, 'lineAt', {
+      configurable: true,
+      value(pos) {
+        lines++
+        return lineAt(pos)
+      },
+    })
+    let spec
+    try {
+      spec = indent(state, partial, false, Decoration.none)
+    } finally {
+      delete state.sliceDoc
+      delete state.doc.lineAt
+    }
+    assert.ok(lines < 10, 'tail keys must not rescan the code block')
+    state = state.update(spec).state
+    assert.equal(state.doc.sliceString(head, head + unit.length), unit)
+  }
+  press('  ')
+  press('  ')
+  press('  ')
+  const before = state.field(codeIndent).first.from
+  // An edit before the block maps its metadata; the partial tree then moves too.
+  state = state.update({ changes: { from: 0, insert: 'before\n' } }).state
+  assert.equal(state.field(codeIndent).first.from, before + 7)
+  press('  ')
+  const first = state.field(codeIndent).first.from
+  state = state.update({
+    changes: { from: first, to: first + 2, insert: '    ' },
+  }).state
+  assert.equal(state.field(codeIndent), null)
+  press('    ')
+  state = state.update({
+    changes: { from: first, insert: '\tearlier\n' },
+  }).state
+  press('\t')
+})
+
+test('code indentation strips quote and indented-code prefixes', () => {
+  const tab = (state, tree, hidden) => indent(state, tree, false, hidden)
+  assert.equal(
+    run('> ~~~\n>   x\n> |y\n> ~~~', tab),
+    '> ~~~\n>   x\n>   |y\n> ~~~',
+  )
+  assert.equal(
+    run('> > ~~~\n> >   x\n> > |y\n> > ~~~', tab),
+    '> > ~~~\n> >   x\n> >   |y\n> > ~~~',
+  )
+  assert.equal(run('    x\n      |y', tab), '    x\n        |y')
+  assert.equal(run('>     x\n>       |y', tab), '>     x\n>         |y')
 })
 
 test('typing on the blank line between two blocks starts its own paragraph', () => {

@@ -1,5 +1,22 @@
 import { isMap, parseDocument } from 'yaml'
 
+/** interactive checks leave oversized prefixes as markdown instead of parsing them as yaml. */
+export const maximumFrontmatterUnits = 256 * 1024
+
+export const frontmatterProbe = { lines: 0, parses: 0, search: 1 << 16 }
+
+/** recognition needs the mapping shape, not duplicate-key diagnostics. */
+export function isFrontmatterMapping(yaml: string) {
+  frontmatterProbe.parses++
+  try {
+    return isMap(
+      parseDocument(yaml, { uniqueKeys: false, prettyErrors: false }).contents,
+    )
+  } catch {
+    return false
+  }
+}
+
 /** A divider alone is Markdown. Frontmatter needs a closed metadata mapping. */
 export function readFrontmatter(source: string) {
   const opening = /^(?:\uFEFF)?---[ \t]*(\r?\n)/.exec(source)
@@ -12,12 +29,8 @@ export function readFrontmatter(source: string) {
     opening[0].length,
     opening[0].length + closing.index,
   )
-  try {
-    // Keep malformed mappings recognizable so the addon can offer YAML repair.
-    if (!isMap(parseDocument(yaml).contents)) return null
-  } catch {
-    return null
-  }
+  // Keep malformed mappings recognizable so the addon can offer YAML repair.
+  if (!isFrontmatterMapping(yaml)) return null
   const end = opening[0].length + closing.index + closing[0].length
   const spacing = /^(?:[ \t]*\r?\n)*/.exec(source.slice(end))?.[0] ?? ''
   const prefix = source.slice(0, end + spacing.length)

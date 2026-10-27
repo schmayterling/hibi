@@ -1,68 +1,89 @@
 import { StateEffect, StateField, type Text } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view'
-import { readFrontmatter } from '../../shared/frontmatter.ts'
+import {
+  frontmatterProbe,
+  maximumFrontmatterUnits,
+} from '../../shared/frontmatter.ts'
+import {
+  type FrontmatterBounds,
+  type FrontmatterRead,
+  keepUnclosedFrontmatterRead,
+  readSourceFrontmatter,
+} from '../../shared/source-frontmatter.ts'
+import type { RawEdit } from '../../shared/source-operations.ts'
 import { formattedPrefix } from './formatted-contributions.ts'
 
-/** The first line, after a byte order mark the source keeps. */
-const opening = /^﻿?---[ \t]*$/
-const closing = /^(?:---|\.\.\.)[ \t]*$/
+export { frontmatterProbe }
 
-/** Lines read, YAML parses and the characters one search reads, for scale tests. */
-export const frontmatterProbe = { lines: 0, parses: 0, search: 1 << 16 }
-
-/**
- * Search about `size` characters of lines from line start `from` for a
- * closing line: its end, or 0 and the end of the last line read.
- */
-function search(doc: Text, from: number, size: number) {
-  let at = from
-  for (
-    const iter = doc.iterLines(doc.lineAt(from).number);
-    !iter.next().done;
-  ) {
-    frontmatterProbe.lines++
-    const end = at + iter.value.length
-    if (closing.test(iter.value)) return { closer: end, searched: end }
-    at = end + 1
-    if (at - from >= size) return { closer: 0, searched: end }
-  }
-  return { closer: 0, searched: doc.length }
-}
-
-/** The closing line's end when the lines before it are frontmatter as the properties read it: a metadata mapping. */
-function recognized(doc: Text, closer: number) {
-  if (!closer) return 0
-  frontmatterProbe.parses++
-  return readFrontmatter(doc.sliceString(0, closer)) ? closer : 0
-}
-
-type Bounds = {
-  /** Line 1 opens frontmatter. */
-  open: boolean
-  /** The end of the first closing line after the opening one, or 0. */
-  closer: number
-  /** Without a closing line, lines are read up to this one's end. */
+type Reading = {
+  work?: Generator<void, FrontmatterRead> | undefined
+  read?: FrontmatterRead
   searched: number
-  /** Where frontmatter ends: the closing line's end when it closes a metadata mapping, else 0. */
+}
+type Bounds = {
+  open: boolean
+  closer: number
+  searched: number
   end: number
+  prefix: number
+  oversized: boolean
+  complete: boolean
+  read?: FrontmatterRead
+}
+const readings = new WeakMap<Text, Reading>()
+
+function boundsOf(doc: Text, steps: number, known?: FrontmatterBounds): Bounds {
+  let reading = readings.get(doc)
+  if (!reading) {
+    reading = { searched: 0 }
+    readings.set(doc, reading)
+    const progress = reading
+    reading.work = readSourceFrontmatter(
+      {
+        utf16Length: doc.length,
+        sliceRaw: (from, to) => {
+          progress.searched = Math.max(progress.searched, to)
+          return doc.sliceString(from, to)
+        },
+      },
+      known,
+    )
+  }
+  for (let step = 0; step < steps && reading.work; step++) {
+    const next = reading.work.next()
+    if (next.done) {
+      reading.read = next.value
+      reading.work = undefined
+    }
+  }
+  const read = reading.read
+  const closedTo = read?.closedTo ?? 0
+  const closer =
+    closedTo && doc.sliceString(closedTo - 1, closedTo) === '\n'
+      ? closedTo - 1
+      : closedTo
+  return {
+    open: read?.open ?? true,
+    closer,
+    searched: read?.inspectedTo ?? reading.searched,
+    end:
+      read?.bounds &&
+      (closer === doc.length || doc.sliceString(closer, closer + 1) === '\n')
+        ? closer
+        : 0,
+    prefix: read?.bounds?.contentFrom ?? 0,
+    oversized: read?.oversized ?? false,
+    complete: !!read,
+    ...(read ? { read } : {}),
+  }
 }
 
-const none: Bounds = { open: false, closer: 0, searched: 0, end: 0 }
-
-function boundsOf(doc: Text): Bounds {
-  if (doc.lines < 2 || !opening.test(doc.line(1).text)) return none
-  const { closer, searched } = search(
-    doc,
-    doc.line(2).from,
-    frontmatterProbe.search,
-  )
-  return { open: true, closer, searched, end: recognized(doc, closer) }
+/** standalone consumers share the same bounded read as installed fields. */
+export function readFrontmatterBounds(doc: Text) {
+  return boundsOf(doc, Number.POSITIVE_INFINITY)
 }
 
-/** Reads on for a closing line; views dispatch it in idle time. */
 export const frontmatterSearch = StateEffect.define<null>()
-
-/** Searches the rest of a long note for a closing line in idle slices. */
 const searcher = ViewPlugin.fromClass(
   class {
     private idle = 0
@@ -75,15 +96,7 @@ const searcher = ViewPlugin.fromClass(
       this.schedule()
     }
     schedule() {
-      const { open, closer, searched } =
-        this.view.state.field(frontmatterBounds)
-      if (
-        this.idle ||
-        !open ||
-        closer ||
-        searched >= this.view.state.doc.length
-      )
-        return
+      if (this.idle || this.view.state.field(frontmatterBounds).complete) return
       this.idle = requestIdleCallback(() => {
         this.idle = 0
         this.view.dispatch({ effects: frontmatterSearch.of(null) })
@@ -95,111 +108,65 @@ const searcher = ViewPlugin.fromClass(
   },
 )
 
-/**
- * The end of the first closing line after an opening one, and where
- * frontmatter ends: there when the lines between are a metadata mapping,
- * else 0. Opening a note and each idle slice read about one search's worth
- * of lines, so a divider at the top of a long note never reads it all at
- * once. Edits after the closing line keep both; without one, only edited
- * lines that were read can close it.
- */
+/** one cooperative, normalized prefix read serves formatted, source and tag views. */
 export const frontmatterBounds = StateField.define<Bounds>({
-  create: (state) => boundsOf(state.doc),
+  create: (state) => boundsOf(state.doc, frontmatterProbe.search / 4096),
   update(value, transaction) {
     const { doc } = transaction.state
-    let next = value
     if (transaction.docChanged) {
-      if (doc.lines < 2 || !opening.test(doc.line(1).text)) return none
-      let first = Number.POSITIVE_INFINITY
-      transaction.changes.iterChangedRanges((_fromA, _toA, from) => {
-        first = Math.min(first, from)
+      const read = value.read
+      let reusable = !!read
+      let bodyOnly =
+        !!read?.bounds &&
+        transaction.startState.doc.sliceString(
+          read.bounds.headerTo - 1,
+          read.bounds.headerTo,
+        ) === '\n'
+      transaction.changes.iterChangedRanges((from) => {
+        if (read?.bounds && from < read.bounds.headerTo) bodyOnly = false
+        if (
+          read &&
+          (from < read.inspectedTo ||
+            (read.dependsOnEnd && from === read.inspectedTo))
+        )
+          reusable = false
       })
-      if (value.closer && first > value.closer) {
-        const closer = transaction.changes.mapPos(value.closer)
-        next = { ...value, closer, searched: closer, end: value.end && closer }
-      } else if (!value.open || first <= doc.line(1).to)
-        // An edit to the opening line may open or end frontmatter.
-        next = boundsOf(doc)
-      else if (value.closer) {
-        // The lines before an edit hold no closing line, so the old one
-        // holds unless an edit reaches it or an edited line closes earlier.
-        const old = transaction.startState.doc.lineAt(value.closer)
-        let reached = false
-        transaction.changes.iterChangedRanges((fromA, toA) => {
-          if (toA >= old.from && fromA <= old.to) reached = true
+      if (reusable && read) {
+        readings.set(doc, { read, searched: read.inspectedTo })
+        return value
+      }
+      if (bodyOnly && read?.bounds)
+        return boundsOf(doc, Number.POSITIVE_INFINITY, read.bounds)
+      if (read && (read.unclosed || read.oversized)) {
+        const changes: RawEdit[] = []
+        let bounded = true
+        transaction.changes.iterChanges((from, to, _fromB, _toB, insert) => {
+          if (insert.length > maximumFrontmatterUnits) bounded = false
+          else changes.push({ from, to, insert: insert.toString() })
         })
-        if (reached) {
-          const found = search(
-            doc,
-            doc.lineAt(first).from,
-            frontmatterProbe.search,
-          )
-          next = { open: true, ...found, end: recognized(doc, found.closer) }
-        } else {
-          let closer = transaction.changes.mapPos(value.closer)
-          transaction.changes.iterChangedRanges((_fromA, _toA, from, to) => {
-            const stop = doc.lineAt(to).number
-            for (
-              let number = Math.max(2, doc.lineAt(from).number);
-              number <= stop;
-              number++
-            ) {
-              frontmatterProbe.lines++
-              const line = doc.line(number)
-              if (closing.test(line.text)) {
-                closer = Math.min(closer, line.to)
-                break
-              }
-            }
+        const kept =
+          bounded &&
+          keepUnclosedFrontmatterRead(read, changes, {
+            utf16Length: doc.length,
+            lineCount: doc.lines,
+            lineAt: (at) => doc.lineAt(at),
+            sliceRaw: (from, to) => doc.sliceString(from, to),
           })
-          next = {
-            open: true,
-            closer,
-            searched: closer,
-            end: recognized(doc, closer),
-          }
-        }
-      } else {
-        const searched = transaction.changes.mapPos(value.searched, -1)
-        let closer = 0
-        transaction.changes.iterChangedRanges((_fromA, _toA, from, to) => {
-          if (from > searched) return
-          const stop = doc.lineAt(Math.min(to, searched)).number
-          for (
-            let number = Math.max(2, doc.lineAt(from).number);
-            number <= stop;
-            number++
-          ) {
-            frontmatterProbe.lines++
-            const line = doc.line(number)
-            if (closing.test(line.text)) {
-              if (!closer || line.to < closer) closer = line.to
-              break
-            }
-          }
-        })
-        next = {
-          open: true,
-          closer,
-          searched: closer || searched,
-          end: recognized(doc, closer),
+        if (kept) {
+          readings.set(doc, { read: kept, searched: kept.inspectedTo })
+          return boundsOf(doc, 0)
         }
       }
-    }
-    if (
-      next.open &&
-      !next.closer &&
-      next.searched < doc.length &&
-      transaction.effects.some((effect) => effect.is(frontmatterSearch))
-    ) {
-      const { closer, searched } = search(
+      return boundsOf(
         doc,
-        next.searched + 1,
-        frontmatterProbe.search,
+        value.complete
+          ? Number.POSITIVE_INFINITY
+          : frontmatterProbe.search / 4096,
       )
-      next = { open: true, closer, searched, end: recognized(doc, closer) }
     }
-    return next
+    return transaction.effects.some((effect) => effect.is(frontmatterSearch))
+      ? boundsOf(doc, frontmatterProbe.search / 4096)
+      : value
   },
   provide: () => searcher,
 })

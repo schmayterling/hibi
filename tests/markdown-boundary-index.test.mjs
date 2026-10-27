@@ -451,6 +451,19 @@ test('safe inline styles and null prototypes preserve catalog order', () => {
   assert.deepEqual(boundarySyntaxIds(styled), [])
   assert.deepEqual(
     boundarySyntaxIds({
+      parseInline: [
+        Object.assign(Object.create(null), {
+          name: 'Emphasis',
+          parse: () => -1,
+          before: 'Escape',
+          after: 'Entity',
+        }),
+      ],
+    }),
+    [],
+  )
+  assert.deepEqual(
+    boundarySyntaxIds({
       defineNodes: [Object.assign(Object.create(null), styled.defineNodes[0])],
     }),
     [],
@@ -463,6 +476,46 @@ test('safe inline styles and null prototypes preserve catalog order', () => {
     'table@1',
     'strike@1',
   ])
+})
+
+test('inline neutrality rejects rules sharing block parser names', () => {
+  for (const name of [
+    'LinkReference',
+    'IndentedCode',
+    'FencedCode',
+    'Blockquote',
+    'HorizontalRule',
+    'BulletList',
+    'OrderedList',
+    'ATXHeading',
+    'HTMLBlock',
+    'SetextHeading',
+    'Table',
+    'TaskList',
+    'EmptyTask',
+    'FootnoteDefinition',
+    'BlockMath',
+    'AlertQuoteStart',
+    'AlertTitle',
+    'Subtext',
+  ]) {
+    assert.equal(
+      boundarySyntaxIds({ parseInline: [{ name, parse: () => -1 }] }),
+      null,
+      name,
+    )
+  }
+  for (const rule of [
+    Object.create({ name: 'InheritedInline', parse: () => -1 }),
+    Object.defineProperty({ parse: () => -1 }, 'name', {
+      get: () => assert.fail('name accessors must not run'),
+    }),
+    Object.defineProperty({ name: 'HiddenInline' }, 'unknown', {
+      value: true,
+    }),
+    { name: 'Inline', [Symbol('unknown')]: true },
+  ])
+    assert.equal(boundarySyntaxIds({ parseInline: [rule] }), null)
 })
 
 test('inline neutrality rejects every boundary-affecting declaration', () => {

@@ -43,12 +43,13 @@ export type BoundaryConfig = {
 }
 export const boundaryKey = (config: BoundaryConfig) => JSON.stringify(config)
 
+const catalogParser = parser.configure(Object.values(catalog))
 const boundaryNodes = new Set([
   'Frontmatter',
-  ...parser
-    .configure(Object.values(catalog))
-    .nodeSet.types.map((type) => type.name),
+  ...catalogParser.nodeSet.types.map((type) => type.name),
 ])
+const blockNames = (catalogParser as unknown as { blockNames?: unknown })
+  .blockNames
 
 function plainFields(value: object, fields: readonly string[]) {
   if (!value || typeof value !== 'object') return false
@@ -67,11 +68,18 @@ function plainFields(value: object, fields: readonly string[]) {
   )
 }
 
-/** Inline-only extensions cannot change the scanner's top-level block boundaries. */
+/** Inline names are removed during block scans, so they must not name block rules. */
 function inlineOnly(config: MarkdownConfig) {
   return (
     plainFields(config, ['parseInline', 'defineNodes']) &&
     (config.parseInline === undefined || Array.isArray(config.parseInline)) &&
+    (config.parseInline ?? []).every(
+      (rule) =>
+        plainFields(rule, ['name', 'parse', 'before', 'after']) &&
+        typeof rule.name === 'string' &&
+        Array.isArray(blockNames) &&
+        !blockNames.includes(rule.name),
+    ) &&
     (config.defineNodes === undefined || Array.isArray(config.defineNodes)) &&
     (config.defineNodes ?? []).every((node) =>
       typeof node === 'string'

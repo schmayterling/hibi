@@ -399,6 +399,7 @@ export function* formattedTextEffects(
     }
     end = Math.max(end, leaf.to)
   }
+  for (const leaf of leaves) yield { kind: 'leaf', ...leaf }
   if (end >= 0 && end < input.length && end < range.to)
     yield { kind: 'hide', from: end, to: Math.min(range.to, input.length) }
 }

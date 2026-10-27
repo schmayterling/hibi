@@ -121,8 +121,11 @@ test('50 mib rendered projection yields bounded reads and retains source ranges 
     assert.ok(counters.maximumRead <= 4096)
     turns++
   }
-  assert.ok(turns > 0)
+  assert.ok(turns > length / 2048)
   const counters = projection.counters()
+  assert.equal(counters.plainTailUnits, length)
+  assert.ok(counters.maximumYieldRead <= 8192, JSON.stringify(counters))
+  assert.ok(counters.maximumAdvanceRead <= 128 * 1024, JSON.stringify(counters))
   assert.ok(counters.maskBytes <= 4096)
   assert.ok(counters.retainedWindows <= 2)
   assert.ok(counters.parses <= 3)

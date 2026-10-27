@@ -91,6 +91,14 @@ test('rendered replacements preserve surviving marks and remove emptied syntax',
     assert.equal(replace(source, query, value), expected, source)
 })
 
+test('opaque content keeps surrounding marks and links nonempty during replacement', () => {
+  assert.equal(
+    replace('[A ![image](pic)](href)', 'A ', 'X'),
+    '[X![image](pic)](href)',
+  )
+  assert.equal(replace('**A ![image](pic)**', 'A ', ''), '**![image](pic)**')
+})
+
 test('rendered search never offers replacement through half a surrogate scalar', () => {
   for (const [source, queries] of [
     [

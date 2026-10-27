@@ -111,6 +111,48 @@ test('projection window cache covers every requested source unit beyond parser l
     )
 })
 
+test('syntax-free final paragraphs use a bounded configured grammar proof', () => {
+  const options = { ...config, chunkSize: 16, groupSize: 4, giantBlock: 64 }
+  for (const [prefix, expected] of [
+    ['**title**\n\n', 'title\n'],
+    ['', ''],
+  ]) {
+    const text = 'plain words. 😀 '.repeat(20)
+    const projection = index(prefix + text, options)
+    assert.equal(projection.counters().plainTailUnits, text.length)
+    assert.ok(projection.counters().maximumYieldRead <= 8192)
+    assert.equal(
+      [...projection.range(0, projection.length)]
+        .map((chunk) => chunk.text)
+        .join(''),
+      expected + text,
+    )
+  }
+  for (const prefix of ['\x60\x60\x60\n', '> quote\n', '[label\n']) {
+    const projection = index(prefix + 'ordinary '.repeat(20), options)
+    assert.equal(projection.counters().plainTailUnits, 0, prefix)
+  }
+})
+test('semantic block separators survive chunk and syntax-window boundaries', () => {
+  const options = { ...config, chunkSize: 16, groupSize: 4, giantBlock: 64 }
+  const source = Array.from(
+    { length: 40 },
+    (_, at) => '**word' + at + '**',
+  ).join('\n\n')
+  const projection = index(source, options)
+  const chunks = [...projection.range(0, projection.length)]
+  assert.equal(
+    chunks.map((chunk) => chunk.text).join(''),
+    Array.from({ length: 40 }, (_, at) => 'word' + at).join('\n'),
+  )
+  assert.equal(
+    [...projection.range(0, projection.length, { blockSeparator: '' })]
+      .map((chunk) => chunk.text)
+      .join(''),
+    Array.from({ length: 40 }, (_, at) => 'word' + at).join(''),
+  )
+})
+
 test('replacement proof uses active flavour syntax and widget rules', () => {
   for (const value of [
     '[[Page|Alias]]',

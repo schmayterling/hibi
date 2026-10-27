@@ -312,6 +312,8 @@ export type ChunkedMarkdownOptions = {
   /** Node names whose blocks longer than two chunks need inner nodes only for their opening and last lines. */
   opaque?: ReadonlySet<string>
   probe?: ChunkedMarkdownProbe
+  /** Immutable derived indexes invalidate on edits and need no per-line edit dependencies. */
+  trackReadAhead?: boolean
 }
 
 /** A visible document range. */
@@ -386,7 +388,7 @@ function markdownInput(
   input: Input,
   ranges: readonly { from: number; to: number }[],
 ): Input {
-  return {
+  const result: Input = {
     length: input.length,
     lineChunks: false,
     read: (from, to) => input.read(from, to),
@@ -404,6 +406,8 @@ function markdownInput(
       return parts.join('')
     },
   }
+  if (readers.has(input)) readers.set(result, (to) => readAhead(input, to))
+  return result
 }
 
 /** Inner parser steps per outer step, so the host can yield inside a long range. */
@@ -790,10 +794,11 @@ class ChunkedParse implements ChunkedPartialParse {
         },
       ]
     })
-    readers.set(input, (to) => {
-      const at = this.reading?.parsedPos ?? this.pos
-      this.reads.set(at, Math.max(this.reads.get(at) ?? -1, to))
-    })
+    if (parser.options.trackReadAhead !== false)
+      readers.set(input, (to) => {
+        const at = this.reading?.parsedPos ?? this.pos
+        this.reads.set(at, Math.max(this.reads.get(at) ?? -1, to))
+      })
   }
 
   get parsedPos() {
@@ -2361,7 +2366,10 @@ export class ChunkedMarkdownParser extends Parser {
     this.document = full.nodeSet.types.find((type) => type.name === 'Document')!
     // Inline parsers never change block structure, so boundary scans skip them.
     const inline = (base as unknown as { inlineNames?: unknown }).inlineNames
-    const scan = base.configure({ wrap: trackReadAhead })
+    const scan =
+      options.trackReadAhead === false
+        ? base
+        : base.configure({ wrap: trackReadAhead })
     this.scan = Array.isArray(inline)
       ? scan.configure({
           remove: inline.filter(

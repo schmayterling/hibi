@@ -19,7 +19,10 @@ import {
   boundaryInlineParser,
   boundaryParser,
 } from './markdown-boundary-syntax.ts'
-import { createPlainTextRunExtension } from './markdown-plain-text-runs.ts'
+import {
+  createPlainTextRunExtension,
+  plainInlineText,
+} from './markdown-plain-text-runs.ts'
 import {
   type RenderedChunk,
   type RenderedRange,
@@ -120,6 +123,10 @@ export class RenderedTextIndex {
   readonly #inline: NonNullable<ReturnType<typeof boundaryInlineParser>>
   readonly #config: BoundaryConfig
   readonly #input: Input & FormattedTextInput
+  #syntaxInput: Input
+  #plainTail: RenderedRange | null = null
+  #leafEnd = -1
+  #maximumYieldRead = 0
   #fragments: readonly TreeFragment[] = []
   #windows: Window[] = []
   #masks = new Map<number, Uint8Array>()
@@ -163,6 +170,7 @@ export class RenderedTextIndex {
       groupSize: config.groupSize,
       giantBlock: config.giantBlock,
       opaque: new Set(config.opaque),
+      trackReadAhead: false,
     })
     this.#input = {
       length: source.normalizedLength,
@@ -177,6 +185,7 @@ export class RenderedTextIndex {
         }
       },
     }
+    this.#syntaxInput = this.#input
   }
   get length() {
     return this.#source.normalizedLength
@@ -200,6 +209,10 @@ export class RenderedTextIndex {
       sourceReads: this.#reader.reads,
       sourceUnits: this.#reader.units,
       maximumRead: this.#reader.maximum,
+      maximumYieldRead: this.#maximumYieldRead,
+      plainTailUnits: this.#plainTail
+        ? this.#plainTail.to - this.#plainTail.from
+        : 0,
       maximumInputRequest: this.#reader.requestMaximum,
       maximumAdvanceRead: this.#maximumAdvanceRead,
       parses: this.#parses,
@@ -212,9 +225,10 @@ export class RenderedTextIndex {
       complete: this.#complete,
     }
   }
-  #tick() {
-    this.#operations++
-    if (++this.#pending < batch) return false
+  #tick(units = 1) {
+    this.#operations += units
+    this.#pending += units
+    if (this.#pending < batch) return false
     this.#maximum = Math.max(this.#maximum, this.#pending)
     this.#pending = 0
     this.#steps++
@@ -234,16 +248,18 @@ export class RenderedTextIndex {
     }
   }
   *#window(at: number): Generator<void, Window> {
+    if (at >= this.#syntaxInput.length)
+      return { from: at, to: this.length, frames: [], nodes: 0 }
     const width = this.#config.chunkSize * this.#config.groupSize
     const from = Math.floor(at / width) * width,
-      to = Math.min(this.length, from + width)
+      to = Math.min(this.#syntaxInput.length, from + width)
     const found = this.#windows.find(
       (value) => value.from <= from && value.to >= to,
     )
     if (found) return found
     const tree = yield* this.#advance(
       this.#parser.startChunkedParse(
-        this.#input,
+        this.#syntaxInput,
         this.#fragments,
         { from, to },
         this.prefix,
@@ -283,6 +299,23 @@ export class RenderedTextIndex {
     mask[index] = (mask[index]! & ~(15 << shift)) | (code << shift)
   }
   *#effect(effect: TextEffect, range: RenderedRange) {
+    if (effect.kind === 'leaf') {
+      if (this.#leafEnd >= 0 && effect.from > this.#leafEnd) {
+        const lf = this.#input.lineAt(this.#leafEnd).to
+        if (lf < effect.from) {
+          yield* this.#effect(
+            { kind: 'hide', from: this.#leafEnd, to: effect.from },
+            { from: 0, to: this.length },
+          )
+          yield* this.#effect(
+            { kind: 'block', from: lf, to: lf + 1 },
+            { from: 0, to: this.length },
+          )
+        }
+      }
+      this.#leafEnd = Math.max(this.#leafEnd, effect.to)
+      return
+    }
     const from = Math.max(range.from, effect.from),
       to = Math.min(range.to, effect.to)
     if (to <= from) return
@@ -308,14 +341,15 @@ export class RenderedTextIndex {
     }
   }
   *#project(resolveFootnotes: boolean) {
+    this.#leafEnd = -1
     const width = this.#config.chunkSize * this.#config.groupSize
-    for (let from = 0; from < this.length; from += width) {
+    for (let from = 0; from < this.#syntaxInput.length; from += width) {
       const window = yield* this.#window(from)
       for (const frame of window.frames)
         for (const covered of frame.covered) {
           const range = {
             from: Math.max(from, covered.from),
-            to: Math.min(from + width, this.length, covered.to),
+            to: Math.min(from + width, this.#syntaxInput.length, covered.to),
           }
           if (range.to <= range.from) continue
           for (const effect of formattedTextEffects(
@@ -333,19 +367,95 @@ export class RenderedTextIndex {
           }
         }
     }
+    if (this.#plainTail) {
+      yield* this.#effect(
+        { kind: 'leaf', ...this.#plainTail },
+        { from: 0, to: this.length },
+      )
+      yield* this.#effect(
+        { kind: 'hide', from: this.#plainTail.to, to: this.length },
+        { from: 0, to: this.length },
+      )
+    }
   }
   *build(): Generator<void> {
     if (this.#complete) return
     this.#building ??= this.#build()
     for (;;) {
+      const before = this.#reader.units
       const next = this.#building.next()
+      this.#maximumYieldRead = Math.max(
+        this.#maximumYieldRead,
+        this.#reader.units - before,
+      )
       if (next.done) return
       yield
     }
   }
+  /**
+   * Prove a final root paragraph with the configured grammar, then use the
+   * existing plain-run predicate to avoid lezer flattening its physical line.
+   * ponytail: the grammar proof's prefix fits one scan window; other long
+   * lines keep the formatted parser's path until it exposes retained contexts.
+   */
+  *#preparePlainTail(): Generator<void> {
+    const tail = this.text(
+      Math.max(this.prefix, this.length - batch),
+      this.length,
+    )
+    const trailing = /\n*$/.exec(tail)![0].length
+    if (trailing === tail.length) return
+    const range = this.#input.lineAt(this.length - trailing)
+    if (
+      range.from < this.prefix ||
+      range.to - range.from < this.#config.giantBlock ||
+      range.from - this.prefix > this.#config.giantBlock
+    )
+      return
+    if (
+      !plainInlineText(
+        this.text(Math.max(range.from, range.to - batch), range.to),
+      )
+    )
+      return
+    for (let at = range.from; at < range.to; ) {
+      let to = Math.min(range.to, at + batch)
+      if (!this.validStart(to)) to--
+      const text = this.text(Math.max(range.from, at - 3), to)
+      if (!plainInlineText(text)) return
+      at = to
+      if (this.#tick(text.length)) yield
+    }
+    const headTo = Math.min(range.to, range.from + batch)
+    const text = this.text(this.prefix, headTo)
+    let tree: Tree
+    try {
+      tree = yield* this.#advance(this.#parser.full.startParse(text))
+    } catch {
+      return
+    }
+    const node = tree.resolveInner(range.from - this.prefix, 1)
+    if (
+      node.name !== 'Paragraph' ||
+      node.from + this.prefix !== range.from ||
+      node.parent?.name !== 'Document'
+    )
+      return
+    this.#plainTail = range
+    const length = range.from
+    this.#syntaxInput = {
+      length,
+      lineChunks: false,
+      chunk: (at) => this.#input.chunk(at).slice(0, Math.max(0, length - at)),
+      read: (from, to) =>
+        this.#input.read(Math.min(from, length), Math.min(to, length)),
+    }
+  }
+
   *#build(): Generator<void> {
+    yield* this.#preparePlainTail()
     const boundaries = yield* this.#advance(
-      this.#parser.startBoundaryParse(this.#input, [], this.prefix),
+      this.#parser.startBoundaryParse(this.#syntaxInput, [], this.prefix),
     )
     this.#fragments = TreeFragment.addTree(boundaries)
     yield* this.#project(false)
@@ -482,11 +592,16 @@ export class RenderedTextIndex {
         // Whole visible coverage is checked against retained masks, never marker text.
         let before = false,
           after = false,
+          opaque = false,
           first = -1,
           last = -1
         for (const run of this.runs(open.to)) {
           if (run.from >= close.from) break
-          if (run.barrier || run.text === '') continue
+          if (run.barrier) {
+            opaque = true
+            break
+          }
+          if (run.text === '') continue
           const a = Math.max(open.to, run.from),
             b = Math.min(close.from, run.to)
           if (a >= b) continue
@@ -496,7 +611,10 @@ export class RenderedTextIndex {
           after ||= b > to
           if (this.#tick()) yield null
         }
-        if ((!before && !after && first >= 0) || node.name === 'Autolink')
+        if (
+          (!opaque && !before && !after && first >= 0) ||
+          node.name === 'Autolink'
+        )
           containers.push({
             kind: ['Link', 'WikiLink', 'Autolink'].includes(node.name)
               ? 'link'

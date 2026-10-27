@@ -13,18 +13,31 @@ for (const [shape, line] of [
     '50 mib ' +
       shape +
       ' projection retains packed masks and bounded syntax windows',
-    (t) => {
+    async (t) => {
       const length = 50 * 1024 * 1024,
         text = line.repeat(Math.ceil(length / line.length)).slice(0, length)
       const store = new SourceStore(text, { tabId: 'scale', revision: 0 })
       globalThis.gc?.()
       const before = process.memoryUsage(),
         index = new RenderedTextIndex(store.snapshot(), 0, renderedConfig)
+      console.error(JSON.stringify({ shape, phase: 'baseline', ...before }))
       let yields = 0,
         peakRss = before.rss
       for (const _ of index.build()) {
-        if (++yields % 4096 === 0)
+        if (++yields % 32 === 0) {
           peakRss = Math.max(peakRss, process.memoryUsage().rss)
+          await new Promise((resolve) => setImmediate(resolve))
+        }
+        if (yields % 8192 === 0)
+          console.error(
+            JSON.stringify({
+              shape,
+              phase: 'build',
+              yields,
+              ...index.counters(),
+              rss: process.memoryUsage().rss,
+            }),
+          )
       }
       globalThis.gc?.()
       const counters = index.counters(),

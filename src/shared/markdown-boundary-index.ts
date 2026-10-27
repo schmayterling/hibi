@@ -16,7 +16,7 @@ import type {
   SourceSnapshot,
 } from './source-buffer.ts'
 import { sourceParserInput } from './source-parser.ts'
-import { editorChangesFromSource } from './source-projection.ts'
+import { editorChangesFromSource, mappedPrefix } from './source-projection.ts'
 
 /** Cache normalized ranges so short lines do not each seek the rope. */
 function boundaryInput(source: SourceSnapshot): Input {
@@ -49,7 +49,7 @@ export class MarkdownBoundaryIndex {
   private parse: ChunkedPartialParse
   private tree: Tree | null = null
   private source: SourceSnapshot
-  readonly config: BoundaryConfig
+  config: BoundaryConfig
   constructor(
     source: SourceSnapshot,
     config: BoundaryConfig,
@@ -100,6 +100,8 @@ export class MarkdownBoundaryIndex {
       offset += change.insert.length - (change.to - change.from)
       return result
     })
+    const prefix = mappedPrefix(this.config.prefix, changes)
+    if (prefix !== null) this.config = { ...this.config, prefix }
     const fragments = TreeFragment.applyChanges(
       TreeFragment.addTree(tree),
       changes,

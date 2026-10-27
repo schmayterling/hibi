@@ -114,6 +114,25 @@ function fixture(t, source = '# title\n\ntext\n\n'.repeat(20000)) {
   return { transports, pages, declined, errors, session, client, request }
 }
 
+test('a prefix change without an edit replaces a held boundary request', async (t) => {
+  const prefix = '---\ntitle: exact\n---\n\n'
+  const f = fixture(t, prefix + '# heading\n\nbody\n\n'.repeat(100))
+  f.request(config, (page) => f.pages.push(page))
+  await until(() => f.pages.length === 1)
+  const firstId = f.pages[0].id
+  f.request({ ...config, prefix: prefix.length })
+  await new Promise(setImmediate)
+  assert.equal(
+    f.transports[0].messages.filter((message) => message.type === 'boundaries')
+      .length,
+    2,
+  )
+  await until(() => f.pages.some((page) => page.id !== firstId && page.done))
+  const page = f.pages.find((page) => page.id !== firstId)
+  assert.equal(page.records[0].length, prefix.length)
+  assert.deepEqual(f.errors, [])
+})
+
 test('index pages are bounded and acknowledged one at a time on the existing replica', async (t) => {
   const advance = MarkdownBoundaryIndex.prototype.advance
   const progress = { advances: 0 }

@@ -154,6 +154,99 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       }
     },
   )
+  await t.test(
+    'frontmatter activation refreshes boundaries without a text edit',
+    async () => {
+      await page.evaluate(async () => {
+        await window.livePreview.mount(
+          '---\ntitle: exact\n---\n\n' + '# heading\n\nbody\n\n'.repeat(100),
+          undefined,
+          { worker: true },
+        )
+      })
+      await page.waitForFunction(() => window.livePreview.workerState.ready)
+      const before = await page.evaluate(() => {
+        const preview = window.livePreview
+        const doc = preview.view().state.doc
+        const requests = preview.workerState.requests
+        preview.setFrontmatter(true)
+        return { requests, sameDoc: doc === preview.view().state.doc }
+      })
+      await page.waitForFunction(() => window.livePreview.workerState.ready)
+      const after = await page.evaluate(() => ({
+        requests: window.livePreview.workerState.requests,
+        errors: window.livePreview.workerState.errors,
+      }))
+      assert.equal(before.sameDoc, true)
+      assert.equal(after.requests, before.requests + 1)
+      assert.deepEqual(after.errors, [])
+    },
+  )
+  await t.test(
+    'properties keystrokes retain worker boundaries and a complete footnote index',
+    async () => {
+      await page.evaluate(async () => {
+        const prefix = '---\ntitle: exact\n---\n\n'
+        const unit =
+          '# heading\n\nparagraph reference[^a]\n\n[^a]: definition\n\n'
+        await window.livePreview.mount(
+          prefix + unit.repeat(Math.ceil((8 * 1024 * 1024) / unit.length)),
+          undefined,
+          { worker: true, frontmatter: true, editable: true },
+        )
+      })
+      await page.waitForFunction(
+        () =>
+          window.livePreview.workerState.ready &&
+          window.livePreview.definitionsReady(),
+        undefined,
+        { timeout: 120000 },
+      )
+      const result = await page.evaluate(async () => {
+        const preview = window.livePreview
+        const before = preview.definitionIndex()
+        const requests = preview.workerState.requests,
+          pages = preview.workerState.pages
+        const length = preview.view().state.doc.length
+        preview.reset()
+        preview.footnoteScan.scanned = preview.footnoteScan.parsed = 0
+        for (const insert of ['x', '\nother: value', 'z']) {
+          const at = preview.view().state.doc.line(2).to
+          preview.edit(at, at, insert, true)
+        }
+        for (let i = 0; i < 3; i++)
+          await new Promise((done) =>
+            requestIdleCallback(done, { timeout: 200 }),
+          )
+        const after = preview.definitionIndex()
+        return {
+          requests: preview.workerState.requests - requests,
+          pages: preview.workerState.pages - pages,
+          scanned: preview.probe.scannedUnits,
+          footnoteScanned: preview.footnoteScan.scanned,
+          footnoteParsed: preview.footnoteScan.parsed,
+          sameGroups: before.groups === after.groups,
+          sameLabels: before.labels === after.labels,
+          readDelta: after.read - before.read,
+          lengthDelta: preview.view().state.doc.length - length,
+          ready: preview.definitionsReady(),
+          errors: preview.workerState.errors,
+        }
+      })
+      t.diagnostic(JSON.stringify({ properties: result }))
+      assert.equal(result.requests, 0, JSON.stringify(result))
+      assert.equal(result.pages, 0, JSON.stringify(result))
+      assert.equal(result.scanned, 0, JSON.stringify(result))
+      assert.equal(result.footnoteScanned, 0, JSON.stringify(result))
+      assert.equal(result.footnoteParsed, 0, JSON.stringify(result))
+      assert.equal(result.sameGroups, true)
+      assert.equal(result.sameLabels, true)
+      assert.equal(result.readDelta, result.lengthDelta)
+      assert.equal(result.ready, true)
+      assert.deepEqual(result.errors, [])
+    },
+  )
+
   await page.evaluate(async () => {
     const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
     await window.livePreview.mount(

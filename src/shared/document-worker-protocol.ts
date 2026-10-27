@@ -2,6 +2,10 @@ import type { Token } from 'marked'
 import type { BoundaryRecord } from './chunked-markdown.ts'
 import type { BoundaryConfig } from './markdown-boundary-syntax.ts'
 
+/** Prefix positions follow source edits; they do not select a grammar. */
+export const boundaryKey = (config: BoundaryConfig) =>
+  JSON.stringify({ ...config, prefix: 0 })
+
 export type BoundaryPage = {
   type: 'boundaries'
   epoch: string

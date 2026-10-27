@@ -2,8 +2,10 @@ import { isolateHistory } from '@codemirror/commands'
 import { DocInput } from '@codemirror/language'
 import {
   ChangeSet,
+  countColumn,
   EditorSelection,
   type EditorState,
+  findColumn,
   Text,
   type TransactionSpec,
 } from '@codemirror/state'
@@ -73,11 +75,15 @@ function sourceFrom(state: EditorState, node: SyntaxNode): number | null {
     const after = first.text.slice(mark.to - first.from)
     if (/^ *\t/.test(after)) return null
     const spaces = /^ */.exec(after)![0].length
-    offset +=
+    const column =
+      countColumn(prefix, 4, offset) +
       mark.to -
       first.from -
       quotePrefix(first.text, quotes) +
       (!after[spaces] || spaces > 4 ? 1 : spaces)
+    offset = findColumn(prefix, column, 4, true)
+    // A tab that crosses the content column cannot belong to the separator.
+    if (offset < 0 || countColumn(prefix, 4, offset) !== column) return null
   }
   if (offset > prefix.length || !/^[ \t]*$/.test(prefix.slice(offset)))
     return null
@@ -92,11 +98,14 @@ function sourceTo(state: EditorState, node: SyntaxNode) {
   for (let parent = node.parent; parent; parent = parent.parent)
     if (parent.name === 'Blockquote') quotes++
   let line = state.doc.lineAt(Math.max(from, to - 1))
-  while (
-    line.from > from &&
-    /^[ \t]*$/.test(line.text.slice(quotePrefix(line.text, quotes)))
-  )
+  while (line.from > from) {
+    const prefix = quotePrefix(line.text, quotes)
+    if (!/^[ \t]*$/.test(line.text.slice(prefix))) break
+    const marker = line.text.lastIndexOf('>', prefix - 1)
+    if (marker >= 0 && node.resolve(line.from + marker, 1).name !== 'QuoteMark')
+      break
     line = state.doc.line(line.number - 1)
+  }
   return Math.min(to, line.to)
 }
 
@@ -440,6 +449,19 @@ function preservesBlocks(
       if (!separator.test(line.text)) {
         const context = blockAt(tree, line.from)
         if (context) sample(context)
+        // Raw-line table lookahead can decide whether this neighbor was lazy.
+        if (line.number > 1) {
+          const before = doc.line(line.number - 1)
+          add(before.from)
+          const opening = blockAt(tree, before.to)
+          if (opening) {
+            sample(opening)
+            if (opening.to > floor)
+              contexts.set(opening.from + ':' + opening.name, opening)
+            for (let parent = opening.parent; parent; parent = parent.parent)
+              sample(parent, 'first')
+          }
+        }
       }
     }
     // Blank separators can hide a neighbor outside the current container.
@@ -481,20 +503,26 @@ function preservesBlocks(
     if (previous && !around(previous)) return false
     if (next && !around(next)) return false
   }
-  for (const at of [
+  const seams = [
     sourceFrom(state, block),
     sourceTo(state, block),
     sourceFrom(state, target),
     sourceTo(state, target),
     ...modified,
-  ]) {
+  ]
+  changes.iterChangedRanges((from, to) => {
+    seams.push(from, to)
+  })
+  for (const at of seams) {
     if (at === null) return false
     const decisions = readAheadFrom(tree, at)
     if (!decisions) return false
     for (const decision of decisions) {
+      const line = doc.lineAt(decision)
+      if (uncovered(tree, line.from, line.to)) return false
       add(decision)
-      const context = blockAt(tree, decision)
-      if (context && !around(context)) return false
+      const context = blockAt(tree, line.to)
+      if (!context || !around(context)) return false
     }
   }
   const ranges = (text: Text, positions: number[], prefix: number) => {
@@ -750,6 +778,41 @@ export function moveBlock(
         : { from: start(at), to: start(at), insert: text + gap, offset: 0 }
   }
   changes.push(insert)
+  // A bare quote prefix must not consume the first space of a joined block.
+  let quoted = false
+  for (let parent = block.parent; parent; parent = parent.parent)
+    if (parent.name === 'Blockquote') quoted = true
+  if (quoted) {
+    const bare = (text: string) => /^[ \t>]*>$/.test(text)
+    const prefix = (at: number) =>
+      state.doc.sliceString(state.doc.lineAt(at).from, at)
+    for (const change of changes) {
+      const suffix = state.doc.sliceString(
+        change.to,
+        Math.min(state.doc.length, change.to + 1),
+      )
+      if (/^[ \t]/.test(change.insert || suffix) && bare(prefix(change.from)))
+        return null
+      if (/^[ \t]/.test(suffix)) {
+        const newline = change.insert.lastIndexOf('\n')
+        const tail =
+          newline >= 0
+            ? change.insert.slice(newline + 1)
+            : prefix(change.from) + change.insert
+        if (bare(tail)) return null
+      }
+    }
+    if (/^[ \t]/.test(text)) {
+      const lead = insert.insert.slice(0, insert.offset)
+      const newline = lead.lastIndexOf('\n')
+      if (
+        bare(
+          newline >= 0 ? lead.slice(newline + 1) : prefix(insert.from) + lead,
+        )
+      )
+        return null
+    }
+  }
   // Changes are in document order; an insertion goes before a replacement
   // starting at the same place.
   changes.sort((a, b) => a.from - b.from || a.to - b.to)

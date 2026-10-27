@@ -139,6 +139,16 @@ test('moving a later paragraph cannot turn earlier paragraphs into math', {
   await saved(doc)
 })
 
+test('moving a table delimiter cannot change the lazy list and quote above it', {
+  timeout: 60000,
+}, async () => {
+  const doc = '> a\n2. | b | c |\n>    | --- | - |\n>    # h\n'
+  await open('table-lookahead.md', doc, '| --- | - |')
+  assert.equal(await (await menu('| --- | - |')).isEnabled(), false)
+  await page.keyboard.press('Escape')
+  await saved(doc)
+})
+
 test('moving indented code below a list is disabled before source changes', {
   timeout: 60000,
 }, async () => {

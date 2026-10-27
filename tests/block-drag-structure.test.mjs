@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { DocInput } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
+import { TreeFragment } from '@lezer/common'
 import { GFM } from '@lezer/markdown'
 import { blockStep, moveBlock } from '../src/addons/block-drag/formatted.ts'
 import { blockMathSyntax } from '../src/addons/math/formatted-syntax.ts'
+import { subtextSyntax } from '../src/addons/text-extras/formatted-syntax.ts'
 import {
   BoundaryTree,
   boundaryRecords,
@@ -14,7 +17,13 @@ import { formattedBlockParser } from '../src/renderer/src/formatted-contribution
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { Footnotes, GithubAlerts } from '../src/shared/markdown-extra-syntax.ts'
 
-const extensions = [GFM, Footnotes, GithubAlerts, blockMathSyntax]
+const extensions = [
+  GFM,
+  Footnotes,
+  GithubAlerts,
+  blockMathSyntax,
+  subtextSyntax,
+]
 const grammar = EditorState.create({
   extensions: formattedSyntax({ extensions }).extension,
 })
@@ -28,6 +37,13 @@ const containers = new Set([
   'Document',
 ])
 function structure(doc, tree = md.parse(doc), moving = null, direction = 0) {
+  const marks = []
+  tree.iterate({
+    enter(node) {
+      if (node.name === 'QuoteMark') marks.push([node.from, node.to])
+    },
+  })
+  marks.sort((a, b) => a[0] - b[0])
   const visit = (node) => {
     if (containers.has(node.name)) {
       const children = node.getChildren('Block')
@@ -49,12 +65,31 @@ function structure(doc, tree = md.parse(doc), moving = null, direction = 0) {
       }
       return [node.name, ...children.map(visit)]
     }
+    if (/^(FencedCode|CodeBlock|BlockMath)$/.test(node.name))
+      return [
+        node.name,
+        ['CodeMark', 'CodeInfo', 'CodeText', 'MathMark', 'MathText'].map(
+          (name) =>
+            node
+              .getChildren(name)
+              .map((part) => doc.slice(part.from, part.to))
+              .join('')
+              .replace(/\n+$/, ''),
+        ),
+      ]
+    let at = node.from
+    let text = ''
+    for (const [from, to] of marks) {
+      if (from < at || to > node.to) continue
+      text += doc.slice(at, from)
+      at = to
+    }
+    text += doc.slice(at, node.to)
     return [
       node.name,
-      doc
-        .slice(node.from, node.to)
+      text
         .split('\n')
-        .map((line) => line.replace(/^[\s>]*/, '').trim())
+        .map((line) => line.trim())
         .filter(Boolean)
         .join(' '),
     ]
@@ -193,34 +228,69 @@ test('lookahead dependency queries skip unrelated chunks in large notes', () => 
   const boundary = new BoundaryTree(chunked, doc.length)
   boundary.append([...boundaryRecords(tree)])
   assert.equal(readAheadFrom(boundary.finish(), doc.indexOf('m $$ x')), null)
-  const visits = (count) => {
-    const doc = '$$ q\n\nm $$ x\n\n'.repeat(count) + 'end\n'
+  const visits = (count, quoted = false) => {
+    let doc = '$$ q\n\nm $$ x\n\n'.repeat(count) + 'end\n'
+    if (quoted)
+      doc = doc
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n')
     const chunked = new ChunkedMarkdownParser(md, md, {
       chunkSize: 64,
       groupSize: 8,
     })
-    const tree = chunked.parse(doc)
+    const work = chunked.startChunkedParse(
+      new DocInput(EditorState.create({ doc }).doc),
+      [],
+      { from: Infinity, to: Infinity },
+    )
+    let tree
+    while (!tree) tree = work.advance()
+    let stored = 0,
+      bytes = 0
+    const inspect = (node) => {
+      for (const [, value] of node.propValues) {
+        if (!value?.kind) continue
+        bytes += value.index?.byteLength ?? 0
+        if (value.kind === 'root' || value.kind === 'group')
+          node.children.forEach(inspect)
+        else if (value.reads) {
+          assert.ok(value.reads instanceof Float64Array)
+          stored += value.reads.length / 2
+          bytes += value.reads.byteLength
+          for (let i = 2; i < value.reads.length; i += 2)
+            assert.ok(value.reads[i] > value.reads[i - 2])
+        }
+      }
+    }
+    inspect(tree)
+    assert.equal(stored, count)
+    assert.ok(bytes <= count * 64 + 1024, String(bytes))
     const proto = Object.getPrototypeOf(tree)
     const original = proto.prop
     let calls = 0
     proto.prop = function (...args) {
       calls++
       const value = original.apply(this, args)
-      return value?.index
+      const watch = (array) =>
+        new Proxy(array, {
+          get(target, key) {
+            if (typeof key === 'string' && /^\d+$/.test(key)) calls++
+            return Reflect.get(target, key, target)
+          },
+        })
+      return value?.index || value?.reads
         ? {
             ...value,
-            index: new Proxy(value.index, {
-              get(target, key, receiver) {
-                if (typeof key === 'string' && /^\d+$/.test(key)) calls++
-                return Reflect.get(target, key, receiver)
-              },
-            }),
+            ...(value.index ? { index: watch(value.index) } : {}),
+            ...(value.reads ? { reads: watch(value.reads) } : {}),
           }
         : value
     }
     try {
       const starts = readAheadFrom(tree, doc.lastIndexOf('m $$ x') + 3)
-      assert.ok(starts?.includes(doc.lastIndexOf('$$ q')))
+      const opening = doc.lastIndexOf('$$ q')
+      assert.ok(starts?.includes(doc.lastIndexOf('\n', opening - 1) + 1))
     } finally {
       proto.prop = original
     }
@@ -228,8 +298,81 @@ test('lookahead dependency queries skip unrelated chunks in large notes', () => 
   }
   const small = visits(100)
   const large = visits(20000)
-  console.log(JSON.stringify({ mathDependencies: { small, large } }))
+  const giantSmall = visits(100, true)
+  const giantLarge = visits(20000, true)
+  console.log(
+    JSON.stringify({
+      mathDependencies: { small, large, giantSmall, giantLarge },
+    }),
+  )
   assert.ok(large < 100 && large <= small + 32, `${small}, ${large}`)
+  assert.ok(
+    giantLarge < 100 && giantLarge <= giantSmall + 40,
+    `${giantSmall}, ${giantLarge}`,
+  )
+})
+
+test('lazy table lookahead and quoted literal lines keep their structure and text', () => {
+  const table = '> a\n2. | b | c |\n>    | --- | - |\n>    # h\n'
+  assert.equal(moved(table, '| --- |', 'Paragraph', 1), null)
+  for (const doc of [
+    '3.   > -# small 1457\n      > - [ ] t1458\n    >\n     > > al1460\n',
+    '>p\n>\n>    ```\n>      c\n>    ```\n',
+    '> p\n>\n>    ```\n>      c\n>    ```\n',
+    '>11) -    sp2123\n>    -   ```` md\n>        c2126\n',
+  ])
+    checkMoves(doc)
+})
+test('tab separators cannot move a nested list across its content column', () => {
+  const doc = '- a\n  1. x\n\n     -# s\n  2.\n \tt\n  > q\n'
+  const { state, tree } = view(doc)
+  const find = (token, name) => {
+    let node = tree.resolveInner(doc.indexOf(token), 1)
+    while (node && node.name !== name) node = node.parent
+    assert.ok(node, name)
+    return node
+  }
+  assert.equal(
+    moveBlock(
+      state,
+      tree,
+      find('1.', 'OrderedList'),
+      find('> q', 'Blockquote'),
+      false,
+    ),
+    null,
+  )
+  const spaced = doc.replace(' \tt', '    t')
+  const current = view(spaced)
+  let list = current.tree.resolveInner(spaced.indexOf('1.'), 1)
+  while (list && list.name !== 'OrderedList') list = list.parent
+  let quote = current.tree.resolveInner(spaced.indexOf('> q'), 1)
+  while (quote && quote.name !== 'Blockquote') quote = quote.parent
+  const spec = moveBlock(current.state, current.tree, list, quote, false)
+  assert.ok(spec)
+  assert.deepEqual(
+    structure(current.state.update(spec).state.doc.toString()),
+    structure(spaced, current.tree, list, 1),
+  )
+})
+test('dragged blank separators cannot activate an earlier interior math line', () => {
+  const body = `p1\np2\n$$ ${'q'.repeat(4000)}\n${'r'.repeat(5991)}\nplast`
+  for (const doc of [
+    `X\n\n${body}\n\n\n\n\n\nB\n\n$$\n`,
+    `> X\n>\n${body
+      .split('\n')
+      .map((line) => '> ' + line)
+      .join('\n')}\n>\n>\n>\n>\n>\n> B\n>\n> $$\n`,
+  ]) {
+    const { state, tree } = view(doc)
+    const find = (token) => {
+      let node = tree.resolveInner(doc.indexOf(token), 1)
+      while (node && node.name !== 'Paragraph') node = node.parent
+      assert.ok(node)
+      return node
+    }
+    assert.equal(moveBlock(state, tree, find('B\n'), find('X'), false), null)
+  }
 })
 
 test('every block in 800 seeded mixed notes preserves structure in both directions', () => {
@@ -273,6 +416,55 @@ test('every block in 800 seeded mixed notes preserves structure in both directio
   }
   console.log(JSON.stringify({ moves, changed: 0 }))
   assert.ok(moves > 4000, String(moves))
+})
+
+test('viewport changes retain distant math decisions in giant containers', () => {
+  const doc =
+    '> intro\n>\n' +
+    Array.from({ length: 300 }, (_, i) => `> padding ${i}\n>\n`).join('') +
+    '> $$ a\n>\n' +
+    '> f\n>\n'.repeat(1000) +
+    '> m $$ x\n>\n> z $$\n'
+  const { state } = view(doc)
+  const chunked = new ChunkedMarkdownParser(md, md, {
+    chunkSize: 128,
+    groupSize: 4,
+    giantBlock: 512,
+  })
+  const parse = (old, from, to) => {
+    const work = chunked.startChunkedParse(
+      new DocInput(state.doc),
+      old ? TreeFragment.addTree(old) : [],
+      { from, to },
+    )
+    for (;;) {
+      const tree = work.advance()
+      if (tree) return tree
+    }
+  }
+  const at = doc.indexOf('m $$ x')
+  const initial = parse(null, Infinity, Infinity)
+  const boundary = new BoundaryTree(chunked, doc.length)
+  const records = [...boundaryRecords(initial)]
+  for (let i = 0; i < records.length; i += 128)
+    boundary.append(records.slice(i, i + 128))
+  for (const [complete, original] of [
+    [true, initial],
+    [false, boundary.finish()],
+  ]) {
+    let tree = original
+    for (let i = 0; i < 3; i++) {
+      tree = parse(tree, at - 10, doc.length)
+      const starts = readAheadFrom(tree, at)
+      if (complete) assert.ok(starts?.includes(doc.indexOf('> $$ a')))
+      else assert.equal(starts, null)
+      let block = tree.resolveInner(at, 1)
+      while (block && block.name !== 'Paragraph') block = block.parent
+      assert.ok(block)
+      assert.equal(blockStep(state, tree, block, 1), null)
+      tree = parse(tree, 0, 40)
+    }
+  }
 })
 
 test('mixed math decisions preserve the complete block tree in both directions', () => {

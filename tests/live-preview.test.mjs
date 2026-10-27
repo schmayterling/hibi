@@ -1287,3 +1287,24 @@ test('ordered list numbers in a 20,000-item list come from cached item offsets',
   assert.ok(result.scrolled < 1000, JSON.stringify(result.scrolled))
   assert.ok(result.edited < 10000, JSON.stringify(result.edited))
 })
+
+test('selecting the whole note includes the hidden fences at its ends', {
+  timeout: 30000,
+}, async () => {
+  const doc = '```js\nconst answer = 42\n```'
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(doc, { width: 800, height: 600 }, { editable: true })
+    const view = preview.view()
+    view.dispatch({ selection: { anchor: 0, head: doc.length } })
+    const all = view.state.selection.main
+    // A caret left on the hidden closing fence still moves beside it.
+    view.dispatch({ selection: { anchor: doc.length } })
+    return {
+      all: [all.anchor, all.head],
+      caret: view.state.selection.main.head,
+    }
+  }, doc)
+  assert.deepEqual(result.all, [0, doc.length])
+  assert.equal(result.caret, doc.indexOf('\n```'))
+})

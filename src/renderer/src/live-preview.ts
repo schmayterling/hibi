@@ -1650,6 +1650,8 @@ export function livePreview(
       const lines = transaction.startState.field(layout)
       let moved = false
       const ranges = transaction.selection.ranges.map((range, index) => {
+        // Selecting the whole note includes its hidden first and last lines.
+        if (range.from === 0 && range.to === doc.length) return range
         let head = range.head
         lines.between(head, head, (from, to, value) => {
           if (value !== hiddenLine || head < from || head > to) return

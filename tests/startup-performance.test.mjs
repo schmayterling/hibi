@@ -97,9 +97,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // and 9 bytes for the formatted view's copy importing the synchronous export
   // renderer from the startup chunk (#459),
   // plus 1 byte of minified import aliases in the entry that the source outline's
-  // lazy chunks renamed; no module moved into startup (#460).
+  // lazy chunks renamed; no module moved into startup (#460),
+  // plus 1764 bytes for the shared non-recursive block tokenizer used by the
+  // existing synchronous export renderer (#491).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
-  assert.ok(bytes <= 691124, `startup catalog grew to ${bytes} bytes`)
+  assert.ok(bytes <= 692888, `startup catalog grew to ${bytes} bytes`)
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
   assert.doesNotMatch(
     modules,

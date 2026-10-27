@@ -22,7 +22,13 @@ function wikiParts(node: SyntaxNode) {
   const target = node.getChild('WikiTarget')
   const label = node.getChild('WikiAlias') ?? target
   const text = target?.tree?.prop(wikiText)
-  return label && text !== undefined ? { target: text, label } : null
+  return label && text !== undefined
+    ? {
+        target: text,
+        label,
+        aliased: node.getChildren('WikiMark').length === 3,
+      }
+    : null
 }
 
 /**
@@ -186,7 +192,7 @@ export const contribution: FormattedContribution = {
           to,
           {
             'data-wiki-link': parts.target,
-            'data-wiki-alias': String(parts.label.name === 'WikiAlias'),
+            'data-wiki-alias': String(parts.aliased),
           },
           true,
         )

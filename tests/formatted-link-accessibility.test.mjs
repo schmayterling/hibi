@@ -21,6 +21,8 @@ Around ~~[struck](b.md)~~ and [x **y** z](b.md).
 | wiki | [[c]] |
 | wiki-entity | [[c\\|&copy;]] |
 | wiki-alias | [[b \\|x &amp; y]] |
+| wiki-empty | [[b\\|]] |
+| wiki-blank | [[b\\|   ]] |
 | entity | [&amp;](b.md) |
 | mapped | left \\| \\| [&copy;&#x1f331;](c.md) |
 `
@@ -39,6 +41,8 @@ const names = [
   'c',
   '©',
   'x & y',
+  'b',
+  'b',
   '&',
   '©🌱',
 ]
@@ -191,6 +195,27 @@ for (const engine of ['tiptap', 'codemirror']) {
         await pressShortcut(app, `${mod}+[`)
         await shown(app, page, 'a.md')
         await link('c').waitFor()
+      }
+    // Empty aliases also keep a table escape while their shown label is the target.
+    for (const rowName of ['wiki-empty', 'wiki-blank'])
+      for (const modifiers of follows) {
+        const row = rich.locator('tr').filter({ hasText: rowName })
+        await row
+          .getByRole('link', { name: 'b', exact: true })
+          .click({ modifiers })
+        await shown(app, page, 'b.md')
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
+        await row.getByRole('link', { name: 'b', exact: true }).click()
+        const active =
+          engine === 'codemirror'
+            ? row.locator('.hibi-lp-cell-editor [data-wiki-link]')
+            : row.getByRole('link', { name: 'b', exact: true })
+        await active.waitFor()
+        await active.click({ modifiers })
+        await shown(app, page, 'b.md')
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
       }
     // Editing keeps table escapes in the source, but follows the same wiki target.
     for (const [name, target] of [

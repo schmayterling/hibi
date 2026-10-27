@@ -194,6 +194,21 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
     ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'false' }],
     ['syntax', 6, 8],
   ])
+  assert.deepEqual(drawn('[[Note|]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
+    ['syntax', 6, 9],
+  ])
+  assert.deepEqual(drawn('[[Note|   ]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
+    ['syntax', 6, 12],
+  ])
+  assert.deepEqual(drawn('[[Note   ]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'false' }],
+    ['syntax', 6, 11],
+  ])
   assert.deepEqual(drawn('[[ Note#Part | Shown ]]'), [
     ['syntax', 0, 15],
     [

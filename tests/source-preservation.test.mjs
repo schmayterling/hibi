@@ -186,7 +186,11 @@ testFormattedEngines(
       })
       ipcMain.removeHandler('addons:enable')
       ipcMain.handle('addons:enable', async (...args) => {
-        if (args[1] === 'citations' && args[2] === true) {
+        if (
+          args[1] === 'citations' &&
+          args[2] === true &&
+          !globalThis.releaseCitationsEnable
+        ) {
           await new Promise((resolve) => {
             globalThis.releaseCitationsEnable = resolve
             started()
@@ -402,7 +406,7 @@ testFormattedEngines(
     await replaceSourceText(
       page,
       page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
-      prefix + 'New body',
+      `${prefix}New body`,
     )
     await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
     await waitForDocumentEditor(app, page, { name: 'Document editor' })
@@ -418,7 +422,7 @@ testFormattedEngines(
     await replaceRichText(page, bodyEditor, 'Protected body')
     assert.equal(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      prefix + 'Protected body',
+      `${prefix}Protected body`,
     )
   },
 )

@@ -455,7 +455,9 @@ test('renderer worker resolves references across a giant paragraph and keeps fin
   })
   assert.equal(metadata.type, 'metadata', metadata.message)
   assert.equal(metadata.reference.href, 'target.md')
+  loadWorker(worker, replies, 'next target.md', 'next')
   const find = await next({
+    epoch: 'next',
     type: 'find',
     id: 2,
     query: 'target.md',

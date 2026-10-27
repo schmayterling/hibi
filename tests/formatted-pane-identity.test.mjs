@@ -203,10 +203,12 @@ test('addon view targets and source extensions identify each formatted split pan
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await rich.focus()
   assert.equal((await active()).value.view.viewId, formatted.value.view.viewId)
+  const previous = (await page.evaluate(() => window.hibi.getDocument())).tabId
   await clickMenu(app, 'New')
   await waitForAsync(
     page,
-    async () => (await window.hibi.getDocument()).ephemeral,
+    async (previous) => (await window.hibi.getDocument()).tabId !== previous,
+    previous,
   )
   await waitForDocumentEditor(app, page)
   for (const target of [formatted.value.view, markdown.value.view])

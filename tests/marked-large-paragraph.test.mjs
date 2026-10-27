@@ -5,30 +5,36 @@ import { pathToFileURL } from 'node:url'
 import { parser } from '@lezer/markdown'
 import { build } from 'esbuild'
 import { Lexer, Marked, Tokenizer } from 'marked'
+import { outsideCode } from '../src/addons/_shared/import-markdown.ts'
 import { exportOptions } from '../src/addons/documentation/options.ts'
 import { prepareSite } from '../src/addons/documentation/site.ts'
 import { imageSources } from '../src/main/images.ts'
 import { parseWorkspaceMetadata } from '../src/main/workspace-index-metadata.ts'
 import { WorkspaceMetadataParser } from '../src/main/workspace-metadata-parser.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
+import { MarkdownSemanticLexer } from '../src/shared/markdown-semantic-tokens.ts'
 import { MarkdownSourceModel } from '../src/shared/markdown-source-model.ts'
 import { MarkdownSourceReferences } from '../src/shared/markdown-source-references.ts'
 import {
   BlockTokenizer,
   blockMarkdown,
+  blockScanCounters,
   lexMarkdown,
   parseMarkdown,
 } from '../src/shared/marked-blocks.ts'
 import { noteHeadings } from '../src/shared/note-metadata.ts'
 import { defaultNoteSyntax, noteLexer } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { SourceOwners } from '../src/shared/source-owners.ts'
+import { SourceReferences } from '../src/shared/source-references.ts'
 import { pageTitle } from '../src/site/title.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
 
 const bundle = await build({
   stdin: {
     contents: `
-      export { renderMarkdown, flavors } from './src/renderer/src/flavors.ts'
+      export { renderMarkdown } from './src/renderer/src/render-markdown.ts'
+      export { flavors } from './src/renderer/src/flavors.ts'
       export { textProjection } from './src/renderer/src/text-projection.ts'
       export { BlockTokenizer } from './src/shared/marked-blocks.ts'
       export { Tokenizer } from 'marked'
@@ -95,6 +101,81 @@ function references(source, gfm = false) {
     model.dispose()
   }
 }
+
+test('html interruptions keep newline searches linear across paragraph starts', (t) => {
+  for (const gfm of [false, true]) {
+    for (const count of [32, 64, 128]) {
+      const source = 'text\n<!-- note --> y\n'.repeat(count)
+      const expected = new Marked({ gfm }).lexer(source)
+      const indexOf = String.prototype.indexOf
+      blockScanCounters.calls = blockScanCounters.units = 0
+      let searches = 0
+      const probe = t.mock.method(
+        String.prototype,
+        'indexOf',
+        function (needle, ...args) {
+          if (needle === '\n') searches++
+          return indexOf.call(this, needle, ...args)
+        },
+      )
+      let actual
+      try {
+        actual = new Marked({ gfm }, blockMarkdown).lexer(source)
+      } finally {
+        probe.mock.restore()
+      }
+      assert.deepEqual(actual, expected)
+      t.diagnostic(
+        JSON.stringify({ gfm, count, searches, ...blockScanCounters }),
+      )
+      assert.ok(
+        searches <= count * 12,
+        `${searches} newline searches / ${count} blocks`,
+      )
+    }
+  }
+})
+
+test('setext candidate work stops at blank paragraph boundaries', (t) => {
+  for (const count of [32, 64, 128, 256]) {
+    const source = 'ordinary words\n\n'.repeat(count)
+    blockScanCounters.calls = blockScanCounters.units = 0
+    const tokens = new Marked({}, blockMarkdown).lexer(source)
+    assert.equal(
+      tokens.filter((token) => token.type === 'paragraph').length,
+      count,
+    )
+    t.diagnostic(
+      JSON.stringify({ count, length: source.length, ...blockScanCounters }),
+    )
+    assert.equal(blockScanCounters.calls, count)
+    assert.ok(blockScanCounters.units <= source.length * 2)
+  }
+})
+
+test('import translation retains an entire 50 mib ordinary paragraph', () => {
+  assert.equal(
+    outsideCode(paragraph, (text) => text),
+    paragraph,
+  )
+})
+
+test('semantic tokens retain an entire 50 mib ordinary paragraph', () => {
+  const store = new SourceStore(paragraph, { tabId: 'semantics', revision: 0 })
+  const owners = new SourceOwners([
+    { kind: 'markdown:Paragraph', length: paragraph.length },
+  ])
+  const references = new SourceReferences(owners, () => ({}))
+  const lexer = new MarkdownSemanticLexer({ gfm: false })
+  const result = lexer.read(
+    store.snapshot(),
+    owners,
+    owners.get(0).owner.slot,
+    references,
+  )
+  assert.equal(result.tokens[0].type, 'paragraph')
+  assert.equal(result.tokens[0].raw, paragraph)
+})
 
 test('source references lex an entire 50 mib ordinary paragraph', () => {
   assert.equal(references(paragraph), null)
@@ -190,6 +271,26 @@ test('tokens, references, headings, metadata and full export match unpatched mar
       for (const source of corpus) {
         const original = new Marked({ gfm, breaks: false })
         const expected = original.lexer(source)
+        if (gfm) {
+          const convert = (text) => text.toUpperCase()
+          const imported = outsideCode(source, convert)
+          const heading = t.mock.method(
+            BlockTokenizer.prototype,
+            'lheading',
+            Tokenizer.prototype.lheading,
+          )
+          const paragraph = t.mock.method(
+            BlockTokenizer.prototype,
+            'paragraph',
+            Tokenizer.prototype.paragraph,
+          )
+          try {
+            assert.equal(imported, outsideCode(source, convert))
+          } finally {
+            heading.mock.restore()
+            paragraph.mock.restore()
+          }
+        }
         const settings = {
           ...defaultNoteSyntax,
           gfm,
@@ -368,8 +469,18 @@ test('setext scanner preserves independent rules and the nested parser grammar',
     assert.equal(nestedTokenizer.lheading(paragraph), undefined)
     const original = new nested.Marked({ gfm })
     const patched = new nested.Marked({ gfm }, blockMarkdown)
-    for (const source of corpus)
+    for (const source of corpus) {
       assert.deepEqual(patched.lexer(source), original.lexer(source), source)
+      const tokenizer = Object.assign(
+        new original.Tokenizer(),
+        blockMarkdown.tokenizer,
+      )
+      assert.deepEqual(
+        new original.Lexer({ ...original.defaults, tokenizer }).lex(source),
+        original.lexer(source),
+        source,
+      )
+    }
   }
 })
 

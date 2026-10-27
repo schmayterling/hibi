@@ -2,6 +2,7 @@ import type { MarkdownManager } from '@tiptap/markdown'
 import type { Node } from '@tiptap/pm/model'
 import type { EditorState, Transaction } from '@tiptap/pm/state'
 import { ReplaceStep } from '@tiptap/pm/transform'
+import { blockMarkdown } from '../../shared/marked-blocks.ts'
 import { type SourceOwner, SourceOwners } from '../../shared/source-owners.ts'
 import { preserveRichSource } from './rich-source-preservation.ts'
 import { normalizeSource, sourceText } from './source-text.ts'
@@ -46,11 +47,16 @@ export function createRichParagraphProof(
 ) {
   try {
     const original = sourceText(source)
-    const lexer = () =>
-      new manager.instance.Lexer({
+    const lexer = () => {
+      const tokenizer = Object.assign(
+        new manager.instance.Tokenizer(),
+        blockMarkdown.tokenizer,
+      )
+      return new manager.instance.Lexer({
         ...manager.instance.defaults,
-        tokenizer: null,
+        tokenizer,
       })
+    }
     const tokens = lexer().lex(original.text)
     const regions: Region[] = []
     const blockRegions: number[] = []

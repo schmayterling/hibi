@@ -2,11 +2,11 @@ import { type MarkedExtension, marked, Tokenizer } from 'marked'
 
 // Keep each parser's block grammar, but scan lines without a backtracking frame
 // per character or continuation line. Equivalence tests guard the rule delimiters.
-const setextRules = new WeakMap<
-  RegExp,
-  { start: RegExp; interrupt: RegExp; underline: RegExp }
->()
+const setextRules = new WeakMap<RegExp, { start: RegExp; candidate: RegExp }>()
 const paragraphRules = new WeakMap<RegExp, RegExp>()
+
+// Candidate calls and source spans, including validation of a matched prefix.
+export const blockScanCounters = { calls: 0, units: 0 }
 
 export function lexMarkdown(source: string) {
   return marked.lexer(source, {
@@ -75,35 +75,31 @@ export class BlockTokenizer extends Tokenizer {
       if (!interrupt || !underline) return read.call(this, source)
       rule = {
         start: new RegExp(start),
-        interrupt: new RegExp(`^(?:${interrupt})`),
-        underline: new RegExp(`^${underline}`),
+        candidate: new RegExp(`\\n(?:(${underline})|${interrupt})`),
       }
       setextRules.set(pattern, rule)
     }
     if (!rule.start.test(source)) return
-    let from = 0
-    for (;;) {
-      const end = source.indexOf('\n', from)
-      if (end < 0) return
-      // A dot in the original text capture excludes these line terminators.
-      if (/[\r\u2028\u2029]/.test(source.slice(from, end))) return
-      const rest = source.slice(end + 1)
-      const underline = rule.underline.exec(rest)
-      if (end > 0 && underline)
-        return blockToken(
-          this,
-          'lheading',
-          source,
-          [
-            source.slice(0, end + 1 + underline[0].length),
-            source.slice(0, end),
-            underline[1] as string,
-          ],
-          read,
-        )
-      if (rule.interrupt.test(rest)) return
-      from = end + 1
-    }
+    // Stop at the first underline or interruption without a frame per character.
+    blockScanCounters.calls++
+    const candidate = rule.candidate.exec(source)
+    blockScanCounters.units += candidate
+      ? candidate.index + candidate[0].length
+      : source.length
+    if (!candidate?.[1] || !candidate.index) return
+    blockScanCounters.units += candidate.index
+    if (/[\r\u2028\u2029]/.test(source.slice(0, candidate.index))) return
+    return blockToken(
+      this,
+      'lheading',
+      source,
+      [
+        source.slice(0, candidate.index + candidate[0].length),
+        source.slice(0, candidate.index),
+        candidate[2] as string,
+      ],
+      read,
+    )
   }
 
   override paragraph(source: string, read = Tokenizer.prototype.paragraph) {

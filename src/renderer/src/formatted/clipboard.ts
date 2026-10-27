@@ -3,11 +3,11 @@ import { EditorView } from '@codemirror/view'
 import DOMPurify from 'dompurify'
 import { renderedHtmlOptions } from '../../../shared/rendered-html.ts'
 import { documentRuntime } from '../document-runtime'
-import { renderMarkdown } from '../flavors'
 import {
   type FormattedContribution,
   formattedDocument,
 } from '../formatted-contributions.ts'
+import { renderMarkdown } from '../render-markdown'
 
 /*
  * Copy and paste in the formatted view. Copying gives the selection's exact

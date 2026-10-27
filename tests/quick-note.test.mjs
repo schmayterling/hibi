@@ -46,17 +46,17 @@ async function captureWindow(app) {
               window.focus()
             }
         })
+      const editor = page.locator(
+        formattedEngines.get(app) === 'tiptap'
+          ? '.tiptap[contenteditable="true"]'
+          : '.hibi-formatted .cm-content[contenteditable="true"]',
+      )
       await page
         .getByRole('textbox', { name: 'Document editor', exact: true })
-        .waitFor()
+        .and(editor)
+        .waitFor({ timeout: 7000 })
       assert.equal(
-        await page
-          .locator(
-            formattedEngines.get(app) === 'tiptap'
-              ? '.tiptap[contenteditable="true"]'
-              : '.hibi-formatted .cm-content[contenteditable="true"]',
-          )
-          .count(),
+        await editor.count(),
         1,
         'quick note uses the selected formatted engine',
       )
@@ -159,12 +159,14 @@ const readDraft = (profile) =>
     .then(JSON.parse)
     .catch(() => null)
 
-const noteText = async (capture) =>
-  (
-    await capture
-      .getByRole('textbox', { name: 'Document editor', exact: true })
-      .innerText()
-  ).trim()
+const noteText = (capture) =>
+  capture
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .evaluate((element) =>
+      element.cmTile?.root.view.state.doc.length === 0
+        ? ''
+        : element.innerText.trim(),
+    )
 
 /** A workspace and profile shared by one or more launches, cleaned up together. */
 async function harness(t, { draft, draftFile } = {}) {

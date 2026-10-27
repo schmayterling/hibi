@@ -72,9 +72,9 @@ async function formattedWindowProof(page, preview) {
       const { view } = Object.values(await import(`app://hibi/${sdk}`)).find(
         (value) => value?.view?.EditorView,
       )
-      const addon = addons.snapshot().find(
-        (entry) => entry.manifest.id === 'text-extras',
-      )
+      const addon = addons
+        .snapshot()
+        .find((entry) => entry.manifest.id === 'text-extras')
       const start = addon.start.bind(addon)
       addon.start = async (context) => {
         await start(context)

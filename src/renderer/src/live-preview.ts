@@ -355,7 +355,7 @@ function inline(
   const outer: Range<Decoration>[] = []
   const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
-  const headings = new Map<number, Range<BlockWrapper>>()
+  const headings = new Map<number, Heading>()
   const line = (pos: number) => {
     let info = lines.get(pos)
     if (!info) {
@@ -402,8 +402,10 @@ function inline(
   }
   /** Markers of formatting under the selection stay visible and editable. */
   const syntax = (from: number, to: number, revealed: boolean) => {
-    if (revealed) mark('hibi-lp-marker', from, to)
-    else hideRange(from, to)
+    if (!revealed) hideRange(from, to)
+    else if (to > from) {
+      mark('hibi-lp-marker hibi-lp-syntax', from, to)
+    }
   }
 
   function link(node: SyntaxNode) {
@@ -600,13 +602,11 @@ function inline(
     const heading = /^(ATX|Setext)Heading(\d)$/.exec(name)
     if (heading) {
       if (!headings.has(ref.from))
-        headings.set(
-          ref.from,
-          BlockWrapper.create({
-            tagName: 'div',
-            attributes: { role: 'heading', 'aria-level': name.slice(-1) },
-          }).range(doc.lineAt(ref.from).from, ref.to),
-        )
+        headings.set(ref.from, {
+          from: ref.from,
+          to: ref.to,
+          level: name.slice(-1),
+        })
       eachLine(doc, ref.from, ref.to, range, (current) => {
         // A setext underline line is hidden by the layout field.
         if (
@@ -775,13 +775,52 @@ function inline(
     )
   }
   blocks = noBlocks
+  const wrappers: Range<BlockWrapper>[] = []
+  for (const { from, to, level } of headings.values()) {
+    wrappers.push(
+      BlockWrapper.create({
+        tagName: 'div',
+        attributes: {
+          role: 'heading',
+          'aria-level': level,
+        },
+      }).range(doc.lineAt(from).from, to),
+    )
+  }
   return {
     decorations: Decoration.set(decorations, true),
     groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
     outer: Decoration.set(outer, true),
-    wrappers: BlockWrapper.set([...headings.values()], true),
+    wrappers: BlockWrapper.set(wrappers, true),
     end,
+  }
+}
+
+type Heading = { from: number; to: number; level: string }
+
+/** One name from rendered text; editable syntax stays readable in the original DOM. */
+function nameHeadings(view: EditorView) {
+  for (const heading of view.contentDOM.querySelectorAll('[role="heading"]')) {
+    if (!heading.querySelector('.hibi-lp-syntax')) {
+      heading.removeAttribute('aria-label')
+      continue
+    }
+    const name = [...heading.querySelectorAll('.cm-line')]
+      .map((line) => {
+        const copy = line.cloneNode(true) as HTMLElement
+        for (const syntax of copy.querySelectorAll(
+          '.hibi-lp-syntax, .cm-widgetBuffer, [aria-hidden="true"]',
+        ))
+          syntax.remove()
+        for (const image of copy.querySelectorAll('img'))
+          image.replaceWith(image.alt)
+        for (const br of copy.querySelectorAll('br')) br.replaceWith(' ')
+        return copy.textContent
+      })
+      .join(' ')
+    if (heading.getAttribute('aria-label') !== name)
+      heading.setAttribute('aria-label', name)
   }
 }
 
@@ -1440,6 +1479,9 @@ export function livePreview(
           this.reveal,
           view.state.field(layout),
         ))
+      }
+      docViewUpdate(view: EditorView) {
+        nameHeadings(view)
       }
       update(update: ViewUpdate) {
         const tree = syntax.tree(update.state)

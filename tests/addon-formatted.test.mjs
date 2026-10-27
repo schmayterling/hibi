@@ -35,8 +35,14 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
           const exports = {
             commands: ['isolateHistory'],
             language: ['syntaxTree'],
-            state: ['Prec', 'Transaction'],
-            view: ['EditorView', 'ViewPlugin'],
+            state: [
+              'Facet',
+              'Prec',
+              'StateEffect',
+              'StateField',
+              'Transaction',
+            ],
+            view: ['Decoration', 'EditorView', 'ViewPlugin', 'keymap'],
           }
           builder.onResolve({ filter: /^@codemirror\// }, (args) => ({
             path: args.path.split('/')[1],

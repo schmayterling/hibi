@@ -962,13 +962,13 @@ class TableView {
     this.view.focus()
   }
 
-  stopEditing() {
+  stopEditing(redraw = true) {
     const editing = this.editing
     if (!editing) return
     this.editing = null
     editing.editor.destroy()
-    // The cell renders statically again.
-    if (editing.line < this.lines && editing.element.isConnected)
+    // The cell renders statically again unless its table is being removed.
+    if (redraw && editing.line < this.lines && editing.element.isConnected)
       editing.element.replaceWith(
         this.cell(
           editing.line ? 'td' : 'th',
@@ -1746,11 +1746,9 @@ class TableView {
     const pos = link && this.dom.contains(link) ? this.linkStart(link) : null
     const wiki = link?.closest('[data-wiki-link]')
     const raw = wiki?.getAttribute('data-wiki-link')
-    // An active cell still has the table escape before an alias's pipe.
+    // Both cell renderers read the canonical table escape before an alias's pipe.
     const target =
-      this.editing?.editor.view.dom.contains(link) &&
-      wiki?.getAttribute('data-wiki-alias') === 'true' &&
-      raw?.endsWith('\\')
+      wiki?.getAttribute('data-wiki-alias') === 'true' && raw?.endsWith('\\')
         ? raw.slice(0, -1).trim()
         : (raw ?? undefined)
     if (
@@ -1793,7 +1791,7 @@ class TableView {
   }
 
   destroy() {
-    this.stopEditing()
+    this.stopEditing(false)
     if (this.saving) this.save()
     this.unsubscribe?.()
     mounted.get(this.view)?.delete(this)

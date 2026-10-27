@@ -94,18 +94,24 @@ test('footnote references are links that move to their definitions', {
       }
     }, target)
   const arrived = () =>
-    page.waitForFunction((definition) => {
-      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
-        .view
-      const at = view.coordsAtPos(definition)
-      const box = view.scrollDOM.getBoundingClientRect()
-      return (
-        view.state.selection.main.head === definition &&
-        at &&
-        at.top >= box.top &&
-        at.bottom <= box.bottom
-      )
-    }, definition)
+    page.waitForFunction(
+      ({ definition, target }) => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile
+          .root.view
+        const line = [...view.contentDOM.querySelectorAll('.cm-line')].find(
+          (element) => element.textContent.includes(target),
+        )
+        const at = line?.getBoundingClientRect()
+        const box = document.querySelector('.rich-pane').getBoundingClientRect()
+        return (
+          view.state.selection.main.head === definition &&
+          at &&
+          at.top >= box.top &&
+          at.bottom <= box.bottom
+        )
+      },
+      { definition, target },
+    )
   const top = () =>
     page.evaluate(() => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root

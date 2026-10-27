@@ -100,8 +100,8 @@ function trimmed(
   for (; from < to && isSpace(cx.char(from)); from++) obsidianWork.reads++
   for (; to > from && isSpace(cx.char(to - 1)); to--) obsidianWork.reads++
   if (from === to) return []
-  const { parser } = cx
-  const type = parser.nodeSet.types[parser.getNodeType(name)]!
+  // An element for the node gives its type's id in this parser.
+  const type = cx.parser.nodeSet.types[cx.elt(name, from, to).type]!
   const text = new Tree(type, [], [], to - from, [
     [wikiText, cx.slice(from, to)],
   ])

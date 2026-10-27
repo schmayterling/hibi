@@ -95,6 +95,22 @@ test('rendered projection follows the formatted grammar including active flavors
   )
 })
 
+test('projection window cache covers every requested source unit beyond parser lookahead', () => {
+  const text = '- item\n'.repeat(100)
+  const projection = index(text, {
+    ...config,
+    chunkSize: 16,
+    groupSize: 4,
+    giantBlock: 64,
+  })
+  for (let from = 0; from < text.length; from += 7)
+    assert.equal(
+      [...projection.range(from, from + 6)].map((chunk) => chunk.text).join(''),
+      'item',
+      String(from),
+    )
+})
+
 test('replacement proof uses active flavour syntax and widget rules', () => {
   for (const value of [
     '[[Page|Alias]]',

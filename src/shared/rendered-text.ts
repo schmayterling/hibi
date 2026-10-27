@@ -238,7 +238,7 @@ export class RenderedTextIndex {
     const from = Math.floor(at / width) * width,
       to = Math.min(this.length, from + width)
     const found = this.#windows.find(
-      (value) => value.from <= at && at < value.to,
+      (value) => value.from <= from && value.to >= to,
     )
     if (found) return found
     const tree = yield* this.#advance(

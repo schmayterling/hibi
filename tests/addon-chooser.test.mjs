@@ -90,14 +90,14 @@ test('addon chooser reviews every candidate, supports keyboard selection, and se
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await waitForDocumentEditor(app, page)
   await page.evaluate(() =>
     window.hibi.setAddonTrustSettings({
       allowUnsigned: true,
       checkRevocations: false,
     }),
   )
-  page.setDefaultTimeout(7000)
-  await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog, shell, ipcMain }, source) => {
     globalThis.packageSource = source
     globalThis.nativeReviews = 0

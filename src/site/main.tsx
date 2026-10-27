@@ -11,7 +11,6 @@ import {
   PanelLeft,
   Search,
 } from 'lucide-react'
-import { marked } from 'marked'
 import {
   type CSSProperties,
   useCallback,
@@ -27,6 +26,7 @@ import {
   type PaletteCommand,
 } from '../renderer/src/CommandPalette'
 import { headingAnchors } from '../shared/heading-anchor'
+import { parseMarkdown } from '../shared/marked-blocks.ts'
 import { renderedHtmlOptions } from '../shared/rendered-html'
 import '../addons/graph/style.css'
 import { ColorschemeSettings } from '../ui/ColorschemeSettings'
@@ -187,7 +187,7 @@ export function startSite(workspace: SiteData, root: Root) {
 
   function renderMarkdown(path: string, markdown: string, html?: string) {
     const fragment = DOMPurify.sanitize(
-      html ?? marked.parse(markdown, { async: false }),
+      html ?? parseMarkdown(markdown),
       html === undefined
         ? {
             RETURN_DOM_FRAGMENT: true,

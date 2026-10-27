@@ -2,6 +2,10 @@ import type { Token } from 'marked'
 import type { BoundaryRecord } from './chunked-markdown.ts'
 import type { BoundaryConfig } from './markdown-boundary-syntax.ts'
 
+/** Prefix positions follow source edits; they do not select a grammar. */
+export const boundaryKey = (config: BoundaryConfig) =>
+  JSON.stringify({ ...config, prefix: 0 })
+
 export type BoundaryPage = {
   type: 'boundaries'
   epoch: string
@@ -11,6 +15,8 @@ export type BoundaryPage = {
   sequence: number
   length: number
   from?: number
+  /** End of the repaired range; the suffix after it is unchanged from baseVersion. */
+  to?: number
   records: BoundaryRecord[]
   done: boolean
 }
@@ -71,6 +77,7 @@ export type DocumentWorkerRequest =
       version: number
       config: BoundaryConfig
       from?: number
+      baseVersion?: number
     }
   | {
       type: 'boundary-ack'

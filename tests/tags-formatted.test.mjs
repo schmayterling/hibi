@@ -244,7 +244,7 @@ test('every leaf block with inline text holds its tags once, whichever syntax ad
   assert.ok(read < 2 * (to - from), `${read} characters read`)
 })
 
-test('code, HTML, comments, link definitions, frontmatter, alert titles and block math hold no tags', () => {
+test('code, HTML, comments, link definitions, frontmatter, alert titles, block math and rules hold no tags', () => {
   const doc = [
     '```\n#fenced\n```',
     '    #indented',
@@ -264,6 +264,12 @@ test('code, HTML, comments, link definitions, frontmatter, alert titles and bloc
   assert.deepEqual(found(`${prefix}\nbody #body`, { prefix: prefix.length }), [
     'body',
   ])
+  // A rule has no text, so a long one in view reads none.
+  const rule = render('-'.repeat(100_000), {
+    ranges: [{ from: 50_000, to: 50_064 }],
+  })
+  assert.deepEqual(rule.marks, [])
+  assert.equal(rule.read, 0)
 })
 
 test('contributed node views apply by node name or Lezer group, once each', () => {

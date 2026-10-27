@@ -13,7 +13,7 @@ import { tagMatches } from './syntax.ts'
 /**
  * Leaf blocks whose text the rich view does not show as text: code, HTML,
  * comments, processing instructions, link definitions, frontmatter, alert
- * titles and display math. Every other leaf block holds tags, such as
+ * titles, display math and rules. Every other leaf block holds tags, such as
  * paragraphs, headings, tasks and small text, whichever syntax adds it.
  */
 const sourceBlocks = new Set([
@@ -26,6 +26,7 @@ const sourceBlocks = new Set([
   'Frontmatter',
   'AlertTitle',
   'BlockMath',
+  'HorizontalRule',
 ])
 
 /** Inline syntax whose text is never a tag, like the rich view's code and link marks. */

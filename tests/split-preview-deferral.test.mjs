@@ -863,10 +863,11 @@ async function cmSplit(t, original) {
     const sourceMode = await page.locator('.editor-panes.mode-markdown').count()
     const editors = sourceMode ? [] : [rich]
     if (
-      canonical.length > 256 * 1024 &&
+      original.length > 256 * 1024 &&
       (await page.locator('.editor-panes.mode-normal').count())
     ) {
-      // Design §11 releases the hidden source rope of a large note.
+      // Opening size stays cached while this fixture edits one revision.
+      // Huge-note growth needs a separate release check.
       await source.waitFor({ state: 'detached' })
       assert.equal(await source.count(), 0)
     } else {

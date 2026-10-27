@@ -448,6 +448,48 @@ test('keys pressed while an embedded note link has focus edit beside the embed, 
   }
 })
 
+test('a revealed image embed keeps its image beside its source, as core images do', {
+  timeout: 90000,
+}, async () => {
+  await engine(true, true)
+  await open('parity.md')
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const images = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .obsidian-embed img')].map(
+        (image) => ({
+          width: image.getBoundingClientRect().width,
+          loaded: image.complete && image.naturalWidth > 0,
+        }),
+      ),
+    )
+  await page.waitForFunction(() => {
+    const image = document.querySelector('.rich-pane .obsidian-embed img')
+    return image?.complete && image.naturalWidth > 0
+  })
+  assert.deepEqual(await images(), [{ width: 120, loaded: true }])
+  await page.locator('.rich-pane .obsidian-embed img').click()
+  await page
+    .locator('.rich-pane .cm-line', { hasText: '![[pic.png|120]]' })
+    .waitFor()
+  await page.waitForFunction(() => {
+    const image = document.querySelector('.rich-pane .obsidian-embed img')
+    return image?.complete && image.naturalWidth > 0
+  })
+  assert.deepEqual(await images(), [{ width: 120, loaded: true }])
+  // The image follows its source on the same line.
+  const line = await page.evaluate(() => {
+    const image = document.querySelector('.rich-pane .obsidian-embed img')
+    const line = image.closest('.cm-line')
+    return {
+      text: line.textContent,
+      marker: !!line.querySelector('.hibi-lp-marker'),
+    }
+  })
+  assert.deepEqual(line, { text: '![[pic.png|120]]', marker: true })
+})
+
 test('shift-click below an image and on decoded glyphs keeps the target through mousedown', {
   timeout: 90000,
 }, async () => {

@@ -230,20 +230,20 @@ export const contribution: FormattedContribution = {
       decorate(node, out, { state, revealed }) {
         const parts = wikiParts(state.sliceDoc(node.from, node.to))
         if (!parts) return false
+        const widget = new EmbedWidget(
+          parts.target,
+          parts.label,
+          state.facet(formattedDocument).revision,
+          node.to - node.from,
+        )
         if (revealed) {
           out.syntax(node.from, node.from + 3)
           out.syntax(node.to - 2, node.to)
-        } else
-          out.replace(
-            node.from,
-            node.to,
-            new EmbedWidget(
-              parts.target,
-              parts.label,
-              state.facet(formattedDocument).revision,
-              node.to - node.from,
-            ),
-          )
+          // An image stays beside its source, as core images do; a note's
+          // link would only repeat the label.
+          if (image.test(parts.target.split('#')[0] ?? ''))
+            out.widget(node.to, widget)
+        } else out.replace(node.from, node.to, widget)
         return false
       },
     },

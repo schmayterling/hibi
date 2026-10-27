@@ -144,7 +144,7 @@ export type FormattedContribution = {
   syntax?: MarkdownConfig | readonly MarkdownConfig[]
   /**
    * The syntax's inline parsers start only at characters in
-   * ``\`&*_![]<>~^$:``, URLs or email addresses, so the language keeps
+   * ``\`&*_![]<>~^$:=``, URLs or email addresses, so the language keeps
    * skipping text without them; other contributed inline syntax turns that off.
    */
   inlineStops?: boolean
@@ -163,6 +163,11 @@ export type FormattedContribution = {
 
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
+
+/** Block overlays opt into measuring the edges the container renderer draws. */
+export const formattedBlockEdges = Facet.define<boolean, boolean>({
+  combine: (values) => values.some(Boolean),
+})
 
 /** The view's active flavor ids also identify worker boundary configurations. */
 export const formattedFlavors = Facet.define<

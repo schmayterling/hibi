@@ -164,6 +164,9 @@ export const contribution: FormattedContribution = {
   id: 'markdown.obsidian',
   flavor: 'markdown.obsidian',
   syntax: obsidianSyntax,
+  // Embeds, wikilinks and highlights start at `!`, `[` and `=`, so text
+  // without them is still skipped.
+  inlineStops: true,
   views: [
     {
       nodes: ['WikiLink'],

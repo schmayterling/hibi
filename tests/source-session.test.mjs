@@ -324,65 +324,75 @@ test('a read-only view takes no undo or redo by any route and keeps the history'
   f.session.dispose()
 })
 
-test('sdk selection history keeps a host view text history in the session', () => {
-  const session = new DocumentSession(
-    'start',
-    { tabId: 'cm-test', revision: 0 },
-    0,
-    {
-      enqueue: () => {},
-      onError: (error) => {
-        throw error
+for (const kind of ['view', 'state command target'])
+  test(`sdk history on a host ${kind} keeps text history in the session`, () => {
+    const session = new DocumentSession(
+      'start',
+      { tabId: 'cm-test', revision: 0 },
+      0,
+      {
+        enqueue: () => {},
+        onError: (error) => {
+          throw error
+        },
       },
-    },
-  )
-  const bridge = createSourceSession(session, 'formatted')
-  const lock = new Compartment()
-  const view = {
-    state: EditorState.create({
-      doc: 'start',
-      extensions: [commands.history(), lock.of([])],
-    }),
-    update(transactions) {
-      for (const transaction of transactions) this.state = transaction.state
-    },
-    dispatch(transaction) {
-      bridge.dispatch([transaction], view)
-    },
-  }
-  const detach = bridge.attach(view)
-  view.dispatch(view.state.update(type(5, '!', 1)))
-  const current = () => ({
-    text: session.snapshot().materialize(),
-    version: session.state().contentVersion,
-    depth: session.historyDepth(),
+    )
+    const bridge = createSourceSession(session, 'formatted')
+    const lock = new Compartment()
+    const view = {
+      state: EditorState.create({
+        doc: 'start',
+        extensions: [commands.history(), lock.of([])],
+      }),
+      update(transactions) {
+        for (const transaction of transactions) this.state = transaction.state
+      },
+      dispatch(transaction) {
+        bridge.dispatch([transaction], view)
+      },
+    }
+    const target = () =>
+      kind === 'view' ? view : { state: view.state, dispatch: view.dispatch }
+    const detach = bridge.attach(view)
+    view.dispatch(view.state.update(type(5, '!', 1)))
+    const current = () => ({
+      text: session.snapshot().materialize(),
+      version: session.state().contentVersion,
+      depth: session.historyDepth(),
+    })
+    const typed = current()
+    view.dispatch(
+      view.state.update({
+        effects: lock.reconfigure(EditorState.readOnly.of(true)),
+      }),
+    )
+    for (const command of ['undo', 'redo', 'undoSelection', 'redoSelection'])
+      assert.equal(commands[command](target()), false, command)
+    assert.deepEqual(current(), typed)
+    view.dispatch(view.state.update({ effects: lock.reconfigure([]) }))
+    // Undo and redo are the session's, not new edits from the view's history.
+    assert.equal(commands.undoSelection(target()), true)
+    assert.deepEqual(current(), {
+      text: 'start',
+      version: typed.version + 1,
+      depth: { undo: 0, redo: 1 },
+    })
+    assert.equal(commands.redoSelection(target()), true)
+    assert.equal(commands.undo(target()), true)
+    assert.equal(commands.redo(target()), true)
+    assert.deepEqual(current(), {
+      text: 'start!',
+      version: typed.version + 4,
+      depth: { undo: 1, redo: 0 },
+    })
+    // A detached view's states no longer reach the session.
+    const left = target()
+    detach()
+    for (const command of ['undo', 'undoSelection'])
+      assert.equal(commands[command](left), false, command)
+    assert.equal(current().text, 'start!')
+    session.dispose()
   })
-  const typed = current()
-  view.dispatch(
-    view.state.update({
-      effects: lock.reconfigure(EditorState.readOnly.of(true)),
-    }),
-  )
-  assert.equal(commands.undoSelection(view), false)
-  assert.equal(commands.redoSelection(view), false)
-  assert.deepEqual(current(), typed)
-  view.dispatch(view.state.update({ effects: lock.reconfigure([]) }))
-  // Undo and redo are the session's, not new edits from the view's history.
-  assert.equal(commands.undoSelection(view), true)
-  assert.deepEqual(current(), {
-    text: 'start',
-    version: typed.version + 1,
-    depth: { undo: 0, redo: 1 },
-  })
-  assert.equal(commands.redoSelection(view), true)
-  assert.deepEqual(current(), {
-    text: 'start!',
-    version: typed.version + 2,
-    depth: { undo: 1, redo: 0 },
-  })
-  detach()
-  session.dispose()
-})
 
 test('a hidden source view coalesces canonical edits and catches up exactly when shown', () => {
   const f = fixture('one\r\ntwo\rthree\n')

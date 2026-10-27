@@ -368,6 +368,10 @@ Embed ![[Happy.png]] here
 
 Autolink <https://happy.example> and https://happy.example here
 
+Footnote [^Happy] here
+
+[^Happy]: Happy note
+
 | Wiki | Cell |
 | - | - |
 | [[Happy]] | x |
@@ -381,11 +385,13 @@ Autolink <https://happy.example> and https://happy.example here
     .first()
     .waitFor()
   // A wikilink without an alias keeps its target and shows the new word as
-  // its alias, as the rich view writes it; in a table the alias pipe is escaped.
+  // its alias, as the rich view writes it; in a table the alias pipe is
+  // escaped. A footnote's text changes in place.
   for (const [source, offset, replaced] of [
     ['[[Happy]] and', 3, '[[Happy|Glad]] and'],
     ['[[Note|Happy]]', 8, '[[Note|Glad]]'],
     ['| [[Happy]] |', 5, '| [[Happy\\|Glad]] |'],
+    ['[^Happy]: Happy note', 12, '[^Happy]: Glad note'],
   ]) {
     await caret(page, note.indexOf(source) + offset)
     await chooseSynonym(app, page, 'Happy', 'glad')
@@ -393,8 +399,9 @@ Autolink <https://happy.example> and https://happy.example here
     await pressShortcut(app, `${mod}+z`)
     await saved(page, note)
   }
-  // Text the formatted view shows as a link's destination, title or label, an
-  // alias's target, an embed, or a URL is not a word to look up.
+  // Text the formatted view shows as a link's destination, title or label, a
+  // footnote's label, an alias's target, an embed, or a URL is not a word to
+  // look up.
   await page.evaluate(() => {
     window.noWordNotices = 0
     new MutationObserver((records) => {
@@ -422,6 +429,8 @@ Autolink <https://happy.example> and https://happy.example here
     note.indexOf('![[Happy.png]]') + 5,
     note.indexOf('<https://happy.example>') + 10,
     note.indexOf('and https://happy.example') + 14,
+    note.indexOf('[^Happy] here') + 4,
+    note.indexOf('[^Happy]:') + 4,
     definition + 3,
     note.indexOf('happy.example', definition) + 2,
   ]) {

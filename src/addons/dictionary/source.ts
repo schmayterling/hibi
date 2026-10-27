@@ -19,28 +19,29 @@ export const trackSourceViews = (
 
 /**
  * Syntax whose text the formatted view does not show as text: destinations,
- * titles, reference labels and embeds, and the brackets that a replaced
- * selection must keep.
+ * titles, reference and footnote labels and embeds, and the brackets that a
+ * replaced selection must keep.
  */
 const unshown = new Set([
   'URL',
   'LinkTitle',
   'LinkLabel',
+  'FootnoteLabel',
   'Autolink',
   'WikiEmbed',
   'LinkMark',
+  'FootnoteMark',
   'WikiMark',
 ])
 
 /** A link or image without `(…)` or `[label]` after its text, whose text is then its reference's label. */
 function namesReference(node: SyntaxNode, state: EditorState) {
-  const label = node.getChild('LinkLabel')
-  return (
-    !(label && label.to - label.from > 2) &&
-    !node
-      .getChildren('LinkMark')
-      .some((mark) => state.sliceDoc(mark.from, mark.to) === '(')
-  )
+  // Its last child is the `)` after a destination, a `[label]`, or the `]`
+  // after its text, so its other children are never read.
+  const last = node.lastChild
+  return last?.name === 'LinkLabel'
+    ? last.to - last.from <= 2
+    : state.sliceDoc(node.to - 1, node.to) !== ')'
 }
 
 /**
@@ -60,29 +61,31 @@ function wordEdit(state: EditorState, from: number, to: number) {
   const tree = formattedSyntaxTree(state)
   if (!tree) return inPlace
   if (uncovered(tree, from, to)) return null
-  let shown = true
   let target = null as SyntaxNode | null
-  tree.iterate({
-    from,
-    to,
-    enter(node) {
-      if (!shown || node.from >= to || node.to <= from) return false
-      if (
-        unshown.has(node.name) ||
-        ((node.name === 'Link' || node.name === 'Image') &&
-          namesReference(node.node, state))
-      )
-        shown = false
-      else if (node.name === 'WikiTarget') {
-        // Behind an alias, a target is syntax.
-        if (node.node.parent?.getChildren('WikiMark').length !== 2)
-          shown = false
-        else target = node.node
-      }
-      return shown
-    },
-  })
-  if (!shown) return null
+  const shown = (node: SyntaxNode) => {
+    if (
+      unshown.has(node.name) ||
+      ((node.name === 'Link' || node.name === 'Image') &&
+        namesReference(node, state))
+    )
+      return false
+    if (node.name !== 'WikiTarget') return true
+    // Behind an alias, a target is syntax.
+    if (node.parent?.getChildren('WikiMark').length !== 2) return false
+    target = node
+    return true
+  }
+  // The nodes the word overlaps are those around its start and those that
+  // start in it; a link's other children are not read.
+  const cursor = tree.cursorAt(from, 1)
+  for (let node: SyntaxNode | null = cursor.node; node; node = node.parent)
+    if (!shown(node)) return null
+  for (
+    let more = cursor.childAfter(from) || cursor.next(false);
+    more && cursor.from < to;
+    more = cursor.next()
+  )
+    if (!shown(cursor.node)) return null
   if (!target) return inPlace
   const { from: start, to: end } = target
   let table: SyntaxNode | null = target

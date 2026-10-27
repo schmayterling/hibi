@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
+import { TreeCursor } from '@lezer/common'
 import {
   detectLangs,
   matchCase,
@@ -26,8 +27,12 @@ import {
   writePreferences,
 } from '../src/addons/dictionary/settings.ts'
 import { sourceTarget } from '../src/addons/dictionary/source.ts'
-import { formattedTree } from '../src/renderer/src/formatted-contributions.ts'
+import {
+  formattedMarkdown,
+  formattedTree,
+} from '../src/renderer/src/formatted-contributions.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
+import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
 
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
@@ -198,25 +203,26 @@ test('dictionary finds the caret word with the right segmenter and language', ()
   assert.deepEqual(detectLangs('사랑', preferences), [])
 })
 
-test('in the formatted view the dictionary offers no word across link brackets or in text not parsed yet', () => {
-  /** A formatted view's state behind the editor calls the lookup makes. */
-  const view = (doc) => {
-    const syntax = formattedSyntax({ slice: 1000 })
-    let state = EditorState.create({
-      doc,
-      extensions: [syntax.extension, formattedTree.of(syntax.tree)],
-    })
-    return {
-      get state() {
-        return state
-      },
-      dispatch(spec) {
-        state = state.update(spec).state
-      },
-      dom: { isConnected: true },
-      focus() {},
-    }
+/** A formatted view's state, with `extensions`, behind the editor calls the lookup makes. */
+const view = (doc, extensions = []) => {
+  const syntax = formattedSyntax({ slice: 1000 })
+  let state = EditorState.create({
+    doc,
+    extensions: [syntax.extension, formattedTree.of(syntax.tree), extensions],
+  })
+  return {
+    get state() {
+      return state
+    },
+    dispatch(spec) {
+      state = state.update(spec).state
+    },
+    dom: { isConnected: true },
+    focus() {},
   }
+}
+
+test('in the formatted view the dictionary offers no word across link brackets or in text not parsed yet', () => {
   const link = 'Link [Happy](https://happy.example) here\n'
   const url = link.indexOf('happy.example') + 2
   const near = view(link)
@@ -235,6 +241,52 @@ test('in the formatted view the dictionary offers no word across link brackets o
     sourceTarget(far, filler.length + url, filler.length + url),
     null,
   )
+})
+
+test('in the formatted view footnote labels offer no word and a definition keeps its text replaceable', () => {
+  const note = 'See [^Happy] here\n\n[^Happy]: A happy note\n'
+  const footnote = view(note, formattedMarkdown.of(Footnotes))
+  for (const at of [note.indexOf('Happy') + 2, note.lastIndexOf('Happy') + 2])
+    assert.equal(sourceTarget(footnote, at, at), null, `offset ${at}`)
+  const happy = sourceTarget(
+    footnote,
+    note.indexOf('happy') + 2,
+    note.indexOf('happy') + 2,
+  )
+  assert.equal(happy.word, 'happy')
+  assert.equal(happy.replace('glad'), true)
+  assert.equal(footnote.state.doc.toString(), note.replace('happy', 'glad'))
+})
+
+test('in the formatted view a word lookup in a link reads none of its other children', () => {
+  /** Tree cursor moves between siblings while looking up the word at each offset of `doc`. */
+  const moves = (doc, offsets) => {
+    const formatted = view(doc)
+    const step = {}
+    let count = 0
+    for (const name of ['next', 'prev', 'nextSibling', 'prevSibling']) {
+      step[name] = TreeCursor.prototype[name]
+      TreeCursor.prototype[name] = function (...args) {
+        count++
+        return step[name].apply(this, args)
+      }
+    }
+    try {
+      return offsets.map((at) => {
+        count = 0
+        assert.equal(sourceTarget(formatted, at, at)?.word, 'Happy')
+        return count
+      })
+    } finally {
+      Object.assign(TreeCursor.prototype, step)
+    }
+  }
+  const link = (spans) =>
+    `[Happy ${'*x*_x_'.repeat(spans / 2)} Happy](https://x.example)`
+  const words = (doc) => [3, doc.lastIndexOf('Happy') + 2]
+  const small = link(2)
+  const large = link(20000)
+  assert.deepEqual(moves(large, words(large)), moves(small, words(small)))
 })
 
 test('dictionary keeps German preferences and recent pack language', (t) => {

@@ -911,6 +911,7 @@ class TableView {
    * text on the line right after a table would be one of its rows.
    */
   leave(after: boolean) {
+    if (!this.current) return
     const { doc } = this.view.state
     const { from, to } = this.range()
     this.stopEditing()
@@ -1750,13 +1751,15 @@ const tableEditing = ViewPlugin.fromClass(
     }
     update(update: ViewUpdate) {
       const tables = mounted.get(this.view) ?? []
-      // A selection set elsewhere, as by undo, moves a focused cell editor;
-      // not one the formatted view read from the editor's DOM selection.
+      // Undo and keyboard navigation move a focused cell editor; ignore
+      // DOM selection echoes from the unfocused formatted view.
       const selected = update.transactions.some(
         (transaction) =>
           transaction.selection &&
           !transaction.annotation(cellInput) &&
-          transaction.annotation(Transaction.userEvent) !== 'select',
+          (transaction.annotation(Transaction.userEvent) !== 'select' ||
+            transaction.scrollIntoView ||
+            update.view.hasFocus),
       )
       // Until they follow, deleted rows' places move with every change, and
       // a selection set since takes their place.

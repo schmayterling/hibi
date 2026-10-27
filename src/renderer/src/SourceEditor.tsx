@@ -1841,15 +1841,21 @@ export function SourceEditor({
     const unregister = registerSourceView(
       editor,
       (raw) => {
-        const anchor = bridge.snapshot().rawToEditor(raw)
-        if (anchor !== null)
-          editor.dispatch({
-            selection: { anchor },
-            effects: EditorView.scrollIntoView(anchor, {
-              y: 'start',
-              yMargin: 48,
-            }),
-          })
+        const at = bridge.snapshot().rawToEditor(raw)
+        if (at === null) return
+        // Like the rich view, the formatted view puts the caret in a heading's
+        // text, after the opening mark and the space it hides with it.
+        const end = Math.min(editor.state.doc.lineAt(at).to, at + 7),
+          mark = formatted
+            ? /^#{1,6}(?:[ \t]|$)/.exec(editor.state.sliceDoc(at, end))
+            : null
+        editor.dispatch({
+          selection: { anchor: at + (mark?.[0].length ?? 0) },
+          effects: EditorView.scrollIntoView(at, {
+            y: 'start',
+            yMargin: 48,
+          }),
+        })
       },
       {
         toSource: (position) =>

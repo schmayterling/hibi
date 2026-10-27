@@ -11,10 +11,11 @@ import {
   blockMathSyntax,
   inlineMathSyntax,
 } from '../addons/math/formatted-syntax.ts'
+import { subtextSyntax } from '../addons/text-extras/formatted-syntax.ts'
 
 import { EmptyTask, Footnotes, GithubAlerts } from './markdown-extra-syntax.ts'
 
-/** Both realms import these objects; an unrecognized contribution never gets a guessed grammar. */
+/** Block grammars must use these same objects in both realms. */
 const catalog = {
   'table@1': Table,
   'tasks@1': TaskList,
@@ -25,6 +26,7 @@ const catalog = {
   'autolink@1': Autolink,
   'math-inline@1': inlineMathSyntax,
   'math-block@1': blockMathSyntax,
+  'subtext@1': subtextSyntax,
 } satisfies Record<string, MarkdownConfig>
 
 export type BoundarySyntax = keyof typeof catalog
@@ -41,7 +43,55 @@ export type BoundaryConfig = {
 }
 export { boundaryKey } from './document-worker-protocol.ts'
 
-/** Resolve by object identity, including order. Names or similar node sets cannot prove parity. */
+const catalogParser = parser.configure(Object.values(catalog))
+const boundaryNodes = new Set([
+  'Frontmatter',
+  ...catalogParser.nodeSet.types.map((type) => type.name),
+])
+const blockNames = (catalogParser as unknown as { blockNames?: unknown })
+  .blockNames
+
+function plainFields(value: object, fields: readonly string[]) {
+  if (!value || typeof value !== 'object') return false
+  const prototype = Object.getPrototypeOf(value)
+  return (
+    (prototype === null || prototype === Object.prototype) &&
+    Reflect.ownKeys(value).every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      return (
+        typeof key === 'string' &&
+        fields.includes(key) &&
+        descriptor !== undefined &&
+        'value' in descriptor
+      )
+    })
+  )
+}
+
+/** Inline names are removed during block scans, so they must not name block rules. */
+function inlineOnly(config: MarkdownConfig) {
+  return (
+    plainFields(config, ['parseInline', 'defineNodes']) &&
+    (config.parseInline === undefined || Array.isArray(config.parseInline)) &&
+    (config.parseInline ?? []).every(
+      (rule) =>
+        plainFields(rule, ['name', 'parse', 'before', 'after']) &&
+        typeof rule.name === 'string' &&
+        Array.isArray(blockNames) &&
+        !blockNames.includes(rule.name),
+    ) &&
+    (config.defineNodes === undefined || Array.isArray(config.defineNodes)) &&
+    (config.defineNodes ?? []).every((node) =>
+      typeof node === 'string'
+        ? !boundaryNodes.has(node)
+        : plainFields(node, ['name', 'block', 'style']) &&
+          !node.block &&
+          !boundaryNodes.has(node.name),
+    )
+  )
+}
+
+/** Known grammars retain order; proven inline-only configs need no worker syntax. */
 export function boundarySyntaxIds(
   extensions: MarkdownExtension,
 ): BoundarySyntax[] | null {
@@ -51,7 +101,7 @@ export function boundarySyntaxIds(
     const id = (Object.keys(catalog) as BoundarySyntax[]).find(
       (key) => catalog[key] === extension,
     )
-    if (!id) return false
+    if (!id) return inlineOnly(extension as MarkdownConfig)
     ids.push(id)
     return true
   }

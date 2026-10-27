@@ -18,6 +18,15 @@ import { renderMarkdown } from '../render-markdown'
 
 /** Marks the HTML this view copies, whose text is already the exact Markdown. */
 const copied = 'data-hibi-markdown'
+/**
+ * ponytail: the most selected Markdown a copy renders as HTML, the size of the
+ * largest note the rich view opens formatted. The clipboard only takes data
+ * during the event, and rendering grows with the selection, so larger
+ * selections copy their Markdown as text only, as the source view does. A
+ * later write would replace anything copied since; HTML for them needs a
+ * clipboard that can add a format to an earlier copy.
+ */
+const renderedLimit = 256 * 1024
 const pastedSelection = Annotation.define<EditorSelection>()
 
 /** HTML pastes waiting for the converter, with the selection each replaces. */
@@ -35,20 +44,21 @@ function copy(event: ClipboardEvent, view: EditorView, cut: boolean) {
   event.preventDefault()
   data.clearData()
   data.setData('text/plain', markdown)
-  try {
-    const { tabId } = state.facet(formattedDocument)
-    const { html } = renderMarkdown(
-      markdown,
-      tabId ? documentRuntime.get(tabId)?.id : undefined,
-    )
-    data.setData(
-      'text/html',
-      `<div ${copied}>${DOMPurify.sanitize(html, renderedHtmlOptions)}</div>`,
-    )
-  } catch (error) {
-    // The text is on the clipboard either way.
-    console.error('Copied HTML could not be rendered:', error)
-  }
+  if (markdown.length <= renderedLimit)
+    try {
+      const { tabId } = state.facet(formattedDocument)
+      const { html } = renderMarkdown(
+        markdown,
+        tabId ? documentRuntime.get(tabId)?.id : undefined,
+      )
+      data.setData(
+        'text/html',
+        `<div ${copied}>${DOMPurify.sanitize(html, renderedHtmlOptions)}</div>`,
+      )
+    } catch (error) {
+      // The text is on the clipboard either way.
+      console.error('Copied HTML could not be rendered:', error)
+    }
   if (cut && !state.readOnly)
     view.dispatch({
       changes: ranges.map(({ from, to }) => ({ from, to })),

@@ -253,9 +253,36 @@ test('native formatted copy has no one-mebibyte content cutoff', {
   const copied = await readClipboard()
   assert.equal(copied.text.length, text.length)
   assert.equal(copied.text, text)
-  assert.ok(copied.html.length > text.length)
+  // A selection this large copies its Markdown as text only.
+  assert.equal(copied.html.length, 0)
   await undo()
   await settled(note)
+})
+
+test('copy renders html for selections up to 256 KiB and copies larger ones as text only', {
+  timeout: 60000,
+}, async () => {
+  const limit = 256 * 1024
+  const text = `${'clipboard text '.repeat(70)}\n`.repeat(256)
+  assert.ok(text.length > limit)
+  try {
+    await setFixture(text)
+    const within = await clipboardEvent('copy', 0, limit)
+    assert.equal(within.text, text.slice(0, limit))
+    assert.match(within.html, /^<div data-hibi-markdown><p>clipboard text/)
+    const above = await clipboardEvent('copy', 0, limit + 1)
+    assert.equal(above.handled, true)
+    assert.equal(above.text, text.slice(0, limit + 1))
+    assert.equal(above.html.length, 0)
+    // Cut takes the same text in one undoable edit.
+    const cut = await clipboardEvent('cut', 0, null)
+    assert.deepEqual([cut.text === text, cut.html.length], [true, 0])
+    await settled('')
+    await undo()
+    await settled(text)
+  } finally {
+    await setFixture(note)
+  }
 })
 
 test('copy puts the exact markdown of the selection and its export html on the clipboard', {

@@ -14,14 +14,14 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const makeSource = (size) => {
   const unit = `${'ordinary words '.repeat(16)}\n\n`,
     length = size * 1024 * 1024
-  return `# Large note\n\n${unit.repeat(Math.ceil(length / unit.length))}`.slice(
+  return `# Large note\n\n[[linked note]] and ~subscript~\n\n-# small text\n\n${unit.repeat(Math.ceil(length / unit.length))}`.slice(
     0,
     length,
   )
 }
 
 /** Open `file` in a fresh app, with the CodeMirror formatted view switch on or off. */
-async function launch(t, file, codemirror) {
+async function launch(t, file, codemirror, boundaryLength) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-large-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -38,6 +38,62 @@ async function launch(t, file, codemirror) {
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
   if (codemirror) {
+    await page.addInitScript((length) => {
+      const counters = {
+        requests: 0,
+        streams: [],
+        length: 0,
+        pages: 0,
+        records: 0,
+        maxRecords: 0,
+        done: false,
+        syntax: [],
+      }
+      window.defaultBoundaryWork = counters
+      const NativeWorker = window.Worker
+      window.Worker = class extends NativeWorker {
+        constructor(...args) {
+          super(...args)
+          this.noteEpoch = null
+          this.addEventListener('message', ({ data }) => {
+            const stream = `${data.epoch}:${data.id}:${data.version}`
+            if (
+              data.type !== 'boundaries' ||
+              data.epoch !== this.noteEpoch ||
+              !counters.streams.includes(stream)
+            )
+              return
+            const syntax = JSON.parse(data.key).syntax
+            if (!syntax.includes('subtext@1')) return
+            counters.syntax = syntax
+            counters.length = data.length
+            counters.pages++
+            counters.records += data.records.length
+            counters.maxRecords = Math.max(
+              counters.maxRecords,
+              data.records.length,
+            )
+            counters.done = data.done
+          })
+        }
+        postMessage(message, ...args) {
+          if (message.type === 'load-start')
+            this.noteEpoch =
+              message.head.length === length ? message.epoch : null
+          if (
+            message.type === 'boundaries' &&
+            message.epoch === this.noteEpoch &&
+            message.config.syntax.includes('subtext@1')
+          ) {
+            counters.requests++
+            counters.streams.push(
+              `${message.epoch}:${message.id}:${message.version}`,
+            )
+          }
+          super.postMessage(message, ...args)
+        }
+      }
+    }, boundaryLength)
     await page.evaluate(() =>
       localStorage.setItem('hibi:formatted-engine', 'codemirror'),
     )
@@ -61,7 +117,7 @@ for (const size of [2, 50])
     const file = join(folder, `${size}.md`)
     await mkdir(folder, { recursive: true })
     await writeFile(file, makeSource(size))
-    const { page, started } = await launch(t, file, true)
+    const { page, started } = await launch(t, file, true, size * 1024 * 1024)
     // Before, notes over 256 KiB opened in source view.
     await page
       .locator('.rich-pane .hibi-formatted .hibi-lp-h1', {
@@ -69,6 +125,26 @@ for (const size of [2, 50])
       })
       .waitFor()
     const mount = Math.round(performance.now() - started)
+    await page.waitForFunction(() => window.defaultBoundaryWork?.done)
+    const boundaries = await page.evaluate(() => window.defaultBoundaryWork)
+    t.diagnostic(JSON.stringify({ size, boundaries }))
+    assert.equal(boundaries.requests, 1)
+    assert.equal(boundaries.streams.length, 1)
+    assert.equal(boundaries.length, size * 1024 * 1024)
+    assert.ok(boundaries.records > 0)
+    const chunks = Math.ceil(boundaries.length / 4096)
+    assert.ok(boundaries.records <= chunks + Math.ceil(chunks / 64) + 8)
+    assert.equal(boundaries.pages, Math.ceil(boundaries.records / 128))
+    assert.ok(boundaries.maxRecords <= 128)
+    assert.ok(boundaries.syntax.includes('subtext@1'))
+    await page.evaluate(async () => {
+      for (let i = 0; i < 3; i++)
+        await new Promise((done) => requestIdleCallback(done, { timeout: 200 }))
+    })
+    assert.deepEqual(
+      await page.evaluate(() => window.defaultBoundaryWork),
+      boundaries,
+    )
     assert.equal(
       await page.getByText('Opened in source view').count(),
       0,

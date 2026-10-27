@@ -19,7 +19,18 @@ import {
 import { formattedRegistry } from '../src/renderer/src/formatted-registry.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
+import {
+  BoundaryTree,
+  boundaryRecords,
+} from '../src/shared/chunked-markdown.ts'
+import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import { boundarySyntaxIds } from '../src/shared/markdown-boundary-syntax.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
+import { sourceParserInput } from '../src/shared/source-parser.ts'
+import {
+  editorChangesFromSource,
+  normalizedSource,
+} from '../src/shared/source-projection.ts'
 
 // Feature modules import their styles; these tests need only the code.
 registerHooks({
@@ -379,6 +390,246 @@ test('turning off core html or images shows their nodes as written', () => {
   }
 })
 
+test('default markdown, obsidian and text-extras addons keep worker boundaries active', async () => {
+  const modules = await Promise.all([
+    import('../src/renderer/src/formatted/tables.ts'),
+    import('../src/renderer/src/formatted/tasks.ts'),
+    import('../src/renderer/src/formatted/footnotes.ts'),
+    import('../src/renderer/src/formatted/strikethrough.ts'),
+    import('../src/renderer/src/formatted/autolinks.ts'),
+    import('../src/addons/markdown/formatted.ts'),
+    import('../src/addons/markdown/formatted-obsidian.ts'),
+    import('../src/addons/text-extras/formatted.ts'),
+  ])
+  const contributions = modules.flatMap((module) =>
+    module.contributions
+      ? Object.values(module.contributions)
+      : [module.contribution],
+  )
+  const remove = contributions.map((contribution) =>
+    formattedRegistry.register({
+      id: contribution.id,
+      load: () => contribution,
+    }),
+  )
+  try {
+    const flavors = [
+      'markdown.github',
+      'markdown.obsidian',
+      'text-extras.text-extras',
+    ]
+    const state = EditorState.create({
+      extensions: formattedContributions.extension(flavors),
+    })
+    const configs = state.facet(formattedMarkdown)
+    const ids = boundarySyntaxIds(configs)
+    assert.ok(
+      ids,
+      'default addon syntax must be eligible for worker boundaries',
+    )
+    assert.ok(ids.includes('subtext@1'))
+    const unit = '# heading\n\n[[note]] and ~subscript~\n\n-# small text\n\n'
+    const text = unit.repeat(Math.ceil((2 * 1024 * 1024) / unit.length))
+    const store = new SourceStore(text, {
+      tabId: 'default-addons',
+      revision: 0,
+    })
+    const index = new MarkdownBoundaryIndex(store.snapshot(), {
+      schema: 1,
+      syntax: ids,
+      flavors,
+      literal: [],
+      opaque: state.facet(formattedOpaque),
+      prefix: 0,
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+    })
+    while (!index.advance()) {}
+    const probe = {
+      parsedChunks: 0,
+      parsedUnits: 0,
+      scannedUnits: 0,
+      reusedNodes: 0,
+      builtGroups: 0,
+    }
+    const base = parser.configure([
+      { defineNodes: [{ name: 'Frontmatter', block: true }] },
+      ...configs,
+    ])
+    const opaque = new Set(state.facet(formattedOpaque))
+    const view = new ChunkedMarkdownParser(base, base, { probe, opaque })
+    const builder = new BoundaryTree(view, text.length)
+    const pages = [...index.pages()]
+    assert.ok(pages.length > 0)
+    for (const page of pages) builder.append(page.records)
+    const parse = view.startChunkedParse(
+      sourceParserInput(store.snapshot()),
+      TreeFragment.addTree(builder.finish()),
+      { from: text.length - 8192, to: text.length },
+    )
+    while (!parse.advance()) {}
+    assert.equal(probe.scannedUnits, 0)
+    assert.ok(probe.reusedNodes > 0)
+
+    const sizes = { chunkSize: 64, groupSize: 4, giantBlock: 1024 }
+    const scanner = new ChunkedMarkdownParser(base, base, { ...sizes, opaque })
+    const finish = (parse) => {
+      for (;;) {
+        const tree = parse.advance()
+        if (tree) return tree
+      }
+    }
+    const shape = (tree) => {
+      const nodes = []
+      tree.iterate({
+        enter: (node) => nodes.push([node.name, node.from, node.to]),
+      })
+      return nodes
+    }
+    const input = (text) => ({
+      length: text.length,
+      lineChunks: false,
+      chunk: (from) => text.slice(from, from + 4096),
+      read: (from, to) => text.slice(from, to),
+    })
+    const snippets = [
+      unit,
+      'para line\n-# small after para\nlazy\n\n',
+      '> -# quoted small\n> more\n\n',
+      '- -# list small\n  continued\n\n',
+      '| a | b |\n| --- | --- |\n| [[x|y]] | ~s~ |\n\n',
+      '- [ ] task ~sub~\n- [x] done\n\n',
+      '- [ ]\n\n',
+      '> [!NOTE]\n> alert ==hl==\n\n',
+      '[^n]: footnote [[link]]\n    continued\n\n',
+      '~~~js\n-# not small\n[[not link]]\n\n~~~\n\n',
+      'setext ~sub~\n===\n\n',
+      '<div>\n[[x]]\n\n# after\n\n',
+      '[ref]: /target\n\n',
+      '    indented -# no\n\n',
+      '==highlight\nacross lines==\n\n',
+      '[[link\nacross]]\n\n',
+      '%%comment%%\n\n',
+      'text ~~strike~~ https://example.com\n\n',
+      '1. ordered\n2. -# small in ordered\n\n',
+      '-#nospace\n\n',
+      ' -# one space\n\n',
+      '-# \n\n',
+      'a\n-# b\n-# c\n- d\n\n',
+    ]
+    const inserts = [
+      'x',
+      '\n',
+      '\n\n',
+      '~~~\n',
+      '> ',
+      '- ',
+      '-# ',
+      '-',
+      '#',
+      '|',
+      '[[',
+      ']]',
+      '==',
+      '~',
+      '\n---\n',
+      '<!--',
+      '-->',
+    ]
+    for (const ending of ['\n', '\r\n', '\r']) {
+      for (let seed = 1; seed <= 24; seed++) {
+        let rng = seed
+        const random = (size) => {
+          rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0
+          return rng % size
+        }
+        let text = Array.from(
+          { length: 28 },
+          () => snippets[random(snippets.length)],
+        ).join('')
+        const store = new SourceStore(text.replaceAll('\n', ending), {
+          tabId: 'default-parity',
+          revision: 0,
+        })
+        const worker = new MarkdownBoundaryIndex(store.snapshot(), {
+          ...index.config,
+          ...sizes,
+        })
+        let incremental = finish(scanner.startBoundaryParse(input(text), []))
+        for (let step = 0; step < 6; step++) {
+          while (!worker.advance()) {}
+          const label = `seed ${seed} step ${step} ending ${JSON.stringify(ending)}`
+          assert.deepEqual(
+            [...worker.records()],
+            [...boundaryRecords(incremental)],
+            label,
+          )
+          const builder = new BoundaryTree(scanner, text.length)
+          for (const page of worker.pages()) builder.append(page.records)
+          const adopted = finish(
+            scanner.startChunkedParse(
+              input(text),
+              TreeFragment.addTree(builder.finish()),
+              { from: 0, to: text.length },
+            ),
+          )
+          assert.deepEqual(shape(adopted), shape(base.parse(text)), label)
+          if (step === 5) continue
+          const from = random(text.length + 1)
+          const to = Math.min(text.length, from + random(10))
+          let insert = inserts[random(inserts.length)]
+          if (text.slice(from, to) === insert) insert += 'x'
+          const before = store.snapshot()
+          const prepared = store.prepare({
+            document: before.document,
+            operationId: crypto.randomUUID(),
+            baseVersion: before.version,
+            contentVersion: before.version + 1,
+            origin: 'source',
+            historyGroup: 'test',
+            changes: [
+              {
+                from: before.editorToRaw(from),
+                to: before.editorToRaw(to),
+                insert: insert.replaceAll('\n', ending),
+              },
+            ],
+          })
+          store.commit(prepared)
+          worker.apply(prepared)
+          let offset = 0
+          const ranges = editorChangesFromSource(
+            prepared.before,
+            prepared.operation.changes,
+          ).map((change) => {
+            const range = {
+              fromA: change.from,
+              toA: change.to,
+              fromB: change.from + offset,
+              toB: change.from + offset + change.insert.length,
+            }
+            offset += change.insert.length - (change.to - change.from)
+            return range
+          })
+          text = normalizedSource(store.snapshot().materialize())
+          incremental = finish(
+            scanner.startBoundaryParse(
+              input(text),
+              TreeFragment.applyChanges(
+                TreeFragment.addTree(incremental),
+                ranges,
+              ),
+            ),
+          )
+        }
+      }
+    }
+  } finally {
+    for (const dispose of remove.reverse()) dispose()
+  }
+})
+
 test('default task, footnote and alert grammars share exact worker catalog identities', async () => {
   const tasks = await import('../src/renderer/src/formatted/tasks.ts')
   const footnotes = await import('../src/renderer/src/formatted/footnotes.ts')
@@ -516,14 +767,13 @@ test('bundled inline syntax keeps skipping plain text, and inline syntax that ma
       plain.calls <= prose.length / 100,
       `${plain.calls} obsidian inline parser calls for ${prose.length} characters of prose`,
     )
-    // The worker has no grammar for the obsidian flavor's syntax, so its
-    // documents decline worker boundaries and parse on the view's thread.
+    // Inline-only obsidian syntax leaves the worker's block grammar unchanged.
     assert.ok(boundarySyntaxIds(formatted('', ['markdown.github']).markdown))
-    assert.equal(
+    assert.deepEqual(
       boundarySyntaxIds(
         formatted('', ['markdown.github', 'markdown.obsidian']).markdown,
       ),
-      null,
+      boundarySyntaxIds(formatted('', ['markdown.github']).markdown),
     )
     // Inline syntax without declared stops may start at any character.
     const word = {

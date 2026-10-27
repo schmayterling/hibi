@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
+const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const filler = (name) =>
   Array.from({ length: 30 }, (_, i) => `${name} paragraph ${i}.`).join('\n\n')
 
@@ -38,6 +39,9 @@ test('behind the switch, the formatted view reports, follows and navigates the r
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })
   t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
     await app.close()
     await rm(folder, { recursive: true, force: true })
   })
@@ -246,6 +250,38 @@ test('behind the switch, the formatted view reports, follows and navigates the r
       expected,
     )
     previous = await page.evaluate(() => window.hibi.getDocument())
+  }
+
+  // (4) Typing right after a jump edits the heading's text, as in the rich
+  // view, instead of its hidden marker.
+  for (const [label, typed] of [
+    ['Last bold', '#### xLast **bold**'],
+    ['Ordered heading', '1. #### xOrdered heading'],
+    ['Setext two', 'xSetext two'],
+  ]) {
+    const line = typed.replace('x', '')
+    await outline.getByRole('treeitem', { name: label, exact: true }).click()
+    await page.waitForFunction((line) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      return (
+        view.hasFocus &&
+        view.state.doc.lineAt(view.state.selection.main.head).text === line
+      )
+    }, line)
+    await page.keyboard.press('x')
+    await page.waitForFunction((line) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      return view.state.doc.lineAt(view.state.selection.main.head).text !== line
+    }, line)
+    assert.equal((await caret()).line, typed)
+    await outline
+      .getByRole('treeitem', { name: `x${label}`, exact: true })
+      .waitFor()
+    await pressShortcut(app, `${mod}+z`)
+    await outline.getByRole('treeitem', { name: label, exact: true }).waitFor()
+    assert.equal((await caret()).line, line)
   }
 })
 

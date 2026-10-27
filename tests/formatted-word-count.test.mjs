@@ -42,6 +42,7 @@ before(
       JSON.stringify({ 'word-count': true, dictionary: true, typst: true }),
     )
     await writeFile(join(folder, 'counts.md'), source)
+    await writeFile(join(folder, 'tasks.md'), '- [ ] a\n- [ ]\tbuy milk')
     await writeFile(join(folder, 'diagram.md'), diagram)
     await writeFile(join(folder, 'typeset.md'), typeset)
     await writeFile(
@@ -136,6 +137,27 @@ test('formatted counts match rich document totals and ignore selections', {
     assert.equal(await sourceText(), source)
   }
 })
+test('tab-separated tasks count their text in both formatted engines', {
+  timeout: 90000,
+}, async () => {
+  for (const formatted of [false, true]) {
+    await engine(formatted)
+    await open('tasks.md')
+    await counts(label({ words: 3, characters: 13 }))
+    assert.equal(await sourceText(), '- [ ] a\n- [ ]\tbuy milk')
+    assert.equal(
+      await page
+        .locator(
+          formatted
+            ? '.rich-pane .hibi-lp-task'
+            : '.rich-pane .tiptap input[type="checkbox"]',
+        )
+        .count(),
+      2,
+    )
+  }
+})
+
 test('edits and undo retain exact source and rapid document switches keep their own totals', {
   timeout: 90000,
 }, async () => {

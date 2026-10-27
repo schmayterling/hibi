@@ -166,6 +166,79 @@ test('disabled bullets stay literal beside active task lists', () => {
   }
 })
 
+test('tab-separated task markers match the rendered task text and counts', () => {
+  for (const source of [
+    '- [ ] a\n- [ ]\tbuy milk',
+    '- [x]\tbuy milk',
+    '* [X]\tbuy milk',
+    '+ [ ]\tbuy milk',
+    '- [ ] \tbuy milk',
+    '- [ ]\tbuy milk\n  continuation',
+    '- [ ]\tbuy milk\n  - [ ]\tnested',
+    '- [ ]text\n- [z]\tbuy milk',
+    '1. [ ]\tbuy milk',
+  ]) {
+    const expected = native(source)
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'tasks', revision: 0 }),
+      defaultNoteSyntax,
+    )
+    try {
+      const work = counter.read()
+      let step
+      do step = work.next()
+      while (!step.done)
+      assert.deepEqual(step.value, countText(expected), source)
+      assert.equal(
+        richText(source, defaultNoteSyntax).slice(1),
+        expected,
+        source,
+      )
+    } finally {
+      counter.dispose()
+    }
+  }
+})
+
+test('list and definition differences retain commonmark structure in either gfm setting', () => {
+  for (const [source, formatted, rich] of [
+    ['1. e\n=', [1, 3], [1, 4]],
+    ['1. 2.', [0, 3], [0, 4]],
+    ['2.\n    e', [1, 3], [1, 4]],
+    ['- [ ]\n ', [0, 2], [0, 3]],
+    ['1. one\n2.\n two', [2, 11], [3, 12]],
+    ['1. one\n[^a]:', [1, 5], [2, 11]],
+  ])
+    for (const gfm of source === '1. one\n2.\n two' ? [false, true] : [true]) {
+      const counter = new FormattedCounter(
+        new SourceStore(source, { tabId: 'lists', revision: 0 }),
+        { ...defaultNoteSyntax, gfm },
+      )
+      try {
+        const work = counter.read()
+        let step
+        do step = work.next()
+        while (!step.done)
+        assert.deepEqual(
+          [step.value.words, step.value.characters],
+          formatted,
+          source,
+        )
+        const expected = countText(
+          native(
+            source,
+            gfm
+              ? flavors
+              : flavors.filter((flavor) => flavor.id !== 'markdown.github'),
+          ),
+        )
+        assert.deepEqual([expected.words, expected.characters], rich, source)
+      } finally {
+        counter.dispose()
+      }
+    }
+})
+
 test('disabled syntax remains literal in document totals', () => {
   for (const [source, feature, expected] of [
     ['one **bold**', 'core.bold', 'one **bold**'],

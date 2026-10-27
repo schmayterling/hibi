@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
-import { countText } from '../src/addons/word-count/count.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 import {
   electron,
@@ -94,6 +93,243 @@ const cases = [
   },
 ]
 
+// Visible text/count/outline outcomes captured from the legacy controls on 6366b028.
+// The multiline-title outcomes use the accepted CommonMark blank-line rule (§11(2)).
+const formattedOutcomes = {
+  '0/empty/0': { text: '', headings: [], counts: { words: 0, characters: 0 } },
+  '0/whitespace/0': {
+    text: '\n',
+    headings: [],
+    counts: { words: 0, characters: 1 },
+  },
+  '0/crlf whitespace/0': {
+    text: '',
+    headings: [],
+    counts: { words: 0, characters: 0 },
+  },
+  '0/paragraphs/0': {
+    text: 'first\nbody\n\nlast\n',
+    headings: ['first', 'last'],
+    counts: { words: 3, characters: 17 },
+  },
+  '0/crlf/0': {
+    text: 'heading\nbold and italic\nlast',
+    headings: ['heading'],
+    counts: { words: 5, characters: 28 },
+  },
+  '0/inline/0': {
+    text: 'bold link\n\n and code',
+    headings: ['bold link'],
+    counts: { words: 4, characters: 20 },
+  },
+  '0/lists/0': {
+    text: '\n\nfirst\n\nsecond\n\nnested\nquote\nouter',
+    headings: ['first', 'nested', 'outer'],
+    counts: { words: 5, characters: 35 },
+  },
+  '0/lazy quote/0': {
+    text: '\nfirst\nsmall\nlast\nouter',
+    headings: ['outer'],
+    counts: { words: 4, characters: 23 },
+  },
+  '0/lazy definition/0': {
+    text: '\nplain text\nref\nafter',
+    headings: ['after'],
+    counts: { words: 4, characters: 21 },
+  },
+  '0/gfm/0': {
+    text: '\n\n\na\n\nb\n\n\nc\n\nd\n\ncareful\nstrike',
+    headings: [],
+    counts: { words: 6, characters: 30 },
+  },
+  '0/extras/0': {
+    text: 'H2O\nsmall words\nafter',
+    headings: ['after'],
+    counts: { words: 4, characters: 21 },
+  },
+  '0/references/0': {
+    text: 'label\n[missing]',
+    headings: ['label'],
+    counts: { words: 2, characters: 15 },
+  },
+  '0/forward references/0': {
+    text: '[ref]\nref',
+    headings: ['ref'],
+    counts: { words: 2, characters: 9 },
+  },
+  '0/reference edits/0': {
+    text: 'label\nlast',
+    headings: ['label'],
+    counts: { words: 2, characters: 10 },
+  },
+  '0/reference edits/1': {
+    text: 'label\nlast',
+    headings: ['label'],
+    counts: { words: 2, characters: 10 },
+  },
+  '0/grapheme seams/0': {
+    text: 'carriage\r\nafter 👩🏽‍💻\né 🇵🇭',
+    headings: ['after 👩🏽‍💻'],
+    counts: { words: 3, characters: 20 },
+  },
+  '0/long paragraph/0': {
+    text: `${'text '.repeat(1800)}\nafter`,
+    headings: ['after'],
+    counts: { words: 1801, characters: 9006 },
+  },
+  '0/long fence/0': {
+    text: `${'code '.repeat(1800)}\nafter`,
+    headings: ['after'],
+    counts: { words: 1801, characters: 9006 },
+  },
+  '0/html/0': {
+    text: '<div>\n[ref]: /hidden\n</div>\n[ref]',
+    headings: [],
+    counts: { words: 5, characters: 33 },
+  },
+  '0/inline html/0': {
+    text: 'words <em>native</em>\nafter',
+    headings: ['after'],
+    counts: { words: 5, characters: 27 },
+  },
+  '0/multiline title/0': {
+    text: '[ref]: /target "first\ntitle\nlast"\n[ref]',
+    headings: ['title'],
+    counts: { words: 6, characters: 39 },
+  },
+  '0/quoted title/0': {
+    text: 'ref',
+    headings: [],
+    counts: { words: 1, characters: 3 },
+  },
+  '0/long physical heading/0': {
+    text: `${'a'.repeat(4094)}[other]: /fake\n[other]`,
+    headings: [`${'a'.repeat(4094)}[other]: /fake`],
+    counts: { words: 4, characters: 4116 },
+  },
+  '0/task list/0': {
+    text: '\n\ntodo\n\ndone\nafter',
+    headings: ['after'],
+    counts: { words: 3, characters: 18 },
+  },
+  '1/empty/0': { text: '', headings: [], counts: { words: 0, characters: 0 } },
+  '1/whitespace/0': {
+    text: '\n',
+    headings: [],
+    counts: { words: 0, characters: 1 },
+  },
+  '1/crlf whitespace/0': {
+    text: '',
+    headings: [],
+    counts: { words: 0, characters: 0 },
+  },
+  '1/paragraphs/0': {
+    text: '# first\nbody\n\nlast\n',
+    headings: ['last'],
+    counts: { words: 3, characters: 19 },
+  },
+  '1/crlf/0': {
+    text: '# heading\n**bold** and italic\nlast',
+    headings: [],
+    counts: { words: 5, characters: 34 },
+  },
+  '1/inline/0': {
+    text: '# **bold** [link](https://example.com)\n![photo](photo.png) and code',
+    headings: [],
+    counts: { words: 10, characters: 67 },
+  },
+  '1/lists/0': {
+    text: '\n\n# first\n\nsecond\n\nnested\nquote\n# outer',
+    headings: ['nested'],
+    counts: { words: 5, characters: 39 },
+  },
+  '1/lazy quote/0': {
+    text: '\nfirst\nsmall\nlast\n# outer',
+    headings: [],
+    counts: { words: 4, characters: 25 },
+  },
+  '1/lazy definition/0': {
+    text: '\nplain text\nref\n# after',
+    headings: [],
+    counts: { words: 4, characters: 23 },
+  },
+  '1/gfm/0': {
+    text: '\n\n\na\n\nb\n\n\nc\n\nd\n\ncareful\nstrike',
+    headings: [],
+    counts: { words: 6, characters: 30 },
+  },
+  '1/extras/0': {
+    text: 'H2O\nsmall words\n# after',
+    headings: [],
+    counts: { words: 4, characters: 23 },
+  },
+  '1/references/0': {
+    text: '# [label][REF]\n[missing]',
+    headings: [],
+    counts: { words: 3, characters: 24 },
+  },
+  '1/forward references/0': {
+    text: '[ref]\n# [ref]',
+    headings: [],
+    counts: { words: 2, characters: 13 },
+  },
+  '1/reference edits/0': {
+    text: '# [label][ref]\nlast',
+    headings: [],
+    counts: { words: 3, characters: 19 },
+  },
+  '1/reference edits/1': {
+    text: '# [label][ref]\nlast',
+    headings: [],
+    counts: { words: 3, characters: 19 },
+  },
+  '1/grapheme seams/0': {
+    text: 'carriage\r\n# after 👩🏽‍💻\né 🇵🇭',
+    headings: [],
+    counts: { words: 3, characters: 22 },
+  },
+  '1/long paragraph/0': {
+    text: `${'text '.repeat(1800)}\n# after`,
+    headings: [],
+    counts: { words: 1801, characters: 9008 },
+  },
+  '1/long fence/0': {
+    text: `${'code '.repeat(1800)}\n# after`,
+    headings: [],
+    counts: { words: 1801, characters: 9008 },
+  },
+  '1/html/0': {
+    text: '<div>\n[ref]: /hidden\n</div>\n[ref]',
+    headings: [],
+    counts: { words: 5, characters: 33 },
+  },
+  '1/inline html/0': {
+    text: 'words <em>native</em>\n# after',
+    headings: [],
+    counts: { words: 5, characters: 29 },
+  },
+  '1/multiline title/0': {
+    text: '[ref]: /target "first\n# title\nlast"\n[ref]',
+    headings: [],
+    counts: { words: 6, characters: 41 },
+  },
+  '1/quoted title/0': {
+    text: 'ref',
+    headings: [],
+    counts: { words: 1, characters: 3 },
+  },
+  '1/long physical heading/0': {
+    text: `# ${'a'.repeat(4094)}[other]: /fake\n[other]`,
+    headings: [],
+    counts: { words: 4, characters: 4118 },
+  },
+  '1/task list/0': {
+    text: '\n\ntodo\n\ndone\n# after',
+    headings: [],
+    counts: { words: 3, characters: 20 },
+  },
+}
+
 const harness = `
 import { getText, getTextSerializersFromSchema } from '@tiptap/core'
 import { Strike } from '@tiptap/extension-strike'
@@ -117,23 +353,6 @@ const flavors = [
   {id:'text-extras.text-extras',richExtensions:[Subscript,Subtext],export:{extensions:[textExtrasMarkdown]}},
 ]
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b)
-
-export function oracles(cases) {
-  const editor = document.querySelector('.tiptap').editor
-  return cases.map(fixture => {
-    const sources = [fixture.source]
-    if (fixture.edit) sources.push(fixture.source.slice(0,fixture.edit.from)+fixture.edit.insert+fixture.source.slice(fixture.edit.to))
-    return sources.map(source => {
-      const node = editor.schema.nodeFromJSON(editor.markdown.parse(source))
-      const text = getText(node,{blockSeparator:'\\n',textSerializers:getTextSerializersFromSchema(editor.schema)})
-      const headings = []
-      node.descendants(node => {
-        if(node.type.name==='heading') headings.push(node.textContent || 'Untitled heading')
-      })
-      return {source,text,headings,counts:countText(text)}
-    })
-  })
-}
 
 export async function run(cases) {
   const editor = document.querySelector('.tiptap').editor
@@ -397,14 +616,7 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
     join(profile, 'addons.json'),
     JSON.stringify({ 'word-count': true }),
   )
-  const bundle = await build({
-    stdin: { contents: harness, resolveDir: resolve('.') },
-    bundle: true,
-    format: 'iife',
-    globalName: 'SemanticNativeFixture',
-    platform: 'browser',
-    write: false,
-  })
+  assert.equal(Object.keys(formattedOutcomes).length, 48)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -420,27 +632,6 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const configurations = [[], ['core.heading-1', 'core.bold', 'core.images']]
-  const oracles = []
-  await selectFormattedEngine(app, page, 'tiptap')
-  for (const disabled of configurations) {
-    await page.evaluate(
-      (disabled) =>
-        localStorage.setItem(
-          'hibi:markdown-syntax-disabled',
-          JSON.stringify(disabled),
-        ),
-      disabled,
-    )
-    await page.reload()
-    await waitForDocumentEditor(app, page)
-    await page.evaluate(bundle.outputFiles[0].text)
-    oracles.push(
-      await page.evaluate(
-        (cases) => SemanticNativeFixture.oracles(cases),
-        cases,
-      ),
-    )
-  }
   await page.addInitScript(() => {
     window.semanticCountSequence = 0
     window.semanticCountReplies = []
@@ -504,7 +695,20 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
         name: 'Document editor',
         exact: true,
       })
-      for (const [pass, expected] of oracles[configuration][index].entries()) {
+      const sources = [fixture.source]
+      if (fixture.edit)
+        sources.push(
+          fixture.source.slice(0, fixture.edit.from) +
+            fixture.edit.insert +
+            fixture.source.slice(fixture.edit.to),
+        )
+      for (const [pass, source] of sources.entries()) {
+        const expected =
+          formattedOutcomes[`${configuration}/${fixture.name}/${pass}`]
+        assert.ok(
+          expected,
+          `Missing semantic outcome for ${fixture.name}, pass ${pass}`,
+        )
         if (pass) {
           afterCount = await page.evaluate(() => window.semanticCountSequence)
           await rich.evaluate((element, edit) => {
@@ -521,31 +725,16 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
           page,
           async (source) =>
             (await window.hibi.getDocument()).markdown === source,
-          expected.source,
+          source,
         )
-        // Design §11(2) accepts CommonMark parsing. Reference titles cannot
-        // contain a blank line (spec.commonmark.org/0.31.2/#example-197), so
-        // this fixture renders literal paragraphs and a real heading in CM.
-        const commonmarkTitle = fixture.name === 'multiline title'
-        const titleHeading = !disabled.includes('core.heading-1')
-        const expectedHeadings = commonmarkTitle
-          ? titleHeading
-            ? ['title']
-            : []
-          : expected.headings
-        const formattedText = commonmarkTitle
-          ? expected.source
-              .replace(/\n\n/g, '\n')
-              .replace('# title', titleHeading ? 'title' : '# title')
-          : expected.text
-        const formattedCount = statusLabel(
-          commonmarkTitle ? countText(formattedText) : expected.counts,
-        )
+        const expectedHeadings = expected.headings
+        const formattedText = expected.text
+        const formattedCount = statusLabel(expected.counts)
         // Await a reply sent after this note/edit, so a previous note with
         // identical counts cannot satisfy readiness.
         const request = {
           afterCount,
-          source: expected.source,
+          source: source,
           text: formattedText,
         }
         await page.waitForFunction(
@@ -609,13 +798,13 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
             )
             assert.equal(
               (await page.evaluate(() => window.hibi.getDocument())).markdown,
-              expected.source,
+              source,
             )
             assert.equal(
               await rich.evaluate((element) =>
                 element.cmTile.root.view.state.doc.toString(),
               ),
-              expected.source.replace(/\r\n?/g, '\n'),
+              source.replace(/\r\n?/g, '\n'),
             )
             assert.deepEqual(actual.headings, expectedHeadings)
             assert.equal(

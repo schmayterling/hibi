@@ -694,15 +694,7 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
     }
   })
   assert.ok(math.formula.height > math.fontSize * 2, JSON.stringify(math))
-  await t.test(
-    'caret beside tall math stays text sized',
-    {
-      todo: 'formatted gap marker-003: the caret beside tall math must remain text sized',
-    },
-    () => {
-      assert.ok(math.caret.height < math.fontSize * 1.5, JSON.stringify(math))
-    },
-  )
+  assert.ok(math.caret.height < math.fontSize * 1.5, JSON.stringify(math))
   assert.ok(math.caret.top >= math.formula.top - 1, JSON.stringify(math))
   assert.ok(math.caret.bottom <= math.formula.bottom + 1, JSON.stringify(math))
 })

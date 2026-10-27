@@ -20,6 +20,7 @@ import {
   boundaryKey,
   boundarySyntaxIds,
 } from '../../shared/markdown-boundary-syntax.ts'
+import { ContainerHTML } from '../../shared/markdown-html-syntax.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
 import { mappedPrefix } from '../../shared/source-projection.ts'
 import {
@@ -113,6 +114,7 @@ function markdownParser(
 ) {
   const base = parser.configure([
     { defineNodes: [{ name: 'Frontmatter', block: true }] },
+    ContainerHTML,
     ...contributed,
     options.extensions ?? [],
   ])

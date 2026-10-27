@@ -290,19 +290,32 @@ export class MarkdownSourceModel {
       : null
   }
   #expand(tree: Tree, range: Range, owners: SourceOwners): Range {
-    // recheck the next block even when changed indentation becomes trivia.
-    const last = owners.at(range.to, -1)
-    let next = last && owners.get(last.index + 1)
-    if (next?.owner.kind === 'trivia') next = owners.get(next.index + 1)
-    const block = next && this.#boundary(tree, next.from, 1)
-    let from = range.from,
+    // edits can change either neighboring block across unchanged trivia.
+    const boundaryStart = owners.at(range.from),
+      boundaryEnd = owners.at(range.to, -1)
+    let preceding = boundaryStart && owners.get(boundaryStart.index - 1),
+      following = boundaryEnd && owners.get(boundaryEnd.index + 1)
+    if (preceding?.owner.kind === 'trivia')
+      preceding = owners.get(preceding.index - 1)
+    if (following?.owner.kind === 'trivia')
+      following = owners.get(following.index + 1)
+    const previousBlock = preceding && this.#boundary(tree, preceding.to, -1),
+      nextBlock = following && this.#boundary(tree, following.from, 1)
+    let from =
+        preceding &&
+        (!previousBlock ||
+          previousBlock.from !== preceding.from ||
+          previousBlock.to !== preceding.to ||
+          previousBlock.kind !== preceding.owner.kind)
+          ? preceding.from
+          : range.from,
       to =
-        next &&
-        (!block ||
-          block.from !== next.from ||
-          block.to !== next.to ||
-          block.kind !== next.owner.kind)
-          ? next.to
+        following &&
+        (!nextBlock ||
+          nextBlock.from !== following.from ||
+          nextBlock.to !== following.to ||
+          nextBlock.kind !== following.owner.kind)
+          ? following.to
           : range.to
     for (;;) {
       const first = owners.at(from),

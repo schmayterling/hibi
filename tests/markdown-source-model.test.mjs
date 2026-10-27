@@ -337,6 +337,52 @@ test('every single-position edit and undo matches fresh owners across block inde
   t.diagnostic(`${checked} incremental/fresh and undo comparisons`)
 })
 
+test('an insertion at a block end rechecks the preceding owner bounds', () => {
+  const store = new SourceStore('- ```\n', { tabId: 'block-end', revision: 0 })
+  const dialect = parser.configure(GFM)
+  const model = new MarkdownSourceModel(store.snapshot(), dialect, 'gfm')
+  try {
+    finish(model)
+    edit(store, model, [{ from: 6, to: 6, insert: 'x' }])
+    assert.deepEqual(
+      rows(finish(model).owners),
+      oracle(store.snapshot(), dialect),
+    )
+    edit(store, model, [{ from: 6, to: 7, insert: '' }])
+    assert.deepEqual(
+      rows(finish(model).owners),
+      oracle(store.snapshot(), dialect),
+    )
+  } finally {
+    model.dispose()
+  }
+})
+
+test('indentation before a two mib list keeps parser reads and reconciliation bounded', () => {
+  const item = '- item words here\n'
+  const source =
+    '- a\n' + item.repeat(Math.ceil((2 * 1024 * 1024) / item.length))
+  const store = new SourceStore(source, { tabId: 'list-scale', revision: 0 })
+  const model = new MarkdownSourceModel(
+    store.snapshot(),
+    parser.configure(GFM),
+    'gfm',
+  )
+  try {
+    finish(model)
+    model.counters(true)
+    edit(store, model, [{ from: 0, to: 0, insert: '\t' }])
+    finish(model)
+    const work = model.counters()
+    assert.equal(work.regions, 1)
+    assert.equal(work.rowsWritten, 4)
+    assert.equal(work.parser.readUnits, 56)
+    assert.ok(work.boundarySeeks <= 7)
+  } finally {
+    model.dispose()
+  }
+})
+
 test('100k-line prefix edits preserve later owners without a metadata tree walk', () => {
   const source = '# heading\n\nparagraph\n\n'.repeat(25_000).slice(0, -1)
   const store = new SourceStore(source, { tabId: 'large', revision: 0 })

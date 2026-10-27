@@ -115,6 +115,18 @@ test('leading indentation and undo keep fence counts equal to a fresh projection
       }
 })
 
+test('line break edits that retain indentation keep fresh counts through undo', (t) => {
+  const source = '-     c\n\n  =\n'
+  const counter = fixture(t, source)
+  const original = count(counter)
+  edit(counter, 1, 3, '\n')
+  const fresh = fixture(t, counter.store.snapshot().materialize())
+  assert.deepEqual(count(counter), count(fresh))
+  assert.deepEqual(count(counter), { words: 1, characters: 7 })
+  edit(counter, 1, 2, '  ', 'undo')
+  assert.deepEqual(count(counter), original)
+})
+
 test('regional fence termination matches Marked through tab edits and undo', (t) => {
   for (const language of ['mermaid', 'js', 'typst']) {
     for (const marker of ['```', '~~~']) {

@@ -214,9 +214,12 @@ export class SourceParserSession {
                 openStarts.has(fragment.from + fragment.offset),
               openEnd =
                 fragment.openEnd || openEnds.has(fragment.to + fragment.offset)
-            // markdown can reuse an open fragment at offset zero after indentation
-            // is removed. keep its first unit outside reuse to reparse that line.
-            const from = openStart && fragment.from === 0 ? 1 : fragment.from
+            // markdown can reuse an open fragment at an indented line start.
+            // keep its first unit outside reuse to reparse that line.
+            const rawFrom = openStart ? source.editorToRaw(fragment.from) : null
+            const lineStart =
+              rawFrom !== null && source.lineAt(rawFrom)?.from === rawFrom
+            const from = lineStart ? fragment.from + 1 : fragment.from
             return from === fragment.from &&
               openStart === fragment.openStart &&
               openEnd === fragment.openEnd

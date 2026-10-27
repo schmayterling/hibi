@@ -21,6 +21,7 @@ import {
 
 const { values } = parseArgs({
   options: {
+    'script-census': { type: 'boolean', default: false },
     engine: {
       type: 'string',
       default: process.env.HIBI_BENCH_ENGINE ?? 'tiptap',
@@ -69,28 +70,34 @@ async function measure(page, start, app, scenario) {
     await waitForWorkspaces(page, recentPaths)
     ready = performance.now() - start
   }
-  // snapshot loaded scripts after readiness, outside startup and input intervals.
+  // debugger activation can perturb input cost; census launches omit typing.
   const session = await page.context().newCDPSession(page)
   let scripts = []
   session.on('Debugger.scriptParsed', ({ url }) => {
     if (url.startsWith('app://hibi/')) scripts.push(url)
   })
-  await session.send('Debugger.enable')
-  await session.send('Debugger.disable')
-  const beforeInputScripts = [...new Set(scripts)]
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  const previousText = await editor.textContent()
-  const beforeInput = performance.now()
-  await typeCharacter(page, previousText)
-  const firstInput = performance.now() - beforeInput
+  let beforeInputScripts = null
+  if (values['script-census']) {
+    await session.send('Debugger.enable')
+    await session.send('Debugger.disable')
+    beforeInputScripts = [...new Set(scripts)]
+  }
+  let firstInput = null
   const typing = []
-  for (let i = 0; i < 8; i++) {
-    const before = performance.now()
-    if (process.env.HIBI_BENCH_INSERT_TEXT === '1')
-      await page.keyboard.insertText('a')
-    else await editor.press('a')
-    typing.push(performance.now() - before)
-    await new Promise((done) => setTimeout(done, 50))
+  if (!values['script-census']) {
+    const previousText = await editor.textContent()
+    const beforeInput = performance.now()
+    await typeCharacter(page, previousText)
+    firstInput = performance.now() - beforeInput
+    for (let i = 0; i < 8; i++) {
+      const before = performance.now()
+      if (process.env.HIBI_BENCH_INSERT_TEXT === '1')
+        await page.keyboard.insertText('a')
+      else await editor.press('a')
+      typing.push(performance.now() - before)
+      await new Promise((done) => setTimeout(done, 50))
+    }
   }
   const renderer = await page.evaluate(() => ({
     timeOrigin: performance.timeOrigin,
@@ -248,6 +255,11 @@ try {
   const quantile = (values, q) =>
     values.toSorted((a, b) => a - b)[Math.ceil(values.length * q) - 1]
   for (const sample of samples) {
+    if (sample.renderer.beforeInputScripts === null) {
+      sample.renderer.beforeInputBytes = null
+      sample.renderer.beforeInputModules = null
+      continue
+    }
     const loaded = new Set(
       sample.renderer.beforeInputScripts.map((url) =>
         new URL(url).pathname.slice(1),
@@ -291,14 +303,18 @@ try {
             ),
             0.95,
           ) ?? null,
-        firstInputP95: quantile(
-          group.map((sample) => sample.firstInput),
-          0.95,
-        ),
-        typingP95: quantile(
-          group.flatMap((sample) => sample.typing),
-          0.95,
-        ),
+        firstInputP95:
+          quantile(
+            group.flatMap((sample) =>
+              sample.firstInput === null ? [] : [sample.firstInput],
+            ),
+            0.95,
+          ) ?? null,
+        typingP95:
+          quantile(
+            group.flatMap((sample) => sample.typing),
+            0.95,
+          ) ?? null,
       }
     },
   )
@@ -307,6 +323,7 @@ try {
       {
         ...provenance,
         engine,
+        scriptCensus: values['script-census'],
         runtime: process.version,
         host: {
           cpu: cpus()[0]?.model,
@@ -317,7 +334,7 @@ try {
         arch: process.arch,
         enabledAddons,
         conditions:
-          'production assets in test electron; hidden windows with focus emulation; profiles seeded at app origin without loading hibi, before launch timing; fresh profile is not os cold-cache; driver latency included. source and build hashes are independent; rebuild the recorded source before comparing.',
+          'production assets in test electron; hidden windows with focus emulation; app profiles seeded at app origin without loading hibi, before launch timing; minimal control unseeded; fresh profile is not os cold-cache; input timing and pre-input script census use separate launches; driver latency included. source and build hashes are independent; rebuild the recorded source before comparing.',
         initialBytes: initial.reduce((sum, chunk) => sum + chunk.bytes, 0),
         initialModules: initial.flatMap((chunk) => chunk.modules),
         summary,

@@ -332,7 +332,7 @@ export function selectBenchmarkFile(app, file) {
 
 export async function openBenchmarkDocument(app, page, title) {
   await clickMenu(app, 'Open…')
-  return page.waitForFunction(
+  await page.waitForFunction(
     (title) =>
       [
         ...document.querySelectorAll(

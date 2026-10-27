@@ -203,7 +203,86 @@ test('document opening recognizes formatted headings in either engine', async ()
     },
   }
   for (observed of ['tiptap', 'codemirror'])
-    assert.equal(await flows.openBenchmarkDocument(app, page, 'Note'), true)
+    await flows.openBenchmarkDocument(app, page, 'Note')
+})
+
+test('script census and input timing stay separate while reporting engine and conditions', async () => {
+  const source = await readFile(
+    new URL('../scripts/benchmark-startup.mjs', import.meta.url),
+    'utf8',
+  )
+  const measure = source.slice(
+    source.indexOf('async function measure('),
+    source.indexOf('\ntry {'),
+  )
+  for (const census of [false, true]) {
+    const events = []
+    const samples = []
+    let parsed
+    const session = {
+      on(_event, run) {
+        parsed = run
+      },
+      async send(method) {
+        if (method === 'Debugger.enable') {
+          events.push('debugger')
+          parsed({ url: 'app://hibi/assets/editor.js' })
+        }
+      },
+      async detach() {},
+    }
+    const page = {
+      getByRole: () => ({ textContent: async () => '', press: async () => {} }),
+      context: () => ({ newCDPSession: async () => session }),
+      async evaluate(run) {
+        return String(run).includes('getAddonStates') ? ['markdown'] : {}
+      },
+    }
+    const app = {
+      async evaluate(run) {
+        return String(run).includes('BrowserWindow')
+          ? { visible: false, focused: false }
+          : {}
+      },
+    }
+    await vm.runInNewContext(
+      `${measure}; measure(page, 0, app, 'fresh-profile')`,
+      {
+        page,
+        app,
+        samples,
+        assert,
+        values: { 'script-census': census },
+        engine: 'codemirror',
+        recentPaths: [],
+        performance: { now: () => 0, timeOrigin: 0 },
+        process: { env: {} },
+        setTimeout: (run) => run(),
+        loadavg: () => [1, 2, 3],
+        waitForEditor: async (_page, engine) =>
+          assert.equal(engine, 'codemirror'),
+        waitForWorkspaces: async () => {},
+        typeCharacter: async () => events.push('input'),
+      },
+    )
+    assert.equal(samples[0].engine, 'codemirror')
+    assert.equal(samples[0].visibility.visible, false)
+    assert.equal(samples[0].focusEmulation, true)
+    assert.deepEqual(samples[0].addons, ['markdown'])
+    assert.deepEqual(samples[0].loadAverage, [1, 2, 3])
+    if (census) {
+      assert.ok(!events.includes('input'))
+      assert.equal(samples[0].firstInput, null)
+      assert.equal(samples[0].typing.length, 0)
+      assert.equal(
+        samples[0].renderer.beforeInputScripts[0],
+        'app://hibi/assets/editor.js',
+      )
+    } else {
+      assert.ok(events.indexOf('input') < events.indexOf('debugger'))
+      assert.equal(samples[0].renderer.beforeInputScripts, null)
+    }
+  }
 })
 
 test('report provenance fingerprints source, both processes, renderer, helpers and lockfile', async (t) => {

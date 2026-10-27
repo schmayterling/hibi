@@ -25,7 +25,7 @@ export class DiagnosticIngress {
     this.admission = new DiagnosticAdmission(profile)
     this.artifacts = []
     let bytes = 128 // Session keys, profile and UUID, inside the 64 KiB limit.
-    for (const [url, id] of artifacts.slice(0, 256)) {
+    for (const [url, id] of artifacts) {
       if (
         typeof url !== 'string' ||
         url.length > 1024 ||

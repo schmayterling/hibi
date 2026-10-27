@@ -163,8 +163,7 @@ export function decodeDiagnosticSession(
       typeof data.token !== 'string' ||
       !/^[a-f0-9-]{36}$/.test(data.token) ||
       !['release', 'debug'].includes(data.profile) ||
-      !Array.isArray(data.artifacts) ||
-      data.artifacts.length > 256
+      !Array.isArray(data.artifacts)
     )
       return null
     if (

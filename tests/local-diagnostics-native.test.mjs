@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
-import { electron, showTestWindows, stopElectronTree } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
 
 async function launchFixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-diagnostic-native-'))
@@ -132,10 +132,15 @@ test('main-loop sampling stops while hidden, minimized, suspended or failed', {
   await app.evaluate(() => globalThis.diagnosticFixture.report())
   const sampling = () =>
     app.evaluate(() => globalThis.diagnosticFixture.sampling())
-  assert.deepEqual(await sampling(), {
-    armedBeforeReady: false,
-    armed: showTestWindows,
+  const initial = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    return {
+      ...globalThis.diagnosticFixture.sampling(),
+      visible: window.isVisible() && !window.isMinimized(),
+    }
   })
+  assert.equal(initial.armedBeforeReady, false)
+  assert.equal(initial.armed, initial.visible)
   assert.equal(
     await app.evaluate(() => globalThis.diagnosticFixture.visibility(true)),
     true,

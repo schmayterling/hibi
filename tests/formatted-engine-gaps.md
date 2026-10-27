@@ -4,6 +4,8 @@ these todos execute their assertions. each row identifies a reproduced parity ga
 
 owner numbers follow the ordered formatted engine readiness plan. the default flip requires `HIBI_EXPECT_FORMATTED_GAPS=0 node --test tests/formatted-engine-gaps.test.mjs` to pass. the count is annotation count; a shared annotation can execute in more than one fixture. locations identify the todo option or literal map entry to remove.
 
+accepted differences are not gaps; their tests assert each engine. after a code language is turned off and on while source mode hides the formatted view, the rich editor refreshes its highlighting once when shown; codemirror leaves the unchanged view as it is, and its shown highlighting follows the language.
+
 | gap id | test file:line | behavior | owning slice |
 | --- | --- | --- | --- |
 | reload-001 | [addon-reload.test.mjs:783](addon-reload.test.mjs#L783) | addon reload must retain selection and document focus | 3b: addon reload selection and focus |
@@ -14,8 +16,8 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | completion-001 | [autocomplete-addon.test.mjs:369](autocomplete-addon.test.mjs#L369) | a fresh rich completion list must accept the word with tab | 8a: native input, structure and toolbar state |
 | syntax-001 | [code-syntax-settings.test.mjs:23](code-syntax-settings.test.mjs#L23) | syntax settings must refresh formatted code highlighting | 8c: highlighting and grammar lifecycle |
 | syntax-004 | [code-syntax-settings.test.mjs:250](code-syntax-settings.test.mjs#L250) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
-| syntax-002 | [code-syntax-settings.test.mjs:293](code-syntax-settings.test.mjs#L293) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
-| syntax-003 | [code-syntax-settings.test.mjs:442](code-syntax-settings.test.mjs#L442) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
+| syntax-002 | [code-syntax-settings.test.mjs:301](code-syntax-settings.test.mjs#L301) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
+| syntax-003 | [code-syntax-settings.test.mjs:470](code-syntax-settings.test.mjs#L470) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
 | split-001 | [cursor.test.mjs:266](cursor.test.mjs#L266) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | history-001 | [edit-menu-history.test.mjs:341](edit-menu-history.test.mjs#L341) | keyboard redo must preserve read-only formatted source and history | 3: read-only access and shared history guards |
 | api-002 | [editor-extension-context.test.mjs:251](editor-extension-context.test.mjs#L251) | source and formatted editors must preserve hosting view identities | 6: verbatim projections and selection contracts |

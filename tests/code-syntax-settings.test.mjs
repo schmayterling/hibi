@@ -230,19 +230,19 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
       hasText: 'Wide code',
     })
     .waitFor()
+  // CodeMirror draws a block's scroll box again when lines draw above it,
+  // so its checks find the box anew; the rich editor keeps its pre.
+  const box = cm ? '.rich-pane .hibi-lp-codescroll' : null
   const block = page
-    .locator(
-      cm
-        ? '.rich-pane .hibi-lp-codescroll'
-        : '.tiptap:has(h1:text-is("Wide code")) pre',
-    )
+    .locator(box ?? '.tiptap:has(h1:text-is("Wide code")) pre')
     .first()
   await block.waitFor()
-  await block.evaluate((pre) => {
+  await block.evaluate((pre, box) => {
+    if (box && !pre.isConnected) pre = document.querySelector(box)
     pre.scrollLeft = pre.scrollWidth
     if (pre.matches('.rich-pane')) pre.scrollTop = pre.scrollHeight
     else pre.scrollIntoView({ block: 'end' })
-  })
+  }, box)
   if (cm)
     await t.test(
       'wide code can scroll horizontally',
@@ -251,16 +251,23 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
       },
       async () => {
         assert.ok(
-          await block.evaluate((pre) => pre.scrollLeft > 0),
+          await block.evaluate(
+            (pre, box) =>
+              (pre.isConnected ? pre : document.querySelector(box)).scrollLeft >
+              0,
+            box,
+          ),
           'wide code retains horizontal scrolling',
         )
       },
     )
   await block.evaluate(
-    (pre) =>
+    (pre, selector) =>
       new Promise((resolve, reject) => {
         const started = performance.now()
         const check = () => {
+          if (selector && !pre.isConnected)
+            pre = document.querySelector(selector)
           const box = pre.getBoundingClientRect()
           const pane = pre.closest('.rich-pane').getBoundingClientRect()
           const shown = [
@@ -281,6 +288,7 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
         }
         check()
       }),
+    box,
   )
 })
 
@@ -382,13 +390,33 @@ test(
     )
     assert.equal(await page.evaluate(() => window.richRefreshes), 0)
     await pressShortcut(app, `${mod}+Shift+[`)
+    // Accepted difference: the rich editor refreshes its highlighting once when
+    // shown; the language ended as it was, so CodeMirror has nothing to redraw.
     await page.waitForFunction(
       (cm) =>
-        (cm ? window.richRefreshes > 0 : window.richRefreshes === 1) &&
+        (cm || window.richRefreshes === 1) &&
         !!document.querySelector('.rich-pane .hibi-token-keyword'),
       cm,
     )
-    if (cm) await page.evaluate(() => window.richHighlightObserver.disconnect())
+    if (cm) {
+      await page.evaluate(() => window.richHighlightObserver.disconnect())
+      // The shown view follows the language: no colors while it is off.
+      const toggle = async () => {
+        await clickMenu(app, 'Settings')
+        await page
+          .getByRole('tab', { name: /^code highlight$/i, exact: true })
+          .click()
+        await javascript.click()
+        await page.getByRole('button', { name: /back to app/i }).click()
+        await page.locator('.settings-screen').waitFor({ state: 'hidden' })
+      }
+      await toggle()
+      await page.waitForFunction(
+        () => !document.querySelector('.rich-pane .hibi-token-keyword'),
+      )
+      await toggle()
+      await page.locator('.rich-pane .hibi-token-keyword').waitFor()
+    }
     // One long line decorates the columns near the visible ones, also after typing.
     const longLine = `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``
     if (cm) await replaceRichText(page, rich, longLine)
@@ -476,10 +504,9 @@ test(
         )
         .first()
         .waitFor({ state: 'attached' })
-      const block = page
-        .locator(cm ? '.rich-pane .hibi-lp-codescroll' : '.tiptap pre')
-        .first()
-      await block.evaluate(place)
+      const box = cm ? '.rich-pane .hibi-lp-codescroll' : null
+      const block = page.locator(box ?? '.tiptap pre').first()
+      await block.evaluate(place, box)
       if (cm)
         assert.equal(
           (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -487,10 +514,12 @@ test(
         )
       // Highlighted text must appear where the block is scrolled to.
       await block.evaluate(
-        (pre) =>
+        (pre, selector) =>
           new Promise((resolve, reject) => {
             const started = performance.now()
             const check = () => {
+              if (selector && !pre.isConnected)
+                pre = document.querySelector(selector)
               const box = pre.getBoundingClientRect()
               const pane = pre.closest('.rich-pane').getBoundingClientRect()
               const shown = [
@@ -511,9 +540,11 @@ test(
             }
             check()
           }),
+        box,
       )
     }
-    const right = (pre) => {
+    const right = (pre, box) => {
+      if (box && !pre.isConnected) pre = document.querySelector(box)
       pre.scrollIntoView({ block: 'start' })
       pre.scrollLeft = pre.scrollWidth
     }
@@ -534,7 +565,8 @@ test(
     })
     await show(
       `\`\`\`js\nconst header = 42;\n${'const wrapped = 42; '.repeat(5000)}\n\`\`\``,
-      (pre) => {
+      (pre, box) => {
+        if (box && !pre.isConnected) pre = document.querySelector(box)
         const pane = pre.closest('.rich-pane')
         const content = pre.matches('.rich-pane')
           ? pre.querySelector('.cm-content')

@@ -13,7 +13,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.ref }}
+  # A merged pull request's closed event has the base branch as github.ref, so pull requests key on their number.
+  group: check-${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.number) || github.ref }}
   cancel-in-progress: true
 jobs:
   desktop:

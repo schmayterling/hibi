@@ -67,21 +67,20 @@ test('50 MiB formatted projections and reference reads retain long paragraphs', 
 }, () => {
   const size = 50 * 1024 * 1024
   for (const unit of ['ordinary words. ', 'ordinary words.\n']) {
-    const source =
-      unit.repeat(Math.ceil(size / unit.length)).slice(0, size - 1) + 'x'
+    const source = `${unit.repeat(Math.ceil(size / unit.length)).slice(0, size - 1)}x`
     assert.ok(
       richText(source, syntax).slice(1) === source.replaceAll('\n', ' '),
       JSON.stringify({ unit, size }),
     )
   }
   // Formatting prevents the plain-source shortcut from skipping reference lexing.
-  const source = '**start** ' + 'ordinary words. '.repeat(size / 16)
+  const source = `**start** ${'ordinary words. '.repeat(size / 16)}`
   const counter = new FormattedCounter(
     new SourceStore(source, { tabId: 'long-reference-scale', revision: 0 }),
     syntax,
   )
   try {
-    assert.deepEqual(read(counter), countText('start ' + source.slice(10)))
+    assert.deepEqual(read(counter), countText(`start ${source.slice(10)}`))
     assert.ok(counter.counters().referenceUnits >= size)
   } finally {
     counter.dispose()

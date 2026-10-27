@@ -1,11 +1,11 @@
 import { FrontmatterSourceModel } from '../../shared/frontmatter-source-model.ts'
 import { MarkdownSemanticCache } from '../../shared/markdown-semantic-cache.ts'
 import type { SemanticRegion } from '../../shared/markdown-semantic-tokens.ts'
-import { BlockTokenizer } from '../../shared/marked-blocks.ts'
 import {
   MarkdownSourceModel,
   metadataParsers,
 } from '../../shared/markdown-worker-parser.ts'
+import { BlockTokenizer } from '../../shared/marked-blocks.ts'
 import type { SourceStore } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
 import type { SourceOwner, SourceOwners } from '../../shared/source-owners.ts'

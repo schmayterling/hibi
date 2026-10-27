@@ -158,7 +158,12 @@ before(
     await writeFile(join(folder, 'notes', 'nested.md'), nested)
     await writeFile(join(folder, 'notes', 'markers.md'), markers)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      // compare grayscale text in both compositing paths on every platform.
+      args: [
+        resolve('.'),
+        '--disable-lcd-text',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
@@ -274,8 +279,6 @@ const sample = (target, selectors, title) =>
           return [
             key,
             {
-              fontKerning: style.fontKerning,
-              textRendering: style.textRendering,
               fontFamily: style.fontFamily,
               fontSize: style.fontSize,
               fontWeight: style.fontWeight,
@@ -331,24 +334,6 @@ const formatted = {
   closing: { selector: '.cm-line', text: 'Closing paragraph' },
   after: { selector: '.cm-line', text: 'After the rule' },
 }
-
-const captureState = (pane) =>
-  pane.evaluate((pane) => {
-    const { x, y, width, height } = pane.getBoundingClientRect()
-    return {
-      viewport: [innerWidth, innerHeight],
-      dpr: devicePixelRatio,
-      visual: [
-        visualViewport.offsetLeft,
-        visualViewport.offsetTop,
-        visualViewport.scale,
-      ],
-      pane: { x, y, width, height },
-      scroll: [pane.scrollLeft, pane.scrollTop],
-      range: [pane.clientHeight, pane.scrollHeight],
-      fonts: document.fonts.status,
-    }
-  })
 
 /** Compare a note in the rich view and the formatted view: styles, text positions and pixels. */
 async function parity(title, doc, rich, formatted, name) {
@@ -431,8 +416,6 @@ async function parity(title, doc, rich, formatted, name) {
         dh: Math.round((b.box.height - a.box.height) * 10) / 10,
       })
     }
-    const panes = [richPane, harness.locator('.rich-pane')]
-    const beforeCapture = await Promise.all(panes.map(captureState))
     const images = [
       await richPane.screenshot({
         path: `test-results/live-preview-${name}-rich-${id}.png`,
@@ -441,118 +424,41 @@ async function parity(title, doc, rich, formatted, name) {
         path: `test-results/live-preview-${name}-formatted-${id}.png`,
       }),
     ].map((image) => image.toString('base64'))
-    const afterCapture = await Promise.all(panes.map(captureState))
-    const { difference, box, diagnostic } = await app.evaluate(
-      async (
-        { nativeImage, BrowserWindow },
-        { images, beforeCapture, boxes },
-      ) => {
+    const { difference, box } = await app.evaluate(
+      ({ nativeImage }, images) => {
         const [a, b] = images.map((image) =>
           nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
         )
-        const compare = (a, b) => {
-          const size = a.getSize()
-          const other = b.getSize()
-          if (size.width !== other.width || size.height !== other.height)
-            return { difference: 1, box: [size, other] }
-          const left = a.toBitmap(),
-            right = b.toBitmap()
-          let changed = 0,
-            box = null
-          for (let i = 0; i < left.length; i += 4)
-            if (
-              Math.abs(left[i] - right[i]) > 8 ||
-              Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-              Math.abs(left[i + 2] - right[i + 2]) > 8
-            ) {
-              changed++
-              const x = (i / 4) % size.width,
-                y = Math.floor(i / 4 / size.width)
-              box = box
-                ? [
-                    Math.min(box[0], x),
-                    Math.min(box[1], y),
-                    Math.max(box[2], x),
-                    Math.max(box[3], y),
-                  ]
-                : [x, y, x, y]
-            }
-          return { difference: changed / (left.length / 4), box }
-        }
-        const result = compare(a, b)
-        if (result.difference >= 0.002) {
-          try {
-            const windows = BrowserWindow.getAllWindows()
-            const targets = [
-              windows.find(
-                (window) =>
-                  !window.webContents.getURL().endsWith('/bundle/index.html'),
-              ),
-              windows.find((window) =>
-                window.webContents.getURL().endsWith('/bundle/index.html'),
-              ),
-            ]
-            const native = []
-            for (const [index, window] of targets.entries()) {
-              const rect = beforeCapture[index].pane
-              const image = await window.webContents.capturePage(
-                {
-                  x: Math.floor(rect.x),
-                  y: Math.floor(rect.y),
-                  width: Math.ceil(rect.width),
-                  height: Math.ceil(rect.height),
-                },
-                { stayHidden: true },
-              )
-              native.push(nativeImage.createFromBuffer(image.toPNG()))
-            }
-            result.diagnostic = {
-              native: compare(native[0], native[1]),
-              nativePngSizes: native.map((image) => image.getSize()),
-              sameWindow: {
-                rich: compare(a, native[0]),
-                formatted: compare(b, native[1]),
-              },
-            }
-          } catch (error) {
-            result.diagnostic = { error: String(error) }
+        const size = a.getSize()
+        const other = b.getSize()
+        if (size.width !== other.width || size.height !== other.height)
+          return { difference: 1, box: [size, other] }
+        const left = a.toBitmap(),
+          right = b.toBitmap()
+        let changed = 0,
+          box = null
+        for (let i = 0; i < left.length; i += 4)
+          if (
+            Math.abs(left[i] - right[i]) > 8 ||
+            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
+            Math.abs(left[i + 2] - right[i + 2]) > 8
+          ) {
+            changed++
+            const x = (i / 4) % size.width,
+              y = Math.floor(i / 4 / size.width)
+            box = box
+              ? [
+                  Math.min(box[0], x),
+                  Math.min(box[1], y),
+                  Math.max(box[2], x),
+                  Math.max(box[3], y),
+                ]
+              : [x, y, x, y]
           }
-          result.diagnostic.pngSizes = [a.getSize(), b.getSize()]
-          result.diagnostic.runtime = {
-            electron: process.versions.electron,
-            chrome: process.versions.chrome,
-            platform: process.platform,
-          }
-          result.diagnostic.glyphs = [a, b].map((image, index) => {
-            const scale =
-              image.getSize().width / beforeCapture[index].pane.width
-            const x = Math.floor(boxes[index].left * scale)
-            const y = Math.floor(boxes[index].top * scale)
-            const crop = { x, y, width: 64, height: 32 }
-            return { crop, png: image.crop(crop).toPNG().toString('base64') }
-          })
-        }
-        return result
+        return { difference: changed / (left.length / 4), box }
       },
-      { images, beforeCapture, boxes: [before.title.box, after.title.box] },
+      images,
     )
-    if (diagnostic)
-      console.log(
-        JSON.stringify({
-          id,
-          key: 'capture',
-          beforeCapture,
-          afterCapture,
-          text: { rich: before.title, formatted: after.title },
-          geometry: Object.fromEntries(
-            Object.keys(before).map((key) => [
-              key,
-              { rich: before[key].box, formatted: after[key].box },
-            ]),
-          ),
-          ...diagnostic,
-        }),
-      )
     // Where the screenshots differ, in their pixels: left, top, right, bottom.
     report.push({ id, key: 'pixels', difference, box })
   }

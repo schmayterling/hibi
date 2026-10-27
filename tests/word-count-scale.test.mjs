@@ -45,6 +45,7 @@ test('a local edit in 50 MiB recounts bounded regions without flattening the doc
         countedRegions: work.countedRegions,
         countedUnits: work.countedUnits,
         referenceUnits: work.referenceUnits,
+        visible: work.visible,
         source: work.source,
         parser: work.parser,
       }),
@@ -56,6 +57,11 @@ test('a local edit in 50 MiB recounts bounded regions without flattening the doc
     assert.equal(work.source.materializedUnits, 0)
     assert.ok(work.source.sourceUnitsRead < 16384)
     assert.ok(work.parser.nodesVisited < 32)
+    assert.ok(work.visible.lookupSlotsRead < 8192, JSON.stringify(work.visible))
+    assert.ok(
+      work.visible.recordSlotsCopied < 8192,
+      JSON.stringify(work.visible),
+    )
   } finally {
     counter.dispose()
   }

@@ -95,6 +95,32 @@ for (const engine of ['tiptap', 'codemirror'])
       await page.keyboard.press('Shift+Tab')
       await markdown(source)
     })
+    if (engine === 'codemirror')
+      await t.test(
+        'code in a first list item indents its own lines',
+        async () => {
+          const replace = (text, caret) =>
+            editor.evaluate(
+              (element, [text, caret]) => {
+                const view = element.cmTile.root.view
+                view.dispatch({
+                  changes: { from: 0, to: view.state.doc.length, insert: text },
+                  selection: { anchor: caret },
+                })
+                view.focus()
+              },
+              [text, caret],
+            )
+          // The item cannot nest; its code has no indented line of its own.
+          const list = '- item\n\n  ```\n  x\n  y\n  ```'
+          await replace(list, list.lastIndexOf('y'))
+          await markdown(list)
+          await page.keyboard.press('Tab')
+          await markdown(list.replace('  y', '  \ty'))
+          await replace(source, 0)
+          await markdown(source)
+        },
+      )
     await t.test('without Tab indenting, Tab leaves code', async () => {
       await clickMenu(app, 'Settings')
       await page.getByRole('tab', { name: 'Editor', exact: true }).click()

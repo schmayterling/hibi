@@ -408,15 +408,60 @@ export const codeIndent = StateField.define<CodeIndent | null>({
 })
 
 /**
+ * The containers around code, outermost first, as the markdown parser strips
+ * them from each of its lines: null for a quote's marker, or the columns a
+ * list item or footnote definition indents its content by.
+ */
+function codeContainers(state: EditorState, code: SyntaxNode) {
+  const containers: (number | null)[] = []
+  for (let parent = code.parent; parent; parent = parent.parent)
+    if (parent.name === 'Blockquote') containers.unshift(null)
+    else if (parent.name === 'FootnoteDefinition') containers.unshift(4)
+    else if (parent.name === 'ListItem') {
+      const mark = parent.getChild('ListMark')
+      if (!mark) continue
+      // Content starts after the marker's spaces, or one column after a
+      // marker followed by five or more columns or nothing.
+      const { text, from } = state.doc.lineAt(parent.from)
+      const after = mark.to - from
+      const marked = countColumn(text, 4, after)
+      const skipped =
+        after + (/[^ \t]/.exec(text.slice(after))?.index ?? text.length - after)
+      const spaced = countColumn(text, 4, skipped)
+      const content =
+        spaced >= marked + 5 || skipped === text.length ? marked + 1 : spaced
+      containers.unshift(content - countColumn(text, 4, parent.from - from))
+    }
+  return containers
+}
+
+const quoteMarker = /[ \t]*>[ \t]?/y
+
+/** Where a line's text starts after its containers' prefixes, and its column there. */
+function containedStart(text: string, containers: readonly (number | null)[]) {
+  let at = 0,
+    column = 0
+  for (const width of containers) {
+    if (width === null) {
+      quoteMarker.lastIndex = at
+      at += quoteMarker.exec(text)?.[0].length ?? 0
+      column = countColumn(text, 4, at)
+    } else {
+      column += width
+      at = findColumn(text, column, 4)
+    }
+  }
+  return { at, column }
+}
+
+/**
  * Code indents like its first indented source line among its first
  * `codeIndentLines` lines, even outside the parsed chunk.
  */
 function codeIndentUnit(state: EditorState, code: SyntaxNode) {
   const opening = state.doc.lineAt(code.from)
-  let quotes = 0
-  for (let parent = code.parent; parent; parent = parent.parent)
-    if (parent.name === 'Blockquote') quotes++
-  const prefix = `${code.name}:${quotes}`
+  const containers = codeContainers(state, code)
+  const prefix = `${code.name}:${containers.map((width) => width ?? '>').join(' ')}`
   const fenced = code.name === 'FencedCode'
   let found = state.field(codeIndent, false)
   if (
@@ -445,7 +490,6 @@ function codeIndentUnit(state: EditorState, code: SyntaxNode) {
         ? state.doc.lineAt(closing.from).from - 1
         : code.to,
     )
-    const markers = new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`)
     found = { ...found }
     for (
       let pos = Math.max(found.scan, fenced ? opening.to + 1 : opening.from);
@@ -453,12 +497,13 @@ function codeIndentUnit(state: EditorState, code: SyntaxNode) {
     ) {
       const line = state.doc.lineAt(pos)
       found.scan = line.from
-      let start = markers.exec(line.text)?.[0].length ?? 0
+      const contained = containedStart(line.text, containers)
+      let start = contained.at
       if (!fenced)
         start =
           line.number === opening.number
             ? code.from - line.from
-            : findColumn(line.text, countColumn(line.text, 4, start) + 4, 4)
+            : findColumn(line.text, contained.column + 4, 4)
       const text = line.text.slice(start)
       // Indented-code parsing discards blank whitespace; fenced code preserves it.
       const unit = !fenced && blank(text) ? undefined : detectIndentUnit(text)
@@ -671,17 +716,26 @@ export function deleteForward(
   }
 }
 
-/** Tab and Shift-Tab: nest list items, indent code, or insert a tab after text. */
+/**
+ * Tab and Shift-Tab: nest list items, indent code, or insert a tab after
+ * text. With `codeTabs`, code in an item that cannot nest indents instead.
+ */
 export function indent(
   state: EditorState,
   tree: Tree,
   outdent: boolean,
   hidden: Hidden,
+  codeTabs = true,
 ): TransactionSpec | null {
   if (state.readOnly) return null
   const range = state.selection.main
   const item = around(tree, range.head, ['ListItem'])
-  if (item) {
+  const code = around(tree, range.head, ['FencedCode', 'CodeBlock'])
+  // Code in an item after no sibling indents its own lines, as in the rich editor.
+  if (
+    item &&
+    !(code && codeTabs && !outdent && item.prevSibling?.name !== 'ListItem')
+  ) {
     const mark = item.getChild('ListMark')
     const first = state.doc.lineAt(item.from)
     const previous = item.prevSibling
@@ -726,7 +780,6 @@ export function indent(
       userEvent: 'delete.dedent',
     }
   }
-  const code = around(tree, range.head, ['FencedCode', 'CodeBlock'])
   if (code) {
     const { unit, effects } = codeIndentUnit(state, code)
     if (range.empty && !outdent)

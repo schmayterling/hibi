@@ -15,6 +15,7 @@ import {
   indent,
   lineBreak,
 } from '../src/renderer/src/formatted-commands.ts'
+import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
 
 const markdown = parser.configure(GFM)
 const hide = Decoration.replace({})
@@ -209,6 +210,54 @@ test('code indentation strips quote and indented-code prefixes', () => {
   )
   assert.equal(run('    x\n      |y', tab), '    x\n        |y')
   assert.equal(run('>     x\n>       |y', tab), '>     x\n>         |y')
+})
+
+test('code indentation strips list, footnote and mixed container prefixes', () => {
+  const footnotes = parser.configure([GFM, Footnotes])
+  const tab = (doc, codeTabs) => {
+    const head = doc.indexOf('|')
+    const text = doc.replace('|', '')
+    const state = EditorState.create({ doc: text, selection: { anchor: head } })
+    const spec = indent(
+      state,
+      footnotes.parse(text),
+      false,
+      Decoration.none,
+      codeTabs,
+    )
+    const next = state.update(spec ?? {}).state
+    const at = next.selection.main.head
+    return `${next.doc.sliceString(0, at)}|${next.doc.sliceString(at)}`
+  }
+  // The code's own first indent, not its container's: a tab, as in the rich editor.
+  for (const doc of [
+    '[^1]: note\n\n    ```js\n    foo|\n    \tbar\n    ```',
+    '- item\n\n  ```js\n  foo|\n  \tbar\n  ```',
+    '> - item\n>\n>   ```\n>   foo|\n>   \tbar\n>   ```',
+    '- > ```\n  > foo|\n  > \tbar\n  > ```',
+    '10. item\n\n    ```\n    foo|\n    \tbar\n    ```',
+    '- item\n\n      foo|\n      \tbar',
+  ])
+    assert.equal(tab(doc), doc.replace('|', '\t|'), doc)
+  assert.equal(
+    tab('10. item\n\n    ```\n    foo|\n      bar\n    ```'),
+    '10. item\n\n    ```\n    foo  |\n      bar\n    ```',
+  )
+  // Code in a first item, which cannot nest, indents with the preferred unit.
+  assert.equal(
+    tab('- item\n\n  ```js\n  foo|\n  ```'),
+    '- item\n\n  ```js\n  foo\t|\n  ```',
+  )
+  // Without Tab indenting, Tab keeps the item and its code as they are.
+  assert.equal(
+    tab('- item\n\n  ```js\n  foo|\n  ```', false),
+    '- item\n\n  ```js\n  foo|\n  ```',
+  )
+  // An item after a sibling still nests, as in the rich editor.
+  assert.match(
+    tab('- one\n- two\n\n  ```js\n  foo|\n  ```'),
+    /^- one\n {2}- two\n/,
+  )
 })
 
 test('the first tab in a 50 MiB code block with no indented line reads only its first lines', () => {

@@ -171,9 +171,9 @@ test('compiled source themes can register colors through their renderer entry', 
 })
 
 test('api compatibility uses one format and caller-owned compiled trust', () => {
-  for (const apiVersion of [1, 2]) {
+  for (const apiVersion of [1, 2, 3]) {
     const parsed = compiled({ apiVersion, native: { entry: 'native.ts' } })
-    assert.equal(parsed.manifest.apiVersion, 2)
+    assert.equal(parsed.manifest.apiVersion, 3)
     assert.equal(parsed.manifest.defaultEnabled, false)
     assert.deepEqual(
       compiled({ apiVersion }).manifest,
@@ -181,7 +181,7 @@ test('api compatibility uses one format and caller-owned compiled trust', () => 
     )
   }
   assert.throws(() => compiled({ kind: undefined }), /kind/)
-  assert.throws(() => compiled({ apiVersion: 3 }), /API version/)
+  assert.throws(() => compiled({ apiVersion: 4 }), /API version/)
 })
 
 test('all 41 json manifests match their compatibility shims without entry or native metadata', async () => {
@@ -224,7 +224,7 @@ test('all 41 json manifests match their compatibility shims without entry or nat
     assert.deepEqual(manifest, metadata, manifest.id)
     assert.deepEqual(
       parseAddonManifest(input, { trust: 'compiled' }).manifest,
-      manifest,
+      { ...manifest, apiVersion: 3 },
       manifest.id,
     )
     assert.equal('entry' in manifest, false, manifest.id)

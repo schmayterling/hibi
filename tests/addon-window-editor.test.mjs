@@ -57,6 +57,55 @@ test('addon window boot code loads no addon module before taking the bridge', as
   assert.deepEqual(addonModules(), [])
 })
 
+/** Exercise a public formatted registration in the window's own addon host. */
+async function formattedWindowProof(page, preview) {
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const chunk = (module) =>
+    chunks.find((entry) => entry.modules.includes(module)).file
+  await preview.evaluate(
+    async ({ registry, sdk }) => {
+      const addons = Object.values(await import(`app://hibi/${registry}`)).find(
+        (value) => value?.isInstalled && value?.snapshot,
+      )
+      const { view } = Object.values(await import(`app://hibi/${sdk}`)).find(
+        (value) => value?.view?.EditorView,
+      )
+      const addon = addons
+        .snapshot()
+        .find((entry) => entry.manifest.id === 'text-extras')
+      const start = addon.start.bind(addon)
+      addon.start = async (context) => {
+        await start(context)
+        context.editor.registerFormatted({
+          id: 'window-proof',
+          create: ({ viewId }) =>
+            view.EditorView.editorAttributes.of({
+              'data-window-formatted': viewId,
+            }),
+        })
+      }
+    },
+    {
+      registry: chunk('src/renderer/src/addon-registry.ts'),
+      sdk: chunk('src/addons/sdk-source.ts'),
+    },
+  )
+  const proof = preview.locator('[data-window-formatted]')
+  await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', false))
+  await preview
+    .locator('style[data-addon-style="text-extras.text-extras"]')
+    .waitFor({ state: 'detached' })
+  await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', true))
+  await proof.waitFor()
+  assert.ok(await proof.getAttribute('data-window-formatted'))
+  await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', false))
+  await proof.waitFor({ state: 'detached' })
+  await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', true))
+  await proof.waitFor()
+}
+
 async function hostEditor(t, engine) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-addon-window-editor-'))
   const profile = join(root, 'profile')
@@ -100,6 +149,7 @@ async function hostEditor(t, engine) {
     await preview.getByRole('region', { name: 'Preview note' }).count(),
     1,
   )
+  if (engine === 'codemirror') await formattedWindowProof(page, preview)
 
   await editor.click()
   await preview.keyboard.type('# Title')

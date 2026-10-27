@@ -537,7 +537,14 @@ class TableView {
     const content = cell
       ? cellContent(line.text.slice(cell.from, cell.to))
       : null
-    if (content?.text) renderInline(this.view, content.text, paragraph)
+    if (content?.text && cell)
+      renderInline(
+        this.view,
+        content.text,
+        paragraph,
+        this.now(line.from + cell.from),
+        content.source,
+      )
     else paragraph.append(document.createElement('br'))
     element.append(paragraph)
     // Keyboard handles for the column's width and the row's height.
@@ -714,7 +721,9 @@ class TableView {
 
   /** A position of the widget's text snapshot, where it is now. */
   private now(snapshot: number) {
-    return this.range().from - this.widget.from + snapshot
+    return this.dom.isConnected
+      ? this.range().from - this.widget.from + snapshot
+      : snapshot
   }
 
   /** The cell at a position of the formatted view's document, with the offset in its text. */
@@ -953,13 +962,13 @@ class TableView {
     this.view.focus()
   }
 
-  stopEditing() {
+  stopEditing(redraw = true) {
     const editing = this.editing
     if (!editing) return
     this.editing = null
     editing.editor.destroy()
-    // The cell renders statically again.
-    if (editing.line < this.lines && editing.element.isConnected)
+    // The cell renders statically again unless its table is being removed.
+    if (redraw && editing.line < this.lines && editing.element.isConnected)
       editing.element.replaceWith(
         this.cell(
           editing.line ? 'td' : 'th',
@@ -1363,10 +1372,13 @@ class TableView {
     const header = this.widget.line(0)
     return this.widget.row(0).cells.map((cell) => {
       const element = document.createElement('p')
+      const content = cellContent(header.text.slice(cell.from, cell.to))
       renderInline(
         this.view,
-        cellContent(header.text.slice(cell.from, cell.to)).text,
+        content.text,
         element,
+        this.now(header.from + cell.from),
+        content.source,
       )
       return element.textContent ?? ''
     })
@@ -1733,14 +1745,7 @@ class TableView {
     const link = (event.target as Element).closest('.hibi-lp-link')
     const pos = link && this.dom.contains(link) ? this.linkStart(link) : null
     const wiki = link?.closest('[data-wiki-link]')
-    const raw = wiki?.getAttribute('data-wiki-link')
-    // An active cell still has the table escape before an alias's pipe.
-    const target =
-      this.editing?.editor.view.dom.contains(link) &&
-      wiki?.getAttribute('data-wiki-alias') === 'true' &&
-      raw?.endsWith('\\')
-        ? raw.slice(0, -1).trim()
-        : (raw ?? undefined)
+    const target = wiki?.getAttribute('data-wiki-link') ?? undefined
     if (
       pos != null &&
       this.view.state.facet(formattedFollowLink)?.(this.view, pos, target)
@@ -1781,7 +1786,7 @@ class TableView {
   }
 
   destroy() {
-    this.stopEditing()
+    this.stopEditing(false)
     if (this.saving) this.save()
     this.unsubscribe?.()
     mounted.get(this.view)?.delete(this)

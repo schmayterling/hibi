@@ -686,3 +686,79 @@ test('20,000 wikilinks: only embeds near the viewport render and typing renders 
   assert.ok(scrolled.embeds < 100, JSON.stringify(scrolled))
   assert.ok(scrolled.renders < 100, JSON.stringify(scrolled))
 })
+
+test('table image aliases preserve dimensions and media in static and edited cells', {
+  timeout: 90000,
+}, async () => {
+  const source = [
+    '# Table embeds',
+    '',
+    '![[picture.png|200]]',
+    '',
+    '| kind | media |',
+    '| --- | --- |',
+    String.raw`| width | ![[picture.png\|200]] |`,
+    String.raw`| size | ![[picture.png\|200x100]] |`,
+    String.raw`| text | ![[picture.png\|caption]] |`,
+    String.raw`| empty | ![[picture.png\|]] |`,
+    String.raw`| blank | ![[picture.png\|   ]] |`,
+    '| plain | ![[picture.png]] |',
+    String.raw`| note | [[Other\|note alias]] |`,
+    '',
+  ].join('\n')
+  await writeFile(join(folder, 'notes', 'table-embeds.md'), source)
+  await writeFile(join(folder, 'notes', 'picture.png'), pixel)
+  await engine(false)
+  await open('table-embeds.md')
+  const pane = page.locator('.rich-pane')
+  const image = (root) =>
+    root.locator('.obsidian-embed img').evaluateAll((images) =>
+      images.map((image) => ({
+        alt: image.alt,
+        width: image.getAttribute('width'),
+        height: image.getAttribute('height'),
+      })),
+    )
+  const expected = [
+    { alt: 'picture.png', width: '200', height: null },
+    { alt: 'picture.png', width: '200', height: '100' },
+    { alt: 'caption', width: null, height: null },
+    { alt: 'picture.png', width: null, height: null },
+    { alt: 'picture.png', width: null, height: null },
+    { alt: 'picture.png', width: null, height: null },
+  ]
+  assert.deepEqual(await image(pane.locator('table')), expected, 'rich table')
+  await engine(true, false)
+  const table = pane.locator('.hibi-lp-table')
+  await table.waitFor()
+  assert.deepEqual(
+    await image(
+      pane
+        .locator('.cm-line')
+        .filter({ has: page.locator('.obsidian-embed img') }),
+    ),
+    [expected[0]],
+    'non-table control',
+  )
+  assert.deepEqual(await image(table), expected, 'static table')
+  for (let row = 0; row < expected.length; row++) {
+    const cell = table
+      .locator('tr[data-line]')
+      .nth(row + 1)
+      .locator('td')
+      .nth(1)
+    await cell.click()
+    await cell.locator('.hibi-lp-cell-editor').waitFor()
+    await cell.locator('.cm-content').press('End')
+    assert.deepEqual(await image(cell), [expected[row]], `edited row ${row}`)
+  }
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.rich-pane .obsidian-embed img')].every(
+      (image) => image.complete && image.naturalWidth > 0,
+    ),
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    source,
+  )
+})

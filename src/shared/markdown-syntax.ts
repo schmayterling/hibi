@@ -10,7 +10,7 @@ export type SyntaxSlashCommand = {
   cursor?: number
   /** Extra slash-menu search terms. */
   keywords?: string
-  /** Rich-view insertion. Omit when this syntax only supports source insertion. */
+  /** @deprecated Tiptap-only insertion. The CodeMirror formatted view uses markdown and cursor. */
   rich?: (chain: ChainedCommands) => ChainedCommands
 }
 

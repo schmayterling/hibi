@@ -2828,6 +2828,7 @@ function App() {
               flavors={paneChosen}
               footnoteDocument={paneFootnoteDocument}
               sourceExtensions={addonHost.sourceExtensions}
+              formattedExtensions={addonHost.formattedExtensions}
               richExtensions={addonHost.richExtensions}
               documentRevision={paneDocument.revision}
               showLineNumbers={showLineNumbers}

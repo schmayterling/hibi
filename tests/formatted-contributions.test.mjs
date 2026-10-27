@@ -147,6 +147,38 @@ test('contributions apply only to documents with their flavor, and core syntax t
   }
 })
 
+test('renderer features follow syntax settings without removing sibling views', () => {
+  const remove = markdownSyntax.register('test', {
+    id: 'renderer',
+    label: 'Renderer',
+    group: 'Test',
+    level: 'inline',
+    nodes: ['Highlight'],
+    matches: () => false,
+  })
+  try {
+    const views = () =>
+      EditorState.create({
+        extensions: contributionExtension({
+          id: 'test.renderers',
+          views: [
+            { nodes: ['Highlight'], feature: 'test.renderer' },
+            { nodes: ['Paragraph'] },
+          ],
+        }),
+      }).facet(formattedViews)
+    assert.equal(views().length, 2)
+    markdownSyntax.setEnabled('test.renderer', false)
+    assert.deepEqual(
+      views().map((view) => view.nodes),
+      [['Paragraph']],
+    )
+  } finally {
+    markdownSyntax.setEnabled('test.renderer', true)
+    remove()
+  }
+})
+
 test('lazy entries load when a formatted view asks for them and report their arrival', async () => {
   let resolve
   const arrived = new Promise((done) => {

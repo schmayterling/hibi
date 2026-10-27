@@ -107,8 +107,9 @@ for (const hidden of [true, false]) {
           }
         })
       const failed = await state()
+      // Either failure redraws the same element at the accepted text.
       assert.deepEqual(failed, {
-        formatted: applied ? typed : 'start',
+        formatted: typed,
         source: typed,
         canonical: typed,
         editable: false,

@@ -18,6 +18,7 @@ import {
 } from 'react'
 import type {
   DocumentFormat,
+  FormattedExtension,
   MarkdownExtension,
   MarkdownFlavor,
   RichExtension,
@@ -281,6 +282,7 @@ export function MarkdownEditor({
   findOpen: boolean
   onCloseFind: () => void
   markdownExtensions: readonly MarkdownExtension[]
+  formattedExtensions: readonly FormattedExtension[]
   sourceExtensions: readonly SourceExtension[]
   richExtensions: readonly RichExtension[]
   cursorSettings: CursorSettings
@@ -3299,6 +3301,7 @@ export function MarkdownEditor({
                   onLink={onLink}
                   onFormatting={attachSourceFormatting}
                   sourceExtensions={sourceExtensions}
+                  flavors={flavors.map((flavor) => flavor.id)}
                   showLineNumbers={showLineNumbers}
                   onReady={(status) => {
                     setSourceReady(status === 'ready')

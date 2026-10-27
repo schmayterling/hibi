@@ -243,9 +243,14 @@ test('revealing editable heading markers keeps its heading role and level', {
   )
 })
 
-/** Headings in the native accessibility tree: their names and the text they hold. */
+/** Rendered headings in the pane's accessibility tree: their names and text. */
 async function headingTree(cdp) {
-  const { nodes } = await cdp.send('Accessibility.getFullAXTree')
+  const { result } = await cdp.send('Runtime.evaluate', {
+    expression: 'document.querySelector(".rich-pane")',
+  })
+  const { nodes } = await cdp.send('Accessibility.queryAXTree', {
+    objectId: result.objectId,
+  })
   const byId = new Map(nodes.map((node) => [node.nodeId, node]))
   const text = (node) =>
     node.role?.value === 'StaticText'

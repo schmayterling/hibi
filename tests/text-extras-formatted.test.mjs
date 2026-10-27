@@ -353,6 +353,7 @@ test('table cells keep one contextual glyph when core entities and subscripts co
     else globalThis.document = prior
   })
   const state = EditorState.create({
+    doc: '~[&amp;](target)~ **~&#169;~**',
     extensions: [
       contributionExtension(entities),
       contributionExtension(contributions.subscript),

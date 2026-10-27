@@ -446,6 +446,7 @@ test('static table cells inherit disabled inline syntax', (t) => {
   })
   for (const disabled of [false, true]) {
     const state = EditorState.create({
+      doc: '**#hidden** #plain',
       extensions: [
         formattedViews.of(view),
         disabled ? formattedLiteral.of('StrongEmphasis') : [],

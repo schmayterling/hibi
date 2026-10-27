@@ -131,17 +131,26 @@ export function parseAddonManifest(
   if (
     data.capabilities !== undefined &&
     (!Array.isArray(data.capabilities) ||
-      data.capabilities.length > 5 ||
+      data.capabilities.length > 6 ||
       new Set(data.capabilities).size !== data.capabilities.length ||
       data.capabilities.some(
         (value) =>
-          !['ui', 'rich', 'source', 'markdown', 'modalEditing'].includes(value),
+          ![
+            'ui',
+            'rich',
+            'source',
+            'formatted',
+            'markdown',
+            'modalEditing',
+          ].includes(value),
       ))
   )
     throw new Error('The addon lists invalid SDK capabilities.')
   if (
     data.activation !== undefined &&
-    !['command', 'source', 'rich'].includes(String(data.activation))
+    !['command', 'source', 'rich', 'formatted'].includes(
+      String(data.activation),
+    )
   )
     throw new Error('The addon activation mode is invalid.')
   if (

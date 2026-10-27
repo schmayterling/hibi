@@ -1,4 +1,9 @@
-import type { AddonAuthor, AddonManifest } from '../addons/api'
+import {
+  ADDON_API_VERSION,
+  type AddonAuthor,
+  type AddonManifest,
+  compatibleAddonManifest,
+} from '../addons/api'
 import { validId } from './addon-manifest.ts'
 import {
   addonPackageUrl,
@@ -61,7 +66,13 @@ export function parseAddonDirectory(value: unknown): AddonDirectoryEntry[] {
   if (!Array.isArray(value) || value.length > 500)
     throw new Error('The addon directory is invalid.')
   const ids = new Set<string>()
-  return value.map((entry: unknown) => {
+  return value.flatMap((entry: unknown) => {
+    if (
+      object(entry) &&
+      Number.isSafeInteger(entry.apiVersion) &&
+      (entry.apiVersion as number) > ADDON_API_VERSION
+    )
+      return []
     if (
       !object(entry) ||
       Object.keys(entry).some(
@@ -85,8 +96,7 @@ export function parseAddonDirectory(value: unknown): AddonDirectoryEntry[] {
       ids.has(entry.id) ||
       !text(entry.name, 128) ||
       !text(entry.description, 2048) ||
-      !text(entry.version, 64) ||
-      ![1, 2].includes(entry.apiVersion as number) ||
+      !compatibleAddonManifest(entry) ||
       !['extension', 'theme'].includes(entry.kind as string) ||
       !text(entry.license, 128) ||
       !Array.isArray(entry.authors) ||
@@ -140,7 +150,7 @@ export function parseAddonDirectory(value: unknown): AddonDirectoryEntry[] {
         throw new Error('The addon directory contains an invalid download.')
       addonPackageUrl(source.url)
     }
-    return entry as AddonDirectoryEntry
+    return [entry as AddonDirectoryEntry]
   })
 }
 

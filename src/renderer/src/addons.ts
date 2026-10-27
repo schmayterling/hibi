@@ -16,6 +16,7 @@ import {
   type AddonManifest,
   type AddonState,
   compatibleAddonManifest,
+  type FormattedExtension,
   type MarkdownExtension,
   type RichExtension,
   type SourceExtension,
@@ -74,6 +75,7 @@ import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, type RegisteredFlavor, renderMarkdownAsync } from './flavors'
+import { codemirrorFormattedView } from './formatted-engine'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
@@ -337,15 +339,21 @@ export function useAddons(
     [states, resolution],
   )
   const triggered = useCallback(
-    (manifest: AddonManifest) =>
-      requested.has(manifest.id) ||
-      (manifest.activation === 'command'
-        ? false
-        : manifest.activation === 'source'
-          ? activeView !== 'normal'
-          : manifest.activation === 'rich'
-            ? activeView !== 'markdown'
-            : true),
+    (manifest: AddonManifest) => {
+      const activation = manifest.activation
+      return (
+        requested.has(manifest.id) ||
+        (activation === 'command'
+          ? false
+          : activation === 'source'
+            ? activeView !== 'normal'
+            : activation === 'formatted'
+              ? codemirrorFormattedView && activeView !== 'markdown'
+              : activation === 'rich'
+                ? activeView !== 'markdown'
+                : true)
+      )
+    },
     [activeView, requested],
   )
   const relevantIds = useMemo(() => {
@@ -642,16 +650,34 @@ export function useAddons(
     })
   }, [rich])
   const sources = useRef(
-    new Map<string, SourceExtension & { addonId: string }>(),
+    new Map<
+      string,
+      SourceExtension & {
+        addonId: string
+        presentation: 'source' | 'formatted'
+      }
+    >(),
   ).current
   const [sourceExtensions, setSourceExtensions] = useState<SourceExtension[]>(
     [],
   )
+  const [formattedExtensions, setFormattedExtensions] = useState<
+    FormattedExtension[]
+  >([])
   const publishSources = useCallback(() => {
     setSourceExtensions((current) => {
-      const next = [...sources.values()].sort((a, b) =>
-        a.id.localeCompare(b.id),
-      )
+      const next = [...sources.values()]
+        .filter((entry) => entry.presentation === 'source')
+        .sort((a, b) => a.id.localeCompare(b.id))
+      return current.length === next.length &&
+        current.every((entry, index) => entry === next[index])
+        ? current
+        : next
+    })
+    setFormattedExtensions((current) => {
+      const next = [...sources.values()]
+        .filter((entry) => entry.presentation === 'formatted')
+        .sort((a, b) => a.id.localeCompare(b.id))
       return current.length === next.length &&
         current.every((entry, index) => entry === next[index])
         ? current
@@ -911,6 +937,35 @@ export function useAddons(
       const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
+      const compatibility =
+        codemirrorFormattedView && addonRegistry.origin(id) !== 'built-in'
+          ? import('./formatted-addon-compatibility').then(
+              ({ createFormattedCompatibility }) =>
+                disposed
+                  ? null
+                  : createFormattedCompatibility(
+                      id,
+                      addon.manifest.name,
+                      toastScope.api,
+                      () => latest.current.openAddonSettings(id),
+                    ),
+            )
+          : null
+      if (compatibility)
+        cleanups.add(() => {
+          void compatibility.then((scope) => scope?.dispose())
+        })
+      const registerCompatibility = (kind: 'rich' | 'formatted') => {
+        let removed = false
+        let remove: (() => void) | undefined
+        void compatibility?.then((scope) => {
+          if (!removed) remove = scope?.register(kind)
+        })
+        return () => {
+          removed = true
+          remove?.()
+        }
+      }
       const registerView: ViewApi['register'] = (view) => {
         let registered: ViewRegistration | undefined
         let removed = false
@@ -1005,6 +1060,55 @@ export function useAddons(
           throw new Error(
             'Editor integrations must finish before input is enabled. Use startup or editor-view activation for this addon.',
           )
+      }
+      const registerEditorExtension = (
+        extension: SourceExtension | FormattedExtension,
+        presentation: 'source' | 'formatted',
+      ) => {
+        if (disposed) return () => {}
+        assertInputActivation()
+        const key = `${id}.${extension.id}`
+        if (
+          !/^[a-z][a-z0-9-]*$/.test(extension.id) ||
+          sources.has(`${presentation}:${key}`)
+        )
+          throw new Error(
+            `This addon supplied a duplicate or invalid ${presentation}-editor feature: ${key}.`,
+          )
+        const entry = {
+          id: key,
+          addonId: id,
+          presentation,
+          async create(...args: Parameters<SourceExtension['create']>) {
+            if (disposed) return []
+            try {
+              const result = await performanceDiagnostics.measure(
+                id,
+                `${presentation} attachment:${extension.id}`,
+                () => (extension.create as SourceExtension['create'])(...args),
+              )
+              return disposed ? [] : result
+            } catch (error) {
+              throw new Error(
+                `${addon.manifest.name} could not start its ${presentation} editor feature.`,
+                { cause: error },
+              )
+            }
+          },
+        }
+        return batch.register(`${presentation}:${extension.id}`, () => {
+          sources.set(`${presentation}:${key}`, entry)
+          const removeCompatibility =
+            presentation === 'formatted'
+              ? registerCompatibility('formatted')
+              : () => {}
+          if (mounted.current) publishSources()
+          return () => {
+            removeCompatibility()
+            sources.delete(`${presentation}:${key}`)
+            if (!disposed && mounted.current) publishSources()
+          }
+        })
       }
       const live = <T>(
         call: () => Promise<T>,
@@ -1625,9 +1729,24 @@ export function useAddons(
               registerFlavor(flavor) {
                 if (disposed) return () => {}
                 assertSchemaActivation()
-                const remove = batch.register(`flavor:${flavor.id}`, () =>
-                  flavors.register(id, flavor),
-                )
+                const remove = batch.register(`flavor:${flavor.id}`, () => {
+                  const removeFlavor = flavors.register(
+                    id,
+                    flavor,
+                    (error) => latest.current.error(error),
+                    addonRegistry.origin(id) !== 'built-in',
+                  )
+                  const removeCompatibility =
+                    flavor.syntax || flavor.render
+                      ? registerCompatibility('formatted')
+                      : flavor.richExtensions?.length
+                        ? registerCompatibility('rich')
+                        : () => {}
+                  return () => {
+                    removeFlavor()
+                    removeCompatibility()
+                  }
+                })
                 return track(remove)
               },
               renderMarkdown(source, documentId) {
@@ -1774,8 +1893,10 @@ export function useAddons(
                 }
                 return batch.register(`rich:${extension.id}`, () => {
                   rich.set(key, entry)
+                  const removeCompatibility = registerCompatibility('rich')
                   if (mounted.current) publishRich()
                   return () => {
+                    removeCompatibility()
                     if (rich.delete(key) && !disposed && mounted.current)
                       publishRich()
                   }
@@ -1783,43 +1904,10 @@ export function useAddons(
               },
               runCommand: (command) =>
                 disposed ? Promise.resolve(false) : app.runCommand(command),
-              registerSource(extension) {
-                if (disposed) return () => {}
-                assertInputActivation()
-                const key = `${id}.${extension.id}`
-                if (!/^[a-z][a-z0-9-]*$/.test(extension.id) || sources.has(key))
-                  throw new Error(
-                    `This addon supplied a duplicate or invalid source-editor feature: ${key}.`,
-                  )
-                const entry = {
-                  id: key,
-                  addonId: id,
-                  async create(...args: Parameters<SourceExtension['create']>) {
-                    if (disposed) return []
-                    try {
-                      const result = await performanceDiagnostics.measure(
-                        id,
-                        `source attachment:${extension.id}`,
-                        () => extension.create(...args),
-                      )
-                      return disposed ? [] : result
-                    } catch (error) {
-                      throw new Error(
-                        `${addon.manifest.name} could not start its source editor feature.`,
-                        { cause: error },
-                      )
-                    }
-                  },
-                }
-                return batch.register(`source:${extension.id}`, () => {
-                  sources.set(key, entry)
-                  if (mounted.current) publishSources()
-                  return () => {
-                    sources.delete(key)
-                    if (!disposed && mounted.current) publishSources()
-                  }
-                })
-              },
+              registerSource: (extension) =>
+                registerEditorExtension(extension, 'source'),
+              registerFormatted: (extension) =>
+                registerEditorExtension(extension, 'formatted'),
               updateMarkdown(transform, options) {
                 if (disposed) return
                 const isCurrent = latest.current.isCommandContextCurrent
@@ -2629,6 +2717,7 @@ export function useAddons(
     markdownExtensions,
     richExtensions,
     sourceExtensions,
+    formattedExtensions,
     statusItems,
     sidebarViews,
     setEnabled,

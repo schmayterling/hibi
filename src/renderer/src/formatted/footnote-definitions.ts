@@ -12,6 +12,7 @@ import {
   type MarkdownParser,
   parser,
 } from '@lezer/markdown'
+import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { mappedPrefix } from '../../../shared/source-projection.ts'
 import { ChunkedMarkdownParser } from '../chunked-markdown.ts'
 import {
@@ -345,7 +346,7 @@ const scanners = new WeakMap<readonly MarkdownConfig[], MarkdownParser>()
 function scanner(configs: readonly MarkdownConfig[]) {
   let scan = scanners.get(configs)
   if (!scan) {
-    const base = parser.configure([...configs])
+    const base = protectMarkdownParser(parser, configs)
     scan = new ChunkedMarkdownParser(base, base).scan
     scanners.set(configs, scan)
   }

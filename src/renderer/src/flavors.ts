@@ -2,6 +2,7 @@ import type { MarkdownFlavor } from '../../addons/api'
 import { validatePreservation } from '../../shared/preservation'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { codeLanguages } from './code-languages'
+import { flavorRegistrations } from './flavor-registrations'
 
 export async function renderMarkdownAsync(source: string, documentId?: string) {
   const { renderMarkdown } = await import('./render-markdown')
@@ -42,7 +43,12 @@ export const flavors = {
       listeners.delete(listener)
     }
   },
-  register(addonId: string, flavor: MarkdownFlavor) {
+  register(
+    addonId: string,
+    flavor: MarkdownFlavor,
+    onError: (error: unknown) => void = console.error,
+    external = true,
+  ) {
     validatePreservation(flavor.preservation)
     if (
       flavor.preservation &&
@@ -54,15 +60,31 @@ export const flavors = {
     const id = `${addonId}.${flavor.id}`
     if (!/^[a-z][a-z0-9-]*$/.test(flavor.id) || registry.has(id))
       throw new Error(`invalid or duplicate flavor: ${id}`)
+    let active = true
+    let removeFormatted: (() => void) | undefined
     const item = { ...flavor, id, addonId }
+    const remove = () => {
+      if (registry.get(id) !== item) return
+      active = false
+      registry.delete(id)
+      removeFormatted?.()
+      publish()
+    }
+    flavorRegistrations.set(item, {
+      external,
+      active: () => active,
+      remove,
+      onError,
+    })
+    if (flavor.syntax || flavor.render)
+      void import('./load-formatted-flavor')
+        .then(({ load }) => load())
+        .then((register) => {
+          if (active) removeFormatted = register(addonId, item, onError)
+        }, onError)
     registry.set(id, item)
     publish()
-    return () => {
-      if (registry.get(id) === item) {
-        registry.delete(id)
-        publish()
-      }
-    }
+    return remove
   },
 }
 export function parseFlavorChoice(raw: string | null): FlavorChoice {

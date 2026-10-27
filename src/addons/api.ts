@@ -1,4 +1,7 @@
-import type { Extension } from '@codemirror/state'
+import type { EditorState, Extension } from '@codemirror/state'
+import type { WidgetType } from '@codemirror/view'
+import type { SyntaxNodeRef } from '@lezer/common'
+import type { MarkdownConfig } from '@lezer/markdown'
 import type { AnyExtension, Editor } from '@tiptap/core'
 import type { MarkedExtension } from 'marked'
 import type { ComponentType, CSSProperties } from 'react'
@@ -91,15 +94,17 @@ export type {
 export type { TooltipApi, TooltipOptions } from '../ui/tooltips'
 
 /** Increment when a public contract changes incompatibly. */
-export const ADDON_API_VERSION = 2
+export const ADDON_API_VERSION = 3
 
-/** Versioned API v1 packages retain the same runtime contract. */
+/** Versioned API v1 and v2 packages remain loadable. */
 export function compatibleAddonManifest(manifest: {
   apiVersion?: unknown
   version?: unknown
 }): boolean {
   return (
-    (manifest.apiVersion === 1 || manifest.apiVersion === ADDON_API_VERSION) &&
+    (manifest.apiVersion === 1 ||
+      manifest.apiVersion === 2 ||
+      manifest.apiVersion === ADDON_API_VERSION) &&
     typeof manifest.version === 'string' &&
     !!manifest.version.trim() &&
     manifest.version.length <= 40
@@ -109,7 +114,10 @@ export function compatibleAddonManifest(manifest: {
 /** Metadata used to list an addon before its code loads. */
 export type AddonCapability =
   | 'ui'
+  /** @deprecated Tiptap SDK for the previous editor. Use formatted for the CodeMirror formatted view. */
   | 'rich'
+  /** CodeMirror formatted editor and Lezer Markdown SDK (API 3). */
+  | 'formatted'
   | 'source'
   | 'markdown'
   /** Only one enabled addon may claim the source editor's modal keybindings. */
@@ -143,7 +151,7 @@ export type AddonManifest = {
   id: string
   name: string
   description: string
-  apiVersion: typeof ADDON_API_VERSION
+  apiVersion: 1 | 2 | typeof ADDON_API_VERSION
   /** Existing API v1 addons default to extension. */
   kind?: 'theme' | 'extension'
   defaultEnabled?: boolean
@@ -154,7 +162,7 @@ export type AddonManifest = {
    */
   capabilities?: readonly AddonCapability[]
   /** Command activation needs inert command descriptors. View activation is for editor behavior, not schemas. */
-  activation?: 'command' | 'source' | 'rich'
+  activation?: 'command' | 'source' | 'rich' | 'formatted'
   commands?: readonly AddonCommandDescriptor[]
   /** Inert ownership metadata protects source even when an installed addon has never been loaded. */
   syntax?: readonly AddonSyntaxDescriptor[]
@@ -195,12 +203,130 @@ export type EditorExtensionContext = Readonly<{
   viewId: ViewId
 }>
 
+/** A syntax node in the formatted editor's canonical Markdown source. */
+export type FormattedNode = SyntaxNodeRef
+
+/** Decorations for a node in the visible ranges, rebuilt as the viewport, text or selection change. */
+export type FormattedDecorations = {
+  /** Attributes, such as `class`, for text in the node. */
+  mark(from: number, to: number, attributes: Record<string, string>): void
+  /**
+   * Text that reads as a link, such as a link's label: one element with the
+   * link role and style, whole around the other decorations in it.
+   */
+  link(from: number, to: number, attributes?: Record<string, string>): void
+  /**
+   * Markdown syntax: hidden and atomic, or an editable marker while the node
+   * is revealed. Stays on one line.
+   */
+  syntax(from: number, to: number): void
+  /** Attributes for the line starting at `at`; classes and styles merge with other renderers'. */
+  line(at: number, attributes: Record<string, string>): void
+  /** An inline widget at `at`, after the text there unless `side` is -1. */
+  widget(at: number, widget: WidgetType, side?: -1 | 1): void
+  /** Replace text on one line with a widget, or hide it without one. Atomic. */
+  replace(from: number, to: number, widget?: WidgetType): void
+}
+
+/**
+ * Decorations that change the document's layout: block widgets and
+ * replacements across lines. They are built once per parsed chunk and kept
+ * while the chunk is unchanged, so they must depend only on the node's text
+ * and the reveal state.
+ */
+export type FormattedLayout = {
+  /** Replace a range, which may span lines; a block widget takes whole lines. Atomic. */
+  replace(
+    from: number,
+    to: number,
+    widget?: WidgetType,
+    options?: { block?: boolean },
+  ): void
+  /** A widget at `at`; a block widget sits between lines, below them unless `side` is -1. */
+  widget(
+    at: number,
+    widget: WidgetType,
+    options?: { block?: boolean; side?: -1 | 1 },
+  ): void
+}
+
+export type FormattedRenderContext = {
+  state: EditorState
+  /** `decorate`: the visible range being rendered, to bound per-line work in long nodes; null in `layout`. */
+  visible: { from: number; to: number } | null
+  /**
+   * The selection touches the node while Markdown markers are shown: show
+   * its source and keep any rendering beside it.
+   */
+  revealed: boolean
+}
+
+/** How a quote, list item or contributed container lays out the lines inside it. */
+export type FormattedContainer = {
+  /** CSS length the container indents its lines by; quotes default to 21px, list items to 1.5em, other nodes to 0. */
+  width?: string
+  /** Class for every line in the container. */
+  class?: string
+  /**
+   * CSS background layers behind the line, from the container's left edge
+   * (`left`) to the line end; `top` is the space above the container's first
+   * line, which lies outside it, and 0 on its other lines. Both are CSS lengths.
+   */
+  paint?: (left: string, top: string) => string
+  /**
+   * Space inside the container in px: above its first line, below its last
+   * shown line and right of every line. Its first and last blocks' margins
+   * stay inside a side with padding.
+   */
+  padding?: { top?: number; bottom?: number; right?: number }
+  /** List items: false hides the list marker. */
+  marker?: boolean
+}
+
+/** Rendering for syntax nodes by name or Lezer group. */
+export type FormattedNodeView = {
+  /** Names of the nodes it renders, or of their Lezer groups, such as `LeafBlock`. */
+  nodes: readonly string[]
+  /** Local registerSyntax id controlling this renderer. Disabled nodes show literal source. */
+  feature?: string
+  /** Inline decorations. Return false to skip the node's children. */
+  decorate?(
+    node: FormattedNode,
+    out: FormattedDecorations,
+    context: FormattedRenderContext,
+  ): undefined | false
+  /** Layout decorations. Return false to skip the node's children. */
+  layout?(
+    node: FormattedNode,
+    out: FormattedLayout,
+    context: FormattedRenderContext,
+  ): undefined | false
+  /** Block nodes: margins in px, collapsing with their neighbors' like the formatted view's document styles. */
+  space?: { top: number; bottom: number }
+  /**
+   * How the node lays out its lines as a container. Quotes and list items
+   * are containers; another block node with this hook becomes one, with
+   * spacing between its blocks. Called once per node and render.
+   */
+  container?(
+    node: FormattedNode,
+    context: FormattedRenderContext,
+  ): FormattedContainer | undefined
+}
+
+/** Per formatted editor; removed when its addon stops. */
+export type FormattedExtension = {
+  id: string
+  create: (context: EditorExtensionContext) => Extension | Promise<Extension>
+}
+
 export type SourceExtension = {
   id: string
   /** Created per source editor; may lazy-load an editor integration. */
   create: (context?: EditorExtensionContext) => Extension | Promise<Extension>
 }
 
+/** @deprecated Tiptap-only attachment. Use FormattedExtension for the CodeMirror formatted view. */
 export type RichExtension = {
   id: string
   /** Attach editor behavior without rebuilding its schema or undo history. */
@@ -400,7 +526,25 @@ export type MarkdownFlavor = {
   /** False when disabled syntax has a lossless built-in fallback, such as a code fence. */
   readOnlyWhenDisabled?: boolean
   markedOptions?: { gfm?: boolean; breaks?: boolean }
+  /** @deprecated Legacy Tiptap schema extensions. Use syntax and render for the CodeMirror formatted editor. */
   richExtensions?: readonly AnyExtension[]
+  /**
+   * Lezer Markdown extensions for the formatted view and source highlighting (API 3).
+   * New node names must be unique across the configured grammar. Use your addon id
+   * as a prefix; declarations colliding with bundled or other addon nodes are rejected.
+   */
+  syntax?: MarkdownConfig | readonly MarkdownConfig[]
+  /**
+   * True only when inline parsers start at backslash, backtick, & * _ ! [ ] < > ~ ^ $ : =,
+   * line breaks, or core URL/email starts. Preserves plain-text run skipping.
+   */
+  inlineStops?: boolean
+  /**
+   * Viewport-bounded inline renderers and cached block layout (API 3).
+   * If a render callback throws, Hibi reports it and removes this flavor's
+   * formatted contribution. Other flavors and source editing keep working.
+   */
+  render?: readonly FormattedNodeView[]
   /** Rules receive rendered Markdown with declared text characters protected by ctx.literals (sentinel to character), including in tables; preserve node markup. */
   paragraphRules?: readonly MarkdownParagraphRule[]
   /** Verbatim flavors require source editing. Literal fallback is for semantic syntax only. */
@@ -841,9 +985,12 @@ export type AddonContext = {
     registerContextActionProvider: (
       provider: import('../shared/editor-interactions').EditorContextActionProvider,
     ) => Promise<() => void>
+    /** @deprecated Tiptap-only. Use registerFormatted for the CodeMirror formatted editor. */
     registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void
     registerSource: (extension: SourceExtension) => () => void
+    /** Create an extension for each CodeMirror formatted editor (API 3). */
+    registerFormatted: (extension: FormattedExtension) => () => void
     registerFlavor: (flavor: MarkdownFlavor) => () => void
     /** Render with the file's flavor choice and active projections for static export. */
     renderMarkdown: (source: string, documentId?: string) => RenderedMarkdown

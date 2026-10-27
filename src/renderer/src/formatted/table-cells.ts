@@ -19,12 +19,13 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import type { SyntaxNodeRef } from '@lezer/common'
+import { type SyntaxNodeRef, Tree } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownParser,
   parser,
 } from '@lezer/markdown'
+import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   claimFormattedReplacement,
@@ -35,7 +36,6 @@ import {
   formattedLiteral,
   formattedMarkdown,
   formattedNodeViews,
-  formattedOwner,
   formattedRefresh,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
@@ -58,7 +58,7 @@ function cellParser(state: EditorState) {
   const contributed = state.facet(formattedMarkdown)
   let found = cellParsers.get(contributed)
   if (!found) {
-    const inline = parser.configure(contributed)
+    const inline = protectMarkdownParser(parser, contributed)
     const blocks =
       (inline as unknown as { blockNames?: readonly string[] }).blockNames ?? []
     found = inline.configure({ remove: [...blocks] })
@@ -110,68 +110,84 @@ function decorateCell(
   text: string,
   out: CellDecorations,
   touched: (from: number, to: number) => boolean,
+  from: number,
+  source?: readonly number[],
 ) {
+  const to = from + (source?.[text.length] ?? text.length)
   const views = formattedNodeViews(state)
   const literal = literalNodes(state)
   const replacements = new Set<string>()
+  // Node and context positions stay in the owning document. Only the sink
+  // maps them to the cell's displayed text, where escaped pipes lose a slash.
+  const local = (position: number) => {
+    const offset = Math.max(0, position - from)
+    if (!source) return Math.min(text.length, offset)
+    let low = 0,
+      high = text.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (source[middle]! < offset) low = middle + 1
+      else high = middle
+    }
+    return low
+  }
+  const revealedAt = (start: number, end: number) =>
+    touched(local(start), local(end))
   // Line breaks in cells are written as <br>, as the rich editor saved them.
   const lineBreakAt = (node: SyntaxNodeRef) =>
     node.name === 'HTMLTag' &&
-    /^<br\s*\/?>$/i.test(text.slice(node.from, node.to))
-  let cellState: EditorState | null = null
+    /^<br\s*\/?>$/i.test(state.sliceDoc(node.from, node.to))
   const sink = (revealed: boolean): FormattedDecorations => ({
-    mark(from, to, attributes) {
+    mark(start, end, attributes) {
+      const from = local(start),
+        to = local(end)
       if (to > from) out.mark(from, to, attributes)
     },
-    link(from, to, attributes) {
+    link(start, end, attributes) {
+      const from = local(start),
+        to = local(end)
       if (to > from) out.link(from, to, formattedLinkAttributes(attributes))
     },
-    syntax(from, to) {
+    syntax(start, end) {
+      const from = local(start),
+        to = local(end)
       if (to <= from) return
       if (revealed) out.marker(from, to)
       else out.hide(from, to, null)
     },
     line() {},
     widget(at, widget, side = 1) {
-      out.widget(at, widget, side)
+      out.widget(local(at), widget, side)
     },
-    replace(from, to, widget) {
+    replace(start, end, widget) {
+      const from = local(start),
+        to = local(end)
       if (to > from && claimFormattedReplacement(replacements, from, to))
         out.hide(from, to, widget ?? null)
     },
   })
-  cellParser(state)
-    .parse(text)
-    .iterate({
-      enter(node) {
-        // Syntax whose setting is off shows as written, its children too.
-        if (literal.has(node.name)) return false
-        const revealed = touched(node.from, node.to)
-        const nodeOut = sink(revealed)
-        let skip = false
-        // A cell draws its line breaks itself, so contributed HTML renderers
-        // add no second one.
-        const nodeViews = lineBreakAt(node) ? [] : views(node.type).views
-        for (const nodeView of nodeViews) {
-          cellState ??= EditorState.create({
-            doc: text,
-            extensions: [
-              formattedOwner.of(state),
-              state
-                .facet(formattedLiteral)
-                .map((name) => formattedLiteral.of(name)),
-            ],
-          })
-          const context: FormattedRenderContext = {
-            state: cellState,
-            visible: { from: 0, to: text.length },
-            revealed,
-          }
-          if (nodeView.decorate?.(node, nodeOut, context) === false) skip = true
-        }
-        return builtIn(node, nodeOut) === false || skip ? false : undefined
-      },
-    })
+  const tree = cellParser(state).parse(state.sliceDoc(from, to))
+  const cursor = new Tree(tree.type, [tree], [from], to).cursor()
+  cursor.firstChild()
+  cursor.iterate((node) => {
+    // Syntax whose setting is off shows as written, its children too.
+    if (literal.has(node.name)) return false
+    const revealed = revealedAt(node.from, node.to)
+    const nodeOut = sink(revealed)
+    let skip = false
+    // A cell draws its line breaks itself, so contributed HTML renderers
+    // add no second one.
+    const nodeViews = lineBreakAt(node) ? [] : views(node.type).views
+    for (const nodeView of nodeViews) {
+      const context: FormattedRenderContext = {
+        state,
+        visible: { from, to },
+        revealed,
+      }
+      if (nodeView.decorate?.(node, nodeOut, context) === false) skip = true
+    }
+    return builtIn(node, nodeOut) === false || skip ? false : undefined
+  })
 
   /** The formatted view's own inline rendering. */
   function builtIn(
@@ -189,7 +205,7 @@ function decorateCell(
         return
       case 'EmphasisMark': {
         const parent = node.node.parent
-        sink(!!parent && touched(parent.from, parent.to)).syntax(
+        sink(!!parent && revealedAt(parent.from, parent.to)).syntax(
           node.from,
           node.to,
         )
@@ -213,14 +229,14 @@ function decorateCell(
         const linkMarks = node.node.getChildren('LinkMark')
         const open = linkMarks[0]
         const close = linkMarks.find(
-          (mark) => text.slice(mark.from, mark.to) === ']',
+          (mark) => state.sliceDoc(mark.from, mark.to) === ']',
         )
         // Reference links need the note's definitions, so they stay literal.
         if (
           !open ||
           !close ||
-          text[open.from] !== '[' ||
-          text[close.to] !== '('
+          state.sliceDoc(open.from, open.from + 1) !== '[' ||
+          state.sliceDoc(close.to, close.to + 1) !== '('
         )
           return false
         out.syntax(node.from, open.to)
@@ -270,6 +286,8 @@ export function renderInline(
   view: EditorView,
   text: string,
   into: HTMLElement,
+  from = 0,
+  source?: readonly number[],
 ) {
   const marks: InlineMark[] = [],
     hidden: { from: number; to: number; widget: WidgetType | null }[] = [],
@@ -285,6 +303,8 @@ export function renderInline(
       widget: (at, widget, side) => widgets.push({ at, widget, side }),
     },
     () => false,
+    from,
+    source,
   )
   // Text between decoration boundaries, inside spans for the marks over it.
   const parents: HTMLElement[] = [into]
@@ -322,7 +342,7 @@ export function padding(text: string) {
 }
 
 /** Decorations of a cell editor: hidden padding, and the cell's Markdown rendered with markers under the selection. */
-function editorDecorations(main: EditorState, view: EditorView) {
+function editorDecorations(main: EditorState, view: EditorView, from?: number) {
   const text = view.state.doc.toString()
   const reveal =
     view.hasFocus && main.facet(showMarkdownMarkers)
@@ -340,27 +360,30 @@ function editorDecorations(main: EditorState, view: EditorView) {
   const { start, end } = padding(text)
   hide(0, start, null)
   hide(end, text.length, null)
-  decorateCell(
-    main,
-    text,
-    {
-      mark: (from, to, attributes) =>
-        decorations.push(Decoration.mark({ attributes }).range(from, to)),
-      // Inclusive, so that widgets at the text's ends are inside the link too.
-      link: (from, to, attributes) =>
-        decorations.push(
-          Decoration.mark({ attributes, inclusive: true }).range(from, to),
-        ),
-      hide,
-      marker: (from, to) =>
-        decorations.push(
-          Decoration.mark({ class: 'hibi-lp-marker' }).range(from, to),
-        ),
-      widget: (at, widget, side) =>
-        decorations.push(Decoration.widget({ widget, side }).range(at)),
-    },
-    (from, to) => reveal.some((range) => range.from <= to && range.to >= from),
-  )
+  if (from !== undefined)
+    decorateCell(
+      main,
+      text,
+      {
+        mark: (from, to, attributes) =>
+          decorations.push(Decoration.mark({ attributes }).range(from, to)),
+        // Inclusive, so that widgets at the text's ends are inside the link too.
+        link: (from, to, attributes) =>
+          decorations.push(
+            Decoration.mark({ attributes, inclusive: true }).range(from, to),
+          ),
+        hide,
+        marker: (from, to) =>
+          decorations.push(
+            Decoration.mark({ class: 'hibi-lp-marker' }).range(from, to),
+          ),
+        widget: (at, widget, side) =>
+          decorations.push(Decoration.widget({ widget, side }).range(at)),
+      },
+      (from, to) =>
+        reveal.some((range) => range.from <= to && range.to >= from),
+      from,
+    )
   return {
     decorations: Decoration.set(decorations, true),
     atomic: Decoration.set(atomic, true),
@@ -426,11 +449,15 @@ export class CellEditor {
         atomic: DecorationSet
         constructor(view: EditorView) {
           ;({ decorations: this.decorations, atomic: this.atomic } =
-            editorDecorations(host.main.state, view))
+            editorDecorations(host.main.state, view, host.span()?.from))
         }
         update(update: ViewUpdate) {
-          if (
-            update.docChanged ||
+          // Local input reaches the parent after view.update. Keep mapped
+          // decorations until dispatch refreshes against that committed state.
+          if (update.docChanged) {
+            this.decorations = this.decorations.map(update.changes)
+            this.atomic = this.atomic.map(update.changes)
+          } else if (
             update.selectionSet ||
             update.focusChanged ||
             update.transactions.some((transaction) =>
@@ -438,7 +465,11 @@ export class CellEditor {
             )
           )
             ({ decorations: this.decorations, atomic: this.atomic } =
-              editorDecorations(host.main.state, update.view))
+              editorDecorations(
+                host.main.state,
+                update.view,
+                host.span()?.from,
+              ))
         }
       },
       {
@@ -632,7 +663,11 @@ export class CellEditor {
   /** Apply the editor's transactions, and send each change and selection to the formatted view. */
   private dispatch(transactions: readonly Transaction[], view: EditorView) {
     view.update(transactions)
-    if (this.remote) return
+    if (this.remote) {
+      if (transactions.some((transaction) => transaction.docChanged))
+        this.refresh()
+      return
+    }
     for (const transaction of transactions) {
       if (!view.dom.isConnected || !this.host.current()) return
       const span = this.host.span()
@@ -680,6 +715,11 @@ export class CellEditor {
         ],
       })
     }
+    if (
+      transactions.some((transaction) => transaction.docChanged) &&
+      view.dom.isConnected
+    )
+      this.refresh()
   }
 
   /** Redraw inline syntax after the formatted view's render inputs change. */

@@ -36,6 +36,27 @@ const metadata = {
 const commit = 'a'.repeat(40)
 const entry = { ...metadata, path: 'addons/example' }
 
+test('directory accepts mixed supported api versions and rejects malformed versions', () => {
+  const entries = [1, 2, 3].map((apiVersion) => ({
+    ...entry,
+    id: `example-v${apiVersion}`,
+    apiVersion,
+  }))
+  assert.deepEqual(parseAddonDirectory(entries), entries)
+  for (const apiVersion of [0, -1, 3.1, '3', null, undefined])
+    assert.throws(
+      () => parseAddonDirectory([{ ...entry, apiVersion }]),
+      /invalid entry/,
+    )
+})
+
+test('a newer api entry does not hide supported garden entries', () => {
+  const future = { ...entry, id: 'future', apiVersion: 4 }
+  assert.deepEqual(parseAddonDirectory([entry, future]), [entry])
+  assert.deepEqual(parseAddonDirectory([future, entry]), [entry])
+  assert.deepEqual(parseAddonDirectory([future]), [])
+})
+
 test('directory sources bind repository commits or release bytes without granting trust', () => {
   const repository = {
     ...metadata,

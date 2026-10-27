@@ -471,7 +471,7 @@ test('outline rows name long headings in full and shorten them only on screen', 
   assert.equal(formatted.height, formatted.rowHeight)
 })
 
-test('long outline labels run in a worker and cancel when edited or closed', {
+test('long outline labels run in a worker and cancel when edited or the note changes', {
   timeout: 90000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-label-worker-'))
@@ -568,7 +568,7 @@ test('long outline labels run in a worker and cancel when edited or closed', {
   )
   assert.equal(await page.evaluate(() => window.outlineLabelRequests.length), 2)
 
-  // A new pending label must also terminate when the outline closes.
+  // Closing the sidebar keeps heading navigation's labels; changing notes cancels them.
   await page.evaluate(() => {
     window.holdOutlineLabels = true
   })
@@ -576,6 +576,15 @@ test('long outline labels run in a worker and cancel when edited or closed', {
   await page.waitForFunction(() => window.outlineLabelRequests.length === 3)
   const beforeClose = await page.evaluate(() => window.outlineLabelTerminations)
   await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await outline.waitFor({ state: 'hidden' })
+  assert.equal(
+    await page.evaluate(() => window.outlineLabelTerminations),
+    beforeClose,
+  )
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  await clickMenu(app, 'New')
   await page.waitForFunction(
     (count) => window.outlineLabelTerminations > count,
     beforeClose,

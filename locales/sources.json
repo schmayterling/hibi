@@ -4118,7 +4118,8 @@
     "src/renderer/src/ImportDialog.tsx"
   ],
   "b52d8596aa3f": [
-    "src/renderer/src/addons.ts"
+    "src/renderer/src/addons.ts",
+    "src/renderer/src/formatted-addon-compatibility.ts"
   ],
   "53bd3f8c9ac4": [
     "src/addons/ui-preview/index.tsx"
@@ -5529,6 +5530,9 @@
     "src/renderer/src/SyntaxSettings.tsx",
     "src/renderer/src/settings-categories.ts"
   ],
+  "22b222cf96e0": [
+    "src/shared/markdown-flavor-guard.ts"
+  ],
   "5d56d0cefb9f": [
     "src/renderer/src/addons.ts"
   ],
@@ -6322,14 +6326,14 @@
   "99427620f0ec": [
     "src/renderer/src/addons.ts"
   ],
-  "d5717893f842": [
-    "src/renderer/src/addons.ts"
-  ],
   "2c04b0714304": [
     "src/renderer/src/addons.ts"
   ],
   "5f453afab556": [
     "src/renderer/src/addon-views.ts"
+  ],
+  "adebe9b39174": [
+    "src/renderer/src/addons.ts"
   ],
   "3c4b2c687d81": [
     "src/renderer/src/addons.ts"
@@ -6360,6 +6364,9 @@
   ],
   "5eebb144c45a": [
     "src/shared/addon-manifest.ts"
+  ],
+  "50cf98d7b64d": [
+    "src/addons/sdk-legacy-rich.ts"
   ],
   "2d715c5a75aa": [
     "src/addons/dictionary/custom-word-store.ts",
@@ -6987,6 +6994,9 @@
   "c296b396f03c": [
     "src/main/updates.ts"
   ],
+  "3ce8bc1abf30": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "1e6bf669df09": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -7574,6 +7584,9 @@
   "9121a9ed1cc9": [
     "src/renderer/src/window-desktop.ts"
   ],
+  "f199dfdaaddd": [
+    "src/renderer/src/formatted-addon-compatibility.ts"
+  ],
   "3a06dca7eb1b": [
     "src/addons/dictionary/SideView.tsx"
   ],
@@ -7589,7 +7602,7 @@
   "f82d8c5475b7": [
     "src/renderer/src/addons.ts"
   ],
-  "386c2c478548": [
+  "f2767ee8a65d": [
     "src/renderer/src/addons.ts"
   ],
   "d44b2d82471e": [

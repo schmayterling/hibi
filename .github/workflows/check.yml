@@ -3,7 +3,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
     inputs:
       clean:
@@ -13,13 +12,10 @@ on:
 permissions:
   contents: read
 concurrency:
-  # A merged pull request's closed event has the base branch as github.ref, so pull requests key on their number.
-  group: check-${{ github.event_name == 'pull_request' && format('refs/pull/{0}/merge', github.event.number) || github.ref }}
+  group: check-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   desktop:
-    # A closed pull request starts a run only so the concurrency group cancels its queued and running checks.
-    if: github.event.action != 'closed'
     timeout-minutes: ${{ matrix.shard == '0/1' && 120 || 35 }}
     strategy:
       fail-fast: false

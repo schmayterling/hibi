@@ -13,8 +13,8 @@ import {
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { formattedFormatting } from './formatted-contributions.ts'
+import { codeIndentLines, detectIndentUnit, tabIndent } from './indentation.ts'
 import { escapeLineStarts, literal } from './markdown-literal.ts'
-import { codeIndentLines, detectIndentUnit, tabIndent } from './tab-indent.ts'
 
 /*
  * Structure keys for the formatted view. They edit the Markdown source the

@@ -10,7 +10,7 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       export { editorPreferences } from './editor-preferences'
-      export { tabIndent } from './tab-indent'
+      export { tabIndent } from './indentation'
       export { autosave } from './autosave'
     `,
     resolveDir: resolve('src/renderer/src'),

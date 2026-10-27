@@ -540,9 +540,9 @@ function inline(
         // Container syntax stays independent of skipped inline or literal nodes.
         if (
           !literal.has('Blockquote') &&
-          line(doc.lineAt(Math.max(ref.from, range.from)).from).containers.some(
-            (node) => node.name === 'Blockquote',
-          )
+          lines
+            .get(doc.lineAt(Math.max(ref.from, range.from)).from)
+            ?.containers.some((node) => node.name === 'Blockquote')
         ) {
           const pending = [ref.node.cursor(IterMode.IgnoreMounts)]
           for (let cursor = pending.pop(); cursor; cursor = pending.pop()) {

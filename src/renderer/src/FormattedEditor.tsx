@@ -148,6 +148,8 @@ export function MarkdownEditor({
   const documentTarget = documentRuntime.captureDocument(documentState.tabId)
   const findTarget =
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane
+  const activeViewId =
+    findTarget === 'source' ? sourceViewId : (viewId as ViewId)
   useEffect(() => {
     editorViewRegistry.setActive(viewId as ViewId, 'rich')
     return () => editorViewRegistry.clearActive(viewId as ViewId)
@@ -171,11 +173,8 @@ export function MarkdownEditor({
     }
   }, [sourceMounted, documentTarget, documentState.tabId, sourceViewId])
   useEffect(() => {
-    if (focused && documentTarget)
-      documentRuntime.focusView(
-        findTarget === 'source' ? sourceViewId : (viewId as ViewId),
-      )
-  }, [focused, documentTarget, findTarget, sourceViewId, viewId])
+    if (focused && documentTarget) documentRuntime.focusView(activeViewId)
+  }, [focused, documentTarget, activeViewId])
   useEffect(() => {
     onOutline([])
     onActiveOutline(null)
@@ -326,6 +325,7 @@ export function MarkdownEditor({
       />
       <main
         className={`editor-panes mode-${paneMode}`}
+        data-editor-view={activeViewId}
         data-source-ready={ready}
         onDropCapture={(event) => {
           const files = Array.from(event.dataTransfer.files)

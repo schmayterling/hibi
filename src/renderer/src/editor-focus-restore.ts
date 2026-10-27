@@ -33,7 +33,9 @@ export function focusEditor(options?: FocusOptions) {
     const root = document.querySelector<HTMLElement>(
       '.editor-page[data-active="true"]',
     )
-    const viewId = root?.dataset.side
+    const viewId =
+      root?.querySelector<HTMLElement>('.editor-panes')?.dataset.editorView ??
+      root?.dataset.side
     const view = viewId
       ? documentRuntime.captureView(viewId as ViewId)
       : documentRuntime.captureActiveView()
@@ -62,7 +64,14 @@ export function focusEditor(options?: FocusOptions) {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['contenteditable', 'inert', 'hidden', 'class', 'style'],
+      attributeFilter: [
+        'contenteditable',
+        'inert',
+        'hidden',
+        'class',
+        'style',
+        'data-editor-view',
+      ],
     })
   }
 }

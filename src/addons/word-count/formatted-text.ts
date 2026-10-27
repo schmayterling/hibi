@@ -403,7 +403,7 @@ function block(token: Token, syntax: ProjectionSyntax, out: string[]) {
     case 'githubAlert': {
       out.push('\n')
       const start = out.length
-      children(token.tokens ?? [], syntax, out, true)
+      children(token.tokens ?? [], syntax, out, false)
       if (out.length === start) out.push('\n')
       return
     }

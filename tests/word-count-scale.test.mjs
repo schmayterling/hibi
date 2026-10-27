@@ -4,6 +4,52 @@ import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
+function read(counter) {
+  const work = counter.read()
+  for (;;) {
+    const step = work.next()
+    if (step.done) return step.value
+  }
+}
+
+test('a definition edit used by 20k paragraphs retains unchanged visibility rows', {
+  timeout: 180000,
+}, () => {
+  const paragraphs = 20000
+  const source = `${'[label][ref] word\n\n'.repeat(paragraphs)}[ref]: /a`
+  const store = new SourceStore(source, {
+    tabId: 'reference-counts',
+    revision: 0,
+  })
+  const counter = new FormattedCounter(store, defaultNoteSyntax)
+  try {
+    const initial = read(counter)
+    assert.equal(initial.words, paragraphs * 2)
+    counter.counters(true)
+    counter.apply({
+      document: store.snapshot().document,
+      operationId: 'reference-edit',
+      baseVersion: 0,
+      contentVersion: 1,
+      origin: 'source',
+      historyGroup: 'reference-edit',
+      changes: [{ from: source.length - 1, to: source.length, insert: 'b' }],
+    })
+    assert.deepEqual(read(counter), initial)
+    const work = counter.counters()
+    console.log(JSON.stringify(work))
+    assert.ok(work.countedRegions >= paragraphs)
+    assert.ok(
+      work.visible.recordSlotsCopied < 8192,
+      JSON.stringify(work.visible),
+    )
+    assert.equal(work.source.materializations, 0)
+    assert.equal(work.source.materializedUnits, 0)
+  } finally {
+    counter.dispose()
+  }
+})
+
 test('a local edit in 50 MiB recounts bounded regions without flattening the document', {
   timeout: 180000,
 }, () => {

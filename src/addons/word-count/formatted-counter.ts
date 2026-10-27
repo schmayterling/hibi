@@ -370,22 +370,25 @@ export class FormattedCounter {
       )
     else {
       const removed = delta.removed
-        .map((owner) => previous.bySlot(owner.slot)!.index)
+        .flatMap((owner) => previous.bySlot(owner.slot)?.index ?? [])
         .sort((a, b) => b - a)
       for (const index of removed)
         this.#visible = this.#visible.splice(index, index + 1, [])
       const changed = delta.changed
-        .map((owner) => owners.bySlot(owner.slot)!)
+        .flatMap((owner) => owners.bySlot(owner.slot) ?? [])
         .sort((a, b) => a.index - b.index)
-      for (const { owner, index } of changed) {
-        const value = summary(owner.slot)
-        this.#visible = previous.bySlot(owner.slot)
-          ? this.#visible.update(index, value)
-          : this.#visible.splice(index, index, [value])
-      }
+      for (const { owner, index } of changed)
+        if (!previous.bySlot(owner.slot))
+          this.#visible = this.#visible.splice(index, index, [
+            summary(owner.slot),
+          ])
       for (const slot of dirty) {
         const row = owners.bySlot(slot)
-        if (row) this.#visible = this.#visible.update(row.index, summary(slot))
+        if (!row) continue
+        const value = summary(slot)
+        const current = this.#visible.get(row.index)?.owner
+        if (current?.kind !== value.kind || current.parsed !== value.parsed)
+          this.#visible = this.#visible.update(row.index, value)
       }
     }
     this.#owners = owners

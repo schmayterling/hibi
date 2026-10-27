@@ -16,6 +16,8 @@ function read(counter) {
 }
 
 for (const [source, text] of [
+  ['> [!NOTE]\n> a\n>\n>\n>\n> b', '\na\nb'],
+  ['> [!NOTE]\n>\n>\n> a\n>\n>', '\na'],
   [
     '| a | b |\n|---|---|\n| c | d |\n\n> [!TIP]\n> **careful**\n\n~~strike~~',
     '\n\n\na\n\nb\n\n\nc\n\nd\n\ncareful\nstrike',

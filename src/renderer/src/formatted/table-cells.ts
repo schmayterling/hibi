@@ -406,6 +406,8 @@ export type CellMove = 'next' | 'previous' | 'up' | 'down' | 'left' | 'right'
 export type CellHost = {
   /** The formatted view. */
   readonly main: EditorView
+  /** Whether the table's cell spans describe the current document. */
+  current(): boolean
   /** The cell's text between its delimiters in the formatted view's document now; null while its row ends before it. */
   span(): { from: number; to: number; closed: boolean } | null
   /** The change that ends the cell's row with this cell, holding `text`. */
@@ -487,6 +489,11 @@ export class CellEditor {
     }
     const content = (view: EditorView) => padding(view.state.doc.toString())
     const move = (to: CellMove) => () => host.move(to)
+    /** A line break in the cell, which Enter, Shift-Enter and Mod-Enter all make in the rich editor's cells. */
+    const lineBreak = (view: EditorView) => {
+      view.dispatch(view.state.replaceSelection('<br>'), { userEvent: 'input' })
+      return true
+    }
     // Inline formatting shortcuts format the cell's source; block ones do nothing in a cell.
     let formatting: SourceFormatting | null = null
     const inline = ['bold', 'italic', 'strike', 'inline-code']
@@ -510,11 +517,11 @@ export class CellEditor {
           preview,
           this.access.of(access(main)),
           EditorState.transactionFilter.of((transaction) => {
-            // Nothing writes the cell while the formatted view takes no input.
+            // Nothing writes while the host takes no input or has old spans.
             if (
               transaction.docChanged &&
               !this.remote &&
-              !writable(host.main.state)
+              (!writable(host.main.state) || !host.current())
             )
               return []
             // The caret moves within the content, not into the padding.
@@ -566,23 +573,8 @@ export class CellEditor {
                 shift: edge(false, true),
               },
               { key: 'End', run: edge(true, false), shift: edge(true, true) },
-              { key: 'Enter', run: move('down') },
-              {
-                key: 'Shift-Enter',
-                run: (view) => {
-                  view.dispatch(view.state.replaceSelection('<br>'), {
-                    userEvent: 'input',
-                  })
-                  return true
-                },
-              },
-              {
-                key: 'Mod-Enter',
-                run: () => {
-                  host.leave(true)
-                  return true
-                },
-              },
+              { key: 'Enter', run: lineBreak, shift: lineBreak },
+              { key: 'Mod-Enter', run: lineBreak },
               {
                 key: 'Escape',
                 run: () => {
@@ -677,7 +669,7 @@ export class CellEditor {
       return
     }
     for (const transaction of transactions) {
-      if (!view.dom.isConnected) return
+      if (!view.dom.isConnected || !this.host.current()) return
       const span = this.host.span()
       const changes: ChangeSpec[] = []
       if (transaction.docChanged) {

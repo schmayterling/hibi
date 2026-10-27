@@ -117,9 +117,11 @@ test('cell renderers retain the owner state and canonical source positions', asy
         class: 'hibi-lp-link cell-proof',
         role: 'link',
       })
-      const textOf = (node) =>
-        node.text ?? node.children.map(textOf).join('')
-      assert.equal(textOf(root.children[0]), source.slice(2, -2).replace('\\|', '|'))
+      const textOf = (node) => node.text ?? node.children.map(textOf).join('')
+      assert.equal(
+        textOf(root.children[0]),
+        source.slice(2, -2).replace('\\|', '|'),
+      )
     }
     await Promise.resolve()
     assert.deepEqual(errors, [])

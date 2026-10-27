@@ -632,7 +632,7 @@ test('a <br> in a cell is one line break, drawn alike in the cell and its editor
   assert.deepEqual(await breaks(), { editing: true, breaks: 1 })
 })
 
-test('cell editors move with tab, enter and arrows and leave with escape', {
+test('cell editors move with tab and arrows and leave with escape', {
   timeout: 30000,
 }, async () => {
   const doc = 'before\n\n| a | b |\n| --- | --- |\n| c | d |\n| e |\n\nafter'
@@ -644,7 +644,7 @@ test('cell editors move with tab, enter and arrows and leave with escape', {
     'Tab',
     'Tab',
     'Shift+Tab',
-    'Enter',
+    'ArrowDown',
     'ArrowRight',
     'ArrowRight',
     'ArrowRight',
@@ -686,6 +686,27 @@ test('cell editors move with tab, enter and arrows and leave with escape', {
 })
 
 const undoKey = process.platform === 'darwin' ? 'Meta+z' : 'Control+z'
+
+test('enter, shift-enter and mod-enter break the line in a cell, as in the rich editor', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| --- | --- |\n|  | x |\n\nafter'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td').first().click()
+  await harness.keyboard.press('Enter')
+  await harness.keyboard.type('cell')
+  let now = await state()
+  assert.deepEqual([now.cell, now.editor], ['2:0', 'cell'])
+  assert.match(now.doc, /^\| <br>cell \| x \|$/m)
+  // The last cell of the last row keeps editing; each key adds a break there.
+  await harness.locator('.hibi-lp-table td', { hasText: 'x' }).click()
+  await harness.keyboard.press('End')
+  for (const key of ['Enter', 'Shift+Enter', 'ControlOrMeta+Enter'])
+    await harness.keyboard.press(key)
+  now = await state()
+  assert.equal(now.cell, '2:1')
+  assert.match(now.doc, /^\| <br>cell \| x<br><br><br> \|\n\nafter$/m)
+})
 
 test('a cell editor follows its row when rows are added or deleted around it', {
   timeout: 30000,
@@ -734,6 +755,11 @@ test('a cell editor whose row is deleted edits the row now there after later cha
     view.dispatch({
       changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
     })
+    // A DOM selection echo carries no new navigation intent.
+    view.dispatch({
+      selection: { anchor: view.state.doc.length },
+      userEvent: 'select',
+    })
     view.dispatch({
       changes: { from: text.indexOf('| alpha'), insert: '| NEW |\n' },
     })
@@ -744,6 +770,300 @@ test('a cell editor whose row is deleted edits the row now there after later cha
   const now = await state()
   assert.deepEqual([now.cell, now.editor], ['4:0', 'gammaX'])
   assert.match(now.doc, /\| alpha \|\n\| gammaX \|\n\| delta \|/)
+})
+
+test('a later pointer selection supersedes deleted-row recovery', {
+  timeout: 30000,
+}, async () => {
+  await mount('| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n\nafter')
+  await harness.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    view.dispatch({
+      changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
+    })
+    view.focus()
+    view.dispatch({
+      selection: { anchor: view.state.doc.length },
+      userEvent: 'select.pointer',
+    })
+  })
+  await harness.evaluate(() => window.tables.settle())
+  const now = await state()
+  assert.equal(now.head, now.doc.length)
+  assert.equal(now.editor, null)
+})
+
+test('a later keyboard selection supersedes pending deleted-row recovery', {
+  timeout: 30000,
+}, async () => {
+  await mount('| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n\nafter')
+  await harness.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+  const end = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    view.dispatch({
+      changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
+    })
+    view.focus()
+    const mac = /Mac/.test(navigator.platform)
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'End',
+        keyCode: 35,
+        metaKey: mac,
+        ctrlKey: !mac,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+    return [view.state.selection.main.head, view.state.doc.length]
+  })
+  assert.equal(end[0], end[1])
+  await harness.evaluate(() => window.tables.settle())
+  const now = await state()
+  assert.equal(now.head, end[1])
+  assert.equal(now.editor, null)
+})
+
+test('escape and table-edge navigation wait for current table bounds', {
+  timeout: 60000,
+}, async (t) => {
+  const doc =
+    'intro\n\n| a | b |\n| - | - |\n' +
+    Array.from(
+      { length: 20000 },
+      (_, index) => `| row ${index} | right${index} |`,
+    ).join('\n') +
+    '\n\nafter'
+  for (const key of [
+    'Escape',
+    'ArrowUp',
+    'ArrowLeft',
+    'ArrowDown',
+    'ArrowRight',
+  ])
+    for (const shrink of [false, true])
+      await t.test(
+        `${key} after table ${shrink ? 'shrink' : 'growth'}`,
+        async () => {
+          await harness.evaluate(
+            (doc) =>
+              window.tables.mount(
+                doc,
+                { width: 1000, height: 800 },
+                { editable: true, slice: 0 },
+              ),
+            doc,
+          )
+          await harness.waitForFunction(() => !window.tables.settling())
+          await harness.locator('.hibi-lp-table').waitFor()
+          await harness.evaluate(() => window.tables.settle())
+          const before = key === 'ArrowUp' || key === 'ArrowLeft'
+          const target = before
+            ? 'a'
+            : key === 'Escape'
+              ? 'right0'
+              : 'right19999'
+          if (target === 'right19999')
+            await harness.locator('.rich-pane').evaluate((pane) => {
+              pane.scrollTop = pane.scrollHeight
+            })
+          await harness
+            .locator('.hibi-lp-table :is(th, td)', {
+              hasText: new RegExp(`^${target}$`),
+            })
+            .click()
+          const result = await harness.evaluate(
+            ({ key, shrink, before }) => {
+              const view = window.tables.view()
+              const text = view.state.doc.toString()
+              const editor = document.querySelector(
+                '.hibi-lp-cell-editor .cm-content',
+              )
+              editor.focus()
+              editor.dispatchEvent(
+                new KeyboardEvent('keydown', {
+                  key: before ? 'Home' : 'End',
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              )
+              view.dispatch({
+                changes: [
+                  { from: 0, insert: '~~~\n' },
+                  shrink
+                    ? {
+                        from: text.indexOf('| row 10000'),
+                        to: text.indexOf('\n\nafter'),
+                      }
+                    : { from: text.indexOf('row 0'), insert: 'Z'.repeat(200) },
+                ],
+              })
+              const settling = window.tables.settling()
+              const head = view.state.selection.main.head
+              const doc = view.state.doc.toString()
+              editor.dispatchEvent(
+                new KeyboardEvent('keydown', {
+                  key,
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              )
+              return {
+                settling,
+                head,
+                after: view.state.selection.main.head,
+                unchanged: doc === view.state.doc.toString(),
+                connected: editor.isConnected,
+              }
+            },
+            { key, shrink, before },
+          )
+          assert.equal(result.settling, true)
+          assert.equal(result.after, result.head)
+          assert.equal(result.unchanged, true)
+          assert.equal(result.connected, true)
+          // Once the snapshot is current, leaving works with the new bounds.
+          await harness.evaluate(() =>
+            window.tables.view().dispatch({ changes: { from: 0, to: 4 } }),
+          )
+          await harness.waitForFunction(() => !window.tables.settling())
+          await harness.evaluate(() => window.tables.settle())
+          const current =
+            shrink && target === 'right19999' ? 'right9999' : target
+          if ((await state()).editor?.trim() !== current)
+            await harness
+              .locator('.hibi-lp-table :is(th, td)', {
+                hasText: new RegExp(`^${current}$`),
+              })
+              .click()
+          await harness.evaluate(
+            ({ key, before }) => {
+              const editor = document.querySelector(
+                '.hibi-lp-cell-editor .cm-content',
+              )
+              for (const pressed of [before ? 'Home' : 'End', key])
+                editor.dispatchEvent(
+                  new KeyboardEvent('keydown', {
+                    key: pressed,
+                    bubbles: true,
+                    cancelable: true,
+                  }),
+                )
+            },
+            { key, before },
+          )
+          const now = await state()
+          assert.equal(now.editor, null)
+          assert.equal(
+            before
+              ? now.head < now.doc.indexOf('| a')
+              : now.head > now.doc.lastIndexOf('|'),
+            true,
+          )
+        },
+      )
+})
+
+test('unfinished syntax never resolves or writes cells with old spans', {
+  timeout: 60000,
+}, async () => {
+  const doc =
+    'intro\n\n| a | b |\n| - | - |\n' +
+    Array.from(
+      { length: 20000 },
+      (_, index) => `| row ${index} | right${index} |`,
+    ).join('\n') +
+    '\n\nafter'
+  for (const mode of ['input', 'follow', 'lookup', 'lookup-end']) {
+    await harness.evaluate(
+      (doc) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 800 },
+          { editable: true, slice: 0 },
+        ),
+      doc,
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    const target = mode === 'lookup-end' ? 'right19999' : 'right0'
+    if (mode === 'lookup-end') {
+      await harness.evaluate((target) => {
+        const view = window.tables.view()
+        view.focus()
+        view.dispatch({
+          selection: { anchor: view.state.doc.toString().indexOf(target) },
+        })
+      }, target)
+      await harness.evaluate(() => window.tables.settle())
+    }
+    await harness
+      .locator('.hibi-lp-table td', { hasText: new RegExp(`^${target}$`) })
+      .click()
+    const result = await harness.evaluate(async (mode) => {
+      const view = window.tables.view()
+      const text = view.state.doc.toString()
+      const target = mode === 'lookup-end' ? 'right19999' : 'right0'
+      if (mode.startsWith('lookup')) view.focus()
+      view.dispatch({
+        changes: [
+          { from: 0, insert: '~~~\n' },
+          { from: text.indexOf('row 0'), insert: 'Z'.repeat(200) },
+        ],
+        ...(mode === 'input'
+          ? {}
+          : { selection: { anchor: text.indexOf(target) + 204 } }),
+      })
+      const settling = window.tables.settling()
+      const before = view.state.doc.toString()
+      const expected = view.state.selection.main.head
+      await new Promise(queueMicrotask)
+      const head = view.state.selection.main.head
+      document.execCommand('insertText', false, 'Q')
+      await new Promise(queueMicrotask)
+      await new Promise(queueMicrotask)
+      return {
+        settling,
+        before,
+        expected,
+        head,
+        doc: view.state.doc.toString(),
+      }
+    }, mode)
+    assert.equal(result.settling, true, mode)
+    assert.equal(result.head, result.expected, mode)
+    assert.equal(result.doc === result.before, true, mode)
+    // Restore table syntax; queued recovery must retry after the new layout.
+    await harness.evaluate(() =>
+      window.tables.view().dispatch({ changes: { from: 0, to: 4 } }),
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    await harness.evaluate(() => window.tables.settle())
+    const now = await state()
+    assert.deepEqual(
+      [now.cell, now.editor],
+      [mode === 'lookup-end' ? '20001:1' : '2:1', target],
+      mode,
+    )
+    await harness.keyboard.press('Home')
+    await harness.keyboard.type('Q')
+    assert.ok((await state()).doc.includes(`| Q${target} |`), mode)
+  }
+  // A settled parse may reuse its tree; its mapped widgets still need a new snapshot.
+  await mount(doc)
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('right19998') },
+    })
+    view.dispatch({ changes: { from: 0, insert: 'prefix ' } })
+  })
+  await harness.evaluate(() => window.tables.settle())
+  const now = await state()
+  assert.deepEqual([now.cell, now.editor], ['20000:1', 'right19998'])
 })
 
 test('a cell editor whose row is deleted leaves focus that moved out of the editor', {
@@ -804,11 +1124,12 @@ test('navigation out of a read-only table writes nothing', {
 }, async () => {
   const doc = '| a | b |\n| - | - |\n| x | y |'
   await mount(doc)
-  // Tab in the last cell would add a row; escape at the end a paragraph.
+  // Tab in the last cell would add a row; escape or a move down past the
+  // end a paragraph.
   for (const [cell, key] of [
     ['y', 'Tab'],
     ['x', 'Escape'],
-    ['x', process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter'],
+    ['x', 'ArrowDown'],
   ]) {
     await harness.evaluate(() => window.tables.setEditable(true))
     await harness.locator('.hibi-lp-table td', { hasText: cell }).click()
@@ -818,6 +1139,14 @@ test('navigation out of a read-only table writes nothing', {
     const now = await state()
     assert.equal(now.doc, doc, key)
     assert.equal(now.editor, null, key)
+  }
+  // Nor do the keys that break a line in a cell.
+  await harness.evaluate(() => window.tables.setEditable(true))
+  await harness.locator('.hibi-lp-table td', { hasText: 'x' }).click()
+  await harness.evaluate(() => window.tables.setEditable(false))
+  for (const key of ['Enter', 'Shift+Enter', 'ControlOrMeta+Enter']) {
+    await harness.keyboard.press(key)
+    assert.equal((await state()).doc, doc, key)
   }
   // Nor do the toolbar's table actions.
   assert.equal(
@@ -855,6 +1184,37 @@ test('undo moves the cell editor to the cell whose edit it undoes', {
   assert.equal(now.head, '| alpha'.length)
 })
 
+test('the toolbar inserts a header and two rows, with the caret in the first header cell', {
+  timeout: 30000,
+}, async () => {
+  await mount('hello')
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: 0, head: 5 } })
+  })
+  assert.equal(
+    await harness.evaluate(() => window.tables.runFormatting('table')),
+    true,
+  )
+  const rows = harness.locator('.hibi-lp-table tr')
+  await harness.locator('.hibi-lp-table').waitFor()
+  assert.equal(await rows.count(), 3)
+  await harness.evaluate(() => window.tables.settle())
+  assert.deepEqual([(await state()).cell, (await state()).head], ['0:0', 2])
+  // Table actions edit the table around that cell, as in the rich editor.
+  assert.equal(
+    await harness.evaluate(() => window.tables.runTableAction('row-after')),
+    true,
+  )
+  assert.equal(await rows.count(), 4)
+  assert.equal(
+    await harness.evaluate(() => window.tables.runTableAction('column-after')),
+    true,
+  )
+  assert.equal(await rows.first().locator('th, td').count(), 3)
+})
+
 test('tab extends a table of only a header, and leaving a table at the end adds a paragraph', {
   timeout: 30000,
 }, async () => {
@@ -864,9 +1224,7 @@ test('tab extends a table of only a header, and leaving a table at the end adds 
   assert.equal((await state()).cell, '2:0')
   await harness.keyboard.type('c')
   assert.equal((await state()).doc, 'before\n\n| a | b |\n| - | - |\n| c |  |')
-  await harness.keyboard.press(
-    process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter',
-  )
+  await harness.keyboard.press('ArrowDown')
   await harness.keyboard.type('AFTER')
   const now = await state()
   assert.equal(now.doc, 'before\n\n| a | b |\n| - | - |\n| c |  |\n\nAFTER')

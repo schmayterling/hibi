@@ -1233,15 +1233,15 @@ function chunkLayout(
       },
     })
   }
-  return { ranges: out, sensitive }
+  return { ranges: out, sensitive, doc: sensitive ? doc : null }
 }
 
 type ChunkLayout = ReturnType<typeof chunkLayout>
 /**
  * Layout per chunk tree, set of views and set of nodes shown as written:
  * reused chunks keep their decorations, shifted to their position. A chunk
- * under the selection whose layout comes from contributed views is laid out
- * again with its reveal state.
+ * with contributed views refreshes its document snapshot after an edit, and
+ * is laid out again with its reveal state under the selection.
  */
 const chunkCache = new WeakMap<
   readonly FormattedNodeView[],
@@ -1290,7 +1290,7 @@ function layoutDecorations(
   const out: Range<Decoration>[] = []
   for (const { from, chunk, covered } of parsedChunks(tree)) {
     let layout = cache.get(chunk)
-    if (!layout) {
+    if (!layout || (layout.sensitive && layout.doc !== state.doc)) {
       layout = chunkLayout(state, tree, from, covered, [])
       cache.set(chunk, layout)
     }
@@ -1397,7 +1397,9 @@ export function livePreview(
       // An edit's unfinished reparse keeps the layout it replaces, mapped.
       if (
         syntax.settling(state) ||
-        (tree === syntax.tree(startState) &&
+        (!transaction.docChanged &&
+          !syntax.settling(startState) &&
+          tree === syntax.tree(startState) &&
           state.facet(formattedViews) === startState.facet(formattedViews) &&
           state.facet(formattedLiteral) ===
             startState.facet(formattedLiteral) &&

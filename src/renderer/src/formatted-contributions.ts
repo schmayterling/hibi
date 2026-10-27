@@ -184,10 +184,10 @@ export type FormattedNodeViews = {
    */
   views: readonly FormattedNodeView[]
   /**
-   * The same views in the order they decorate: those for a group first, so
-   * where both mark the same text, the node's own marks wrap theirs.
+   * The views that name one of the node's groups. The formatted view draws
+   * their marks inside its other marks, so small text wraps the tags in it.
    */
-  decorators: readonly FormattedNodeView[]
+  grouped: readonly FormattedNodeView[]
 }
 
 const viewsByType = new WeakMap<
@@ -211,10 +211,7 @@ export function formattedNodeViews(state: EditorState) {
         (view) =>
           !named.includes(view) && view.nodes.some((name) => type.is(name)),
       )
-      matched = {
-        views: [...named, ...grouped],
-        decorators: [...grouped, ...named],
-      }
+      matched = { views: [...named, ...grouped], grouped }
       found.set(type, matched)
     }
     return matched

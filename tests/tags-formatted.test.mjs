@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorState, RangeSet } from '@codemirror/state'
-import { Decoration } from '@codemirror/view'
+import { EditorState } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
 import { blockMathSyntax } from '../src/addons/math/formatted-syntax.ts'
 import { formattedTags } from '../src/addons/tags/formatted.ts'
@@ -284,22 +283,19 @@ test('contributed node views apply by node name or Lezer group, once each', () =
   const views = formattedNodeViews(state)
   const type = (name) =>
     contributed.nodeSet.types.find((entry) => entry.name === name)
-  // Views naming the node come first, except when decorating.
+  // Views naming the node come first.
   assert.deepEqual(views(type('Paragraph')), {
     views: [both, leaf],
-    decorators: [leaf, both],
+    grouped: [leaf],
   })
   for (const name of ['FencedCode', 'Subtext', 'FutureBlock'])
     assert.deepEqual(
       views(type(name)),
-      { views: [leaf, both], decorators: [leaf, both] },
+      { views: [leaf, both], grouped: [leaf, both] },
       name,
     )
-  assert.deepEqual(views(type('Emphasis')), {
-    views: [named],
-    decorators: [named],
-  })
-  assert.deepEqual(views(type('Blockquote')), { views: [], decorators: [] })
+  assert.deepEqual(views(type('Emphasis')), { views: [named], grouped: [] })
+  assert.deepEqual(views(type('Blockquote')), { views: [], grouped: [] })
   // Each type resolves once per set of views.
   assert.equal(
     formattedNodeViews(state)(type('Paragraph')),
@@ -307,58 +303,26 @@ test('contributed node views apply by node name or Lezer group, once each', () =
   )
 })
 
-test('small text wraps the tags in it whichever contribution registers first', () => {
-  // Small text beside a list bullet marks its text, here only a tag: both
-  // marks cover the same text.
-  const doc = '- -# #tag'
-  const tree = contributed.parse(doc)
+test('small text holds its tags through a group view whichever contribution registers first', () => {
+  // Small text beside a list bullet marks its text, which may be only a tag.
+  // The formatted view draws group views' marks from a source of higher
+  // precedence, so the tag sits inside the small text.
+  const subtext = contributed.nodeSet.types.find(
+    (type) => type.name === 'Subtext',
+  )
   for (const order of [
     [...extras.subtext.views, view],
     [view, ...extras.subtext.views],
-  ]) {
-    const state = EditorState.create({
-      doc,
-      extensions: order.map((entry) => formattedViews.of(entry)),
-    })
-    const views = formattedNodeViews(state)
-    const marks = []
-    const out = {
-      mark: (from, to, attributes) =>
-        marks.push(Decoration.mark({ attributes }).range(from, to)),
-      syntax() {},
-      line() {},
-      widget() {},
-      replace() {},
-    }
-    tree.iterate({
-      enter(node) {
-        for (const nodeView of views(node.type).decorators)
-          nodeView.decorate?.(node, out, {
-            state,
-            visible: { from: 0, to: doc.length },
-            revealed: false,
-          })
-      },
-    })
-    const nesting = []
-    RangeSet.spans(
-      [Decoration.set(marks, true)],
-      doc.indexOf('#tag'),
-      doc.length,
-      {
-        point() {},
-        span: (_from, _to, active) =>
-          nesting.push(active.map((mark) => mark.spec.attributes.class)),
-      },
-    )
-    // The editor wraps the first active mark in the others, so the tag sits
-    // inside the small text: small, in the tag's own color.
+  ])
     assert.deepEqual(
-      nesting,
-      [['hibi-tag', 'markdown-subtext']],
+      formattedNodeViews(
+        EditorState.create({
+          extensions: order.map((entry) => formattedViews.of(entry)),
+        }),
+      )(subtext),
+      { views: [...extras.subtext.views, view], grouped: [view] },
       order.map((entry) => entry.nodes.join()).join(' then '),
     )
-  }
 })
 
 test('the formatted view shows reference links and entities as written, so their tags follow the text', () => {

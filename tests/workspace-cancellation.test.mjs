@@ -10,7 +10,7 @@ import {
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import { build } from 'esbuild'
 import { waitForAsync } from './poll.mjs'
 
@@ -66,6 +66,15 @@ const {
   workspaceMetadataPages,
 } = module.exports
 const fs = process.getBuiltinModule('node:fs/promises')
+beforeEach((t) => {
+  t.mock.method(process.getBuiltinModule('node:fs'), 'watch', () => ({
+    on() {
+      return this
+    },
+    close() {},
+  }))
+  syncBuiltinESMExports()
+})
 
 test('aborting traversal closes its directory iterator before reading later entries', async (t) => {
   const base = await mkdtemp(join(tmpdir(), 'hibi-scan-cancel-'))

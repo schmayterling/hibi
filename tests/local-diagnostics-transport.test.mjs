@@ -3,6 +3,7 @@ import test from 'node:test'
 import { DiagnosticIngress } from '../src/main/local-diagnostics/ingress.ts'
 import { DiagnosticProducer } from '../src/preload/local-diagnostics.ts'
 import {
+  decodeDiagnosticSession,
   diagnosticLimits,
   diagnosticPolicies,
 } from '../src/shared/local-diagnostics.ts'
@@ -16,6 +17,38 @@ const wire = (extra = {}) =>
 const settle = () => new Promise((resolve) => setImmediate(resolve))
 
 for (const profile of ['release', 'debug']) {
+  test(`${profile}: every trusted artifact reaches the session and admits frames beyond 256 chunks`, () => {
+    const artifacts = Array.from({ length: 600 }, (_, i) => [
+      `app://hibi/assets/chunk-${i}.js`,
+      i + 100,
+    ])
+    const records = []
+    const ingress = new DiagnosticIngress(profile, artifacts, (record) => {
+      records.push(record)
+      return true
+    })
+    const hello = ingress.receive(true, 'hello')
+    const config = decodeDiagnosticSession(hello)
+    assert.deepEqual(config?.artifacts, artifacts)
+    const frames = [[artifacts.at(-1)[1], 12, 3]]
+    assert.equal(
+      ingress.receive(
+        true,
+        'batch',
+        config.token,
+        JSON.stringify([wire({ stackStatus: 'captured', frames })]),
+      ),
+      true,
+    )
+    assert.deepEqual(JSON.parse(records[0]).frames, frames)
+    assert.equal(
+      decodeDiagnosticSession(
+        JSON.stringify({ ...config, artifacts: [[artifacts[0][0], 4097]] }),
+      ),
+      null,
+    )
+    ingress.dispose()
+  })
   test(`${profile}: long trusted artifact URLs cannot expand the initial session beyond its wire bound`, () => {
     const artifacts = Array.from({ length: 256 }, (_, i) => [
       `app://hibi/${'a'.repeat(900)}/${i}.js`,

@@ -113,6 +113,7 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { definitionOf } from './formatted/footnote-definitions'
 import {
   followsLink,
   formattedDocument,
@@ -1140,12 +1141,16 @@ export function SourceEditor({
         !['Link', 'Autolink', 'Image', 'LinkReference'].includes(
           node.parent?.name ?? '',
         )
+      // Footnote references there move to their definitions.
+      const links = formatted
+        ? ['Link', 'Autolink', 'FootnoteReference']
+        : ['Link', 'Autolink']
       const linkAt = (side: -1 | 1) => {
         let node = tree(view.state).resolveInner(position, side)
-        while (node.parent && !['Link', 'Autolink'].includes(node.name))
+        while (node.parent && !links.includes(node.name))
           if (bare(node)) return node
           else node = node.parent
-        return ['Link', 'Autolink'].includes(node.name) ? node : null
+        return links.includes(node.name) ? node : null
       }
       // The formatted view also looks after the position, where a table cell
       // gives the start of the link clicked in it.
@@ -1166,6 +1171,20 @@ export function SourceEditor({
           return true
         }
         return false
+      }
+      if (node.name === 'FootnoteReference') {
+        const label = node.getChild('FootnoteLabel')
+        const at =
+          label &&
+          definitionOf(view.state, view.state.sliceDoc(label.from, label.to))
+        if (at == null) return false
+        view.dispatch({
+          selection: { anchor: at },
+          effects: EditorView.scrollIntoView(at, { y: 'start', yMargin: 48 }),
+          userEvent: 'select',
+        })
+        view.focus()
+        return true
       }
       const target = markdownLink(
         view.state.sliceDoc(node.from, node.to),

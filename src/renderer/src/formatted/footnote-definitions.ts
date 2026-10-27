@@ -756,6 +756,48 @@ export function defined(state: EditorState, label: string) {
   return !!index && countOf(index.labels, label.toLowerCase()) > 0
 }
 
+/**
+ * Where the text of the first definition of a reference's label starts.
+ * Null until changed blocks have been read again or no definition was read.
+ * Only the stretch whose labels have it is parsed again.
+ */
+export function definitionOf(state: EditorState, label: string) {
+  const index = state.field(footnoteDefinitions, false)
+  if (!index || index.stale) return null
+  const wanted = label.toLowerCase()
+  let from = index.start
+  for (const group of index.groups)
+    for (const stretch of group.stretches) {
+      if (!stretch.labels.includes(wanted)) {
+        from += stretch.length
+        continue
+      }
+      const text = state.doc.sliceString(from, from + stretch.length)
+      let found: number | null = null
+      scanner(index.configs)
+        .parse(text)
+        .iterate({
+          enter(node) {
+            if (found !== null) return false
+            if (node.name !== 'FootnoteDefinition') return undefined
+            const name = node.node.getChild('FootnoteLabel'),
+              mark = node.node.getChildren('FootnoteMark')[1]
+            if (
+              name &&
+              mark &&
+              text.slice(name.from, name.to).toLowerCase() === wanted
+            ) {
+              // The text after the label and the spaces that follow it.
+              found = from + mark.to + text.slice(mark.to).search(/[^ \t]|$/)
+            }
+            return undefined
+          },
+        })
+      return found
+    }
+  return null
+}
+
 /** Whether all of the note has been read. */
 export function definitionsRead(state: EditorState) {
   const index = state.field(footnoteDefinitions, false)

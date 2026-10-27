@@ -15,8 +15,13 @@ registerHooks({
 const { contribution, Footnotes } = await import(
   '../src/renderer/src/formatted/footnotes.ts'
 )
-const { definitionsRead, footnoteDefinitions, footnoteScan, readDefinitions } =
-  await import('../src/renderer/src/formatted/footnote-definitions.ts')
+const {
+  definitionOf,
+  definitionsRead,
+  footnoteDefinitions,
+  footnoteScan,
+  readDefinitions,
+} = await import('../src/renderer/src/formatted/footnote-definitions.ts')
 const { contributionExtension } = await import(
   '../src/renderer/src/formatted-contributions.ts'
 )
@@ -167,6 +172,8 @@ test('references hide their brackets and definitions label their first line', ()
   const sink = {
     mark: (from, to, attributes) =>
       out.push(['mark', doc.slice(from, to), attributes.class]),
+    link: (from, to, attributes) =>
+      out.push(['link', doc.slice(from, to), attributes.class]),
     syntax: (from, to) => out.push(['syntax', doc.slice(from, to)]),
     line: (at, attributes) => out.push(['line', at, attributes]),
     widget() {},
@@ -192,7 +199,7 @@ test('references hide their brackets and definitions label their first line', ()
   })
   assert.deepEqual(out, [
     ['syntax', '[^'],
-    ['mark', '1', 'hibi-lp-footnote-ref'],
+    ['link', '1', 'hibi-lp-footnote-ref'],
     ['syntax', ']'],
     [
       'line',
@@ -222,6 +229,7 @@ function rendered(state) {
         node,
         {
           mark: () => marks.push('mark'),
+          link: () => marks.push('link'),
           syntax: () => marks.push('syntax'),
           line() {},
           widget() {},
@@ -242,6 +250,47 @@ test('references without a definition stay text; labels match case-insensitively
     ),
   )
   assert.deepEqual(rendered(state), ['[^1]', '[^Note]'])
+})
+
+test('a reference finds where the text of its first definition starts', () => {
+  const doc = `See[^a] and[^b].\n\n${'filler paragraph\n\n'.repeat(400)}> [^A]:  quoted note\n\n[^a]: second\n\nordinary paragraph\n\n    [^b]: code, not a definition\n`
+  const state = settle(create(doc))
+  assert.equal(definitionOf(state, 'a'), doc.indexOf('quoted note'))
+  assert.equal(definitionOf(state, 'A'), doc.indexOf('quoted note'))
+  assert.equal(definitionOf(state, 'b'), null)
+})
+
+test('definition navigation waits for changed blocks to be read again', () => {
+  let state = settle(
+    create(
+      `see[^a]\n\n${'filler paragraph\n\n'.repeat(400)}[^a]: first\n\n[^A]: second`,
+    ),
+  )
+  const slice = footnoteScan.slice
+  try {
+    footnoteScan.slice = 0
+    state = state.update({ changes: { from: 0, insert: '```\n' } }).state
+    assert.equal(definitionOf(state, 'a'), null)
+  } finally {
+    footnoteScan.slice = slice
+  }
+  state = settle(state)
+  assert.equal(definitionOf(state, 'a'), null)
+})
+
+test('definition navigation follows source edits and the next duplicate', () => {
+  let state = settle(create('see[^a]\n\n[^a]:\tfirst\n\n[^A]: second'))
+  assert.equal(definitionOf(EditorState.create(), 'a'), null)
+  assert.equal(definitionOf(state, 'a'), state.doc.toString().indexOf('first'))
+  state = settle(
+    state.update({ changes: { from: 0, insert: 'new paragraph\n\n' } }).state,
+  )
+  assert.equal(definitionOf(state, 'a'), state.doc.toString().indexOf('first'))
+  const start = state.doc.toString().indexOf('[^a]:')
+  state = settle(
+    state.update({ changes: { from: start, to: start + 5 } }).state,
+  )
+  assert.equal(definitionOf(state, 'a'), state.doc.toString().indexOf('second'))
 })
 
 test('definitions count where the formatted view parses them: not in code, html or paragraphs', () => {
@@ -646,6 +695,10 @@ for (const replacement of [
       }),
     )
     assert.deepEqual(indexed(state), { old: 1 })
+    assert.equal(
+      definitionOf(state, 'old'),
+      state.doc.toString().indexOf('previous'),
+    )
     state = state.update({
       changes: { from: 0, to: state.doc.length, insert: replacement },
       selection: { anchor: replacement.length },
@@ -656,5 +709,12 @@ for (const replacement of [
     assert.equal(state.doc.toString(), replacement)
     assert.equal(state.selection.main.head, replacement.length)
     assert.deepEqual(indexed(state), parsed(replacement))
+    assert.equal(definitionOf(state, 'old'), null)
+    assert.equal(
+      definitionOf(state, 'new'),
+      replacement.includes('replacement')
+        ? replacement.indexOf('replacement')
+        : null,
+    )
   })
 }

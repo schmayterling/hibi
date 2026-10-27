@@ -275,6 +275,71 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
   )
 
   await t.test(
+    'typing a mid-note fence after idle edits settles without repeated adoption or scanning',
+    async () => {
+      const before = await page.evaluate(() => {
+        const preview = window.livePreview
+        const view = preview.view()
+        const at = view.state.doc.lineAt(
+          Math.floor(view.state.doc.length / 2),
+        ).from
+        view.dispatch({ selection: { anchor: at }, scrollIntoView: true })
+        preview.reset()
+        const requests = preview.workerState.requests
+        const pages = preview.workerState.pages
+        for (const [i, character] of [...'~~~\n'].entries())
+          preview.edit(at + i, at + i, character)
+        return { at, requests, pages }
+      })
+      await page.waitForFunction(
+        (before) =>
+          window.livePreview.workerState.requests - before.requests > 4 ||
+          (!window.livePreview.settling() &&
+            window.livePreview.workerState.ready),
+        before,
+        { timeout: 120000 },
+      )
+      const counters = () =>
+        page.evaluate(
+          (before) => ({
+            requests: window.livePreview.workerState.requests - before.requests,
+            pages: window.livePreview.workerState.pages - before.pages,
+            adopted: window.livePreview.probe.adoptionSlices ?? 0,
+            scanned: window.livePreview.probe.scannedUnits,
+            settling: window.livePreview.settling(),
+            errors: window.livePreview.workerState.errors,
+          }),
+          before,
+        )
+      const settled = await counters()
+      t.diagnostic(JSON.stringify({ typedFence: settled }))
+      assert.equal(settled.settling, false, JSON.stringify(settled))
+      assert.ok(settled.requests <= 4, JSON.stringify(settled))
+      assert.ok(settled.pages <= 4, JSON.stringify(settled))
+      assert.ok(settled.adopted <= 4, JSON.stringify(settled))
+      assert.ok(settled.scanned <= 1024 * 1024, JSON.stringify(settled))
+      assert.deepEqual(settled.errors, [])
+      await page.evaluate(async () => {
+        for (let i = 0; i < 3; i++)
+          await new Promise((done) =>
+            requestIdleCallback(done, { timeout: 200 }),
+          )
+      })
+      assert.deepEqual(await counters(), settled)
+      await page.evaluate(() => {
+        for (let i = 0; i < 4; i++) window.livePreview.undo()
+      })
+      await page.waitForFunction(
+        () =>
+          !window.livePreview.settling() &&
+          window.livePreview.workerState.ready,
+        undefined,
+        { timeout: 120000 },
+      )
+    },
+  )
+
+  await t.test(
     'edited indexes retain far jumps and rebuild after structural undo and redo',
     async () => {
       for (const fraction of [0.01, 0.5, 0.99]) {

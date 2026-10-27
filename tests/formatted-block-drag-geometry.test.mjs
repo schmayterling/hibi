@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 let app, page, folder
@@ -30,6 +30,8 @@ before(
     )
     await page.reload()
     await waitForDocumentEditor(app, page)
+    const session = await page.context().newCDPSession(page)
+    await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   },
   { timeout: 90000 },
 )
@@ -48,11 +50,15 @@ async function open(name, doc, token) {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await pressShortcut(app, `${mod}+o`)
-  await page.locator('.rich-pane .cm-line', { hasText: token }).waitFor()
+  await page
+    .locator('.rich-pane:not([inert]) .cm-line', { hasText: token })
+    .waitFor()
 }
 
 async function hover(token) {
-  const line = page.locator('.rich-pane .cm-line', { hasText: token })
+  const line = page.locator('.rich-pane:not([inert]) .cm-line', {
+    hasText: token,
+  })
   const box = await line.boundingBox()
   const top = await line.evaluate(
     (line) => Number.parseFloat(line.style.paddingTop) || 0,
@@ -60,7 +66,9 @@ async function hover(token) {
   await page.mouse.move(0, 0)
   await page.mouse.move(box.x + 90, box.y + top + 14)
   await page.waitForFunction(() => {
-    const handle = document.querySelector('.rich-pane .block-drag-handle')
+    const handle = document.querySelector(
+      '.rich-pane:not([inert]) .block-drag-handle',
+    )
     return handle && getComputedStyle(handle).visibility === 'visible'
   })
   return line
@@ -78,7 +86,7 @@ test('hovered task handles leave checkboxes clickable in plain and nested contai
     const checkbox = line.locator('input.hibi-lp-task')
     const box = await checkbox.boundingBox()
     const handle = await page
-      .locator('.rich-pane .block-drag-handle')
+      .locator('.rich-pane:not([inert]) .block-drag-handle')
       .boundingBox()
     assert.ok(
       handle.x + handle.width <= box.x,
@@ -126,11 +134,51 @@ test('alert and footnote handles follow the actual content offset', {
     const line = await hover(token)
     const box = await line.boundingBox()
     const handle = await page
-      .locator('.rich-pane .block-drag-handle')
+      .locator('.rich-pane:not([inert]) .block-drag-handle')
       .boundingBox()
     assert.ok(
       Math.abs(handle.x + handle.width - box.x) <= 1,
       JSON.stringify({ name, handle, box }),
     )
   }
+})
+
+test('enabling block drag in an open note keeps task checkboxes clickable', {
+  timeout: 90000,
+}, async () => {
+  const doc = '- [ ] first task\n- [ ] second task\n'
+  await open('activation.md', doc, 'second task')
+  const toggle = async () => {
+    await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+    await page.locator('#addon-block-drag').click()
+    await page.keyboard.press('Escape')
+    await page.locator('.rich-pane:not([inert]) .cm-content').waitFor()
+  }
+  await toggle()
+  await waitForAsync(
+    page,
+    () => !document.querySelector('.rich-pane:not([inert]) .block-drag-handle'),
+  )
+  await toggle()
+  const line = await hover('second task')
+  const checkbox = await line.locator('input.hibi-lp-task').boundingBox()
+  const handle = await page
+    .locator('.rich-pane:not([inert]) .block-drag-handle')
+    .boundingBox()
+  assert.ok(
+    handle.x + handle.width <= checkbox.x,
+    JSON.stringify({ handle, checkbox }),
+  )
+  await page.mouse.click(
+    checkbox.x + checkbox.width / 2,
+    checkbox.y + checkbox.height / 2,
+  )
+  await waitForAsync(
+    page,
+    async (doc) =>
+      (await window.hibi.getDocument()).markdown ===
+      doc.replace('- [ ] second', '- [x] second'),
+    doc,
+  )
 })

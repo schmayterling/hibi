@@ -1406,6 +1406,8 @@ export function livePreview(
         } else if (
           update.docChanged ||
           update.viewportChanged ||
+          update.state.facet(formattedBlockEdges) !==
+            update.startState.facet(formattedBlockEdges) ||
           changedReveal ||
           tree !== syntax.tree(update.startState) ||
           update.state.field(layout) !== update.startState.field(layout) ||

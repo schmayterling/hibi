@@ -32,6 +32,29 @@ const leafNames = new Set([
   'BlockMath',
 ])
 
+/** Source cells actually rendered by the table view, before its inline parse. */
+export function formattedTableRow(
+  node: SyntaxNode,
+  offset: number,
+  input: FormattedTextInput,
+  at: number,
+) {
+  const from = offset + node.from,
+    first = input.lineAt(from)
+  const row = input.lineAt(at),
+    delimiter = input.lineAt(first.to + 1)
+  if (row.from === delimiter.from) return null
+  let quotes = 0
+  for (let parent = node.parent; parent; parent = parent.parent)
+    if (parent.name === 'Blockquote') quotes++
+  const source = input.read(row.from, row.to)
+  const start =
+    row.from === first.from ? from - row.from : rowStart(source, quotes)
+  const parsed = parseRow(source.slice(start), row.from + start)
+  const columns = parseRow(input.read(from, first.to), from).cells.length
+  return { ...row, ...parsed, cells: parsed.cells.slice(0, columns) }
+}
+
 /** Pure unrevealed-text effects from the same nodes and source ranges the view draws. */
 export function* formattedTextEffects(
   tree: Tree,
@@ -307,18 +330,21 @@ export function* formattedTextEffects(
       descend = false
     }
     if (name === 'Table' && features.has('markdown.tables')) {
-      let row = input.lineAt(from),
-        ordinal = 0,
-        quotes = 0
-      for (let parent = node.parent; parent; parent = parent.parent)
-        if (parent.name === 'Blockquote') quotes++
-      while (row.from <= to) {
+      const firstRow = input.lineAt(from),
+        delimiter = input.lineAt(firstRow.to + 1)
+      let row = input.lineAt(Math.max(from, range.from))
+      yield {
+        kind: 'hide',
+        from: Math.max(0, delimiter.from - 1),
+        to: delimiter.to,
+      }
+      while (row.from <= to && row.from < range.to) {
+        const ordinal =
+          row.from === firstRow.from ? 0 : row.from === delimiter.from ? 1 : 2
         if (ordinal === 1)
           yield { kind: 'hide', from: Math.max(0, row.from - 1), to: row.to }
         else if (row.to >= range.from && row.from < range.to) {
-          const source = input.read(row.from, row.to)
-          const start = ordinal ? rowStart(source, quotes) : from - row.from
-          const parsed = parseRow(source.slice(start), row.from + start)
+          const parsed = formattedTableRow(node, offset, input, row.from)!
           let at = row.from
           for (let index = 0; index < parsed.cells.length; index++) {
             const cell = parsed.cells[index]!
@@ -338,6 +364,13 @@ export function* formattedTextEffects(
               read: (a: number, b: number) => content.text.slice(a, b),
               lineAt: () => ({ from: 0, to: content.text.length }),
             }
+            // Escaped pipes remain one atom, including inside inline code.
+            for (const escaped of cellText.matchAll(/\\\|/g))
+              yield {
+                kind: 'atom',
+                from: cell.from + escaped.index,
+                to: cell.from + escaped.index + 2,
+              }
             // The cell view removes escaped pipes before parsing and maps back.
             for (const effect of formattedTextEffects(
               cellTree,
@@ -357,22 +390,19 @@ export function* formattedTextEffects(
               yield {
                 ...effect,
                 from: cell.from + content.source[effect.from]!,
-                to: cell.from + content.source[effect.to]!,
+                to:
+                  cell.from +
+                  (effect.to > effect.from
+                    ? content.source[effect.to - 1]! + 1
+                    : content.source[effect.to]!),
               }
             }
-            for (const escaped of cellText.matchAll(/\\\|/g))
-              yield {
-                kind: 'hide',
-                from: cell.from + escaped.index,
-                to: cell.from + escaped.index + 1,
-              }
             at = cell.to
           }
           yield { kind: 'hide', from: at, to: row.to }
         }
-        if (row.to >= input.length || row.to >= to) break
+        if (row.to >= input.length || row.to >= to || row.to >= range.to) break
         row = input.lineAt(row.to + 1)
-        ordinal++
       }
       descend = false
     }
@@ -401,5 +431,5 @@ export function* formattedTextEffects(
   }
   for (const leaf of leaves) yield { kind: 'leaf', ...leaf }
   if (end >= 0 && end < input.length && end < range.to)
-    yield { kind: 'hide', from: end, to: Math.min(range.to, input.length) }
+    yield { kind: 'trailing', from: end, to: Math.min(range.to, input.length) }
 }

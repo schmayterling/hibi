@@ -6,7 +6,10 @@ import {
   TreeFragment,
 } from '@lezer/common'
 import { ChunkedMarkdownParser, parsedChunks } from './chunked-markdown.ts'
-import { formattedTextEffects } from './formatted-text-effects.ts'
+import {
+  formattedTableRow,
+  formattedTextEffects,
+} from './formatted-text-effects.ts'
 import {
   type FormattedTextInput,
   formattedAtomText,
@@ -23,6 +26,7 @@ import {
   createPlainTextRunExtension,
   plainInlineText,
 } from './markdown-plain-text-runs.ts'
+import { cellContent } from './markdown-table-source.ts'
 import {
   type RenderedChunk,
   type RenderedRange,
@@ -65,6 +69,12 @@ const page = 4096,
   batch = 1024
 type Frame = ReturnType<typeof parsedChunks>[number]
 type Window = { from: number; to: number; frames: Frame[]; nodes: number }
+type DetailFrame = RenderedRange & {
+  tree: Tree
+  start: (position: number) => number
+  end: (position: number) => number
+  local: (position: number) => number
+}
 
 /** The parser reads bounded normalized pages, including on a single huge line. */
 class Reader {
@@ -298,11 +308,42 @@ export class RenderedTextIndex {
       shift = (at & 1) * 4
     mask[index] = (mask[index]! & ~(15 << shift)) | (code << shift)
   }
-  *#effect(effect: TextEffect, range: RenderedRange) {
+  *#emptyGap(from: number, to: number): Generator<void, boolean> {
+    for (let at = from; at < to; ) {
+      const end = Math.min(to, at + batch, (Math.floor(at / page) + 1) * page)
+      const text = this.text(at, end)
+      if (!this.#masks.has(Math.floor(at / page))) {
+        if (/[^ \t\r\n]/.test(text)) return false
+      } else {
+        for (let index = 0; index < text.length; index++) {
+          const code = this.#code(at + index)
+          if (
+            code === 2 ||
+            code === 3 ||
+            (code === 0 && /[^ \t\r\n]/.test(text[index]!))
+          )
+            return false
+        }
+      }
+      at = end
+      if (this.#tick(text.length)) yield
+    }
+    return true
+  }
+
+  *#effect(effect: TextEffect, range: RenderedRange): Generator<void, void> {
     if (effect.kind === 'leaf') {
-      if (this.#leafEnd >= 0 && effect.from > this.#leafEnd) {
+      if (
+        this.#leafEnd >= 0 &&
+        effect.from > this.#leafEnd &&
+        this.#code(this.#leafEnd) !== 4
+      ) {
         const lf = this.#input.lineAt(this.#leafEnd).to
-        if (lf < effect.from) {
+        if (
+          lf < effect.from &&
+          this.#code(lf) !== 4 &&
+          (yield* this.#emptyGap(this.#leafEnd, effect.from))
+        ) {
           yield* this.#effect(
             { kind: 'hide', from: this.#leafEnd, to: effect.from },
             { from: 0, to: this.length },
@@ -314,6 +355,13 @@ export class RenderedTextIndex {
         }
       }
       this.#leafEnd = Math.max(this.#leafEnd, effect.to)
+      return
+    }
+    if (effect.kind === 'trailing') {
+      const from = Math.max(range.from, effect.from),
+        to = Math.min(range.to, effect.to)
+      if (yield* this.#emptyGap(from, to))
+        yield* this.#effect({ kind: 'hide', from, to }, range)
       return
     }
     const from = Math.max(range.from, effect.from),
@@ -345,27 +393,30 @@ export class RenderedTextIndex {
     const width = this.#config.chunkSize * this.#config.groupSize
     for (let from = 0; from < this.#syntaxInput.length; from += width) {
       const window = yield* this.#window(from)
-      for (const frame of window.frames)
-        for (const covered of frame.covered) {
-          const range = {
-            from: Math.max(from, covered.from),
-            to: Math.min(from + width, this.#syntaxInput.length, covered.to),
-          }
-          if (range.to <= range.from) continue
-          for (const effect of formattedTextEffects(
-            frame.chunk,
-            frame.from,
-            this.#input,
-            range,
-            this.#config,
-            this.#inline,
-            this.#definitions,
-            resolveFootnotes,
-          )) {
-            if (effect) yield* this.#effect(effect, range)
-            if (this.#tick()) yield
-          }
+      for (const frame of window.frames) {
+        const range = {
+          from: Math.max(from, frame.from),
+          to: Math.min(
+            from + width,
+            this.#syntaxInput.length,
+            frame.from + frame.chunk.length,
+          ),
         }
+        if (range.to <= range.from) continue
+        for (const effect of formattedTextEffects(
+          frame.chunk,
+          frame.from,
+          this.#input,
+          range,
+          this.#config,
+          this.#inline,
+          this.#definitions,
+          resolveFootnotes,
+        )) {
+          if (effect) yield* this.#effect(effect, range)
+          if (this.#tick()) yield
+        }
+      }
     }
     if (this.#plainTail) {
       yield* this.#effect(
@@ -538,6 +589,73 @@ export class RenderedTextIndex {
   ): Generator<RenderedChunk> {
     yield* renderedRange(this.runs(from), from, to, this.#input, options)
   }
+  *#details(
+    window: Window,
+    from: number,
+    to: number,
+  ): Generator<DetailFrame | null> {
+    for (const frame of window.frames) {
+      const source = (position: number) => frame.from + position
+      yield {
+        from: frame.from,
+        to: frame.from + frame.chunk.length,
+        tree: frame.chunk,
+        start: source,
+        end: source,
+        local: (position) => position - frame.from,
+      }
+      if (!this.#config.textFeatures?.includes('markdown.tables')) continue
+      const cursor = frame.chunk.cursor()
+      let descend = true
+      do {
+        const node = cursor.node,
+          start = source(node.from),
+          end = source(node.to)
+        descend =
+          start < to && end > from && !this.#config.literal.includes(node.name)
+        if (!descend || node.name !== 'Table') continue
+        descend = false
+        for (
+          let at = this.#input.lineAt(Math.max(from, start)).from;
+          at < Math.min(to, end);
+        ) {
+          const bounds = this.#input.lineAt(at)
+          const row = formattedTableRow(node, frame.from, this.#input, at)
+          for (const cell of row?.cells ?? []) {
+            if (cell.from >= to || cell.to <= from) continue
+            const content = cellContent(this.text(cell.from, cell.to))
+            const start = (position: number) =>
+              cell.from + (content.source[position] ?? cell.to - cell.from)
+            const end = (position: number) =>
+              position > content.text.length
+                ? cell.to
+                : position
+                  ? cell.from + content.source[position - 1]! + 1
+                  : start(0)
+            yield {
+              ...cell,
+              tree: this.#inline.parse(content.text),
+              start,
+              end,
+              local(position) {
+                let low = 0,
+                  high = content.text.length
+                while (low < high) {
+                  const mid = (low + high) >>> 1
+                  if (start(mid) < position) low = mid + 1
+                  else high = mid
+                }
+                return low
+              },
+            }
+          }
+          if (this.#tick()) yield null
+          at = bounds.to + 1
+        }
+      } while (cursor.next(descend))
+    }
+  }
+
   *containers(from: number, to: number): Generator<RenderedContainer | null> {
     const work = this.#window(from)
     let next = work.next()
@@ -548,18 +666,28 @@ export class RenderedTextIndex {
     const window = next.value
     const seen = new Set<string>(),
       containers: RenderedContainer[] = []
-    for (const frame of window.frames) {
+    for (const frame of this.#details(window, from, to)) {
+      if (!frame) {
+        yield null
+        continue
+      }
       const read = (a: number, b: number) =>
         this.text(
-          Math.max(0, frame.from + a),
-          Math.min(this.length, frame.from + b),
+          Math.max(0, frame.start(a)),
+          Math.min(this.length, frame.end(b)),
         )
-      const cursor = frame.chunk.cursor()
+      const cursor = frame.tree.cursor()
+      let descend = true
       do {
         const node = cursor.node,
-          start = frame.from + node.from,
-          end = frame.from + node.to
-        if (start >= to || end <= from) continue
+          start = frame.start(node.from),
+          end = frame.end(node.to)
+        descend =
+          start < to &&
+          end > from &&
+          !this.#config.literal.includes(node.name) &&
+          node.name !== 'Table'
+        if (!descend) continue
         const hidden = formattedMarkerRanges(node, read)
         if (
           hidden.length !== 2 ||
@@ -577,12 +705,12 @@ export class RenderedTextIndex {
         )
           continue
         const open = {
-            from: frame.from + hidden[0]!.from,
-            to: frame.from + hidden[0]!.to,
+            from: frame.start(hidden[0]!.from),
+            to: frame.end(hidden[0]!.to),
           },
           close = {
-            from: frame.from + hidden[1]!.from,
-            to: frame.from + hidden[1]!.to,
+            from: frame.start(hidden[1]!.from),
+            to: frame.end(hidden[1]!.to),
           }
         const key = open.from + ':' + close.to
         if (seen.has(key)) continue
@@ -623,7 +751,7 @@ export class RenderedTextIndex {
             ...(node.name === 'Autolink' ? { autolink: true as const } : {}),
           })
         if (this.#tick()) yield null
-      } while (cursor.next())
+      } while (cursor.next(descend))
     }
     const compact: RenderedContainer[] = []
     for (const container of containers) {
@@ -771,11 +899,17 @@ export class RenderedTextIndex {
   ): Generator<void, RenderedMatchContext> {
     const window = yield* this.#window(from)
     let found: SyntaxNode | null = null,
-      offset = 0
-    for (const frame of window.frames) {
-      if (from >= frame.from && from < frame.from + frame.chunk.length) {
-        found = frame.chunk.resolveInner(from - frame.from, 1)
-        offset = frame.from
+      start = (position: number) => position,
+      end = start
+    for (const frame of this.#details(window, from, to)) {
+      if (!frame) {
+        yield
+        continue
+      }
+      if (from >= frame.from && from < frame.to) {
+        found = frame.tree.resolveInner(frame.local(from), 1)
+        start = frame.start
+        end = frame.end
       }
     }
     let code: RenderedCode | null = null
@@ -784,17 +918,20 @@ export class RenderedTextIndex {
       to: this.#input.lineAt(to).to,
     }
     for (let node = found; node; node = node.parent) {
-      if (this.#config.literal.includes(node.name)) break
+      if (this.#config.literal.includes(node.name)) {
+        code = null
+        break
+      }
       if (node.name === 'InlineCode') {
         const open = node.firstChild!,
           close = node.lastChild!
         code = {
-          from: offset + open.to,
-          to: offset + close.from,
+          from: end(open.to),
+          to: start(close.from),
           width: open.to - open.from,
         }
       } else if (node.name === 'CodeBlock' || node.name === 'FencedCode')
-        code ??= { from: offset + node.from, to: offset + node.to, width: 0 }
+        code ??= { from: start(node.from), to: end(node.to), width: 0 }
       if (
         [
           'Paragraph',
@@ -806,7 +943,7 @@ export class RenderedTextIndex {
         ].includes(node.name) ||
         /Heading/.test(node.name)
       )
-        block = { from: offset + node.from, to: offset + node.to }
+        block = { from: start(node.from), to: end(node.to) }
     }
     const physical = this.#input.lineAt(from).from,
       lineFrom = Math.max(physical, Math.min(block.from, from))

@@ -143,6 +143,60 @@ test('plain paragraph proof separates bounded reads at a source-page seam', () =
   )
 })
 
+test('table roots project their source beyond syntax coverage windows', () => {
+  const options = { ...config, chunkSize: 16, groupSize: 4, giantBlock: 64 }
+  const table = index(
+    '| left | right |\n|---|---|\n' +
+      Array.from({ length: 50 }, (_, at) => '| **r' + at + '** | x |').join(
+        '\n',
+      ),
+    options,
+  )
+  assert.equal(
+    [...searchRenderedLiteral(table, '*')].flatMap((batch) => batch.matches)
+      .length,
+    0,
+  )
+  assert.equal(
+    [...searchRenderedLiteral(table, 'r27')].flatMap((batch) => batch.matches)
+      .length,
+    1,
+  )
+})
+
+test('table cells retain inline provenance after escaped-pipe normalization', () => {
+  const source =
+    '| ' +
+    String.raw`a\\\|b` +
+    ' | &copy;\\|x |\n|---|---|\n| **bold** | `code` |'
+  const projection = index(source)
+  assert.equal(
+    [...projection.range(0, projection.length)]
+      .map((chunk) => chunk.text)
+      .join(''),
+    'a\\|b\t©|x\nbold\tcode',
+  )
+  const [pipe] = [...searchRenderedLiteral(projection, '|x')].flatMap(
+    (batch) => batch.matches,
+  )
+  assert.equal(pipe.from, source.indexOf('\\|x'))
+  const [code] = [...searchRenderedLiteral(projection, 'code')].flatMap(
+    (batch) => batch.matches,
+  )
+  assert.ok(code.context.code?.width)
+  const [bold] = [...searchRenderedLiteral(projection, 'bold')].flatMap(
+    (batch) => batch.matches,
+  )
+  const work = projection.prepareReplacement(bold, '')
+  let next = work.next()
+  while (!next.done) next = work.next()
+  assert.ok(next.value.edits)
+  let changed = source
+  for (const edit of [...next.value.edits].reverse())
+    changed = changed.slice(0, edit.from) + edit.insert + changed.slice(edit.to)
+  assert.ok(!changed.includes('**'))
+})
+
 test('semantic block separators survive chunk and syntax-window boundaries', () => {
   const options = { ...config, chunkSize: 16, groupSize: 4, giantBlock: 64 }
   const source = Array.from(
@@ -193,6 +247,7 @@ test('atomic formatted widgets are barriers and do not expose hidden source', ()
   for (const source of [
     'x ![alt](pic.png) y',
     'x $a*b*c$ y',
+    'x\n\n$$\na*b*c\n$$\n\ny',
     'x\n\n---\n\ny',
   ]) {
     const projection = index(source)

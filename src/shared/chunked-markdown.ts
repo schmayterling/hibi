@@ -393,7 +393,7 @@ function markdownInput(
     lineChunks: false,
     read: (from, to) => input.read(from, to),
     chunk(at) {
-      const end = ranges.find((range) => range.to > at)?.to ?? at
+      const end = ranges.find((range) => range.to > at)?.to ?? input.length
       const parts: string[] = []
       while (at < end) {
         const chunk = input.chunk(at).slice(0, end - at)

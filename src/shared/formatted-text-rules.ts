@@ -167,7 +167,7 @@ export type FormattedTextInput = RenderedInput & {
   lineAt: (position: number) => RenderedRange
 }
 export type TextEffect = RenderedRange & {
-  kind: 'hide' | 'barrier' | 'atom' | 'block' | 'leaf'
+  kind: 'hide' | 'barrier' | 'atom' | 'block' | 'leaf' | 'trailing'
 }
 
 /** Conditions shared with the views that replace these nodes with widgets. */

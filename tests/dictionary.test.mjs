@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { EditorState } from '@codemirror/state'
 import {
   detectLangs,
   matchCase,
@@ -24,6 +25,9 @@ import {
   readPreferences,
   writePreferences,
 } from '../src/addons/dictionary/settings.ts'
+import { sourceTarget } from '../src/addons/dictionary/source.ts'
+import { formattedTree } from '../src/renderer/src/formatted-contributions.ts'
+import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
@@ -192,6 +196,45 @@ test('dictionary finds the caret word with the right segmenter and language', ()
     'Straße',
   )
   assert.deepEqual(detectLangs('사랑', preferences), [])
+})
+
+test('in the formatted view the dictionary offers no word across link brackets or in text not parsed yet', () => {
+  /** A formatted view's state behind the editor calls the lookup makes. */
+  const view = (doc) => {
+    const syntax = formattedSyntax({ slice: 1000 })
+    let state = EditorState.create({
+      doc,
+      extensions: [syntax.extension, formattedTree.of(syntax.tree)],
+    })
+    return {
+      get state() {
+        return state
+      },
+      dispatch(spec) {
+        state = state.update(spec).state
+      },
+      dom: { isConnected: true },
+      focus() {},
+    }
+  }
+  const link = 'Link [Happy](https://happy.example) here\n'
+  const url = link.indexOf('happy.example') + 2
+  const near = view(link)
+  assert.equal(sourceTarget(near, url, url), null)
+  // Replacing `Link [Happy` would drop the link's opening bracket.
+  assert.equal(sourceTarget(near, 0, link.indexOf('Happy') + 5), null)
+  const happy = sourceTarget(near, 8, 8)
+  assert.equal(happy.word, 'Happy')
+  assert.equal(happy.replace('Glad'), true)
+  assert.equal(near.state.doc.toString(), link.replace('[Happy]', '[Glad]'))
+  // The view parses past its first screen in idle time; until then a URL
+  // there has no syntax that tells it from text.
+  const filler = 'Some words here.\n\n'.repeat(20000)
+  const far = view(filler + link)
+  assert.equal(
+    sourceTarget(far, filler.length + url, filler.length + url),
+    null,
+  )
 })
 
 test('dictionary keeps German preferences and recent pack language', (t) => {

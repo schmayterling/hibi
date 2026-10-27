@@ -34,6 +34,34 @@ test('a correction reads one list item regardless of the container length', (t) 
   assert.deepEqual(work, [work[0], work[0]])
   assert.ok(work[1] < 128, String(work))
 })
+test('batched corrections do not revisit every edit for every leaf', () => {
+  const count = 100
+  const doc = 'teh\n\n'.repeat(count)
+  const state = EditorState.create({ doc })
+  const transaction = state.update({
+    changes: Array.from({ length: count }, (_, index) => ({
+      from: index * 5,
+      to: index * 5 + 3,
+      insert: 'the',
+    })),
+  })
+  const tree = markdown.parse(doc)
+  let visits = 0
+  const iterate = transaction.changes.iterChangedRanges.bind(
+    transaction.changes,
+  )
+  transaction.changes.iterChangedRanges = (visit, ...args) =>
+    iterate(
+      (...range) => {
+        visits++
+        visit(...range)
+      },
+      ...args,
+    )
+  assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+  assert.ok(visits <= count * 4, String(visits))
+})
+
 function check(source, changes) {
   const state = EditorState.create({ doc: source })
   const transaction = state.update({ changes })

@@ -59,7 +59,10 @@ export function formattedLiteralEdits(
   const nextInput = inputFor(transaction.newDoc, (from, to) =>
     transaction.newDoc.sliceString(from, to),
   )
-  const blocks = new Map<number, { ranges: Range[]; marks: Range[] }>()
+  const blocks = new Map<
+    number,
+    { ranges: Range[]; marks: Range[]; edits: Range[] }
+  >()
   let valid = true,
     pending = false
   transaction.changes.iterChanges((from, to, _fromB, _toB, insert) => {
@@ -100,7 +103,11 @@ export function formattedLiteralEdits(
     }
     const start = offset + node.from
     const key = node.name === 'Table' ? before.doc.lineAt(from).from : start
-    if (blocks.has(key)) return
+    const known = blocks.get(key)
+    if (known) {
+      known.edits.push({ from, to })
+      return
+    }
     const ranges =
       node.name === 'Table'
         ? tableRanges(before.doc, start, from)
@@ -123,16 +130,21 @@ export function formattedLiteralEdits(
         marks.push({ from: offset + cursor.from, to: end })
       } while (cursor.next() && cursor.from + offset < range.to)
     }
-    blocks.set(key, { ranges, marks })
+    blocks.set(key, { ranges, marks, edits: [{ from, to }] })
   })
   if (!valid) return false
   if (pending) return null
   for (const block of blocks.values()) {
-    transaction.changes.iterChangedRanges((from, to) => {
-      if (block.marks.some((mark) => from < mark.to && to >= mark.from))
-        valid = false
-    })
-    if (!valid) return false
+    let protectedIndex = 0
+    for (const edit of block.edits) {
+      while (
+        block.marks[protectedIndex] &&
+        block.marks[protectedIndex]!.to <= edit.from
+      )
+        protectedIndex++
+      const mark = block.marks[protectedIndex]
+      if (mark && edit.to >= mark.from) return false
+    }
     const ranges: Range[] = []
     let markIndex = 0
     for (const range of block.ranges) {
@@ -170,12 +182,8 @@ export function formattedLiteralEdits(
           ),
       )
     }
-    transaction.changes.iterChangedRanges((from, to) => {
-      if (!block.ranges.some((range) => from >= range.from && to <= range.to))
-        return
-      if (!literal(from - oldBase, to - oldBase)) valid = false
-    })
-    if (!valid) return false
+    for (const edit of block.edits)
+      if (!literal(edit.from - oldBase, edit.to - oldBase)) return false
     const shape = (
       parsed: Tree,
       input: Input,

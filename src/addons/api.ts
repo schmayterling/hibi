@@ -632,7 +632,7 @@ export type DocumentsApi = {
     target: import('../shared/foundation-contracts').VersionedDocumentTarget,
   ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
 }
-/** Positions are UTF-16 offsets in the named editor, not Markdown source offsets. */
+/** UTF-16 positions belong to the named editor: normalized source offsets in CodeMirror source/formatted views, ProseMirror positions in the legacy rich view. These are not raw Markdown source offsets. */
 export type EditorViewSelection = {
   view: import('../shared/foundation-contracts').ViewTarget
   editor: 'source' | 'rich'

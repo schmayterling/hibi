@@ -97,7 +97,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | api-003 | [editor-view-bridge.test.mjs:189](editor-view-bridge.test.mjs#L189) | switching source view must retain the hosting view identity | 6: verbatim projections and selection contracts |
 | api-006 | [editor-view-bridge.test.mjs:201](editor-view-bridge.test.mjs#L201) | switching to source must stale the previous formatted selection | 6: verbatim projections and selection contracts |
 | split-002 | [editor.test.mjs:187](editor.test.mjs#L187) | split formatted view must remain read-only | 3: read-only access and shared history guards |
-| api-004 | [formatted-completions.test.mjs:223](formatted-completions.test.mjs#L223) | typing context must preserve rich selection offsets | 6: verbatim projections and selection contracts |
 | find-001 | [formatted-find.test.mjs:210](formatted-find.test.mjs#L210) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
 | find-002 | [formatted-find.test.mjs:339](formatted-find.test.mjs#L339) | undo must restore matches without a current find result | 4b: find wiring and navigation |
 | find-006 | [formatted-find.test.mjs:384](formatted-find.test.mjs#L384) | increasing total matches must preserve the viewport highlight budget | 4b: find wiring and navigation |
@@ -162,3 +161,9 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | split-011 | [split-preview-ime.test.mjs:491](split-preview-ime.test.mjs#L491) | split formatted view must remain read-only during native composition | 3: read-only access and shared history guards |
 | split-017 | [split-preview-ime.test.mjs:575](split-preview-ime.test.mjs#L575) | composition in a read-only split preview must preserve source and content version | 3: read-only access and shared history guards |
 | split-014 | [typst.test.mjs:432](typst.test.mjs#L432) | split formatted view must remain read-only | 3: read-only access and shared history guards |
+
+## accepted differences
+
+api-004: typing context uses the named editor's UTF-16 coordinates in API 1, 2, and 3. Legacy rich view retains ProseMirror positions; CodeMirror source and formatted views use normalized source positions. Replacing `chosen` in `before chosen after 😀` reports 8..14 in ProseMirror and 7..13 in CodeMirror. Both must report the live committed selection and matching nearby text. The complete formatted-completions file verifies both implementations.
+
+The API 2 declaration introduced by `8bd8d8bda86d54cbd3fc0ad6a004ec83c69d71f8` already specifies editor-local positions and changes in the previous editor document. Public addon documentation at docs revision `de79e8e0fb6066a155a96482f690e3a543239b46` describes named-editor coordinates. The addon starter uses no positions. The published catalog's five extensions (fatass-horse, fnaf-jumpscare, oneko, typing-speed, and hibi-doom at `446296f572ba80ba6290fba864f104412794bca2`) use no selection/completion position APIs; its six themes use no editor positions. Bundled autocomplete compares changes with captured selections, and writing-suggestions derives ranges from selection.head; neither requires ProseMirror numbering.

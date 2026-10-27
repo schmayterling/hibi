@@ -1,6 +1,6 @@
 import type { ViewTarget } from './foundation-contracts'
 
-/** Positions belong to the named editor, not to the Markdown source. */
+/** UTF-16 positions belong to the named editor: normalized source offsets in CodeMirror source/formatted views, ProseMirror positions in the legacy rich view. */
 export interface EditorInteractionRequest {
   readonly view: ViewTarget
   readonly contentVersion: number

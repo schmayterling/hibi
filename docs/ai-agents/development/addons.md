@@ -55,6 +55,8 @@ Settings load when needed for their page or command-palette discovery. Discovery
 
 ## Editor behavior
 
+Selection, interaction, completion, and typing-context positions use UTF-16 coordinates in the named editor for API 1, 2, and 3. The legacy rich editor uses ProseMirror positions. CodeMirror source and formatted editors use normalized source positions, with CRLF counted as one line break. Derive edit ranges from the captured editor selection; do not add a ProseMirror offset in CodeMirror. Typing changes refer to the previous editor document, while their selection and nearby text describe the committed document. Raw source edits use the complete original Markdown coordinates instead.
+
 `context.editor.onKeyEvent(listener)` observes keydown and keyup in active editable rich/source panes. Events include phase (`down`/`up`), view (`normal`/`source`), key/code, repeat, and modifiers. Observers run synchronously and cannot consume input. IME composition, hidden/read-only panes, dialogs, and non-editor fields are excluded. Disposing the listener or stopping the addon removes it; listener errors are contained. A release may be absent when focus leaves, so reset held-key state on blur or focus changes. No operating-system hooks are exposed.
 
 `context.editor.registerSource({ id, create })` installs a CodeMirror extension in each source editor. `create(context)` can return a promise for a lazy import. Keep resources scoped to the editor lifecycle. Reconfiguration preserves content and history; stopping the addon removes registrations. `context.editor.runCommand(command)` uses Hibi's file handling and returns `false` on cancellation or failure. Vim demonstrates both APIs.

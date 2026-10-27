@@ -7,7 +7,7 @@ function maskCodeSpans(text: string, spans = codeSpans(text)) {
   return characters.join('')
 }
 
-/** Positions are editor-local: CodeMirror and ProseMirror offsets are distinct. */
+/** UTF-16 positions belong to the named editor: normalized source offsets in CodeMirror source/formatted views, ProseMirror positions in the legacy rich view. */
 export interface CompletionRequest {
   readonly view: ViewTarget
   readonly contentVersion: number

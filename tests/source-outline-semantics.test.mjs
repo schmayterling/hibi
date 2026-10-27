@@ -324,3 +324,14 @@ test('body reuse preserves definition edits, queued edits, removals and undo', (
 test('source outline labels preserve native inline math atoms', () => {
   check('# before $x^2$ after and **$y$**', { math: true })
 })
+
+test('long heading labels match native headings in full', () => {
+  const words = Array.from(
+    { length: 300 },
+    (_, i) => `word${i} **bold ${i}** [link ${i}](/target) &amp;`,
+  )
+  const [atx] = check(`# ${words.join(' ')}`)
+  assert.ok(atx.label.length > 4096, `${atx.label.length}`)
+  // A paragraph before a dashed line is one setext heading.
+  check(`${words.join('\n')}\n---\n`)
+})

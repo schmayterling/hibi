@@ -366,3 +366,71 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
     [],
   )
 })
+
+test('outline rows name long headings in full and shorten them only on screen', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-long-'))
+  const file = join(folder, 'long.md')
+  const words = Array.from({ length: 300 }, (_, i) => `word${i} **bold ${i}**`)
+  const label = words.join(' ').replaceAll('**', '')
+  await writeFile(file, `# ${words.join(' ')}\n\nBody.\n\n## Short\n`)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`, file],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(15000)
+  await page.setViewportSize({ width: 1100, height: 700 })
+  const outline = page.locator(
+    '.outline-sidebar[data-side="right"][data-open="true"]',
+  )
+  const rows = async () => {
+    await waitForDocumentEditor(app, page)
+    if (!(await outline.count())) {
+      await page
+        .getByRole('button', { name: /^toggle right sidebar$/i })
+        .click()
+      await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+      await page
+        .getByRole('menuitem', { name: 'On this page', exact: true })
+        .click()
+    }
+    const short = outline.getByRole('treeitem', { name: 'Short', exact: true })
+    await short.waitFor()
+    const row = outline.getByRole('treeitem').first()
+    return {
+      label: await row.locator('.sidebar-label').textContent(),
+      rowHeight: await short.evaluate(
+        (element) => element.getBoundingClientRect().height,
+      ),
+      ...(await row.evaluate((element) => {
+        const text = element.querySelector('.sidebar-label')
+        return {
+          clipped:
+            getComputedStyle(text).textOverflow === 'ellipsis' &&
+            text.scrollWidth > text.clientWidth,
+          height: element.getBoundingClientRect().height,
+        }
+      })),
+    }
+  }
+
+  // The rich view's outline names the heading by its whole text.
+  const rich = await rows()
+  assert.equal(rich.label.length, label.length)
+  assert.equal(rich.label, label)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await page.locator('.rich-pane .hibi-lp-h1').waitFor()
+  const formatted = await rows()
+  assert.equal(formatted.label.length, label.length)
+  assert.deepEqual(formatted, rich)
+  assert.equal(formatted.clipped, true)
+  assert.equal(formatted.height, formatted.rowHeight)
+})

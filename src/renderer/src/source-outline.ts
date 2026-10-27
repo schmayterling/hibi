@@ -66,12 +66,10 @@ function headingText(source: SourceSnapshot, node: SyntaxNode) {
       node.name.startsWith('ATX') && first?.name === 'HeaderMark'
         ? first.to
         : node.from,
-    to = last?.name === 'HeaderMark' && last.from >= from ? last.from : node.to,
-    boundedTo = Math.min(to, from + 512)
-  // ponytail: labels inspect at most 512 UTF-16 units; full heading text stays
-  // in the document. Larger labels need a separately budgeted inline reader.
+    to = last?.name === 'HeaderMark' && last.from >= from ? last.from : node.to
+  // The whole heading: the outline shortens long labels only on screen.
   return normalizedSource(
-    source.sliceRaw(rawPosition(source, from), rawPosition(source, boundedTo)),
+    source.sliceRaw(rawPosition(source, from), rawPosition(source, to)),
   )
     .replace(/\n[ \t]*(?:>[ \t]*)+/g, '\n')
     .trim()

@@ -688,6 +688,11 @@ test('codemirror: mounted inactive target edits keep the other document and its 
   const secondId = (await page.evaluate(() => window.hibi.getDocument())).tabId
   await page.getByRole('tab', { name: 'first.md', exact: true }).click()
   await waitForDocumentEditor(app, page)
+  // Reopening the tab remounts this host; retain source in the current mount.
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await page.getByRole('button', { name: 'normal', exact: true }).click()
+  await waitForDocumentEditor(app, page)
   await splitTab(app, page, secondId)
   const left = page.locator('.editor-page[data-side="left"]')
   const right = page.locator('.editor-page[data-side="right"]')

@@ -40,6 +40,7 @@ import {
   type CellHost,
   type CellMove,
   cellInput,
+  markStarts,
   padding,
   renderInline,
   textStarts,
@@ -1709,13 +1710,7 @@ class TableView {
     const row = cell?.parentElement
     const index = row?.getAttribute('data-line')
     if (!cell || !row || index == null) return null
-    // The link's first rendered text knows its offset in the cell's content.
-    const texts = document.createTreeWalker(link, NodeFilter.SHOW_TEXT)
-    let start: number | undefined
-    for (let text = texts.nextNode(); text; text = texts.nextNode()) {
-      start = textStarts.get(text)
-      if (start !== undefined) break
-    }
+    const start = markStarts.get(link)
     const line = Number(index)
     const source = this.widget.line(line)
     const range = this.widget.row(line).cells[[...row.children].indexOf(cell)]

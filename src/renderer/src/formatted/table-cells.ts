@@ -280,8 +280,9 @@ function decorateCell(
   }
 }
 
-/** Where rendered text nodes start in their cell's content. */
+/** Where rendered text nodes and mark elements start in their cell's content. */
 export const textStarts = new WeakMap<Node, number>()
+export const markStarts = new WeakMap<Element, number>()
 
 /** A cell's inline Markdown as static DOM, as the formatted view renders text it does not reveal. */
 export function renderInline(
@@ -310,6 +311,7 @@ export function renderInline(
     const parent = parents.at(-1)!
     if (op.type === 'open') {
       const element = document.createElement('span')
+      markStarts.set(element, op.mark.from)
       for (const [key, value] of Object.entries(op.mark.attributes))
         element.setAttribute(key, value)
       parent.append(element)

@@ -19,6 +19,8 @@ Around ~~[struck](b.md)~~ and [x **y** z](b.md).
 | --- | --- |
 | row | [cell link](b.md) |
 | wiki | [[c]] |
+| entity | [&amp;](b.md) |
+| mapped | left \\| \\| [&copy;&#x1f331;](c.md) |
 `
 // The rich view's links, in order: one each, named by the text it shows.
 const names = [
@@ -33,6 +35,8 @@ const names = [
   'x y z',
   'cell link',
   'c',
+  '&',
+  '©🌱',
 ]
 
 async function open(t, engine) {
@@ -148,6 +152,8 @@ for (const engine of ['tiptap', 'codemirror']) {
       ['alias text', 'b.md'],
       ['cell link', 'b.md'],
       ['c', 'c.md'],
+      ['&', 'b.md'],
+      ['©🌱', 'c.md'],
     ])
       for (const modifiers of follows) {
         await link(name).click({ modifiers })
@@ -160,14 +166,25 @@ for (const engine of ['tiptap', 'codemirror']) {
           assert.deepEqual(await settled(), { name: 'a.md', opened: [target] })
       }
     // The link of the cell being edited follows the same way.
-    await link('cell link').click()
-    if (engine === 'codemirror')
-      await rich
-        .locator('.hibi-lp-cell-editor')
-        .getByRole('link', { name: 'cell link', exact: true })
-        .waitFor()
-    assert.deepEqual(await settled(), { name: 'a.md', opened: [] })
-    await link('cell link').click({ modifiers: ['Shift'] })
-    await shown(app, page, 'b.md')
+    for (const [name, target] of [
+      ['cell link', 'b.md'],
+      ['&', 'b.md'],
+      ['©🌱', 'c.md'],
+    ])
+      for (const modifiers of follows) {
+        await link(name).click()
+        if (engine === 'codemirror')
+          await rich
+            .locator('.hibi-lp-cell-editor')
+            .getByRole('link', { name, exact: true })
+            .waitFor()
+        assert.equal(await link(name).count(), 1)
+        assert.deepEqual(await settled(), { name: 'a.md', opened: [] })
+        await link(name).click({ modifiers })
+        await shown(app, page, target)
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
+        await link('c').waitFor()
+      }
   })
 }

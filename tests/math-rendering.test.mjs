@@ -510,6 +510,9 @@ test('codemirror: formulas accept input before completion, keep the reading posi
   await clickMenu(app, 'Save')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), edited)
+  // The main process reports the note clean before the window's save command
+  // ends, and the window ignores file commands until it does.
+  await page.locator('.app[aria-busy="false"]').waitFor()
 
   let tall = ''
   for (let index = 0; index < 80; index++)

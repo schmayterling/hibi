@@ -217,7 +217,7 @@ export const minimumKeysForP95 = 20
 
 const keyMetrics = ['taskMs', 'readyMs', 'paintMs']
 
-/** Per-launch values compared within each ab/ba pair, so load drift between launches cancels. */
+/** Per-launch values compared within each ab/ba pair. */
 const pairedMeasurements = {
   openReadyMs: measurements.openReadyMs,
   openPaintMs: measurements.openPaintMs,
@@ -254,20 +254,34 @@ export function pairEditors(samples) {
       fixture,
       pairs: complete.length,
       ratios: Object.fromEntries(
-        Object.entries(pairedMeasurements).map(([name, read]) => [
-          name,
-          statistics(
-            complete.map(({ tiptap, codemirror }) => {
-              const before = read(tiptap),
-                after = read(codemirror)
-              return Number.isFinite(before) &&
-                Number.isFinite(after) &&
-                before > 0
-                ? after / before
-                : null
-            }),
-          ),
-        ]),
+        Object.entries(pairedMeasurements).map(([name, read]) => {
+          const ratios = complete.map(({ tiptap, codemirror }) => {
+            const before = read(tiptap),
+              after = read(codemirror)
+            const ratio = after / before
+            return Number.isFinite(before) &&
+              Number.isFinite(after) &&
+              before > 0 &&
+              after > 0 &&
+              Number.isFinite(ratio) &&
+              ratio > 0
+              ? ratio
+              : null
+          })
+          const result = statistics(ratios)
+          return [
+            name,
+            {
+              ...result,
+              median: result.n
+                ? Math.exp(
+                    statistics(ratios.filter(Number.isFinite).map(Math.log))
+                      .median,
+                  )
+                : null,
+            },
+          ]
+        }),
       ),
     }
   })
@@ -283,12 +297,15 @@ export function summarizeEditors(samples) {
   return [...groups.values()].map((attempts) => {
     const group = attempts.filter((sample) => sample.status === 'complete')
     const keys = group.flatMap((sample) => sample.keys)
-    // Fewer keys per launch make the nearest-rank p95 the first keys after warm-up.
-    const quoteP95 =
-      group.length > 0 &&
-      group.every((sample) => sample.keys.length >= minimumKeysForP95)
     const keyStatistics = (metric) => {
       const result = statistics(keys.map((key) => key[metric]))
+      const quoteP95 =
+        group.length > 0 &&
+        group.every(
+          (sample) =>
+            sample.keys.filter((key) => Number.isFinite(key[metric])).length >=
+            minimumKeysForP95,
+        )
       return quoteP95 ? result : { ...result, p95: null }
     }
     const keyCount = Math.max(0, ...group.map((sample) => sample.keys.length))
@@ -497,8 +514,8 @@ async function metrics(session) {
 /**
  * Wait for a quiet renderer: two consecutive 100 ms windows that each add
  * under 1 ms of main-thread task time, for at most 3 s. Idle-time work an
- * editor queued, such as parsing ahead of the viewport, then cannot start
- * inside the next measurement.
+ * editor queued, such as parsing ahead of the viewport, is less likely
+ * to overlap a measurement. A timeout leaves that pass out of comparisons.
  */
 export async function settle(page, session) {
   const started = performance.now()
@@ -566,9 +583,10 @@ export async function scrollFrames(
     ...scroll,
     ...start,
     taskMs: scroll.frames.length ? taskMs : null,
-    mainThreadPerFrameMs: scroll.frames.length
-      ? taskMs / scroll.frames.length
-      : null,
+    mainThreadPerFrameMs:
+      scroll.frames.length && start.settled
+        ? taskMs / scroll.frames.length
+        : null,
   }
 }
 
@@ -583,7 +601,7 @@ export async function scrollSeries(page, session, frameCount, passes) {
   for (let pass = 0; pass < passes; pass++)
     steady.push(await scrollFrames(page, session, frameCount, `scroll-${pass}`))
   const last = steady.at(-1) ?? first
-  const measured = steady.filter((pass) => pass.frames.length)
+  const measured = steady.filter((pass) => pass.settled && pass.frames.length)
   return {
     requestedPx: last.requestedPx,
     distancePx: last.distancePx,
@@ -591,7 +609,7 @@ export async function scrollSeries(page, session, frameCount, passes) {
     ...(last.reason ? { reason: last.reason } : {}),
     first,
     passes: steady,
-    frames: steady.flatMap((pass) => pass.frames),
+    frames: measured.flatMap((pass) => pass.frames),
     taskMs: measured.length
       ? measured.reduce((total, pass) => total + pass.taskMs, 0)
       : null,
@@ -871,7 +889,7 @@ function markdownReport(report) {
     '',
     '## codemirror / tiptap per pair',
     '',
-    'each launch pair ran back to back with the same size, fixture and run index; ratios below 1 favor codemirror. cells are the median ratio [min–max] over complete pairs.',
+    'each launch pair ran back to back with the same size, fixture and run index; ratios below 1 favor codemirror. cells show the reciprocal log-space center [raw min–max] over eligible pairs.',
     '',
     `| size | fixture | pairs | ${ratios.map(([name]) => name).join(' | ')} |`,
     `| --- | --- | ---: | ${ratios.map(() => '---:').join(' | ')} |`,
@@ -893,9 +911,9 @@ function markdownReport(report) {
     '',
     'hidden windows, focus emulation, fresh profiles; engine order alternates within balanced pairs (ab, ba). startup and engine-selection reload are excluded. no os cache clearing.',
     'open readyMs ends at editable formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap attempts normal view; open+switch is reported only if an editable formatted view becomes ready. an observed read-only preview, or codemirror source fallback needing #450, records unavailable formatted metrics while retaining source-open timing, capability state, source hash and traces. unavailable samples make the report partial; unexpected errors fail it. the matrix continues in both cases.',
-    `${report.config.warmupKeys} untimed warm-up keys precede measured keys; p95 is quoted only when every launch measured at least ${minimumKeysForP95} keys. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.`,
+    `${report.config.warmupKeys} untimed warm-up keys precede measured keys; each p95 is quoted only when every launch observed at least ${minimumKeysForP95} values for that metric. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.`,
     'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. full frame, layout, gc and User Timing evidence is retained in traces.',
-    `scroll requests 3600 css px over a fixed number of animation frames. every pass starts at the top once the renderer is quiet (two 100 ms windows under 1 ms of task time each, at most 3 s), so queued idle-time work does not land in it. the first traversal follows typing and find; steady state is the median of ${report.config.scrollPasses} later passes over the same distance, which codemirror has already drawn and measured once. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances, settle state and frame intervals are in results.json.`,
+    `scroll requests 3600 css px over a fixed number of animation frames. every pass starts at the top after two quiet 100 ms windows or a 3 s timeout. quiet windows reduce overlap with queued work but do not prove none can interleave; timed-out passes remain in raw results and are excluded from comparisons. the first traversal follows typing and find; steady state is the median of up to ${report.config.scrollPasses} settled later passes over the same distance, which codemirror has already drawn and measured once. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances, settle state and frame intervals are in results.json.`,
     "the prose 575kb fixture is trace-input-paint.mjs's exact 574,998-byte, 100,000-word paragraph fixture. mixed fixtures repeat headings, emphasis, links, lists, code, a table and math at the same byte sizes. math rendering depends on the enabled addons recorded per sample.",
     report.smoke
       ? 'smoke numbers validate the sampler under shared load; they establish no performance ranking or full-matrix pass.'

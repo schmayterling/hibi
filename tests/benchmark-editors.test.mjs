@@ -257,6 +257,16 @@ const launch = (engine, run, values = {}) => ({
   },
 })
 
+test('a key paint p95 needs enough observed paints in each launch', () => {
+  const sample = launch('tiptap', 0, { keys: Array(20).fill(1) })
+  sample.keys[0].paintMs = 9
+  const [row] = summarizeEditors([sample])
+  assert.equal(row.metrics.keyPaintMs.n, 1)
+  assert.equal(row.metrics.keyPaintMs.median, 9)
+  assert.equal(row.metrics.keyPaintMs.p95, null)
+  assert.equal(row.metrics.keyReadyMs.p95, 1)
+})
+
 test('short key series report per-index medians but no p95', () => {
   const [row] = summarizeEditors([
     launch('tiptap', 0, { keys: [9, 6, 5, 5] }),
@@ -267,6 +277,26 @@ test('short key series report per-index medians but no p95', () => {
   assert.equal(row.metrics.keyTaskMs.p95, null)
   assert.equal(row.metrics.keyReadyMs.max, 9)
   assert.deepEqual(row.keyIndexMedians.readyMs, [8, 5, 5, 5])
+})
+
+test('paired center is reciprocal under balanced engine observations', () => {
+  const samples = [
+    launch('tiptap', 0, { open: 1 }),
+    launch('codemirror', 0, { open: 10 }),
+    launch('codemirror', 1, { open: 1 }),
+    launch('tiptap', 1, { open: 10 }),
+  ]
+  const forward = pairEditors(samples)[0].ratios.openReadyMs
+  const reverse = pairEditors(
+    samples.map((sample) => ({
+      ...sample,
+      engine: sample.engine === 'tiptap' ? 'codemirror' : 'tiptap',
+    })),
+  )[0].ratios.openReadyMs
+  assert.equal(forward.n, 2)
+  assert.deepEqual([forward.min, forward.max], [0.1, 10])
+  assert.ok(Math.abs(forward.median - 1) < 1e-12)
+  assert.ok(Math.abs(forward.median * reverse.median - 1) < 1e-12)
 })
 
 test('pairs compare codemirror with tiptap within each run, so load drift cancels', () => {
@@ -298,8 +328,8 @@ test('pairs compare codemirror with tiptap within each run, so load drift cancel
   )
   assert.equal(row.ratios.keyReadyMs.median, 0.5)
   assert.equal(row.ratios.keyTaskMs.median, 0.5)
-  assert.equal(row.ratios.scrollMainThreadPerFrameMs.median, 3)
-  assert.equal(row.ratios.scrollFirstPerFrameMs.median, 4)
+  assert.ok(Math.abs(row.ratios.scrollMainThreadPerFrameMs.median - 3) < 1e-12)
+  assert.ok(Math.abs(row.ratios.scrollFirstPerFrameMs.median - 4) < 1e-12)
   assert.equal(row.ratios.openPaintMs.n, 0)
   assert.equal(row.ratios.openPaintMs.missing, 2)
 })
@@ -346,6 +376,32 @@ test('settling waits for two quiet windows after background work', async () => {
   const result = await settle(page, session)
   assert.equal(result.settled, true)
   assert.equal(log.filter((entry) => entry === 'wait').length, 5)
+})
+
+test('unsettled traversals retain raw passes without comparison metrics', async () => {
+  const originalNow = performance.now
+  let ticks = 0
+  performance.now = () => ++ticks * 1000
+  try {
+    const { page, session } = fakeRenderer(Array(80).fill(5))
+    const scroll = await scrollSeries(page, session, 2, 3)
+    assert.equal(scroll.first.settled, false)
+    assert.ok(scroll.passes.every((pass) => pass.settled === false))
+    assert.equal(scroll.first.frames.length, 2)
+    assert.equal(scroll.passes.length, 3)
+    assert.equal(scroll.frames.length, 0)
+    assert.equal(scroll.mainThreadPerFrameMs, null)
+    assert.equal(scroll.first.mainThreadPerFrameMs, null)
+    const sample = { ...launch('tiptap', 0), scroll }
+    assert.equal(summarizeEditors([sample])[0].metrics.scrollMedianMs.n, 0)
+    assert.equal(
+      pairEditors([sample, { ...launch('codemirror', 0), scroll }])[0].ratios
+        .scrollMainThreadPerFrameMs.n,
+      0,
+    )
+  } finally {
+    performance.now = originalNow
+  }
 })
 
 test('scroll series keeps the first traversal apart from settled repeat passes', async () => {

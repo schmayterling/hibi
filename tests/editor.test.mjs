@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
   testFormattedEngines as it,
@@ -15,13 +14,14 @@ import {
   replaceSourceText,
 } from './keyboard.mjs'
 
-test('empty entry, three views, and lossless source switching', {
+it('empty entry, three views, and lossless source switching', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-editor-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
+  let cdp
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({
@@ -29,20 +29,37 @@ test('empty entry, three views, and lossless source switching', {
         checkboxChecked: false,
       })
     })
+    await cdp?.detach()
     await app.close()
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await selectFormattedEngine(app, page, 'tiptap')
-  const rich = page.getByRole('textbox', { name: /document editor/i })
+  const cm = t.formattedEngine === 'codemirror'
+  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  if (cm) {
+    cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  }
   await waitForDocumentEditor(app, page)
-  assert.equal((await rich.innerText()).trim(), '')
-  assert.equal(
-    await rich.locator('p').getAttribute('data-placeholder'),
-    'Start typing',
-  )
+  if (cm) {
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      '',
+    )
+    await rich.locator('.cm-placeholder').waitFor()
+    assert.equal(
+      await rich.locator('.cm-placeholder').textContent(),
+      'Start typing',
+    )
+  } else {
+    assert.equal((await rich.innerText()).trim(), '')
+    assert.equal(
+      await rich.locator('p').getAttribute('data-placeholder'),
+      'Start typing',
+    )
+  }
   await page.waitForFunction(
     () =>
       (
@@ -66,7 +83,7 @@ test('empty entry, three views, and lossless source switching', {
     .click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()
-  const geometry = await page.evaluate(() => {
+  const geometry = await page.evaluate((cm) => {
     const panes = document
       .querySelector('.editor-panes')
       .getBoundingClientRect()
@@ -84,7 +101,9 @@ test('empty entry, three views, and lossless source switching', {
         ),
       bottom: panes.bottom,
       viewport: innerHeight,
-      padding: getComputedStyle(document.querySelector('.tiptap')).paddingTop,
+      padding: getComputedStyle(
+        document.querySelector(cm ? '.rich-pane .cm-content' : '.tiptap'),
+      ).paddingTop,
       besideSidebar:
         title.x >
         document.querySelector('.workspace-sidebar').getBoundingClientRect()
@@ -95,7 +114,7 @@ test('empty entry, three views, and lossless source switching', {
         getComputedStyle(document.querySelector('.document-title'))
           .borderWidth === '0px',
     }
-  })
+  }, cm)
   assert.equal(geometry.top, geometry.toolbarBottom)
   assert.equal(geometry.bottom, geometry.viewport - 32)
   assert.equal(geometry.padding, '48px')
@@ -107,9 +126,7 @@ test('empty entry, three views, and lossless source switching', {
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await page.getByRole('slider', { name: /content padding/i }).press('Home')
   assert.equal(
-    await page.evaluate(
-      () => getComputedStyle(document.querySelector('.tiptap')).paddingTop,
-    ),
+    await rich.evaluate((element) => getComputedStyle(element).paddingTop),
     '0px',
   )
   await page.keyboard.press('Escape')
@@ -119,7 +136,20 @@ test('empty entry, three views, and lossless source switching', {
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, markdown)
   await rich.getByRole('heading', { name: /^hello$/i, exact: true }).waitFor()
-  assert.equal(await rich.locator('strong').innerText(), 'bold')
+  assert.equal(
+    await rich.locator(cm ? '.hibi-lp-strong' : 'strong').innerText(),
+    'bold',
+  )
+  if (cm)
+    assert.equal(
+      await rich
+        .locator('.hibi-lp-strong')
+        .evaluate(
+          (element) =>
+            Number.parseFloat(getComputedStyle(element).fontWeight) >= 600,
+        ),
+      true,
+    )
   assert.equal(await rich.getByRole('checkbox').isChecked(), true)
   assert.equal(
     await rich.getByRole('cell', { name: /^two$/i, exact: true }).innerText(),
@@ -142,7 +172,19 @@ test('empty entry, three views, and lossless source switching', {
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
-  assert.equal(await rich.getAttribute('contenteditable'), 'false')
+  // Formatted split panes and literal HTML stay editable in this engine.
+  assert.equal(
+    await rich.getAttribute('contenteditable'),
+    cm ? 'true' : 'false',
+  )
+  if (cm) {
+    await rich.locator('.hibi-lp-codeblock').waitFor()
+    assert.ok(
+      (await rich.innerText()).includes(
+        '<div data-value="keep">custom html</div>',
+      ),
+    )
+  }
   assert.equal(
     (await source.locator('.cm-line').allTextContents()).join('\n'),
     extended,
@@ -171,9 +213,7 @@ test('empty entry, three views, and lossless source switching', {
   )
   await page.keyboard.press('Escape')
   assert.equal(
-    await page.evaluate(
-      () => getComputedStyle(document.querySelector('.tiptap')).paddingTop,
-    ),
+    await rich.evaluate((element) => getComputedStyle(element).paddingTop),
     '0px',
   )
   await page

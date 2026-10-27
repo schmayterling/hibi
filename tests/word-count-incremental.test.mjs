@@ -86,6 +86,37 @@ for (const language of ['mermaid', 'typst'])
     assert.equal(counter.store.snapshot().sliceRaw(0, source.length), source)
   })
 
+test('regional fence termination matches Marked through tab edits and undo', (t) => {
+  for (const language of ['mermaid', 'js', 'typst']) {
+    for (const marker of ['```', '~~~']) {
+      for (const eol of ['\n', '\r\n'])
+        for (const indent of ['', ' ', '   ']) {
+          const config = { ...syntax, mermaid: true, typst: true }
+          const source = `before${eol}${eol}${indent}${marker}${language}${eol}x${eol}${indent}${marker}${eol}${eol}after`
+          const counter = new FormattedCounter(
+            new SourceStore(source, { tabId: 'closing', revision: 0 }),
+            config,
+          )
+          t.after(() => counter.dispose())
+          const expected = (text) => countText(richText(text, config).slice(1))
+          assert.deepEqual(count(counter), expected(source))
+          const at = source.lastIndexOf(marker) + marker.length
+          const changed = source.slice(0, at) + '\t' + source.slice(at)
+          for (let cycle = 0; cycle < 2; cycle++) {
+            edit(counter, at, at, '\t', cycle ? 'redo' : 'source')
+            assert.deepEqual(
+              count(counter),
+              expected(changed),
+              JSON.stringify({ language, marker, eol, indent, cycle }),
+            )
+            edit(counter, at, at + 1, '', 'undo')
+            assert.deepEqual(count(counter), expected(source))
+          }
+        }
+    }
+  }
+})
+
 test('leading blank lines retain their first empty paragraph', (t) => {
   for (const eol of ['\n', '\r\n']) {
     const source = `${eol}${eol}body`

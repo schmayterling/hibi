@@ -253,7 +253,16 @@ for (const language of ['mermaid', 'typst'])
             `\`\`\`${language} extra\nx\n\`\`\``,
             `> \`\`\`${language}\n> x\n> \`\`\`\n\nafter`,
             `- before\n\n  \`\`\`${language}\n  x\n  \`\`\`\n\nafter`,
-            '\`\`\`js\nordinary code\n\`\`\`',
+            `before\n\n~~~${language}\nx\n~~~\t\n\nafter`,
+            ...(active && !disabled.length
+              ? [
+                  `before\n\n ~~~${language}\nx\n ~~~\t\n\nafter`,
+                  `before\n\n   ~~~${language}\nx\n   ~~~ \t \n\nafter`,
+                ]
+              : []),
+            `> ~~~${language}\n> x\n> ~~~\t\n> tail\n\nafter`,
+            `- before\n\n  ~~~${language}\n  x\n  ~~~\t\n  tail\n\nafter`,
+            '```js\nordinary code\n```',
           ]) {
             const expected = native(
               source,
@@ -283,6 +292,15 @@ for (const language of ['mermaid', 'typst'])
       markdownSyntax.reset()
     }
   })
+
+test('ordinary indented fences retain Marked text despite the native schema omission', () => {
+  const source = 'before\n\n ~~~js\nx\n ~~~\t\n\nafter'
+  assert.equal(native(source), 'before')
+  assert.equal(
+    richText(source, defaultNoteSyntax).slice(1),
+    'before\nx\n ~~~\t\n\nafter',
+  )
+})
 
 test('formatted text and counts match the rich view', () => {
   for (const source of [

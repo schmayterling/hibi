@@ -1,6 +1,7 @@
 import type { MarkdownConfig } from '@lezer/markdown'
 import { Lexer, Tokenizer, type TokenizerExtension } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
+import { typstBlock } from '../typst/syntax.ts'
 import type { CountSyntax } from './formatted-text.ts'
 
 const definitionTokenizer = new Tokenizer()
@@ -56,6 +57,41 @@ export function countMarkdownSyntax(
   return {
     defineNodes: [{ name: 'CountDefinition', block: true }],
     parseBlock: [
+      {
+        name: 'CountFence',
+        before: 'FencedCode',
+        parse(cx, line) {
+          if (cx.depth !== 1) return false
+          const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line.text)?.[1]
+          if (!marker || !definitionTokenizer.fences(`${line.text}\n`))
+            return false
+          const typst =
+            syntax.typst && !!typstBlock(`${line.text}\nx\n${marker}`)
+          const opener = `${marker}${typst ? 'typst' : ''}\nx\n`
+          const from = cx.lineStart + line.pos
+          while (cx.nextLine()) {
+            const close = /^ {0,3}([`~]+)/.exec(line.text)?.[1]
+            if (
+              !close ||
+              close.length < marker.length ||
+              close[0] !== marker[0]
+            )
+              continue
+            // Probe native termination only at plausible closers. In particular,
+            // Marked rejects tab suffixes that Lezer accepts; Typst accepts them.
+            const probe = `${opener}${line.text}\nafter`
+            const token = typst
+              ? typstBlock(probe)
+              : definitionTokenizer.fences(probe)
+            if (token && token.raw.length < probe.length) {
+              cx.nextLine()
+              break
+            }
+          }
+          cx.addElement(cx.elt('FencedCode', from, cx.prevLineEnd()))
+          return true
+        },
+      },
       {
         name: 'CountDefinition',
         before: 'LinkReference',

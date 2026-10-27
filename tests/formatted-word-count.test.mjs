@@ -204,6 +204,30 @@ for (const [language, name, text] of [
     await pressShortcut(app, mod + '+z')
     assert.equal(await sourceText(), text)
     await counts(native)
+    const closing = text.lastIndexOf('```') + 3
+    const tabbed = text.slice(0, closing) + '\t' + text.slice(closing)
+    const tabCount =
+      language === 'mermaid' ? label(countText('before\n')) : native
+    await page.evaluate((from) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.focus()
+      view.dispatch({
+        changes: { from, insert: '\t' },
+        userEvent: 'input.type',
+      })
+    }, closing)
+    await counts(tabCount)
+    assert.equal(await sourceText(), tabbed)
+    await pressShortcut(app, mod + '+z')
+    await counts(native)
+    assert.equal(await sourceText(), text)
+    await pressShortcut(app, mod + '+Shift+z')
+    await counts(tabCount)
+    assert.equal(await sourceText(), tabbed)
+    await pressShortcut(app, mod + '+z')
+    await counts(native)
+    assert.equal(await sourceText(), text)
     for (const [tab, selector, visible] of [
       ['Addon Manager', `#addon-${language}`, expected(text)],
       [

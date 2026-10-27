@@ -40,9 +40,11 @@ import {
   Compartment,
   EditorSelection,
   EditorState,
+  type Extension,
   Prec,
   type Text,
   Transaction,
+  type TransactionSpec,
 } from '@codemirror/state'
 import {
   type Command,
@@ -87,6 +89,7 @@ import {
   type EditorInteractionRequest,
   sameInteraction,
 } from '../../shared/editor-interactions'
+import { errorMessage } from '../../shared/errors'
 import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { protectMarkdownParser } from '../../shared/markdown-flavor-guard'
 import { markdownLink } from '../../shared/markdown-link'
@@ -147,8 +150,14 @@ import {
 import { sourceIndentation } from './source-indent'
 import {
   createSourceSession,
+  editSpec,
+  failedEditGuard,
+  failingParts,
+  firstStateRead,
+  reconfiguration,
   sourceEditorTextCooperatively,
   sourceEditTransaction,
+  transactionState,
 } from './source-session'
 import {
   registerSourceView,
@@ -186,6 +195,65 @@ const sameReferenceSyntax = (
   a.textExtras === b.textExtras &&
   !!a.math === !!b.math &&
   a.frontmatter === b.frontmatter
+
+/** An editor feature. `fail` reports its failure and removes it from every editor; input waits for one without it. */
+type EditorFeature = (SourceExtension | FormattedExtension) & {
+  fail?: (error: unknown) => void
+}
+type InstalledFeature = { feature: EditorFeature; extension: Extension }
+
+/** Input does not wait for features this editor removed after they failed to leave. */
+const installedFor = (
+  installed: readonly EditorFeature[],
+  wanted: readonly EditorFeature[],
+  failed: WeakSet<EditorFeature>,
+) =>
+  installed === wanted ||
+  (wanted.every((feature) => installed.includes(feature)) &&
+    installed.every(
+      (feature) => wanted.includes(feature) || failed.has(feature),
+    ))
+
+const featureExtensions = (
+  installed: readonly InstalledFeature[],
+  formatted: boolean,
+) => {
+  const extensions = installed.map(({ extension }) => extension)
+  // Cached renderers must see the fields installed with their input.
+  return [extensions, formatted ? formattedRenderInputs.of(extensions) : []]
+}
+
+/**
+ * Reports the features an edit fails with, which then leave every editor,
+ * and returns the others. A feature input waits for stays; the edit fails.
+ */
+function isolateFeatures(
+  start: EditorState,
+  edit: readonly Transaction[] | readonly TransactionSpec[],
+  installed: readonly InstalledFeature[],
+  compartment: Compartment,
+  formatted: boolean,
+) {
+  const failing = failingParts(
+    start,
+    edit,
+    installed.filter(({ feature }) => feature.fail),
+    (kept) =>
+      compartment.reconfigure(
+        featureExtensions(
+          installed.filter((part) => !part.feature.fail || kept.includes(part)),
+          formatted,
+        ),
+      ),
+  )
+  for (const { part, error } of failing)
+    part.feature.fail?.(
+      new Error(`${part.feature.id}: ${errorMessage(error)}`, { cause: error }),
+    )
+  return installed.filter(
+    (part) => !failing.some((failure) => failure.part === part),
+  )
+}
 
 export function SourceEditor({
   document,
@@ -244,7 +312,7 @@ export function SourceEditor({
   findMove: FindMove
   onFindStatus: (status: FindStatus) => void
   showLineNumbers: boolean
-  sourceExtensions: readonly (SourceExtension | FormattedExtension)[]
+  sourceExtensions: readonly EditorFeature[]
   onFormatting: (formatting: SourceFormatting | null) => void
   onLink: (href: string) => void
   /** Formatted renders Markdown in place over the same source session. */
@@ -313,7 +381,7 @@ export function SourceEditor({
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
     bridge: ReturnType<typeof createSourceSession>
-    extensions: readonly (SourceExtension | FormattedExtension)[]
+    extensions: readonly EditorFeature[]
   } | null>(null)
   const [extensionError, setExtensionError] = useState('')
   const [languageError, setLanguageError] = useState('')
@@ -339,10 +407,15 @@ export function SourceEditor({
   const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
     typeof createSourceSession
   > | null>(null)
+  const failedFeatures = useRef(new WeakSet<EditorFeature>())
   const inputReady =
     preparedText?.bridge === bridge &&
     installedExtensions?.bridge === bridge &&
-    installedExtensions.extensions === sourceExtensions &&
+    installedFor(
+      installedExtensions.extensions,
+      sourceExtensions,
+      failedFeatures.current,
+    ) &&
     languageReady &&
     !echoError
   const editContext = useRef({
@@ -365,6 +438,8 @@ export function SourceEditor({
   const editable = useRef(new Compartment())
   const numbers = useRef(new Compartment())
   const addons = useRef(new Compartment())
+  /** The features in `addons`, with what each created. */
+  const installed = useRef<readonly InstalledFeature[]>([])
   const indentation = useRef(new Compartment())
   const display = useRef(new Compartment())
   const findHighlights = useRef(new Compartment())
@@ -1286,6 +1361,69 @@ export function SourceEditor({
       openLink.current(target.href)
       return true
     }
+    installed.current = []
+    /** While typing is made into an edit: the first transaction made, once there is one. */
+    let inputEdit: Transaction | null | undefined
+    /**
+     * Rejects input that failed, with the features named that it failed with
+     * when `edit` is replayed from `start`. The DOM may still show what it left
+     * out; an update could fail again, so setState draws the state as it is.
+     */
+    const reject = (
+      view: EditorView,
+      error: unknown,
+      edit?: readonly Transaction[] | readonly TransactionSpec[],
+      start = view.state,
+    ) => {
+      setInputError(error instanceof Error ? error.message : String(error))
+      const kept = edit
+        ? isolateFeatures(
+            start,
+            edit,
+            installed.current,
+            addons.current,
+            formatted,
+          )
+        : installed.current
+      for (const { feature } of installed.current)
+        if (!kept.some((part) => part.feature === feature))
+          failedFeatures.current.add(feature)
+      // A composition must keep the note's text: CodeMirror redraws text that
+      // differs, which ends the composition, and the IME then starts over
+      // beside it. Without the features named, the edit is made again, in the
+      // same update. The features leave first, so their extenders do not run.
+      if (
+        view.compositionStarted &&
+        edit &&
+        start === view.state &&
+        kept.length < installed.current.length
+      ) {
+        const reinstall = reconfiguration(
+          view.state,
+          addons.current.reconfigure(featureExtensions(kept, formatted)),
+        )
+        let retry: Transaction | null = null
+        try {
+          retry = reinstall.state.update(
+            ...edit.map((part, index) => {
+              const spec = part instanceof Transaction ? editSpec(part) : part
+              return index ? { ...spec, sequential: true } : spec
+            }),
+          )
+        } catch {}
+        if (retry) {
+          installed.current = kept
+          view.dispatch([reinstall, retry])
+          return
+        }
+      }
+      // Otherwise the input is not applied. A composition ends first, so the
+      // IME does not compose on over text the note does not have.
+      const focused = view.hasFocus
+      if (view.compositionStarted) view.contentDOM.blur()
+      view.setState(view.state)
+      if (focused) view.focus()
+    }
     const editor = new EditorView({
       parent: host.current,
       ...(place
@@ -1299,16 +1437,35 @@ export function SourceEditor({
       dispatchTransactions(transactions, editor) {
         try {
           bridge.dispatch(transactions, editor, exactChanges.current)
-          setInputError('')
+          // Only the user's next action clears a failure, not the view's own.
+          if (
+            transactions.some((transaction) =>
+              transaction.annotation(Transaction.userEvent),
+            )
+          )
+            setInputError('')
         } catch (error) {
-          setInputError(error instanceof Error ? error.message : String(error))
-          editor.update([editor.state.update({})])
+          // A transaction made after a failed one may start from either state,
+          // so the failed one is replayed alone, from the state it started at.
+          const failed = transactions.find(
+            (transaction) => !transactionState(transaction),
+          )
+          reject(editor, error, failed && [failed], failed?.startState)
         }
       },
       state: EditorState.create({
         doc: preparedText.text,
         ...(selection ? { selection } : {}),
         extensions: [
+          firstStateRead,
+          // The first transaction typing makes, as CodeMirror made it, before
+          // anything else can fail on it.
+          Prec.highest(
+            EditorState.changeFilter.of((transaction) => {
+              if (inputEdit === null) inputEdit = transaction
+              return true
+            }),
+          ),
           addons.current.of([]),
           findHighlights.current.of([]),
           search({
@@ -1331,11 +1488,13 @@ export function SourceEditor({
             defaultKeymap: false,
           }),
           EditorState.transactionExtender.of((transaction) => {
-            const options = currentCompletions(transaction.state)
+            const state = transactionState(transaction)
+            if (!state) return null
+            const options = currentCompletions(state)
             if (
               !options.length ||
               options === currentCompletions(transaction.startState) ||
-              selectedCompletion(transaction.state)
+              selectedCompletion(state)
             )
               return null
             const option = options[0]
@@ -1642,9 +1801,74 @@ export function SourceEditor({
               requestFind()
             }
           }),
+          failedEditGuard,
+          // Typing read from the DOM is made into an edit here, last, so an
+          // extension that fails while it is made is named from that edit,
+          // with every range CodeMirror changed and selected.
+          Prec.lowest(
+            EditorView.inputHandler.of((view, from, to, text, insert) => {
+              inputEdit = null
+              try {
+                insert()
+                return false
+              } catch (error) {
+                reject(
+                  view,
+                  error,
+                  inputEdit
+                    ? [inputEdit]
+                    : [
+                        {
+                          changes: { from, to, insert: text },
+                          userEvent: 'input',
+                        },
+                      ],
+                )
+                return true
+              } finally {
+                inputEdit = undefined
+              }
+            }),
+          ),
         ],
       }),
     })
+    // A filter or extender may also fail while a transaction is made, before
+    // dispatch: from specs here, and from typing CodeMirror reads in the
+    // DOM observer (internal to CodeMirror). That input is rejected too.
+    const dispatch = editor.dispatch.bind(editor) as (
+      ...input: unknown[]
+    ) => void
+    editor.dispatch = ((...input: unknown[]) => {
+      if (
+        input.some(
+          (value) => value instanceof Transaction || Array.isArray(value),
+        )
+      )
+        return dispatch(...input)
+      let transaction: Transaction
+      try {
+        transaction = editor.state.update(...(input as TransactionSpec[]))
+      } catch (error) {
+        reject(editor, error, input as TransactionSpec[])
+        return
+      }
+      dispatch(transaction)
+    }) as EditorView['dispatch']
+    const observer = (
+      editor as unknown as {
+        observer: { flush: (readSelection?: boolean) => boolean }
+      }
+    ).observer
+    const flush = observer.flush.bind(observer)
+    observer.flush = (readSelection) => {
+      try {
+        return flush(readSelection)
+      } catch (error) {
+        reject(editor, error)
+        return true
+      }
+    }
     view.current = editor
     setMountedView(editor)
     const detachSession = bridge.attach(editor, (error) =>
@@ -2142,26 +2366,40 @@ export function SourceEditor({
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
-    void Promise.all(
-      sourceExtensions.map(async (extension) => extension.create(context)),
-    )
-      .then((extensions) => {
-        if (!canceled) {
-          editor.dispatch({
-            effects: addons.current.reconfigure([
-              extensions,
-              // Cached renderers must see the fields installed with their input.
-              formatted ? formattedRenderInputs.of(extensions) : [],
-            ]),
-          })
-          setInstalledExtensions({ bridge, extensions: sourceExtensions })
-        }
+    void Promise.allSettled(
+      sourceExtensions.map(async (feature) => feature.create(context)),
+    ).then((results) => {
+      if (canceled) return
+      const errors: unknown[] = []
+      let parts: InstalledFeature[] = []
+      results.forEach((result, index) => {
+        const feature = sourceExtensions[index]!
+        if (result.status === 'fulfilled')
+          parts.push({ feature, extension: result.value })
+        else if (feature.fail) feature.fail(result.reason)
+        else errors.push(result.reason)
       })
-      .catch((error: unknown) => {
-        if (!canceled) {
-          setExtensionError(String(error))
-        }
-      })
+      const install = () =>
+        reconfiguration(
+          editor.state,
+          addons.current.reconfigure(featureExtensions(parts, formatted)),
+        )
+      let transaction = install()
+      if (!transactionState(transaction)) {
+        parts = isolateFeatures(
+          editor.state,
+          [],
+          parts,
+          addons.current,
+          formatted,
+        )
+        transaction = install()
+      }
+      installed.current = parts
+      editor.dispatch(transaction)
+      if (errors.length) setExtensionError(String(errors[0]))
+      else setInstalledExtensions({ bridge, extensions: sourceExtensions })
+    })
     return () => {
       canceled = true
     }

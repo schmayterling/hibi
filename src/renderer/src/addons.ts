@@ -756,9 +756,19 @@ export function useAddons(
         stop: () => void
         /** Swap package stylesheets and themes without restarting code; false when superseded. */
         restyle: () => Promise<boolean>
+        /** The activation this run belongs to; its failures carry it. */
+        activation: number
       }
     >(),
   ).current
+  useEffect(() => {
+    // A run that continues while main moves the addon on belongs to the new activation.
+    for (const [id, runtime] of running) {
+      const activation = activationOf(states, id)
+      if (activation !== undefined && activation > runtime.activation)
+        runtime.activation = activation
+    }
+  }, [running, states])
   const mounted = useRef(false)
   useEffect(() => {
     mounted.current = true
@@ -1156,25 +1166,17 @@ export function useAddons(
                 fail(error: unknown) {
                   const feature = `${presentation}:${key}`
                   if (disposed || !sources.has(feature)) return
-                  failedFeatures.set(feature, {
+                  const failure = {
                     addonId: id,
-                    activation:
-                      activationOf(currentActivation.current.states, id) ?? 0,
+                    activation: running.get(id)?.activation ?? 0,
+                  }
+                  failedFeatures.set(feature, failure)
+                  featureFailures.current?.postMessage({
+                    key: feature,
+                    ...failure,
                   })
                   remove()
                   latest.current.error(error)
-                  // Other windows compare it with the activation main has now,
-                  // which this window may not have heard of.
-                  void window.hibi.getAddonStates().then((states) => {
-                    const activation = activationOf(states, id)
-                    if (activation === undefined) return
-                    failedFeatures.set(feature, { addonId: id, activation })
-                    featureFailures.current?.postMessage({
-                      key: feature,
-                      addonId: id,
-                      activation,
-                    })
-                  }, latest.current.error)
                 },
                 drop: () => remove(),
               }),
@@ -1468,7 +1470,12 @@ export function useAddons(
           throw new Error(
             `The ${id} addon needs an update before it can run in this version of Hibi.`,
           )
-        running.set(id, { addon, stop, restyle })
+        running.set(id, {
+          addon,
+          stop,
+          restyle,
+          activation: activationOf(currentActivation.current.states, id) ?? 0,
+        })
         const start = async () => {
           const { renderMarkdown } = await import('./render-markdown')
           if (disposed) return

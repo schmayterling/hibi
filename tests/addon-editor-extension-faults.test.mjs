@@ -516,6 +516,60 @@ for (const presentation of ['formatted', 'source'])
     assert.deepEqual(errors, [])
   })
 
+/** A command that makes three edits, each from the state the one before reaches, and dispatches them together. */
+const failingChain = (inserts) => (presentation) =>
+  `export default (sdk) => ({ start(context) {
+  const { StateField } = sdk.codeMirror.state
+  const { EditorView, keymap } = sdk.codeMirror.view
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    StateField.define({
+      create: () => 0,
+      update(value, transaction) {
+        if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('chain boom')
+        return value
+      },
+    }),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+    keymap.of([{ key: 'F8', run(view) {
+      let state = view.state
+      const transactions = []
+      for (const insert of ${JSON.stringify(inserts)}) {
+        const transaction = state.update({ changes: { from: state.doc.toString().lastIndexOf('end') + 3, insert }, userEvent: 'input.type' })
+        transactions.push(transaction)
+        state = transaction.state
+      }
+      view.dispatch(transactions)
+      return true
+    } }]),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  for (const inserts of [
+    ['Q', 'a', 'b'],
+    ['a', 'Q', 'b'],
+  ])
+    test(`an addon ${presentation} field that fails on edit ${inserts.indexOf('Q') + 1} of a dispatch whose next edit was made from it is named and removed (codemirror)`, {
+      timeout: 120000,
+    }, async (t) => {
+      const { page, pane, errors } = await open(t, {
+        source: plain,
+        presentation,
+        engine: 'codemirror',
+        code: failingChain(inserts),
+      })
+      await caret(page, pane)
+      await page.keyboard.press('F8')
+      await reported(page, 'bad-ext.bad: chain boom')
+      await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+      const rejected = await state(page, pane)
+      t.diagnostic(JSON.stringify({ rejected, errors }))
+      assert.equal(rejected.canonical, plain)
+      assert.equal(rejected.view, rejected.canonical)
+      assert.deepEqual(rejected.shown, ['end'])
+      assert.deepEqual(errors, [])
+    })
+
 /** Two features that fail on `A` and on `B`, and a command that makes both edits from one state but dispatches only `A`. */
 const failingAlternatives = (
   presentation,
@@ -771,13 +825,9 @@ async function openWindows(t, beforeWindow = async () => {}) {
   await preview
     .locator('.rich-pane .cm-content[contenteditable="true"]')
     .waitFor({ timeout: 20000 })
-  // Only the other window restarts the addon here.
   await addWindowFeature(preview)
-  await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', false))
-  await preview
-    .locator('style[data-addon-style="text-extras.text-extras"]')
-    .waitFor({ state: 'detached' })
-  await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', true))
+  await restartTextExtras(app, page)
+  await page.locator('.rich-pane [data-window-fault]').waitFor()
   await preview.locator('.rich-pane [data-window-fault]').waitFor()
   return { app, page, pane, errors, preview, previewErrors, feature }
 }
@@ -936,6 +986,52 @@ test("a failure from the addon's next run still removes the feature from a windo
   const removed = { main: await feature(page), other: await feature(preview) }
   t.diagnostic(JSON.stringify({ removed, errors, previewErrors }))
   assert.deepEqual(removed, { main: 0, other: 0 })
+  assert.deepEqual(errors, [])
+  assert.deepEqual(previewErrors, [])
+})
+
+test('a failure keeps the activation of the run it happened in, even when main answers the window later (codemirror)', {
+  timeout: 180000,
+}, async (t) => {
+  const { app, page, pane, errors, preview, previewErrors, feature } =
+    await openWindows(t)
+  // Main holds the next addon states request from the main window.
+  await app.evaluate(({ BrowserWindow, ipcMain }) => {
+    const original = ipcMain._invokeHandlers.get('addons:states')
+    const main = BrowserWindow.getAllWindows().find(
+      (window) => !window.webContents.getURL().endsWith('/addon-window.html'),
+    ).webContents.id
+    const gate = { original, armed: true, release: () => {} }
+    globalThis.statesGate = gate
+    ipcMain.removeHandler('addons:states')
+    ipcMain.handle('addons:states', (event, ...args) => {
+      if (!gate.armed || event.sender.id !== main)
+        return original(event, ...args)
+      gate.armed = false
+      return new Promise((resolve) => {
+        gate.release = () => resolve(original(event, ...args))
+      })
+    })
+  })
+  try {
+    await type(page, pane, ['Q'])
+    await reported(page, 'text-extras.window-fault: window boom')
+    await restartTextExtras(app, page)
+    await page.locator('.rich-pane [data-window-fault]').waitFor()
+    await preview.locator('.rich-pane [data-window-fault]').waitFor()
+  } finally {
+    await app.evaluate(({ ipcMain }) => {
+      const { original, release } = globalThis.statesGate
+      ipcMain.removeHandler('addons:states')
+      ipcMain.handle('addons:states', original)
+      release()
+    })
+  }
+  await frame(preview)
+  await frame(preview)
+  const restored = { main: await feature(page), other: await feature(preview) }
+  t.diagnostic(JSON.stringify({ restored, errors, previewErrors }))
+  assert.deepEqual(restored, { main: 1, other: 1 })
   assert.deepEqual(errors, [])
   assert.deepEqual(previewErrors, [])
 })

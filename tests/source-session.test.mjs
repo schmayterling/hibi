@@ -985,6 +985,14 @@ test('filters and extenders that read a state never see one an extension failed 
       names(start, [first, second], [{ name: 'feature', extension }]),
       ['feature: field failed'],
     )
+    // An edit made from a failed one starts where that one did; the failed
+    // one is named from its own start.
+    const after = second.state.update({ changes: { from: 4, insert: 'b' } })
+    assert.equal(transactionState(after)?.doc.toString(), 'endab')
+    assert.deepEqual(
+      names(second.startState, [second], [{ name: 'feature', extension }]),
+      ['feature: field failed'],
+    )
     const removed = reconfiguration(start, install([])).state
     assert.equal(removed.field(failing, false), undefined)
     const typedB = start.update({ changes: { from: 3, insert: 'b' } })

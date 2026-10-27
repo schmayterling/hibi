@@ -1362,19 +1362,20 @@ export function SourceEditor({
     }
     installed.current = []
     /**
-     * Rejects input that failed, with the features named that it failed with.
-     * The DOM may still show what it left out; an update could fail again, so
-     * setState draws the state as it is.
+     * Rejects input that failed, with the features named that it failed with
+     * when `edit` is replayed from `start`. The DOM may still show what it left
+     * out; an update could fail again, so setState draws the state as it is.
      */
     const reject = (
       view: EditorView,
       error: unknown,
       edit?: readonly Transaction[] | readonly TransactionSpec[],
+      start = view.state,
     ) => {
       setInputError(error instanceof Error ? error.message : String(error))
       const kept = edit
         ? isolateFeatures(
-            view.state,
+            start,
             edit,
             installed.current,
             addons.current,
@@ -1392,7 +1393,12 @@ export function SourceEditor({
       // differs, which ends the composition, and the IME then starts over
       // beside it. Without the features named, the edit is made again, in the
       // same update. The features leave first, so their extenders do not run.
-      if (!edit || kept.length === installed.current.length) return
+      if (
+        !edit ||
+        start !== view.state ||
+        kept.length === installed.current.length
+      )
+        return
       installed.current = kept
       const reinstall = reconfiguration(
         view.state,
@@ -1432,13 +1438,12 @@ export function SourceEditor({
           )
             setInputError('')
         } catch (error) {
-          reject(
-            editor,
-            error,
-            transactions.some((transaction) => !transactionState(transaction))
-              ? transactions
-              : undefined,
+          // A transaction made after a failed one may start from either state,
+          // so the failed one is replayed alone, from the state it started at.
+          const failed = transactions.find(
+            (transaction) => !transactionState(transaction),
           )
+          reject(editor, error, failed && [failed], failed?.startState)
         }
       },
       state: EditorState.create({

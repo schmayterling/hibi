@@ -723,19 +723,13 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
   await paragraph.click()
   const from = source.indexOf('Some '),
     to = source.indexOf('\n\nAnother')
-  await t.test(
-    'focused paragraph reveals its formatting markers',
-    {
-      todo: 'formatted gap marker-004: focused paragraphs must reveal all their formatting markers',
-    },
-    async () => {
-      await rich.locator('.hibi-lp-strong').first().click()
-      assert.equal(await heading.locator('.hibi-lp-marker').count(), 0)
-      assert.equal(await rich.locator('.hibi-lp-marker').count(), 8)
-      await markerSelection(rich, from, to)
-      assert.equal(await paragraph.locator('.hibi-lp-marker').count(), 8)
-    },
-  )
+  await t.test('focused paragraph reveals its formatting markers', async () => {
+    await rich.locator('.hibi-lp-strong').first().click()
+    assert.equal(await heading.locator('.hibi-lp-marker').count(), 0)
+    assert.equal(await rich.locator('.hibi-lp-marker').count(), 8)
+    await markerSelection(rich, from, to)
+    assert.equal(await paragraph.locator('.hibi-lp-marker').count(), 8)
+  })
   await markerSelection(rich, from, to)
   const copied = await rich.evaluate((element) => {
     const clipboardData = new DataTransfer()
@@ -779,19 +773,13 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
     source,
   )
   await rich.press('ControlOrMeta+a')
-  await t.test(
-    'select all hides formatting markers',
-    {
-      todo: 'formatted gap marker-006: select all must hide formatting markers',
-    },
-    async () => {
-      assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
-      assert.equal(
-        (await page.evaluate(() => window.hibi.getDocument())).markdown,
-        source,
-      )
-    },
-  )
+  await t.test('select all hides formatting markers', async () => {
+    assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      source,
+    )
+  })
   await rich
     .locator('.cm-line')
     .filter({ hasText: /^Another/ })

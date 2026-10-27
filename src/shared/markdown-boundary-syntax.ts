@@ -93,7 +93,7 @@ export function boundarySyntaxIds(
     const id = (Object.keys(catalog) as BoundarySyntax[]).find(
       (key) => catalog[key] === extension,
     )
-    if (!id) return inlineOnly(extension)
+    if (!id) return inlineOnly(extension as MarkdownConfig)
     ids.push(id)
     return true
   }

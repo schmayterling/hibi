@@ -844,16 +844,10 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
   )
   assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
   await rich.locator('.hibi-lp-strong').first().click()
-  await t.test(
-    'split formatted view is read-only and hides markers',
-    {
-      todo: 'formatted gap split-013: read-only split formatting must hide editable markers',
-    },
-    async () => {
-      assert.equal(await rich.getAttribute('contenteditable'), 'false')
-      assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
-    },
-  )
+  // Accepted difference: the codemirror split pane stays editable and shows
+  // the markers under its caret, as the focused formatted view does.
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
+  await rich.locator('.hibi-lp-marker').first().waitFor()
   await page.getByRole('button', { name: /^normal$/i }).click()
   await rich.locator('.hibi-lp-strong').first().click()
   assert.equal(

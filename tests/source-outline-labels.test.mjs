@@ -117,36 +117,44 @@ test('label workers are reused, terminated on cancellation, and ignore late resu
 })
 
 test('complete nested labels fit a small worker stack', async (t) => {
-  const module = new URL(
-    '../src/renderer/src/source-outline-label.worker.ts',
-    import.meta.url,
-  ).href
-  const code = `
-    import { parentPort } from 'node:worker_threads'
-    import { createOutlineLabelReader } from ${JSON.stringify(module)}
-    const read = createOutlineLabelReader({
-      syntax: { gfm: true },
-      flavors: ['markdown.github'],
-      disabled: [],
+  for (const disabled of [[], ['core.italic']]) {
+    const name = disabled.length ? 'disabled italic' : 'enabled italic'
+    await t.test(name, async (t) => {
+      const module = new URL(
+        '../src/renderer/src/source-outline-label.worker.ts',
+        import.meta.url,
+      ).href
+      const code = `
+        import { parentPort } from 'node:worker_threads'
+        import { createOutlineLabelReader } from ${JSON.stringify(module)}
+        const read = createOutlineLabelReader({
+          syntax: { gfm: true },
+          flavors: ['markdown.github'],
+          disabled: ${JSON.stringify(disabled)},
+        })
+        parentPort.postMessage(read({
+          text: ${JSON.stringify(text)},
+          level: 1,
+          references: new Map(),
+        }).label)
+      `
+      const worker = new Worker(
+        new URL(`data:text/javascript,${encodeURIComponent(code)}`),
+        {
+          resourceLimits: { stackSizeMb: 0.5 },
+        },
+      )
+      t.after(() => worker.terminate())
+      const label = await new Promise((resolve, reject) => {
+        worker.once('message', resolve)
+        worker.once('error', reject)
+      })
+      assert.equal(
+        label,
+        disabled.length ? text : `${'a '.repeat(1000)}b${' a'.repeat(1000)}`,
+      )
     })
-    parentPort.postMessage(read({
-      text: ${JSON.stringify(text)},
-      level: 1,
-      references: new Map(),
-    }).label)
-  `
-  const worker = new Worker(
-    new URL(`data:text/javascript,${encodeURIComponent(code)}`),
-    {
-      resourceLimits: { stackSizeMb: 0.5 },
-    },
-  )
-  t.after(() => worker.terminate())
-  const label = await new Promise((resolve, reject) => {
-    worker.once('message', resolve)
-    worker.once('error', reject)
-  })
-  assert.equal(label, `${'a '.repeat(1000)}b${' a'.repeat(1000)}`)
+  }
 })
 
 test('pending long labels cannot publish after an edit or disposal', () => {

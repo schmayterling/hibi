@@ -105,13 +105,9 @@ function labelTokens(tokens: readonly Token[]) {
       continue
     }
     const token = step.value
-    if (
-      'tokens' in token &&
-      token.tokens &&
-      !markdownSyntax.disabledFeature(token)
-    ) {
-      // Enabled images are textless atoms; their alt's nesting cannot affect a label.
-      if (token.type === 'image') {
+    if ('tokens' in token && token.tokens) {
+      // Disabled syntax renders raw text; enabled images are textless atoms.
+      if (markdownSyntax.disabledFeature(token) || token.type === 'image') {
         entry.output.push({ ...token, tokens: [] })
         continue
       }

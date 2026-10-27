@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorSelection, EditorState, Transaction } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import { parseFrontmatter } from '../src/addons/frontmatter/markdown.ts'
 import {
   formattedProjection,
@@ -10,7 +11,7 @@ import { createSourceSession } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { normalizedSource } from '../src/shared/source-projection.ts'
 
-function fixture(text, adapter) {
+function fixture(text, adapter, prepare) {
   const session = new DocumentSession(
     text,
     { tabId: 'projection', revision: 0 },
@@ -22,6 +23,10 @@ function fixture(text, adapter) {
       },
     },
   )
+  if (prepare) {
+    prepare(session)
+    text = session.snapshot().materialize()
+  }
   const bridge = createSourceSession(session)
   const view = {
     state: EditorState.create({
@@ -120,7 +125,7 @@ test('frontmatter and custom projections protect the same ordered prefix', () =>
   )
 })
 
-test('50 mib unmatched notes map source echoes and local undo without reparsing', () => {
+test('50 mib unmatched notes defer one proof to input and map interior echoes and history', () => {
   const f = fixture('x'.repeat(50 * 1024 * 1024), adapter)
   const count = parses
   f.session.counters(true)
@@ -130,11 +135,16 @@ test('50 mib unmatched notes map source echoes and local undo without reparsing'
       'source',
       `s${i}`,
     )
+  assert.equal(parses, count)
+  assert.equal(f.session.counters().materializations, 0)
   for (let i = 0; i < 5; i++)
     f.dispatch({ changes: { from: 100, insert: 'z' } })
+  assert.equal(parses, count + 1)
+  assert.equal(f.session.counters().materializations, 1)
+  f.session.counters(true)
   for (let i = 0; i < 5; i++) f.bridge.undo()
   for (let i = 0; i < 5; i++) f.bridge.redo()
-  assert.equal(parses, count)
+  assert.equal(parses, count + 1)
   const counters = f.session.counters()
   assert.equal(counters.materializations, 0)
   assert.ok(counters.sourceUnitsRead < 4096, JSON.stringify(counters))
@@ -156,6 +166,89 @@ test('canonical source-prefix changes refresh projection bounds without running 
     f.view.state.selection.main.head,
     normalizedSource(prefix).length,
   )
+})
+
+test('a fresh negative proof protects a header restored by undo without a focus event', () => {
+  const f = fixture(prefix + 'body' + suffix, adapter, (session) =>
+    session.edit(
+      [{ from: 0, to: prefix.length, insert: '' }],
+      'source',
+      'header',
+    ),
+  )
+  f.bridge.undo()
+  f.dispatch({ selection: EditorSelection.range(0, f.view.state.doc.length) })
+  f.dispatch(f.view.state.replaceSelection('typed'), {
+    annotations: Transaction.userEvent.of('input.type'),
+  })
+  assert.equal(f.session.snapshot().materialize(), prefix + 'typed' + suffix)
+})
+
+test('a stale canonical echo rechecks before the next local selection and input', () => {
+  const f = fixture('AB? body', {
+    id: 'interior',
+    preservation: { level: 'verbatim', version: '1' },
+    parse(source) {
+      if (!source.startsWith('AB! ')) return null
+      return {
+        sourceOffset: 4,
+        content: source.slice(4),
+        serialize: (text) => 'AB! ' + text,
+      }
+    },
+  })
+  f.session.edit([{ from: 2, to: 3, insert: '!' }], 'source', 'interior')
+  f.dispatch({ selection: { anchor: 0 } })
+  assert.equal(f.view.state.selection.main.head, 4)
+  f.dispatch(f.view.state.replaceSelection('typed'))
+  assert.equal(f.session.snapshot().materialize(), 'AB! typedbody')
+})
+
+test('stale local input cannot consume a newly protected prefix', () => {
+  const f = fixture('AB? body', {
+    id: 'interior-input',
+    preservation: { level: 'verbatim', version: '1' },
+    parse(source) {
+      if (!source.startsWith('AB! ')) return null
+      return {
+        sourceOffset: 4,
+        content: source.slice(4),
+        serialize: (text) => 'AB! ' + text,
+      }
+    },
+  })
+  f.session.edit([{ from: 2, to: 3, insert: '!' }], 'source', 'interior')
+  f.dispatch({ changes: { from: 0, insert: 'lost' } })
+  assert.equal(f.session.snapshot().materialize(), 'AB! body')
+  assert.equal(f.view.state.selection.main.head, 4)
+  f.dispatch(f.view.state.replaceSelection('typed'))
+  assert.equal(f.session.snapshot().materialize(), 'AB! typedbody')
+})
+
+test('50 mib local edits and refocuses do not re-read the source', () => {
+  const original = EditorView.domEventHandlers
+  let focus
+  EditorView.domEventHandlers = (handlers) => {
+    focus = handlers.focus
+    return original.call(EditorView, handlers)
+  }
+  let f
+  try {
+    f = fixture(prefix + 'x'.repeat(50 * 1024 * 1024) + suffix, adapter)
+  } finally {
+    EditorView.domEventHandlers = original
+  }
+  const count = parses
+  f.session.counters(true)
+  f.view.dispatch = f.dispatch
+  for (let i = 0; i < 5; i++) {
+    f.dispatch({
+      changes: { from: normalizedSource(prefix).length + 1, insert: 'y' },
+    })
+    focus({}, f.view)
+  }
+  assert.equal(parses, count)
+  assert.equal(f.session.counters().materializations, 0)
 })
 
 test('unprovable verbatim adapters cannot accept changes', () => {

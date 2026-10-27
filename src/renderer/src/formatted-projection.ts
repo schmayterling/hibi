@@ -26,6 +26,16 @@ type Body = {
 /** Whole-source changes from the projection's properties editor. */
 export const formattedProjectionSource = Annotation.define<string>()
 const refreshProjection = StateEffect.define<Body>()
+function clampSelection(selection: EditorSelection, bounds: Body) {
+  const clamp = (position: number) =>
+    Math.max(bounds.from, Math.min(bounds.to, position))
+  return EditorSelection.create(
+    selection.ranges.map((range) =>
+      EditorSelection.range(clamp(range.anchor), clamp(range.head)),
+    ),
+    selection.mainIndex,
+  )
+}
 
 /** Legacy verbatim projections keep their exact source outside the editable body. */
 export function formattedProjection(
@@ -67,50 +77,52 @@ export function formattedProjection(
           to,
           readOnly: false,
           stale: false,
-          watchStart: from > 0,
-          watchEnd: to < state.doc.length,
+          watchStart: from > 0 || to === state.doc.length,
+          watchEnd: to < state.doc.length || from === 0,
         }
+  }
+  const updateBody = (value: Body, transaction: Transaction): Body => {
+    if (!transaction.docChanged) return value
+    const replacement = transaction.annotation(formattedProjectionSource)
+    if (replacement !== undefined) return read(transaction.state, replacement)
+    const echo = transaction.annotation(Transaction.addToHistory) === false
+    let reprove = value.readOnly && echo
+    transaction.changes.iterChangedRanges((from, to) => {
+      if (
+        from < value.from ||
+        to > value.to ||
+        (echo &&
+          ((value.watchStart && from === 0) ||
+            (value.watchEnd && to === transaction.startState.doc.length)))
+      )
+        reprove = true
+    })
+    if (reprove) {
+      const next = read(transaction.state)
+      return {
+        ...next,
+        watchStart: next.watchStart || value.watchStart,
+        watchEnd: next.watchEnd || value.watchEnd,
+      }
+    }
+    // Only canonical echoes invalidate a proof. Local edits keep its body bounds.
+    return {
+      ...value,
+      stale: echo,
+      to: transaction.changes.mapPos(value.to, 1),
+    }
   }
   const body = StateField.define<Body>({
     create: read,
     update(value, transaction) {
       for (const effect of transaction.effects)
         if (effect.is(refreshProjection))
-          return {
+          value = {
             ...effect.value,
             watchStart: effect.value.watchStart || value.watchStart,
             watchEnd: effect.value.watchEnd || value.watchEnd,
           }
-      if (!transaction.docChanged) return value
-      const replacement = transaction.annotation(formattedProjectionSource)
-      if (replacement !== undefined) return read(transaction.state, replacement)
-      const echo = transaction.annotation(Transaction.addToHistory) === false
-      let reprove = value.readOnly && echo
-      transaction.changes.iterChangedRanges((from, to) => {
-        if (
-          from < value.from ||
-          to > value.to ||
-          (echo &&
-            ((value.watchStart && from === 0) ||
-              (value.watchEnd && to === transaction.startState.doc.length)))
-        )
-          reprove = true
-      })
-      if (reprove) {
-        const next = read(transaction.state)
-        return {
-          ...next,
-          watchStart: next.watchStart || value.watchStart,
-          watchEnd: next.watchEnd || value.watchEnd,
-        }
-      }
-      // A negative proof is still a body proof. Echoes and history map it;
-      // focus rechecks legacy adapters once before an inactive pane accepts input.
-      return {
-        ...value,
-        stale: true,
-        to: transaction.changes.mapPos(value.to, 1),
-      }
+      return updateBody(value, transaction)
     },
   })
   const hidden = Decoration.replace({ block: true })
@@ -145,8 +157,15 @@ export function formattedProjection(
       ])
     }),
     EditorState.transactionFilter.of((transaction) => {
-      const current = transaction.startState.field(body, false)
-      if (!current) return transaction
+      const previous = transaction.startState.field(body, false)
+      if (!previous) return transaction
+      let refreshed: Body | undefined
+      for (const effect of transaction.effects)
+        if (effect.is(refreshProjection)) refreshed = effect.value
+      const refresh =
+        previous.stale && !refreshed ? read(transaction.startState) : undefined
+      const current = refresh ?? refreshed ?? previous
+      const effects = refresh ? [refreshProjection.of(refresh)] : []
       let outside = current.readOnly && transaction.docChanged
       transaction.changes.iterChangedRanges((from, to) => {
         if (from < current.from || to > current.to) outside = true
@@ -155,30 +174,35 @@ export function formattedProjection(
         outside &&
         transaction.annotation(formattedProjectionSource) === undefined
       )
-        return []
-      let next = transaction.docChanged
-        ? transaction.state.field(body)
-        : current
+        return effects.length
+          ? {
+              effects,
+              selection: clampSelection(
+                transaction.startState.selection,
+                current,
+              ),
+            }
+          : []
+      let next =
+        refresh || refreshed
+          ? updateBody(current, transaction)
+          : transaction.docChanged
+            ? transaction.state.field(body)
+            : current
       for (const effect of transaction.effects)
         if (effect.is(refreshProjection)) next = effect.value
-      const clamp = (position: number) =>
-        Math.max(next.from, Math.min(next.to, position))
       const selection = transaction.newSelection
       if (
         selection.ranges.every(
           (range) => range.from >= next.from && range.to <= next.to,
         )
       )
-        return transaction
+        return effects.length ? [transaction, { effects }] : transaction
       return [
         transaction,
         {
-          selection: EditorSelection.create(
-            selection.ranges.map((range) =>
-              EditorSelection.range(clamp(range.anchor), clamp(range.head)),
-            ),
-            selection.mainIndex,
-          ),
+          effects,
+          selection: clampSelection(selection, next),
           sequential: true,
         },
       ]

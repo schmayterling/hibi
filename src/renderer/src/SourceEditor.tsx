@@ -150,6 +150,7 @@ import { sourceIndentation } from './source-indent'
 import {
   createSourceSession,
   editSpec,
+  failedEdit,
   failedEditGuard,
   failingParts,
   reconfiguration,
@@ -1416,6 +1417,11 @@ export function SourceEditor({
           }
         : {}),
       dispatchTransactions(transactions, editor) {
+        const failed = failedEdit(transactions)
+        if (failed) {
+          reject(editor, failed.error, [failed.edit])
+          return
+        }
         try {
           bridge.dispatch(transactions, editor, exactChanges.current)
           // Only the user's next action clears a failure, not the view's own.

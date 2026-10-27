@@ -660,8 +660,12 @@ export function useAddons(
       }
     >(),
   ).current
-  /** Editor features that failed in any window, with their addons, until those are turned off. */
-  const failedFeatures = useRef(new Map<string, string>()).current
+  /** Editor features that failed in any window, with their addons and times, until those are turned off. */
+  const failedFeatures = useRef(
+    new Map<string, { addonId: string; at: number }>(),
+  ).current
+  /** When this window last saw each addon turned off. */
+  const turnedOff = useRef(new Map<string, number>()).current
   const featureFailures = useRef<BroadcastChannel | null>(null)
   useEffect(() => {
     const channel = new BroadcastChannel('hibi-editor-feature-failures')
@@ -669,13 +673,24 @@ export function useAddons(
     channel.onmessage = ({ data }: MessageEvent<unknown>) => {
       // A window that opens later asks for the failures so far.
       if (data === null) {
-        for (const [key, addonId] of failedFeatures)
-          channel.postMessage({ key, addonId })
+        for (const [key, failure] of failedFeatures)
+          channel.postMessage({ key, ...failure })
         return
       }
-      const { key, addonId } = (data ?? {}) as Record<string, unknown>
-      if (typeof key !== 'string' || typeof addonId !== 'string') return
-      failedFeatures.set(key, addonId)
+      const { key, addonId, at } = (data ?? {}) as Record<string, unknown>
+      if (
+        typeof key !== 'string' ||
+        typeof addonId !== 'string' ||
+        typeof at !== 'number'
+      )
+        return
+      // A failure that arrives late belongs to a run the addon has left.
+      const state = currentActivation.current.states.find(
+        (state) => state.id === addonId,
+      )
+      if (state?.enabled === false || at <= (turnedOff.get(addonId) ?? 0))
+        return
+      failedFeatures.set(key, { addonId, at })
       sources.get(key)?.drop?.()
     }
     channel.postMessage(null)
@@ -683,12 +698,14 @@ export function useAddons(
       featureFailures.current = null
       channel.close()
     }
-  }, [failedFeatures, sources])
+  }, [failedFeatures, turnedOff, sources])
   useEffect(() => {
-    for (const [key, addonId] of failedFeatures)
+    const now = Date.now()
+    for (const state of states) if (!state.enabled) turnedOff.set(state.id, now)
+    for (const [key, { addonId }] of failedFeatures)
       if (!states.some((state) => state.id === addonId && state.enabled))
         failedFeatures.delete(key)
-  }, [failedFeatures, states])
+  }, [failedFeatures, turnedOff, states])
   const [sourceExtensions, setSourceExtensions] = useState<SourceExtension[]>(
     [],
   )
@@ -1135,10 +1152,11 @@ export function useAddons(
             : {
                 fail(error: unknown) {
                   if (disposed || !sources.has(`${presentation}:${key}`)) return
-                  failedFeatures.set(`${presentation}:${key}`, id)
+                  const failure = { addonId: id, at: Date.now() }
+                  failedFeatures.set(`${presentation}:${key}`, failure)
                   featureFailures.current?.postMessage({
                     key: `${presentation}:${key}`,
-                    addonId: id,
+                    ...failure,
                   })
                   remove()
                   latest.current.error(error)

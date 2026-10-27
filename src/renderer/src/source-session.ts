@@ -208,8 +208,11 @@ function update(
 /** CodeMirror keeps the part of a state it reached when an extension failed, and returns it on later reads. */
 const failedStates = new WeakMap<Transaction, unknown>()
 
-/** Marks the empty transaction that stands in for an edit an extension failed on. */
-const failedEdit = Annotation.define<Transaction>()
+/**
+ * Edits an extension failed on, by the state they started from. Other filters
+ * may rebuild the empty transaction that stands in for one, but not its start.
+ */
+const failedEdits = new WeakMap<EditorState, Transaction>()
 
 /**
  * Reads each edit's state before other filters and extenders can: when an
@@ -218,17 +221,29 @@ const failedEdit = Annotation.define<Transaction>()
  * Filters run from the last one, so this goes last.
  */
 export const failedEditGuard = Prec.lowest(
-  EditorState.transactionFilter.of((transaction) =>
-    transactionState(transaction)
-      ? transaction
-      : { annotations: failedEdit.of(transaction) },
-  ),
+  EditorState.transactionFilter.of((transaction) => {
+    if (transactionState(transaction)) return transaction
+    failedEdits.set(transaction.startState, transaction)
+    return []
+  }),
 )
+
+/**
+ * The edit an extension failed on that these transactions stand in for, with
+ * its error. Each is taken once; a change from the same state is new input.
+ */
+export function failedEdit(transactions: readonly Transaction[]) {
+  for (const transaction of transactions) {
+    const edit = failedEdits.get(transaction.startState)
+    if (!edit) continue
+    failedEdits.delete(transaction.startState)
+    if (!transaction.docChanged) return { edit, error: failedStates.get(edit) }
+  }
+  return null
+}
 
 /** The state a transaction reaches. When an extension fails on it, every read throws that error. */
 function reachedState(transaction: Transaction): EditorState {
-  const failed = transaction.annotation(failedEdit)
-  if (failed) return reachedState(failed)
   if (failedStates.has(transaction)) throw failedStates.get(transaction)
   try {
     return transaction.state
@@ -282,16 +297,15 @@ export function reconfiguration(
 
 /** A spec that makes a transaction's edit again, with everything it carries. */
 export function editSpec(transaction: Transaction): TransactionSpec {
-  const original = transaction.annotation(failedEdit) ?? transaction
   return {
-    changes: original.changes,
-    ...(original.selection ? { selection: original.selection } : {}),
-    effects: original.effects,
+    changes: transaction.changes,
+    ...(transaction.selection ? { selection: transaction.selection } : {}),
+    effects: transaction.effects,
     // CodeMirror keeps these internal; an extension may fail on its own.
     annotations: (
-      original as unknown as { annotations: readonly Annotation<unknown>[] }
+      transaction as unknown as { annotations: readonly Annotation<unknown>[] }
     ).annotations,
-    scrollIntoView: original.scrollIntoView,
+    scrollIntoView: transaction.scrollIntoView,
   }
 }
 
@@ -310,10 +324,12 @@ export function failingParts<Part>(
 ) {
   const replay = (installed: readonly Part[]) => {
     let state = reachedState(reconfiguration(start, install(installed)))
+    const reach = (made: Transaction) =>
+      reachedState(failedEdit([made])?.edit ?? made)
     if (edit.every((part) => part instanceof Transaction))
       for (const transaction of edit as readonly Transaction[])
-        state = reachedState(state.update(editSpec(transaction)))
-    else reachedState(state.update(...(edit as readonly TransactionSpec[])))
+        state = reach(state.update(editSpec(transaction)))
+    else reach(state.update(...(edit as readonly TransactionSpec[])))
   }
   const accepted: Part[] = []
   const failing: { part: Part; error: unknown }[] = []

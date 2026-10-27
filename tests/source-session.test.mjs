@@ -11,6 +11,7 @@ import {
 } from '@codemirror/state'
 import {
   createSourceSession,
+  failedEdit,
   failedEditGuard,
   failingParts,
   reconfiguration,
@@ -952,19 +953,31 @@ test('filters and extenders that read a state never see one an extension failed 
     failingParts(start, edit, parts, install).map(
       ({ part, error }) => `${part.name}: ${error.message}`,
     )
-  for (const required of [true, false]) {
-    const extension = reading(required)
+  // A filter may rebuild the transaction that stands in for the edit.
+  const rebuilding = [
+    failing,
+    EditorState.transactionFilter.of((transaction) => ({
+      changes: transaction.changes,
+      selection: transaction.selection,
+      effects: transaction.effects,
+      scrollIntoView: transaction.scrollIntoView,
+    })),
+  ]
+  for (const extension of [reading(true), reading(false), rebuilding]) {
     const start = EditorState.create({
       doc: 'end',
       extensions: [compartment.of(extension), failedEditGuard],
     })
     const typed = start.update(typedQ)
     assert.equal(typed.docChanged, false)
-    assert.equal(transactionState(typed), null)
+    const failed = failedEdit([typed])
+    assert.equal(failed?.error.message, 'field failed')
+    assert.equal(failedEdit([typed]), null)
     // Leaving it out does not run its extender, which may require its field.
-    assert.deepEqual(names(start, [typed], [{ name: 'feature', extension }]), [
-      'feature: field failed',
-    ])
+    assert.deepEqual(
+      names(start, [failed.edit], [{ name: 'feature', extension }]),
+      ['feature: field failed'],
+    )
     const removed = reconfiguration(start, install([])).state
     assert.equal(removed.field(failing, false), undefined)
     const typedB = start.update({ changes: { from: 3, insert: 'b' } })

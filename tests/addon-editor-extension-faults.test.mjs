@@ -418,6 +418,86 @@ for (const presentation of ['formatted', 'source'])
     assert.deepEqual(errors, [])
   })
 
+test('an addon source state field that fails on a pasted edit is removed and the paste is rejected on screen and in the note (codemirror)', {
+  timeout: 120000,
+}, async (t) => {
+  const { app, page, pane, errors } = await open(t, {
+    source: plain,
+    presentation: 'source',
+    engine: 'codemirror',
+    code: failingField,
+  })
+  await caret(page, pane)
+  await app.evaluate(({ BrowserWindow, clipboard }) => {
+    clipboard.writeText('paste Q\nnew line')
+    BrowserWindow.getAllWindows()[0].webContents.paste()
+  })
+  await reported(page, 'bad-ext.bad: field boom')
+  const pasted = await state(page, pane)
+  t.diagnostic(JSON.stringify({ pasted, errors }))
+  assert.equal(pasted.canonical, plain)
+  assert.equal(pasted.view, pasted.canonical)
+  assert.deepEqual(pasted.shown, ['end'])
+  await type(page, pane, ['Q'])
+  const after = await state(page, pane)
+  assert.equal(after.canonical, plain.replace(/end\n$/, 'endQ\n'))
+  assert.equal(after.view, after.canonical)
+  assert.deepEqual(after.shown, ['endQ'])
+  assert.equal(after.good, true)
+  assert.deepEqual(errors, [])
+})
+
+/** A failing state field with a filter that rebuilds every transaction from its parts, without annotations. */
+const rebuildingFilter = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  const { EditorState, StateField } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    StateField.define({
+      create: () => 0,
+      update(value, transaction) {
+        if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('field boom')
+        return value
+      },
+    }),
+    EditorState.transactionFilter.of((transaction) => ({
+      changes: transaction.changes,
+      selection: transaction.selection,
+      effects: transaction.effects,
+      scrollIntoView: transaction.scrollIntoView,
+    })),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`an addon ${presentation} filter that rebuilds the rejected edit cannot hide its failing field (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: rebuildingFilter,
+    })
+    await type(page, pane, ['a', 'Q'])
+    const rejected = await state(page, pane)
+    t.diagnostic(JSON.stringify({ rejected, errors }))
+    assert.equal(rejected.canonical, plain.replace(/end\n$/, 'enda\n'))
+    assert.equal(rejected.view, rejected.canonical)
+    assert.deepEqual(rejected.shown, ['enda'])
+    await reported(page, 'bad-ext.bad: field boom')
+    await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+    await type(page, pane, ['b', 'Q'])
+    const after = await state(page, pane)
+    t.diagnostic(JSON.stringify({ after, errors }))
+    assert.equal(after.canonical, plain.replace(/end\n$/, 'endabQ\n'))
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(after.shown, ['endabQ'])
+    assert.deepEqual(errors, [])
+  })
+
 /** An extender that fails on `Z`, with a command that inserts one. */
 const failingExtender = (
   presentation,
@@ -534,9 +614,11 @@ async function restartTextExtras(app, page) {
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
 }
 
-test('a failing formatted feature leaves the editors of every window, and turning its addon off and on restores it (codemirror)', {
-  timeout: 180000,
-}, async (t) => {
+/**
+ * Opens a note in the formatted view with a failing text extras feature,
+ * and another editor window (an addon window) with the same feature.
+ */
+async function openWindows(t, beforeWindow = async () => {}) {
   const { app, page, pane, errors } = await open(t, {
     source: plain,
     presentation: 'formatted',
@@ -548,6 +630,7 @@ test('a failing formatted feature leaves the editors of every window, and turnin
   const feature = (window) =>
     window.locator('.rich-pane [data-window-fault]').count()
   await page.locator('.rich-pane [data-window-fault]').waitFor()
+  await beforeWindow(page)
   await page.evaluate(() => window.hibi.setAddonEnabled('ui-preview', true))
   await page.evaluate(() =>
     window.hibi.openAddonWindow('ui-preview', { id: 'editor' }),
@@ -574,6 +657,14 @@ test('a failing formatted feature leaves the editors of every window, and turnin
     .waitFor({ state: 'detached' })
   await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', true))
   await preview.locator('.rich-pane [data-window-fault]').waitFor()
+  return { app, page, pane, errors, preview, previewErrors, feature }
+}
+
+test('a failing formatted feature leaves the editors of every window, and turning its addon off and on restores it (codemirror)', {
+  timeout: 180000,
+}, async (t) => {
+  const { app, page, pane, errors, preview, previewErrors, feature } =
+    await openWindows(t)
   assert.equal(await feature(page), 1)
   await type(page, pane, ['Q'])
   await reported(page, 'text-extras.window-fault: window boom')
@@ -608,6 +699,61 @@ test('a failing formatted feature leaves the editors of every window, and turnin
   }
   t.diagnostic(JSON.stringify({ removedThere, errors, previewErrors }))
   assert.deepEqual(removedThere, { main: 0, other: 0 })
+  assert.deepEqual(errors, [])
+  assert.deepEqual(previewErrors, [])
+})
+
+test('a failure another window reports after its addon was turned off does not remove the feature when it is turned on again (codemirror)', {
+  timeout: 180000,
+}, async (t) => {
+  const { app, page, pane, errors, preview, previewErrors, feature } =
+    await openWindows(t, (page) =>
+      // The other window holds failure messages until the test releases them.
+      page.context().addInitScript(() => {
+        const Channel = window.BroadcastChannel
+        window.heldFailures = []
+        window.BroadcastChannel = class extends Channel {
+          set onmessage(receive) {
+            super.onmessage = (event) => {
+              if (window.holdFailures && event.data)
+                window.heldFailures.push(() => receive(event))
+              else receive(event)
+            }
+          }
+        }
+      }),
+    )
+  await preview.evaluate(() => {
+    window.holdFailures = true
+  })
+  await type(page, pane, ['Q'])
+  await preview.waitForFunction(() => window.heldFailures.length > 0)
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  const toggle = page.locator('#addon-text-extras')
+  await toggle.click()
+  await preview
+    .locator('style[data-addon-style="text-extras.text-extras"]')
+    .waitFor({ state: 'detached' })
+  await frame(preview)
+  // It arrives while the addon is off.
+  await preview.evaluate(() => {
+    window.holdFailures = false
+    for (const receive of window.heldFailures.splice(0)) receive()
+  })
+  await toggle.click()
+  await page.waitForFunction(
+    () => document.querySelector('#addon-text-extras')?.checked === true,
+  )
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  await page.locator('.rich-pane [data-window-fault]').waitFor()
+  await preview
+    .locator('.rich-pane [data-window-fault]')
+    .waitFor({ timeout: 10000 })
+    .catch(() => {})
+  const restored = { main: await feature(page), other: await feature(preview) }
+  t.diagnostic(JSON.stringify({ restored, errors, previewErrors }))
+  assert.deepEqual(restored, { main: 1, other: 1 })
   assert.deepEqual(errors, [])
   assert.deepEqual(previewErrors, [])
 })

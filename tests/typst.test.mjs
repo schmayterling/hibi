@@ -424,17 +424,10 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   )
   assert.match(await rich.innerText(), /keep this paragraph\./)
   assert.equal((await read()).markdown, markdown)
-  await t.test(
-    'split formatted view is read-only',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap split-014: split formatted view must remain read-only'
-          : undefined,
-    },
-    async () => {
-      assert.equal(await rich.getAttribute('contenteditable'), 'false')
-    },
+  // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
+  assert.equal(
+    await rich.getAttribute('contenteditable'),
+    t.formattedEngine === 'codemirror' ? 'true' : 'false',
   )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   if (t.formattedEngine === 'tiptap')

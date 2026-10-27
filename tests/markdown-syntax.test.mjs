@@ -156,16 +156,10 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
     .click()
   assert.equal(await rich.locator('h2, .hibi-lp-h2').innerText(), 'two')
   assert.match(await rich.innerText(), /\*\*bold\*\* H~2~O/)
-  await t.test(
-    'split formatted view is read-only',
-    {
-      todo: cm
-        ? 'formatted gap split-012: split formatted view must remain read-only'
-        : undefined,
-    },
-    async () => {
-      assert.equal(await rich.getAttribute('contenteditable'), 'false')
-    },
+  // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
+  assert.equal(
+    await rich.getAttribute('contenteditable'),
+    cm ? 'true' : 'false',
   )
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(

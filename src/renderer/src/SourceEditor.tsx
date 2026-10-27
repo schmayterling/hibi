@@ -106,6 +106,7 @@ import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { DocumentWorkerClient, type FindAction } from './document-worker-client'
 import { registerEditorSelectionCapture } from './editor-command-targets'
+import { captureEditorFocus } from './editor-focus-restore'
 import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
@@ -288,6 +289,7 @@ export function SourceEditor({
   ])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
+  const restoreFocus = useRef<(() => void) | null>(null)
   const keepingPlace = useRef(keepPlace)
   keepingPlace.current = keepPlace
   // Effects follow the actual view, which mounts after source preparation.
@@ -307,6 +309,12 @@ export function SourceEditor({
     () => createSourceSession(session, viewId),
     [session, viewId, bridgeRetry, document.tabId, document.revision],
   )
+  // An echo this bridge's view could not show; Retry rebuilds the view.
+  const [failedEcho, setFailedEcho] = useState<{
+    bridge: typeof bridge
+    message: string
+  } | null>(null)
+  const echoError = failedEcho?.bridge === bridge ? failedEcho.message : ''
   const [preparedText, setPreparedText] = useState<{
     bridge: ReturnType<typeof createSourceSession>
     text: Text
@@ -318,7 +326,8 @@ export function SourceEditor({
     preparedText?.bridge === bridge &&
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
-    languageReady
+    languageReady &&
+    !echoError
   const editContext = useRef({
     document,
     editTarget,
@@ -639,9 +648,15 @@ export function SourceEditor({
       formatted
         ? {
             boundaries: {
-              request: (config, receive, declined, from) => {
+              request: (config, receive, declined, from, baseVersion) => {
                 if (bridge.isCurrent())
-                  getWorker().boundaries(config, receive, declined, from)
+                  getWorker().boundaries(
+                    config,
+                    receive,
+                    declined,
+                    from,
+                    baseVersion,
+                  )
                 else declined('stale')
               },
               release: (retain) =>
@@ -1401,8 +1416,13 @@ export function SourceEditor({
           keymap.of([
             { key: 'Ctrl-a', run: selectAll },
             ...defaultKeymap,
-            { key: 'Mod-z', run: bridge.undo, shift: bridge.redo },
-            { key: 'Mod-y', run: bridge.redo },
+            {
+              key: 'Mod-z',
+              run: bridge.undo,
+              shift: bridge.redo,
+              preventDefault: true,
+            },
+            { key: 'Mod-y', run: bridge.redo, preventDefault: true },
           ]),
           formatted
             ? []
@@ -1538,7 +1558,14 @@ export function SourceEditor({
     })
     view.current = editor
     setMountedView(editor)
-    const detachSession = bridge.attach(editor)
+    const detachSession = bridge.attach(editor, (error) =>
+      setFailedEcho({
+        bridge,
+        message:
+          (error instanceof Error ? error.message : String(error)) ||
+          'The source editor is synchronizing.',
+      }),
+    )
     const removeTypingHistory = session.subscribeOperations((prepared) => {
       if (
         !completionBroker.hasTypingListeners() ||
@@ -1838,7 +1865,11 @@ export function SourceEditor({
       {
         read: () => {
           const source = bridge.snapshot()
-          if (view.current !== editor || !session.ownsCurrentSnapshot(source))
+          if (
+            view.current !== editor ||
+            !bridge.isCurrent() ||
+            !session.ownsCurrentSnapshot(source)
+          )
             return null
           const selection = editor.state.selection.main
           return {
@@ -1911,6 +1942,7 @@ export function SourceEditor({
       .load(formatted ? '16px "Geist"' : '13px "Geist Mono"')
       .then(finishFont, finishFont)
     return () => {
+      restoreFocus.current ??= captureEditorFocus(editor.contentDOM)
       cancelAnimationFrame(compositionFrame)
       editor.contentDOM.removeEventListener('keydown', onTypingCommand, true)
       editor.contentDOM.removeEventListener(
@@ -2056,30 +2088,42 @@ export function SourceEditor({
   ])
   useEffect(() => {
     if (mountedView !== view.current) return
+    if (mountedView && (disabled || !inputReady))
+      restoreFocus.current ??= captureEditorFocus(mountedView.contentDOM)
     mountedView?.dispatch({
       effects: editable.current.reconfigure([
         EditorView.editable.of(!disabled && inputReady),
         EditorState.readOnly.of(disabled || !inputReady),
+        ...(echoError
+          ? [EditorView.contentAttributes.of({ tabindex: '0' })]
+          : []),
       ]),
     })
-  }, [mountedView, disabled, inputReady])
+  }, [mountedView, disabled, inputReady, echoError])
 
   useEffect(() => {
     // Publish readiness after CodeMirror configures input, before its next frame.
-    ready.current(
-      extensionError || languageError
+    const status =
+      extensionError || languageError || echoError
         ? 'failed'
         : inputReady && (!waitForFont || fontReadyBridge === bridge)
           ? 'ready'
-          : 'loading',
-    )
+          : 'loading'
+    ready.current(status)
+    if (status === 'ready' && !disabled) {
+      const restore = restoreFocus.current
+      restoreFocus.current = null
+      restore?.()
+    }
   }, [
     bridge,
+    disabled,
     inputReady,
     waitForFont,
     fontReadyBridge,
     extensionError,
     languageError,
+    echoError,
   ])
 
   useEffect(() => {
@@ -2166,15 +2210,20 @@ export function SourceEditor({
 
   return (
     <>
-      {(extensionError || languageError || inputError) && (
+      {(extensionError || languageError || inputError || echoError) && (
         <DocumentNotice
           title={
-            inputError
+            echoError || inputError
               ? 'Edit could not be applied'
               : 'Editor addon unavailable'
           }
-          message={inputError || extensionError || languageError}
+          message={echoError || inputError || extensionError || languageError}
         >
+          {echoError && (
+            <Button onClick={() => retryBridge((retry) => retry + 1)}>
+              Retry
+            </Button>
+          )}
           {!inputError && !extensionError && languageError && codeLanguage && (
             <Button onClick={() => void codeLanguages.retry(codeLanguage)}>
               Retry language

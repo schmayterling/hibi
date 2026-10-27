@@ -12,6 +12,7 @@ import {
   type MarkdownParser,
   parser,
 } from '@lezer/markdown'
+import { mappedPrefix } from '../../../shared/source-projection.ts'
 import { ChunkedMarkdownParser } from '../chunked-markdown.ts'
 import {
   formattedMarkdown,
@@ -715,31 +716,73 @@ type EditorStateChanges = readonly {
   toB: number
 }[]
 
+/** Groups are relative to start; unfinished reads also carry absolute offsets and line numbers. */
+function shiftPrefix(index: Index, start: number, lines: number): Index {
+  const size = start - index.start
+  if (!size && !lines) return index
+  const shift = (ranges: Lines) =>
+    ranges.map(({ from, to }) => ({ from: from + size, to: to + size }))
+  const { pending, stale } = index
+  const ahead = pending?.ahead
+  return {
+    ...index,
+    start,
+    read: index.read + size,
+    stale: stale ? { from: stale.from + size, to: stale.to + size } : null,
+    pending: pending
+      ? {
+          ...pending,
+          from: pending.from + size,
+          at: pending.at + size,
+          head: pending.head ? shift(pending.head) : null,
+          ...(ahead
+            ? {
+                ahead: {
+                  ...ahead,
+                  last: ahead.last + lines,
+                  end: ahead.end + size,
+                  found: ahead.found.map((line) => line + lines),
+                  ranges: shift(ahead.ranges),
+                },
+              }
+            : {}),
+        }
+      : null,
+  }
+}
+
 export const footnoteDefinitions = StateField.define<Index>({
   create,
   update(index, transaction) {
     const { state } = transaction
     const prefix = prefixOf(state)
-    // Other syntax, or a prefix that appeared or went away, reads the note again.
-    if (
-      state.facet(formattedMarkdown) !== index.configs ||
-      prefix !== index.start ||
-      prefix !== transaction.changes.mapPos(index.start, -1)
-    )
-      return create(state)
+    if (state.facet(formattedMarkdown) !== index.configs) return create(state)
+    const changes: EditorStateChanges[number][] = []
+    transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+      changes.push({ fromA, toA, fromB, toB })
+    })
     let next = index
-    if (transaction.docChanged) {
-      const changes: {
-        fromA: number
-        toA: number
-        fromB: number
-        toB: number
-      }[] = []
-      transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-        changes.push({ fromA, toA, fromB, toB })
-      })
-      next = edit(index, state, changes)
-      if (next.stale) next = step(next, state.doc, footnoteScan.slice >> 4)
+    if (
+      transaction.docChanged &&
+      mappedPrefix(index.start, changes) === prefix
+    ) {
+      next = shiftPrefix(
+        index,
+        prefix,
+        state.doc.lineAt(prefix).number -
+          transaction.startState.doc.lineAt(index.start).number,
+      )
+    } else {
+      // A changed prefix boundary or replacement of the body needs a fresh index.
+      if (
+        prefix !== index.start ||
+        prefix !== transaction.changes.mapPos(index.start, -1)
+      )
+        return create(state)
+      if (transaction.docChanged) {
+        next = edit(index, state, changes)
+        if (next.stale) next = step(next, state.doc, footnoteScan.slice >> 4)
+      }
     }
     for (const effect of transaction.effects)
       if (effect.is(readDefinitions)) next = step(next, state.doc, effect.value)

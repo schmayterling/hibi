@@ -39,7 +39,7 @@ export type BoundaryConfig = {
   groupSize: number
   giantBlock: number
 }
-export const boundaryKey = (config: BoundaryConfig) => JSON.stringify(config)
+export { boundaryKey } from './document-worker-protocol.ts'
 
 /** Resolve by object identity, including order. Names or similar node sets cannot prove parity. */
 export function boundarySyntaxIds(

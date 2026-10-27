@@ -626,6 +626,98 @@ test('opening a note reads none of it; idle slices read the rest', () => {
   }
 })
 
+test('properties keystrokes retain an 8 mib footnote index without reading its body', async () => {
+  const { contribution: frontmatter } = await import(
+    '../src/addons/frontmatter/formatted.ts'
+  )
+  const prefix = '---\ntitle: exact\n---\n\n'
+  const unit =
+    'paragraph words with a reference[^a] here\n\n[^a]: definition text\n\n'
+  let state = settle(
+    EditorState.create({
+      doc: prefix + unit.repeat(Math.ceil((8 * 1024 * 1024) / unit.length)),
+      extensions: [frontmatter.extension, contributionExtension(contribution)],
+    }),
+  )
+  for (const insert of ['x', '\nother: value', 'z']) {
+    const before = state.field(footnoteDefinitions)
+    const at = state.doc.line(2).to
+    footnoteScan.scanned = footnoteScan.parsed = 0
+    state = state.update({
+      changes: { from: at, insert },
+      userEvent: 'input.addon',
+    }).state
+    const after = state.field(footnoteDefinitions)
+    assert.equal(after.start, before.start + insert.length)
+    assert.equal(after.read, before.read + insert.length)
+    assert.equal(after.groups, before.groups)
+    assert.equal(after.labels, before.labels)
+    assert.equal(definitionsRead(state), true)
+    assert.equal(footnoteScan.scanned, 0)
+    assert.equal(footnoteScan.parsed, 0)
+  }
+})
+
+test('prefix edits map unfinished footnote scans and line lookahead without restarting', async () => {
+  const { contribution: frontmatter } = await import(
+    '../src/addons/frontmatter/formatted.ts'
+  )
+  for (const body of [
+    '~~~\n' + 'line words\n'.repeat(5000) + '~~~\n\n[^tail]: exact\n',
+    '\n'.repeat(100000) + '[^tail]: exact\n',
+  ]) {
+    let state = EditorState.create({
+      doc: '---\ntitle: exact\n---\n\n' + body,
+      extensions: [frontmatter.extension, contributionExtension(contribution)],
+    })
+    state = state.update({ effects: readDefinitions.of(2048) }).state
+    const before = state.field(footnoteDefinitions)
+    assert.ok(before.pending)
+    footnoteScan.scanned = footnoteScan.parsed = 0
+    const insert = '\nother: value'
+    state = state.update({
+      changes: { from: state.doc.line(2).to, insert },
+      userEvent: 'input.addon',
+    }).state
+    const after = state.field(footnoteDefinitions)
+    assert.equal(after.groups, before.groups)
+    assert.equal(after.read, before.read + insert.length)
+    assert.ok(after.pending)
+    assert.equal(footnoteScan.scanned, 0)
+    assert.equal(footnoteScan.parsed, 0)
+    state = settle(state)
+    assert.deepEqual(indexed(state), { tail: 1 })
+  }
+})
+
+test('a property edit preserves stale footnote work without spending another scan slice', async () => {
+  const { contribution: frontmatter } = await import(
+    '../src/addons/frontmatter/formatted.ts'
+  )
+  const prefix = '---\ntitle: exact\n---\n\n'
+  let state = settle(
+    EditorState.create({
+      doc: prefix + '[^a]: definition\n\n'.repeat(50000),
+      extensions: [frontmatter.extension, contributionExtension(contribution)],
+    }),
+  )
+  state = state.update({
+    changes: { from: prefix.length, insert: '~~~\n' },
+  }).state
+  const before = state.field(footnoteDefinitions)
+  assert.ok(before.stale || before.pending)
+  footnoteScan.scanned = footnoteScan.parsed = 0
+  state = state.update({
+    changes: { from: 10, insert: '\nother: value' },
+    userEvent: 'input.addon',
+  }).state
+  assert.equal(state.field(footnoteDefinitions).groups, before.groups)
+  assert.equal(footnoteScan.scanned, 0)
+  assert.equal(footnoteScan.parsed, 0)
+  state = settle(state)
+  assert.deepEqual(indexed(state), {})
+})
+
 for (const replacement of [
   '/h2',
   '[^new]: replacement\n',

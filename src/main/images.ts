@@ -3,6 +3,7 @@ import { lstat, open, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
+import { lexMarkdown } from '../shared/marked-blocks.ts'
 import { isPathInside } from './workspace-paths.ts'
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -33,7 +34,7 @@ export function imageMime(data: Buffer): string | null {
 
 export function imageSources(markdown: string): Set<string> {
   const sources = new Set<string>()
-  marked.walkTokens(marked.lexer(markdown), (token) => {
+  marked.walkTokens(lexMarkdown(markdown), (token) => {
     if (token.type === 'image') sources.add(token.href)
   })
   return sources

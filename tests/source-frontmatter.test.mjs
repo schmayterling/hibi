@@ -3,6 +3,7 @@ import test from 'node:test'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import {
+  keepUnclosedFrontmatterRead,
   readSourceFrontmatter,
   reuseFrontmatterRead,
 } from '../src/shared/source-frontmatter.ts'
@@ -110,6 +111,47 @@ test('prefix inspection does not read or materialize the whole body', () => {
     ]),
     false,
   )
+})
+
+test('ordinary outline probes read only the opening units without materializing a note', () => {
+  for (const text of [
+    'x',
+    'text',
+    `intro 🌿\n\n${'# heading\n\nbody\n'.repeat(5)}`,
+  ]) {
+    const store = new SourceStore(text, { tabId: 'prefix-probe', revision: 0 })
+    const result = scan(store.snapshot())
+    assert.equal(result.bounds, null)
+    assert.equal(store.counters().materializations, 0)
+    assert.ok(store.counters().sourceUnitsRead <= 4)
+  }
+})
+
+test('kept oversized reads map their inspected endpoint only through earlier insertions', () => {
+  const store = new SourceStore(`---\n${'a'.repeat(256 * 1024 + 64)}\nbody`, {
+    tabId: 'oversized-endpoint',
+    revision: 0,
+  })
+  const read = scan(store.snapshot())
+  assert.equal(read.oversized, true)
+  const before = store.snapshot()
+  const changes = [
+    { from: 100, to: 100, insert: 'xx' },
+    { from: before.utf16Length, to: before.utf16Length, insert: 'tail' },
+  ]
+  const prepared = store.prepare({
+    document: before.document,
+    operationId: crypto.randomUUID(),
+    baseVersion: before.version,
+    contentVersion: before.version + 1,
+    origin: 'source',
+    historyGroup: 'endpoint',
+    changes,
+  })
+  store.commit(prepared)
+  const kept = keepUnclosedFrontmatterRead(read, changes, store.snapshot())
+  assert.ok(kept)
+  assert.equal(kept.inspectedTo, read.inspectedTo + 2)
 })
 
 test('EOF-sensitive prefixes invalidate on append and closed decisions reuse after their read set', () => {

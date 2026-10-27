@@ -51,6 +51,7 @@ import { ToolbarSettings } from './EditorToolbar'
 import { FormatsSettings } from './FormatsSettings'
 import { HibiSettings } from './HibiSettings'
 import { HotkeySettings } from './HotkeySettings'
+import { tabIndent } from './indentation'
 import { LicenseSettings } from './LicenseSettings'
 import { ModalEditingSettings } from './ModalEditingSettings'
 import { NotificationSettings } from './NotificationSettings'
@@ -62,7 +63,6 @@ import {
   settingsNavigation,
 } from './settings-categories'
 import { settingsCategory, settingsPages } from './settings-pages'
-import { tabIndent } from './tab-indent'
 import { WorkspaceSettings } from './WorkspaceSettings'
 
 class PluginSettingsBoundary extends Component<

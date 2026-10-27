@@ -1,7 +1,7 @@
-// Kept apart from tab-indent.ts so settings and the rich editor never load CodeMirror.
+// Kept apart from indentation.ts so settings and the rich editor never load CodeMirror.
 import { indentUnit } from '@codemirror/language'
 import { StateField, type Text } from '@codemirror/state'
-import { detectIndentUnit } from './tab-indent.ts'
+import { detectIndentUnit } from './indentation.ts'
 
 type Indented = { unit: string; from: number; to: number } | null
 const firstIndented = (doc: Text, pos = 0, end = doc.length): Indented => {

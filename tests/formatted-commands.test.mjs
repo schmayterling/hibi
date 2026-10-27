@@ -16,12 +16,12 @@ import {
   indent,
   lineBreak,
 } from '../src/renderer/src/formatted-commands.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import {
   codeIndentLines,
   detectIndentUnit,
   tabIndent,
-} from '../src/renderer/src/tab-indent.ts'
+} from '../src/renderer/src/indentation.ts'
+import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
 
 const markdown = parser.configure(GFM)

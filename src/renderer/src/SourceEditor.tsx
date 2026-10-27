@@ -131,6 +131,7 @@ import {
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedSyntax } from './formatted-syntax'
+import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import {
@@ -154,7 +155,6 @@ import {
   type SourceReferenceResult,
   type SourceReferenceSyntax,
 } from './source-view'
-import { tabIndent } from './tab-indent'
 import { textProjection } from './text-projection'
 
 const highlighting = HighlightStyle.define([

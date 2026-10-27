@@ -37,7 +37,8 @@ it('empty entry, three views, and lossless source switching', {
   page.setDefaultTimeout(7000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   const cm = t.formattedEngine === 'codemirror'
-  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const rich = page.getByRole('textbox', { name: /document editor/i })
   if (cm) {
     cdp = await page.context().newCDPSession(page)
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -48,7 +49,7 @@ it('empty entry, three views, and lossless source switching', {
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
       '',
     )
-    await rich.locator('.cm-placeholder').waitFor()
+    await rich.locator('.cm-placeholder').waitFor({ state: 'attached' })
     assert.equal(
       await rich.locator('.cm-placeholder').textContent(),
       'Start typing',
@@ -122,11 +123,18 @@ it('empty entry, three views, and lossless source switching', {
   assert.equal(geometry.flat, true)
   await clickMenu(app, 'Settings')
   await page.getByRole('main', { name: /settings/i }).waitFor()
+  await rich.waitFor({ state: 'hidden' })
   assert.equal(await rich.isVisible(), false)
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await page.getByRole('slider', { name: /content padding/i }).press('Home')
   assert.equal(
-    await rich.evaluate((element) => getComputedStyle(element).paddingTop),
+    await page.evaluate(
+      (cm) =>
+        getComputedStyle(
+          document.querySelector(cm ? '.rich-pane .cm-content' : '.tiptap'),
+        ).paddingTop,
+      cm,
+    ),
     '0px',
   )
   await page.keyboard.press('Escape')
@@ -213,7 +221,13 @@ it('empty entry, three views, and lossless source switching', {
   )
   await page.keyboard.press('Escape')
   assert.equal(
-    await rich.evaluate((element) => getComputedStyle(element).paddingTop),
+    await page.evaluate(
+      (cm) =>
+        getComputedStyle(
+          document.querySelector(cm ? '.rich-pane .cm-content' : '.tiptap'),
+        ).paddingTop,
+      cm,
+    ),
     '0px',
   )
   await page

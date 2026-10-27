@@ -1287,3 +1287,100 @@ test('ordered list numbers in a 20,000-item list come from cached item offsets',
   assert.ok(result.scrolled < 1000, JSON.stringify(result.scrolled))
   assert.ok(result.edited < 10000, JSON.stringify(result.edited))
 })
+
+test('code language changes reparse only the code on screen of a 50 MiB note', {
+  timeout: 120000,
+}, async () => {
+  await harness.evaluate(async () => {
+    const unit =
+      '## Section\n\nWords between blocks.\n\n```js\nconst value = 1\n```\n\n```rust\nfn main() {}\n```\n\n'
+    await window.livePreview.mount(
+      unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
+      { width: 800, height: 600 },
+    )
+    window.codeKeywords = (text) =>
+      [
+        ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
+      ].filter((token) => token.textContent === text).length
+  })
+  const keywords = (text, shown) =>
+    harness.waitForFunction(
+      ({ text, shown }) => window.codeKeywords(text) > 0 === shown,
+      { text, shown },
+    )
+  // Work of one change: the parse it starts, before idle time parses ahead.
+  const measure = (change) =>
+    harness.evaluate(async (change) => {
+      const preview = window.livePreview
+      await preview.settle()
+      preview.reset()
+      if (change === 'disable') preview.setCodeLanguage('javascript', false)
+      else preview.hide(false)
+      await preview.settle()
+      return {
+        ...preview.probe,
+        keywords: window.codeKeywords('const'),
+        blocks: document.querySelectorAll('.hibi-lp-codeblock').length,
+      }
+    }, change)
+  try {
+    // A grammar that loads after the first parse reaches the parsed blocks.
+    await keywords('fn', true)
+    await keywords('const', true)
+    const disabled = await measure('disable')
+    // A hidden view waits: no parse and no change until it is shown.
+    await harness.evaluate(() => window.livePreview.hide(true))
+    await harness.waitForFunction(
+      () =>
+        getComputedStyle(document.querySelector('.rich-pane')).visibility ===
+        'hidden',
+    )
+    const hidden = await harness.evaluate(async () => {
+      const preview = window.livePreview
+      await preview.settle()
+      preview.reset()
+      preview.setCodeLanguage('javascript', true)
+      await preview.settle()
+      await preview.settle()
+      return { ...preview.probe, keywords: window.codeKeywords('const') }
+    })
+    const shown = await measure('show')
+    // Code parsed before its language changed parses again when it returns to the screen.
+    await harness.evaluate(() => {
+      const preview = window.livePreview
+      const { doc } = preview.view().state
+      preview.scrollTo(doc.lineAt(Math.floor(doc.length / 2)).from)
+    })
+    await harness.waitForFunction(
+      () =>
+        window.livePreview.view().viewport.from > 1024 * 1024 &&
+        window.codeKeywords('const') > 0,
+    )
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', false),
+    )
+    await keywords('const', false)
+    await harness.evaluate(() => window.livePreview.scrollTo(0))
+    await harness.waitForFunction(
+      () =>
+        window.livePreview.view().viewport.from === 0 &&
+        window.codeKeywords('fn') > 0 &&
+        window.codeKeywords('const') === 0,
+    )
+    console.log(JSON.stringify({ disabled, hidden, shown }))
+    assert.equal(hidden.parsedUnits, 0, JSON.stringify(hidden))
+    assert.equal(hidden.keywords, 0)
+    assert.equal(disabled.keywords, 0)
+    assert.ok(shown.keywords > 0, JSON.stringify(shown))
+    // The code on screen and the chunks it straddles parse again, not the note.
+    for (const result of [disabled, shown]) {
+      assert.ok(result.blocks > 4, JSON.stringify(result))
+      assert.ok(result.parsedChunks <= 4, JSON.stringify(result))
+      assert.ok(result.parsedUnits <= 4 * 4096, JSON.stringify(result))
+    }
+  } finally {
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', true),
+    )
+  }
+})

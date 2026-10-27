@@ -12,10 +12,9 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | reload-003 | [addon-reload.test.mjs:969](addon-reload.test.mjs#L969) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
 | api-001 | [addon-toolbar-command.test.mjs:149](addon-toolbar-command.test.mjs#L149) | api 2 rich selection must report rendered text | 6: verbatim projections and selection contracts |
 | completion-001 | [autocomplete-addon.test.mjs:369](autocomplete-addon.test.mjs#L369) | a fresh rich completion list must accept the word with tab | 8a: native input, structure and toolbar state |
-| syntax-001 | [code-syntax-settings.test.mjs:23](code-syntax-settings.test.mjs#L23) | syntax settings must refresh formatted code highlighting | 8c: highlighting and grammar lifecycle |
-| syntax-004 | [code-syntax-settings.test.mjs:250](code-syntax-settings.test.mjs#L250) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
-| syntax-002 | [code-syntax-settings.test.mjs:293](code-syntax-settings.test.mjs#L293) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
-| syntax-003 | [code-syntax-settings.test.mjs:442](code-syntax-settings.test.mjs#L442) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
+| syntax-004 | [code-syntax-settings.test.mjs:238](code-syntax-settings.test.mjs#L238) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
+| syntax-002 | [code-syntax-settings.test.mjs:281](code-syntax-settings.test.mjs#L281) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
+| syntax-003 | [code-syntax-settings.test.mjs:430](code-syntax-settings.test.mjs#L430) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
 | split-001 | [cursor.test.mjs:266](cursor.test.mjs#L266) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | history-001 | [edit-menu-history.test.mjs:341](edit-menu-history.test.mjs#L341) | keyboard redo must preserve read-only formatted source and history | 3: read-only access and shared history guards |
 | api-002 | [editor-extension-context.test.mjs:251](editor-extension-context.test.mjs#L251) | source and formatted editors must preserve hosting view identities | 6: verbatim projections and selection contracts |
@@ -150,7 +149,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | api-005 | [rich-edit-api.test.mjs:295](rich-edit-api.test.mjs#L295) | rich source edits must reject structural markup changes | 6: verbatim projections and selection contracts |
 | split-007 | [rich-editability.test.mjs:72](rich-editability.test.mjs#L72) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | marker-007 | [sidebar-views.test.mjs:105](sidebar-views.test.mjs#L105) | outline navigation must expose rendered heading text | 8b: hidden markers and math caret placement |
-| syntax-005 | [sideload.test.mjs:283](sideload.test.mjs#L283) | disabling an addon must remove its formatted syntax colors | 8c: highlighting and grammar lifecycle |
 | link-003 | [site.test.mjs:518](site.test.mjs#L518) | heading links must navigate to canonical and legacy destinations | 5a: reference labels and destinations |
 | split-008 | [slash.test.mjs:344](slash.test.mjs#L344) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | split-009 | [source-markdown-lifecycle.test.mjs:337](source-markdown-lifecycle.test.mjs#L337) | split formatted view must remain read-only | 3: read-only access and shared history guards |

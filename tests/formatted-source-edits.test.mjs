@@ -10,11 +10,158 @@ import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const markdown = parser.configure(GFM)
+
+test('a correction reads one list item regardless of the container length', (t) => {
+  const work = []
+  for (const count of [10, 2000]) {
+    const doc = '- some teh words\n'.repeat(count)
+    const from = doc.indexOf('teh', Math.floor(count / 2) * 17)
+    const state = EditorState.create({ doc })
+    const transaction = state.update({
+      changes: { from, to: from + 3, insert: 'the' },
+    })
+    const tree = markdown.parse(doc)
+    let units = 0
+    const read = state.sliceDoc.bind(state)
+    state.sliceDoc = (from, to) => {
+      units += to - from
+      return read(from, to)
+    }
+    assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+    work.push(units)
+  }
+  t.diagnostic(JSON.stringify({ units: work }))
+  assert.deepEqual(work, [work[0], work[0]])
+  assert.ok(work[1] < 128, String(work))
+})
 function check(source, changes) {
   const state = EditorState.create({ doc: source })
   const transaction = state.update({ changes })
   return formattedLiteralEdits(transaction, markdown, markdown.parse(source))
 }
+
+test('table cell proofs read the row and header independently of row count', (t) => {
+  const work = []
+  for (const count of [10, 2000]) {
+    const doc = '| word |\n| --- |\n' + '| teh |\n'.repeat(count)
+    const state = EditorState.create({ doc })
+    const from = doc.indexOf('teh', doc.length / 2)
+    const transaction = state.update({
+      changes: { from, to: from + 3, insert: 'the' },
+    })
+    const tree = markdown.parse(doc)
+    let units = 0
+    const read = state.sliceDoc.bind(state)
+    state.sliceDoc = (from, to) => {
+      units += to - from
+      return read(from, to)
+    }
+    assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+    work.push(units)
+  }
+  t.diagnostic(JSON.stringify({ units: work }))
+  assert.deepEqual(work, [work[0], work[0]])
+  assert.ok(work[1] < 512, String(work))
+})
+
+test('leaf proofs retain multiline quote and list context', () => {
+  for (const source of [
+    '> *teh\n> words*',
+    '> - teh\n>   words',
+    '> _teh\n>_',
+    '> > teh\n> > ---',
+  ]) {
+    const from = source.indexOf('teh')
+    assert.equal(check(source, { from, to: from + 3, insert: 'the' }), true)
+  }
+  const source = '> *teh\n> words*'
+  assert.equal(check(source, { from: source.length - 1, insert: '*' }), false)
+  const marker = source.indexOf('\n>') + 1
+  assert.equal(
+    check(source, { from: marker, to: marker + 1, insert: '' }),
+    false,
+  )
+})
+
+test('cold list proofs use worker context without reading the whole container', () => {
+  const doc = '- some teh words\n'.repeat(2000)
+  const source = new SourceStore(doc, { tabId: 'list', revision: 0 }).snapshot()
+  const index = new MarkdownBoundaryIndex(source, {
+    schema: 1,
+    syntax: [],
+    flavors: [],
+    literal: [],
+    opaque: [],
+    prefix: 0,
+    chunkSize: 4096,
+    groupSize: 64,
+    giantBlock: 65536,
+  })
+  while (!index.advance()) {}
+  const builder = new BoundaryTree(index.parser, index.length)
+  for (const page of index.pages()) builder.append(page.records)
+  const state = EditorState.create({ doc })
+  const from = doc.indexOf('teh', doc.length / 2)
+  const transaction = state.update({
+    changes: { from, to: from + 3, insert: 'the' },
+  })
+  let units = 0
+  const read = state.sliceDoc.bind(state)
+  state.sliceDoc = (from, to) => {
+    units += to - from
+    return read(from, to)
+  }
+  assert.equal(
+    formattedLiteralEdits(transaction, markdown, builder.finish()),
+    true,
+  )
+  assert.ok(units < 16384, String(units))
+})
+
+test('cold container context preserves nested prose and fences', () => {
+  for (const [doc, allowed] of [
+    ['> - some teh words\n'.repeat(2000), true],
+    [
+      '- intro\n\n  ```\n' + '  code\n\n'.repeat(1800) + '  teh\n  ```\n',
+      false,
+    ],
+  ]) {
+    const source = new SourceStore(doc, {
+      tabId: 'context',
+      revision: 0,
+    }).snapshot()
+    const index = new MarkdownBoundaryIndex(source, {
+      schema: 1,
+      syntax: [],
+      flavors: [],
+      literal: [],
+      opaque: [],
+      prefix: 0,
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+    })
+    while (!index.advance()) {}
+    const builder = new BoundaryTree(index.parser, index.length)
+    for (const page of index.pages()) builder.append(page.records)
+    const state = EditorState.create({ doc })
+    const from = doc.indexOf('teh', doc.length / 2)
+    const transaction = state.update({
+      changes: { from, to: from + 3, insert: 'the' },
+    })
+    let units = 0
+    const read = state.sliceDoc.bind(state)
+    state.sliceDoc = (from, to) => {
+      units += to - from
+      return read(from, to)
+    }
+    assert.equal(
+      formattedLiteralEdits(transaction, markdown, builder.finish()),
+      allowed,
+    )
+    assert.ok(units < 20000, String(units))
+  }
+})
 
 test('literal corrections preserve paragraph, heading, mark and link structure', () => {
   assert.equal(check('teh', { from: 0, to: 3, insert: 'the' }), true)

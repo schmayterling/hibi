@@ -1097,10 +1097,15 @@ class ChunkedParse implements ChunkedPartialParse {
       this.addTail()
       return false
     }
-    // Far from the viewport, wider windows split into several pending chunks.
+    // Boundary scans keep replay points for later leaf proofs. A finite
+    // viewport can scan farther ahead, splitting its window into pending chunks.
     const size = this.parser.chunkSize
     this.startScan(
-      demand && demand.from - this.pos > 32 * size ? 16 * size : 2 * size,
+      demand &&
+        Number.isFinite(demand.from) &&
+        demand.from - this.pos > 32 * size
+        ? 16 * size
+        : 2 * size,
     )
     return true
   }
@@ -1923,7 +1928,16 @@ class ChunkedParse implements ChunkedPartialParse {
         return
       }
       this.pos = from
-      this.addChunk(this.leaf('pending', to - from, block.reach))
+      // Keep replay context for unseen containers and opaque blocks too.
+      // A later leaf proof must not read the entire container to recover it.
+      this.addChunk(
+        !block.leaf ||
+          block.opaque ||
+          block.key === 'Table' ||
+          /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(block.key ?? '')
+          ? this.giantLeaf(this.giant(block, end), to - from, block.reach)
+          : this.leaf('pending', to - from, block.reach),
+      )
       this.pos = to
       return
     }
@@ -2522,15 +2536,57 @@ export function boundaryWindow(tree: Tree, from: number, to: number) {
   if (info?.kind === 'tail') return 'building' as const
   if (!chunk || !info) return null
   const start = groupFrom + group.positions[index]!
+  if (to > start + chunk.length) return null
+  const block = info.kind === 'giant' ? info.block : null
   const opaque =
-    info?.kind === 'giant' &&
-    info.block.leaf &&
-    (info.block.opaque ||
-      /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(info.block.key ?? '')) &&
-    info.block.key !== 'Table'
-  return to <= start + chunk.length
-    ? { from: start, to: start + chunk.length, opaque }
-    : null
+    !!block?.leaf &&
+    (block.opaque ||
+      /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(block.key ?? '')) &&
+    block.key !== 'Table'
+  if (!block || block.leaf)
+    return {
+      from: start,
+      to: start + chunk.length,
+      opaque,
+      table: block?.key === 'Table',
+      ranges: [{ from: start, to: start + chunk.length }],
+    }
+  // Replay points prove container state without reading the intervening items.
+  // A point inside a paragraph/table is not an inline proof boundary.
+  const points = block.points
+  let low = 0,
+    high = points.length - 1,
+    first = 0
+  while (low <= high) {
+    const middle = (low + high) >> 1
+    if (start + points[middle]!.at <= from) {
+      first = middle
+      low = middle + 1
+    } else high = middle - 1
+  }
+  while (first && points[first]!.retype) first--
+  let last = first + 1
+  while (
+    last < points.length &&
+    (start + points[last]!.at <= to || points[last]!.retype)
+  )
+    last++
+  const point = points[first]!
+  const end = start + (points[last]?.at ?? chunk.length)
+  const ranges: Lines[] = []
+  for (const range of [
+    ...point.head.map((range) => ({
+      from: start + range.from,
+      to: start + range.to,
+    })),
+    { from: start + point.at, to: end },
+  ]) {
+    const previous = ranges.at(-1)
+    if (previous && previous.to >= range.from)
+      previous.to = Math.max(previous.to, range.to)
+    else ranges.push(range)
+  }
+  return { from: ranges[0]!.from, to: end, opaque, table: false, ranges }
 }
 
 /** Only the final tail lacks verified boundaries; find it without walking the index. */

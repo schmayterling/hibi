@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
@@ -351,6 +351,12 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
   await page.waitForFunction(() =>
     window.sourceReview.getDocument()?.markdown.startsWith('some teh words'),
   )
+  await page.waitForFunction(() =>
+    document
+      .querySelector('[aria-label="Document editor"]')
+      ?.textContent.includes('some teh words'),
+  )
+  await waitForDocumentEditor(app, page)
   const positions = [
     longSource.indexOf('teh', 50000),
     longSource.lastIndexOf('teh'),
@@ -376,6 +382,7 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
     assert.equal(
       await page.evaluate(() => window.longEditResult.status),
       'applied',
+      JSON.stringify(await page.evaluate(() => window.longEditResult)),
     )
   }
   const actual = (await page.evaluate(() => window.hibi.getDocument())).markdown

@@ -4,7 +4,6 @@ import { GFM, type MarkdownParser, parser } from '@lezer/markdown'
 import { decodeHTML } from 'entities'
 import type { Token } from 'marked'
 import { FrontmatterParser } from '../../shared/frontmatter-parser.ts'
-import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
 import { markdownSourceParser } from '../../shared/markdown-source-references.ts'
 import type {
   PreparedSourceOperation,
@@ -169,7 +168,6 @@ export class SourceOutlineModel {
       math: options.math ?? false,
     })
     this.#renderLabel = options.renderLabel ?? ((tokens) => plainText(tokens))
-    const runs = createPlainTextRunExtension()
     this.#markdown = parser.configure([
       ...(options.gfm ? GFM : []),
       ...(this.#math
@@ -188,10 +186,19 @@ export class SourceOutlineModel {
             ),
           ]
         : []),
-      { defineNodes: [{ name: 'Frontmatter', block: true }] },
-      runs.extension,
+      {
+        defineNodes: [{ name: 'Frontmatter', block: true }],
+        // Only block boundaries feed the outline. Labels have their own bounded
+        // semantic reader; parsing inline trees here can take seconds per line.
+        parseInline: [
+          {
+            name: 'OutlineText',
+            before: 'Escape',
+            parse: (context) => context.end,
+          },
+        ],
+      },
     ])
-    runs.allow(this.#markdown)
     this.#session = new SourceParserSession(
       source,
       this.#markdown,

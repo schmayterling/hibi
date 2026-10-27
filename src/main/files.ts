@@ -1,9 +1,26 @@
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { copyFile, link, open, rename, stat, unlink } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { SourceSnapshot } from '../shared/source-buffer'
 import { retryRename } from './atomic-rename.ts'
+
+const fileAccess = new Map<string, Promise<void>>()
+
+async function lockFileAccess(path: string) {
+  const key = resolve(path)
+  const previous = fileAccess.get(key)
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fileAccess.set(key, pending)
+  await previous
+  return () => {
+    if (fileAccess.get(key) === pending) fileAccess.delete(key)
+    release()
+  }
+}
 
 export function validateMarkdown(value: unknown): asserts value is string {
   if (typeof value !== 'string')
@@ -14,10 +31,14 @@ export async function* readMarkdownChunks(
   path: string,
   maximumBytes = Infinity,
 ): AsyncGenerator<string> {
+  const release = await lockFileAccess(path)
   const file = await open(
     path,
     constants.O_RDONLY | (constants.O_NONBLOCK ?? 0),
-  )
+  ).catch((error) => {
+    release()
+    throw error
+  })
   try {
     const info = await file.stat()
     if (!info.isFile())
@@ -55,7 +76,11 @@ export async function* readMarkdownChunks(
     const tail = decoder.decode()
     if (tail) yield tail
   } finally {
-    await file.close()
+    try {
+      await file.close()
+    } finally {
+      release()
+    }
   }
 }
 
@@ -146,6 +171,7 @@ export async function writeText(
     if (error.code !== 'ENOENT') throw error
     return null
   })
+  let release: (() => void) | undefined
   try {
     const file = await open(temp, 'wx', existing?.mode ?? 0o600)
     try {
@@ -159,6 +185,8 @@ export async function writeText(
     } finally {
       await file.close()
     }
+    // Fill the temporary file first; commit only after owned readers close.
+    release = await lockFileAccess(path)
     const checkCommit = () => {
       if (canCommit && !canCommit())
         throw new Error('The save request is no longer current.')
@@ -182,8 +210,12 @@ export async function writeText(
         return rename(temp, path)
       })
   } finally {
-    await unlink(temp).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error
-    })
+    try {
+      await unlink(temp).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error
+      })
+    } finally {
+      release?.()
+    }
   }
 }

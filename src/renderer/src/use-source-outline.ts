@@ -273,7 +273,8 @@ export function useSourceOutline({
                 outline: step.value,
               }
               onOutlineUnavailable?.(null)
-              if (changed) onOutline(headings)
+              // Positions and the drawn viewport can change even when labels do not.
+              onOutline(headings)
               reportActiveHeading()
               return
             }
@@ -385,6 +386,8 @@ export function useSourceOutline({
   const [controls] = useState(() => ({
     /** Selects the active heading again, after `view` changed panes. */
     reportActive: () => reportActive.current(),
+    /** The outline the last reported headings come from, or null while it is read again. */
+    outline: () => sourceOutline.current?.outline ?? null,
     /** Moves `view` to a heading of the current outline; false if it is stale. */
     reveal: (id: string) => {
       const current = sourceOutline.current,

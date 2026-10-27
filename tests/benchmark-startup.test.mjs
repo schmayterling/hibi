@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -494,6 +495,46 @@ async function provenanceFixture(t) {
   }
   return root
 }
+
+test('production builds need no benchmark harness and tolerate source edits during compilation', async (t) => {
+  const root = await provenanceFixture(t)
+  const { scripts } = JSON.parse(await readFile('package.json', 'utf8'))
+  await writeFile(
+    join(root, 'package.json'),
+    JSON.stringify({
+      type: 'module',
+      scripts: {
+        'build:app': scripts['build:app'].replace(
+          'electron-vite build',
+          'node build',
+        ),
+        docs: 'node scripts/docs.mjs',
+        'build:site': 'node scripts/build-site.mjs',
+      },
+    }),
+  )
+  await writeFile(join(root, 'scripts/docs.mjs'), '')
+  await writeFile(
+    join(root, 'build'),
+    "import { writeFileSync } from 'node:fs'; writeFileSync('src/example.ts', 'mid-build edit')",
+  )
+  await writeFile(
+    join(root, 'scripts/build-site.mjs'),
+    "import { writeFileSync } from 'node:fs'; writeFileSync('out/site.html', 'built')",
+  )
+  execSync('npm run build:app', { cwd: root, stdio: 'pipe' })
+  assert.equal(
+    await readFile(join(root, 'src/example.ts'), 'utf8'),
+    'mid-build edit',
+  )
+  assert.equal(await readFile(join(root, 'out/site.html'), 'utf8'), 'built')
+  assert.match(scripts['bench:build'], /node scripts\/build-provenance\.mjs/)
+})
+
+test('release packaging excludes the benchmark build receipt', async () => {
+  const builder = await readFile('electron-builder.yml', 'utf8')
+  assert.match(builder, /^ {2}- ['"]?!out\/benchmark-build\.json['"]?$/m)
+})
 
 test('provenance refuses missing or stale build manifests including ignored addon changes', async (t) => {
   const root = await provenanceFixture(t)

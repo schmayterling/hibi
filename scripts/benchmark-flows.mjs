@@ -208,25 +208,28 @@ export async function benchmarkProvenance(sampler, root = '.') {
     join(root, 'out/benchmark-build.json'),
     'utf8',
   ).catch((cause) => {
-    throw new Error('benchmark build manifest missing; run npm run build', {
-      cause,
-    })
+    throw new Error(
+      'benchmark build manifest missing; run npm run bench:build',
+      {
+        cause,
+      },
+    )
   })
   const buildManifest = JSON.parse(manifest)
   assert.equal(
     buildManifest.status,
     'complete',
-    'incomplete build; run npm run build',
+    'incomplete build; run npm run bench:build',
   )
   assert.equal(
     buildManifest.sourceHash,
     build.sourceHash,
-    'stale build: source changed; run npm run build',
+    'stale build: source changed; run npm run bench:build',
   )
   assert.equal(
     buildManifest.buildHash,
     build.buildHash,
-    'stale build: output changed; run npm run build',
+    'stale build: output changed; run npm run bench:build',
   )
   const git = (args) =>
     execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()

@@ -983,11 +983,39 @@ test('link reference definitions take no space and show only while the caret edi
     ['# one\n[a]: /x\n[b]:\n  /y\n\ntwo', '# one\ntwo'],
     ['[ref]: /x\n\none\n\n> [q]: /y\n>\n> two', 'one\n\n> two'],
     ['one\n\ntwo\n\n[ref]: /x\n', 'one\n\ntwo\n'],
+    // After a list marker, the item's text shows beside the marker.
+    ['- [r]: /x\n\n  two', '- two'],
+    ['1. [r]: /x\n\n   two', '1. two'],
   ]) {
     const shown = await layout(doc)
     const expected = await layout(plain)
     assert.equal(shown.text, expected.text, doc)
     assert.deepEqual(shown.tops, expected.tops, doc)
+  }
+  // Arrow keys stay on the last shown block before a trailing definition,
+  // and a note of definitions alone keeps them hidden.
+  for (const doc of ['body\n\n[r]: /x', '[r]: /x', '- [r]: /x\n\n  two']) {
+    await harness.evaluate(async (doc) => {
+      const preview = window.livePreview
+      await preview.mount(doc, { width: 800, height: 600 }, { editable: true })
+      const view = preview.view()
+      view.focus()
+      view.dispatch({ selection: { anchor: 0 } })
+      await preview.settle()
+    }, doc)
+    const shown = []
+    for (const key of ['ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowDown']) {
+      await harness.keyboard.press(key)
+      shown.push(
+        await harness.evaluate(async () => {
+          await window.livePreview.settle()
+          return [...document.querySelectorAll('.cm-line')].some((line) =>
+            line.textContent.includes('[r]'),
+          )
+        }),
+      )
+    }
+    assert.deepEqual(shown, [false, false, false, false], doc)
   }
   const doc = 'one\n\n[ref]: /x\n\ntwo'
   const definition = { from: doc.indexOf('['), to: doc.indexOf('two') - 1 }
@@ -1020,6 +1048,18 @@ test('link reference definitions take no space and show only while the caret edi
     JSON.stringify({ heads, definition }),
   )
   assert.equal(heads.at(-1), doc.length)
+  // A selection from the definition's first character shows it too.
+  assert.equal(
+    await harness.evaluate(async (from) => {
+      const preview = window.livePreview
+      preview.view().dispatch({ selection: { anchor: from, head: from + 5 } })
+      await preview.settle()
+      return [...document.querySelectorAll('.cm-line')].some(
+        (line) => line.textContent.trim() === '[ref]: /x',
+      )
+    }, definition.from),
+    true,
+  )
   // A caret placed in the definition shows it, and typing stays in it.
   const typed = await harness.evaluate(async (at) => {
     const preview = window.livePreview
@@ -1033,28 +1073,30 @@ test('link reference definitions take no space and show only while the caret edi
   }, doc.indexOf('/x') + 2)
   assert.equal(typed.shown, true)
   await harness.keyboard.type('yz')
+  const shownLine = () =>
+    harness.evaluate(async () => {
+      await window.livePreview.settle()
+      return [...document.querySelectorAll('.cm-line')].some(
+        (line) => line.textContent.trim() === '[ref]: /xyz',
+      )
+    })
+  assert.equal(await shownLine(), true)
+  // Arrow keys move inside a shown definition without hiding it.
+  await harness.keyboard.press('ArrowLeft')
+  assert.equal(await shownLine(), true)
   const after = await harness.evaluate(async () => {
     const preview = window.livePreview
-    await preview.settle()
     const view = preview.view()
-    const shown = [...document.querySelectorAll('.cm-line')].some(
-      (line) => line.textContent.trim() === '[ref]: /xyz',
-    )
     view.contentDOM.blur()
     await preview.settle()
     return {
       doc: view.state.doc.toString(),
-      shown,
       hidden: ![...document.querySelectorAll('.cm-line')].some((line) =>
         line.textContent.includes('[ref]'),
       ),
     }
   })
-  assert.deepEqual(after, {
-    doc: 'one\n\n[ref]: /xyz\n\ntwo',
-    shown: true,
-    hidden: true,
-  })
+  assert.deepEqual(after, { doc: 'one\n\n[ref]: /xyz\n\ntwo', hidden: true })
 })
 
 test('links whose destination spans lines render on one line while mounting and scrolling', {

@@ -41,6 +41,8 @@ async function launch(t, file, codemirror, boundaryLength) {
     await page.addInitScript((length) => {
       const counters = {
         requests: 0,
+        streams: [],
+        length: 0,
         pages: 0,
         records: 0,
         maxRecords: 0,
@@ -52,11 +54,19 @@ async function launch(t, file, codemirror, boundaryLength) {
       window.Worker = class extends NativeWorker {
         constructor(...args) {
           super(...args)
+          this.noteEpoch = null
           this.addEventListener('message', ({ data }) => {
-            if (data.type !== 'boundaries' || data.length !== length) return
+            const stream = `${data.epoch}:${data.id}:${data.version}`
+            if (
+              data.type !== 'boundaries' ||
+              data.epoch !== this.noteEpoch ||
+              !counters.streams.includes(stream)
+            )
+              return
             const syntax = JSON.parse(data.key).syntax
             if (!syntax.includes('subtext@1')) return
             counters.syntax = syntax
+            counters.length = data.length
             counters.pages++
             counters.records += data.records.length
             counters.maxRecords = Math.max(
@@ -67,8 +77,18 @@ async function launch(t, file, codemirror, boundaryLength) {
           })
         }
         postMessage(message, ...args) {
-          if (message.type === 'boundaries') {
+          if (message.type === 'load-start')
+            this.noteEpoch =
+              message.head.length === length ? message.epoch : null
+          if (
+            message.type === 'boundaries' &&
+            message.epoch === this.noteEpoch &&
+            message.config.syntax.includes('subtext@1')
+          ) {
             counters.requests++
+            counters.streams.push(
+              `${message.epoch}:${message.id}:${message.version}`,
+            )
           }
           super.postMessage(message, ...args)
         }
@@ -108,10 +128,23 @@ for (const size of [2, 50])
     await page.waitForFunction(() => window.defaultBoundaryWork?.done)
     const boundaries = await page.evaluate(() => window.defaultBoundaryWork)
     t.diagnostic(JSON.stringify({ size, boundaries }))
-    assert.ok(boundaries.requests > 0)
-    assert.ok(boundaries.pages > 0 && boundaries.records > 0)
+    assert.equal(boundaries.requests, 1)
+    assert.equal(boundaries.streams.length, 1)
+    assert.equal(boundaries.length, size * 1024 * 1024)
+    assert.ok(boundaries.records > 0)
+    const chunks = Math.ceil(boundaries.length / 4096)
+    assert.ok(boundaries.records <= chunks + Math.ceil(chunks / 64) + 8)
+    assert.equal(boundaries.pages, Math.ceil(boundaries.records / 128))
     assert.ok(boundaries.maxRecords <= 128)
     assert.ok(boundaries.syntax.includes('subtext@1'))
+    await page.evaluate(async () => {
+      for (let i = 0; i < 3; i++)
+        await new Promise((done) => requestIdleCallback(done, { timeout: 200 }))
+    })
+    assert.deepEqual(
+      await page.evaluate(() => window.defaultBoundaryWork),
+      boundaries,
+    )
     assert.equal(
       await page.getByText('Opened in source view').count(),
       0,

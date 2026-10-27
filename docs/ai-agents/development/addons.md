@@ -85,7 +85,7 @@ Updates after disposal are ignored. Click failures produce an error notification
 
 ## Slash actions
 
-An existing command can join the slash menu with `slash: { label, description, keywords?, when?, transform }`. `when(source)` checks the complete note. `transform(source)` synchronously receives the whole note with its slash query removed, then returns replacement text or `null` to cancel. Keep transforms pure. Frontmatter shares one `addFrontmatter` transform between its palette and slash actions.
+An existing command can join the slash menu with `slash: { label, description, keywords?, available?, when?, transform }`. `available(note)` decides whether the action is offered and reads only what it needs: `note.slice(from, to)` returns part of the note and `note.length` is its length, in UTF-16 code units. `when(source)` receives the complete note instead, which is read again whenever the menu changes, so prefer `available`; Hibi checks `available` when both are set. `transform(source)` synchronously receives the whole note with its slash query removed, then returns replacement text or `null` to cancel. Keep checks and transforms pure. Frontmatter's check reads a few pieces of the note each time, reads on in idle time, and keeps its answer through edits that cannot change it; it shares one `addFrontmatter` transform between its palette and slash actions.
 
 ```typescript
 context.commands.register({
@@ -96,7 +96,7 @@ context.commands.register({
     label: 'properties',
     description: 'add page metadata',
     keywords: 'frontmatter yaml',
-    when: source => !hasProperties(source),
+    available: note => !hasProperties(note),
     transform: addProperties,
   },
 })
@@ -204,6 +204,6 @@ Desktop and exported sidebars default to 256 px while respecting saved widths. D
 
 ## Compatibility
 
-The public API is version 2. Source plugins must include `version` and `apiVersion: 2`; bundled plugins use this contract. Versioned API v1 packages remain runtime-compatible and are normalized on installation. Both processes reject empty/missing versions and unsupported API versions.
+The public API is version 3. New plugins include `version` and `apiVersion: 3`; API v1 and v2 packages remain loadable and are normalized on installation. For the CodeMirror formatted view, flavors contribute `syntax` and `render`, and `context.editor.registerFormatted` installs per-view extensions. The `formatted` SDK capability adds Lezer Markdown as `sdk.codeMirror.markdown`. See [formatted view contributions](architecture.md#formatted-view-contributions) for rendering and legacy compatibility. Both processes reject empty/missing versions and unsupported API versions.
 
 Preserve signatures when adding capabilities. Breaking changes require an API version bump, addon migrations, and documentation updates. `npm start` regenerates references when declarations change. Otherwise run `npm run docs`; `npm run docs:check`, included in `npm run check`, rejects stale references. Update the addon README with behavior changes.

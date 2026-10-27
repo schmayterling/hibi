@@ -38,6 +38,16 @@ const base = {
 }
 const { entry, ...metadata } = base
 
+test('formatted activation accepts the formatted capability', () => {
+  const parsed = parseAddonManifest({
+    ...base,
+    apiVersion: 3,
+    capabilities: ['formatted'],
+    activation: 'formatted',
+  })
+  assert.equal(parsed.manifest.activation, 'formatted')
+})
+
 test('package parser bundles without main, platform, or editor dependencies', () => {
   const paths = Object.keys(metafile.inputs).join('\n')
   assert.doesNotMatch(paths, /node_modules|src\/main\//)
@@ -52,7 +62,12 @@ for (const item of await fixture('compatibility')) {
     const parse = () => admitInstalledAddon({ ...base, ...item.fields }, [])
     if (item.error) return assert.throws(parse, new RegExp(item.error))
     assert.deepEqual(parse(), {
-      manifest: { ...metadata, defaultEnabled: false, ...item.expected },
+      manifest: {
+        ...metadata,
+        apiVersion: 3,
+        defaultEnabled: false,
+        ...item.expected,
+      },
       entry,
       themes: [],
     })
@@ -161,7 +176,7 @@ test('loading existing packages ignores old unknown declarations without admitti
     admitInstalledAddon(themePackage, []),
   )
   for (const input of [
-    { ...base, apiVersion: 3 },
+    { ...base, apiVersion: 4 },
     { ...base, entry: '../entry.js' },
     { ...base, capabilities: ['modalEditing'] },
     { ...themePackage, themes: ['theme.json'] },
@@ -319,12 +334,12 @@ test('theme resolution composes with caller-owned trust and cannot admit install
 })
 
 test('inline data themes retain api compatibility, color defaults, and license credits', () => {
-  for (const apiVersion of [1, 2]) {
+  for (const apiVersion of [1, 2, 3]) {
     const { manifest, entry, themes } = admitInstalledAddon(
       { ...themePackage, apiVersion },
       [],
     )
-    assert.equal(manifest.apiVersion, 2)
+    assert.equal(manifest.apiVersion, 3)
     assert.equal(manifest.defaultEnabled, false)
     assert.equal(entry, '')
     assert.equal(themes.length, 1)
@@ -359,7 +374,7 @@ test('full typst notice fits the shared license cap and existing manifest byte l
     'utf8',
   )
   assert.equal(Buffer.byteLength(text), 53546)
-  for (const apiVersion of [1, 2]) {
+  for (const apiVersion of [1, 2, 3]) {
     const input = {
       ...base,
       apiVersion,

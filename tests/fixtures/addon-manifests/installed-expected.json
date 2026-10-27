@@ -3,7 +3,7 @@
     "id": "foundation-proof",
     "name": "Foundation proof",
     "description": "A small consumer of Hibi's public foundation APIs.",
-    "apiVersion": 2,
+    "apiVersion": 3,
     "kind": "extension",
     "version": "1.0.0",
     "authors": [

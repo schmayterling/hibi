@@ -121,7 +121,6 @@ test('required addons confirm together, share versioned exports, and leave consu
       checkRevocations: false,
     }),
   )
-  await waitForDocumentEditor(app, page)
   for (const { id } of fixtures) {
     await app.evaluate(
       (_electron, source) => {

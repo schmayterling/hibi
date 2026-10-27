@@ -46,7 +46,8 @@ export const contribution: FormattedContribution = {
         )
           return false
         out.syntax(open.from, open.to)
-        out.mark(label.from, label.to, { class: 'hibi-lp-footnote-ref' })
+        // A link to the definition: a modified click moves there.
+        out.link(label.from, label.to, { class: 'hibi-lp-footnote-ref' })
         out.syntax(close.from, close.to)
         return false
       },

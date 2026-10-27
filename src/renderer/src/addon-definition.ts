@@ -1,5 +1,5 @@
 import type { Addon, AddonManifest } from '../../addons/api'
-import { loadAddonSdk } from '../../addons/sdk-loader'
+import { codemirrorFormattedView } from './formatted-engine'
 
 export type Definition = Omit<Addon, 'manifest'> & { manifest?: AddonManifest }
 // Elements also carry `$$typeof`, so only React's component wrappers qualify.
@@ -29,7 +29,10 @@ export async function normalizeDefinition(
   // Capabilities select the optional SDK; omitting them keeps the legacy factory contract.
   const sdk =
     typeof exported === 'function'
-      ? await loadAddonSdk(manifest.capabilities)
+      ? await (await import('../../addons/sdk-loader')).loadAddonSdk(
+          manifest.capabilities,
+          codemirrorFormattedView,
+        )
       : undefined
   // A stop during loading must not run factory code that would own resources.
   if (cancelled()) return

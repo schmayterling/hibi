@@ -11,7 +11,10 @@ import {
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 import { markdownSyntax } from '../../src/renderer/src/markdown-syntax'
-import { tableActions } from '../../src/renderer/src/source-formatting'
+import {
+  sourceFormatting,
+  tableActions,
+} from '../../src/renderer/src/source-formatting'
 import {
   storedTableLayout,
   type TableLayout,
@@ -28,6 +31,7 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+let syntax: ReturnType<typeof formattedSyntax> | null = null
 /** A second view of the same document, as another pane of the tab would be. */
 let second: EditorView | null = null
 // The workspace's table sizes, as the main process keeps and updates them.
@@ -91,7 +95,12 @@ Object.assign(window, {
       doc: string,
       size?: { width: number; height: number },
       /** `tabId` gives the view a tab with table sizes; `add` mounts a second view of the tab beside the first. */
-      options: { editable?: boolean; tabId?: string; add?: boolean } = {},
+      options: {
+        editable?: boolean
+        tabId?: string
+        add?: boolean
+        slice?: number
+      } = {},
     ) {
       if (size)
         Object.assign(panes.style, {
@@ -107,12 +116,13 @@ Object.assign(window, {
         second = null
       }
       document.querySelector<HTMLElement>('.rich-pane')!.scrollTop = 0
+      syntax = formattedSyntax({ probe, slice: options.slice })
       const mounted = new EditorView({
         parent: host,
         state: EditorState.create({
           doc,
           extensions: [
-            livePreview(formattedSyntax({ probe })),
+            livePreview(syntax),
             options.editable
               ? [history(), keymap.of([...defaultKeymap, ...historyKeymap])]
               : [],
@@ -131,6 +141,7 @@ Object.assign(window, {
       await settle()
     },
     view: () => view,
+    settling: () => view && syntax?.settling(view.state),
     second: () => second,
     /** How many column and row positions table size tracking mapped. */
     sizeProbe: () =>
@@ -159,6 +170,8 @@ Object.assign(window, {
           .some((actions) => actions.run(current, id))
       )
     },
+    /** Run a toolbar formatting action, as the toolbar does. */
+    runFormatting: (id: string) => !!view && sourceFormatting(view).run(id),
     /** Make the mounted editor read-only and not editable, or editable again. */
     setEditable: (on: boolean) =>
       view?.dispatch({ effects: editable.reconfigure(access(on)) }),

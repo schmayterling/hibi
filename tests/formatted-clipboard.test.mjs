@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
+import { parser as markdownParser } from '@lezer/markdown'
 import { marked } from 'marked'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
@@ -252,9 +253,36 @@ test('native formatted copy has no one-mebibyte content cutoff', {
   const copied = await readClipboard()
   assert.equal(copied.text.length, text.length)
   assert.equal(copied.text, text)
-  assert.ok(copied.html.length > text.length)
+  // A selection this large copies its Markdown as text only.
+  assert.equal(copied.html.length, 0)
   await undo()
   await settled(note)
+})
+
+test('copy renders html for selections up to 256 KiB and copies larger ones as text only', {
+  timeout: 60000,
+}, async () => {
+  const limit = 256 * 1024
+  const text = `${'clipboard text '.repeat(70)}\n`.repeat(256)
+  assert.ok(text.length > limit)
+  try {
+    await setFixture(text)
+    const within = await clipboardEvent('copy', 0, limit)
+    assert.equal(within.text, text.slice(0, limit))
+    assert.match(within.html, /^<div data-hibi-markdown><p>clipboard text/)
+    const above = await clipboardEvent('copy', 0, limit + 1)
+    assert.equal(above.handled, true)
+    assert.equal(above.text, text.slice(0, limit + 1))
+    assert.equal(above.html.length, 0)
+    // Cut takes the same text in one undoable edit.
+    const cut = await clipboardEvent('cut', 0, null)
+    assert.deepEqual([cut.text === text, cut.html.length], [true, 0])
+    await settled('')
+    await undo()
+    await settled(text)
+  } finally {
+    await setFixture(note)
+  }
 })
 
 test('copy puts the exact markdown of the selection and its export html on the clipboard', {
@@ -328,7 +356,7 @@ test('pasted html becomes markdown in one edit; plain text and own copies paste 
     '<hr><p><span>kept</span> <custom-el>text</custom-el></p>'
   const expected = [
     '## Title',
-    'Some **bold**, *em*, ~~gone~~, ``a`b`` and [link](<https://x.test/a b>).  \nnext \\*star\\*',
+    'Some **bold**, *em*, ~~gone~~, ``a`b`` and [link](https://x.test/a%20b).  \nnext \\*star\\*',
     '- one\n  - nested\n- two',
     '3. three',
     '> quoted',
@@ -570,6 +598,154 @@ test('a leading language marker cannot extend a code fence or swallow following 
     assert.deepEqual(actual, { code: 'hello\n', paragraphs: ['after'] })
   } finally {
     await setFixture(note)
+  }
+})
+
+test('pasted web links open the browser target and relative urls keep local handling', {
+  timeout: 30000,
+}, async (t) => {
+  await app.evaluate(({ shell }) => {
+    globalThis.clipboardOpenExternal = shell.openExternal
+    globalThis.clipboardOpened = []
+    shell.openExternal = async (href) => {
+      globalThis.clipboardOpened.push(href)
+    }
+  })
+  try {
+    for (const [href, expected] of [
+      [String.raw`https://x.test/a\b`, 'https://x.test/a/b'],
+      [String.raw`http://x.test/a\b`, 'http://x.test/a/b'],
+      ['https://x.test/a%5Cb', 'https://x.test/a%5Cb'],
+      [String.raw`missing\note.md`, null],
+      [String.raw`//x.test/a\b`, null],
+    ]) {
+      await t.test(href, async () => {
+        try {
+          await app.evaluate(() => {
+            globalThis.clipboardOpened = []
+          })
+          await clipboardEvent('paste', 0, null, {
+            'text/html': `<p><a href="${href}">target</a> tail</p>`,
+          })
+          await waitForAsync(page, async () =>
+            (await window.hibi.getDocument()).markdown.startsWith('[target]'),
+          )
+          if (expected) {
+            await page.locator('.hibi-lp-link').click({ modifiers: ['Shift'] })
+            await waitForAsync(app, () => globalThis.clipboardOpened.length > 0)
+          } else {
+            const target = marked.lexer(await markdown())[0].tokens[0].href
+            assert.equal(target, href.replace(/\\/g, '%5C'))
+            await assert.rejects(
+              page.evaluate(
+                async (href) =>
+                  window.hibi.openDocumentLink(
+                    href,
+                    (await window.hibi.getDocument()).revision,
+                  ),
+                target,
+              ),
+            )
+          }
+          assert.deepEqual(
+            await app.evaluate(() => globalThis.clipboardOpened),
+            expected ? [expected] : [],
+          )
+        } finally {
+          await setFixture(note)
+        }
+      })
+    }
+  } finally {
+    await app.evaluate(({ shell }) => {
+      shell.openExternal = globalThis.clipboardOpenExternal
+      delete globalThis.clipboardOpenExternal
+      delete globalThis.clipboardOpened
+    })
+  }
+})
+
+test('pasted link and image urls stay destinations through line breaks, controls and backslashes', {
+  timeout: 60000,
+}, async (t) => {
+  for (const [name, html, expected, urls] of [
+    [
+      'line break',
+      '<p><a href="a&#10;onclick=x">t</a> tail</p>',
+      '[t](aonclick=x) tail',
+      ['aonclick=x'],
+    ],
+    [
+      'tab and carriage return',
+      '<p><a href="https://x.test/a&#9;b&#13;c">t</a></p>',
+      '[t](https://x.test/abc)',
+      ['https://x.test/abc'],
+    ],
+    [
+      'backslash before the closing angle bracket',
+      '<p><a href="x onclick=y\\">t</a></p>',
+      '[t](<x onclick=y%5C>)',
+      ['x%20onclick=y%5C'],
+    ],
+    [
+      'backslash before the closing parenthesis',
+      '<p><a href="https://x.test/a\\">t</a> b</p>',
+      '[t](https://x.test/a/) b',
+      ['https://x.test/a/'],
+    ],
+    [
+      'control character',
+      '<p><a href="a&#1;b">t</a></p>',
+      '[t](<a\u0001b>)',
+      ['a%01b'],
+    ],
+    [
+      'image source and description',
+      '<p><img src="pic&#10;.png" alt="a&#10;&#10;b"> c</p>',
+      '![a b](pic.png) c',
+      ['pic.png'],
+    ],
+  ]) {
+    await t.test(name, async () => {
+      try {
+        await clipboardEvent('paste', note.length, note.length, {
+          'text/html': html,
+        })
+        await waitForAsync(
+          page,
+          async (length) =>
+            (await window.hibi.getDocument()).markdown.length > length,
+          note.length,
+        )
+        const inserted = (await markdown()).slice(note.length)
+        assert.equal(inserted, expected)
+        // The formatted view reads a link or image, not an html tag.
+        const nodes = new Set()
+        markdownParser.parse(inserted).iterate({
+          enter: ({ name }) => {
+            nodes.add(name)
+          },
+        })
+        assert.ok(nodes.has('Link') || nodes.has('Image'), inserted)
+        assert.ok(!nodes.has('HTMLTag'), inserted)
+        // Exports render the same destination.
+        const rendered = marked.parse(inserted)
+        const actual = await page.evaluate(
+          (rendered) =>
+            [
+              ...new DOMParser()
+                .parseFromString(rendered, 'text/html')
+                .querySelectorAll('a, img'),
+            ].map(
+              (node) => node.getAttribute('href') ?? node.getAttribute('src'),
+            ),
+          rendered,
+        )
+        assert.deepEqual(actual, urls)
+      } finally {
+        await setFixture(note)
+      }
+    })
   }
 })
 

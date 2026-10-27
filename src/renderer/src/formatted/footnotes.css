@@ -6,6 +6,9 @@
   line-height: 0;
   color: var(--syntax-link);
 }
+.hibi-formatted .hibi-lp-link.hibi-lp-footnote-ref {
+  text-decoration: none;
+}
 /* A note is labelled in its margin, like the exported footnote list, at its size. */
 .hibi-formatted .cm-line.hibi-lp-footnote {
   font-size: 0.9em;

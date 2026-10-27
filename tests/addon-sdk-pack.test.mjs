@@ -112,7 +112,7 @@ test('packed addon sdk checks external consumers', {
       await readFile(join(packageDir, 'LICENSE.md')),
       await readFile(join(root, 'LICENSE.md')),
     )
-    assert.equal(metadata.hibiAddonApiVersion, 2)
+    assert.equal(metadata.hibiAddonApiVersion, 3)
     assert(
       Object.values(metadata.exports).every(
         (entry) => Object.keys(entry).join() === 'types',
@@ -143,6 +143,26 @@ export default create
       'rich.ts': `import type { RichExtension, ViewId } from '@hibi/addon-sdk/api'
 import type { CapabilityFactory } from '@hibi/addon-sdk/sdk-loader'
 const create: CapabilityFactory = (sdk) => ({ start(context) { if (!sdk.tiptap) throw Error('rich unavailable'); const rich: RichExtension = { id: 'rich-proof', attach(editor) { editor.commands.focus(); return () => {} } }; const delegated: RichExtension = { id: 'rich-delegated', attach: (editor) => rich.attach(editor) }; const viewAware: RichExtension = { id: 'rich-view', attach(_editor, editorContext) { if (!editorContext) return () => {}; const view: ViewId = editorContext.viewId; return () => context.notify(view) } }; sdk.tiptap.Extension.create({ name: 'rich-proof' }); context.editor.registerRich(rich); context.editor.registerRich(delegated); context.editor.registerRich(viewAware) } })
+export default create
+`,
+      'formatted.ts': `import type { FormattedNode, FormattedNodeView, FormattedDecorations, FormattedLayout, FormattedRenderContext, FormattedExtension, MarkdownFlavor } from '@hibi/addon-sdk/api'
+import type { CapabilityFactory } from '@hibi/addon-sdk/sdk-loader'
+const create: CapabilityFactory = sdk => ({ start(context) {
+  if (!sdk.codeMirror?.markdown || !sdk.codeMirror.common) throw Error('formatted unavailable')
+  const prop = new sdk.codeMirror.common.NodeProp<string>()
+  sdk.codeMirror.markdown.parser.configure({ props: [prop.add({ Paragraph: 'shared' })] })
+  const { WidgetType } = sdk.codeMirror.view
+  class Widget extends WidgetType { toDOM() { return document.createElement('span') } }
+  const render: FormattedNodeView = { nodes: ['Proof'], feature: 'proof',
+    decorate(node: FormattedNode, out: FormattedDecorations, ctx: FormattedRenderContext) { out.mark(node.from, node.to, { class: 'proof' }); out.link(node.from, node.to); out.link(node.from, node.to, { class: 'proof-link' }); out.syntax(node.from, node.from + 1); out.line(ctx.state.doc.lineAt(node.from).from, { class: 'line' }); out.widget(node.to, new Widget(), 1); out.replace(node.from, node.to, new Widget()); return undefined },
+    layout(node, out: FormattedLayout) { out.replace(node.from, node.to, new Widget(), { block: true }); out.widget(node.to, new Widget(), { block: true, side: 1 }); return undefined },
+  }
+  const flavor: MarkdownFlavor = { id: 'proof', name: 'Proof', kind: 'syntax', description: 'Proof', detect: () => true, syntax: sdk.codeMirror.markdown.GFM, render: [render] }
+  context.editor.registerSyntax({ id: 'proof', label: 'Proof', group: 'Proof', level: 'inline', nodes: ['Proof'], matches: () => false })
+  context.editor.registerFlavor(flavor)
+  const extension: FormattedExtension = { id: 'proof', create(ctx) { return sdk.codeMirror!.view.EditorView.editorAttributes.of({ 'data-view': ctx.viewId }) } }
+  context.editor.registerFormatted(extension)
+} })
 export default create
 `,
       'legacy.ts': `import type { SideloadFactory } from '@hibi/addon-sdk/sdk'
@@ -229,13 +249,13 @@ test('generated addon installs, enables, runs, disables, and re-enables', {
       dialog.showMessageBox = async () => ({ response: 1 })
     }, installable)
     const page = await app.firstWindow()
+    await waitForDocumentEditor(app, page)
     await page.evaluate(() =>
       window.hibi.setAddonTrustSettings({
         allowUnsigned: true,
         checkRevocations: false,
       }),
     )
-    await waitForDocumentEditor(app, page)
     await clickMenu(app, 'Command palette')
     await page
       .getByRole('combobox', { name: /search commands/i })

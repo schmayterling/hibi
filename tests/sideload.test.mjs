@@ -147,6 +147,12 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await page.evaluate(() =>
+    window.hibi.setAddonTrustSettings({
+      allowUnsigned: true,
+      checkRevocations: false,
+    }),
+  )
+  await page.evaluate(() =>
     localStorage.setItem(
       'sidebar-pinned-views',
       JSON.stringify(['missing.one', 'missing.two', 'missing.three']),

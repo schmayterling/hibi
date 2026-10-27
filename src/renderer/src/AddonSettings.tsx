@@ -1,5 +1,12 @@
 import { FileText, Search } from 'lucide-react'
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import type { Addon, AddonManifest, AddonState } from '../../addons/api'
 import { addonDefaultEnabled } from '../../shared/addon-defaults'
 import type { AddonDirectoryEntry } from '../../shared/addon-directory'
@@ -20,6 +27,7 @@ import { SettingsFilter } from '../../ui/SettingsFilter'
 import { useToasts } from '../../ui/Sonner'
 import { AddonGarden, useAddonDirectory } from './AddonGarden'
 import { addonRegistry } from './addon-registry'
+import { formattedCompatibility } from './formatted-compatibility'
 
 const AddonReadme = lazy(() => import('./AddonReadme'))
 
@@ -49,11 +57,20 @@ export function useAddonReadme() {
 }
 
 export function AddonMetadata({ manifest }: { manifest: AddonManifest }) {
+  const incompatible = useSyncExternalStore(
+    formattedCompatibility.subscribe,
+    formattedCompatibility.snapshot,
+  )
   return (
     <span className="addon-metadata">
       <span>{sentenceCase(addonRegistry.origin(manifest.id))}</span>
       <span>{sentenceCase(manifest.kind ?? 'Extension')}</span>
       <span>v{manifest.version}</span>
+      {incompatible.includes(manifest.id) && (
+        <span data-formatted-compatibility={manifest.id}>
+          Update needed for formatted view
+        </span>
+      )}
       {addonRegistry.trust(manifest.id) === 'unsigned' && (
         <span data-tooltip="Hibi cannot confirm who made this addon.">
           Unsigned

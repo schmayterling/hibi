@@ -1,11 +1,11 @@
 {
   "name": "@hibi/addon-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Type declarations for Hibi addon packages",
   "license": "GPL-3.0-only",
-  "hibiAddonApiVersion": 2,
+  "hibiAddonApiVersion": 3,
   "types": "./types/index.d.ts",
   "exports": {
     ".": {
@@ -37,6 +37,8 @@
     "@codemirror/state": "^6.7.4",
     "@codemirror/view": "^6.43.11",
     "@lezer/highlight": "^1.2.3",
+    "@lezer/common": "^1.5.2",
+    "@lezer/markdown": "^1.8.1",
     "@tiptap/core": "^3.31.3",
     "@types/react": "^19.3.0",
     "marked": "^18.0.13",

@@ -468,7 +468,6 @@ test('a reviewed replacement stays enabled and reloads in place unless its acces
       checkRevocations: false,
     }),
   )
-  await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => window.consumerSaw === 1)
   const install = async (source) => {
     await app.evaluate((_electron, source) => {

@@ -1,13 +1,11 @@
-import { Marked } from 'marked'
-import type { MarkdownFlavor, RenderedMarkdown } from '../../addons/api'
+import type { MarkdownFlavor } from '../../addons/api'
 import { validatePreservation } from '../../shared/preservation'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
-import literalStyles from '../../ui/markdown-literal.css?raw'
-import syntaxStyles from '../../ui/syntax.css?raw'
-import { codeHtml, codeLanguages, escapeCode } from './code-languages'
-import { installSyntaxPreferences } from './syntax-parser'
+import { codeLanguages } from './code-languages'
+import { flavorRegistrations } from './flavor-registrations'
 
 export async function renderMarkdownAsync(source: string, documentId?: string) {
+  const { renderMarkdown } = await import('./render-markdown')
   const version = codeLanguages.version()
   let rendered = renderMarkdown(source, documentId)
   await codeLanguages.settle()
@@ -45,7 +43,12 @@ export const flavors = {
       listeners.delete(listener)
     }
   },
-  register(addonId: string, flavor: MarkdownFlavor) {
+  register(
+    addonId: string,
+    flavor: MarkdownFlavor,
+    onError: (error: unknown) => void = console.error,
+    external = true,
+  ) {
     validatePreservation(flavor.preservation)
     if (
       flavor.preservation &&
@@ -57,15 +60,31 @@ export const flavors = {
     const id = `${addonId}.${flavor.id}`
     if (!/^[a-z][a-z0-9-]*$/.test(flavor.id) || registry.has(id))
       throw new Error(`invalid or duplicate flavor: ${id}`)
+    let active = true
+    let removeFormatted: (() => void) | undefined
     const item = { ...flavor, id, addonId }
+    const remove = () => {
+      if (registry.get(id) !== item) return
+      active = false
+      registry.delete(id)
+      removeFormatted?.()
+      publish()
+    }
+    flavorRegistrations.set(item, {
+      external,
+      active: () => active,
+      remove,
+      onError,
+    })
+    if (flavor.syntax || flavor.render)
+      void import('./load-formatted-flavor')
+        .then(({ load }) => load())
+        .then((register) => {
+          if (active) removeFormatted = register(addonId, item, onError)
+        }, onError)
     registry.set(id, item)
     publish()
-    return () => {
-      if (registry.get(id) === item) {
-        registry.delete(id)
-        publish()
-      }
-    }
+    return remove
   },
 }
 export function parseFlavorChoice(raw: string | null): FlavorChoice {
@@ -122,41 +141,5 @@ export function flavorMatches(flavor: MarkdownFlavor, source: string) {
   } catch (error) {
     console.error(`flavor detection failed: ${flavor.id}`, error)
     return false
-  }
-}
-export function renderMarkdown(
-  source: string,
-  documentId?: string,
-): RenderedMarkdown {
-  const selected = selectedFlavors(loadFlavor(documentId), snapshot)
-  const parser = installSyntaxPreferences(
-    new Marked({ gfm: false, breaks: false }),
-  )
-  parser.use({
-    renderer: {
-      code({ text, lang }) {
-        const language = lang?.trim().split(/\s+/)[0] ?? ''
-        return `<pre><code${language ? ` class="language-${escapeCode(language)}"` : ''}>${codeHtml(text, language)}\n</code></pre>\n`
-      },
-    },
-  })
-  for (const flavor of selected) {
-    if (flavor.markedOptions) parser.setOptions(flavor.markedOptions)
-    for (const extension of flavor.export?.extensions ?? [])
-      parser.use(extension)
-  }
-  return {
-    html: parser.parse(source, { async: false }),
-    css:
-      syntaxStyles +
-      literalStyles +
-      '\n' +
-      selected
-        .filter(
-          (flavor) =>
-            flavor.kind === 'dialect' || flavorMatches(flavor, source),
-        )
-        .map((flavor) => flavor.export?.css ?? '')
-        .join('\n'),
   }
 }

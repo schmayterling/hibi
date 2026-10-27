@@ -269,11 +269,27 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
     0,
   )
   assert.equal(await page.locator('.app').getAttribute('data-sidebar'), 'true')
-  await page.waitForFunction(
-    () =>
-      ![...document.querySelectorAll('.hibi-token-keyword')].some(
-        (node) => node.textContent === 'hello addon',
-      ),
+  await t.test(
+    'disabling an addon removes syntax colors from both panes',
+    async () => {
+      await page.waitForFunction(
+        () =>
+          ![...document.querySelectorAll('.hibi-token-keyword')].some(
+            (node) => node.textContent === 'hello addon',
+          ),
+      )
+    },
+  )
+  t.diagnostic(
+    JSON.stringify(
+      await page.evaluate(() => ({
+        remainingSyntax: [...document.querySelectorAll('.hibi-token-keyword')]
+          .filter((node) => node.textContent === 'hello addon')
+          .map((node) =>
+            node.closest('.source-pane') ? 'source' : 'formatted',
+          ),
+      })),
+    ),
   )
   assert.equal(
     await page.evaluate(

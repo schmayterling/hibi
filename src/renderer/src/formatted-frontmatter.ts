@@ -1,6 +1,9 @@
 import { StateEffect, StateField, type Text } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view'
-import { readFrontmatter } from '../../shared/frontmatter.ts'
+import {
+  maximumFrontmatterUnits,
+  readFrontmatter,
+} from '../../shared/frontmatter.ts'
 import { formattedPrefix } from './formatted-contributions.ts'
 
 /** The first line, after a byte order mark the source keeps. */
@@ -31,7 +34,7 @@ function search(doc: Text, from: number, size: number) {
 
 /** The closing line's end when the lines before it are frontmatter as the properties read it: a metadata mapping. */
 function recognized(doc: Text, closer: number) {
-  if (!closer) return 0
+  if (!closer || doc.lineAt(closer).from > maximumFrontmatterUnits) return 0
   frontmatterProbe.parses++
   return readFrontmatter(doc.sliceString(0, closer)) ? closer : 0
 }

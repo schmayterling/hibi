@@ -1,5 +1,8 @@
 import { isMap, parseDocument } from 'yaml'
 
+/** interactive checks leave oversized prefixes as markdown instead of parsing them as yaml. */
+export const maximumFrontmatterUnits = 256 * 1024
+
 /** A divider alone is Markdown. Frontmatter needs a closed metadata mapping. */
 export function readFrontmatter(source: string) {
   const opening = /^(?:\uFEFF)?---[ \t]*(\r?\n)/.exec(source)

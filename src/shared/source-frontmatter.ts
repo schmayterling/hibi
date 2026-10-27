@@ -1,4 +1,5 @@
 import { isMap, parseDocument } from 'yaml'
+import { maximumFrontmatterUnits } from './frontmatter.ts'
 import type { SourceSnapshot } from './source-buffer.ts'
 import type { RawEdit } from './source-operations.ts'
 
@@ -94,6 +95,7 @@ export function* readSourceFrontmatter(
                 take()
                 headerTo = position
               }
+              if (yamlTo > maximumFrontmatterUnits) return finish(null)
               try {
                 if (
                   !isMap(

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { relative, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { relative } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
 
@@ -8,14 +9,13 @@ const retained = new Set([
   'src/renderer/src/use-source-outline.ts -> ./markdown-semantics',
   'src/renderer/src/addon-definition.ts -> ../../addons/sdk-loader',
 ])
+const local = (file) => relative('', file).replaceAll('\\', '/')
 
-// Modules the CodeMirror editors would load from the rich editor's engine.
-async function legacyModules(followDemand, load = '') {
+// Modules the CodeMirror editors would load from the rich editor's engine,
+// with `load.code` appended to `load.file` when given.
+async function legacyModules(followDemand, load) {
   const { metafile } = await build({
-    stdin: {
-      contents: `export * from './FormattedEditor'\n${load}`,
-      resolveDir: resolve('src/renderer/src'),
-    },
+    entryPoints: ['src/renderer/src/FormattedEditor.tsx'],
     bundle: true,
     write: false,
     platform: 'browser',
@@ -27,19 +27,26 @@ async function legacyModules(followDemand, load = '') {
       {
         name: 'demand',
         setup(bundle) {
-          bundle.onResolve({ filter: /\?|^virtual:/ }, ({ path }) => ({
-            path,
-            external: true,
-          }))
+          // Raw stylesheets and the addon catalog come from the build; other queries are followed.
+          bundle.onResolve(
+            { filter: /\.css\?raw$|^virtual:hibi-addon-catalog\// },
+            ({ path }) => ({ path, external: true }),
+          )
           bundle.onResolve({ filter: /.*/ }, ({ importer, kind, path }) =>
             kind === 'dynamic-import' &&
-            (!followDemand ||
-              retained.has(
-                `${relative('', importer).replaceAll('\\', '/')} -> ${path}`,
-              ))
+            (!followDemand || retained.has(`${local(importer)} -> ${path}`))
               ? { path, external: true }
               : undefined,
           )
+          if (load)
+            bundle.onLoad({ filter: /\.tsx?$/ }, async ({ path }) =>
+              local(path) === load.file
+                ? {
+                    contents: `${await readFile(path, 'utf8')}\n${load.code}`,
+                    loader: path.endsWith('.tsx') ? 'tsx' : 'ts',
+                  }
+                : undefined,
+            )
         },
       },
     ],
@@ -58,10 +65,28 @@ test('codemirror editors load no tiptap or prosemirror modules', async () => {
   assert.deepEqual(await legacyModules(true), [])
 })
 
-test('the rich schema stays allowed only from its retained importers', async () => {
-  for (const load of [
-    "void import('./markdown-semantics')",
-    "void import('../../addons/sdk-loader')",
+test('the rich schema stays allowed only through its retained imports', async () => {
+  for (const [file, code] of [
+    [
+      'src/renderer/src/SourceEditor.tsx',
+      "void import('./markdown-semantics')",
+    ],
+    [
+      'src/renderer/src/SourceEditor.tsx',
+      "void import('../../addons/sdk-loader')",
+    ],
+    [
+      'src/renderer/src/use-source-outline.ts',
+      "void import('./markdown-semantics?outline')",
+    ],
+    [
+      'src/renderer/src/addon-definition.ts',
+      "void import('../../addons/sdk-loader?sdk')",
+    ],
   ])
-    assert.notDeepEqual(await legacyModules(true, load), [], load)
+    assert.notDeepEqual(
+      await legacyModules(true, { file, code }),
+      [],
+      `${file}: ${code}`,
+    )
 })

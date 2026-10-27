@@ -719,6 +719,58 @@ test('a cell editor follows its row when rows are added or deleted around it', {
   assert.deepEqual([now.cell, now.editor], ['4:0', 'NEWY'])
 })
 
+test('a cell editor whose row is deleted edits the row now there after later changes', {
+  timeout: 30000,
+}, async () => {
+  await mount(
+    '| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n| delta |\n\nafter',
+  )
+  await harness.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+  await harness.keyboard.press('End')
+  // Before the editor follows, another change adds a row above.
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    view.dispatch({
+      changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
+    })
+    view.dispatch({
+      changes: { from: text.indexOf('| alpha'), insert: '| NEW |\n' },
+    })
+  })
+  await harness.evaluate(() => window.tables.settle())
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('X')
+  const now = await state()
+  assert.deepEqual([now.cell, now.editor], ['4:0', 'gammaX'])
+  assert.match(now.doc, /\| alpha \|\n\| gammaX \|\n\| delta \|/)
+})
+
+test('a cell editor whose row is deleted leaves focus that moved out of the editor', {
+  timeout: 30000,
+}, async () => {
+  await mount('| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n\nafter')
+  await harness.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+  await harness.keyboard.press('End')
+  const focused = await harness.evaluate(async () => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    view.dispatch({
+      changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
+    })
+    const button = document.createElement('button')
+    button.textContent = 'outside'
+    document.body.append(button)
+    button.focus()
+    await window.tables.settle()
+    const active = document.activeElement === button
+    button.remove()
+    return active
+  })
+  assert.equal(focused, true)
+  assert.equal((await state()).editor, null)
+})
+
 test('cell editors take no input while the formatted view takes none', {
   timeout: 30000,
 }, async () => {

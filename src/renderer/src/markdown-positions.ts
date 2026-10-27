@@ -1,5 +1,6 @@
 import type { Node as RichNode } from '@tiptap/pm/model'
 import { marked, type Token } from 'marked'
+import { lexMarkdown } from '../../shared/marked-blocks.ts'
 import { sourceText } from './source-text.ts'
 import { preserveDisabled } from './syntax-parser.ts'
 
@@ -51,7 +52,7 @@ export function markdownPositions(source: string, document: RichNode) {
       }
     }
   }
-  const tokens = marked.lexer(source)
+  const tokens = lexMarkdown(source)
   marked.walkTokens(tokens, preserveDisabled)
   visit(tokens, source, 0)
   // Each run represents consecutive normalized source/rich points. Convert to

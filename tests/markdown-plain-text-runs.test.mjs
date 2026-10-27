@@ -10,7 +10,11 @@ import {
   Subscript,
   Superscript,
 } from '@lezer/markdown'
+import { obsidianSyntax } from '../src/addons/markdown/formatted-syntax.ts'
+import { inlineMathSyntax } from '../src/addons/math/formatted-syntax.ts'
+import { subscriptSyntax } from '../src/addons/text-extras/formatted-syntax.ts'
 import { FrontmatterParser } from '../src/shared/frontmatter-parser.ts'
+import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
 import { createPlainTextRunExtension } from '../src/shared/markdown-plain-text-runs.ts'
 
 const optimize = (baseline) => {
@@ -161,6 +165,43 @@ test('plain text runs preserve known subscript, superscript and emoji extensions
     '[~sub~ ^super^ :smile:](https://example.com)',
     ':www.example.com: ^hello@example.com^ ~a_b@example.com~',
   ]) {
+    sameTree(baseline, optimized, source)
+  }
+})
+
+test('plain text runs preserve the inline syntax of bundled formatted view contributions', () => {
+  const baseline = parser.configure([
+    GFM,
+    Footnotes,
+    subscriptSyntax,
+    inlineMathSyntax,
+    obsidianSyntax,
+  ])
+  const optimized = optimize(baseline)
+  for (const source of [
+    ...inlineCases,
+    'prose ==highlight== tail [[Target|label]] ![[photo.png|20]]',
+    'a==b==c ===a=== ==a == \\==literal== `==code==` text == spaced ==',
+    '[[a]][[b]] ![[a]]![[b.png]] [[a|b|c]] [link [[inner]]](url)',
+    '**==bold==** ==a [[b]] c== ==&lt;tag&gt;== [[Other|&amp;]]',
+    'two  \n==hard break== ==a\nb== [[a\nb]]',
+    '> quoted [[a]]\n- listed ==b==\n# heading ![[c.png]]',
+    'note[^1] [^a b] ~sub~ H~2~O ~~strike~~ ~~~a~~~ $x^2$ $$y$$ \\$5 a$b$c',
+    '[^1]: defined ==here== $z$ ~s~\n\n| ==a== | $b$ |\n| - | - |\n| [[c]] | ~d~ |',
+  ]) {
+    sameTree(baseline, optimized, source)
+  }
+  // Random text over the syntax's characters and the text around them.
+  let state = 7
+  const random = () => {
+    state = (state * 1103515245 + 12345) & 0x7fffffff
+    return state / 0x7fffffff
+  }
+  const alphabet = '[[]]==!|$~^ a\\`\n'
+  for (let run = 0; run < 2000; run++) {
+    let source = ''
+    for (let index = 2 + Math.floor(random() * 14); index > 0; index--)
+      source += alphabet[Math.floor(random() * alphabet.length)]
     sameTree(baseline, optimized, source)
   }
 })

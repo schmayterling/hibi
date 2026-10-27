@@ -154,6 +154,19 @@ test('EOF-sensitive prefixes invalidate on append and closed decisions reuse aft
   }
 })
 
+test('only a complete scan without a closing marker proves frontmatter unclosed', () => {
+  for (const text of ['---\n', '---\nkey: value']) {
+    const { result } = compare(text)
+    assert.equal(result.unclosed, true)
+    assert.equal(result.dependsOnEnd, true)
+  }
+  for (const text of ['---', '---\nscalar\n---', '---\nkey: value\n---']) {
+    const { result } = compare(text)
+    assert.equal(result.unclosed, false)
+    assert.equal(result.dependsOnEnd, true)
+  }
+})
+
 test('large candidate scans yield and can release unfinished input', () => {
   const { result } = compare('---\n' + 'a'.repeat(100000), 4096)
   assert.equal(result.bounds, null)

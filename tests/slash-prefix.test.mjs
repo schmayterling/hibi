@@ -2,12 +2,19 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import test from 'node:test'
-import { Text } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import { Schema } from '@tiptap/pm/model'
 import {
   maximumSlashQueryUnits,
   slashQuery,
 } from '../src/addons/slash-commands/commands.ts'
+import {
+  frontmatterBounds,
+  frontmatterProbe,
+  frontmatterSearch,
+} from '../src/renderer/src/formatted-frontmatter.ts'
+import { readFrontmatter } from '../src/shared/frontmatter.ts'
 
 async function load(file, name, bindings) {
   const source = stripTypeScriptTypes(
@@ -154,6 +161,7 @@ test('source reads only a possible slash prefix, even near the start of a long l
     syntaxTree: () => ({ resolveInner: () => null }),
     slashQuery,
     maximumSlashQueryUnits,
+    frontmatterBounds,
   })
   const match = (source, head = source.length) => {
     ranges.length = 0
@@ -165,6 +173,7 @@ test('source reads only a possible slash prefix, even near the start of a long l
         readOnly: false,
         facet: () => true,
         selection: { main: { head, empty: true }, ranges: [{}] },
+        field: () => undefined,
         doc: {
           lineAt: () => ({
             from: 0,
@@ -183,15 +192,114 @@ test('source reads only a possible slash prefix, even near the start of a long l
   assert.equal(match('x'.repeat(100_000)), null)
   assert.deepEqual(ranges, [])
   assert.equal(match(`/a${'x'.repeat(100_000)}`, 2).query, 'a')
-  assert.deepEqual(ranges, [
-    [0, 2],
-    [0, 4],
-  ])
+  assert.deepEqual(ranges, [[0, 2]])
   assert.equal(match(`/${astral}`).query, astral)
-  assert.deepEqual(ranges, [
-    [0, maximumSlashQueryUnits],
-    [0, 4],
-  ])
+  assert.deepEqual(ranges, [[0, maximumSlashQueryUnits]])
   assert.equal(match(`/${astral}\u{10400}`), null)
   assert.deepEqual(ranges, [])
+})
+
+test('source slash queries stay blocked while frontmatter bounds are unfinished', async () => {
+  const current = await load('source', 'current', {
+    EditorView,
+    syntaxTree: () => ({ resolveInner: () => null }),
+    slashQuery,
+    maximumSlashQueryUnits,
+    frontmatterBounds,
+  })
+  const prefix = '---\nprevious: ok\n/h2'
+  const suffix = '\n---\n\n/h2'
+  const start = `${prefix}: value\npadding: `
+  const text =
+    start + 'x'.repeat(78_035 - start.length - suffix.length) + suffix
+  assert.equal(prefix.length, 20)
+  assert.ok(readFrontmatter(text))
+  for (const bom of ['', '\uFEFF']) {
+    let state = EditorState.create({
+      doc: bom + text,
+      selection: { anchor: prefix.length + bom.length },
+      extensions: [frontmatterBounds],
+    })
+    const view = () => ({
+      hasFocus: true,
+      scrollDOM: { classList: { contains: () => false } },
+      state,
+    })
+    assert.equal(state.field(frontmatterBounds).end, 0)
+    assert.ok(state.field(frontmatterBounds).searched < state.doc.length)
+    assert.equal(current(view()), null)
+    while (!state.field(frontmatterBounds).closer)
+      state = state.update({ effects: frontmatterSearch.of(null) }).state
+    assert.ok(state.field(frontmatterBounds).end > state.selection.main.head)
+    assert.equal(current(view()), null)
+    state = state.update({ selection: { anchor: state.doc.length } }).state
+    assert.equal(current(view()).query, 'h2')
+  }
+})
+
+test('source frontmatter checks read nothing per query, and edits only the lines they touch', async () => {
+  const current = await load('source', 'current', {
+    EditorView: { editable: Symbol('editable') },
+    syntaxTree: () => ({ resolveInner: () => null }),
+    slashQuery,
+    maximumSlashQueryUnits,
+    frontmatterBounds,
+    readFrontmatter,
+  })
+  const body = 'ordinary words in a paragraph\n\n'.repeat(
+    Math.ceil((50 * 1024 * 1024) / 31),
+  )
+  // The query after a note's `/h2`, and the units the check read.
+  const check = (state) => {
+    let units = 0
+    const { head } = state.selection.main
+    const match = current({
+      hasFocus: true,
+      scrollDOM: { classList: { contains: () => false } },
+      state: {
+        readOnly: false,
+        facet: () => true,
+        selection: { main: { head, empty: true }, ranges: [{}] },
+        field: (field, require) => state.field(field, require),
+        doc: {
+          length: state.doc.length,
+          lineAt: (pos) => state.doc.lineAt(pos),
+          sliceString(from, to) {
+            const read = state.doc.sliceString(from, to)
+            units += read.length
+            return read
+          },
+          toString() {
+            units += state.doc.length
+            return state.doc.toString()
+          },
+        },
+      },
+    })
+    return { query: match?.query ?? null, units }
+  }
+  const note = (before, after) =>
+    EditorState.create({
+      doc: `${before}/h2${after}`,
+      selection: { anchor: before.length + 3 },
+      extensions: [frontmatterBounds],
+    })
+  assert.deepEqual(
+    check(note('---\ntitle: Long note\n---\n\n', `\n\n${body}`)),
+    { query: 'h2', units: 3 },
+  )
+  assert.deepEqual(check(note('---\ntitle: Long note\n', `\n---\n\n${body}`)), {
+    query: null,
+    units: 3,
+  })
+  // A divider without a closing line: the editor reads a bounded part of
+  // the note at first and the rest in idle time; edits read their lines.
+  frontmatterProbe.lines = 0
+  let divider = note('---\n\n', `\n\n${body}`)
+  assert.ok(frontmatterProbe.lines < 10_000, String(frontmatterProbe.lines))
+  for (let query = 0; query < 3; query++)
+    assert.deepEqual(check(divider), { query: null, units: 3 })
+  frontmatterProbe.lines = 0
+  divider = divider.update({ changes: { from: 4, insert: 'x' } }).state
+  assert.ok(frontmatterProbe.lines <= 2, String(frontmatterProbe.lines))
 })

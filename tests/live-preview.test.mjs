@@ -158,7 +158,12 @@ before(
     await writeFile(join(folder, 'notes', 'nested.md'), nested)
     await writeFile(join(folder, 'notes', 'markers.md'), markers)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      // compare grayscale text in both compositing paths on every platform.
+      args: [
+        resolve('.'),
+        '--disable-lcd-text',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
@@ -239,20 +244,30 @@ const sample = (target, selectors, title) =>
       const pane = root.getBoundingClientRect()
       const textBox = (element, text) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const index = node.data.indexOf(text)
-          if (index < 0) continue
-          const range = document.createRange()
-          range.setStart(node, index)
-          range.setEnd(node, index + text.length)
-          const box = range.getBoundingClientRect()
-          return {
-            left: box.left - pane.left,
-            top: box.top - pane.top,
-            height: box.height,
+        const nodes = []
+        for (let node = walker.nextNode(); node; node = walker.nextNode())
+          nodes.push(node)
+        const index = nodes
+          .map((node) => node.data)
+          .join('')
+          .indexOf(text)
+        if (index < 0) return null
+        const point = (offset) => {
+          for (const node of nodes) {
+            if (offset <= node.length) return [node, offset]
+            offset -= node.length
           }
         }
-        return null
+        const range = document.createRange()
+        range.setStart(...point(index))
+        range.setEnd(...point(index + text.length))
+        const box = range.getBoundingClientRect()
+        return {
+          width: box.width,
+          left: box.left - pane.left,
+          top: box.top - pane.top,
+          height: box.height,
+        }
       }
       return Object.fromEntries(
         Object.entries(selectors).map(([key, { selector, text }]) => {
@@ -272,8 +287,7 @@ const sample = (target, selectors, title) =>
               backgroundColor: style.backgroundColor,
               textDecorationLine: style.textDecorationLine,
               letterSpacing: style.letterSpacing,
-              // Highlighting splits text into spans; the first word is one text node.
-              box: textBox(element, text.split(' ')[0]),
+              box: textBox(element, text),
             },
           ]
         }),
@@ -383,7 +397,7 @@ async function parity(title, doc, rich, formatted, name) {
     for (const key of Object.keys(rich)) {
       const a = before[key],
         b = after[key]
-      assert.ok(a && b, `${key}: ${JSON.stringify({ a, b })}`)
+      assert.ok(a?.box && b?.box, `${key}: ${JSON.stringify({ a, b })}`)
       for (const property of [
         'fontFamily',
         'fontSize',
@@ -398,6 +412,8 @@ async function parity(title, doc, rich, formatted, name) {
         key,
         dx: Math.round((b.box.left - a.box.left) * 10) / 10,
         dy: Math.round((b.box.top - a.box.top) * 10) / 10,
+        dw: Math.round((b.box.width - a.box.width) * 10) / 10,
+        dh: Math.round((b.box.height - a.box.height) * 10) / 10,
       })
     }
     const images = [
@@ -447,19 +463,20 @@ async function parity(title, doc, rich, formatted, name) {
     report.push({ id, key: 'pixels', difference, box })
   }
   console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
-  // The same text at the same positions renders the same pixels; a failure
-  // reports the text positions too.
+  // keep the pixel gate strict; failures also report full phrase bounds.
   for (const { id, key, difference } of report)
     if (key === 'pixels')
       assert.ok(
         difference < 0.002,
         `${id}: ${difference} ${JSON.stringify(report)}`,
       )
-  // Text positions match the rich view within a pixel.
+  // full phrase bounds match the rich view within a pixel.
   const offsets = report.filter(
     (entry) =>
       entry.key !== 'pixels' &&
-      (Math.abs(entry.dx) > 1 || Math.abs(entry.dy) > 1),
+      [entry.dx, entry.dy, entry.dw, entry.dh].some(
+        (value) => Math.abs(value) > 1,
+      ),
   )
   assert.deepEqual(offsets, [], JSON.stringify(report))
 }
@@ -866,6 +883,72 @@ test('a 50 MiB note renders and edits with viewport-bounded work', {
     assert.ok(edit.builtGroups <= 3, JSON.stringify(edit))
     assert.ok(edit.lines < 400, JSON.stringify(edit))
   }
+})
+
+test('after an idle moment, scrolling near the viewport parses nothing in its frames', {
+  timeout: 90000,
+}, async () => {
+  // The paired benchmark's 575 kb prose: 100,000 words in paragraphs of 20.
+  const words =
+    'alpha beta gamma delta epsilon zeta eta theta iota kappa'.split(' ')
+  const doc = Array.from(
+    { length: 100000 },
+    (_, i) => `${i ? (i % 20 === 0 ? '\n\n' : ' ') : ''}${words[i % 10]}`,
+  ).join('')
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    // Earlier cases leave the pane scrolled; this note opens at its start.
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 1200, height: 800 })
+    const view = preview.view()
+    preview.reset()
+    // Quiet once long idle periods pass without parse progress. Text ahead
+    // is parsed meanwhile, and the viewport never shows unparsed text.
+    let unparsedViewport = 0,
+      calm = 0,
+      last = ''
+    while (calm < 3) {
+      const remaining = await new Promise((resolve) =>
+        requestIdleCallback((deadline) => resolve(deadline.timeRemaining())),
+      )
+      if (!preview.covered(view.viewport.from, view.viewport.to))
+        unparsedViewport++
+      const progress = JSON.stringify(preview.probe)
+      calm = remaining >= 40 && progress === last ? calm + 1 : 0
+      last = progress
+    }
+    const ahead = { ...preview.probe }
+    const coveredAhead = preview.covered(
+      view.viewport.from,
+      Math.min(view.state.doc.length, view.viewport.to + 32 * 1024),
+    )
+    preview.reset()
+    // 3600 px over twelve frames, as the paired benchmark scrolls.
+    for (let frame = 1; frame <= 12; frame++) {
+      pane.scrollTop = frame * 300
+      await new Promise(requestAnimationFrame)
+    }
+    await preview.settle()
+    return {
+      length: view.state.doc.length,
+      scrolled: pane.scrollTop,
+      unparsedViewport,
+      ahead,
+      coveredAhead,
+      scroll: { ...preview.probe },
+    }
+  }, doc)
+  console.log(JSON.stringify(result))
+  assert.equal(result.scrolled, 3600, JSON.stringify(result))
+  assert.equal(result.unparsedViewport, 0, JSON.stringify(result))
+  assert.equal(result.coveredAhead, true, JSON.stringify(result))
+  // Idle-time parsing covers a bounded window around the viewport, not the note.
+  assert.ok(result.ahead.parsedUnits <= 24 * 4096, JSON.stringify(result))
+  assert.ok(result.length > 4 * 24 * 4096)
+  assert.equal(result.scroll.parsedChunks, 0, JSON.stringify(result))
+  assert.equal(result.scroll.parsedUnits, 0, JSON.stringify(result))
+  assert.equal(result.scroll.scannedUnits, 0, JSON.stringify(result))
 })
 
 test('links whose destination spans lines render on one line while mounting and scrolling', {

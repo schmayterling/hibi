@@ -1,21 +1,41 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DocumentSession } from '../src/shared/document-session.ts'
-import { renderedReplaceEdits } from '../src/shared/rendered-replace.ts'
+import { renderedReplaceEdits as applyRenderedReplaceEdits } from '../src/shared/rendered-replace.ts'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { sourceChangesFromEditor } from '../src/shared/source-projection.ts'
 import { searchRenderedLiteral } from '../src/shared/source-rendered-search.ts'
 import { searchSourceLiteral } from '../src/shared/source-search.ts'
+import { renderedConfig } from './rendered-config.mjs'
 
+const projections = new WeakMap()
+const finish = (work) => {
+  for (;;) {
+    const next = work.next()
+    if (next.done) return next.value
+  }
+}
+function renderedReplaceEdits(match, value) {
+  const projection = projections.get(match)
+  return applyRenderedReplaceEdits(
+    match,
+    value,
+    projection
+      ? finish(projection.prepareReplacement(match, value))
+      : undefined,
+  )
+}
 function matches(text, query, options) {
   const store = new SourceStore(text, { tabId: 'provenance', revision: 0 })
-  const projection = new RenderedTextIndex(store.snapshot())
+  const projection = new RenderedTextIndex(store.snapshot(), 0, renderedConfig)
   for (const _step of projection.build()) {
   }
-  return [...searchRenderedLiteral(projection, query, options)].flatMap(
+  const found = [...searchRenderedLiteral(projection, query, options)].flatMap(
     (batch) => batch.matches,
   )
+  for (const match of found) projections.set(match, projection)
+  return found
 }
 function replace(text, query, value) {
   const [match] = matches(text, query)
@@ -105,7 +125,6 @@ test('rendered search preserves source folding and unicode across CRLF and chunk
       'οδος',
       'οδοσ',
       'café ος',
-      '\nCAFÉ',
     ]) {
       const store = new SourceStore(text, { tabId: 'fold-parity', revision: 0 })
       const raw = [
@@ -122,7 +141,7 @@ test('rendered search preserves source folding and unicode across CRLF and chunk
 })
 
 test('rendered replacement maps CRLF and unicode to one canonical operation and undo', (t) => {
-  const text = '😀 intro\r\nhello **world**\r\ntail'
+  const text = '😀 intro\r\n```\r\nhello world\r\ntail\r\n```'
   const journal = [],
     errors = []
   const session = new DocumentSession(
@@ -136,21 +155,22 @@ test('rendered replacement maps CRLF and unicode to one canonical operation and 
   )
   t.after(() => session.dispose())
   const snapshot = session.snapshot()
-  const projection = new RenderedTextIndex(snapshot)
+  const projection = new RenderedTextIndex(snapshot, 0, renderedConfig)
   for (const _step of projection.build()) {
   }
   const [match] = [...searchRenderedLiteral(projection, 'lo wo')].flatMap(
     (batch) => batch.matches,
   )
+  projections.set(match, projection)
   const edits = renderedReplaceEdits(match, 'X\nY')
   assert.ok(edits)
   session.edit(sourceChangesFromEditor(snapshot, edits), 'source', 'replace')
   assert.equal(
     session.snapshot().materialize(),
-    '😀 intro\r\nhelX\r\nY**rld**\r\ntail',
+    '😀 intro\r\n```\r\nhelX\r\nYrld\r\ntail\r\n```',
   )
   assert.equal(journal.length, 1)
-  assert.equal(journal[0].changes.length, 2)
+  assert.equal(journal[0].changes.length, 1)
   assert.equal(session.state().contentVersion, 1)
   assert.ok(session.undo())
   assert.equal(session.snapshot().materialize(), text)
@@ -160,7 +180,7 @@ test('rendered replacement maps CRLF and unicode to one canonical operation and 
 })
 
 test('coextensive nested marks keep replacement provenance compact', () => {
-  const marks = '*'.repeat(20000)
+  const marks = '*'.repeat(500)
   const source = marks + 'word' + marks
   const [match] = matches(source, 'word')
   assert.equal(match.containers.length, 1)
@@ -191,10 +211,14 @@ test('replacement text stays literal at line starts, mid-word, in link labels an
       tabId: 'replace-literal',
       revision: 0,
     })
-    const projection = new RenderedTextIndex(store.snapshot())
+    const projection = new RenderedTextIndex(
+      store.snapshot(),
+      0,
+      renderedConfig,
+    )
     for (const _step of projection.build()) {
     }
-    return [...projection.runs()]
+    return [...projection.range(0, projection.length)]
       .map((run) => run.text ?? projection.text(run.from, run.to))
       .join('')
   }

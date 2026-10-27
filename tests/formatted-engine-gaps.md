@@ -98,12 +98,12 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | api-006 | [editor-view-bridge.test.mjs:201](editor-view-bridge.test.mjs#L201) | switching to source must stale the previous formatted selection | 6: verbatim projections and selection contracts |
 | split-002 | [editor.test.mjs:187](editor.test.mjs#L187) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | api-004 | [formatted-completions.test.mjs:223](formatted-completions.test.mjs#L223) | typing context must preserve rich selection offsets | 6: verbatim projections and selection contracts |
-| find-001 | [formatted-find.test.mjs:301](formatted-find.test.mjs#L301) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
-| find-002 | [formatted-find.test.mjs:430](formatted-find.test.mjs#L430) | undo must restore matches without a current find result | 4b: find wiring and navigation |
-| find-006 | [formatted-find.test.mjs:475](formatted-find.test.mjs#L475) | increasing total matches must preserve the viewport highlight budget | 4b: find wiring and navigation |
-| find-003 | [formatted-find.test.mjs:542](formatted-find.test.mjs#L542) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
-| split-003 | [formatted-find.test.mjs:642](formatted-find.test.mjs#L642) | split formatted view must remain read-only | 3: read-only access and shared history guards |
-| find-005 | [formatted-find.test.mjs:801](formatted-find.test.mjs#L801) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
+| find-001 | [formatted-find.test.mjs:305](formatted-find.test.mjs#L305) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
+| find-002 | [formatted-find.test.mjs:434](formatted-find.test.mjs#L434) | undo must restore matches without a current find result | 4b: find wiring and navigation |
+| find-006 | [formatted-find.test.mjs:479](formatted-find.test.mjs#L479) | increasing total matches must preserve the viewport highlight budget | 4b: find wiring and navigation |
+| find-003 | [formatted-find.test.mjs:546](formatted-find.test.mjs#L546) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
+| split-003 | [formatted-find.test.mjs:646](formatted-find.test.mjs#L646) | split formatted view must remain read-only | 3: read-only access and shared history guards |
+| find-005 | [formatted-find.test.mjs:805](formatted-find.test.mjs#L805) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
 | release-001 | [formatted-hidden-source.test.mjs:167](formatted-hidden-source.test.mjs#L167) | reopening source must restore its saved scroll position | 2c: hidden source release and mapped bookmarks |
 | release-002 | [formatted-hidden-source.test.mjs:188](formatted-hidden-source.test.mjs#L188) | formatted edits must map the saved source scroll position | 2c: hidden source release and mapped bookmarks |
 | release-003 | [formatted-hidden-source.test.mjs:327](formatted-hidden-source.test.mjs#L327) | a note that grows huge must release its hidden source view | 2c: hidden source release and mapped bookmarks |

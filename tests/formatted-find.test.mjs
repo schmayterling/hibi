@@ -172,8 +172,10 @@ async function openFind(
       window.renderedFindReplies = []
       const observed = new WeakSet(),
         post = Worker.prototype.postMessage
+      let config
       Worker.prototype.postMessage = function (message, ...rest) {
         const request = message.message ?? message
+        if (request.type === 'boundaries') config = request.config
         if (request.type === 'find') {
           if (!observed.has(this)) {
             observed.add(this)
@@ -189,6 +191,8 @@ async function openFind(
           const find = {
             ...request,
             mode: 'rendered',
+            config,
+            prefix: config?.prefix ?? 0,
             viewport: {
               from: 0,
               to: editor?.cmTile?.root.view.state.doc.length ?? length,

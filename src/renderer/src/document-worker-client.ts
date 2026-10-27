@@ -45,6 +45,7 @@ type ClientOptions = {
     query: string,
     highlights?: SearchHighlights,
     mode?: FindMode,
+    replacement?: import('../../shared/rendered-replace.ts').RenderedReplacement,
   ) => void
   error: (message: string) => void
   metadataPending?: () => void
@@ -256,6 +257,9 @@ export class DocumentWorkerClient {
   ) {
     if (this.#disposed || this.#failed) return
     if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
+    const config =
+      options.config ??
+      (options.mode === 'rendered' ? this.#boundaries?.config : undefined)
     this.#latest = {
       type: 'find',
       epoch: this.#epoch,
@@ -266,7 +270,15 @@ export class DocumentWorkerClient {
       to,
       action,
       ...(options.mode ? { mode: options.mode } : {}),
-      ...(options.prefix === undefined ? {} : { prefix: options.prefix }),
+      ...(config ? { config } : {}),
+      ...(options.replacement === undefined
+        ? {}
+        : { replacement: options.replacement }),
+      ...(options.prefix === undefined
+        ? config
+          ? { prefix: config.prefix }
+          : {}
+        : { prefix: options.prefix }),
       ...(options.viewport ? { viewport: { ...options.viewport } } : {}),
     }
     this.#options.pending()
@@ -432,6 +444,10 @@ export class DocumentWorkerClient {
         this.#highlightRequest?.mode !== request.mode ||
         this.#highlightRequest?.prefix !== request.prefix,
       ...(request.mode ? { mode: request.mode } : {}),
+      ...(request.config ? { config: request.config } : {}),
+      ...(request.replacement === undefined
+        ? {}
+        : { replacement: request.replacement }),
       ...(request.prefix === undefined ? {} : { prefix: request.prefix }),
       ...(request.viewport ? { viewport: request.viewport } : {}),
       from: request.from,
@@ -646,6 +662,7 @@ export class DocumentWorkerClient {
             request.query,
             reply.highlights,
             reply.mode ?? 'source',
+            reply.replacement,
           )
         else
           this.#options.result(

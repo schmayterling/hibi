@@ -68,12 +68,13 @@ export class DocumentWorkerService {
   #rendered: import('./rendered-text.ts').RenderedTextIndex | null = null
   #renderedModule: typeof import('./rendered-text.ts') | null = null
   #renderedLoading = false
-  #renderedPrefix = 0
+  #renderedKey = ''
   #location: import('./source-search-index.ts').SearchLocation | null = null
   #findId = 0
   #request: FindRequest | null = null
   #work: Generator<unknown, unknown> | null = null
-  #stage: 'build' | 'locate' | 'highlights' = 'build'
+  #stage: 'build' | 'locate' | 'highlights' | 'replacement' = 'build'
+  #highlights: import('./source-search-index.ts').SearchHighlights | undefined
   #findChannel: MessageChannel | null = null
   #findScheduled = false
   #disposed = false
@@ -499,6 +500,13 @@ export class DocumentWorkerService {
           message.to > this.#store.snapshot().normalizedLength
         )
           throw new Error('Find selection is outside its source snapshot.')
+        if (
+          message.replacement !== undefined &&
+          (message.mode !== 'rendered' ||
+            typeof message.replacement !== 'string' ||
+            message.replacement.length > 65536)
+        )
+          throw new Error('Find text is too long.')
         if (typeof message.query !== 'string' || message.query.length > 65536)
           throw new Error('Find text is too long.')
         const mode = message.mode ?? 'source',
@@ -526,6 +534,11 @@ export class DocumentWorkerService {
               (viewport.limit ?? 512) > 512))
         )
           throw new Error('Find selection is outside its source snapshot.')
+        if (
+          mode === 'rendered' &&
+          (!message.config || message.config.prefix !== prefix)
+        )
+          throw new Error('Formatted find configuration is unsupported.')
         if (mode === 'rendered' && !this.#renderedModule) {
           this.#cancel()
           this.#request = { ...message }
@@ -559,7 +572,11 @@ export class DocumentWorkerService {
           this.#store &&
           request.version === this.#store.snapshot().version
         )
-          this.#startFind(request)
+          try {
+            this.#startFind(request)
+          } catch (error) {
+            this.#fail('find', error, request.id)
+          }
       },
       (error) => {
         this.#renderedLoading = false
@@ -570,16 +587,18 @@ export class DocumentWorkerService {
   #startFind(message: FindRequest) {
     const mode = message.mode ?? 'source',
       prefix = message.prefix ?? 0
-    const key = mode + ':' + (mode === 'rendered' ? prefix : 0)
+    const renderedKey = JSON.stringify(message.config)
+    const key = mode + ':' + (mode === 'rendered' ? renderedKey : 0)
     if (
       mode === 'rendered' &&
-      (!this.#rendered || this.#renderedPrefix !== prefix)
+      (!this.#rendered || this.#renderedKey !== renderedKey)
     ) {
       this.#rendered = new this.#renderedModule!.RenderedTextIndex(
         this.#store!.snapshot(),
         prefix,
+        message.config,
       )
-      this.#renderedPrefix = prefix
+      this.#renderedKey = renderedKey
     }
     if (
       !this.#index ||
@@ -891,14 +910,44 @@ export class DocumentWorkerService {
         if (this.#stage === 'build') {
           this.#stage = 'locate'
           this.#work = this.#index!.locate(request.from, request.to)
-        } else if (this.#stage === 'locate' && request.viewport) {
+        } else if (
+          this.#stage === 'locate' &&
+          (request.viewport || request.replacement !== undefined)
+        ) {
           this.#location =
             step.value as import('./source-search-index.ts').SearchLocation
-          this.#stage = 'highlights'
-          this.#work = this.#index!.highlights(request.viewport)
+          this.#highlights = undefined
+          if (request.viewport) {
+            this.#stage = 'highlights'
+            this.#work = this.#index!.highlights(request.viewport)
+          } else {
+            this.#stage = 'replacement'
+            this.#work = this.#index!.replacement(
+              request.from,
+              request.to,
+              request.replacement!,
+            )
+          }
+        } else if (
+          this.#stage === 'highlights' &&
+          request.replacement !== undefined
+        ) {
+          this.#highlights =
+            step.value as import('./source-search-index.ts').SearchHighlights
+          this.#stage = 'replacement'
+          this.#work = this.#index!.replacement(
+            request.from,
+            request.to,
+            request.replacement,
+          )
         } else {
-          const highlights =
-            this.#stage === 'highlights'
+          const replacement =
+            this.#stage === 'replacement'
+              ? (step.value as import('./rendered-replace.ts').RenderedReplacement)
+              : undefined
+          const highlights = replacement
+            ? this.#highlights
+            : this.#stage === 'highlights'
               ? (step.value as import('./source-search-index.ts').SearchHighlights)
               : undefined
           this.#work = null
@@ -907,16 +956,18 @@ export class DocumentWorkerService {
             epoch: this.#epoch,
             id: request.id,
             version: request.version,
-            location: highlights
-              ? this.#location!
-              : (step.value as Extract<
-                  DocumentWorkerReply,
-                  { type: 'find' }
-                >['location']),
+            location:
+              highlights || replacement
+                ? this.#location!
+                : (step.value as Extract<
+                    DocumentWorkerReply,
+                    { type: 'find' }
+                  >['location']),
             ...(request.mode === 'rendered'
               ? { mode: 'rendered' as const }
               : {}),
             ...(highlights ? { highlights } : {}),
+            ...(replacement ? { replacement } : {}),
             ...(request.highlights && request.mode !== 'rendered'
               ? { highlightStarts: this.#index!.highlightStarts() }
               : {}),

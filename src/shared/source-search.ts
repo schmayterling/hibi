@@ -64,6 +64,9 @@ export class LiteralSearchMatcher {
     this.#exact = new Uint8Array(this.needle.length)
     this.#ends = provenance ? new Float64Array(this.needle.length) : null
   }
+  reset() {
+    this.#matched = 0
+  }
   restart(): number | undefined {
     return this.#matched
       ? this.#starts[(this.#fed - this.#matched) % this.needle.length]

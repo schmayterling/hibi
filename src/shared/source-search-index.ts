@@ -4,7 +4,10 @@ import {
   type SourceSnapshot,
   type SourceStorageChange,
 } from './source-buffer.ts'
-import { searchRenderedLiteral } from './source-rendered-search.ts'
+import {
+  renderedMatch,
+  searchRenderedLiteral,
+} from './source-rendered-search.ts'
 import {
   type LiteralSearchOptions,
   literalSearchQuery,
@@ -70,7 +73,9 @@ export class SourceSearchIndex {
   highlightStarts(): readonly number[] {
     return this.#highlightStarts
   }
-  *#search(options = this.#options) {
+  *#search(
+    options: LiteralSearchOptions & { details?: boolean } = this.#options,
+  ) {
     return yield* this.#rendered
       ? searchRenderedLiteral(this.#rendered, this.#query, options)
       : searchSourceLiteral(this.#source, this.#query, options)
@@ -87,7 +92,7 @@ export class SourceSearchIndex {
     this.#highlightStarts.length = 1
     const margin = query.length * 2
     let highlightScan = 0
-    for (const batch of this.#search()) {
+    for (const batch of this.#search({ ...this.#options, details: false })) {
       for (const match of batch.matches) {
         const ranked = Object.freeze({ match, rank: ++this.#total })
         this.#first ??= ranked
@@ -108,6 +113,24 @@ export class SourceSearchIndex {
     }
     this.#complete = true
     return this.state()
+  }
+  *replacement(from: number, to: number, text: string) {
+    if (this.#rendered) {
+      for (const batch of this.#search({
+        ...this.#options,
+        from,
+        details: false,
+      })) {
+        for (const match of batch.matches) {
+          if (match.from !== from || match.to !== to)
+            return { from, to, text, edits: null }
+          const detailed = yield* renderedMatch(this.#rendered, match)
+          return yield* this.#rendered.prepareReplacement(detailed, text)
+        }
+        yield
+      }
+    }
+    return { from, to, text, edits: null }
   }
   *highlights(viewport: SearchViewport): Generator<void, SearchHighlights> {
     if (!this.#complete) throw new Error('Find coverage is incomplete.')
@@ -133,6 +156,7 @@ export class SourceSearchIndex {
     const matches: SourceMatch[] = []
     for (const batch of this.#search({
       ...this.#options,
+      details: false,
       from: this.#highlightStarts[Math.max(0, lo - 1)]!,
     })) {
       for (const match of batch.matches) {
@@ -169,6 +193,7 @@ export class SourceSearchIndex {
       next: RankedMatch | null = null
     for (const batch of this.#search({
       ...this.#options,
+      details: false,
       from: checkpoint?.match.to ?? 0,
     })) {
       for (const match of batch.matches) {
@@ -182,6 +207,20 @@ export class SourceSearchIndex {
       }
       yield
       if (next) break
+    }
+    previous ??= this.#last
+    next ??= this.#first
+    if (this.#rendered) {
+      if (previous)
+        previous = {
+          ...previous,
+          match: yield* renderedMatch(this.#rendered, previous.match),
+        }
+      if (next)
+        next = {
+          ...next,
+          match: yield* renderedMatch(this.#rendered, next.match),
+        }
     }
     return Object.freeze({
       current,

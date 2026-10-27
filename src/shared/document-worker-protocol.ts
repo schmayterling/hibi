@@ -39,6 +39,9 @@ export type FindOptions = Readonly<{
   mode?: FindMode
   prefix?: number
   viewport?: SearchViewport
+  /** Exact active formatted configuration, supplied by the editor. */
+  config?: BoundaryConfig
+  replacement?: string
 }>
 
 import type {
@@ -112,6 +115,8 @@ export type DocumentWorkerRequest =
       query: string
       mode?: FindMode
       prefix?: number
+      config?: BoundaryConfig
+      replacement?: string
       viewport?: SearchViewport
       highlights?: boolean
       from: number
@@ -166,6 +171,7 @@ export type DocumentWorkerReply =
       mode?: FindMode
       highlights?: SearchHighlights
       highlightStarts?: readonly number[]
+      replacement?: import('./rendered-replace.ts').RenderedReplacement
     }
   | {
       type: 'error'

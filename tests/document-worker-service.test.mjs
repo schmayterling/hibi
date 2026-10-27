@@ -4,6 +4,7 @@ import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
+import { renderedConfig } from './rendered-config.mjs'
 
 function fixture(t, source = 'one two one') {
   const messages = [],
@@ -62,6 +63,9 @@ function fixture(t, source = 'one two one') {
       query,
       from,
       to,
+      ...(options.mode === 'rendered'
+        ? { config: { ...renderedConfig, prefix: options.prefix ?? 0 } }
+        : {}),
       ...options,
     })
   load()
@@ -983,6 +987,136 @@ test('rendered find reuses one replica, projection and scheduler for navigation 
   assert.equal(raw.location.total, 2)
   assert.equal(raw.mode, undefined)
   assert.equal(projections.length, 2)
+})
+
+test('rendered replacements return only grammar-verified edits for an exact match', async (t) => {
+  const f = fixture(t, '2 * 3 * 4\n\nTARGET tail')
+  f.find(1, 0, ' 3 ', 3, 6, { mode: 'rendered', replacement: '3' })
+  const refused = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 1,
+  )
+  assert.equal(refused.location.current, 1)
+  assert.deepEqual(refused.replacement, {
+    from: 3,
+    to: 6,
+    text: '3',
+    edits: null,
+  })
+  f.find(2, 0, 'TARGET', 11, 17, {
+    mode: 'rendered',
+    replacement: '#tag',
+    viewport: { from: 0, to: 22 },
+  })
+  const prepared = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(prepared.location.current, 1)
+  assert.deepEqual(prepared.replacement, {
+    from: 11,
+    to: 17,
+    text: '#tag',
+    edits: [{ from: 11, to: 17, insert: '#tag' }],
+  })
+  assert.equal(prepared.highlights.matches.length, 1)
+  f.find(3, 0, 'TARGET', 11, 16, { mode: 'rendered', replacement: 'X' })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 3))
+      .replacement.edits,
+    null,
+  )
+})
+
+test('deep shared-parser recursion fails closed and leaves source find available', async (t) => {
+  const marks = '*'.repeat(20000),
+    text = marks + 'word' + marks
+  const f = fixture(t, text)
+  f.find(1, 0, 'word', 20000, 20004, { mode: 'rendered', replacement: 'X' })
+  const error = await f.next(
+    (reply) => reply.type === 'error' && reply.id === 1,
+  )
+  assert.equal(error.stage, 'find')
+  assert.match(error.message, /call stack/i)
+  assert.ok(
+    !f.messages.some((reply) => reply.type === 'find' && reply.id === 1),
+  )
+  f.find(2, 0, 'word')
+  const result = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(result.location.total, 1)
+  assert.equal(result.location.next.match.from, 20000)
+})
+
+test('unsupported cold rendered configuration replies with a find error', async (t) => {
+  const f = fixture(t, 'note')
+  f.find(1, 0, 'note', 0, 0, {
+    mode: 'rendered',
+    config: { ...renderedConfig, textSyntax: null },
+  })
+  assert.match(
+    (await f.next((reply) => reply.type === 'error' && reply.id === 1)).message,
+    /configuration is unsupported/,
+  )
+})
+
+test('rendered grammar config changes invalidate projection and unknown renderers are refused', async (t) => {
+  const f = fixture(t, 'hello ==world==')
+  const config = {
+    ...renderedConfig,
+    syntax: [...renderedConfig.syntax, 'obsidian@1'],
+    textFeatures: [...renderedConfig.textFeatures, 'markdown.obsidian'],
+  }
+  f.find(1, 0, 'hello world', 0, 0, { mode: 'rendered', config })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 1)).location
+      .total,
+    1,
+  )
+  f.find(2, 0, 'hello world', 0, 0, {
+    mode: 'rendered',
+    config: { ...config, literal: ['Highlight'] },
+  })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 2)).location
+      .total,
+    0,
+  )
+  f.find(3, 0, 'hello', 0, 0, {
+    mode: 'rendered',
+    config: { ...config, textFeatures: ['unknown.custom'] },
+  })
+  const error = await f.next(
+    (reply) => reply.type === 'error' && reply.id === 3,
+  )
+  assert.match(error.message, /configuration is unsupported/)
+})
+
+test('rendered replacement validation cancels through the existing find channel', async (t) => {
+  const original = RenderedTextIndex.prototype.prepareReplacement
+  let steps = 0
+  t.mock.method(
+    RenderedTextIndex.prototype,
+    'prepareReplacement',
+    function* (...args) {
+      for (const step of original.apply(this, args)) {
+        steps++
+        yield step
+      }
+    },
+  )
+  const f = fixture(t, 'TARGET\n\n' + 'plain words.\n'.repeat(1024))
+  f.find(1, 0, 'TARGET', 0, 6, { mode: 'rendered', replacement: 'X' })
+  await f.next(
+    (reply) => reply.type === 'find-progress' && reply.id === 1 && steps > 0,
+  )
+  f.worker.receive({ type: 'cancel-find', epoch: 'first', id: 1 })
+  await f.next((reply) => reply.type === 'canceled' && reply.id === 1)
+  const before = steps
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(steps, before)
+  assert.ok(
+    !f.messages.some((reply) => reply.type === 'find' && reply.id === 1),
+  )
 })
 
 test('rendered projection cancels through queued tasks and resumes without another replica', async (t) => {

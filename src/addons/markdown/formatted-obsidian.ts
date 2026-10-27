@@ -8,6 +8,7 @@ import {
   formattedSyntaxTree,
   showMarkdownMarkers,
 } from '../../renderer/src/formatted-contributions.ts'
+import { formattedMarkerRanges } from '../../shared/formatted-text-rules.ts'
 import { wrapDecoded } from '../_shared/formatted-entities.ts'
 import { obsidianSyntax, wikiText } from './formatted-syntax.ts'
 
@@ -189,7 +190,10 @@ export const contribution: FormattedContribution = {
         if (!parts) return false
         // The label reads as a link; brackets, and the target behind an alias, are syntax.
         const { from, to } = parts.label
-        out.syntax(node.from, from)
+        for (const range of formattedMarkerRanges(node.node, (a, b) =>
+          context.state.sliceDoc(a, b),
+        ))
+          out.syntax(range.from, range.to)
         wrapDecoded(
           out,
           context,
@@ -201,7 +205,6 @@ export const contribution: FormattedContribution = {
           },
           true,
         )
-        out.syntax(to, node.to)
         return false
       },
     },
@@ -234,11 +237,13 @@ export const contribution: FormattedContribution = {
     {
       nodes: ['Highlight'],
       decorate(node, out, context) {
-        out.syntax(node.from, node.from + 2)
+        for (const range of formattedMarkerRanges(node.node, (a, b) =>
+          context.state.sliceDoc(a, b),
+        ))
+          out.syntax(range.from, range.to)
         wrapDecoded(out, context, node.from + 2, node.to - 2, {
           class: 'hibi-lp-highlight',
         })
-        out.syntax(node.to - 2, node.to)
         return false
       },
     },

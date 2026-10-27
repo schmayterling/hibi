@@ -2,6 +2,26 @@ import { markdownLineStarts, markdownLiteral } from './markdown-literal.ts'
 import type { RenderedRange } from './rendered-text.ts'
 import type { SourceMatch } from './source-search.ts'
 
+export type RenderedReplacement = Readonly<{
+  from: number
+  to: number
+  text: string
+  edits: readonly RenderedEdit[] | null
+}>
+
+/** Apply only the worker's grammar-verified plan for this exact source match. */
+export function renderedReplaceEdits(
+  match: SourceMatch,
+  replacement: string,
+  prepared?: RenderedReplacement,
+): readonly RenderedEdit[] | null {
+  return prepared?.from === match.from &&
+    prepared.to === match.to &&
+    prepared.text === replacement
+    ? prepared.edits
+    : null
+}
+
 export type RenderedEdit = Readonly<{
   from: number
   to: number
@@ -62,9 +82,10 @@ export function renderedDeletionRanges(
  * marks; emptied links and marks without replacement content lose delimiters.
  * Map these coordinates through the matching snapshot before canonical edits.
  */
-export function renderedReplaceEdits(
+export function renderedReplacementCandidate(
   match: SourceMatch,
   replacement: string,
+  escapeLiteral = false,
 ): readonly RenderedEdit[] | null {
   const context = match.context
   if (!context || typeof replacement !== 'string') return null
@@ -100,7 +121,7 @@ export function renderedReplaceEdits(
         return null
     }
   }
-  if (!code) {
+  if (!code && escapeLiteral) {
     const literal = markdownLiteral(replacement, context.after)
     const prefix =
       point - context.lineFrom <= context.linePrefix.length

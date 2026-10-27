@@ -7,11 +7,37 @@ import {
   type SourceMatch,
 } from './source-search.ts'
 
+/** Prepare replacement metadata only for a requested navigation result. */
+export function* renderedMatch(
+  projection: RenderedTextIndex,
+  match: SourceMatch,
+): Generator<void, SourceMatch> {
+  const containers: RenderedContainer[] = []
+  for (const container of projection.containers(match.from, match.to)) {
+    if (container) containers.push(container)
+    else yield
+  }
+  const deletion = renderedDeletionRanges({ ...match, containers }, true)
+  const first = deletion?.find(
+    (range) => range.from <= match.from && match.from < range.to,
+  )
+  const context = yield* projection.context(
+    match.from,
+    match.to,
+    first?.to ?? match.segments![0]!.to,
+  )
+  return Object.freeze({
+    ...match,
+    containers: Object.freeze(containers),
+    context,
+  })
+}
+
 /** Resume from source coordinates using retained rendered runs, including inside marks. */
 export function* searchRenderedLiteral(
   projection: RenderedTextIndex,
   query: string,
-  options: LiteralSearchOptions = {},
+  options: LiteralSearchOptions & { details?: boolean } = {},
 ): Generator<SearchProgress, { scanned: number; total: number }> {
   const matcher = new LiteralSearchMatcher(query, options.caseSensitive, true)
   if (!matcher.needle) return { scanned: 0, total: 0 }
@@ -22,6 +48,18 @@ export function* searchRenderedLiteral(
     work = 0
   let matches: SourceMatch[] = []
   for (const run of projection.runs(options.from)) {
+    if (run.barrier || run.text === '') {
+      if (run.barrier) matcher.reset()
+      scanned = run.to
+      yield {
+        matches: Object.freeze(matches),
+        scanned,
+        total,
+        restart: matcher.restart() ?? scanned,
+      }
+      matches = []
+      continue
+    }
     const atomic = run.text !== undefined
     let at = run.from
     for (let from = run.from; from < run.to; ) {
@@ -39,17 +77,23 @@ export function* searchRenderedLiteral(
           sourceTo,
           atomic
             ? {
-                first: decodedAt === 0,
-                last: decodedAt + character.length === text.length,
+                first: run.precise !== false && decodedAt === 0,
+                last:
+                  run.precise !== false &&
+                  decodedAt + character.length === text.length,
               }
             : { first: true, last: true },
         )
         if (match) {
-          const containers: RenderedContainer[] = []
-          for (const container of projection.containers(match.from, match.to)) {
-            if (container) containers.push(container)
-            if (!container || ++work >= 1024) {
-              work = 0
+          if (options.details === false) matches.push(match)
+          else {
+            const work = renderedMatch(projection, match)
+            for (;;) {
+              const next = work.next()
+              if (next.done) {
+                matches.push(next.value)
+                break
+              }
               yield {
                 matches: Object.freeze(matches),
                 scanned,
@@ -59,36 +103,6 @@ export function* searchRenderedLiteral(
               matches = []
             }
           }
-          const deletion = renderedDeletionRanges(
-            { ...match, containers },
-            true,
-          )
-          const first = deletion?.find(
-            (range) => range.from <= match.from && match.from < range.to,
-          )
-          const contextWork = projection.context(
-            match.from,
-            match.to,
-            first?.to ?? match.segments![0]!.to,
-          )
-          let context = contextWork.next()
-          while (!context.done) {
-            yield {
-              matches: Object.freeze(matches),
-              scanned,
-              total,
-              restart: matcher.restart() ?? scanned,
-            }
-            matches = []
-            context = contextWork.next()
-          }
-          matches.push(
-            Object.freeze({
-              ...match,
-              containers: Object.freeze(containers),
-              context: context.value,
-            }),
-          )
           total++
           if (atomic) {
             scanned = Math.max(scanned, run.to)

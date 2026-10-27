@@ -5,6 +5,7 @@ import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceSearchIndex } from '../src/shared/source-search-index.ts'
+import { renderedConfig } from './rendered-config.mjs'
 
 const wait = async (predicate) => {
   const end = Date.now() + 3000
@@ -141,13 +142,44 @@ function queuedFixture(t, source = 'one two one', extra = {}) {
   return { ...f, tasks, channels, builds, drain, step }
 }
 
+test('rendered client forwards verified replacement replies for the current snapshot', async (t) => {
+  const replies = []
+  const f = fixture(t, 'TARGET tail', {
+    result: (location, action, starts, query, highlights, mode, replacement) =>
+      replies.push({ location, action, query, mode, replacement }),
+  })
+  f.find('TARGET', 0, 6, null, {
+    mode: 'rendered',
+    config: renderedConfig,
+    replacement: '#tag',
+  })
+  await wait(() => replies.length === 1)
+  assert.deepEqual(replies[0].replacement, {
+    from: 0,
+    to: 6,
+    text: '#tag',
+    edits: [{ from: 0, to: 6, insert: '#tag' }],
+  })
+  assert.equal(replies[0].mode, 'rendered')
+  assert.equal(replies[0].location.current, 1)
+  assert.equal(
+    f.workers[0].messages.find((message) => message.type === 'find')
+      .replacement,
+    '#tag',
+  )
+})
+
 test('rendered client options, provenance and viewport pages survive selection and edit requests', async (t) => {
   const results = []
   const f = fixture(t, 'hello **world**\n\nhello world', {
     result: (location, action, starts, query, highlights, mode) =>
       results.push({ location, action, starts, query, highlights, mode }),
   })
-  const options = { mode: 'rendered', viewport: { from: 0, to: 28, limit: 1 } }
+  const options = {
+    mode: 'rendered',
+    config: renderedConfig,
+    viewport: { from: 0, to: 28, limit: 1 },
+  }
   f.find('hello world', 0, 0, 'first', options)
   await wait(() => results.length === 1)
   assert.equal(results[0].location.total, 2)
@@ -852,7 +884,8 @@ test('client streams 50 mib and nonascii above 20 mib with bounded append work a
     })
     f.session.counters(true)
     published = undefined
-    const options = pattern === 'a' ? { mode: 'rendered' } : {}
+    const options =
+      pattern === 'a' ? { mode: 'rendered', config: renderedConfig } : {}
     f.find('', 0, 0, null, options)
     await wait(() => f.workers.length)
     const worker = f.workers[0]

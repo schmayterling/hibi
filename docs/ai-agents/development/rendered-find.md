@@ -2,64 +2,68 @@
 
 rendered find is an opt-in mode of the existing document worker. source find remains the default. the formatted editor does not select this mode yet.
 
-## request and reply
+## configuration and requests
 
-`DocumentWorkerClient.find(query, from, to, action, options)` accepts `{ mode: 'rendered', prefix?, viewport? }`. `prefix` is the normalized source offset after an opaque header; it defaults to zero. the caller obtains it from the shared frontmatter model. this projection does not parse yaml. offsets must be complete source character boundaries.
+DocumentWorkerClient.find(query, from, to, action, options) accepts mode: 'rendered', config, prefix, viewport and replacement. config is the exact BoundaryConfig produced by formattedSyntax for the editor's chosen flavours, enabled contributions and literal syntax settings. the client uses its active boundary configuration when one is available; explicit config is useful for tests. unsupported custom grammar or rendering is refused. the worker does not detect flavours independently or substitute a generic gfm parser.
 
-a viewport is `{ from, to, limit? }`, with a default and maximum of 512 matches per page. the reply carries `highlights: { matches, next }`. when another page is needed, `next` is the first unreturned match's source start; request the same viewport end with that start. matches overlapping the viewport are included. rendered mode does not send raw-source `highlightStarts` to the renderer.
+prefix is the normalized source offset after an opaque header. it must agree with config.prefix. the shared frontmatter model supplies it; this projection does not parse yaml.
 
-the usual epoch, request id and source version identify the exact snapshot. stale replies remain subject to the client's existing rejection rules. completed counts and navigation use the existing sparse checkpoints. projection, counting, navigation and viewport pages all run through the existing find channel and cancellation path.
+viewport is { from, to, limit? }, with a default and maximum of 512 matches per page. highlights contains { matches, next }; next is the first unreturned match's source start. request that start with the same viewport end for another page. overlapping matches are included. rendered mode does not send raw-source highlightStarts.
+
+epoch, request id and source version identify the exact snapshot. stale replies follow the client's existing rejection rules. counting, navigation, highlight paging and replacement validation use the existing find channel and cancellation path. no second scheduler or source replica is introduced.
 
 ## coordinates and provenance
 
-all match and edit positions use normalized source utf-16 coordinates, matching codemirror. use `sourceChangesFromEditor(snapshot, edits)` to map one edits array through the exact matching snapshot to canonical bytes and its line-ending convention. never apply normalized offsets directly to crlf source.
+positions use normalized source utf-16 coordinates. use sourceChangesFromEditor(snapshot, edits) with the exact matching snapshot to map edits to canonical offsets and its line-ending convention. never apply normalized offsets directly to crlf source.
 
-each rendered match carries:
+each match has from and to for its visible-source envelope, ordered segments for contributing source ranges, and precise for complete source atoms and normalization scalars. adjacent segments merge. hidden syntax between segments remains inside the envelope.
 
-- `from` and `to`: the source envelope of its visible content, including hidden syntax between segments.
-- `segments`: ordered source ranges that contributed visible text. adjacent ranges merge.
-- `containers`: marks and direct links whose visible content is fully covered, with opening, closing and visible-content ranges. adjacent nested marks with the same visible content share one container.
-- `context`: bounded paragraph-prefix and following source, plus the first segment's code frame and adjacent backtick counts. inherited quote and list prefixes are preserved; replacement needs this context to keep inserted text literal.
-- `precise`: whether both ends cover complete source atoms and normalization scalars.
+for example, hello **world** matched by hello world has envelope [0, 13) and segments [0, 6), [8, 13). the closing bold delimiter lies outside the envelope.
 
-for example, `hello **world**` matched by `hello world` has envelope `[0, 13)` and segments `[0, 6)`, `[8, 13)`. the closing bold delimiter is outside the envelope but available through its container.
+counts and highlight pages retain these small envelopes. navigation prepares containers and context only for the returned matches. containers describe fully covered marks and links, including delimiters outside the envelope. coextensive adjacent marks share one container. context describes the first segment's code frame and source around its insertion point.
 
-entities and escapes map to their complete source atoms. a query matching only part of a multi-scalar entity, surrogate pair or normalization expansion still finds its envelope, with `precise: false`. replacement must refuse it. counting and case folding use the same nfkd, greek-sigma handling and non-overlap phase as source find.
+entities and escapes map to complete source atoms. a query covering only part of a multi-scalar entity, surrogate pair or normalization expansion still finds its envelope with precise: false; replacement refuses it. case folding, nfkd normalization, greek sigma and non-overlap use the same matcher as source find.
 
-## shared range api
+## shared projection and range assembly
 
-`RenderedTextIndex` in `src/shared/rendered-text.ts` is a pure shared module with no worker or renderer dependency. after cooperatively exhausting `build()`, `range(from, to)` streams the rendered text of a normalized source selection with `{ from, to, text, precise }` provenance. ordinary chunks contain at most 4096 source units and do not split surrogate pairs. hidden syntax contributes nothing. an intersected decoded atom contributes its complete rendered text, clipped source coordinates and `precise: false` unless the selection covers its whole source atom. callers can consume chunks without concatenating a whole selection. empty ranges produce no chunks. invalid source or scalar boundaries are refused.
+src/shared/formatted-markdown.ts constructs the grammar used by both formattedSyntax and the worker. src/shared/formatted-text-rules.ts supplies shared inline hide ranges and list prefixes used by the actual views. table projection reuses the cell parser, row splitter and escaped-pipe coordinate mapping.
 
-`renderedRange(runs, from, to, read, { blockSeparator? })` exports the same pure assembly step independently of the index. a caller with retained syntax can supply ordered, non-overlapping source runs and a bounded normalized-source `read` callback without building a whole-note index. decoded atoms use `text`; semantic block boundaries use `block: true`. `blockSeparator: '\n'` or `''` changes only those explicit boundaries. ordinary soft breaks stay literal. the find index's runs preserve source newlines; supplying semantic block boundaries from retained formatted syntax belongs to the caller.
+RenderedTextIndex in src/shared/rendered-text.ts runs that grammar cooperatively through the existing ChunkedMarkdownParser. after build() completes, range(from, to, { blockSeparator? }) streams { from, to, text, precise } chunks without concatenating a selection. ordinary chunks cover at most 4096 source units and never split surrogate pairs. invalid, reversed, non-finite and partial-scalar bounds are refused.
 
-## replacement and history
+renderedRange(runs, from, to, { length, read }, { blockSeparator? }) is the pure assembly helper in src/shared/rendered-range.ts, re-exported by rendered-text.ts. it accepts ordered, non-overlapping RenderedRun values from retained syntax without building an index. decoded atoms have text; semantic block boundaries have block: true. blockSeparator: '\n' or '' changes only those explicit boundaries. ordinary runs retain their supplied text. slice 6 can assemble bounded selections synchronously from the formatted engine's retained tree.
 
-`renderedReplaceEdits(match, replacement)` returns one ordered edits array, or `null` for an imprecise or invalid match. it deletes each visible segment and inserts the supplied plain text at the first segment's start. replacement inside a surviving mark keeps that mark. delimiters of marks or links with no remaining visible content are removed; a whole-link replacement drops its destination.
+the index follows unrevealed text: soft paragraph breaks flow as spaces, semantic blocks have a newline separator, and table cells have tab separators. literal syntax settings leave their source visible. raw html blocks and inline-code content remain literal. lenient links follow the actual grammar, including its incomplete-link behaviour.
+
+images, rules, math, mermaid, typst and other supported atomic widgets are search barriers with no searchable text. matches cannot cross them. their hidden source, including image alt text and urls, latex and diagram code, is searchable in source view. custom widget text and reference-link resolution are not synthesized.
+
+## verified replacement and history
+
+supply replacement: string on an exact match selection to prepare a replacement. reply.replacement contains { from, to, text, edits }, with edits: null when preparation cannot prove the intended result. source mode does not prepare rendered replacements.
+
+RenderedTextIndex.prepareReplacement(match, text) is the cooperative preparation generator. it deletes every visible segment, inserts at the first segment using its marks, and drops delimiters of marks and links left empty. partial ordinary-link replacements retain their destination; whole-link replacements drop it. partial angle-autolink replacement is refused because its label is its href.
+
+preparation forks the immutable snapshot and reparses with the same grammar and hide rules. its rendered text, including widget barriers, must equal the original prefix plus the plain replacement plus the original suffix. a changed block structure or delimiter interpretation is refused unless it can be repaired. raw insertion is tested first. fallback reuses the shared literal-text helper; unnecessary escapes are removed only after another proof. snake_case, #tag, -1, +1 and 1.5 kg keep their spelling wherever safe. code receives verbatim text; backtick runs that would close inline code are refused.
+
+renderedReplaceEdits(match, text, prepared) in src/shared/rendered-replace.ts is the pure apply helper. it returns only the verified edits for the exact from/to/text request, otherwise null. callers must also enforce the reply's source version. unverified structural candidates are never apply results.
 
 examples:
 
-| source | query | replacement | result |
+| source | query | replacement | source result |
 | --- | --- | --- | --- |
-| `hello **world**` | `lo wo` | `X` | `helX**rld**` |
-| `hello **world**` | `hello world` | `X` | `X` |
-| `hello **world**` | `world` | `X` | `hello **X**` |
-| `[hello world](url)` | `world` | `X` | `[hello X](url)` |
-| `[hello world](url)` | `hello world` | `X` | `X` |
+| hello **world** | lo wo | X | helX**rld** |
+| hello **world** | hello world | X | X |
+| hello **world** | world | X | hello **X** |
+| [hello world](url) | world | X | [hello X](url) |
+| [hello world](url) | hello world | X | X |
 
-the helper does not promise a single envelope replacement or insert-only edit. dispatch all its edits in one editor transaction and one history group. one undo restores the complete prior source, including delimiters, destinations, unicode and original line endings. the helper shares the html conversion's literal-text escaper, applies block-prefix escapes at the actual insertion position, and preserves code content verbatim. a backtick run that would close or merge with an inline-code delimiter makes it return `null`; delimiter widths do not grow. partial angle-autolink replacement also returns `null`, since its label is its destination and segmented edits cannot preserve that target. replacing the whole autolink drops its angle delimiters. direct-link partial replacement retains the destination.
+dispatch every returned edit in one transaction and history group. one undo restores original source, including delimiters, destinations, unicode and line endings. undo's selection policy remains open for the ui integration.
 
-## current index
+location.current is one-based only for an exact source envelope. a caret, partial segment or broader selection has current index zero. previous and next wrap as source find does. undo has no separate current-index rule; the worker evaluates the supplied range.
 
-`location.current` is one-based only when the selection exactly equals a match's source envelope. a caret, a partial segment selection, or a broader selection has current index zero. previous and next navigation wrap as in source find.
+## retained memory and parser limits
 
-undo does not define a separate current-index policy here. the later ui integration must decide whether undo restores a match selection or leaves another selection. the worker evaluates whichever exact range the caller supplies for the current snapshot.
+the projection retains packed visibility masks and two syntax windows, rather than objects for every marker or a second rendered note string. ordinary text needs no mask pages. query changes and selection-only navigation reuse the index; source edits and grammar changes invalidate it. replacement proof currently reparses an immutable fork cooperatively, rather than patching the retained index.
 
-## projection and bounds
+source snapshot reads stay bounded to 4096 normalized units. the underlying formatted lezer parser still consumes an entire physical line when parsing inline syntax; a single huge line can allocate a transient line string and exceed a cooperative parser step. deeply nested delimiters can also hit lezer's recursion limit. these are shared parser limitations, not a separate find grammar or a note-size cap. the 50 mib regressions cover ordinary, list-heavy, markup-dense and entity-heavy notes and report source reads, packed bytes, retained syntax nodes and measured memory. no wall-clock threshold is used.
 
-the shared projection covers emphasis, strong emphasis, strikethrough, backslash escapes, decoded entities, direct link labels, angle autolinks and inline code. malformed inline syntax remains literal. inline-code content remains literal, including spaces, entities and backslashes. block prefixes and code fences are scanned without reading a complete physical line. images remain source text, matching the current formatted view. custom addon widgets, reference resolution and non-markdown embedded renderers do not have synthesized searchable text in this contract.
-
-the word counter's semantic projection discards source positions and lexes complete regions; it cannot supply these edit ranges. this shared position-preserving projection instead reuses the source snapshot and literal search matcher. it retains source positions for ordinary text and small decoded strings for atoms, rather than a second whole-note string.
-
-projection work yields after bounded batches, reads at most 4096 normalized source units at a time, and survives query cancellation for reuse on the same source version and prefix. edits invalidate the projection; initial indexing of a new version is cooperative and off the renderer. query changes and selection-only navigation reuse parsed syntax. no second scheduler or renderer whole-note read is introduced.
-
-there is no note-size limit. existing query validation remains 65,536 utf-16 units before and after normalization. provenance work is bounded by that query size; highlight page size bounds the number of returned matches. the 50 mib node regression counts reads, work per yield and materializations, rather than timing the machine.
+query and replacement request text remains bounded to 65,536 utf-16 units at the worker trust boundary. highlight page size bounds returned match count.

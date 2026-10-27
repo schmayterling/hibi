@@ -6,6 +6,7 @@ import {
   formattedFormatting,
   formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
+import { formattedMarkerRanges } from '../../shared/formatted-text-rules.ts'
 import { entityNodes, markDecoded } from '../_shared/formatted-entities.ts'
 import { subscriptSyntax, subtextSyntax } from './formatted-syntax.ts'
 
@@ -22,7 +23,10 @@ const subscript: FormattedContribution = {
     {
       nodes: ['Subscript'],
       decorate(node, out, context) {
-        out.syntax(node.from, node.from + 1)
+        for (const range of formattedMarkerRanges(node.node, (a, b) =>
+          context.state.sliceDoc(a, b),
+        ))
+          out.syntax(range.from, range.to)
         markDecoded(
           out,
           context,
@@ -31,7 +35,6 @@ const subscript: FormattedContribution = {
           { class: 'hibi-lp-subscript' },
           entityNodes(node.node, context.visible, 'Subscript'),
         )
-        out.syntax(node.to - 1, node.to)
         return undefined
       },
     },
@@ -115,7 +118,10 @@ const subtext: FormattedContribution = {
           beside ? { class: 'markdown-subtext' } : null,
           entityNodes(node.node, context.visible, 'Subscript'),
         )
-        out.syntax(node.from, node.from + 3)
+        for (const range of formattedMarkerRanges(node.node, (a, b) =>
+          state.sliceDoc(a, b),
+        ))
+          out.syntax(range.from, range.to)
         return undefined
       },
     },

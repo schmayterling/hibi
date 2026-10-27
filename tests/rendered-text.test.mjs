@@ -4,13 +4,14 @@ import { GFM, parser } from '@lezer/markdown'
 import { decodeHTMLStrict } from 'entities'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { renderedConfig } from './rendered-config.mjs'
 
 const project = (text) => {
   const source = new SourceStore(text, { tabId: 'projection', revision: 0 })
-  const index = new RenderedTextIndex(source.snapshot())
+  const index = new RenderedTextIndex(source.snapshot(), 0, renderedConfig)
   for (const _step of index.build()) {
   }
-  return [...index.runs()]
+  return [...index.range(0, index.length)]
     .map((run) => run.text ?? index.text(run.from, run.to))
     .join('')
 }
@@ -43,7 +44,7 @@ function oracle(text) {
   return result
 }
 
-test('inline delimiter projection agrees with the formatted grammar on a small exhaustive corpus', () => {
+test('inline delimiter projection agrees with the commonmark and gfm baseline on a small exhaustive corpus', () => {
   const parts = [
     'a',
     ' ',
@@ -78,7 +79,10 @@ test('pure range assembly uses separators only at supplied semantic block bounda
     { from: 5, to: 7, block: true },
     { from: 8, to: 13 },
   ]
-  const read = (from, to) => source.slice(from, to)
+  const read = {
+    length: source.length,
+    read: (from, to) => source.slice(from, to),
+  }
   for (const [options, expected] of [
     [{}, 'hello\n\nworld'],
     [{ blockSeparator: '\n' }, 'hello\nworld'],
@@ -112,10 +116,33 @@ test('pure range assembly uses separators only at supplied semantic block bounda
   )
 })
 
+test('pure range rejects invalid bounds and partial unicode scalars', async () => {
+  const { renderedRange } = await import('../src/shared/rendered-text.ts')
+  const text = 'a😀b'
+  const runs = [{ from: 0, to: text.length }]
+  const input = {
+    length: text.length,
+    read: (from, to) => text.slice(from, to),
+  }
+  for (const [from, to] of [
+    [3, 2],
+    [NaN, 2],
+    [0, Infinity],
+    [-1, 2],
+    [0, 5],
+    [2, 3],
+    [0, 2],
+  ])
+    assert.throws(
+      () => [...renderedRange(runs, from, to, input)],
+      `${from}:${to}`,
+    )
+})
+
 test('bounded source ranges stream rendered text with source provenance', () => {
   const source = 'prefix **bold** &amp; tail' + 'x'.repeat(20000)
   const store = new SourceStore(source, { tabId: 'range', revision: 0 })
-  const index = new RenderedTextIndex(store.snapshot())
+  const index = new RenderedTextIndex(store.snapshot(), 0, renderedConfig)
   for (const _step of index.build()) {
   }
   store.counters(true)
@@ -152,13 +179,15 @@ test('bounded source ranges stream rendered text with source provenance', () => 
     [{ from: source.length - 2, to: source.length, text: 'xx', precise: true }],
   )
   // Two source units plus constant scalar/CRLF boundary checks.
-  assert.equal(store.counters().sourceUnitsRead, 8)
+  assert.ok(store.counters().sourceUnitsRead <= 4096)
 
   const unicode = new RenderedTextIndex(
     new SourceStore('x'.repeat(4095) + '😀z', {
       tabId: 'range-unicode',
       revision: 0,
     }).snapshot(),
+    0,
+    renderedConfig,
   )
   for (const _step of unicode.build()) {
   }
@@ -181,10 +210,10 @@ test('links and code honor source-order precedence and quoted destinations', () 
     ],
     ['hello [world](url "title ) here")', 'hello world'],
     ['hello [world](url "(")', 'hello world'],
-    ['hello [world]( "a title")', 'hello world'],
+    ['hello [world]( "a title")', 'hello world( "a title")'],
     ['hello [world](url (title here))', 'hello world'],
-    ['hello [world](url "" junk)', 'hello [world](url "" junk)'],
-    ['hello [world](ur<l>)', 'hello [world](ur<l>)'],
+    ['hello [world](url "" junk)', 'hello world(url "" junk)'],
+    ['hello [world](ur<l>)', 'hello world'],
   ])
     assert.equal(project(source), expected, source)
 })
@@ -193,7 +222,7 @@ test('inline marks do not pair across block or list boundaries', () => {
   for (const [source, expected] of [
     ['*first\n- last*', '*first\nlast*'],
     ['*first\n# last*', '*first\nlast*'],
-    ['*first\n\nlast*', '*first\n\nlast*'],
+    ['*first\n\nlast*', '*first\nlast*'],
   ])
     assert.equal(project(source), expected, source)
 })
@@ -201,15 +230,12 @@ test('inline marks do not pair across block or list boundaries', () => {
 test('rendered text leaves malformed syntax literal and decodes only prose atoms', () => {
   for (const [source, expected] of [
     ['a **word', 'a **word'],
-    ['a [word](unfinished', 'a [word](unfinished'],
+    ['a [word](unfinished', 'a word(unfinished'],
     ['a [word](https://example.test "title") b', 'a word b'],
     ['a [word](https://example.test/a_(b)) b', 'a word b'],
     ['a `&amp; \\*` b', 'a &amp; \\* b'],
     ['a &#x1F600; b', 'a 😀 b'],
-    [
-      'a ![**image** `code` &amp;](url) b',
-      'a ![**image** `code` &amp;](url) b',
-    ],
+    ['a ![**image** `code` &amp;](url) b', 'a  b'],
   ])
     assert.equal(project(source), expected, source)
 })

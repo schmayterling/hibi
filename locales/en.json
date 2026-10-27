@@ -105,6 +105,7 @@
   "a6d662de7706": "An editor addon prevented source synchronization. Retry after checking its settings.",
   "9ab20d9f0486": "An editor extension changed this edit.",
   "293aad4970e4": "An editor extension changed this edit. Review the document before continuing.",
+  "ce2d3152cde7": "An editor extension failed while this edit was made.",
   "6e1bc14eb426": "An error occurred while switching back to a modal addon. Falling back to regular editing mode.",
   "4fa498ec92db": "An exported addon API must be a plain object with a positive integer version.",
   "bcd26bd0c90a": "An import file changed while being read. Try again.",

@@ -2,6 +2,7 @@ import { build } from 'esbuild'
 import {
   BoundaryTree,
   boundaryRecords,
+  spliceBoundaryFragments,
 } from '../src/shared/chunked-markdown.ts'
 import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import {
@@ -358,6 +359,110 @@ test('receiving views reject unscanned boundary records before adopting any page
   )
 })
 
+test('edits during active boundary repairs keep the last completed suffix', () => {
+  const text = '# heading\n\nparagraph words\n\n'.repeat(
+    Math.ceil((8 * 1024 * 1024) / 28),
+  )
+  const store = new SourceStore(text, { tabId: 'midscan', revision: 0 })
+  const probe = counts()
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    configuration({
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+      opaque: ['Table'],
+    }),
+    probe,
+  )
+  drain(index)
+  const at = text.indexOf('# heading', Math.floor(text.length / 2))
+  probe.scannedUnits = 0
+  index.apply(edit(store, [{ from: at + 2, to: at + 2, insert: 'x' }]))
+  assert.equal(index.advance(), false)
+  assert.equal(index.advance(), false)
+  index.apply(edit(store, [{ from: at + 3, to: at + 3, insert: 'y' }]))
+  drain(index)
+  assert.ok(probe.scannedUnits < 512 * 1024, JSON.stringify(probe))
+  probe.scannedUnits = 0
+  let pos = at
+  for (const character of '<!-- note -->') {
+    index.apply(edit(store, [{ from: pos, to: pos, insert: character }]))
+    pos++
+    for (let step = 0; step < 3; step++) if (index.advance()) break
+  }
+  drain(index)
+  assert.ok(probe.scannedUnits < 2 * 1024 * 1024, JSON.stringify(probe))
+  assert.ok(
+    [...index.records()].every(
+      (record) => record.kind !== 'chunk' || record.type !== 'tail',
+    ),
+  )
+})
+
+test('short repair pages splice into mapped viewport fragments with matching syntax', () => {
+  const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+  const body = unit.repeat(1200)
+  const at = body.indexOf('# heading', Math.floor(body.length / 4))
+  const close = body.indexOf('paragraph', at + 2000)
+  const text = body.slice(0, close) + 'words --> text\n\n' + body.slice(close)
+  const store = new SourceStore(text, { tabId: 'splice', revision: 0 })
+  const config = configuration({ opaque: ['Table'] })
+  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(index)
+  const old = hydrate(index)
+  const version = index.version
+  const change = edit(store, [{ from: at, to: at, insert: '<!--\n' }])
+  const mapped = TreeFragment.applyChanges(
+    TreeFragment.addTree(old),
+    changedRanges(change),
+  )
+  const source = sourceParserInput(store.snapshot())
+  const local = index.parser.startChunkedParse(source, mapped, {
+    from: 0,
+    to: 200,
+  })
+  local.advance()
+  index.apply(change)
+  drain(index)
+  const pages = [...index.pages(at, version)]
+  const { from, to } = pages[0]
+  assert.ok(to < index.length)
+  const builder = new BoundaryTree(index.parser, to - from)
+  for (const page of pages) builder.append(page.records)
+  const fragments = spliceBoundaryFragments(
+    local.snapshot(),
+    mapped,
+    from,
+    to,
+    builder.finish(),
+  )
+  const fresh = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(fresh)
+  for (const center of [from, at + 1000, to, index.length - 200]) {
+    const demand = {
+      from: Math.max(0, center - 200),
+      to: Math.min(index.length, center + 200),
+    }
+    const visible = (tree) =>
+      shape(tree).filter(
+        ([name, start, end]) =>
+          name && name !== 'Document' && start < demand.to && end > demand.from,
+      )
+    const actual = finish(
+      index.parser.startChunkedParse(source, fragments, demand, 0, true),
+    )
+    const expected = finish(
+      fresh.parser.startChunkedParse(
+        source,
+        TreeFragment.addTree(hydrate(fresh)),
+        demand,
+      ),
+    )
+    assert.deepEqual(visible(actual), visible(expected), JSON.stringify(demand))
+  }
+})
+
 test('a 52 mib structural repair transfers only through the unchanged suffix', (t) => {
   const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
   const body = unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length))
@@ -405,15 +510,13 @@ test('a 52 mib structural repair transfers only through the unchanged suffix', (
     TreeFragment.addTree(old),
     changedRanges(prepared),
   )
-  const kept = TreeFragment.applyChanges(
+  const fragments = spliceBoundaryFragments(
+    old,
     mapped,
-    [{ fromA: from, toA: to, fromB: from, toB: to }],
-    0,
+    from,
+    to,
+    builder.finish(),
   )
-  const fragments = [
-    ...kept,
-    new TreeFragment(from, to, builder.finish(), -from),
-  ].sort((a, b) => a.from - b.from)
   probe.scannedUnits = 0
   const parsed = finish(
     index.parser.startChunkedParse(
@@ -423,9 +526,23 @@ test('a 52 mib structural repair transfers only through the unchanged suffix', (
         from: index.length - 8192,
         to: index.length,
       },
+      0,
+      true,
     ),
   )
   assert.equal(parsed.length, index.length)
+  assert.equal(probe.scannedUnits, 0)
+  probe.scannedUnits = 0
+  finish(
+    index.parser.startChunkedParse(
+      sourceParserInput(store.snapshot()),
+      TreeFragment.addTree(parsed),
+      {
+        from: index.length - 16384,
+        to: index.length - 8192,
+      },
+    ),
+  )
   assert.equal(probe.scannedUnits, 0)
   const unchanged = [...index.pages(index.length - 100, baseVersion)]
   assert.equal(unchanged.length, 1)

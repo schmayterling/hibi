@@ -27,6 +27,7 @@ import {
   type ChunkedMarkdownProbe,
   type ChunkedPartialParse,
   type Demand,
+  spliceBoundaryFragments,
   uncovered,
   unindexedFrom,
 } from './chunked-markdown.ts'
@@ -222,6 +223,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
     demand: Demand,
     settling: boolean,
     retained = fragments,
+    joined = false,
   ) => {
     const prefix = prefixOf(state)
     return run(
@@ -230,6 +232,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
         fragments,
         demand,
         prefix,
+        joined,
       ),
       demand,
       prefix,
@@ -270,33 +273,21 @@ function syntaxField(options: FormattedSyntaxOptions) {
             config &&
             adopted.key === boundaryKey(config)
           ) {
-            const length = transaction.state.doc.length
-            const fragments = [
-              ...TreeFragment.applyChanges(
-                TreeFragment.addTree(value.tree),
-                [
-                  {
-                    fromA: adopted.from,
-                    toA: length,
-                    fromB: adopted.from,
-                    toB: length,
-                  },
-                ],
-                0,
-              ),
-              new TreeFragment(
-                adopted.from,
-                adopted.to,
-                adopted.tree,
-                -adopted.from,
-              ),
-              ...TreeFragment.applyChanges(
-                value.retained,
-                [{ fromA: 0, toA: adopted.to, fromB: 0, toB: adopted.to }],
-                0,
-              ),
-            ]
-            return start(transaction.state, fragments, demand, true)
+            const fragments = spliceBoundaryFragments(
+              value.tree,
+              value.retained,
+              adopted.from,
+              adopted.to,
+              adopted.tree,
+            )
+            return start(
+              transaction.state,
+              fragments,
+              demand,
+              true,
+              fragments,
+              true,
+            )
           }
         }
       }

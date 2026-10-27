@@ -94,7 +94,10 @@ export class MarkdownBoundaryIndex {
     return this.tree !== null
   }
   apply(prepared: PreparedSourceOperation) {
-    const tree = this.tree ?? (this.advanced ? this.parse.snapshot() : null)
+    // A partial snapshot has an unscanned tail; keep the completed cache instead.
+    const tree =
+      this.tree ??
+      (!this.retained && this.advanced ? this.parse.snapshot() : null)
     let offset = 0
     const changes = editorChangesFromSource(
       prepared.before,

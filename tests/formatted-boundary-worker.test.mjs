@@ -209,8 +209,18 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       )
       t.diagnostic(JSON.stringify({ shortRepair: repaired }))
       assert.equal(repaired.settling, false, JSON.stringify(repaired))
-      assert.ok(repaired.pages <= 2, JSON.stringify(repaired))
-      assert.ok(repaired.records <= 256, JSON.stringify(repaired))
+      assert.ok(
+        repaired.requests > 0 && repaired.requests <= 4,
+        JSON.stringify(repaired),
+      )
+      assert.ok(
+        repaired.pages > 0 && repaired.pages <= 2,
+        JSON.stringify(repaired),
+      )
+      assert.ok(
+        repaired.records > 0 && repaired.records <= 256,
+        JSON.stringify(repaired),
+      )
       assert.deepEqual(repaired.errors, [])
       const at = await page.evaluate(() => {
         const preview = window.livePreview

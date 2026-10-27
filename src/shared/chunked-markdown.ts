@@ -6,7 +6,7 @@ import {
   type PartialParse,
   type SyntaxNode,
   Tree,
-  type TreeFragment,
+  TreeFragment,
 } from '@lezer/common'
 import type { MarkdownParser } from '@lezer/markdown'
 
@@ -596,6 +596,7 @@ class ChunkedParse implements ChunkedPartialParse {
     fragments: readonly TreeFragment[],
     view: Demand | null,
     prefix = 0,
+    joined = false,
   ) {
     this.parser = parser
     this.input = input
@@ -614,19 +615,42 @@ class ChunkedParse implements ChunkedPartialParse {
       )
       this.pos = prefix
     }
-    this.olds = fragments.flatMap((fragment) => {
-      if (fragment.tree.prop(chunkInfo)?.kind !== 'root') return []
+    const limits: { safe: number; cut: number }[] = []
+    for (let i = fragments.length - 1; i >= 0; i--) {
+      const fragment = fragments[i]!,
+        next = fragments[i + 1]
+      if (
+        joined &&
+        next &&
+        fragment.to === next.from &&
+        !fragment.openEnd &&
+        !next.openStart &&
+        next.tree.prop(chunkInfo)?.kind === 'root'
+      ) {
+        limits[i] = limits[i + 1]!
+        continue
+      }
       let safe = length,
         cut = Number.POSITIVE_INFINITY
-      // A fragment cut by a change at the end of the text ends at its end too.
       if (fragment.to < length || fragment.openEnd) {
         cut = fragment.to
-        // A node may end differently if one of its next two lines changed.
-        safe = lineStart(input, fragment.to)
-        for (let i = 0; i < 2 && safe > 0; i++)
+        safe = lineStart(input, cut)
+        for (let line = 0; line < 2 && safe > 0; line++)
           safe = lineStart(input, safe - 1)
       }
-      return [{ fragment, root: fragment.tree, safe, cut }]
+      limits[i] = { safe, cut }
+    }
+    this.olds = fragments.flatMap((fragment, i) => {
+      if (fragment.tree.prop(chunkInfo)?.kind !== 'root') return []
+      const { safe, cut } = limits[i]!
+      return [
+        {
+          fragment,
+          root: fragment.tree,
+          safe: Math.min(fragment.to, safe),
+          cut,
+        },
+      ]
     })
     readers.set(input, (to) => {
       this.reads.push({ at: this.reading?.parsedPos ?? this.pos, to })
@@ -2181,8 +2205,9 @@ export class ChunkedMarkdownParser extends Parser {
     fragments: readonly TreeFragment[],
     demand: Demand | null,
     prefix = 0,
+    joined = false,
   ): ChunkedPartialParse {
-    return new ChunkedParse(this, input, fragments, demand, prefix)
+    return new ChunkedParse(this, input, fragments, demand, prefix, joined)
   }
 }
 
@@ -2320,6 +2345,51 @@ export function unindexedFrom(tree: Tree): number | null {
   return chunk?.prop(chunkInfo)?.kind === 'tail'
     ? tree.positions.at(-1)! + group!.positions.at(-1)!
     : null
+}
+
+/** Splice verified boundaries at closed seams, keeping real edit cuts in the suffix. */
+export function spliceBoundaryFragments(
+  current: Tree,
+  retained: readonly TreeFragment[],
+  from: number,
+  to: number,
+  replacement: Tree,
+) {
+  const prefix = TreeFragment.applyChanges(
+    TreeFragment.addTree(current),
+    [{ fromA: from, toA: current.length, fromB: from, toB: current.length }],
+    0,
+  )
+  const suffix = TreeFragment.applyChanges(
+    retained,
+    [{ fromA: 0, toA: to, fromB: 0, toB: to }],
+    0,
+  )
+  return [
+    ...prefix.map(
+      (fragment) =>
+        new TreeFragment(
+          fragment.from,
+          fragment.to,
+          fragment.tree,
+          fragment.offset,
+          fragment.openStart,
+          false,
+        ),
+    ),
+    ...(to > from ? [new TreeFragment(from, to, replacement, -from)] : []),
+    ...suffix.map(
+      (fragment) =>
+        new TreeFragment(
+          fragment.from,
+          fragment.to,
+          fragment.tree,
+          fragment.offset,
+          fragment.from === to ? false : fragment.openStart,
+          fragment.openEnd,
+        ),
+    ),
+  ]
 }
 
 /** First reused chunk in a mapped fragment that covers the unchanged document suffix. */

@@ -128,13 +128,10 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | corpus-010 | [markdown-semantics-native.test.mjs:116](markdown-semantics-native.test.mjs#L116) | disabled syntax must preserve native lazy reference rendering | 9: outline semantics and diagram lifecycle |
 | corpus-011 | [markdown-semantics-native.test.mjs:118](markdown-semantics-native.test.mjs#L118) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
 | corpus-012 | [markdown-semantics-native.test.mjs:120](markdown-semantics-native.test.mjs#L120) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
-| corpus-013 | [markdown-semantics-native.test.mjs:122](markdown-semantics-native.test.mjs#L122) | disabled heading syntax must still hide reference definitions | 9: outline semantics and diagram lifecycle |
-| corpus-014 | [markdown-semantics-native.test.mjs:124](markdown-semantics-native.test.mjs#L124) | disabled heading syntax must hide forward reference definitions | 9: outline semantics and diagram lifecycle |
-| corpus-015 | [markdown-semantics-native.test.mjs:126](markdown-semantics-native.test.mjs#L126) | disabled heading syntax must hide definitions before reference edits | 9: outline semantics and diagram lifecycle |
-| corpus-016 | [markdown-semantics-native.test.mjs:128](markdown-semantics-native.test.mjs#L128) | disabled heading syntax must hide definitions after reference edits | 9: outline semantics and diagram lifecycle |
-| corpus-017 | [markdown-semantics-native.test.mjs:130](markdown-semantics-native.test.mjs#L130) | disabled heading syntax must preserve native grapheme character counts | 9: outline semantics and diagram lifecycle |
-| corpus-018 | [markdown-semantics-native.test.mjs:132](markdown-semantics-native.test.mjs#L132) | disabled heading syntax must hide multiline reference titles | 9: outline semantics and diagram lifecycle |
-| corpus-019 | [markdown-semantics-native.test.mjs:134](markdown-semantics-native.test.mjs#L134) | disabled heading syntax must hide quoted reference titles | 9: outline semantics and diagram lifecycle |
+| corpus-014 | [markdown-semantics-native.test.mjs:122](markdown-semantics-native.test.mjs#L122) | disabled heading syntax must hide forward reference definitions | 9: outline semantics and diagram lifecycle |
+| corpus-017 | [markdown-semantics-native.test.mjs:124](markdown-semantics-native.test.mjs#L124) | disabled heading syntax must preserve native grapheme character counts | 9: outline semantics and diagram lifecycle |
+| corpus-018 | [markdown-semantics-native.test.mjs:126](markdown-semantics-native.test.mjs#L126) | disabled heading syntax must hide multiline reference titles | 9: outline semantics and diagram lifecycle |
+| corpus-019 | [markdown-semantics-native.test.mjs:128](markdown-semantics-native.test.mjs#L128) | disabled heading syntax must hide quoted reference titles | 9: outline semantics and diagram lifecycle |
 | split-012 | [markdown-syntax.test.mjs:163](markdown-syntax.test.mjs#L163) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | math-001 | [math-rendering.test.mjs:626](math-rendering.test.mjs#L626) | tall formula rendering must preserve the reading position | 8b: hidden markers and math caret placement |
 | split-005 | [motion.test.mjs:223](motion.test.mjs#L223) | split formatted view must remain read-only without an input caret | 3: read-only access and shared history guards |

@@ -93,6 +93,8 @@ class SpaceWidget extends WidgetType {
 }
 const space = Decoration.replace({ widget: new SpaceWidget() })
 const hiddenLine = Decoration.replace({ block: true })
+/** Lines of a link reference definition, which exports leave out too. */
+const hiddenDefinition = Decoration.replace({ block: true })
 
 /** Margins of a block in px, as in the formatted view's document styles. */
 function blockSpace(name: string): { top: number; bottom: number } {
@@ -129,7 +131,9 @@ const noBlocks: Blocks = {
 }
 let blocks = noBlocks
 
-const isBlock = (node: SyntaxNode) => node.type.is('Block')
+/** Blocks the view lays out; link reference definitions take no space. */
+const isBlock = (node: SyntaxNode) =>
+  node.type.is('Block') && node.name !== 'LinkReference'
 const isList = (node: SyntaxNode) =>
   node.name === 'BulletList' || node.name === 'OrderedList'
 /** Blocks that hold blocks; unless padded, their first and last children's margins collapse through them. */
@@ -170,6 +174,25 @@ function loneMarker(doc: Text, item: SyntaxNode) {
   return first && !isContainer(first) && first.name !== 'FencedCode'
     ? own
     : null
+}
+
+/**
+ * The lines a link reference definition hides: its own and the blank lines
+ * up to the next block, or after the previous block when none follows, as
+ * exports drop them with it. Null when a list marker shares its first line.
+ */
+function definitionLines(doc: Text, node: SyntaxNode) {
+  const first = doc.lineAt(node.from)
+  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) return null
+  let next = node.nextSibling
+  while (next && !next.type.is('Block')) next = next.nextSibling
+  if (next) return { from: first.from, to: doc.lineAt(next.from).from - 1 }
+  let previous = node.prevSibling
+  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
+  return {
+    from: previous ? doc.lineAt(previous.to).to + 1 : first.from,
+    to: doc.lineAt(node.to).to,
+  }
 }
 
 /** The first line a block shows: a lone list marker's line collapses into the next. */
@@ -742,7 +765,7 @@ function inline(
     }
     return undefined
   }
-  const end = spacing(view, tree, line)
+  const end = spacing(view, tree, line, layout)
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
@@ -1006,6 +1029,7 @@ function spacing(
   view: EditorView,
   tree: Tree,
   line: (pos: number) => LineInfo,
+  layout: DecorationSet,
 ) {
   const doc = view.state.doc
   const place = (
@@ -1016,20 +1040,23 @@ function spacing(
     // The first block after an unparsed prefix such as frontmatter starts the document.
     if (previous.name === 'Frontmatter') return
     const gap = Math.max(bottomMargin(previous), topMargin(block))
-    const start = doc.lineAt(block.from),
-      end = doc.lineAt(previous.to)
-    if (end.number + 1 >= start.number) {
+    const start = doc.lineAt(block.from)
+    // Lines the layout hides between the blocks, such as definitions, take no space.
+    let first = doc.lineAt(previous.to).number + 1
+    while (first < start.number && replacedLine(layout, doc.line(first)))
+      first++
+    if (first >= start.number) {
       const shown = shownLine(doc, block)
       if (shown.from >= range.from && shown.from <= range.to)
         line(shown.from).gap = gap
       return
     }
-    for (let number = end.number + 1; number < start.number; number++) {
+    for (let number = first; number < start.number; number++) {
       const blank = doc.line(number)
       if (blank.from < range.from || blank.from > range.to) continue
       const info = line(blank.from)
       info.classes.push('hibi-lp-gap')
-      const height = number === end.number + 1 ? gap : 28
+      const height = number === first ? gap : 28
       info.style.push(`height: ${height}px`, `line-height: ${height}px`)
     }
   }
@@ -1236,12 +1263,19 @@ function chunkLayout(
             }
             return
           }
+          case 'LinkReference': {
+            const lines = definitionLines(doc, ref.node)
+            if (lines && starts(ref.from))
+              out.push(
+                hiddenDefinition.range(lines.from - from, lines.to - from),
+              )
+            return false
+          }
           case 'CodeBlock':
           case 'HTMLBlock':
           case 'CommentBlock':
           case 'ProcessingInstructionBlock':
           case 'Table':
-          case 'LinkReference':
             return false
         }
       },
@@ -1375,6 +1409,20 @@ const focused = StateField.define<boolean>({
     EditorView.focusChangeEffect.of((_, focusing) => setFocus.of(focusing)),
 })
 
+/**
+ * Whether the selection was placed since the editor last lost focus, so a
+ * definition it is in shows. Placing it before focusing keeps it there:
+ * focusing draws it in the shown text rather than beside a hidden line.
+ */
+const placed = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects)
+      if (effect.is(setFocus) && !effect.value) return false
+    return transaction.selection ? true : value
+  },
+})
+
 /** The selection while the focused editor shows markers. */
 function revealedIn(state: EditorState): readonly Revealed[] {
   if (!state.field(focused, false) || !state.facet(showMarkdownMarkers))
@@ -1410,13 +1458,19 @@ function mapLines(set: DecorationSet, update: ViewUpdate) {
 /**
  * A link destination on later lines shows while the selection touches it:
  * input beside a range that hides line breaks would not map to the text.
+ * A definition shows while a selection placed since the editor last lost
+ * focus is inside it, so text typed into one stays in view.
  */
 function revealDestinations(set: DecorationSet, state: EditorState) {
+  const shown = state.field(placed, false)
   for (const { from, to } of state.selection.ranges)
     set = set.update({
       filterFrom: from,
       filterTo: to,
-      filter: (a, b, value) => value !== hide || b < from || a > to,
+      filter: (a, b, value) =>
+        value === hiddenDefinition
+          ? !shown || from <= a || to > b
+          : value !== hide || b < from || a > to,
     })
   return set
 }
@@ -1601,8 +1655,9 @@ export function livePreview(
     syntax.extension,
     codeIndent,
     focused,
+    placed,
     layout,
-    EditorView.decorations.compute([layout, 'selection'], (state) =>
+    EditorView.decorations.compute([layout, placed, 'selection'], (state) =>
       revealDestinations(state.field(layout), state),
     ),
     // Hidden layout syntax is atomic too.
@@ -1632,9 +1687,10 @@ export function livePreview(
     EditorView.atomicRanges.of((view) => {
       const { doc } = view.state
       const lines: Range<Decoration>[] = []
+      const shown = revealDestinations(view.state.field(layout), view.state)
       for (const { from, to } of view.visibleRanges)
-        view.state.field(layout).between(from, to, (a, b, value) => {
-          if (value === hiddenLine)
+        shown.between(from, to, (a, b, value) => {
+          if (value === hiddenLine || value === hiddenDefinition)
             lines.push(
               hide.range(Math.max(0, a - 1), Math.min(doc.length, b + 1)),
             )
@@ -1652,7 +1708,13 @@ export function livePreview(
       const ranges = transaction.selection.ranges.map((range, index) => {
         let head = range.head
         lines.between(head, head, (from, to, value) => {
-          if (value !== hiddenLine || head < from || head > to) return
+          // A selection inside a definition shows it instead.
+          if (
+            value === hiddenDefinition
+              ? head !== from
+              : value !== hiddenLine || head < from || head > to
+          )
+            return
           const back = head < (before[index]?.head ?? head)
           head =
             (back && from > 0) || to >= doc.length

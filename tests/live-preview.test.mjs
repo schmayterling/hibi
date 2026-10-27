@@ -952,6 +952,111 @@ test('after an idle moment, scrolling near the viewport parses nothing in its fr
   assert.equal(result.scroll.scannedUnits, 0, JSON.stringify(result))
 })
 
+test('link reference definitions take no space and show only while the caret edits them', {
+  timeout: 60000,
+}, async () => {
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const layout = (doc) =>
+    harness.evaluate(async (doc) => {
+      await window.livePreview.mount(
+        doc,
+        { width: 800, height: 600 },
+        {
+          editable: true,
+        },
+      )
+      const lines = [...document.querySelectorAll('.cm-line')]
+      return {
+        text: lines
+          .map((line) => line.textContent.trim())
+          .filter(Boolean)
+          .join('|'),
+        tops: lines
+          .filter((line) => line.textContent.trim())
+          .map((line) => Math.round(line.getBoundingClientRect().top)),
+      }
+    }, doc)
+  // Each note lays out as the one without its definitions.
+  for (const [doc, plain] of [
+    ['one\n\n[ref]: /x "t"\n\ntwo', 'one\n\ntwo'],
+    ['# one\n[a]: /x\n[b]:\n  /y\n\ntwo', '# one\ntwo'],
+    ['[ref]: /x\n\none\n\n> [q]: /y\n>\n> two', 'one\n\n> two'],
+    ['one\n\ntwo\n\n[ref]: /x\n', 'one\n\ntwo\n'],
+  ]) {
+    const shown = await layout(doc)
+    const expected = await layout(plain)
+    assert.equal(shown.text, expected.text, doc)
+    assert.deepEqual(shown.tops, expected.tops, doc)
+  }
+  const doc = 'one\n\n[ref]: /x\n\ntwo'
+  const definition = { from: doc.indexOf('['), to: doc.indexOf('two') - 1 }
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(doc, { width: 800, height: 600 }, { editable: true })
+    const view = preview.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: 0 } })
+    await preview.settle()
+    return {
+      lines: [...document.querySelectorAll('.cm-line')].map((line) =>
+        line.textContent.trim(),
+      ),
+    }
+  }, doc)
+  assert.ok(!result.lines.includes('[ref]: /x'), JSON.stringify(result))
+  // Arrow keys step over the hidden lines.
+  const heads = []
+  for (let step = 0; step < 4; step++) {
+    await harness.keyboard.press('ArrowDown')
+    heads.push(
+      await harness.evaluate(
+        () => window.livePreview.view().state.selection.main.head,
+      ),
+    )
+  }
+  assert.ok(
+    heads.every((head) => head < definition.from || head > definition.to),
+    JSON.stringify({ heads, definition }),
+  )
+  assert.equal(heads.at(-1), doc.length)
+  // A caret placed in the definition shows it, and typing stays in it.
+  const typed = await harness.evaluate(async (at) => {
+    const preview = window.livePreview
+    const view = preview.view()
+    view.dispatch({ selection: { anchor: at } })
+    await preview.settle()
+    const shown = [...document.querySelectorAll('.cm-line')].some(
+      (line) => line.textContent.trim() === '[ref]: /x',
+    )
+    return { shown }
+  }, doc.indexOf('/x') + 2)
+  assert.equal(typed.shown, true)
+  await harness.keyboard.type('yz')
+  const after = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    await preview.settle()
+    const view = preview.view()
+    const shown = [...document.querySelectorAll('.cm-line')].some(
+      (line) => line.textContent.trim() === '[ref]: /xyz',
+    )
+    view.contentDOM.blur()
+    await preview.settle()
+    return {
+      doc: view.state.doc.toString(),
+      shown,
+      hidden: ![...document.querySelectorAll('.cm-line')].some((line) =>
+        line.textContent.includes('[ref]'),
+      ),
+    }
+  })
+  assert.deepEqual(after, {
+    doc: 'one\n\n[ref]: /xyz\n\ntwo',
+    shown: true,
+    hidden: true,
+  })
+})
+
 test('links whose destination spans lines render on one line while mounting and scrolling', {
   timeout: 90000,
 }, async () => {

@@ -372,7 +372,8 @@ type CodeIndent = {
   to: number
   prefix: string
   scan: number
-  first: { from: number; to: number; unit: string } | null
+  /** The first indented line, or the last sampled line when none is (unit null). */
+  first: { from: number; to: number; unit: string | null } | null
 }
 const rememberCodeIndent = StateEffect.define<CodeIndent>()
 
@@ -385,7 +386,11 @@ export const codeIndent = StateField.define<CodeIndent | null>({
     if (!found || !docChanged) return found
     if (changes.touchesRange(found.from)) return null
     // Keep the checked prefix; only changed lines can introduce an earlier indent.
-    let scan = changes.mapPos(found.scan)
+    // A scan past the last line stays past it.
+    let scan =
+      found.scan > changes.length
+        ? newDoc.length + 1
+        : changes.mapPos(found.scan)
     changes.iterChangedRanges((from, to, next) => {
       if (from <= found.scan && to >= found.from)
         scan = Math.min(scan, newDoc.lineAt(next).from)
@@ -408,50 +413,67 @@ export const codeIndent = StateField.define<CodeIndent | null>({
 })
 
 /**
- * The containers around code, outermost first, as the markdown parser strips
- * them from each of its lines: null for a quote's marker, or the columns a
- * list item or footnote definition indents its content by.
+ * A quote (null), or a list item or footnote definition whose content starts
+ * `width` columns after `from`, where its parent's content starts.
  */
+type Container = { from: number; width: number; bullet: boolean } | null
+
+const spaces = /[ \t]*/y
+
+/** The containers around code, outermost first. */
 function codeContainers(state: EditorState, code: SyntaxNode) {
-  const containers: (number | null)[] = []
+  const containers: Container[] = []
   for (let parent = code.parent; parent; parent = parent.parent)
     if (parent.name === 'Blockquote') containers.unshift(null)
-    else if (parent.name === 'FootnoteDefinition') containers.unshift(4)
+    else if (parent.name === 'FootnoteDefinition')
+      containers.unshift({ from: parent.from, width: 4, bullet: false })
     else if (parent.name === 'ListItem') {
       const mark = parent.getChild('ListMark')
       if (!mark) continue
       // Content starts after the marker's spaces, or one column after a
       // marker followed by five or more columns or nothing.
       const { text, from } = state.doc.lineAt(parent.from)
-      const after = mark.to - from
-      const marked = countColumn(text, 4, after)
-      const skipped =
-        after + (/[^ \t]/.exec(text.slice(after))?.index ?? text.length - after)
-      const spaced = countColumn(text, 4, skipped)
-      const content =
-        spaced >= marked + 5 || skipped === text.length ? marked + 1 : spaced
-      containers.unshift(content - countColumn(text, 4, parent.from - from))
+      spaces.lastIndex = mark.to - from
+      spaces.test(text)
+      const item = text.slice(parent.from - from, spaces.lastIndex)
+      const marked = countColumn(item, 4, mark.to - parent.from)
+      const spaced = countColumn(item, 4)
+      containers.unshift({
+        from: parent.from,
+        width:
+          spaced >= marked + 5 || spaces.lastIndex === text.length
+            ? marked + 1
+            : spaced,
+        bullet: mark.to - mark.from === 1,
+      })
     }
   return containers
 }
 
-const quoteMarker = /[ \t]*>[ \t]?/y
+const leading = /[ \t>]*/y
+/** A line's whitespace and quote markers from `from`, and the character after them. */
+function lineHead(text: string, from = 0) {
+  leading.lastIndex = from
+  leading.test(text)
+  return text.slice(from, leading.lastIndex + 1)
+}
 
-/** Where a line's text starts after its containers' prefixes, and its column there. */
-function containedStart(text: string, containers: readonly (number | null)[]) {
-  let at = 0,
-    column = 0
-  for (const width of containers) {
-    if (width === null) {
-      quoteMarker.lastIndex = at
-      at += quoteMarker.exec(text)?.[0].length ?? 0
-      column = countColumn(text, 4, at)
-    } else {
-      column += width
-      at = findColumn(text, column, 4)
-    }
-  }
-  return { at, column }
+/**
+ * A code line's head without its containers' prefixes, as the rich editor's
+ * markdown parser strips them: a quote's marker; a bullet item's columns,
+ * after reading its leading tabs as spaces; other items' and footnotes'
+ * columns.
+ */
+function contained(head: string, containers: readonly Container[]) {
+  for (const container of containers)
+    if (!container) head = head.replace(/^ {0,3}>[ \t]?/, '')
+    else if (container.bullet) {
+      spaces.lastIndex = 0
+      spaces.test(head)
+      const columns = countColumn(head, 4, spaces.lastIndex) - container.width
+      head = ' '.repeat(Math.max(0, columns)) + head.slice(spaces.lastIndex)
+    } else head = head.slice(findColumn(head, container.width, 4))
+  return head
 }
 
 /**
@@ -461,7 +483,7 @@ function containedStart(text: string, containers: readonly (number | null)[]) {
 function codeIndentUnit(state: EditorState, code: SyntaxNode) {
   const opening = state.doc.lineAt(code.from)
   const containers = codeContainers(state, code)
-  const prefix = `${code.name}:${containers.map((width) => width ?? '>').join(' ')}`
+  const prefix = `${code.name}:${containers.map((container) => (container ? `${container.bullet ? '-' : ''}${container.width}` : '>')).join(' ')}`
   const fenced = code.name === 'FencedCode'
   let found = state.field(codeIndent, false)
   if (
@@ -478,40 +500,37 @@ function codeIndentUnit(state: EditorState, code: SyntaxNode) {
     }
   if (!found.first) {
     const closing = code.lastChild
-    const last = state.doc.line(
-      Math.min(
-        state.doc.lines,
-        opening.number + (fenced ? 1 : 0) + codeIndentLines - 1,
-      ),
-    )
-    const end = Math.min(
-      last.to,
+    const end =
       fenced && closing?.name === 'CodeMark' && closing.from > opening.to
-        ? state.doc.lineAt(closing.from).from - 1
-        : code.to,
-    )
+        ? state.doc.lineAt(closing.from).from
+        : code.to + 1
+    const last = opening.number + (fenced ? 1 : 0) + codeIndentLines - 1
     found = { ...found }
     for (
       let pos = Math.max(found.scan, fenced ? opening.to + 1 : opening.from);
-      pos <= end;
+      pos < end;
     ) {
       const line = state.doc.lineAt(pos)
-      found.scan = line.from
-      const contained = containedStart(line.text, containers)
-      let start = contained.at
-      if (!fenced)
-        start =
-          line.number === opening.number
-            ? code.from - line.from
-            : findColumn(line.text, contained.column + 4, 4)
-      const text = line.text.slice(start)
+      let text: string
+      // Indented code on its item's marker line starts where the parser puts it.
+      if (
+        !fenced &&
+        line.number === opening.number &&
+        containers.some((container) => container && container.from >= line.from)
+      )
+        text = lineHead(line.text, code.from - line.from)
+      else {
+        text = contained(lineHead(line.text), containers)
+        if (!fenced) text = text.replace(/^(?: {0,3}\t| {1,4})/, '')
+      }
       // Indented-code parsing discards blank whitespace; fenced code preserves it.
       const unit = !fenced && blank(text) ? undefined : detectIndentUnit(text)
-      if (unit) {
-        found.first = { from: line.from, to: line.to, unit }
+      pos = found.scan = line.to + 1
+      // Lines after the sampled ones are not read until an edit among those.
+      if (unit || line.number >= last) {
+        found.first = { from: line.from, to: line.to, unit: unit ?? null }
         break
       }
-      pos = line.to + 1
     }
   }
   return {

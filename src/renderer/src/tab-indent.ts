@@ -38,15 +38,15 @@ export const codeIndentLines = 1000
 const indented = /\t| {2,}(?=[^ \n])/y
 /** The first indented line's unit among at most `lines` lines, scanning only as far as that line. */
 export function detectIndentUnit(text: string, lines = Infinity) {
-  for (let at = 0, line = 0; line < lines; line++) {
+  for (let at = 0, line = 1; ; line++) {
     indented.lastIndex = at
     const match = indented.exec(text)?.[0]
     if (match)
       return match === '\t' ? match : ' '.repeat(Math.min(match.length, 4))
+    if (line >= lines) return undefined
     at = text.indexOf('\n', at) + 1
     if (!at) return undefined
   }
-  return undefined
 }
 
 /** Rich-text Tab: lists and tables first, then code indentation, then a mid-line tab. */

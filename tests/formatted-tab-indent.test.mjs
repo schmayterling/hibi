@@ -117,6 +117,18 @@ for (const engine of ['tiptap', 'codemirror'])
           await markdown(list)
           await page.keyboard.press('Tab')
           await markdown(list.replace('  y', '  \ty'))
+          // Leading tabs under a bullet read as spaces, as in the rich editor.
+          for (const code of [
+            '- item\n\n  ~~~\n  x\n  \ty\n  ~~~',
+            '- item\n\n  ~~~\n\tx\n\ty\n  ~~~',
+          ]) {
+            await replace(code, code.indexOf('x') + 1)
+            await markdown(code)
+            await page.keyboard.press('Tab')
+            await markdown(code.replace('x', 'x  '))
+            await page.keyboard.press('ControlOrMeta+z')
+            await markdown(code)
+          }
           await replace(source, 0)
           await markdown(source)
         },

@@ -5,6 +5,7 @@ import { EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
 import { Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
+import { MarkdownManager } from '@tiptap/markdown'
 import {
   blockBreak,
   codeIndent,
@@ -15,6 +16,12 @@ import {
   indent,
   lineBreak,
 } from '../src/renderer/src/formatted-commands.ts'
+import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
+import {
+  codeIndentLines,
+  detectIndentUnit,
+  tabIndent,
+} from '../src/renderer/src/tab-indent.ts'
 import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
 
 const markdown = parser.configure(GFM)
@@ -212,8 +219,23 @@ test('code indentation strips quote and indented-code prefixes', () => {
   assert.equal(run('>     x\n>       |y', tab), '>     x\n>         |y')
 })
 
-test('code indentation strips list, footnote and mixed container prefixes', () => {
+test('code indentation strips container prefixes as the rich editor reads them', () => {
   const footnotes = parser.configure([GFM, Footnotes])
+  const { parser: marked, options, core, addons } = markdownConfiguration([])
+  const manager = new MarkdownManager({
+    extensions: [...core, ...addons],
+    marked,
+    markedOptions: options,
+  })
+  /** The rich editor's Tab unit in the first code block of `doc`. */
+  const rich = (doc) => {
+    const code = (node) =>
+      node.type === 'codeBlock'
+        ? (node.content ?? []).map(({ text }) => text).join('')
+        : node.content?.map(code).find((text) => text !== undefined)
+    const text = code(manager.parse(doc.replace('|', '')))
+    return detectIndentUnit(text, codeIndentLines) ?? tabIndent.snapshot().unit
+  }
   const tab = (doc, codeTabs) => {
     const head = doc.indexOf('|')
     const text = doc.replace('|', '')
@@ -229,16 +251,28 @@ test('code indentation strips list, footnote and mixed container prefixes', () =
     const at = next.selection.main.head
     return `${next.doc.sliceString(0, at)}|${next.doc.sliceString(at)}`
   }
-  // The code's own first indent, not its container's: a tab, as in the rich editor.
-  for (const doc of [
-    '[^1]: note\n\n    ```js\n    foo|\n    \tbar\n    ```',
-    '- item\n\n  ```js\n  foo|\n  \tbar\n  ```',
-    '> - item\n>\n>   ```\n>   foo|\n>   \tbar\n>   ```',
-    '- > ```\n  > foo|\n  > \tbar\n  > ```',
-    '10. item\n\n    ```\n    foo|\n    \tbar\n    ```',
-    '- item\n\n      foo|\n      \tbar',
-  ])
-    assert.equal(tab(doc), doc.replace('|', '\t|'), doc)
+  for (const [doc, unit] of [
+    // Bullet items read a line's leading tabs as spaces to each tab stop.
+    ['- item\n\n  ```js\n  foo|\n  \tbar\n  ```', '  '],
+    ['- item\n\n  ~~~\n\tfoo|\n\tbar\n  ~~~', '  '],
+    ['- [ ] task\n\n  ```\n  foo|\n  \tbar\n  ```', '  '],
+    [' * item\n\n   ~~~\n   foo|\n    \tbar\n   ~~~', '    '],
+    ['- a\n  - b\n\n    ```\n    foo|\n    \tbar\n    ```', '    '],
+    ['> - item\n>\n>   ```\n>   foo|\n>   \tbar\n>   ```', '  '],
+    ['- item\n\n\t\tfoo|\n\t\tbar', '  '],
+    ['- item\n\n      foo|\n      \tbar', '  '],
+    // Quote markers, ordered items and footnotes leave a tab after them.
+    ['- > ```\n  > foo|\n  > \tbar\n  > ```', '\t'],
+    ['>~~~\n>foo|\n> \tbar\n>~~~', '\t'],
+    ['10. item\n\n    ```\n    foo|\n    \tbar\n    ```', '\t'],
+    ['[^1]: note\n\n    ```js\n    foo|\n    \tbar\n    ```', '\t'],
+    ['    foo|\n      bar', '  '],
+  ]) {
+    assert.equal(rich(doc), unit, `rich editor: ${doc}`)
+    assert.equal(tab(doc), doc.replace('|', `${unit}|`), doc)
+  }
+  // The rich editor reads an ordered item's code one column early, with a
+  // leading space and three-space unit here; the code's own unit is two.
   assert.equal(
     tab('10. item\n\n    ```\n    foo|\n      bar\n    ```'),
     '10. item\n\n    ```\n    foo  |\n      bar\n    ```',
@@ -260,15 +294,19 @@ test('code indentation strips list, footnote and mixed container prefixes', () =
   )
 })
 
-test('the first tab in a 50 MiB code block with no indented line reads only its first lines', () => {
-  const body = `${'word '.repeat(11)}\n`.repeat(Math.ceil((50 * 2 ** 20) / 56))
+/**
+ * Line reads, and the units of text they return, for three Tabs on the last
+ * line of a fenced block holding `body`, through a chunked tree that holds
+ * only the block's fences and that line.
+ */
+function tailTabReads(body) {
   const source = `intro\n\n~~~\n${body}y\n~~~\n`
   const sample = markdown.parse('intro\n\n~~~\nx\ny\n~~~\n')
   const code = sample.topNode.getChild('FencedCode')
   const from = source.indexOf('~~~'),
     closing = source.lastIndexOf('~~~'),
     tail = source.lastIndexOf('y\n~~~')
-  /** A chunked tree that holds the block's fences and its last line, after `typed` tabs there. */
+  /** The tree after `typed` tabs on the last line. */
   const tree = (typed) =>
     new Tree(
       sample.type,
@@ -316,6 +354,13 @@ test('the first tab in a 50 MiB code block with no indented line reads only its 
     counts.push({ lines, units })
     assert.equal(state.doc.sliceString(head, head + 1), '\t')
   }
+  return counts
+}
+
+test('the first tab in a 50 MiB code block with no indented line reads only its first lines', () => {
+  const counts = tailTabReads(
+    `${'word '.repeat(11)}\n`.repeat(Math.ceil((50 * 2 ** 20) / 56)),
+  )
   console.log('code-indent-50mib-reads', JSON.stringify(counts))
   // 936,232 line reads before the window; the first key now reads at most it.
   assert.ok(
@@ -323,6 +368,66 @@ test('the first tab in a 50 MiB code block with no indented line reads only its 
     JSON.stringify(counts),
   )
   assert.ok(counts.slice(1).every(({ lines }) => lines < 12))
+})
+
+test('a 50 MiB last sampled line is read once, not on every tab', () => {
+  const giant = 50 * 2 ** 20
+  const counts = tailTabReads(
+    `${'x\n'.repeat(codeIndentLines - 1)}${'x'.repeat(giant)}\n`,
+  )
+  console.log('code-indent-sample-edge-reads', JSON.stringify(counts))
+  // Each key read that line twice, 104,857,606 units, before the sample was kept.
+  assert.ok(counts[0].units < giant + 10_000, JSON.stringify(counts))
+  assert.ok(
+    counts.slice(1).every(({ units }) => units < 100),
+    JSON.stringify(counts),
+  )
+})
+
+test('code samples its lines again after an edit among them, not after one past them', () => {
+  const doc = `~~~\n${'x\n'.repeat(codeIndentLines)}z\n~~~`
+  let state = EditorState.create({
+    doc,
+    selection: { anchor: doc.indexOf('z') },
+    extensions: codeIndent,
+  })
+  const tab = () => {
+    const head = state.selection.main.head
+    state = state.update(
+      indent(
+        state,
+        markdown.parse(state.doc.toString()),
+        false,
+        Decoration.none,
+      ),
+    ).state
+    return state.doc.sliceString(head, state.selection.main.head)
+  }
+  const indentLine = (number) => {
+    state = state.update({
+      changes: { from: state.doc.line(number).from, insert: '  ' },
+    }).state
+  }
+  assert.equal(tab(), '\t')
+  indentLine(codeIndentLines + 2)
+  assert.equal(tab(), '\t')
+  indentLine(codeIndentLines + 1)
+  assert.equal(tab(), '  ')
+})
+
+test('code that runs to the end of the note keeps its sample through later edits', () => {
+  for (const doc of ['~~~', 'a\n\n~~~', '    x', '~~~\nx']) {
+    let state = EditorState.create({
+      doc,
+      selection: { anchor: doc.length },
+      extensions: codeIndent,
+    })
+    state = state.update(
+      indent(state, markdown.parse(doc), false, Decoration.none),
+    ).state
+    state = state.update({ changes: { from: 0, insert: 'z' } }).state
+    assert.equal(state.doc.toString(), `z${doc}\t`, doc)
+  }
 })
 
 test('code indentation follows an indented line among its first thousand lines only', () => {

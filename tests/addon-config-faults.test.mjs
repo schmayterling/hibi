@@ -118,19 +118,22 @@ for (const engine of ['default', 'codemirror']) {
     await page
       .locator('.source-pane .cm-content[contenteditable="true"]')
       .waitFor()
-    await waitForAsync(page, () =>
-      window.configurationNotices.some((text) =>
-        /configuration-proof\.bad:.*unknown parser MissingConfigAnchor/.test(
-          text,
+    try {
+      await waitForAsync(page, () =>
+        window.configurationNotices.some((text) =>
+          /configuration-proof\.bad:.*unknown parser MissingConfigAnchor/i.test(
+            text,
+          ),
         ),
-      ),
-    )
-    t.diagnostic(
-      JSON.stringify({
-        engine,
-        notices: await page.evaluate(() => window.configurationNotices),
-      }),
-    )
+      )
+    } finally {
+      t.diagnostic(
+        JSON.stringify({
+          engine,
+          notices: await page.evaluate(() => window.configurationNotices),
+        }),
+      )
+    }
     assert.equal(
       await page
         .getByText('The editor stopped working', { exact: true })

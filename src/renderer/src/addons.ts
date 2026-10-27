@@ -333,17 +333,21 @@ export function useAddons(
     [states, resolution],
   )
   const triggered = useCallback(
-    (manifest: AddonManifest) =>
-      requested.has(manifest.id) ||
-      (manifest.activation === 'command'
-        ? false
-        : manifest.activation === 'source'
-          ? activeView !== 'normal'
-          : manifest.activation === 'formatted'
-            ? codemirrorFormattedView && activeView !== 'markdown'
-            : manifest.activation === 'rich'
-              ? activeView !== 'markdown'
-              : true),
+    (manifest: AddonManifest) => {
+      const activation = manifest.activation
+      return (
+        requested.has(manifest.id) ||
+        (activation === 'command'
+          ? false
+          : activation === 'source'
+            ? activeView !== 'normal'
+            : activation === 'formatted'
+              ? codemirrorFormattedView && activeView !== 'markdown'
+              : activation === 'rich'
+                ? activeView !== 'markdown'
+                : true)
+      )
+    },
     [activeView, requested],
   )
   const relevantIds = useMemo(() => {

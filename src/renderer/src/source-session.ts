@@ -4,8 +4,10 @@ import {
   ChangeSet,
   EditorSelection,
   EditorState,
+  type Extension,
   Prec,
   type StateEffect,
+  StateField,
   Text,
   Transaction,
   type TransactionSpec,
@@ -209,21 +211,61 @@ function update(
 const failedStates = new WeakMap<Transaction, unknown>()
 
 /**
- * The state a transaction reaches. When an extension fails on it, every read
- * throws that error, and the transaction's own `state` reads as its start,
- * so extensions that read it later never get the half-built state.
+ * Keeps an extension's failure on the transaction: every later read throws it,
+ * and the transaction's own `state` reads as its start, so extensions that read
+ * it later never get the half-built state.
  */
+function recordFailure(transaction: Transaction, error: unknown) {
+  if (failedStates.has(transaction)) return
+  failedStates.set(transaction, error)
+  Object.defineProperty(transaction, 'state', { value: transaction.startState })
+}
+
+/** The state a transaction reaches. When an extension fails on it, every read throws that error. */
 function reachedState(transaction: Transaction): EditorState {
   if (failedStates.has(transaction)) throw failedStates.get(transaction)
   try {
     return transaction.state
   } catch (error) {
-    failedStates.set(transaction, error)
-    Object.defineProperty(transaction, 'state', {
-      value: transaction.startState,
-    })
+    recordFailure(transaction, error)
     throw error
   }
+}
+
+const watchedFields = new WeakSet<object>()
+
+/**
+ * Makes the state fields in an extension keep their failures on the
+ * transaction they fail on, where they happen, so a failure stays rejected
+ * even when the code that read the state caught it. Fields, precedence and
+ * compartment wrappers are CodeMirror internals here.
+ */
+export function watchFields(extension: Extension): Extension {
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(visit)
+    else if (value instanceof StateField) {
+      if (watchedFields.has(value)) return
+      watchedFields.add(value)
+      const field = value as unknown as {
+        updateF: (value: unknown, transaction: Transaction) => unknown
+      }
+      const update = field.updateF
+      field.updateF = (value, transaction) => {
+        try {
+          return update(value, transaction)
+        } catch (error) {
+          recordFailure(transaction, error)
+          throw error
+        }
+      }
+    } else if (value && typeof value === 'object') {
+      if ('inner' in value) visit(value.inner)
+      else if ('extension' in value && value.extension !== value)
+        visit(value.extension)
+    }
+  }
+  visit(extension)
+  return extension
 }
 
 /**

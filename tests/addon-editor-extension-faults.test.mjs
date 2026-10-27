@@ -873,6 +873,57 @@ for (const presentation of ['formatted', 'source'])
     assert.deepEqual(errors, [])
   })
 
+/** A failing state field and a change filter that reads it and hides the failure. */
+const swallowingFilter = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  const { EditorState, StateField } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
+  const field = StateField.define({
+    create: () => 0,
+    update(value, transaction) {
+      if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('swallowed boom')
+      return value
+    },
+  })
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    field,
+    EditorState.changeFilter.of((transaction) => {
+      try {
+        transaction.state.field(field)
+      } catch {}
+      return true
+    }),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`an addon ${presentation} field failure that the addon's own change filter catches is still rejected, named and removed (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: swallowingFilter,
+    })
+    await type(page, pane, ['a', 'Q'])
+    await reported(page, 'bad-ext.bad: swallowed boom')
+    await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+    const rejected = await state(page, pane)
+    t.diagnostic(JSON.stringify({ rejected, errors }))
+    assert.equal(rejected.canonical, plain.replace(/end\n$/, 'enda\n'))
+    assert.equal(rejected.view, rejected.canonical)
+    assert.deepEqual(rejected.shown, ['enda'])
+    await type(page, pane, ['b', 'Q'])
+    const after = await state(page, pane)
+    assert.equal(after.canonical, plain.replace(/end\n$/, 'endabQ\n'))
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(after.shown, ['endabQ'])
+    assert.deepEqual(errors, [])
+  })
+
 /** A failing state field with a filter that rebuilds every transaction from its parts, without annotations. */
 const rebuildingFilter = (
   presentation,

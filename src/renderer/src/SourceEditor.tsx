@@ -156,6 +156,7 @@ import {
   sourceEditorTextCooperatively,
   sourceEditTransaction,
   transactionState,
+  watchFields,
 } from './source-session'
 import {
   registerSourceView,
@@ -2373,7 +2374,7 @@ export function SourceEditor({
       results.forEach((result, index) => {
         const feature = sourceExtensions[index]!
         if (result.status === 'fulfilled')
-          parts.push({ feature, extension: result.value })
+          parts.push({ feature, extension: watchFields(result.value) })
         else if (feature.fail) feature.fail(result.reason)
         else errors.push(result.reason)
       })

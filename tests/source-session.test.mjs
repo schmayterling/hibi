@@ -16,6 +16,7 @@ import {
   reconfiguration,
   sourceEditTransaction,
   transactionState,
+  watchFields,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { runSourceHistory } from '../src/shared/source-history.ts'
@@ -1039,6 +1040,42 @@ test('filters and extenders that read a state never see one an extension failed 
     names(made, [typedZ], [{ name: 'extending', extension: extending }]),
     ['extending: extender failed'],
   )
+})
+
+test('a failure an extension caught while reading the state is still rejected', () => {
+  const failing = StateField.define({
+    create: () => 0,
+    update(value, transaction) {
+      if (transaction.docChanged && transaction.newDoc.toString().includes('Q'))
+        throw new Error('field failed')
+      return value
+    },
+  })
+  const swallowed = []
+  const feature = [
+    failing,
+    // Reads the new state before any guard and hides the failure.
+    EditorState.changeFilter.of((transaction) => {
+      try {
+        transaction.state.field(failing)
+      } catch (error) {
+        swallowed.push(error.message)
+      }
+      return true
+    }),
+  ]
+  const f = fixture('end', {}, [watchFields(feature), failedEditGuard])
+  const surface = f.attach()
+  const typed = type(3, 'Q', 1)
+  assert.throws(() => surface.dispatch(typed), /field failed/)
+  assert.deepEqual(swallowed, ['field failed'])
+  assert.equal(f.session.snapshot().materialize(), 'end')
+  assert.equal(surface.view.state.doc.toString(), 'end')
+  surface.dispatch(type(3, 'b', 2))
+  assert.equal(f.session.snapshot().materialize(), 'endb')
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
+  f.session.dispose()
 })
 
 test('an edit an extension fails on reaches neither the session nor the view', () => {

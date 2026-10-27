@@ -249,9 +249,6 @@ test('installed addon addresses source and rich selections by live view', {
     'stale',
   )
   await open(plain)
-  await page.evaluate(() => {
-    window.viewProbe.events.length = 0
-  })
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(() => {
     const view = window.viewProbe.active()

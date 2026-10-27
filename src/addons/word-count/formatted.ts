@@ -162,6 +162,8 @@ export function observeFormattedCounts(
           alerts: selected.has('markdown.github'),
           textExtras: selected.has('text-extras.text-extras'),
           math: selected.has('math.latex'),
+          mermaid: selected.has('mermaid.blocks'),
+          typst: selected.has('typst.blocks'),
         },
       }
     },

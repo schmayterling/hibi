@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getSchema, getText, getTextSerializersFromSchema } from '@tiptap/core'
+import {
+  getSchema,
+  getText,
+  getTextSerializersFromSchema,
+  Node,
+} from '@tiptap/core'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import { Strike } from '@tiptap/extension-strike'
 import { TableKit } from '@tiptap/extension-table'
@@ -22,14 +27,18 @@ import {
   inlineMath,
   mathTokens,
 } from '../src/addons/math/syntax.ts'
+import { mermaidMarkdown } from '../src/addons/mermaid/markdown.ts'
 import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
+import { typstBlock, typstTokens } from '../src/addons/typst/syntax.ts'
 import { countText } from '../src/addons/word-count/count.ts'
+import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { documentImage } from '../src/renderer/src/DocumentImage.ts'
 import { editorExtensions } from '../src/renderer/src/markdown.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const flavors = [
   {
@@ -77,8 +86,8 @@ flavors.push({
   ],
   export: { extensions: [mathTokens] },
 })
-function native(source) {
-  const freshFlavors = flavors.map((flavor) =>
+function native(source, selected = flavors) {
+  const freshFlavors = selected.map((flavor) =>
     flavor.id === 'markdown.github'
       ? {
           ...flavor,
@@ -174,6 +183,106 @@ test('disabled syntax remains literal in document totals', () => {
       expected,
     )
 })
+
+for (const language of ['mermaid', 'typst'])
+  test(`${language} fences retain native opaque, disabled and ordinary-code counts`, () => {
+    const name = `${language}Block`
+    const node = Node.create({
+      name,
+      group: 'block',
+      atom: true,
+      addAttributes: () => ({ source: { default: '' }, raw: { default: '' } }),
+      ...(language === 'mermaid'
+        ? mermaidMarkdown
+        : {
+            markdownTokenName: 'typstBlock',
+            markdownTokenizer: {
+              name,
+              level: 'block',
+              start: (source) =>
+                source.search(/^ {0,3}(?:`{3,}|~{3,})typst[ \t]*\r?$/im),
+              tokenize: typstBlock,
+            },
+            parseMarkdown: (token, helpers) =>
+              helpers.createNode(name, {
+                source: token.source,
+                raw: token.raw,
+              }),
+          }),
+    })
+    const flavor = {
+      id: `${language}.blocks`,
+      richExtensions: [node],
+      ...(language === 'typst'
+        ? { export: { extensions: [typstTokens] } }
+        : {}),
+    }
+    const remove = markdownSyntax.register(language, {
+      id: 'blocks',
+      label: language,
+      group: language,
+      level: 'block',
+      extensions: [name],
+      matches: (token) =>
+        language === 'mermaid'
+          ? token.type === 'code' && token.lang === 'mermaid'
+          : token.type === 'typstBlock' ||
+            (token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? '')),
+    })
+    try {
+      for (const disabled of [
+        [],
+        [`${language}.blocks`],
+        ['core.code-blocks'],
+      ]) {
+        markdownSyntax.reset()
+        for (const feature of disabled)
+          markdownSyntax.setEnabled(feature, false)
+        for (const active of [true, false]) {
+          const config = {
+            ...defaultNoteSyntax,
+            [language]: active,
+            disabledFeatures: disabled,
+          }
+          for (const source of [
+            `\`\`\`${language}\nx\n\`\`\``,
+            `before\n\n\`\`\`${language}\nx\n\`\`\`\n\nafter`,
+            `before\r\n\r\n~~~${language.toUpperCase()}\r\nx\r\n~~~\r\n\r\nafter`,
+            `~~~${language[0].toUpperCase()}${language.slice(1)}\nx\n~~~`,
+            `before\n\n\`\`\`${language}\nx\n\nafter`,
+            `\`\`\`${language} extra\nx\n\`\`\``,
+            `> \`\`\`${language}\n> x\n> \`\`\`\n\nafter`,
+            `- before\n\n  \`\`\`${language}\n  x\n  \`\`\`\n\nafter`,
+            '\`\`\`js\nordinary code\n\`\`\`',
+          ]) {
+            const expected = native(
+              source,
+              active ? [...flavors, flavor] : flavors,
+            )
+            const label = JSON.stringify({ language, active, disabled, source })
+            assert.equal(richText(source, config).slice(1), expected, label)
+            const counter = new FormattedCounter(
+              new SourceStore(source, { tabId: 'fences', revision: 0 }),
+              config,
+            )
+            try {
+              const work = counter.read()
+              let step
+              do {
+                step = work.next()
+              } while (!step.done)
+              assert.deepEqual(step.value, countText(expected), label)
+            } finally {
+              counter.dispose()
+            }
+          }
+        }
+      }
+    } finally {
+      remove()
+      markdownSyntax.reset()
+    }
+  })
 
 test('formatted text and counts match the rich view', () => {
   for (const source of [

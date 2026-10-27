@@ -922,6 +922,8 @@ test('native corpus: formatted counts equal the rich text counts in the app', {
       ...countSyntax(config),
       textExtras: !!config.textExtras,
       math: !!config.math,
+      mermaid: false,
+      typst: false,
     }
     const { page, errors, open, close } = await openCorpus(config, true)
     try {

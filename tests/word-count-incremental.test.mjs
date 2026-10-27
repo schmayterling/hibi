@@ -58,6 +58,34 @@ test('regional counts equal a full rich-text projection across syntax boundaries
     )
   }
 })
+for (const language of ['mermaid', 'typst'])
+  test(`${language} opacity follows fence edits and undo`, (t) => {
+    const config = { ...syntax, [language]: true }
+    const source = `before\n\n\`\`\`${language}\nx\n\`\`\`\n\nafter`
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'opaque', revision: 0 }),
+      config,
+    )
+    t.after(() => counter.dispose())
+    assert.deepEqual(count(counter), { words: 2, characters: 13 })
+    const at = source.indexOf(language)
+    edit(counter, at, at + language.length, 'js')
+    const code = source.replace(language, 'js')
+    assert.deepEqual(count(counter), countText(richText(code, config).slice(1)))
+    edit(counter, at, at + 2, language, 'undo')
+    assert.deepEqual(count(counter), { words: 2, characters: 13 })
+    const close = source.lastIndexOf('\`\`\`')
+    edit(counter, close, close + 3, '')
+    const unclosed = source.slice(0, close) + source.slice(close + 3)
+    assert.deepEqual(
+      count(counter),
+      countText(richText(unclosed, config).slice(1)),
+    )
+    edit(counter, close, close, '\`\`\`', 'undo')
+    assert.deepEqual(count(counter), { words: 2, characters: 13 })
+    assert.equal(counter.store.snapshot().sliceRaw(0, source.length), source)
+  })
+
 test('leading blank lines retain their first empty paragraph', (t) => {
   for (const eol of ['\n', '\r\n']) {
     const source = `${eol}${eol}body`

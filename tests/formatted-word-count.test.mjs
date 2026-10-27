@@ -15,6 +15,9 @@ const prefix = '---\r\ntitle: Hidden metadata words\r\n---\r\n'
 const body =
   '# Counts\r\n\r\nHello **world** &amp; 👩🏽‍💻.\r\n\r\n-# small words\r\n'
 const source = prefix + body
+const diagram =
+  'before\n\n```mermaid\nflowchart LR\nA[Start] --> B[End]\n```\n\nafter'
+const typeset = 'before\n\n```typst\n= Heading\nText here\n```\n\nafter'
 const label = ({ words, characters }) =>
   `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'} · ${characters.toLocaleString()} ${characters === 1 ? 'character' : 'characters'}`
 const expected = (text) => label(countText(richText(text, syntax).slice(1)))
@@ -36,9 +39,11 @@ before(
     folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-counts-'))
     await writeFile(
       join(folder, 'addons.json'),
-      JSON.stringify({ 'word-count': true, dictionary: true }),
+      JSON.stringify({ 'word-count': true, dictionary: true, typst: true }),
     )
     await writeFile(join(folder, 'counts.md'), source)
+    await writeFile(join(folder, 'diagram.md'), diagram)
+    await writeFile(join(folder, 'typeset.md'), typeset)
     await writeFile(
       join(folder, 'other.md'),
       '# Other\n\nA different document.',
@@ -159,6 +164,75 @@ test('edits and undo retain exact source and rapid document switches keep their 
   await counts(expected(body))
   assert.equal(await sourceText(), source)
 })
+for (const [language, name, text] of [
+  ['mermaid', 'diagram.md', diagram],
+  ['typst', 'typeset.md', typeset],
+])
+  test(`${language} formatted counts match native opaque blocks through toggles and undo`, {
+    timeout: 90000,
+  }, async () => {
+    await engine(false)
+    await open(name)
+    await page.locator(`.rich-pane .tiptap .${language}-block`).waitFor()
+    await counts(label(countText('before\n\nafter')))
+    const native = await status().textContent()
+    await engine(true)
+    await page.locator(`.rich-pane .${language}-block`).waitFor()
+    await counts(native)
+    await page.evaluate(
+      (word) => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile
+          .root.view
+        const from = view.state.doc.toString().indexOf(word)
+        view.focus()
+        view.dispatch({
+          changes: { from, insert: 'extra ' },
+          selection: { anchor: from + 6 },
+          userEvent: 'input.type',
+        })
+      },
+      language === 'mermaid' ? 'Start' : 'Text',
+    )
+    assert.equal(
+      await sourceText(),
+      text.replace(
+        language === 'mermaid' ? 'Start' : 'Text',
+        language === 'mermaid' ? 'extra Start' : 'extra Text',
+      ),
+    )
+    await counts(native)
+    await pressShortcut(app, mod + '+z')
+    assert.equal(await sourceText(), text)
+    await counts(native)
+    for (const [tab, selector, visible] of [
+      ['Addon Manager', `#addon-${language}`, expected(text)],
+      [
+        'Syntax',
+        `input[id="syntax-${language}.blocks"]`,
+        label(countText(text.replaceAll('\n\n', '\n'))),
+      ],
+    ]) {
+      for (const enabled of [false, true]) {
+        await clickMenu(app, 'Settings')
+        await page.getByRole('tab', { name: tab, exact: true }).click()
+        await page.locator(selector).click()
+        await page
+          .getByRole('button', { name: 'Back to app', exact: true })
+          .click()
+        await counts(enabled ? native : visible)
+        assert.equal(await sourceText(), text)
+        if (!enabled) {
+          await engine(false)
+          await counts(visible)
+          await engine(true)
+          await counts(visible)
+        }
+      }
+    }
+    await open('counts.md')
+    await counts(expected(body))
+  })
+
 test('disable and enable remove and restore formatted counts without changing source', {
   timeout: 90000,
 }, async () => {

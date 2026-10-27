@@ -11,11 +11,14 @@ import type { ReferenceDefinitions } from '../../shared/source-references.ts'
 import { alertMarkdown } from '../markdown/alerts.ts'
 import { mathTokens } from '../math/syntax.ts'
 import { textExtrasMarkdown } from '../text-extras/syntax.ts'
+import { typstTokens } from '../typst/syntax.ts'
 
 export type CountSyntax = NoteSyntax & {
   alerts?: boolean
   textExtras?: boolean
   math?: boolean
+  mermaid?: boolean
+  typst?: boolean
 }
 
 type ProjectionSyntax = CountSyntax & { references?: ReferenceDefinitions }
@@ -30,6 +33,7 @@ export function countParser(syntax: CountSyntax) {
     syntax.alerts,
     syntax.textExtras,
     syntax.math,
+    syntax.typst,
   ])
   let parser = parsers.get(key)
   if (!parser) {
@@ -38,6 +42,7 @@ export function countParser(syntax: CountSyntax) {
     if (syntax.alerts) parser.use(alertMarkdown)
     if (syntax.textExtras) parser.use(textExtrasMarkdown)
     if (syntax.math) parser.use(mathTokens)
+    if (syntax.typst) parser.use(typstTokens)
     parsers.set(key, parser)
   }
   return parser
@@ -112,6 +117,7 @@ const extraFeatures: Record<string, string> = {
   inlineMath: 'math.inline',
   blockMath: 'math.block',
   githubAlert: 'markdown.alerts',
+  typstBlock: 'typst.blocks',
 }
 const blockTypes = new Set([
   'heading',
@@ -123,13 +129,21 @@ const blockTypes = new Set([
   'subtext',
   'blockMath',
   'githubAlert',
+  'typstBlock',
 ])
 function maskDisabled(tokens: Token[], syntax: CountSyntax) {
   if (!syntax.disabledFeatures.length) return
   const disabled = new Set(syntax.disabledFeatures)
   countParser(syntax).walkTokens(tokens, (token) => {
+    // Match each addon's preference matcher, including Mermaid's case sensitivity.
     if (
       disabledToken(token, disabled) ||
+      (token.type === 'code' &&
+        token.lang === 'mermaid' &&
+        disabled.has('mermaid.blocks')) ||
+      (token.type === 'code' &&
+        /^typst(?:\s|$)/i.test(token.lang ?? '') &&
+        disabled.has('typst.blocks')) ||
       disabled.has(extraFeatures[token.type] ?? '')
     ) {
       const block =
@@ -370,8 +384,17 @@ function block(token: Token, syntax: ProjectionSyntax, out: string[]) {
       return
     case 'hibiLiteralBlock':
     case 'code':
-      out.push('\n', token.text)
+      out.push(
+        '\n',
+        token.type === 'code' &&
+          syntax.mermaid &&
+          token.lang?.toLowerCase() === 'mermaid' &&
+          !syntax.disabledFeatures.includes('mermaid.blocks')
+          ? ''
+          : token.text,
+      )
       return
+    case 'typstBlock':
     case 'hr':
       out.push('\n')
       return

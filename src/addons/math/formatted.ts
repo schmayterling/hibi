@@ -21,6 +21,66 @@ export type MathHost = {
 }
 
 const cancels = new WeakMap<HTMLElement, () => void>()
+/** The reading position while one rendering slice fills formulas, per view. */
+const reading = new WeakMap<
+  EditorView,
+  { pos: number; margin: number; moved: boolean } | null
+>()
+
+/**
+ * Where the reader is: the caret while it is on screen, else the first line
+ * below the top of the scrolled pane, and its distance from that top.
+ */
+function readingPosition(view: EditorView) {
+  let pane: Element | null = view.scrollDOM
+  while (
+    pane &&
+    !(
+      pane.scrollHeight > pane.clientHeight &&
+      /auto|scroll/.test(getComputedStyle(pane).overflowY)
+    )
+  )
+    pane = pane.parentElement
+  const { top, bottom } = pane?.getBoundingClientRect() ?? {
+    top: 0,
+    bottom: window.innerHeight,
+  }
+  let pos = view.state.selection.main.head
+  let at = view.coordsAtPos(pos, 1)
+  if (!at || at.top < top || at.top > bottom) {
+    const { documentTop } = view
+    let block = view.lineBlockAtHeight(top - documentTop)
+    if (block.top + documentTop < top && block.to < view.state.doc.length)
+      block = view.lineBlockAt(block.to + 1)
+    pos = block.from
+    at = view.coordsAtPos(pos, 1)
+  }
+  return at ? { pos, margin: at.top - top, moved: false } : null
+}
+
+/**
+ * A formula above the reading position grows when it renders. As the rich
+ * view's scroll anchoring does, the reading position stays where it was:
+ * one scroll per rendering slice, after its formulas fill.
+ */
+function keepReading(view: EditorView, dom: HTMLElement) {
+  let position = reading.get(view)
+  if (position === undefined) {
+    position = readingPosition(view)
+    reading.set(view, position)
+    queueMicrotask(() => {
+      reading.delete(view)
+      if (position?.moved && view.dom.isConnected && !view.composing)
+        view.dispatch({
+          effects: EditorView.scrollIntoView(position.pos, {
+            y: 'start',
+            yMargin: position.margin,
+          }),
+        })
+    })
+  }
+  if (position && view.posAtDOM(dom) < position.pos) position.moved = true
+}
 const widgets = new WeakMap<HTMLElement, FormulaWidget>()
 const editControl = {
   type: 'button',
@@ -108,6 +168,7 @@ class FormulaWidget extends WidgetType {
     const reserved = display ? host.formulas.height(latex) : undefined
     if (reserved) dom.style.minHeight = `${reserved}px`
     const cancel = host.formulas.schedule(dom, latex, display, (html) => {
+      keepReading(view, dom)
       if (reserved) dom.style.removeProperty('min-height')
       // KaTeX builds this markup itself; trust: false admits no author HTML.
       if (html !== null)

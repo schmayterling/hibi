@@ -136,7 +136,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | corpus-018 | [markdown-semantics-native.test.mjs:132](markdown-semantics-native.test.mjs#L132) | disabled heading syntax must hide multiline reference titles | 9: outline semantics and diagram lifecycle |
 | corpus-019 | [markdown-semantics-native.test.mjs:134](markdown-semantics-native.test.mjs#L134) | disabled heading syntax must hide quoted reference titles | 9: outline semantics and diagram lifecycle |
 | split-012 | [markdown-syntax.test.mjs:163](markdown-syntax.test.mjs#L163) | split formatted view must remain read-only | 3: read-only access and shared history guards |
-| math-001 | [math-rendering.test.mjs:626](math-rendering.test.mjs#L626) | tall formula rendering must preserve the reading position | 8b: hidden markers and math caret placement |
 | split-005 | [motion.test.mjs:223](motion.test.mjs#L223) | split formatted view must remain read-only without an input caret | 3: read-only access and shared history guards |
 | split-006 | [motion.test.mjs:281](motion.test.mjs#L281) | typing in a read-only split preview must preserve source | 3: read-only access and shared history guards |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |

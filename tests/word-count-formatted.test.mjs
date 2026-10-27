@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { GFM, parser } from '@lezer/markdown'
 import {
   getSchema,
   getText,
@@ -200,7 +201,37 @@ test('tab-separated task markers match the rendered task text and counts', () =>
   }
 })
 
-test('list and definition differences retain commonmark structure in either gfm setting', () => {
+test('indented code in list items stays literal instead of becoming a task', () => {
+  for (const [source, characters] of [
+    ['-     [ ] x', 7],
+    ['-     [ ]\tx', 7],
+    ['-\t\t[ ] x', 9],
+  ]) {
+    const item = parser
+      .configure(GFM)
+      .parse(source)
+      .topNode.getChild('BulletList')
+      ?.getChild('ListItem')
+    assert.ok(item?.getChild('CodeBlock'), source)
+    assert.equal(item?.getChild('Task'), null, source)
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'code-item', revision: 0 }),
+      defaultNoteSyntax,
+    )
+    try {
+      const work = counter.read()
+      let step
+      do step = work.next()
+      while (!step.done)
+      assert.deepEqual(step.value, { words: 1, characters }, source)
+      assert.deepEqual(countText(native(source)), { words: 1, characters: 3 })
+    } finally {
+      counter.dispose()
+    }
+  }
+})
+
+test('list and definition projection differences stay explicit', () => {
   for (const [source, formatted, rich] of [
     ['1. e\n=', [1, 3], [1, 4]],
     ['1. 2.', [0, 3], [0, 4]],

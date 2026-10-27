@@ -8,6 +8,7 @@ These guides describe Hibi's code, extension APIs, validation, and release proce
 - [Architecture and security](development/architecture.md)
 - [Development and validation](development/validation.md)
 - [Performance measurement](development/performance.md)
+- [formatted word count parity](development/word-count-parity.md)
 - [Recorded startup measurements](development/startup-measurements.md)
 - [Releases and publishing](development/releases.md)
 - [Shared UI](development/design-system.md)

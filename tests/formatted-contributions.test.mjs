@@ -9,6 +9,7 @@ import {
   contributionExtension,
   formattedContributions,
   formattedLiteral,
+  formattedMarkdown,
   formattedOpaque,
   formattedPrefix,
   formattedSyntaxTree,
@@ -18,7 +19,11 @@ import {
 import { formattedRegistry } from '../src/renderer/src/formatted-registry.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
+import { BoundaryTree } from '../src/shared/chunked-markdown.ts'
+import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import { boundarySyntaxIds } from '../src/shared/markdown-boundary-syntax.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
+import { sourceParserInput } from '../src/shared/source-parser.ts'
 
 // Feature modules import their styles; these tests need only the code.
 registerHooks({
@@ -375,6 +380,88 @@ test('turning off core html or images shows their nodes as written', () => {
     } finally {
       markdownSyntax.setEnabled(id, true)
     }
+  }
+})
+
+test('default markdown, obsidian and text-extras addons keep worker boundaries active', async () => {
+  const modules = await Promise.all([
+    import('../src/renderer/src/formatted/tables.ts'),
+    import('../src/renderer/src/formatted/tasks.ts'),
+    import('../src/renderer/src/formatted/footnotes.ts'),
+    import('../src/renderer/src/formatted/strikethrough.ts'),
+    import('../src/renderer/src/formatted/autolinks.ts'),
+    import('../src/addons/markdown/formatted.ts'),
+    import('../src/addons/markdown/formatted-obsidian.ts'),
+    import('../src/addons/text-extras/formatted.ts'),
+  ])
+  const contributions = modules.flatMap((module) =>
+    module.contributions
+      ? Object.values(module.contributions)
+      : [module.contribution],
+  )
+  const remove = contributions.map((contribution) =>
+    formattedRegistry.register({
+      id: contribution.id,
+      load: () => contribution,
+    }),
+  )
+  try {
+    const flavors = [
+      'markdown.github',
+      'markdown.obsidian',
+      'text-extras.text-extras',
+    ]
+    const state = EditorState.create({
+      extensions: formattedContributions.extension(flavors),
+    })
+    const configs = state.facet(formattedMarkdown)
+    const ids = boundarySyntaxIds(configs)
+    assert.ok(
+      ids,
+      'default addon syntax must be eligible for worker boundaries',
+    )
+    assert.ok(ids.includes('subtext@1'))
+    const unit = '# heading\n\n[[note]] and ~subscript~\n\n-# small text\n\n'
+    const text = unit.repeat(Math.ceil((2 * 1024 * 1024) / unit.length))
+    const store = new SourceStore(text, {
+      tabId: 'default-addons',
+      revision: 0,
+    })
+    const index = new MarkdownBoundaryIndex(store.snapshot(), {
+      schema: 1,
+      syntax: ids,
+      flavors,
+      literal: [],
+      opaque: state.facet(formattedOpaque),
+      prefix: 0,
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+    })
+    while (!index.advance()) {}
+    const probe = {
+      parsedChunks: 0,
+      parsedUnits: 0,
+      scannedUnits: 0,
+      reusedNodes: 0,
+      builtGroups: 0,
+    }
+    const base = parser.configure(configs)
+    const view = new ChunkedMarkdownParser(base, base, { probe })
+    const builder = new BoundaryTree(view, text.length)
+    const pages = [...index.pages()]
+    assert.ok(pages.length > 0)
+    for (const page of pages) builder.append(page.records)
+    const parse = view.startChunkedParse(
+      sourceParserInput(store.snapshot()),
+      TreeFragment.addTree(builder.finish()),
+      { from: text.length - 8192, to: text.length },
+    )
+    while (!parse.advance()) {}
+    assert.equal(probe.scannedUnits, 0)
+    assert.ok(probe.reusedNodes > 0)
+  } finally {
+    for (const dispose of remove.reverse()) dispose()
   }
 })
 

@@ -14,7 +14,7 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const makeSource = (size) => {
   const unit = `${'ordinary words '.repeat(16)}\n\n`,
     length = size * 1024 * 1024
-  return `# Large note\n\n${unit.repeat(Math.ceil(length / unit.length))}`.slice(
+  return `# Large note\n\n[[linked note]] and ~subscript~\n\n-# small text\n\n${unit.repeat(Math.ceil(length / unit.length))}`.slice(
     0,
     length,
   )
@@ -38,6 +38,41 @@ async function launch(t, file, codemirror) {
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
   if (codemirror) {
+    await page.addInitScript(() => {
+      const counters = {
+        requests: 0,
+        pages: 0,
+        records: 0,
+        maxRecords: 0,
+        done: false,
+        syntax: [],
+      }
+      window.defaultBoundaryWork = counters
+      const NativeWorker = window.Worker
+      window.Worker = class extends NativeWorker {
+        constructor(...args) {
+          super(...args)
+          this.addEventListener('message', ({ data }) => {
+            if (data.type !== 'boundaries') return
+            counters.pages++
+            counters.records += data.records.length
+            counters.maxRecords = Math.max(
+              counters.maxRecords,
+              data.records.length,
+            )
+            counters.done = data.done
+          })
+        }
+        postMessage(message, ...args) {
+          if (message.type === 'boundaries') {
+            counters.requests++
+            counters.syntax = message.config.syntax
+            counters.done = false
+          }
+          super.postMessage(message, ...args)
+        }
+      }
+    })
     await page.evaluate(() =>
       localStorage.setItem('hibi:formatted-engine', 'codemirror'),
     )
@@ -69,6 +104,13 @@ for (const size of [2, 50])
       })
       .waitFor()
     const mount = Math.round(performance.now() - started)
+    await page.waitForFunction(() => window.defaultBoundaryWork?.done)
+    const boundaries = await page.evaluate(() => window.defaultBoundaryWork)
+    t.diagnostic(JSON.stringify({ size, boundaries }))
+    assert.ok(boundaries.requests > 0)
+    assert.ok(boundaries.pages > 0 && boundaries.records > 0)
+    assert.ok(boundaries.maxRecords <= 128)
+    assert.ok(boundaries.syntax.includes('subtext@1'))
     assert.equal(
       await page.getByText('Opened in source view').count(),
       0,

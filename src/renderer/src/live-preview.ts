@@ -544,15 +544,15 @@ function inline(
             (node) => node.name === 'Blockquote',
           )
         ) {
-          const pending = [ref.node]
-          for (let parent = pending.pop(); parent; parent = pending.pop())
-            for (
-              let child = parent.childAfter(range.from);
-              child && child.from <= range.to;
-              child = child.nextSibling
-            )
-              if (child.name === 'QuoteMark') builtIn(child, range)
-              else pending.push(child)
+          const pending = [ref.node.cursor(IterMode.IgnoreMounts)]
+          for (let cursor = pending.pop(); cursor; cursor = pending.pop()) {
+            if (!cursor.childAfter(range.from)) continue
+            do {
+              if (cursor.from > range.to) break
+              if (cursor.name === 'QuoteMark') builtIn(cursor.node, range)
+              else pending.push(cursor.node.cursor(IterMode.IgnoreMounts))
+            } while (cursor.nextSibling())
+          }
         }
         return false
       },

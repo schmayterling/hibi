@@ -183,11 +183,11 @@ test('quoted fences still hide their container markers after html parsing change
   timeout: 60000,
 }, async () => {
   const doc =
-    '> ~~~txt\n> quoted code\n> ~~~\n\n- parent\n\n  > ~~~txt\n  > nested code\n  > ~~~\n'
+    '> ~~~txt\n> quoted code\n> ~~~\n\n- parent\n\n  > ~~~txt\n  > nested code\n  > ~~~\n\n> ~~~markdown\n> > literal greater-than\n> ~~~\n'
   await open('fences.md', doc, 'nested code')
   assert.deepEqual(
     await page.locator('.rich-pane .hibi-lp-codeblock').allTextContents(),
-    ['quoted code', 'nested code'],
+    ['quoted code', 'nested code', '> literal greater-than'],
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,

@@ -35,10 +35,7 @@ const { readSourceFrontmatter } = await import(
 const { SourceStore } = await import('../src/shared/source-buffer.ts')
 const reset = () => Object.assign(parses, { calls: 0, units: 0 })
 const finishBounds = (state) => {
-  while (
-    !state.field(frontmatterBounds).closer &&
-    state.field(frontmatterBounds).searched < state.doc.length
-  )
+  while (!state.field(frontmatterBounds).complete)
     state = state.update({ effects: frontmatterSearch.of(null) }).state
   return state
 }

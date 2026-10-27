@@ -11,9 +11,12 @@ import { createSlashMenu } from './menu'
 type FrontmatterReader = (state: EditorState) =>
   | {
       end: number
+      prefix?: number
       open: boolean
       closer: number
       searched: number
+      oversized?: boolean
+      complete?: boolean
     }
   | undefined
 
@@ -86,8 +89,10 @@ function current(
   const bounds = !formatted && sourceBounds?.(view.state)
   if (
     bounds &&
-    (selection.head < bounds.end ||
+    (bounds.oversized ||
+      selection.head < (bounds.prefix ?? bounds.end) ||
       (bounds.open &&
+        !bounds.complete &&
         !bounds.closer &&
         bounds.searched < view.state.doc.length))
   )

@@ -1,5 +1,8 @@
-import { isMap, parseDocument } from 'yaml'
-import { maximumFrontmatterUnits } from './frontmatter.ts'
+import {
+  frontmatterProbe,
+  isFrontmatterMapping,
+  maximumFrontmatterUnits,
+} from './frontmatter.ts'
 import type { SourceSnapshot } from './source-buffer.ts'
 import type { RawEdit } from './source-operations.ts'
 
@@ -16,20 +19,45 @@ export type FrontmatterRead = Readonly<{
   dependsOnEnd: boolean
   /** The opening line was followed by a complete scan with no closing marker. */
   unclosed: boolean
+  open: boolean
+  closedTo: number
+  oversized: boolean
 }>
 
 /** A completed read owns only scalars. Its unfinished generator owns the input. */
 export function* readSourceFrontmatter(
-  source: Pick<SourceSnapshot, 'utf16Length' | 'chunks' | 'sliceRaw'>,
+  source: Pick<SourceSnapshot, 'utf16Length' | 'sliceRaw'>,
+  known?: FrontmatterBounds,
 ): Generator<void, FrontmatterRead> {
-  const chunks = source.chunks()[Symbol.iterator]()
+  const chunks = (function* () {
+    for (let from = 0; from < source.utf16Length; from += 4096)
+      yield source.sliceRaw(from, Math.min(source.utf16Length, from + 4096))
+  })()
   const lineEnds = /[\r\n\u2028\u2029]/g
   let chunk = '',
     chunkFrom = 0,
     position = 0,
     inspectedTo = 0,
-    dependsOnEnd = false
+    dependsOnEnd = false,
+    normalized = 0,
+    previousCr = false,
+    open = false,
+    closedTo = 0,
+    oversized = false
+  const move = (to: number) => {
+    const text = chunk.slice(position - chunkFrom, to - chunkFrom)
+    normalized +=
+      text.length -
+      (text.match(/\r\n/g)?.length ?? 0) -
+      Number(previousCr && text.startsWith('\n'))
+    previousCr = text.endsWith('\r')
+    position = to
+  }
   const peek = () => {
+    if (normalized > maximumFrontmatterUnits + 4096) {
+      if (!closedTo) oversized = true
+      return ''
+    }
     if (position === source.utf16Length) {
       dependsOnEnd = true
       return ''
@@ -43,7 +71,7 @@ export function* readSourceFrontmatter(
   }
   const take = () => {
     const character = peek()
-    if (character) position++
+    if (character) move(position + 1)
     return character
   }
   const finish = (
@@ -55,6 +83,9 @@ export function* readSourceFrontmatter(
       inspectedTo,
       dependsOnEnd,
       unclosed,
+      open,
+      closedTo,
+      oversized,
     })
   function* spaces() {
     while (peek() === ' ' || peek() === '\t') {
@@ -70,10 +101,16 @@ export function* readSourceFrontmatter(
     const cr = peek() === '\r'
     if (cr) take()
     if (take() !== '\n') return finish(null)
+    open = true
     const yamlFrom = position,
       eol = cr ? '\r\n' : '\n'
     let lineStart = true
     while (position < source.utf16Length) {
+      if (normalized > maximumFrontmatterUnits) {
+        oversized = true
+        return finish(null)
+      }
+      if (lineStart) frontmatterProbe.lines++
       if (lineStart && (peek() === '-' || peek() === '.')) {
         const yamlTo = position,
           marker = take()
@@ -95,17 +132,13 @@ export function* readSourceFrontmatter(
                 take()
                 headerTo = position
               }
-              if (yamlTo > maximumFrontmatterUnits) return finish(null)
-              try {
-                if (
-                  !isMap(
-                    parseDocument(source.sliceRaw(yamlFrom, yamlTo)).contents,
-                  )
-                )
-                  return finish(null)
-              } catch {
+              if (oversized) return finish(null)
+              closedTo = headerTo
+              if (
+                !(known?.yamlFrom === yamlFrom && known.yamlTo === yamlTo) &&
+                !isFrontmatterMapping(source.sliceRaw(yamlFrom, yamlTo))
+              )
                 return finish(null)
-              }
               let contentFrom = headerTo
               // JS multiline $ accepts bare CR and Unicode separators; the
               // spacing expression accepts only LF/CRLF, exactly like the oracle.
@@ -130,9 +163,13 @@ export function* readSourceFrontmatter(
       const next = chunkFrom + (end ? end.index + 1 : chunk.length)
       inspectedTo = Math.max(inspectedTo, next)
       const pause = Math.floor(next / 4096) > Math.floor(position / 4096)
-      position = next
+      move(next)
       lineStart = !!end
       if (pause) yield
+    }
+    if (normalized > maximumFrontmatterUnits) {
+      oversized = true
+      return finish(null)
     }
     // No closing marker: a future append can complete one.
     dependsOnEnd = true
@@ -164,12 +201,17 @@ export function reuseFrontmatterRead(
 export function keepUnclosedFrontmatterRead(
   read: FrontmatterRead,
   changes: readonly RawEdit[],
-  source: SourceSnapshot,
+  source: Pick<
+    SourceSnapshot,
+    'lineAt' | 'lineCount' | 'sliceRaw' | 'utf16Length'
+  >,
 ): FrontmatterRead | null {
-  if (!read.unclosed) return null
+  if (!read.open || (!read.unclosed && !read.oversized)) return null
+  if (read.oversized && changes.some(({ from, to }) => to > from)) return null
   const opening = source.lineAt(0)
   if (
     !opening ||
+    opening.to > maximumFrontmatterUnits ||
     opening.number === source.lineCount ||
     !/^\uFEFF?---[ \t]*$/.test(source.sliceRaw(0, opening.to))
   )
@@ -180,9 +222,10 @@ export function keepUnclosedFrontmatterRead(
     if (!line || line.to - start < 3) return false
     const marker = source.sliceRaw(start, start + 3)
     if (marker !== '---' && marker !== '...') return false
-    for (let at = start + 3; at < line.to; at += 64) {
+    const limit = Math.min(line.to, maximumFrontmatterUnits * 2 + 8)
+    for (let at = start + 3; at < limit; at += 64) {
       const after = /[^ \t]/.exec(
-        source.sliceRaw(at, Math.min(line.to, at + 64)),
+        source.sliceRaw(at, Math.min(limit, at + 64)),
       )?.[0]
       if (after) return /[\r\u2028\u2029]/.test(after)
     }
@@ -198,5 +241,8 @@ export function keepUnclosedFrontmatterRead(
     for (let i = insert.indexOf('\n'); i >= 0; i = insert.indexOf('\n', i + 1))
       if (closes(at + i + 1)) return null
   }
-  return Object.freeze({ ...read, inspectedTo: source.utf16Length })
+  return Object.freeze({
+    ...read,
+    inspectedTo: read.oversized ? read.inspectedTo : source.utf16Length,
+  })
 }

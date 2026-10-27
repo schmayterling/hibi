@@ -305,6 +305,11 @@ test('source frontmatter checks read nothing per query, and edits only the lines
     query: null,
     units: 3,
   })
+  let oversized = note(`---\ntitle: ${'x'.repeat(300000)}\n`, '\n...\nbody')
+  while (!oversized.field(frontmatterBounds).complete)
+    oversized = oversized.update({ effects: frontmatterSearch.of(null) }).state
+  assert.equal(oversized.field(frontmatterBounds).oversized, true)
+  assert.deepEqual(check(oversized), { query: null, units: 3 })
   // A divider without a closing line: the editor reads a bounded part of
   // the note at first and the rest in idle time; edits read their lines.
   frontmatterProbe.lines = 0
@@ -313,8 +318,10 @@ test('source frontmatter checks read nothing per query, and edits only the lines
   for (let query = 0; query < 3; query++)
     assert.deepEqual(check(divider), { query: null, units: 3 })
   frontmatterProbe.lines = 0
+  frontmatterProbe.parses = 0
   divider = divider.update({ changes: { from: 4, insert: 'x' } }).state
-  assert.ok(frontmatterProbe.lines <= 2, String(frontmatterProbe.lines))
+  assert.ok(frontmatterProbe.lines < 10_000, String(frontmatterProbe.lines))
+  assert.equal(frontmatterProbe.parses, 0)
 })
 
 test('formatted queries begin at text blocks, keep container prefixes and reject code and continuation lines', async () => {

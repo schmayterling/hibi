@@ -7,7 +7,10 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from '@codemirror/view'
-import { readFrontmatter } from '../../shared/frontmatter.ts'
+import {
+  frontmatterBounds,
+  readFrontmatterBounds,
+} from '../../renderer/src/formatted-frontmatter.ts'
 import type { SourceExtension } from '../api'
 import { tagMatches } from './syntax.ts'
 
@@ -17,29 +20,15 @@ type FrontmatterState = {
   unclosed: boolean
 }
 
-const openingFence = /^(?:\uFEFF)?---[ \t]*$/
-const closingFence = /^(?:---|\.\.\.)[ \t]*$/
-
-/** Only the metadata header needs YAML parsing; scrolling never reads the full source. */
 export function frontmatterState(state: SourceState): FrontmatterState {
-  const doc = state.doc
-  const firstLine = doc.line(1)
-  if (!openingFence.test(firstLine.text))
-    return { prefix: 0, boundary: firstLine.to, unclosed: false }
-  for (let line = 2; line <= doc.lines; line++) {
-    if (!closingFence.test(doc.line(line).text)) continue
-    let end = line < doc.lines ? doc.line(line + 1).from : doc.length
-    for (let blank = line + 1; blank <= doc.lines; blank++) {
-      if (!/^[ \t]*$/.test(doc.line(blank).text)) break
-      end = blank < doc.lines ? doc.line(blank + 1).from : doc.length
-    }
-    return {
-      prefix: readFrontmatter(doc.sliceString(0, end))?.prefix.length ?? 0,
-      boundary: end,
-      unclosed: false,
-    }
+  const bounds =
+    state.field(frontmatterBounds, false) ?? readFrontmatterBounds(state.doc)
+  return {
+    prefix:
+      bounds.oversized || !bounds.complete ? state.doc.length : bounds.prefix,
+    boundary: bounds.read?.unclosed ? state.doc.line(1).to : bounds.searched,
+    unclosed: bounds.read?.unclosed ?? false,
   }
-  return { prefix: 0, boundary: firstLine.to, unclosed: true }
 }
 
 export function frontmatterPrefix(state: SourceState) {
@@ -51,19 +40,23 @@ export function updateFrontmatterState(
   changes: ChangeDesc,
   state: SourceState,
 ): FrontmatterState {
-  let refresh = false
+  let refresh = !!state.field(frontmatterBounds, false)
   changes.iterChangedRanges((from, _to, nextFrom, nextTo) => {
     if (from <= previous.boundary) refresh = true
     if (!previous.unclosed || refresh) return
-    const doc = state.doc
-    const last = doc.lineAt(nextTo).number
-    for (let line = doc.lineAt(nextFrom).number; line <= last; line++) {
-      if (!closingFence.test(doc.line(line).text)) continue
-      refresh = true
-      break
+    const last = state.doc.lineAt(nextTo).number
+    for (let line = state.doc.lineAt(nextFrom).number; line <= last; line++) {
+      if (/^(?:---|\.\.\.)[ \t]*$/.test(state.doc.line(line).text))
+        refresh = true
     }
   })
-  return refresh ? frontmatterState(state) : previous
+  if (!refresh) return previous
+  const next = frontmatterState(state)
+  return next.prefix === previous.prefix &&
+    next.boundary === previous.boundary &&
+    next.unclosed === previous.unclosed
+    ? previous
+    : next
 }
 
 export function sourceTagRanges(
@@ -123,7 +116,8 @@ export function sourceTags(
 ): SourceExtension {
   return {
     id: 'highlights',
-    create: () =>
+    create: () => [
+      frontmatterBounds,
       ViewPlugin.fromClass(
         class {
           decorations: SourceDecorationSet = SourceDecoration.none
@@ -133,7 +127,11 @@ export function sourceTags(
             this.highlight(view)
           }
           update(update: ViewUpdate) {
-            if (update.docChanged)
+            if (
+              update.docChanged ||
+              update.state.field(frontmatterBounds) !==
+                update.startState.field(frontmatterBounds)
+            )
               this.frontmatter = updateFrontmatterState(
                 this.frontmatter,
                 update.changes,
@@ -142,6 +140,8 @@ export function sourceTags(
             if (
               update.docChanged ||
               update.viewportChanged ||
+              update.state.field(frontmatterBounds) !==
+                update.startState.field(frontmatterBounds) ||
               syntaxTree(update.state) !== syntaxTree(update.startState)
             )
               this.highlight(update.view)
@@ -172,5 +172,6 @@ export function sourceTags(
           },
         },
       ),
+    ],
   }
 }

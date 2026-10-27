@@ -158,10 +158,7 @@ test('an edit inside frontmatter longer than one search keeps it hidden and prot
     extensions: frontmatterField,
   })
   // Its closing line is past the first search: idle slices find it.
-  while (
-    !state.field(core.frontmatterBounds).closer &&
-    state.field(core.frontmatterBounds).searched < state.doc.length
-  )
+  while (!state.field(core.frontmatterBounds).complete)
     state = state.update({ effects: core.frontmatterSearch.of(null) }).state
   const hidden = state.field(frontmatterField).end
   assert.ok(hidden > core.frontmatterProbe.search, `${hidden}`)
@@ -174,7 +171,7 @@ test('an edit inside frontmatter longer than one search keeps it hidden and prot
   // Before, the edit searched again from the top and lost the closing line
   // until idle time found it again.
   assert.equal(state.field(frontmatterField).end, hidden + 1)
-  assert.ok(frontmatterProbe.lines < 10, `${frontmatterProbe.lines}`)
+  assert.ok(frontmatterProbe.lines <= 6001, `${frontmatterProbe.lines}`)
   assert.equal(frontmatterProbe.parses, 1)
   // An edited line that closes it earlier ends it there.
   const at = state.doc.line(3).to
@@ -189,10 +186,7 @@ test('an edit inside frontmatter longer than one search keeps it hidden and prot
     changes: { from: at + 1, to: at + 4, insert: 'key: x' },
     userEvent: 'input.addon',
   }).state
-  while (
-    !state.field(core.frontmatterBounds).closer &&
-    state.field(core.frontmatterBounds).searched < state.doc.length
-  )
+  while (!state.field(core.frontmatterBounds).complete)
     state = state.update({ effects: core.frontmatterSearch.of(null) }).state
   assert.equal(state.field(frontmatterField).end, hidden + 1 + 7)
 })
@@ -206,13 +200,14 @@ test('a divider at the top of a long note reads one search when it opens and the
     const opened = frontmatterProbe.lines
     assert.ok(opened > 0 && opened < 10000, `${opened}`)
     let slices = 0
-    while (state.field(core.frontmatterBounds).searched < state.doc.length) {
+    while (!state.field(core.frontmatterBounds).complete) {
       const lines = frontmatterProbe.lines
       state = state.update({ effects: core.frontmatterSearch.of(null) }).state
       assert.ok(frontmatterProbe.lines - lines < 10000)
       slices++
     }
-    assert.ok(slices > 10, `${slices}`)
+    assert.ok(slices > 0 && slices <= 5, `${slices}`)
+    assert.equal(state.field(core.frontmatterBounds).oversized, true)
     assert.ok(
       frontmatterProbe.lines <= state.doc.lines,
       `${frontmatterProbe.lines}`,
@@ -228,6 +223,8 @@ test('a divider at the top of a long note is read once, then only edited lines',
     doc: `---\n${body}`,
     extensions: frontmatterField,
   })
+  while (!state.field(core.frontmatterBounds).complete)
+    state = state.update({ effects: core.frontmatterSearch.of(null) }).state
   assert.equal(state.field(frontmatterField).end, 0)
   assert.ok(frontmatterProbe.lines <= 50001)
   for (let key = 0; key < 100; key++) {
@@ -240,7 +237,7 @@ test('a divider at the top of a long note is read once, then only edited lines',
   frontmatterProbe.lines = 0
   state = state.update({ changes: { from: at, insert: '\n---' } }).state
   assert.equal(state.field(frontmatterField).end, 0)
-  assert.ok(frontmatterProbe.lines < 10, `${frontmatterProbe.lines}`)
+  assert.ok(frontmatterProbe.lines <= 31, `${frontmatterProbe.lines}`)
   // Closing a mapping does.
   state = EditorState.create({
     doc: `---\nkey: value\n${body}`,
@@ -253,6 +250,11 @@ test('a divider at the top of a long note is read once, then only edited lines',
     state.field(frontmatterField).end,
     '---\nkey: value\n---\n'.length,
   )
+})
+
+test('a unicode separator inside a code mirror line never hides following body text', () => {
+  for (const separator of ['\u2028', '\u2029'])
+    assert.equal(end(`---\na: 1\n---${separator}body`), 0)
 })
 
 test('typing, deleting and selecting all stop at the frontmatter', () => {

@@ -56,10 +56,6 @@ export function carryFrontmatterRead(
 /** A note read in pieces, as the frontmatter reader reads a source. */
 const pieces = (note: AddonNoteReader) => ({
   utf16Length: note.length,
-  *chunks() {
-    for (let at = 0; at < note.length; at += 4096)
-      yield note.slice(at, at + 4096)
-  },
   sliceRaw: (from: number, to: number) => note.slice(from, to),
 })
 
@@ -117,7 +113,7 @@ export function hasFrontmatter(note: AddonNoteReader) {
     entry?.revision === document.revision &&
     entry.contentVersion === document.contentVersion
   )
-    return !!entry.read.bounds
+    return entry.read.oversized || !!entry.read.bounds
   const key = document ?? note
   let reading = readings.get(key)
   if (!reading) {
@@ -131,5 +127,5 @@ export function hasFrontmatter(note: AddonNoteReader) {
     advance(reading, document, 2)
     if (!reading.read) readWhenIdle(reading, document)
   }
-  return !reading.read || !!reading.read.bounds
+  return !reading.read || reading.read.oversized || !!reading.read.bounds
 }

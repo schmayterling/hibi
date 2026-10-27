@@ -115,11 +115,9 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Its render-error route adds 22 bytes; callback guards stay in the lazy flavor module.
   // Syntax ownership adds 115 bytes for synchronous registration identity and cleanup;
   // parser callbacks and recovery stay behind editor imports.
-  // Formatted word counts reuse the existing flavor registry: splitting its shared
-  // chunk adds 102 bytes and preload references add 28, with no new eager modules.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 691124 + 713 + 22 + 115 + 130,
+    bytes <= 691124 + 713 + 22 + 115,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

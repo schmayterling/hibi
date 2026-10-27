@@ -86,6 +86,59 @@ for (const language of ['mermaid', 'typst'])
     assert.equal(counter.store.snapshot().sliceRaw(0, source.length), source)
   })
 
+test('leading indentation and undo keep fence counts equal to a fresh projection', (t) => {
+  const config = { ...syntax, typst: true, mermaid: true }
+  const expected = (text) => countText(richText(text, config).slice(1))
+  for (const body of ['```\n```\nd', '~~~typst\nx\n~~~\n\ntail'])
+    for (const prefix of ['', 'before\n\n'])
+      for (const insert of ['\t', '    ']) {
+        const source = prefix + body
+        const changed = prefix + insert + body
+        const counter = new FormattedCounter(
+          new SourceStore(source, { tabId: 'indent', revision: 0 }),
+          config,
+        )
+        t.after(() => counter.dispose())
+        assert.deepEqual(count(counter), expected(source))
+        for (let cycle = 0; cycle < 2; cycle++) {
+          edit(counter, prefix.length, prefix.length, insert)
+          assert.deepEqual(count(counter), expected(changed), changed)
+          edit(
+            counter,
+            prefix.length,
+            prefix.length + insert.length,
+            '',
+            'undo',
+          )
+          assert.deepEqual(count(counter), expected(source), `undo ${changed}`)
+        }
+      }
+})
+
+test('line break edits that retain indentation keep fresh counts through undo', (t) => {
+  const source = '-     c\n\n  =\n'
+  const counter = fixture(t, source)
+  const original = count(counter)
+  edit(counter, 1, 3, '\n')
+  const fresh = fixture(t, counter.store.snapshot().materialize())
+  assert.deepEqual(count(counter), count(fresh))
+  assert.deepEqual(count(counter), { words: 1, characters: 7 })
+  edit(counter, 1, 2, '  ', 'undo')
+  assert.deepEqual(count(counter), original)
+})
+
+test('a blank line before empty-marker lists keeps fresh counts through undo', (t) => {
+  const source = '\n  h\n\n1.\n1. \n   c\n\n   e'
+  const counter = fixture(t, source)
+  const original = count(counter)
+  edit(counter, 0, 4, '  ')
+  const fresh = fixture(t, counter.store.snapshot().materialize())
+  assert.deepEqual(count(counter), count(fresh))
+  assert.deepEqual(count(counter), { words: 2, characters: 10 })
+  edit(counter, 0, 2, source.slice(0, 4), 'undo')
+  assert.deepEqual(count(counter), original)
+})
+
 test('regional fence termination matches Marked through tab edits and undo', (t) => {
   for (const language of ['mermaid', 'js', 'typst']) {
     for (const marker of ['```', '~~~']) {

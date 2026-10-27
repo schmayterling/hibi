@@ -2509,6 +2509,28 @@ export function boundaryStart(tree: Tree, from: number) {
   return groupFrom + group.positions[index]!
 }
 
+/** A verified scan window containing a source edit, including opaque block context. */
+export function boundaryWindow(tree: Tree, from: number, to: number) {
+  if (tree.prop(chunkInfo)?.kind !== 'root') return null
+  const groupIndex = Math.max(0, childBefore(tree, from))
+  const group = tree.children[groupIndex] as Tree | undefined
+  if (!group) return null
+  const groupFrom = tree.positions[groupIndex]!
+  const index = Math.max(0, childBefore(group, from - groupFrom))
+  const chunk = group.children[index] as Tree | undefined
+  const info = chunk?.prop(chunkInfo)
+  if (!chunk || info?.kind === 'tail') return null
+  const start = groupFrom + group.positions[index]!
+  const opaque =
+    info?.kind === 'giant' &&
+    info.block.leaf &&
+    info.block.opaque &&
+    info.block.key !== 'Table'
+  return to <= start + chunk.length
+    ? { from: start, to: start + chunk.length, opaque }
+    : null
+}
+
 /** Only the final tail lacks verified boundaries; find it without walking the index. */
 export function unindexedFrom(tree: Tree): number | null {
   const group = tree.children.at(-1) as Tree | undefined

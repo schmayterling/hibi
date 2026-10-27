@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('tiptap: rich source edits preserve exact source and one-step undo and reject stale projections', {
@@ -340,4 +340,46 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
     corrected,
   )
   await cdp.detach()
+
+  const longSource = 'some teh words here\n\n'.repeat(20000)
+  const longFile = join(profile, 'long.md')
+  await writeFile(longFile, longSource)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, longFile)
+  await clickMenu(app, 'Open…')
+  await page.waitForFunction(() =>
+    window.sourceReview.getDocument()?.markdown.startsWith('some teh words'),
+  )
+  const positions = [
+    longSource.indexOf('teh', 50000),
+    longSource.lastIndexOf('teh'),
+  ]
+  for (const from of positions) {
+    await waitForAsync(
+      page,
+      async (from) => {
+        const api = window.sourceReview,
+          current = api.getDocument()
+        const result = api.applySourceEdits({
+          requestId: crypto.randomUUID(),
+          tabId: current.tabId,
+          revision: current.revision,
+          contentVersion: current.contentVersion,
+          changes: [{ from, to: from + 3, insert: 'the', expectedText: 'teh' }],
+        })
+        window.longEditResult = result
+        return result.status !== 'busy'
+      },
+      from,
+    )
+    assert.equal(
+      await page.evaluate(() => window.longEditResult.status),
+      'applied',
+    )
+  }
+  const actual = (await page.evaluate(() => window.hibi.getDocument())).markdown
+  for (const from of positions)
+    assert.equal(actual.slice(from, from + 3), 'the')
+  assert.equal(actual.length, longSource.length)
 })

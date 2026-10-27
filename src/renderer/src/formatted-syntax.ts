@@ -11,6 +11,7 @@ import { type Tree, TreeFragment } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
+  type MarkdownParser,
   parseCode,
   parser,
 } from '@lezer/markdown'
@@ -681,6 +682,8 @@ export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
   tree: (state: EditorState) => Tree
+  /** The same configured grammar for a bounded source-block proof. */
+  parser: (state: EditorState) => MarkdownParser
   /**
    * An edit's reparse has not finished, so renderers keep what they drew,
    * mapped through the edit, instead of rendering the edited chunks bare.
@@ -705,6 +708,7 @@ export function formattedSyntax(
       driver(syntax, options),
     ],
     tree: (state) => state.field(field).tree,
+    parser: (state) => syntax.chunkedFor(state).full,
     settling: (state) => state.field(field).settling,
   }
 }

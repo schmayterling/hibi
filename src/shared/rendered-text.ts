@@ -165,6 +165,7 @@ export class RenderedTextIndex {
   readonly #contextReader: Reader
   readonly #nearReader: Reader
   #code: RenderedCode[] = []
+  #linePrefixes: RenderedRange[] = []
   #breaks: number[] = []
   #hidden: RenderedRange[] = []
   #literal: RenderedRange[] = []
@@ -348,8 +349,11 @@ export class RenderedTextIndex {
           itemCode = padding >= 4
           paragraph = false
         }
-        if (at > from && (indent < 4 || marker !== from))
-          this.#hidden.push({ from, to: at })
+        if (at > from && (indent < 4 || marker !== from)) {
+          const prefix = { from, to: at }
+          this.#hidden.push(prefix)
+          this.#linePrefixes.push(prefix)
+        }
         let end = at
         const code = read.at(at)
         if (indent < 4 && (code === '`' || code === '~')) {
@@ -976,6 +980,7 @@ export class RenderedTextIndex {
     this.#containers = []
     this.#parents = []
     this.#code = []
+    this.#linePrefixes = []
     yield* this.#blocks()
     yield* this.#inline()
     this.#code = yield* this.#ordered(this.#code, (a, b) => a.from - b.from)
@@ -1194,12 +1199,22 @@ export class RenderedTextIndex {
   ): Generator<void, RenderedMatchContext> {
     const read = this.#contextReader
     const line = this.#source.lineAt(this.#source.editorToRaw(from)!)!
-    const lineFrom = this.#source.rawToEditor(line.from)!
-    let linePrefix = ''
-    for (let at = lineFrom; at < Math.min(lineFrom + 3, from); at++)
-      linePrefix += read.at(at)
+    const physicalFrom = this.#source.rawToEditor(line.from)!
     let lo = 0,
-      hi = this.#code.length
+      hi = this.#linePrefixes.length
+    while (lo < hi) {
+      const middle = (lo + hi) >>> 1
+      if (this.#linePrefixes[middle]!.from <= physicalFrom) lo = middle + 1
+      else hi = middle
+    }
+    const prefix = this.#linePrefixes[lo - 1]
+    const lineFrom = prefix?.from === physicalFrom ? prefix.to : physicalFrom
+    let linePrefix = ''
+    // Three spaces and nine ordered-list digits may precede a new delimiter.
+    for (let at = lineFrom; at < Math.min(lineFrom + 12, from); at++)
+      linePrefix += read.at(at)
+    lo = 0
+    hi = this.#code.length
     while (lo < hi) {
       const middle = (lo + hi) >>> 1
       if (this.#code[middle]!.from <= from) lo = middle + 1

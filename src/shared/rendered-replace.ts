@@ -103,10 +103,12 @@ export function renderedReplaceEdits(
   if (!code) {
     const literal = markdownLiteral(replacement, context.after)
     const prefix =
-      point - context.lineFrom <= 3
+      point - context.lineFrom <= context.linePrefix.length
         ? context.linePrefix.slice(0, point - context.lineFrom)
         : 'x'
-    insert = markdownLineStarts(prefix + literal).slice(prefix.length)
+    insert = markdownLineStarts(prefix + literal, prefix.length).slice(
+      prefix.length,
+    )
   }
   return joined.map((range) => ({
     ...range,

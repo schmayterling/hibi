@@ -25,8 +25,16 @@ export function markdownLiteral(text: string, after = '') {
 }
 
 /** Line starts that would begin a block. */
-export function markdownLineStarts(text: string) {
+export function markdownLineStarts(text: string, from = 0) {
   return text
-    .replace(/^( {0,3})(\d{1,9})([.)])/gm, '$1$2\\$3')
-    .replace(/^( {0,3})([#>+=-])/gm, '$1\\$2')
+    .replace(
+      /^( {0,3})(\d{1,9})([.)])/gm,
+      (match, indent, digits, marker, at) =>
+        at + indent.length + digits.length < from
+          ? match
+          : `${indent}${digits}\\${marker}`,
+    )
+    .replace(/^( {0,3})([#>+=-])/gm, (match, indent, marker, at) =>
+      at + indent.length < from ? match : `${indent}\\${marker}`,
+    )
 }

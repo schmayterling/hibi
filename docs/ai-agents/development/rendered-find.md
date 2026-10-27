@@ -19,7 +19,7 @@ each rendered match carries:
 - `from` and `to`: the source envelope of its visible content, including hidden syntax between segments.
 - `segments`: ordered source ranges that contributed visible text. adjacent ranges merge.
 - `containers`: marks and direct links whose visible content is fully covered, with opening, closing and visible-content ranges. adjacent nested marks with the same visible content share one container.
-- `context`: bounded line-prefix and following source, plus the first segment's code frame and adjacent backtick counts. replacement needs this context to preserve literal text.
+- `context`: bounded paragraph-prefix and following source, plus the first segment's code frame and adjacent backtick counts. inherited quote and list prefixes are preserved; replacement needs this context to keep inserted text literal.
 - `precise`: whether both ends cover complete source atoms and normalization scalars.
 
 for example, `hello **world**` matched by `hello world` has envelope `[0, 13)` and segments `[0, 6)`, `[8, 13)`. the closing bold delimiter is outside the envelope but available through its container.

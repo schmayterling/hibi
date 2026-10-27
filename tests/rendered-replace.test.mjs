@@ -234,6 +234,17 @@ test('replacement text stays literal at line starts, mid-word, in link labels an
   assert.equal(replace('TARGET[world](url)', 'TARGET', '!'), '\\![world](url)')
 })
 
+test('literal replacement respects existing block prefixes and completed ordered markers', () => {
+  for (const [source, value, expected] of [
+    ['# TARGET tail', '#', '# # tail'],
+    ['- TARGET tail', '#', '- \\# tail'],
+    ['> TARGET tail', '>', '> \\> tail'],
+    ['1234TARGET tail', '.', '1234\\. tail'],
+    ['   123456789TARGET tail', ')', '   123456789\\) tail'],
+  ])
+    assert.equal(replace(source, 'TARGET', value), expected, source)
+})
+
 test('inline code refuses closing runs and handles harmless backticks verbatim', () => {
   for (const [source, value, expected] of [
     ['``before TARGET after``', '`', '``before ` after``'],

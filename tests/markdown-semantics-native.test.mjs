@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
+import { countText } from '../src/addons/word-count/count.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 import {
   electron,
   stopElectronTree,
   waitForDocumentEditor,
 } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
+import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 const cases = [
   { name: 'empty', source: '' },
@@ -113,6 +117,23 @@ const flavors = [
   {id:'text-extras.text-extras',richExtensions:[Subscript,Subtext],export:{extensions:[textExtrasMarkdown]}},
 ]
 const same = (a,b) => JSON.stringify(a) === JSON.stringify(b)
+
+export function oracles(cases) {
+  const editor = document.querySelector('.tiptap').editor
+  return cases.map(fixture => {
+    const sources = [fixture.source]
+    if (fixture.edit) sources.push(fixture.source.slice(0,fixture.edit.from)+fixture.edit.insert+fixture.source.slice(fixture.edit.to))
+    return sources.map(source => {
+      const node = editor.schema.nodeFromJSON(editor.markdown.parse(source))
+      const text = getText(node,{blockSeparator:'\\n',textSerializers:getTextSerializersFromSchema(editor.schema)})
+      const headings = []
+      node.descendants(node => {
+        if(node.type.name==='heading') headings.push(node.textContent || 'Untitled heading')
+      })
+      return {source,text,headings,counts:countText(text)}
+    })
+  })
+}
 
 export async function run(cases) {
   const editor = document.querySelector('.tiptap').editor
@@ -229,7 +250,7 @@ export async function run(cases) {
 }
 `
 
-test('paginated worker semantics match native schema text, headings and counts', {
+test('tiptap: paginated worker semantics match native schema text, headings and counts', {
   timeout: 60000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-semantic-native-'))
@@ -257,6 +278,7 @@ test('paginated worker semantics match native schema text, headings and counts',
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, 'tiptap')
   for (const disabled of [[], ['core.heading-1', 'core.bold', 'core.images']]) {
     await waitForDocumentEditor(app, page)
     if (disabled.length) {
@@ -359,5 +381,253 @@ test('paginated worker semantics match native schema text, headings and counts',
         }
       }
     })
+  }
+})
+
+// Schema JSON, PM positions and compatibility-reader fallbacks above are
+// implementation-exclusive Tiptap proofs. This CM counterpart checks the same
+// notes through canonical source, visible outline and rendered-text counts.
+test('codemirror: semantic fixtures preserve source, headings and formatted counts', {
+  timeout: 240000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-semantic-formatted-'))
+  const profile = join(root, 'profile')
+  await mkdir(profile)
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'word-count': true }),
+  )
+  const bundle = await build({
+    stdin: { contents: harness, resolveDir: resolve('.') },
+    bundle: true,
+    format: 'iife',
+    globalName: 'SemanticNativeFixture',
+    platform: 'browser',
+    write: false,
+  })
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app
+      .evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      .catch(() => {})
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  const configurations = [[], ['core.heading-1', 'core.bold', 'core.images']]
+  const oracles = []
+  await selectFormattedEngine(app, page, 'tiptap')
+  for (const disabled of configurations) {
+    await page.evaluate(
+      (disabled) =>
+        localStorage.setItem(
+          'hibi:markdown-syntax-disabled',
+          JSON.stringify(disabled),
+        ),
+      disabled,
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await page.evaluate(bundle.outputFiles[0].text)
+    oracles.push(
+      await page.evaluate(
+        (cases) => SemanticNativeFixture.oracles(cases),
+        cases,
+      ),
+    )
+  }
+  await page.addInitScript(() => {
+    window.semanticCountSequence = 0
+    window.semanticCountReplies = []
+    window.Worker = new Proxy(window.Worker, {
+      construct(target, args) {
+        const worker = Reflect.construct(target, args)
+        if (String(args[0]).includes('/counter.worker-')) {
+          const pending = []
+          const post = worker.postMessage.bind(worker)
+          worker.postMessage = (source, ...rest) => {
+            pending.push({ sequence: ++window.semanticCountSequence, source })
+            return post(source, ...rest)
+          }
+          worker.addEventListener('message', ({ data }) => {
+            window.semanticCountReplies.push({
+              ...pending.shift(),
+              counts: data,
+            })
+          })
+        }
+        return worker
+      },
+    })
+  })
+  await selectFormattedEngine(app, page, 'codemirror')
+  const statusLabel = ({ words, characters }) =>
+    `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'} · ${characters.toLocaleString()} ${characters === 1 ? 'character' : 'characters'}`
+  for (const [configuration, disabled] of configurations.entries()) {
+    await page.evaluate(
+      (disabled) =>
+        localStorage.setItem(
+          'hibi:markdown-syntax-disabled',
+          JSON.stringify(disabled),
+        ),
+      disabled,
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+    await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+    await page
+      .getByRole('menuitem', { name: 'On this page', exact: true })
+      .click()
+    for (const [index, fixture] of cases.entries()) {
+      let afterCount = await page.evaluate(() => window.semanticCountSequence)
+      const file = join(root, `${configuration}-${index}.md`)
+      await writeFile(file, fixture.source)
+      await app.evaluate(({ dialog }, file) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [file],
+        })
+      }, file)
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        `${configuration}-${index}.md`,
+      )
+      const rich = page.getByRole('textbox', {
+        name: 'Document editor',
+        exact: true,
+      })
+      for (const [pass, expected] of oracles[configuration][index].entries()) {
+        if (pass) {
+          afterCount = await page.evaluate(() => window.semanticCountSequence)
+          await rich.evaluate((element, edit) => {
+            const view = element.cmTile.root.view
+            view.dispatch({
+              selection: { anchor: edit.from, head: edit.to },
+              scrollIntoView: true,
+            })
+            view.focus()
+          }, fixture.edit)
+          await page.keyboard.insertText(fixture.edit.insert)
+        }
+        await waitForAsync(
+          page,
+          async (source) =>
+            (await window.hibi.getDocument()).markdown === source,
+          expected.source,
+        )
+        // Design §11(2) accepts CommonMark parsing. Reference titles cannot
+        // contain a blank line (spec.commonmark.org/0.31.2/#example-197), so
+        // this fixture renders literal paragraphs and a real heading in CM.
+        const commonmarkTitle = fixture.name === 'multiline title'
+        const titleHeading = !disabled.includes('core.heading-1')
+        const expectedHeadings = commonmarkTitle
+          ? titleHeading
+            ? ['title']
+            : []
+          : expected.headings
+        const formattedText = commonmarkTitle
+          ? expected.source
+              .replace(/\n\n/g, '\n')
+              .replace('# title', titleHeading ? 'title' : '# title')
+          : expected.text
+        const formattedCount = statusLabel(
+          commonmarkTitle ? countText(formattedText) : expected.counts,
+        )
+        // Await a reply sent after this note/edit, so a previous note with
+        // identical counts cannot satisfy readiness.
+        const request = {
+          afterCount,
+          source: expected.source,
+          text: formattedText,
+        }
+        await page.waitForFunction(
+          ({ afterCount, source, text }) =>
+            window.semanticCountReplies.some(
+              (reply) =>
+                reply.sequence > afterCount &&
+                (reply.source === source || reply.source === text),
+            ),
+          request,
+        )
+        const reply = await page.evaluate(
+          ({ afterCount, source, text }) =>
+            window.semanticCountReplies.findLast(
+              (reply) =>
+                reply.sequence > afterCount &&
+                (reply.source === source || reply.source === text),
+            ),
+          request,
+        )
+        await page.waitForFunction(
+          (label) =>
+            document.querySelector('[data-status-id="word-count.total"]')
+              ?.textContent === label,
+          statusLabel(reply.counts),
+        )
+        await waitForAsync(
+          page,
+          () =>
+            new Promise((resolve) =>
+              requestIdleCallback(() => resolve(true), { timeout: 16 }),
+            ),
+        )
+        await t.test(
+          `${fixture.name}, pass ${pass}, ${disabled.length ? 'disabled' : 'default'} syntax`,
+          async (t) => {
+            const actual = await page.evaluate(() => ({
+              counts: document.querySelector(
+                '[data-status-id="word-count.total"]',
+              )?.textContent,
+              headings: [
+                ...document.querySelectorAll(
+                  '.outline-sidebar[data-side="right"] .sidebar-label',
+                ),
+              ].map((node) => node.textContent),
+              unavailable: document.querySelector(
+                '.outline-sidebar[data-side="right"] .document-notice',
+              )?.textContent,
+            }))
+            t.diagnostic(
+              JSON.stringify({
+                fixture: fixture.name,
+                pass,
+                disabled,
+                expected: {
+                  counts: formattedCount,
+                  headings: expectedHeadings,
+                },
+                actual,
+              }),
+            )
+            assert.equal(
+              (await page.evaluate(() => window.hibi.getDocument())).markdown,
+              expected.source,
+            )
+            assert.equal(
+              await rich.evaluate((element) =>
+                element.cmTile.root.view.state.doc.toString(),
+              ),
+              expected.source.replace(/\r\n?/g, '\n'),
+            )
+            assert.deepEqual(actual.headings, expectedHeadings)
+            assert.equal(
+              actual.counts,
+              formattedCount,
+              'formatted counts exclude Markdown syntax, as in the native Tiptap oracle',
+            )
+          },
+        )
+      }
+    }
+    // Sidebar visibility is persisted across reloads.
+    await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
   }
 })

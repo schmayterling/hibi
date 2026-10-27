@@ -77,6 +77,23 @@ test('html in list quotes ends on a marker-only line and stays within its contai
     'outside',
   )
 })
+test('crlf blank lines also end html in list-only and top-level containers', () => {
+  for (const doc of [
+    '<div>\r\nraw\r\n</div>\r\n\r\nafter\r\n',
+    '- before\r\n\r\n  <div>\r\n  raw\r\n  </div>\r\n  \r\n  after\r\n',
+  ]) {
+    const parsed = worker().parse(doc)
+    const container = doc.startsWith('-')
+      ? parsed.topNode.firstChild.firstChild
+      : parsed.topNode
+    assert.equal(container.lastChild.name, 'Paragraph', doc)
+    assert.equal(
+      doc.slice(container.lastChild.from, container.lastChild.to).trim(),
+      'after',
+    )
+  }
+})
+
 test('raw html terminators keep their semantics, including blank lines and container exits', () => {
   for (const raw of [
     '<script>\n\ncode\n</script>',

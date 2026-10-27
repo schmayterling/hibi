@@ -15,13 +15,8 @@ export const ContainerHTML: MarkdownConfig = {
       before: 'HTMLBlock',
       parse(cx, line) {
         if (line.next !== 60 || line.indent >= line.baseIndent + 4) return false
-        let quoted = false
-        for (let depth = 0; depth < cx.depth; depth++)
-          if (cx.parentType(depth).name === 'Blockquote') {
-            quoted = true
-            break
-          }
-        if (!quoted) return false
+        // Outside containers, only a retained CR can hide a blank line.
+        if (cx.depth === 1 && !line.text.endsWith('\r')) return false
         const first = line.text.slice(line.pos)
         if (/^<(?:[!?]|(?:script|pre|style|textarea)(?:\s|>|$))/i.test(first))
           return false

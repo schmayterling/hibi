@@ -5,6 +5,8 @@ import {
   boundaryKey,
   type DocumentWorkerReply,
   type DocumentWorkerRequest,
+  type FindMode,
+  type FindOptions,
   type MarkdownReferenceRequest,
   type MarkdownReferenceSyntax,
   type MarkdownSemanticResult,
@@ -16,7 +18,10 @@ import type { SourceOwnerPage } from '../../shared/markdown-source-model.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
-import type { SearchLocation } from '../../shared/source-search-index.ts'
+import type {
+  SearchHighlights,
+  SearchLocation,
+} from '../../shared/source-search-index.ts'
 import {
   type SourceTransferRequest,
   SourceTransferSender,
@@ -38,6 +43,8 @@ type ClientOptions = {
     action: FindAction,
     highlightStarts: readonly number[] | undefined,
     query: string,
+    highlights?: SearchHighlights,
+    mode?: FindMode,
   ) => void
   error: (message: string) => void
   metadataPending?: () => void
@@ -240,7 +247,13 @@ export class DocumentWorkerClient {
         : { baseVersion: request.baseVersion }),
     })
   }
-  find(query: string, from: number, to: number, action: FindAction = null) {
+  find(
+    query: string,
+    from: number,
+    to: number,
+    action: FindAction = null,
+    options: FindOptions = {},
+  ) {
     if (this.#disposed || this.#failed) return
     if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
     this.#latest = {
@@ -252,6 +265,9 @@ export class DocumentWorkerClient {
       from,
       to,
       action,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(options.prefix === undefined ? {} : { prefix: options.prefix }),
+      ...(options.viewport ? { viewport: { ...options.viewport } } : {}),
     }
     this.#options.pending()
     this.#flushQuery()
@@ -412,7 +428,12 @@ export class DocumentWorkerClient {
       query: request.query,
       highlights:
         this.#highlightRequest?.query !== request.query ||
-        this.#highlightRequest?.version !== request.version,
+        this.#highlightRequest?.version !== request.version ||
+        this.#highlightRequest?.mode !== request.mode ||
+        this.#highlightRequest?.prefix !== request.prefix,
+      ...(request.mode ? { mode: request.mode } : {}),
+      ...(request.prefix === undefined ? {} : { prefix: request.prefix }),
+      ...(request.viewport ? { viewport: request.viewport } : {}),
       from: request.from,
       to: request.to,
     })
@@ -611,13 +632,28 @@ export class DocumentWorkerClient {
         request.version === reply.version &&
         reply.version === this.#session.snapshot().version
       ) {
-        if (reply.highlightStarts) this.#highlightRequest = request
-        this.#options.result(
-          reply.location,
-          request.action,
-          reply.highlightStarts,
-          request.query,
+        if (
+          reply.highlightStarts ||
+          reply.highlights ||
+          reply.mode === 'rendered'
         )
+          this.#highlightRequest = request
+        if (reply.mode === 'rendered' || reply.highlights)
+          this.#options.result(
+            reply.location,
+            request.action,
+            reply.highlightStarts,
+            request.query,
+            reply.highlights,
+            reply.mode ?? 'source',
+          )
+        else
+          this.#options.result(
+            reply.location,
+            request.action,
+            reply.highlightStarts,
+            request.query,
+          )
       }
     } else if (reply.type === 'metadata-progress') {
       const request = this.#metadata

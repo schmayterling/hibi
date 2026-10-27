@@ -50,9 +50,10 @@ function fixture(t, source = 'one two one', extra = {}) {
   })
   let query = 'one',
     from = 0,
-    to = 0
+    to = 0,
+    options = {}
   const client = new DocumentWorkerClient(session, {
-    changed: () => client.find(query, from, to),
+    changed: () => client.find(query, from, to, null, options),
     pending: () => {},
     result: (location, action) => results.push({ location, action }),
     error: (error) => errors.push(error),
@@ -67,11 +68,12 @@ function fixture(t, source = 'one two one', extra = {}) {
     client.dispose()
     session.dispose()
   })
-  const find = (text, start = 0, end = 0, action = null) => {
+  const find = (text, start = 0, end = 0, action = null, settings = {}) => {
     query = text
     from = start
     to = end
-    client.find(query, from, to, action)
+    options = settings
+    client.find(query, from, to, action, options)
   }
   const append = (text) => {
     const length = session.snapshot().utf16Length
@@ -138,6 +140,36 @@ function queuedFixture(t, source = 'one two one', extra = {}) {
   }
   return { ...f, tasks, channels, builds, drain, step }
 }
+
+test('rendered client options, provenance and viewport pages survive selection and edit requests', async (t) => {
+  const results = []
+  const f = fixture(t, 'hello **world**\n\nhello world', {
+    result: (location, action, starts, query, highlights, mode) =>
+      results.push({ location, action, starts, query, highlights, mode }),
+  })
+  const options = { mode: 'rendered', viewport: { from: 0, to: 28, limit: 1 } }
+  f.find('hello world', 0, 0, 'first', options)
+  await wait(() => results.length === 1)
+  assert.equal(results[0].location.total, 2)
+  assert.equal(results[0].mode, 'rendered')
+  assert.equal(results[0].highlights.matches.length, 1)
+  assert.equal(results[0].starts, undefined)
+  const match = results[0].highlights.matches[0]
+  f.find('hello world', match.from, match.to, 'next', options)
+  await wait(() => results.length === 2)
+  assert.equal(results[1].location.current, 1)
+  assert.equal(f.workers.length, 1)
+  assert.ok(
+    f.workers[0].messages
+      .filter((message) => message.type === 'find')
+      .every((message) => message.mode === 'rendered'),
+  )
+  f.append('\n\nhello **world**')
+  await wait(() => results.length === 3)
+  assert.equal(results[2].location.total, 3)
+  assert.equal(results[2].mode, 'rendered')
+  assert.deepEqual(f.errors, [])
+})
 
 test('highlight checkpoints transfer once per query version and refresh after cancel or edit', async (t) => {
   const starts = []
@@ -820,7 +852,8 @@ test('client streams 50 mib and nonascii above 20 mib with bounded append work a
     })
     f.session.counters(true)
     published = undefined
-    f.find('')
+    const options = pattern === 'a' ? { mode: 'rendered' } : {}
+    f.find('', 0, 0, null, options)
     await wait(() => f.workers.length)
     const worker = f.workers[0]
     assert.equal(worker.messages[0].type, 'load-start')
@@ -895,6 +928,23 @@ test('client streams 50 mib and nonascii above 20 mib with bounded append work a
     }
     assert.equal(offset, source.length)
     assert.equal(published.snapshot().utf8Bytes, Buffer.byteLength(source))
+    if (options.mode === 'rendered') {
+      f.session.counters(true)
+      f.find('rendered request', 0, 0, null, options)
+      const request = worker.messages.findLast(
+        (message) => message.type === 'find',
+      )
+      assert.equal(request.mode, 'rendered')
+      f.client.cancelFind()
+      await wait(() =>
+        worker.replies.some(
+          (reply) => reply.type === 'canceled' && reply.id === request.id,
+        ),
+      )
+      assert.equal(f.session.counters().materializations, 0)
+      assert.equal(f.session.counters().sourceUnitsRead, 0)
+      f.find('', 0, 0, null, options)
+    }
     f.append('é')
     await wait(() => published.snapshot().version === 1)
     assert.equal(

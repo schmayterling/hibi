@@ -1,14 +1,23 @@
+import { Lexer } from 'marked'
 import type {
   PreparedSourceOperation,
   SourceSnapshot,
 } from '../../shared/source-buffer.ts'
 import type { RawEdit } from '../../shared/source-operations.ts'
 import { SourceOwners } from '../../shared/source-owners.ts'
+import { pendingDefinitionTitle } from './formatted-count-syntax.ts'
 
 const eof = -1
-const marker = /[[\]\\]/g
+const marker = /[[\]\\"'()]/g
 
-type Read = { valid: boolean; dependencies: Set<number> }
+type Read = {
+  valid: boolean
+  dependencies: Set<number>
+  headers: Set<number>
+  headerLines: Set<number>
+  closing: number | null
+  watchedTitle: boolean
+}
 type Row = { kind: string; length: number }
 
 /** structural lookahead for marked labels, without owning their intervening paragraphs. */
@@ -17,6 +26,7 @@ export class CountBrackets {
   #markers: SourceOwners
   readonly #reads = new Map<number, Read>()
   readonly #readers = new Map<number, Set<number>>()
+  readonly #headerReaders = new Map<number, Set<number>>()
   #work = { readUnits: 0, markerVisits: 0, candidateQueries: 0 }
 
   constructor(source: SourceSnapshot) {
@@ -45,23 +55,138 @@ export class CountBrackets {
     return { rows, pending: prefix + text.length - end }
   }
   #forget(slot: number) {
-    for (const dependency of this.#reads.get(slot)?.dependencies ?? []) {
-      const readers = this.#readers.get(dependency)
-      readers?.delete(slot)
-      if (!readers?.size) this.#readers.delete(dependency)
-    }
+    const read = this.#reads.get(slot)
+    for (const [map, dependencies] of [
+      [this.#readers, read?.dependencies],
+      [this.#headerReaders, read?.headers],
+    ] as const)
+      for (const dependency of dependencies ?? []) {
+        const readers = map.get(dependency)
+        readers?.delete(slot)
+        if (!readers?.size) map.delete(dependency)
+      }
     this.#reads.delete(slot)
   }
-  #query(slot: number) {
+  #read(
+    from: number,
+    to: number,
+    headers?: Set<number>,
+    lines?: Set<number>,
+    baseLine = 0,
+  ) {
+    this.#work.readUnits += to - from
+    const first = headers && this.#markers.at(from),
+      last = headers && this.#markers.at(to, -1)
+    if (headers && first && last)
+      for (const row of this.#markers.records(first.index, last.index + 1))
+        headers.add(row.owner.slot)
+    if (headers && to === this.#source.utf16Length) headers.add(eof)
+    lines?.add(this.#source.lineAt(from)!.number - baseLine)
+    return this.#source.sliceRaw(from, to)
+  }
+  #title(
+    from: number,
+    title: string,
+    dependencies: Set<number>,
+    headers: Set<number>,
+    lines: Set<number>,
+    baseLine: number,
+  ) {
+    const first = from < this.#markers.length ? this.#markers.at(from) : null
+    let position = from,
+      closing: ReturnType<SourceOwners['get']> = null
+    for (const row of this.#markers.records(
+      first?.index ?? this.#markers.count,
+    )) {
+      dependencies.add(row.owner.slot)
+      this.#work.markerVisits++
+      if (row.owner.kind === 'text') break
+      if (row.to - 1 < position) continue
+      if (row.owner.kind === '\\') position = row.to + 1
+      else if (row.owner.kind === (title === '(' ? ')' : title)) {
+        closing = row
+        break
+      }
+    }
+    if (!closing) {
+      dependencies.add(eof)
+      return false
+    }
+    const rule = Lexer.rules.block.normal.def,
+      last = this.#source.lineAt(closing.to - 1)!.number
+    let blank = false
+    for (
+      let number = this.#source.lineAt(from)!.number + 1;
+      number <= last;
+      number++
+    ) {
+      const start = this.#source.lineStart(number)!,
+        end = this.#source.lineAt(start)!.to,
+        text = this.#read(start, end),
+        prefix = `[count]: /x ${title}x${title === "'" && blank ? '\n' : ''}`,
+        probe = `${prefix}\n${text}`
+      if (!pendingDefinitionTitle(rule, probe)) {
+        this.#read(start, end, headers, lines, baseLine)
+        return !!rule.exec(`${probe}\n`)?.[3]
+      }
+      blank = !text.length
+    }
+    return false
+  }
+  #header(
+    closing: NonNullable<ReturnType<SourceOwners['get']>>,
+    headers: Set<number>,
+    dependencies: Set<number>,
+    lines: Set<number>,
+    baseLine: number,
+  ) {
+    const rule = Lexer.rules.block.normal.def
+    const line = this.#source.lineAt(closing.to - 1)!
+    const read = (from: number, to: number) => {
+      this.#work.readUnits += to - from
+      const first = this.#markers.at(from),
+        last = this.#markers.at(to, -1)
+      if (first && last)
+        for (const row of this.#markers.records(first.index, last.index + 1))
+          if (row.owner.slot !== closing.owner.slot) headers.add(row.owner.slot)
+      if (to === this.#source.utf16Length) headers.add(eof)
+      lines.add(this.#source.lineAt(from)!.number - baseLine)
+      return this.#source.sliceRaw(from, to)
+    }
+    const prefix = `[count${read(closing.to - 1, line.to)}`
+    if (rule.exec(`${prefix}\n`)) return true
+    const title = pendingDefinitionTitle(rule, prefix)
+    if (title)
+      return this.#title(line.to, title, dependencies, headers, lines, baseLine)
+    // only inspect another destination line if the exact rule can accept one.
+    if (!rule.exec(`${prefix}\n/x\n`)) return false
+    const next = this.#source.lineStart(line.number + 1)
+    if (next === null) return false
+    const end = this.#source.lineAt(next)!.to
+    const probe = `${prefix}\n${read(next, end)}`
+    if (rule.exec(`${probe}\n`)) return true
+    const nextTitle = pendingDefinitionTitle(rule, probe)
+    return (
+      !!nextTitle &&
+      this.#title(end, nextTitle, dependencies, headers, lines, baseLine)
+    )
+  }
+  #query(slot: number, reuseClosing = false) {
+    const previous = this.#reads.get(slot)
     this.#forget(slot)
     const opener = this.#markers.bySlot(slot)
     if (opener?.owner.kind !== '[') return false
     this.#work.candidateQueries++
-    const dependencies = new Set<number>()
+    let closing =
+      reuseClosing && previous?.closing
+        ? this.#markers.bySlot(previous.closing)
+        : null
+    const dependencies = new Set<number>(closing ? previous?.dependencies : []),
+      headers = new Set<number>(),
+      headerLines = new Set<number>()
     let position = opener.to,
-      valid = false,
-      ended = false
-    for (const row of this.#markers.records(opener.index + 1)) {
+      ended = !!closing
+    for (const row of closing ? [] : this.#markers.records(opener.index + 1)) {
       this.#work.markerVisits++
       if (row.owner.kind === 'text') break
       dependencies.add(row.owner.slot)
@@ -70,24 +195,72 @@ export class CountBrackets {
         position = row.to + 1
         continue
       }
-      if (row.owner.kind === ']') {
-        const end = Math.min(this.#source.utf16Length, row.to + 1)
-        this.#work.readUnits += end - row.to
-        valid = this.#source.sliceRaw(row.to, end) === ':'
-      }
+      if (row.owner.kind !== '[' && row.owner.kind !== ']') continue
+      if (row.owner.kind === ']') closing = row
       ended = true
       break
     }
     if (!ended) dependencies.add(eof)
-    this.#reads.set(slot, { valid, dependencies })
-    for (const dependency of dependencies) {
-      let readers = this.#readers.get(dependency)
-      if (!readers) {
-        readers = new Set()
-        this.#readers.set(dependency, readers)
+    const valid =
+      !!closing &&
+      this.#header(
+        closing,
+        headers,
+        dependencies,
+        headerLines,
+        this.#source.lineAt(opener.to - 1)!.number,
+      )
+    this.#remember(slot, {
+      valid,
+      dependencies,
+      headers,
+      closing: closing?.owner.slot ?? null,
+      headerLines,
+      watchedTitle: false,
+    })
+    return valid
+  }
+  #remember(slot: number, read: Read) {
+    this.#reads.set(slot, read)
+    const { dependencies, headers } = read
+    for (const [map, reads] of [
+      [this.#readers, dependencies],
+      [this.#headerReaders, headers],
+    ] as const)
+      for (const dependency of reads) {
+        let readers = map.get(dependency)
+        if (!readers) {
+          readers = new Set()
+          map.set(dependency, readers)
+        }
+        readers.add(slot)
       }
-      readers.add(slot)
-    }
+  }
+  canTitle(from: number, end: number, title: string) {
+    const raw = this.#source.editorToRaw(from),
+      tail = this.#source.editorToRaw(end),
+      row = raw === null ? null : this.#markers.at(raw),
+      previous = row && this.#reads.get(row.owner.slot)
+    if (!row || !previous || tail === null) return false
+    const dependencies = new Set(previous.dependencies),
+      headers = new Set(previous.headers),
+      headerLines = new Set(previous.headerLines),
+      valid = this.#title(
+        tail,
+        title,
+        dependencies,
+        headers,
+        headerLines,
+        this.#source.lineAt(row.to - 1)!.number,
+      )
+    this.#forget(row.owner.slot)
+    this.#remember(row.owner.slot, {
+      ...previous,
+      dependencies,
+      headers,
+      headerLines,
+      watchedTitle: true,
+    })
     return valid
   }
   canClose(from: number) {
@@ -100,7 +273,7 @@ export class CountBrackets {
       this.#query(row.owner.slot)
     )
   }
-  #edit(change: RawEdit, affected: Set<number>) {
+  #edit(change: RawEdit, affected: Set<number>, rescan: Set<number>) {
     const { from, to, insert } = change
     let first = from < this.#markers.length ? this.#markers.at(from) : null
     // the last text row is a gap, not a marker. append into that gap.
@@ -113,24 +286,50 @@ export class CountBrackets {
     const start = first?.index ?? this.#markers.count,
       end = after?.index ?? this.#markers.count
     const scan = this.#scan(insert, first ? from - first.from : 0)
-    let structural = scan.rows.length > 0
+    let structural =
+      scan.rows.length > 0 ||
+      /[\r\n]/.test(insert) ||
+      this.#source.lineAt(from)?.number !== this.#source.lineAt(to)?.number
     for (const row of this.#markers.records(start, end))
       if (row.owner.kind !== 'text') structural = true
-    const collect = (slot: number) => {
-      for (const reader of this.#readers.get(slot) ?? []) affected.add(reader)
+    const collect = (slot: number, labels: boolean) => {
+      for (const reader of this.#headerReaders.get(slot) ?? []) {
+        if (!structural) {
+          const read = this.#reads.get(reader),
+            opener = this.#markers.bySlot(reader),
+            base = opener && this.#source.lineAt(opener.to - 1)!.number,
+            first = this.#source.lineAt(from)!.number - (base ?? 0),
+            last = this.#source.lineAt(to)!.number - (base ?? 0)
+          if (
+            !read ||
+            ![...read.headerLines].some((line) => line >= first && line <= last)
+          )
+            continue
+        }
+        affected.add(reader)
+      }
+      if (labels)
+        for (const reader of this.#readers.get(slot) ?? []) {
+          affected.add(reader)
+          rescan.add(reader)
+        }
     }
-    if (structural) {
-      for (const row of this.#markers.records(
-        start,
-        Math.min(end + 1, this.#markers.count),
-      ))
-        collect(row.owner.slot)
-      collect(eof)
-    }
-    // even a non-marker edit immediately after ']' can create or remove ']:'.
+    for (const row of this.#markers.records(
+      start,
+      Math.min(end + 1, this.#markers.count),
+    ))
+      collect(row.owner.slot, structural)
+    if (structural || to === this.#markers.length) collect(eof, structural)
+    // the unit after a closer or escape determines header and escape semantics.
     const previous = from ? this.#markers.at(from, -1) : null
-    if (previous?.owner.kind === ']' && previous.to === from)
-      collect(previous.owner.slot)
+    if (
+      previous?.to === from &&
+      (previous.owner.kind === ']' || previous.owner.kind === '\\')
+    )
+      for (const reader of this.#readers.get(previous.owner.slot) ?? []) {
+        affected.add(reader)
+        if (previous.owner.kind === '\\') rescan.add(reader)
+      }
     for (const row of this.#markers.records(start, end))
       this.#forget(row.owner.slot)
     if (after)
@@ -149,15 +348,17 @@ export class CountBrackets {
     if (prepared.before !== this.#source)
       throw new Error('Bracket index source operation is stale.')
     const affected = new Set<number>(),
-      previous = new Map<number, boolean>()
+      rescan = new Set<number>(),
+      previous = new Map<number, Read | undefined>()
     for (let at = prepared.operation.changes.length - 1; at >= 0; at--)
-      this.#edit(prepared.operation.changes[at]!, affected)
-    for (const slot of affected)
-      previous.set(slot, this.#reads.get(slot)?.valid ?? false)
+      this.#edit(prepared.operation.changes[at]!, affected, rescan)
+    for (const slot of affected) previous.set(slot, this.#reads.get(slot))
     this.#source = prepared.after
     const openers: number[] = []
     for (const slot of affected) {
-      if (!this.#query(slot) || previous.get(slot)) continue
+      const valid = this.#query(slot, !rescan.has(slot)),
+        before = previous.get(slot)
+      if (!before?.watchedTitle && (!valid || before?.valid)) continue
       const row = this.#markers.bySlot(slot)
       if (row) openers.push(row.to - 1)
     }
@@ -172,5 +373,6 @@ export class CountBrackets {
   dispose() {
     this.#reads.clear()
     this.#readers.clear()
+    this.#headerReaders.clear()
   }
 }

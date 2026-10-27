@@ -53,7 +53,11 @@ export class FormattedCounter {
     this.#syntax = syntax
     this.#brackets = new CountBrackets(store.snapshot())
     const base = metadataParsers[syntax.gfm ? 'gfm' : 'commonmark'].configure(
-      countMarkdownSyntax(syntax, (from) => this.#brackets.canClose(from)),
+      countMarkdownSyntax(
+        syntax,
+        (from) => this.#brackets.canClose(from),
+        (from, end, title) => this.#brackets.canTitle(from, end, title),
+      ),
     )
     const parser = syntax.math ? base.configure(blockMathSyntax) : base
     this.#model = syntax.frontmatter
@@ -90,8 +94,9 @@ export class FormattedCounter {
     let invalidated = false
     for (const from of openers)
       if (
-        this.#model.state().owners?.at(from)?.owner.kind ===
-        'markdown:Paragraph'
+        ['markdown:Paragraph', 'markdown:CountDefinition'].includes(
+          this.#model.state().owners?.at(from)?.owner.kind ?? '',
+        )
       ) {
         this.#model.invalidate(from, from + 1)
         invalidated = true

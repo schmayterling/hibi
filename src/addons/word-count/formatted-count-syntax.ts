@@ -3,10 +3,22 @@ import { Lexer, type TokenizerExtension } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
 import type { CountSyntax } from './formatted-text.ts'
 
+/** ask the actual definition rule whether a title closer can finish it. */
+export function pendingDefinitionTitle(rule: RegExp, text: string) {
+  for (const close of ['"', "'", ')']) {
+    const probe = `${text}${close}\n`
+    const match = rule.exec(probe)
+    if (match?.[3] && match[0].length === probe.length)
+      return match[3].charAt(0)
+  }
+  return null
+}
+
 /** keep marked definition candidates together for regional semantic reads. */
 export function countMarkdownSyntax(
   syntax: CountSyntax,
   canClose?: (from: number) => boolean,
+  canTitle?: (from: number, end: number, title: string) => boolean,
 ): MarkdownConfig {
   const rule = Lexer.rules.block[syntax.gfm ? 'gfm' : 'normal'].def
   const footnotes = markedGithubFootnote()
@@ -23,16 +35,7 @@ export function countMarkdownSyntax(
     if (reset) Reflect.apply(reset, undefined, [text])
     return token
   }
-  // ask the actual definition rule whether appending a title closer can finish it.
-  const openTitle = (text: string) => {
-    for (const close of ['"', "'", ')']) {
-      const probe = `${text}${close}\n`
-      const match = rule.exec(probe)
-      if (match?.[3] && match[0].length === probe.length)
-        return match[3].charAt(0)
-    }
-    return null
-  }
+  const openTitle = (text: string) => pendingDefinitionTitle(rule, text)
   return {
     defineNodes: [{ name: 'CountDefinition', block: true }],
     parseBlock: [
@@ -42,10 +45,10 @@ export function countMarkdownSyntax(
         parse(cx, line) {
           // container blocks already provide one outer semantic owner.
           if (cx.depth !== 1 || !/^ {0,3}\[/.test(line.text)) return false
-          const start = cx.lineStart
+          const start = cx.lineStart,
+            opener = start + line.pos
           const isFootnote = syntax.gfm && footnote(line.text)
-          if (!isFootnote && canClose && !canClose(start + line.pos))
-            return false
+          if (!isFootnote && canClose && !canClose(opener)) return false
           const lines = [line.text]
           let end = start + line.text.length,
             ended = false
@@ -106,6 +109,12 @@ export function countMarkdownSyntax(
               if (!title && !rule.exec(`${text}\n`)?.[3]) {
                 const next = `${text}\n${cx.peekLine()}`
                 title = openTitle(next)
+                if (
+                  title &&
+                  canTitle &&
+                  !canTitle(opener, end + 1 + cx.peekLine().length, title)
+                )
+                  title = null
                 if (title || rule.exec(`${next}\n`)?.[3]) take()
               }
               if (title) {

@@ -144,6 +144,29 @@ test('the marker and the space after it become one checkbox', () => {
   const [open] = render('- [ ]  buy milk')
   assert.deepEqual([open.from, open.to, open.checked], [2, 7, false])
   assert.equal(open.widget.text, 'buy milk')
+  // The checkbox's name is the text the formatted view shows.
+  for (const [doc, text] of [
+    [
+      '- [ ] buy **milk** at [the store](https://example.com)',
+      'buy milk at the store',
+    ],
+    [
+      '- [ ] `code` and <https://example.com/a> &amp; \\*star\\*',
+      'code and https://example.com/a & *star*',
+    ],
+    [
+      '- [ ] see ![a picture](p.png) <b>bold</b>\n  next line',
+      'see bold next line',
+    ],
+    [
+      '- [ ] [label][ref] and https://example.com/bare',
+      '[label][ref] and https://example.com/bare',
+    ],
+  ])
+    assert.equal(render(doc)[0].widget.text, text, doc)
+  // Like outline labels, names read a bounded start of a long task.
+  const long = render(`- [ ] ${'word '.repeat(4000)}`)[0].widget.text
+  assert.ok(long.length <= 512 && long.startsWith('word word'), long.length)
   const [done] = render('- [X]')
   assert.deepEqual([done.from, done.to, done.checked], [2, 5, true])
   // Equal checkboxes keep their DOM; a toggled one updates in place.

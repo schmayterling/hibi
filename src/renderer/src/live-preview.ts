@@ -328,6 +328,7 @@ function inline(
 ): {
   decorations: DecorationSet
   atomic: DecorationSet
+  outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
 } {
@@ -358,9 +359,13 @@ function inline(
   }
   blocks = { literal, views, shapes }
   const decorations: Range<Decoration>[] = []
+  // Text that has to stay one element wraps the other decorations.
+  const outer: Range<Decoration>[] = []
   const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
-  const headings = new Map<number, Range<BlockWrapper>>()
+  const headings = new Map<number, Heading>()
+  /** Markers shown under the selection, which headings' names leave out. */
+  const shown: Revealed[] = []
   const line = (pos: number) => {
     let info = lines.get(pos)
     if (!info) {
@@ -393,8 +398,11 @@ function inline(
   }
   /** Markers of formatting under the selection stay visible and editable. */
   const syntax = (from: number, to: number, revealed: boolean) => {
-    if (revealed) mark('hibi-lp-marker', from, to)
-    else hideRange(from, to)
+    if (!revealed) hideRange(from, to)
+    else if (to > from) {
+      mark('hibi-lp-marker', from, to)
+      shown.push({ from, to })
+    }
   }
 
   function link(node: SyntaxNode) {
@@ -553,13 +561,12 @@ function inline(
     const heading = /^(ATX|Setext)Heading(\d)$/.exec(name)
     if (heading) {
       if (!headings.has(ref.from))
-        headings.set(
-          ref.from,
-          BlockWrapper.create({
-            tagName: 'div',
-            attributes: { role: 'heading', 'aria-level': name.slice(-1) },
-          }).range(doc.lineAt(ref.from).from, ref.to),
-        )
+        headings.set(ref.from, {
+          from: ref.from,
+          to: ref.to,
+          level: name.slice(-1),
+          setext: heading[1] === 'Setext',
+        })
       eachLine(doc, ref.from, ref.to, range, (current) => {
         // A setext underline line is hidden by the layout field.
         if (
@@ -720,12 +727,68 @@ function inline(
     )
   }
   blocks = noBlocks
+  const wrappers: Range<BlockWrapper>[] = []
+  let named = 0
+  for (const { from, to, level, setext } of headings.values()) {
+    // While its markers show, a heading is named by its text between them,
+    // which stays text that a screen reader reads with them.
+    const ids: string[] = []
+    const markers = shown
+      .filter((range) => range.from >= from && range.to <= to)
+      .sort((a, b) => a.from - b.from)
+    // A setext heading's underline line is hidden by the layout field.
+    const last = setext ? doc.lineAt(to).from - 1 : to
+    if (markers.length)
+      eachLine(doc, from, last, { from, to: last }, (line) => {
+        let at = Math.max(from, line.from)
+        const end = Math.min(last, line.to)
+        for (const range of [...markers, { from: end, to: end }]) {
+          if (range.from > end) break
+          if (range.from > at) {
+            const id = `${viewName(view)}-${named++}`
+            ids.push(id)
+            outer.push(
+              Decoration.mark({ attributes: { id }, inclusive: true }).range(
+                at,
+                range.from,
+              ),
+            )
+          }
+          at = Math.max(at, range.to)
+        }
+      })
+    wrappers.push(
+      BlockWrapper.create({
+        tagName: 'div',
+        attributes: {
+          role: 'heading',
+          'aria-level': level,
+          ...(ids.length ? { 'aria-labelledby': ids.join(' ') } : {}),
+        },
+      }).range(doc.lineAt(from).from, to),
+    )
+  }
   return {
     decorations: Decoration.set(decorations, true),
     atomic: Decoration.set(atomic, true),
-    wrappers: BlockWrapper.set([...headings.values()], true),
+    outer: Decoration.set(outer, true),
+    wrappers: BlockWrapper.set(wrappers, true),
     end,
   }
+}
+
+type Heading = { from: number; to: number; level: string; setext: boolean }
+
+/** Element ids of headings' names, unique to each view. */
+const viewNames = new WeakMap<EditorView, string>()
+let viewCount = 0
+function viewName(view: EditorView) {
+  let name = viewNames.get(view)
+  if (!name) {
+    name = `hibi-heading-name-${++viewCount}`
+    viewNames.set(view, name)
+  }
+  return name
 }
 
 /** Where a container's last line that the layout does not hide starts. */
@@ -1317,6 +1380,7 @@ export function livePreview(
     class {
       decorations: DecorationSet
       atomic: DecorationSet
+      outer: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
       end: number
@@ -1326,6 +1390,7 @@ export function livePreview(
         ;({
           decorations: this.decorations,
           atomic: this.atomic,
+          outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
         } = inline(
@@ -1356,6 +1421,7 @@ export function livePreview(
         if (syntax.settling(update.state)) {
           this.decorations = mapLines(this.decorations, update)
           this.atomic = mapLines(this.atomic, update)
+          this.outer = this.outer.map(update.changes)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
           update.docChanged ||
@@ -1376,6 +1442,7 @@ export function livePreview(
           ({
             decorations: this.decorations,
             atomic: this.atomic,
+            outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
           } = inline(update.view, tree, reveal, update.state.field(layout)))
@@ -1455,6 +1522,9 @@ export function livePreview(
       revealDestinations(view.state.field(layout), view.state),
     ),
     preview,
+    EditorView.outerDecorations.of(
+      (view) => view.plugin(preview)?.outer ?? Decoration.none,
+    ),
     EditorView.blockWrappers.of(
       (view) => view.plugin(preview)?.wrappers ?? RangeSet.empty,
     ),

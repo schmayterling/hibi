@@ -242,3 +242,88 @@ test('revealing editable heading markers keeps its heading role and level', {
     1,
   )
 })
+
+/** Headings in the native accessibility tree: their names and the text they hold. */
+async function headingTree(cdp) {
+  const { nodes } = await cdp.send('Accessibility.getFullAXTree')
+  const byId = new Map(nodes.map((node) => [node.nodeId, node]))
+  const text = (node) =>
+    node.role?.value === 'StaticText'
+      ? [node.name?.value ?? '']
+      : (node.childIds ?? []).flatMap((id) =>
+          byId.has(id) ? text(byId.get(id)) : [],
+        )
+  return nodes
+    .filter((node) => node.role?.value === 'heading' && !node.ignored)
+    .map((node) => ({ name: node.name?.value, text: text(node).join('') }))
+}
+
+async function place(page, anchor) {
+  await page.evaluate((anchor) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.focus()
+    view.dispatch({ selection: { anchor } })
+  }, anchor)
+}
+
+test('revealed markers stay readable heading text but leave its name', {
+  timeout: 60000,
+}, async (t) => {
+  const text =
+    '# marker heading\n\n## **bold** heading ##\n\nclosing paragraph\n'
+  const page = await open(t, text, 'codemirror', true)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const rich = page.locator('.rich-pane')
+  await rich.locator('.hibi-lp-h2').waitFor()
+  await place(page, 5)
+  await rich.locator('.hibi-lp-marker', { hasText: '#' }).waitFor()
+  assert.deepEqual(await headingTree(cdp), [
+    { name: 'marker heading', text: '# marker heading' },
+    { name: 'bold heading', text: 'bold heading' },
+  ])
+  // Markers of inline formatting under the caret leave the name as well.
+  await place(page, text.indexOf('bold') + 4)
+  await rich.locator('.hibi-lp-marker', { hasText: '**' }).first().waitFor()
+  assert.deepEqual(await headingTree(cdp), [
+    { name: 'marker heading', text: 'marker heading' },
+    { name: 'bold heading', text: '## **bold** heading ##' },
+  ])
+  // The heading's source stays editable where the markers show.
+  await page.keyboard.insertText('er')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    text.replace('**bold**', '**bolder**'),
+  )
+  await rich
+    .getByRole('heading', { name: 'bolder heading', level: 2, exact: true })
+    .waitFor()
+  await page.keyboard.press('ControlOrMeta+z')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    text,
+  )
+})
+
+test('with markers hidden, the heading under the caret keeps its name', {
+  timeout: 60000,
+}, async (t) => {
+  const page = await open(t, '## heading 0\n\nparagraph 0\n')
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await page.locator('.rich-pane .hibi-lp-h2').waitFor()
+  await place(page, 5)
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  )
+  assert.equal(await page.locator('.rich-pane .hibi-lp-marker').count(), 0)
+  assert.deepEqual(await headingTree(cdp), [
+    { name: 'heading 0', text: 'heading 0' },
+  ])
+})

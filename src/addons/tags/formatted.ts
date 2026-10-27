@@ -4,20 +4,30 @@ import type { SyntaxNode } from '@lezer/common'
 import {
   type FormattedContribution,
   formattedLiteral,
+  formattedOpaque,
   formattedRefresh,
 } from '../../renderer/src/formatted-contributions.ts'
 import { TagLabels } from './formatted-labels.ts'
 import { tagMatches } from './syntax.ts'
 
-/** Blocks whose text holds tags: the rich view's text blocks outside code. */
-const blocks = [
-  'Paragraph',
-  'Task',
-  ...[1, 2, 3, 4, 5, 6].flatMap((level) => [
-    `ATXHeading${level}`,
-    `SetextHeading${level}`,
-  ]),
-]
+/**
+ * Leaf blocks whose text the rich view does not show as text: code, HTML,
+ * comments, processing instructions, link definitions, frontmatter, alert
+ * titles, display math and rules. Every other leaf block holds tags, such as
+ * paragraphs, headings, tasks and small text, whichever syntax adds it.
+ */
+const sourceBlocks = new Set([
+  'CodeBlock',
+  'FencedCode',
+  'HTMLBlock',
+  'CommentBlock',
+  'ProcessingInstructionBlock',
+  'LinkReference',
+  'Frontmatter',
+  'AlertTitle',
+  'BlockMath',
+  'HorizontalRule',
+])
 
 /** Inline syntax whose text is never a tag, like the rich view's code and link marks. */
 const opaque = /Code|Link|link|URL|HTML|Image|Embed|Math|Comment|Escape/
@@ -166,9 +176,15 @@ export function formattedTags(
     id: 'tags.highlights',
     views: [
       {
-        nodes: blocks,
+        nodes: ['LeafBlock'],
         decorate(node, out, { state, visible }) {
-          if (!visible) return
+          // Opaque nodes, such as tables, render their text themselves.
+          if (
+            !visible ||
+            sourceBlocks.has(node.name) ||
+            state.facet(formattedOpaque).includes(node.name)
+          )
+            return
           blockTags(
             node.node,
             Math.max(node.from, visible.from),

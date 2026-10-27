@@ -60,6 +60,12 @@ async function open(name) {
     join(folder, 'notes', name),
   )
   await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async (name) => (await window.hibi.getDocument()).name === name,
+    name,
+  )
+  await waitForDocumentEditor(app, page)
 }
 
 /** Reload the window with the formatted engine switch and marker setting. */

@@ -49,7 +49,9 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
         '.html': 'text/html',
       }[extname(file)]
       response.writeHead(200, {
-        'Content-Type': type ?? 'application/octet-stream',
+        'Content-Type': type
+          ? `${type}; charset=utf-8`
+          : 'application/octet-stream',
       })
       response.end(await readFile(file))
     } catch {
@@ -154,6 +156,202 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       }
     },
   )
+  await t.test(
+    'a short structural repair keeps the unchanged 52 mib suffix in the view',
+    async () => {
+      await page.evaluate(async () => {
+        const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+        const body = unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length))
+        const close = body.indexOf(
+          'paragraph',
+          Math.floor(body.length * 0.01) + 200 * 1024,
+        )
+        await window.livePreview.mount(
+          body.slice(0, close) + 'paragraph --> text\n\n' + body.slice(close),
+          undefined,
+          { worker: true },
+        )
+      })
+      await page.waitForFunction(
+        () => window.livePreview.workerState.ready,
+        undefined,
+        { timeout: 120000 },
+      )
+      const before = await page.evaluate(() => {
+        const preview = window.livePreview
+        const view = preview.view()
+        const at = view.state.doc.lineAt(
+          Math.floor(view.state.doc.length * 0.01),
+        ).from
+        const result = {
+          pages: preview.workerState.pages,
+          requests: preview.workerState.requests,
+        }
+        preview.reset()
+        preview.edit(at, at, '<!--\n')
+        return result
+      })
+      await page.waitForFunction(
+        (before) =>
+          window.livePreview.workerState.pages - before.pages > 4 ||
+          (!window.livePreview.settling() &&
+            window.livePreview.workerState.ready),
+        before,
+        { timeout: 120000 },
+      )
+      const repaired = await page.evaluate(
+        (before) => ({
+          pages: window.livePreview.workerState.pages - before.pages,
+          requests: window.livePreview.workerState.requests - before.requests,
+          records: window.livePreview.probe.adoptedRecords,
+          settling: window.livePreview.settling(),
+          errors: window.livePreview.workerState.errors,
+        }),
+        before,
+      )
+      t.diagnostic(JSON.stringify({ shortRepair: repaired }))
+      assert.equal(repaired.settling, false, JSON.stringify(repaired))
+      assert.ok(
+        repaired.requests > 0 && repaired.requests <= 4,
+        JSON.stringify(repaired),
+      )
+      assert.ok(
+        repaired.pages > 0 && repaired.pages <= 2,
+        JSON.stringify(repaired),
+      )
+      assert.ok(
+        repaired.records > 0 && repaired.records <= 256,
+        JSON.stringify(repaired),
+      )
+      assert.deepEqual(repaired.errors, [])
+      const at = await page.evaluate(() => {
+        const preview = window.livePreview
+        preview.reset()
+        const at = preview.view().state.doc.length - 8192
+        preview.scrollTo(at)
+        return at
+      })
+      await page.waitForFunction(
+        (at) =>
+          [...document.querySelectorAll('.hibi-lp-heading')].some(
+            (element) =>
+              Math.abs(window.livePreview.view().posAtDOM(element) - at) <
+              12000,
+          ),
+        at,
+      )
+      assert.equal(
+        await page.evaluate(() => window.livePreview.probe.scannedUnits),
+        0,
+      )
+    },
+  )
+  await t.test(
+    'frontmatter activation refreshes boundaries without a text edit',
+    async () => {
+      await page.evaluate(async () => {
+        await window.livePreview.mount(
+          '---\ntitle: exact\n---\n\n' + '# heading\n\nbody\n\n'.repeat(100),
+          undefined,
+          { worker: true },
+        )
+      })
+      await page.waitForFunction(() => window.livePreview.workerState.ready)
+      const before = await page.evaluate(() => {
+        const preview = window.livePreview
+        const doc = preview.view().state.doc
+        const requests = preview.workerState.requests
+        const prefixBefore = preview.definitionIndex().start
+        preview.setFrontmatter(true)
+        return {
+          requests,
+          sameDoc: doc === preview.view().state.doc,
+          prefixBefore,
+          prefixAfter: preview.definitionIndex().start,
+          bodyFrom: doc.line(5).from,
+        }
+      })
+      await page.waitForFunction(() => window.livePreview.workerState.ready)
+      const after = await page.evaluate(() => ({
+        requests: window.livePreview.workerState.requests,
+        errors: window.livePreview.workerState.errors,
+      }))
+      assert.equal(before.sameDoc, true)
+      assert.equal(before.prefixBefore, 0)
+      assert.equal(before.prefixAfter, before.bodyFrom)
+      assert.equal(after.requests, before.requests + 1)
+      assert.deepEqual(after.errors, [])
+    },
+  )
+  await t.test(
+    'properties keystrokes retain worker boundaries and a complete footnote index',
+    async () => {
+      await page.evaluate(async () => {
+        const prefix = '---\ntitle: exact\n---\n\n'
+        const unit =
+          '# heading\n\nparagraph reference[^a]\n\n[^a]: definition\n\n'
+        await window.livePreview.mount(
+          prefix + unit.repeat(Math.ceil((8 * 1024 * 1024) / unit.length)),
+          undefined,
+          { worker: true, frontmatter: true, editable: true },
+        )
+      })
+      await page.waitForFunction(
+        () =>
+          window.livePreview.workerState.ready &&
+          window.livePreview.definitionsReady(),
+        undefined,
+        { timeout: 120000 },
+      )
+      const result = await page.evaluate(async () => {
+        const preview = window.livePreview
+        const before = preview.definitionIndex()
+        const requests = preview.workerState.requests,
+          pages = preview.workerState.pages
+        const length = preview.view().state.doc.length
+        preview.reset()
+        preview.footnoteScan.scanned = preview.footnoteScan.parsed = 0
+        for (const insert of ['x', '\nother: value', 'z']) {
+          const at = preview.view().state.doc.line(2).to
+          preview.edit(at, at, insert, true)
+        }
+        for (let i = 0; i < 3; i++)
+          await new Promise((done) =>
+            requestIdleCallback(done, { timeout: 200 }),
+          )
+        const after = preview.definitionIndex()
+        return {
+          requests: preview.workerState.requests - requests,
+          pages: preview.workerState.pages - pages,
+          scanned: preview.probe.scannedUnits,
+          footnoteScanned: preview.footnoteScan.scanned,
+          footnoteParsed: preview.footnoteScan.parsed,
+          sameGroups: before.groups === after.groups,
+          sameLabels: before.labels === after.labels,
+          readDelta: after.read - before.read,
+          prefixBefore: before.start,
+          prefixAfter: after.start,
+          lengthDelta: preview.view().state.doc.length - length,
+          ready: preview.definitionsReady(),
+          errors: preview.workerState.errors,
+        }
+      })
+      t.diagnostic(JSON.stringify({ properties: result }))
+      assert.equal(result.requests, 0, JSON.stringify(result))
+      assert.equal(result.pages, 0, JSON.stringify(result))
+      assert.equal(result.scanned, 0, JSON.stringify(result))
+      assert.equal(result.footnoteScanned, 0, JSON.stringify(result))
+      assert.equal(result.footnoteParsed, 0, JSON.stringify(result))
+      assert.ok(result.prefixBefore > 0)
+      assert.equal(result.prefixAfter - result.prefixBefore, result.lengthDelta)
+      assert.equal(result.sameGroups, true)
+      assert.equal(result.sameLabels, true)
+      assert.equal(result.readDelta, result.lengthDelta)
+      assert.equal(result.ready, true)
+      assert.deepEqual(result.errors, [])
+    },
+  )
+
   await page.evaluate(async () => {
     const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
     await window.livePreview.mount(
@@ -460,12 +658,18 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       undefined,
       { worker: true },
     )
+    const view = window.livePreview.view()
+    const releases = window.livePreview.workerState.releases
+    // Selection moves update the view without changing the syntax configuration.
+    for (let at = 1; at <= 40; at++)
+      view.dispatch({ selection: { anchor: at } })
     const result = {
       requests: window.livePreview.workerState.requests,
       declined: window.livePreview.probe.adoptionDeclined ?? 0,
+      releases,
+      repeatedReleases: window.livePreview.workerState.releases - releases,
     }
     window.livePreview.reset()
-    const view = window.livePreview.view()
     view.dispatch({
       selection: { anchor: view.state.doc.length - 10 },
       scrollIntoView: true,
@@ -474,6 +678,9 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
   })
   assert.equal(unknown.requests, 0)
   assert.ok(unknown.declined > 0)
+  assert.ok(unknown.releases > 0, JSON.stringify(unknown))
+  // Each release posts a message to the worker; updates after the first have nothing to cancel.
+  assert.equal(unknown.repeatedReleases, 0, JSON.stringify(unknown))
   await page.waitForFunction(() => window.livePreview.probe.scannedUnits > 0)
   await page.evaluate(() => window.removeUnknown())
   await page.waitForFunction(

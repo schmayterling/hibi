@@ -21,12 +21,14 @@ import {
   boundarySyntaxIds,
 } from '../../shared/markdown-boundary-syntax.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
+import { mappedPrefix } from '../../shared/source-projection.ts'
 import {
   BoundaryTree,
   ChunkedMarkdownParser,
   type ChunkedMarkdownProbe,
   type ChunkedPartialParse,
   type Demand,
+  spliceBoundaryFragments,
   uncovered,
   unindexedFrom,
 } from './chunked-markdown.ts'
@@ -48,6 +50,8 @@ import {
  */
 type Syntax = {
   tree: Tree
+  /** Mapped boundary fragments kept while a local repair has an unscanned tail. */
+  retained: readonly TreeFragment[]
   demand: Demand
   /** The document prefix that is not parsed as Markdown. */
   prefix: number
@@ -68,6 +72,7 @@ const adoptBoundaries = StateEffect.define<{
   key: string
   tree: Tree
   from: number
+  to: number
 }>()
 
 export type FormattedSyntaxOptions = {
@@ -78,6 +83,7 @@ export type FormattedSyntaxOptions = {
       receive: BoundaryReceive,
       declined: (reason: 'stale' | 'mismatch') => void,
       from?: number,
+      baseVersion?: number,
     ) => void
     release: (retain?: boolean) => void
   }
@@ -183,6 +189,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
     demand: Demand,
     prefix: number,
     settling: boolean,
+    retained: readonly TreeFragment[],
     oneStep = false,
   ): Syntax => {
     const end = performance.now() + slice
@@ -191,6 +198,10 @@ function syntaxField(options: FormattedSyntaxOptions) {
       if (tree)
         return {
           tree,
+          retained:
+            unindexedFrom(tree) === null
+              ? TreeFragment.addTree(tree)
+              : retained,
           demand,
           prefix,
           complete: !uncovered(tree, demand.from, demand.to),
@@ -201,6 +212,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
       if (oneStep || performance.now() >= end)
         return {
           tree: parse.snapshot(),
+          retained,
           demand,
           prefix,
           complete: false,
@@ -214,6 +226,8 @@ function syntaxField(options: FormattedSyntaxOptions) {
     fragments: readonly TreeFragment[],
     demand: Demand,
     settling: boolean,
+    retained = fragments,
+    joined = false,
   ) => {
     const prefix = prefixOf(state)
     return run(
@@ -222,10 +236,12 @@ function syntaxField(options: FormattedSyntaxOptions) {
         fragments,
         demand,
         prefix,
+        joined,
       ),
       demand,
       prefix,
       settling,
+      retained,
     )
   }
   const field = StateField.define<Syntax>({
@@ -261,40 +277,42 @@ function syntaxField(options: FormattedSyntaxOptions) {
             config &&
             adopted.key === boundaryKey(config)
           ) {
-            const length = transaction.state.doc.length
-            const fragments = adopted.from
-              ? [
-                  ...TreeFragment.applyChanges(
-                    TreeFragment.addTree(value.tree),
-                    [
-                      {
-                        fromA: adopted.from,
-                        toA: length,
-                        fromB: adopted.from,
-                        toB: length,
-                      },
-                    ],
-                    0,
-                  ),
-                  new TreeFragment(
-                    adopted.from,
-                    length,
-                    adopted.tree,
-                    -adopted.from,
-                  ),
-                ]
-              : TreeFragment.addTree(adopted.tree)
-            return start(transaction.state, fragments, demand, true)
+            const fragments = spliceBoundaryFragments(
+              value.tree,
+              value.retained,
+              adopted.from,
+              adopted.to,
+              adopted.tree,
+            )
+            return start(
+              transaction.state,
+              fragments,
+              demand,
+              true,
+              fragments,
+              true,
+            )
           }
         }
       }
-      // New syntax contributions or a new unparsed prefix parse the document again.
+      // New syntax or edits crossing the unparsed prefix parse the document again.
       const { state, startState } = transaction
+      const prefix = prefixOf(state)
+      const ranges: {
+        fromA: number
+        toA: number
+        fromB: number
+        toB: number
+      }[] = []
+      transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+        ranges.push({ fromA, toA, fromB, toB })
+      })
       if (
         state.facet(formattedMarkdown) !==
           startState.facet(formattedMarkdown) ||
         state.facet(formattedOpaque) !== startState.facet(formattedOpaque) ||
-        prefixOf(state) !== value.prefix
+        (prefix !== value.prefix &&
+          mappedPrefix(value.prefix, ranges) !== prefix)
       )
         return start(
           transaction.state,
@@ -306,21 +324,18 @@ function syntaxField(options: FormattedSyntaxOptions) {
         )
       if (transaction.docChanged) {
         demand = mapDemand(demand, transaction.changes)
-        const ranges: {
-          fromA: number
-          toA: number
-          fromB: number
-          toB: number
-        }[] = []
-        transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-          ranges.push({ fromA, toA, fromB, toB })
-        })
         // The unfinished parse belongs to the old text; its verified chunks are in the tree.
         const fragments = TreeFragment.applyChanges(
           TreeFragment.addTree(value.tree),
           ranges,
         )
-        return start(transaction.state, fragments, demand, true)
+        return start(
+          transaction.state,
+          fragments,
+          demand,
+          true,
+          TreeFragment.applyChanges(value.retained, ranges),
+        )
       }
       if (demand === value.demand && !resumed) return value
       if (value.parse) {
@@ -331,6 +346,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
           demand,
           value.prefix,
           value.settling && !moved,
+          value.retained,
           oneStep,
         )
       }
@@ -341,6 +357,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
         TreeFragment.addTree(value.tree),
         demand,
         false,
+        value.retained,
       )
     },
   })
@@ -359,9 +376,12 @@ function driver(
       private view: EditorView
       private boundaryIdle = 0
       private boundaryDoc: EditorState['doc'] | null = null
-      private boundaryKey: string | null = null
+      /** The last boundary configuration followed; undefined before the first. */
+      private boundaryKey: string | null | undefined = undefined
+      private boundaryPrefix: number | null = null
       private boundaryStream: string | null = null
       private boundarySeeded = false
+      private boundaryVersion: number | undefined
       private boundaryFrom: number | null = null
       private boundaryTree: BoundaryTree | null = null
       private destroyed = false
@@ -371,7 +391,7 @@ function driver(
         this.followBoundaries()
       }
       update(update: ViewUpdate) {
-        this.followBoundaries()
+        this.followBoundaries(update.changes)
         if (update.viewportChanged) this.schedule(true)
         else if (!update.state.field(field).complete) this.schedule(false)
       }
@@ -379,12 +399,28 @@ function driver(
         const probe = options.probe
         if (probe) probe.adoptionDeclined = (probe.adoptionDeclined ?? 0) + 1
       }
-      private followBoundaries() {
+      private followBoundaries(changes?: ChangeDesc) {
         if (!options.boundaries) return
         const { state } = this.view
         const config = boundaryConfig(state, options, prefixOf(state))
         const key = config ? boundaryKey(config) : null
-        const sameConfig = key === this.boundaryKey
+        let samePrefix = (config?.prefix ?? null) === this.boundaryPrefix
+        if (!samePrefix && changes && this.boundaryPrefix !== null) {
+          const ranges: {
+            fromA: number
+            toA: number
+            fromB: number
+            toB: number
+          }[] = []
+          changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+            ranges.push({ fromA, toA, fromB, toB })
+          })
+          samePrefix =
+            mappedPrefix(this.boundaryPrefix, ranges) === config?.prefix
+        }
+        const sameConfig = key === this.boundaryKey && samePrefix
+        // Syntax the worker cannot parse requests nothing; releasing once covers every later update.
+        if (sameConfig && !config) return
         const syntax = state.field(field)
         // Retain mapped boundaries; only an unscanned tail needs another seed.
         const from =
@@ -401,8 +437,12 @@ function driver(
           return
         this.boundaryDoc = state.doc
         this.boundaryKey = key
+        this.boundaryPrefix = config?.prefix ?? null
         this.boundaryStream = null
-        if (!sameConfig) this.boundarySeeded = false
+        if (!sameConfig) {
+          this.boundarySeeded = false
+          this.boundaryVersion = undefined
+        }
         this.boundaryFrom = null
         this.boundaryTree = null
         if (this.boundaryIdle) cancelIdleCallback(this.boundaryIdle)
@@ -452,7 +492,7 @@ function driver(
                 try {
                   this.boundaryTree ??= new BoundaryTree(
                     chunkedFor(this.view.state),
-                    page.length - (page.from ?? 0),
+                    (page.to ?? page.length) - (page.from ?? 0),
                   )
                   this.boundaryTree.append(page.records)
                   const probe = options.probe
@@ -465,12 +505,14 @@ function driver(
                     const tree = this.boundaryTree.finish()
                     this.boundaryTree = null
                     this.boundarySeeded = true
+                    this.boundaryVersion = page.version
                     this.view.dispatch({
                       effects: adoptBoundaries.of({
                         doc,
                         key: page.key,
                         tree,
                         from: page.from ?? 0,
+                        to: page.to ?? page.length,
                       }),
                     })
                   }
@@ -490,6 +532,7 @@ function driver(
           },
           this.declined,
           from,
+          this.boundaryVersion,
         )
       }
       /** A changed viewport parses on the next task; leftover work waits for idle time. */

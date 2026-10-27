@@ -41,7 +41,7 @@ export type BoundaryConfig = {
   groupSize: number
   giantBlock: number
 }
-export const boundaryKey = (config: BoundaryConfig) => JSON.stringify(config)
+export { boundaryKey } from './document-worker-protocol.ts'
 
 const catalogParser = parser.configure(Object.values(catalog))
 const boundaryNodes = new Set([

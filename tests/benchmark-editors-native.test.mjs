@@ -12,21 +12,28 @@ test('575 kb source-first samples record real capability and continue to editabl
   )
   // Keep provenance and traces for inspection alongside the benchmark report.
   t.diagnostic(directory)
-  await promisify(execFile)(process.execPath, [
-    'scripts/benchmark-editors.mjs',
-    '--runs',
-    '2',
-    '--keys',
-    '2',
-    '--scroll-frames',
-    '2',
-    '--sizes',
-    '575kb,100kb',
-    '--fixtures',
-    'prose',
-    '--out',
-    directory,
-  ])
+  const env = { ...process.env }
+  delete env.GITHUB_ACTIONS
+  delete env.HIBI_TEST_SHOW_WINDOWS
+  await promisify(execFile)(
+    process.execPath,
+    [
+      'scripts/benchmark-editors.mjs',
+      '--runs',
+      '2',
+      '--keys',
+      '2',
+      '--scroll-frames',
+      '2',
+      '--sizes',
+      '575kb,100kb',
+      '--fixtures',
+      'prose',
+      '--out',
+      directory,
+    ],
+    { env },
+  )
   const report = JSON.parse(
     await readFile(join(directory, 'results.json'), 'utf8'),
   )

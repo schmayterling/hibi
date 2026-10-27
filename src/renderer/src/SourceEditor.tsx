@@ -52,6 +52,7 @@ import {
   keymap,
   lineNumbers,
   placeholder,
+  ViewPlugin,
 } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { tags } from '@lezer/highlight'
@@ -165,6 +166,75 @@ import {
   type SourceReferenceSyntax,
 } from './source-view'
 import { textProjection } from './text-projection'
+
+/** The line at a view's top, and where its block starts relative to the top. */
+function placeOf(view: EditorView) {
+  const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
+  const line = view.lineBlockAtHeight(height)
+  return { top: line.from, margin: line.top - height }
+}
+
+/**
+ * A view built off screen scrolls to its kept place with estimated line
+ * heights, and CodeMirror then anchors whichever line those put at the top.
+ * Once it has measured on screen, the kept line goes back to its kept offset,
+ * in a measure that changes no heights: when heights change, CodeMirror moves
+ * the view to hold the line it anchored before them. Input or any other
+ * scroll ends this.
+ */
+function keptPlaceScroll(top: number, margin: number): Extension {
+  let state: 'waiting' | 'aligning' | 'done' = 'waiting',
+    moved = false
+  const stop = () => {
+    state = 'done'
+  }
+  const align = {
+    read: (view: EditorView) =>
+      view.documentTop +
+      view.lineBlockAt(top).top -
+      view.scrollDOM.getBoundingClientRect().top,
+    write: (offset: number, view: EditorView) => {
+      if (state !== 'aligning') return
+      if (moved) {
+        moved = false
+        queueMicrotask(() => view.requestMeasure(align))
+        return
+      }
+      state = 'done'
+      view.scrollDOM.scrollTop += offset - margin
+    },
+  }
+  return [
+    EditorView.scrollHandler.of((_view, range, options) => {
+      if (range.head !== top || options.yMargin !== margin) stop()
+      return false
+    }),
+    EditorView.domEventHandlers({
+      keydown: stop,
+      pointerdown: stop,
+      touchstart: stop,
+      wheel: stop,
+    }),
+    ViewPlugin.define(() => ({
+      update(update) {
+        if (update.docChanged) top = update.changes.mapPos(top, 1)
+        if (update.heightChanged || update.geometryChanged) moved = true
+        // A measure on screen; its own height changes still move the view.
+        if (
+          state !== 'waiting' ||
+          update.transactions.length ||
+          !update.view.inView ||
+          !(update.geometryChanged || update.viewportChanged)
+        )
+          return
+        state = 'aligning'
+        moved = false
+        const view = update.view
+        queueMicrotask(() => view.requestMeasure(align))
+      },
+    })),
+  ]
+}
 
 const highlighting = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--syntax-heading)', fontWeight: '600' },
@@ -377,6 +447,8 @@ export function SourceEditor({
   const restoreFocus = useRef<(() => void) | null>(null)
   const keepingPlace = useRef(keepPlace)
   keepingPlace.current = keepPlace
+  // A hidden view's layout goes stale, so it keeps the place it last showed.
+  const shownPlace = useRef<ReturnType<typeof placeOf> | null>(null)
   // Effects follow the actual view, which mounts after source preparation.
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
@@ -1458,6 +1530,7 @@ export function SourceEditor({
         ...(selection ? { selection } : {}),
         extensions: [
           firstStateRead,
+          place ? keptPlaceScroll(place.top, place.margin) : [],
           // The first transaction typing makes, as CodeMirror made it, before
           // anything else can fail on it.
           Prec.highest(
@@ -1695,6 +1768,11 @@ export function SourceEditor({
               : EditorView.contentAttributes.of({ spellcheck: 'false' }),
           ),
           EditorView.updateListener.of((update) => {
+            if (update.docChanged && shownPlace.current)
+              shownPlace.current.top = update.changes.mapPos(
+                shownPlace.current.top,
+                1,
+              )
             const newline = update.docChanged && newlineInput
             if (update.docChanged) newlineInput = false
             if (update.docChanged && completionBroker.hasTypingListeners()) {
@@ -2343,7 +2421,11 @@ export function SourceEditor({
 
   // Before paint and before focus moves here, a shown or targeted view catches up.
   useLayoutEffect(() => {
-    bridge.setVisible(sourceVisible || editTarget)
+    const shown = sourceVisible || editTarget
+    // Its pane starts to move away only after this commit.
+    shownPlace.current =
+      !shown && view.current?.inView ? placeOf(view.current) : null
+    bridge.setVisible(shown)
   }, [bridge, sourceVisible, editTarget])
 
   // A view keeps its place while its pane still lays out: the cleanup that
@@ -2352,10 +2434,8 @@ export function SourceEditor({
     () => () => {
       const editor = view.current
       if (!keepingPlace.current || !editor) return
-      const height =
-        editor.scrollDOM.getBoundingClientRect().top - editor.documentTop
-      const line = editor.lineBlockAtHeight(height)
-      bridge.keepPlace(editor, line.from, line.top - height)
+      const { top, margin } = shownPlace.current ?? placeOf(editor)
+      bridge.keepPlace(editor, top, margin)
     },
     [bridge],
   )

@@ -117,12 +117,21 @@ const place = (page) =>
     return { anchor, head, top: view.lineBlockAtHeight(height).from }
   })
 
-/** Wait for a source view that holds the note, two frames after it mounts. */
-async function sourceShown(page) {
-  await waitForAsync(page, () => {
-    const content = document.querySelector('.source-pane .cm-content')
-    return content?.cmTile?.root?.view?.state.doc.length > 1024 * 1024
-  })
+/** Wait for a shown source view of `units` or more, two frames after its pane stops moving. */
+async function sourceShown(page, units = 1024 * 1024) {
+  await waitForAsync(
+    page,
+    (units) => {
+      const pane = document.querySelector('.source-pane')
+      return (
+        pane?.querySelector('.cm-content')?.cmTile?.root?.view?.state.doc
+          .length > units &&
+        pane.closest('.mode-markdown') !== null &&
+        !pane.getAnimations().length
+      )
+    },
+    units,
+  )
   await page.evaluate(async () => {
     await new Promise(requestAnimationFrame)
     await new Promise(requestAnimationFrame)
@@ -163,9 +172,6 @@ test("a large note's source view comes back with its selection and scroll, mappe
   await sourceShown(page)
   await t.test(
     'source view restores its unchanged selection and scroll',
-    {
-      todo: 'formatted gap release-001: reopening source must restore its saved scroll position',
-    },
     async () => {
       assert.deepEqual(await place(page), before)
     },
@@ -184,9 +190,6 @@ test("a large note's source view comes back with its selection and scroll, mappe
   await sourceShown(page)
   await t.test(
     'source view maps selection and scroll through a formatted edit',
-    {
-      todo: 'formatted gap release-002: formatted edits must map the saved source scroll position',
-    },
     async () => {
       assert.deepEqual(await place(page), {
         anchor: before.anchor + 2,
@@ -195,6 +198,95 @@ test("a large note's source view comes back with its selection and scroll, mappe
       })
     },
   )
+})
+
+/** The line at the source view's top and how far it is scrolled past, in pixels. */
+const scrolled = (page) =>
+  page.evaluate(() => {
+    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+      .view
+    const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
+    const line = view.lineBlockAtHeight(height)
+    return { top: line.from, offset: height - line.top }
+  })
+
+/**
+ * Leave and reopen the source view `count` times, returning where it shows
+ * each time; `grow` runs once, after the first leave.
+ */
+async function returns(page, view, units, count, grow = async () => {}) {
+  const places = []
+  for (let visit = 0; visit < count; visit++) {
+    await view('normal')
+    if (!visit) await grow()
+    await waitForAsync(
+      page,
+      () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+    )
+    await view('Source view')
+    await sourceShown(page, units)
+    places.push(await scrolled(page))
+  }
+  return places
+}
+
+/** Each return shows the same top line, as far into it as scroll positions round. */
+function samePlace(places, before) {
+  const message = JSON.stringify({ before, places })
+  for (const place of places) {
+    assert.equal(place.top, before.top, message)
+    assert.ok(Math.abs(place.offset - before.offset) < 1, message)
+  }
+}
+
+/** Scroll the shown source view 13 pixels into the line at `at`. */
+const scrollInto = (page, at) =>
+  page.evaluate(async (at) => {
+    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+      .view
+    view.scrollDOM.scrollTop = view.lineBlockAt(at).top + 13
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  }, at)
+
+test("a large note's source view returns to the same line and pixel every time", {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await open(t, 2 * 1024)
+  await view('Source view')
+  await sourceShown(page)
+  await scrollInto(page, 19000)
+  const before = await scrolled(page)
+  assert.ok(before.top > 0 && before.offset > 0, JSON.stringify(before))
+  const places = await returns(page, view, 1024 * 1024, 4)
+  samePlace(places, before)
+})
+
+test('a source view released as its note grows returns to the same line and pixel every time', {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await open(t, 16)
+  await view('Source view')
+  await sourceShown(page, 16000)
+  await scrollInto(page, 9000)
+  const before = await scrolled(page)
+  assert.ok(before.top > 0 && before.offset > 0, JSON.stringify(before))
+  // Text after the place grows the note past the large-note size.
+  const grow = () =>
+    page.evaluate(async () => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({
+        changes: {
+          from: view.state.doc.length,
+          insert: '\n\nordinary growth words'.repeat(20000),
+        },
+        userEvent: 'input',
+      })
+      await window.hibi.flushDocumentChanges()
+    })
+  const places = await returns(page, view, 256 * 1024, 4, grow)
+  samePlace(places, before)
 })
 
 test("find shows its matches in a large note's source view that mounts again", {

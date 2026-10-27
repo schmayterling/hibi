@@ -780,6 +780,7 @@ class ChunkedParse implements ChunkedPartialParse {
     if (groupIndex < 0) return false
     const group = root.children[groupIndex] as Tree
     const groupFrom = root.positions[groupIndex]!
+    const last = group.children.at(-1) as Tree | undefined
     if (groupFrom === at) {
       const end = this.pos + group.length
       const { parsed, giants } = counts(group)
@@ -787,7 +788,8 @@ class ChunkedParse implements ChunkedPartialParse {
         end <= old.safe &&
         !this.readsPast(old, this.pos, group) &&
         !this.edgeAt(old, end) &&
-        !endsOpen(group.children.at(-1) as Tree | undefined) &&
+        last?.prop(chunkInfo)?.kind !== 'tail' &&
+        !endsOpen(last) &&
         !(parsed && this.far(this.pos, end)) &&
         !(
           (parsed < group.children.length || giants) &&
@@ -808,7 +810,11 @@ class ChunkedParse implements ChunkedPartialParse {
     if (info?.kind === 'plain') return false
     if (info?.kind === 'tail') {
       // Still unscanned: keep it until the viewport reaches it.
-      if (this.wanted(this.pos, this.input.length)) return false
+      if (
+        this.view?.from === Number.POSITIVE_INFINITY ||
+        this.wanted(this.pos, this.input.length)
+      )
+        return false
       this.addTail()
       return true
     }
@@ -2398,7 +2404,7 @@ export class BoundaryTree {
         if (
           !Number.isSafeInteger(record.length) ||
           record.length <= 0 ||
-          !['pending', 'tail', 'plain', 'giant'].includes(record.type) ||
+          !['pending', 'plain', 'giant'].includes(record.type) ||
           this.pos + record.length > this.length
         )
           throw new Error('Could not read a document worker reply.')

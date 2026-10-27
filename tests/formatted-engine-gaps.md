@@ -104,8 +104,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | find-003 | [formatted-find.test.mjs:451](formatted-find.test.mjs#L451) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
 | split-003 | [formatted-find.test.mjs:551](formatted-find.test.mjs#L551) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | find-005 | [formatted-find.test.mjs:710](formatted-find.test.mjs#L710) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
-| release-003 | [formatted-hidden-source.test.mjs:321](formatted-hidden-source.test.mjs#L321) | a note that grows huge must release its hidden source view | 2c: hidden source release and mapped bookmarks |
-| release-004 | [formatted-hidden-source.test.mjs:330](formatted-hidden-source.test.mjs#L330) | releasing a grown huge source must destroy its editor | 2c: hidden source release and mapped bookmarks |
 | split-004 | [github-alerts.test.mjs:203](github-alerts.test.mjs#L203) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | marker-001 | [markdown-markers.test.mjs:515](markdown-markers.test.mjs#L515) | left arrow must reenter nested final formatting before typing | 8b: hidden markers and math caret placement |
 | marker-002 | [markdown-markers.test.mjs:574](markdown-markers.test.mjs#L574) | one right arrow must leave final formatting for the next paragraph | 8b: hidden markers and math caret placement |

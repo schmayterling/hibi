@@ -901,7 +901,8 @@ test('the toolbar inserts a header and two rows, with the caret in the first hea
   const rows = harness.locator('.hibi-lp-table tr')
   await harness.locator('.hibi-lp-table').waitFor()
   assert.equal(await rows.count(), 3)
-  assert.equal((await state()).head, 2)
+  await harness.evaluate(() => window.tables.settle())
+  assert.deepEqual([(await state()).cell, (await state()).head], ['0:0', 2])
   // Table actions edit the table around that cell, as in the rich editor.
   assert.equal(
     await harness.evaluate(() => window.tables.runTableAction('row-after')),

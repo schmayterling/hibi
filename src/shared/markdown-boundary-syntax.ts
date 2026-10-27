@@ -14,6 +14,7 @@ import {
 import { subtextSyntax } from '../addons/text-extras/formatted-syntax.ts'
 
 import { EmptyTask, Footnotes, GithubAlerts } from './markdown-extra-syntax.ts'
+import { ContainerHTML } from './markdown-html-syntax.ts'
 
 /** Block grammars must use these same objects in both realms. */
 const catalog = {
@@ -127,6 +128,7 @@ export function boundaryParser(config: BoundaryConfig) {
     return null
   return parser.configure([
     { defineNodes: [{ name: 'Frontmatter', block: true }] },
+    ContainerHTML,
     ...config.syntax.map((id) => catalog[id]),
   ])
 }

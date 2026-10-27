@@ -310,14 +310,19 @@ export function sourceFormatting(
       end = insert.length
     } else {
       const fence = '`'.repeat(fenceLength(selected, 2))
+      // A view that edits tables in place inserts the rich editor's table: a
+      // header and two empty rows, with the caret in the first header cell.
+      const cells = id === 'table' && view.state.facet(tableActions).length > 0
       const block =
         id === 'code-block'
           ? `${fence}\n${selected}\n${fence}`
           : id === 'divider'
             ? '---'
-            : id === 'table'
-              ? '| column 1 | column 2 |\n| --- | --- |\n|  |  |'
-              : null
+            : cells
+              ? '|  |  |\n| --- | --- |\n|  |  |\n|  |  |'
+              : id === 'table'
+                ? '| column 1 | column 2 |\n| --- | --- |\n|  |  |'
+                : null
       if (id === 'hard-break') {
         insert = '  \n'
         start = end = insert.length
@@ -336,7 +341,11 @@ export function sourceFormatting(
             : '\n\n'
         insert = before + block + after
         start =
-          id === 'code-block' ? before.length + fence.length + 1 : insert.length
+          id === 'code-block'
+            ? before.length + fence.length + 1
+            : cells
+              ? before.length + 2
+              : insert.length
         end = id === 'code-block' ? start + selected.length : start
       } else return false
     }

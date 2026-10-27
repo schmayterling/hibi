@@ -158,7 +158,12 @@ before(
     await writeFile(join(folder, 'notes', 'nested.md'), nested)
     await writeFile(join(folder, 'notes', 'markers.md'), markers)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      // compare grayscale text in both compositing paths on every platform.
+      args: [
+        resolve('.'),
+        '--disable-lcd-text',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
@@ -239,20 +244,30 @@ const sample = (target, selectors, title) =>
       const pane = root.getBoundingClientRect()
       const textBox = (element, text) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const index = node.data.indexOf(text)
-          if (index < 0) continue
-          const range = document.createRange()
-          range.setStart(node, index)
-          range.setEnd(node, index + text.length)
-          const box = range.getBoundingClientRect()
-          return {
-            left: box.left - pane.left,
-            top: box.top - pane.top,
-            height: box.height,
+        const nodes = []
+        for (let node = walker.nextNode(); node; node = walker.nextNode())
+          nodes.push(node)
+        const index = nodes
+          .map((node) => node.data)
+          .join('')
+          .indexOf(text)
+        if (index < 0) return null
+        const point = (offset) => {
+          for (const node of nodes) {
+            if (offset <= node.length) return [node, offset]
+            offset -= node.length
           }
         }
-        return null
+        const range = document.createRange()
+        range.setStart(...point(index))
+        range.setEnd(...point(index + text.length))
+        const box = range.getBoundingClientRect()
+        return {
+          width: box.width,
+          left: box.left - pane.left,
+          top: box.top - pane.top,
+          height: box.height,
+        }
       }
       return Object.fromEntries(
         Object.entries(selectors).map(([key, { selector, text }]) => {
@@ -272,8 +287,7 @@ const sample = (target, selectors, title) =>
               backgroundColor: style.backgroundColor,
               textDecorationLine: style.textDecorationLine,
               letterSpacing: style.letterSpacing,
-              // Highlighting splits text into spans; the first word is one text node.
-              box: textBox(element, text.split(' ')[0]),
+              box: textBox(element, text),
             },
           ]
         }),
@@ -383,7 +397,7 @@ async function parity(title, doc, rich, formatted, name) {
     for (const key of Object.keys(rich)) {
       const a = before[key],
         b = after[key]
-      assert.ok(a && b, `${key}: ${JSON.stringify({ a, b })}`)
+      assert.ok(a?.box && b?.box, `${key}: ${JSON.stringify({ a, b })}`)
       for (const property of [
         'fontFamily',
         'fontSize',
@@ -398,6 +412,8 @@ async function parity(title, doc, rich, formatted, name) {
         key,
         dx: Math.round((b.box.left - a.box.left) * 10) / 10,
         dy: Math.round((b.box.top - a.box.top) * 10) / 10,
+        dw: Math.round((b.box.width - a.box.width) * 10) / 10,
+        dh: Math.round((b.box.height - a.box.height) * 10) / 10,
       })
     }
     const images = [
@@ -447,19 +463,20 @@ async function parity(title, doc, rich, formatted, name) {
     report.push({ id, key: 'pixels', difference, box })
   }
   console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
-  // The same text at the same positions renders the same pixels; a failure
-  // reports the text positions too.
+  // keep the pixel gate strict; failures also report full phrase bounds.
   for (const { id, key, difference } of report)
     if (key === 'pixels')
       assert.ok(
         difference < 0.002,
         `${id}: ${difference} ${JSON.stringify(report)}`,
       )
-  // Text positions match the rich view within a pixel.
+  // full phrase bounds match the rich view within a pixel.
   const offsets = report.filter(
     (entry) =>
       entry.key !== 'pixels' &&
-      (Math.abs(entry.dx) > 1 || Math.abs(entry.dy) > 1),
+      [entry.dx, entry.dy, entry.dw, entry.dh].some(
+        (value) => Math.abs(value) > 1,
+      ),
   )
   assert.deepEqual(offsets, [], JSON.stringify(report))
 }
@@ -902,6 +919,10 @@ test('after an idle moment, scrolling near the viewport parses nothing in its fr
       last = progress
     }
     const ahead = { ...preview.probe }
+    const coveredAhead = preview.covered(
+      view.viewport.from,
+      Math.min(view.state.doc.length, view.viewport.to + 32 * 1024),
+    )
     preview.reset()
     // 3600 px over twelve frames, as the paired benchmark scrolls.
     for (let frame = 1; frame <= 12; frame++) {
@@ -914,12 +935,14 @@ test('after an idle moment, scrolling near the viewport parses nothing in its fr
       scrolled: pane.scrollTop,
       unparsedViewport,
       ahead,
+      coveredAhead,
       scroll: { ...preview.probe },
     }
   }, doc)
   console.log(JSON.stringify(result))
   assert.equal(result.scrolled, 3600, JSON.stringify(result))
   assert.equal(result.unparsedViewport, 0, JSON.stringify(result))
+  assert.equal(result.coveredAhead, true, JSON.stringify(result))
   // Idle-time parsing covers a bounded window around the viewport, not the note.
   assert.ok(result.ahead.parsedUnits <= 24 * 4096, JSON.stringify(result))
   assert.ok(result.length > 4 * 24 * 4096)
@@ -1111,6 +1134,79 @@ test('formatting in a giant list stays drawn while an edit inside its window is 
   })
   assert.deepEqual(split.errors, [], JSON.stringify(split))
   assert.ok(split.settling, JSON.stringify(split))
+})
+
+test('heading names and outer link wrappers stay mapped through a pending reparse', {
+  timeout: 90000,
+}, async () => {
+  const doc = Array.from(
+    { length: 20000 },
+    (_, i) => `- ## pre[**fix ${i}**](b.md)ed`,
+  ).join('\n')
+  const cdp = await harness.context().newCDPSession(harness)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(
+      doc,
+      { width: 800, height: 600 },
+      {
+        slice: 0,
+        editable: true,
+        history: true,
+      },
+    )
+    preview.scrollTo(preview.view().state.doc.line(10000).from)
+  }, doc)
+  await harness
+    .getByRole('heading', { name: 'prefix 9999ed', exact: true })
+    .waitFor()
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  const pending = await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    const line = view.state.doc.line(10000)
+    const at = line.from + line.text.indexOf('fix') + 3
+    view.focus()
+    view.dispatch({ selection: { anchor: at } })
+    view.dispatch({ changes: { from: at, insert: 'x' } })
+    const headings = [
+      ...view.contentDOM.querySelectorAll('[role="heading"]'),
+    ].filter((node) => node.textContent.includes('fixx 9999'))
+    return {
+      settling: preview.settling(),
+      names: headings.map((node) => node.getAttribute('aria-label')),
+      links: headings.map(
+        (node) => node.querySelectorAll('[role="link"]').length,
+      ),
+    }
+  })
+  assert.ok(pending.settling, JSON.stringify(pending))
+  assert.deepEqual(pending.names, ['prefixx 9999ed'])
+  assert.deepEqual(pending.links, [1])
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  assert.equal(
+    await harness
+      .getByRole('heading', { name: 'prefixx 9999ed', exact: true })
+      .getByRole('link')
+      .count(),
+    1,
+  )
+  assert.ok(await harness.evaluate(() => window.livePreview.undo()))
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  assert.equal(
+    await harness.evaluate(() =>
+      window.livePreview.view().state.doc.toString(),
+    ),
+    doc,
+  )
+  assert.equal(
+    await harness
+      .getByRole('heading', { name: 'prefix 9999ed', exact: true })
+      .getByRole('link')
+      .count(),
+    1,
+  )
 })
 
 test('ordered list numbers in a 20,000-item list come from cached item offsets', {

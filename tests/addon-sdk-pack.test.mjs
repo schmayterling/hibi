@@ -154,7 +154,7 @@ const create: CapabilityFactory = sdk => ({ start(context) {
   const { WidgetType } = sdk.codeMirror.view
   class Widget extends WidgetType { toDOM() { return document.createElement('span') } }
   const render: FormattedNodeView = { nodes: ['Proof'], feature: 'proof',
-    decorate(node: FormattedNode, out: FormattedDecorations, ctx: FormattedRenderContext) { out.mark(node.from, node.to, { class: 'proof' }); out.syntax(node.from, node.from + 1); out.line(ctx.state.doc.lineAt(node.from).from, { class: 'line' }); out.widget(node.to, new Widget(), 1); out.replace(node.from, node.to, new Widget()); return undefined },
+    decorate(node: FormattedNode, out: FormattedDecorations, ctx: FormattedRenderContext) { out.mark(node.from, node.to, { class: 'proof' }); out.link(node.from, node.to); out.link(node.from, node.to, { class: 'proof-link' }); out.syntax(node.from, node.from + 1); out.line(ctx.state.doc.lineAt(node.from).from, { class: 'line' }); out.widget(node.to, new Widget(), 1); out.replace(node.from, node.to, new Widget()); return undefined },
     layout(node, out: FormattedLayout) { out.replace(node.from, node.to, new Widget(), { block: true }); out.widget(node.to, new Widget(), { block: true, side: 1 }); return undefined },
   }
   const flavor: MarkdownFlavor = { id: 'proof', name: 'Proof', kind: 'syntax', description: 'Proof', detect: () => true, syntax: sdk.codeMirror.markdown.GFM, render: [render] }

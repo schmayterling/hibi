@@ -300,3 +300,28 @@ test('images resolve beside the note, missing ones say so, and the caret reveals
   const typed = note.replace('(pic.png)\n', '(pic.png) after\n')
   await source(typed)
 })
+
+test('task checkboxes are named by the text they show, without markdown', {
+  timeout: 60000,
+}, async () => {
+  await open(
+    'task-names.md',
+    '- [ ] buy **milk** at [the store](https://example.com)\n- [x] call &amp; `write`\n- [ ] read [[b|alias]] today\n',
+    'buy milk',
+  )
+  const boxes = pane('input.hibi-lp-task')
+  await boxes.nth(2).waitFor()
+  const cdp = await page.context().newCDPSession(page)
+  const { nodes } = await cdp.send('Accessibility.getFullAXTree')
+  assert.deepEqual(
+    nodes
+      .filter((node) => node.role?.value === 'checkbox' && !node.ignored)
+      .map((node) => node.name?.value)
+      .filter((name) => name?.startsWith('Task item checkbox')),
+    [
+      'Task item checkbox for buy milk at the store',
+      'Task item checkbox for call & write',
+      'Task item checkbox for read alias today',
+    ],
+  )
+})

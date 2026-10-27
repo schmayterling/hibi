@@ -34,6 +34,7 @@ import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
   blockBreak,
+  codeIndent,
   deleteBackward,
   deleteForward,
   exitBlock,
@@ -51,6 +52,7 @@ import {
   formattedBlockEdges,
   formattedContributions,
   formattedDocument,
+  formattedLinkAttributes,
   formattedLiteral,
   formattedNodeViews,
   formattedRefresh,
@@ -72,7 +74,7 @@ import './live-preview.css'
 
 const hide = Decoration.replace({})
 
-/** Whether Tab indents formatted text; list items and code always take Tab. */
+/** Whether Tab indents formatted text and code; list items always take Tab. */
 export const formattedTabIndents = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,
 })
@@ -313,6 +315,7 @@ function inline(
   decorations: DecorationSet
   groupMarks: DecorationSet
   atomic: DecorationSet
+  outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
 } {
@@ -348,9 +351,11 @@ function inline(
    * text in no fixed order, so these get a source of their own.
    */
   const groupMarks: Range<Decoration>[] = []
+  // Text that has to stay one element wraps the other decorations.
+  const outer: Range<Decoration>[] = []
   const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
-  const headings = new Map<number, Range<BlockWrapper>>()
+  const headings = new Map<number, Heading>()
   const line = (pos: number) => {
     let info = lines.get(pos)
     if (!info) {
@@ -381,10 +386,26 @@ function inline(
     if (to > from)
       decorations.push(Decoration.mark({ class: className }).range(from, to))
   }
+  /** Inclusive, so that widgets at the text's ends are inside the link too. */
+  const linkText = (
+    from: number,
+    to: number,
+    attributes?: Record<string, string>,
+  ) => {
+    if (to > from)
+      outer.push(
+        Decoration.mark({
+          attributes: formattedLinkAttributes(attributes),
+          inclusive: true,
+        }).range(from, to),
+      )
+  }
   /** Markers of formatting under the selection stay visible and editable. */
   const syntax = (from: number, to: number, revealed: boolean) => {
-    if (revealed) mark('hibi-lp-marker', from, to)
-    else hideRange(from, to)
+    if (!revealed) hideRange(from, to)
+    else if (to > from) {
+      mark('hibi-lp-marker hibi-lp-syntax', from, to)
+    }
   }
 
   function link(node: SyntaxNode) {
@@ -407,7 +428,7 @@ function inline(
     // A destination on later lines is hidden with its line breaks by the layout field.
     if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
       syntax(close.from, node.to, revealed)
-    mark('hibi-lp-link', open.to, close.from)
+    linkText(open.to, close.from)
     return undefined
   }
 
@@ -469,6 +490,7 @@ function inline(
     mark(from, to, attributes) {
       if (to > from) marks.push(Decoration.mark({ attributes }).range(from, to))
     },
+    link: linkText,
     syntax: (from, to) => syntax(from, to, revealed),
     line(at, attributes) {
       const info = line(at)
@@ -501,41 +523,68 @@ function inline(
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
-        // Syntax whose setting is off shows as written, its children too.
-        if (literal.has(name)) return false
-        const contributed = views(ref.type)
-        let skip = false
-        if (contributed.views.length) {
-          const out = sink(touched(ref.from, ref.to))
-          const grouped = sink(touched(ref.from, ref.to), groupMarks)
-          const context = {
-            state,
-            revealed: touched(ref.from, ref.to),
-            visible: range,
-          }
-          for (const nodeView of contributed.views)
+        let skip = literal.has(name)
+        if (!skip) {
+          const contributed = views(ref.type)
+          if (contributed.views.length) {
+            const out = sink(touched(ref.from, ref.to))
+            const grouped = sink(touched(ref.from, ref.to), groupMarks)
+            const context = {
+              state,
+              revealed: touched(ref.from, ref.to),
+              visible: range,
+            }
+            for (const nodeView of contributed.views)
+              if (
+                nodeView.decorate?.(
+                  ref,
+                  contributed.grouped.includes(nodeView) ? grouped : out,
+                  context,
+                ) === false
+              )
+                skip = true
+            // Other blocks with a container hook hold their lines like quotes.
             if (
-              nodeView.decorate?.(
-                ref,
-                contributed.grouped.includes(nodeView) ? grouped : out,
-                context,
-              ) === false
-            )
-              skip = true
-          // Other blocks with a container hook hold their lines like quotes.
-          if (
-            name !== 'Blockquote' &&
-            name !== 'ListItem' &&
-            contributed.views.some((nodeView) => nodeView.container)
-          ) {
-            const node = ref.node
-            eachLine(doc, ref.from, ref.to, range, (current) => {
-              line(current.from).containers.push(node)
-            })
+              name !== 'Blockquote' &&
+              name !== 'ListItem' &&
+              contributed.views.some((nodeView) => nodeView.container)
+            ) {
+              const node = ref.node
+              eachLine(doc, ref.from, ref.to, range, (current) => {
+                line(current.from).containers.push(node)
+              })
+            }
+          }
+
+          skip = builtIn(ref, range) === false || skip
+        }
+        if (!skip) return
+        // Container syntax stays independent of skipped inline or literal nodes.
+        if (
+          !literal.has('Blockquote') &&
+          lines
+            .get(doc.lineAt(Math.max(ref.from, range.from)).from)
+            ?.containers.some((node) => node.name === 'Blockquote')
+        ) {
+          const pending = [ref.node.cursor(IterMode.IgnoreMounts)]
+          for (let cursor = pending.pop(); cursor; cursor = pending.pop()) {
+            if (!cursor.childAfter(range.from)) continue
+            do {
+              if (cursor.from > range.to) break
+              if (cursor.name === 'QuoteMark') {
+                const current = doc.lineAt(cursor.from)
+                const depth = line(current.from).containers.filter(
+                  (node) => node.name === 'Blockquote',
+                ).length
+                // Quotes nested in literal containers stay literal too.
+                const before = doc.sliceString(current.from, cursor.from)
+                if ((before.match(/>/g)?.length ?? 0) < depth)
+                  builtIn(cursor.node, range)
+              } else pending.push(cursor.node.cursor(IterMode.IgnoreMounts))
+            } while (cursor.nextSibling())
           }
         }
-        const result = builtIn(ref, range)
-        return skip ? false : result
+        return false
       },
     })
   }
@@ -553,13 +602,11 @@ function inline(
     const heading = /^(ATX|Setext)Heading(\d)$/.exec(name)
     if (heading) {
       if (!headings.has(ref.from))
-        headings.set(
-          ref.from,
-          BlockWrapper.create({
-            tagName: 'div',
-            attributes: { role: 'heading', 'aria-level': name.slice(-1) },
-          }).range(doc.lineAt(ref.from).from, ref.to),
-        )
+        headings.set(ref.from, {
+          from: ref.from,
+          to: ref.to,
+          level: name.slice(-1),
+        })
       eachLine(doc, ref.from, ref.to, range, (current) => {
         // A setext underline line is hidden by the layout field.
         if (
@@ -636,7 +683,7 @@ function inline(
         const revealed = touched(ref.from, ref.to)
         syntax(ref.from, url.from, revealed)
         syntax(url.to, ref.to, revealed)
-        mark('hibi-lp-link', url.from, url.to)
+        linkText(url.from, url.to)
         return false
       }
       case 'URL': {
@@ -646,15 +693,15 @@ function inline(
           parent !== 'Image' &&
           parent !== 'LinkReference'
         )
-          mark('hibi-lp-link', ref.from, ref.to)
+          linkText(ref.from, ref.to)
         return
       }
-      case 'Image':
-      case 'LinkReference':
       case 'HTMLBlock':
-      case 'HTMLTag':
       case 'CommentBlock':
       case 'ProcessingInstructionBlock':
+      case 'Image':
+      case 'LinkReference':
+      case 'HTMLTag':
       case 'Table':
       case 'Entity':
         // Rendered by later formatted-view slices; shown as source text for now.
@@ -728,12 +775,52 @@ function inline(
     )
   }
   blocks = noBlocks
+  const wrappers: Range<BlockWrapper>[] = []
+  for (const { from, to, level } of headings.values()) {
+    wrappers.push(
+      BlockWrapper.create({
+        tagName: 'div',
+        attributes: {
+          role: 'heading',
+          'aria-level': level,
+        },
+      }).range(doc.lineAt(from).from, to),
+    )
+  }
   return {
     decorations: Decoration.set(decorations, true),
     groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
-    wrappers: BlockWrapper.set([...headings.values()], true),
+    outer: Decoration.set(outer, true),
+    wrappers: BlockWrapper.set(wrappers, true),
     end,
+  }
+}
+
+type Heading = { from: number; to: number; level: string }
+
+/** One name from rendered text; editable syntax stays readable in the original DOM. */
+function nameHeadings(view: EditorView) {
+  for (const heading of view.contentDOM.querySelectorAll('[role="heading"]')) {
+    if (!heading.querySelector('.hibi-lp-syntax')) {
+      heading.removeAttribute('aria-label')
+      continue
+    }
+    const name = [...heading.querySelectorAll('.cm-line')]
+      .map((line) => {
+        const copy = line.cloneNode(true) as HTMLElement
+        for (const syntax of copy.querySelectorAll(
+          '.hibi-lp-syntax, .cm-widgetBuffer, [aria-hidden="true"]',
+        ))
+          syntax.remove()
+        for (const image of copy.querySelectorAll('img'))
+          image.replaceWith(image.alt)
+        for (const br of copy.querySelectorAll('br')) br.replaceWith(' ')
+        return copy.textContent
+      })
+      .join(' ')
+    if (heading.getAttribute('aria-label') !== name)
+      heading.setAttribute('aria-label', name)
   }
 }
 
@@ -1185,15 +1272,15 @@ function chunkLayout(
       },
     })
   }
-  return { ranges: out, sensitive }
+  return { ranges: out, sensitive, doc: sensitive ? doc : null }
 }
 
 type ChunkLayout = ReturnType<typeof chunkLayout>
 /**
  * Layout per chunk tree, set of views and set of nodes shown as written:
  * reused chunks keep their decorations, shifted to their position. A chunk
- * under the selection whose layout comes from contributed views is laid out
- * again with its reveal state.
+ * with contributed views refreshes its document snapshot after an edit, and
+ * is laid out again with its reveal state under the selection.
  */
 const chunkCache = new WeakMap<
   readonly FormattedNodeView[],
@@ -1242,7 +1329,7 @@ function layoutDecorations(
   const out: Range<Decoration>[] = []
   for (const { from, chunk, covered } of parsedChunks(tree)) {
     let layout = cache.get(chunk)
-    if (!layout) {
+    if (!layout || (layout.sensitive && layout.doc !== state.doc)) {
       layout = chunkLayout(state, tree, from, covered, [])
       cache.set(chunk, layout)
     }
@@ -1349,7 +1436,9 @@ export function livePreview(
       // An edit's unfinished reparse keeps the layout it replaces, mapped.
       if (
         syntax.settling(state) ||
-        (tree === syntax.tree(startState) &&
+        (!transaction.docChanged &&
+          !syntax.settling(startState) &&
+          tree === syntax.tree(startState) &&
           state.facet(formattedViews) === startState.facet(formattedViews) &&
           state.facet(formattedLiteral) ===
             startState.facet(formattedLiteral) &&
@@ -1370,6 +1459,7 @@ export function livePreview(
       decorations: DecorationSet
       groupMarks: DecorationSet
       atomic: DecorationSet
+      outer: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
       end: number
@@ -1380,6 +1470,7 @@ export function livePreview(
           decorations: this.decorations,
           groupMarks: this.groupMarks,
           atomic: this.atomic,
+          outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
         } = inline(
@@ -1388,6 +1479,9 @@ export function livePreview(
           this.reveal,
           view.state.field(layout),
         ))
+      }
+      docViewUpdate(view: EditorView) {
+        nameHeadings(view)
       }
       update(update: ViewUpdate) {
         const tree = syntax.tree(update.state)
@@ -1411,6 +1505,7 @@ export function livePreview(
           this.decorations = mapLines(this.decorations, update)
           this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)
+          this.outer = this.outer.map(update.changes)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
           update.docChanged ||
@@ -1434,6 +1529,7 @@ export function livePreview(
             decorations: this.decorations,
             groupMarks: this.groupMarks,
             atomic: this.atomic,
+            outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
           } = inline(update.view, tree, reveal, update.state.field(layout)))
@@ -1455,7 +1551,7 @@ export function livePreview(
     }
   const tab = (outdent: boolean) => (view: EditorView) => {
     const tree = syntax.tree(view.state)
-    let structured = false
+    let item = false
     for (
       let node: SyntaxNode | null = tree.resolveInner(
         view.state.selection.main.head,
@@ -1464,9 +1560,8 @@ export function livePreview(
       node;
       node = node.parent
     )
-      if (['ListItem', 'FencedCode', 'CodeBlock'].includes(node.name))
-        structured = true
-    if (!structured && !view.state.facet(formattedTabIndents)) return false
+      if (node.name === 'ListItem') item = true
+    if (!item && !view.state.facet(formattedTabIndents)) return false
     return run((current) =>
       indent(current.state, tree, outdent, hidden(current)),
     )(view)
@@ -1503,6 +1598,7 @@ export function livePreview(
     formattedTree.of(syntax.tree),
     follow,
     syntax.extension,
+    codeIndent,
     focused,
     layout,
     EditorView.decorations.compute([layout, 'selection'], (state) =>
@@ -1518,6 +1614,9 @@ export function livePreview(
       (view) => view.plugin(preview)?.groupMarks ?? Decoration.none,
     ),
     preview,
+    EditorView.outerDecorations.of(
+      (view) => view.plugin(preview)?.outer ?? Decoration.none,
+    ),
     EditorView.blockWrappers.of(
       (view) => view.plugin(preview)?.wrappers ?? RangeSet.empty,
     ),

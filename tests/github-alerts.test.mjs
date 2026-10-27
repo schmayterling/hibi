@@ -106,16 +106,22 @@ it('github alerts edit in rich view, preview in split, and export with markers a
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(temp, 'profile')}`],
   })
+  let cdp
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
+    await cdp?.detach()
     await app.close()
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
   await selectFormattedEngine(app, page, t.formattedEngine)
   const cm = t.formattedEngine === 'codemirror'
+  if (cm) {
+    cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  }
   page.setDefaultTimeout(6500)
   const errors = []
   page.on('pageerror', (error) => {
@@ -181,7 +187,7 @@ it('github alerts edit in rich view, preview in split, and export with markers a
       .evaluate(
         (element, cm) =>
           cm
-            ? getComputedStyle(element)
+            ? getComputedStyle(element, '::before')
                 .backgroundSize.split(',')[0]
                 .trim()
                 .split(' ')[0]

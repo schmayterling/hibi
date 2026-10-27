@@ -56,7 +56,8 @@ export class FormattedCounter {
       countMarkdownSyntax(
         syntax,
         (from) => this.#brackets.canClose(from),
-        (from, end, title) => this.#brackets.canTitle(from, end, title),
+        (from, end, title, complete) =>
+          this.#brackets.canTitle(from, end, title, complete),
       ),
     )
     const parser = syntax.math ? base.configure(blockMathSyntax) : base

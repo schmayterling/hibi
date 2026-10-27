@@ -332,6 +332,49 @@ const richQuirks = [
   },
 ]
 
+test('schema corpus: escaped title alternatives retain native definition spans', () => {
+  const syntax = countSyntax(corpus.configs[0])
+  const rich = richOracle(syntax)
+  for (const source of [
+    '[a]: /url "one\n\ntwo\\\\" three\n\nfour"\n\nafter',
+    '[a]: /url "one\n\ntwo\\"\n\nafter',
+    '[a\n\nb]: /url "one\n\ntwo\\"\n\nafter',
+    '[a]:\n/url "one\n\ntwo\\"\n\nafter',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const text = source.replaceAll('\n', eol)
+      const want = countText(rich(text).text)
+      assert.deepEqual(want, { words: 1, characters: 5 }, JSON.stringify(text))
+      const counter = new FormattedCounter(
+        new SourceStore(text, { tabId: 'escaped-titles', revision: 0 }),
+        syntax,
+      )
+      try {
+        assert.deepEqual(read(counter), want, JSON.stringify(text))
+        const from = text.indexOf('two') + 1
+        const snapshot = counter.store.snapshot()
+        counter.apply({
+          document: snapshot.document,
+          operationId: crypto.randomUUID(),
+          baseVersion: snapshot.version,
+          contentVersion: snapshot.version + 1,
+          origin: 'source',
+          historyGroup: 'escaped-titles',
+          changes: [{ from, to: from, insert: 'x' }],
+        })
+        const changed = text.slice(0, from) + 'x' + text.slice(from)
+        assert.deepEqual(
+          read(counter),
+          countText(rich(changed).text),
+          JSON.stringify(changed),
+        )
+      } finally {
+        counter.dispose()
+      }
+    }
+  markdownSyntax.reset()
+})
+
 test('schema corpus: rich parser quirks keep their minimal reproductions', () => {
   for (const quirk of richQuirks) {
     const syntax = countSyntax({ ...corpus.configs[0], ...quirk.syntax })

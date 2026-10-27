@@ -1,14 +1,26 @@
 import type { MarkdownConfig } from '@lezer/markdown'
-import { Lexer, type TokenizerExtension } from 'marked'
+import { Lexer, Tokenizer, type TokenizerExtension } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
 import type { CountSyntax } from './formatted-text.ts'
+
+const definitionTokenizer = new Tokenizer()
+new Lexer({ gfm: false, tokenizer: definitionTokenizer })
+
+/** use the native destination validation as well as its definition rule. */
+export function countDefinition(text: string) {
+  return definitionTokenizer.def(text)
+}
 
 /** ask the actual definition rule whether a title closer can finish it. */
 export function pendingDefinitionTitle(rule: RegExp, text: string) {
   for (const close of ['"', "'", ')']) {
     const probe = `${text}${close}\n`
     const match = rule.exec(probe)
-    if (match?.[3] && match[0].length === probe.length)
+    if (
+      match?.[3] &&
+      match[0].length === probe.length &&
+      countDefinition(probe)
+    )
       return match[3].charAt(0)
   }
   return null
@@ -18,7 +30,12 @@ export function pendingDefinitionTitle(rule: RegExp, text: string) {
 export function countMarkdownSyntax(
   syntax: CountSyntax,
   canClose?: (from: number) => boolean,
-  canTitle?: (from: number, end: number, title: string) => boolean,
+  canTitle?: (
+    from: number,
+    end: number,
+    title: string,
+    complete: boolean,
+  ) => number | null,
 ): MarkdownConfig {
   const rule = Lexer.rules.block[syntax.gfm ? 'gfm' : 'normal'].def
   const footnotes = markedGithubFootnote()
@@ -106,18 +123,30 @@ export function countMarkdownSyntax(
               if (/^ *$/.test(line.text.slice(pos + 2))) take()
               const text = lines.join('\n')
               let title = openTitle(text)
+              let titleTo =
+                title && canTitle
+                  ? canTitle(opener, end, title, !!rule.exec(`${text}\n`)?.[3])
+                  : undefined
+              if (titleTo === null) title = null
               if (!title && !rule.exec(`${text}\n`)?.[3]) {
-                const next = `${text}\n${cx.peekLine()}`
+                const next = `${text}\n${cx.peekLine()}`,
+                  match = rule.exec(`${next}\n`)
                 title = openTitle(next)
-                if (
-                  title &&
-                  canTitle &&
-                  !canTitle(opener, end + 1 + cx.peekLine().length, title)
-                )
-                  title = null
-                if (title || rule.exec(`${next}\n`)?.[3]) take()
+                titleTo =
+                  title && canTitle
+                    ? canTitle(
+                        opener,
+                        end + 1 + cx.peekLine().length,
+                        title,
+                        !!match?.[3],
+                      )
+                    : undefined
+                if (titleTo === null) title = null
+                if (title || match?.[3]) take()
               }
-              if (title) {
+              if (title && canTitle) {
+                while (titleTo != null && end < titleTo) if (!take()) break
+              } else if (title) {
                 let blank = line.text.length === 0
                 for (;;) {
                   // at line boundaries a title only retains its delimiter, plus

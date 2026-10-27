@@ -5,7 +5,10 @@ import type {
 } from '../../shared/source-buffer.ts'
 import type { RawEdit } from '../../shared/source-operations.ts'
 import { SourceOwners } from '../../shared/source-owners.ts'
-import { pendingDefinitionTitle } from './formatted-count-syntax.ts'
+import {
+  countDefinition,
+  pendingDefinitionTitle,
+} from './formatted-count-syntax.ts'
 
 const eof = -1
 const marker = /[[\]\\"'()]/g
@@ -91,47 +94,38 @@ export class CountBrackets {
     headers: Set<number>,
     lines: Set<number>,
     baseLine: number,
-  ) {
-    const first = from < this.#markers.length ? this.#markers.at(from) : null
-    let position = from,
-      closing: ReturnType<SourceOwners['get']> = null
+    initial: number | null = null,
+  ): number | null {
+    const first = from < this.#markers.length ? this.#markers.at(from) : null,
+      rule = Lexer.rules.block.normal.def
+    let number = this.#source.lineAt(from)!.number + 1,
+      blank = false,
+      actual = initial
     for (const row of this.#markers.records(
       first?.index ?? this.#markers.count,
     )) {
       dependencies.add(row.owner.slot)
       this.#work.markerVisits++
-      if (row.owner.kind === 'text') break
-      if (row.to - 1 < position) continue
-      if (row.owner.kind === '\\') position = row.to + 1
-      else if (row.owner.kind === (title === '(' ? ')' : title)) {
-        closing = row
-        break
+      if (row.owner.kind !== (title === '(' ? ')' : title)) continue
+      const last = this.#source.lineAt(row.to - 1)!.number
+      for (; number <= last; number++) {
+        const start = this.#source.lineStart(number)!,
+          end = this.#source.lineAt(start)!.to,
+          text = this.#read(start, end),
+          prefix = `[count]: /x ${title}x${title === "'" && blank ? '\n' : ''}`,
+          probe = `${prefix}\n${text}`,
+          match = rule.exec(`${probe}\n`)
+        if (match?.[3] && countDefinition(`${probe}\n`)) actual = end
+        const pending = pendingDefinitionTitle(rule, probe)
+        if (number === last || !pending || (title === "'" && !text.length))
+          this.#read(start, end, headers, lines, baseLine)
+        if (!pending) return actual
+        blank = !text.length
       }
     }
-    if (!closing) {
-      dependencies.add(eof)
-      return false
-    }
-    const rule = Lexer.rules.block.normal.def,
-      last = this.#source.lineAt(closing.to - 1)!.number
-    let blank = false
-    for (
-      let number = this.#source.lineAt(from)!.number + 1;
-      number <= last;
-      number++
-    ) {
-      const start = this.#source.lineStart(number)!,
-        end = this.#source.lineAt(start)!.to,
-        text = this.#read(start, end),
-        prefix = `[count]: /x ${title}x${title === "'" && blank ? '\n' : ''}`,
-        probe = `${prefix}\n${text}`
-      if (!pendingDefinitionTitle(rule, probe)) {
-        this.#read(start, end, headers, lines, baseLine)
-        return !!rule.exec(`${probe}\n`)?.[3]
-      }
-      blank = !text.length
-    }
-    return false
+    // an escaped closer can finish now and remain body if a later closer appears.
+    dependencies.add(eof)
+    return actual
   }
   #header(
     closing: NonNullable<ReturnType<SourceOwners['get']>>,
@@ -154,22 +148,46 @@ export class CountBrackets {
       return this.#source.sliceRaw(from, to)
     }
     const prefix = `[count${read(closing.to - 1, line.to)}`
-    if (rule.exec(`${prefix}\n`)) return true
-    const title = pendingDefinitionTitle(rule, prefix)
+    const match = countDefinition(`${prefix}\n`)
+        ? rule.exec(`${prefix}\n`)
+        : null,
+      title = pendingDefinitionTitle(rule, prefix)
     if (title)
-      return this.#title(line.to, title, dependencies, headers, lines, baseLine)
+      return (
+        this.#title(
+          line.to,
+          title,
+          dependencies,
+          headers,
+          lines,
+          baseLine,
+          match?.[3] ? line.to : null,
+        ) !== null
+      )
+    if (match) return true
     // only inspect another destination line if the exact rule can accept one.
-    if (!rule.exec(`${prefix}\n/x\n`)) return false
+    if (!countDefinition(`${prefix}\n/x\n`)) return false
     const next = this.#source.lineStart(line.number + 1)
     if (next === null) return false
     const end = this.#source.lineAt(next)!.to
     const probe = `${prefix}\n${read(next, end)}`
-    if (rule.exec(`${probe}\n`)) return true
-    const nextTitle = pendingDefinitionTitle(rule, probe)
-    return (
-      !!nextTitle &&
-      this.#title(end, nextTitle, dependencies, headers, lines, baseLine)
-    )
+    const nextMatch = countDefinition(`${probe}\n`)
+        ? rule.exec(`${probe}\n`)
+        : null,
+      nextTitle = pendingDefinitionTitle(rule, probe)
+    if (nextTitle)
+      return (
+        this.#title(
+          end,
+          nextTitle,
+          dependencies,
+          headers,
+          lines,
+          baseLine,
+          nextMatch?.[3] ? end : null,
+        ) !== null
+      )
+    return !!nextMatch
   }
   #query(slot: number, reuseClosing = false) {
     const previous = this.#reads.get(slot)
@@ -236,12 +254,12 @@ export class CountBrackets {
         readers.add(slot)
       }
   }
-  canTitle(from: number, end: number, title: string) {
+  canTitle(from: number, end: number, title: string, complete = false) {
     const raw = this.#source.editorToRaw(from),
       tail = this.#source.editorToRaw(end),
       row = raw === null ? null : this.#markers.at(raw),
       previous = row && this.#reads.get(row.owner.slot)
-    if (!row || !previous || tail === null) return false
+    if (!row || !previous || tail === null) return null
     const dependencies = new Set(previous.dependencies),
       headers = new Set(previous.headers),
       headerLines = new Set(previous.headerLines),
@@ -252,6 +270,7 @@ export class CountBrackets {
         headers,
         headerLines,
         this.#source.lineAt(row.to - 1)!.number,
+        complete ? tail : null,
       )
     this.#forget(row.owner.slot)
     this.#remember(row.owner.slot, {
@@ -261,7 +280,7 @@ export class CountBrackets {
       headerLines,
       watchedTitle: true,
     })
-    return valid
+    return valid === null ? null : this.#source.rawToEditor(valid)
   }
   canClose(from: number) {
     const raw = this.#source.editorToRaw(from)

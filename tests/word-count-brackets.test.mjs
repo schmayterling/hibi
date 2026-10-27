@@ -3,7 +3,10 @@ import test from 'node:test'
 import { countText } from '../src/addons/word-count/count.ts'
 import { CountBrackets } from '../src/addons/word-count/count-brackets.ts'
 import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
-import { richText } from '../src/addons/word-count/formatted-text.ts'
+import {
+  countParser,
+  richText,
+} from '../src/addons/word-count/formatted-text.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
@@ -269,6 +272,70 @@ test('warm body edits after stray openers keep work bounded at 1000 and 4000 par
     }
 })
 
+test('native title closers after backslashes remain valid across blank lines', (t) => {
+  const parser = countParser(syntax)
+  for (const eol of ['\n', '\r\n'])
+    for (const [open, gap, close] of [
+      ['"', '\n\n', '"'],
+      ["'", '\n', "'"],
+      ['(', '\n\n', ')'],
+    ]) {
+      const source =
+        `[ref]: /target ${open}first${gap}last\\${close}`.replaceAll('\n', eol)
+      const tokens = new parser.Lexer({
+        ...parser.defaults,
+        tokenizer: null,
+      }).lex(source)
+      assert.equal(tokens[0]?.type, 'def', JSON.stringify(source))
+      const f = fixture(t, source)
+      assert.equal(f.brackets.canClose(0), true, JSON.stringify(source))
+    }
+})
+
+test('native escaped title completion updates distant counts through undo', (t) => {
+  for (const eol of ['\n', '\r\n'])
+    for (const [open, gap, close] of [
+      ['"', '\n\n', '"'],
+      ["'", '\n', "'"],
+      ['(', '\n\n', ')'],
+    ]) {
+      const source = `[ref]: /target ${open}first${gap}last\\`.replaceAll(
+        '\n',
+        eol,
+      )
+      const { edit } = counterFixture(t, source)
+      const end = source.length
+      edit([{ from: end, to: end, insert: close }])
+      edit([{ from: end, to: end + 1, insert: '' }], 'undo')
+      edit([{ from: end, to: end, insert: close }], 'redo')
+    }
+})
+
+test('header repairs reuse the cached closing marker without rescanning label markers', (t) => {
+  for (const eol of ['\n', '\r\n']) {
+    const source =
+      `[first\n\n${'literal \\[x\\] words\n\n'.repeat(250)}last]: <broken`.replaceAll(
+        '\n',
+        eol,
+      )
+    const f = fixture(t, source)
+    assert.equal(f.brackets.canClose(0), false)
+    assert.ok(f.brackets.counters().markerVisits > 250)
+    f.brackets.counters(true)
+    const from = source.length
+    assert.deepEqual(f.edit([{ from, to: from, insert: '>' }]), [0])
+    let work = f.brackets.counters(true)
+    assert.equal(work.candidateQueries, 1)
+    assert.equal(work.markerVisits, 0)
+    assert.ok(work.readUnits < 1024, JSON.stringify(work))
+    assert.deepEqual(f.edit([{ from, to: from + 1, insert: '' }], 'undo'), [])
+    work = f.brackets.counters(true)
+    assert.equal(work.candidateQueries, 1)
+    assert.equal(work.markerVisits, 0)
+    assert.deepEqual(f.edit([{ from, to: from, insert: '>' }], 'redo'), [0])
+  }
+})
+
 test('invalid destinations and unfinished same-line titles keep paragraph work local', (t) => {
   for (const paragraphs of [1000, 4000])
     for (const eol of ['\n', '\r\n'])
@@ -286,7 +353,7 @@ test('invalid destinations and unfinished same-line titles keep paragraph work l
         )
         assert.deepEqual(
           read(counter),
-          expected(source.slice(0, from) + 'x' + source.slice(from)),
+          expected(`${source.slice(0, from)}x${source.slice(from)}`),
         )
         const work = counter.counters(true)
         const details = JSON.stringify({ paragraphs, eol, destination, work })
@@ -333,7 +400,7 @@ test('unfinished optional titles stay literal until distant completion and undo'
       counter.apply(operation(counter.store, [{ from, to: from, insert: 'x' }]))
       assert.deepEqual(
         read(counter),
-        expected(source.slice(0, from) + 'x' + source.slice(from)),
+        expected(`${source.slice(0, from)}x${source.slice(from)}`),
       )
       const work = counter.counters(true)
       assert.ok(work.countedUnits < 1024, JSON.stringify(work))
@@ -348,5 +415,64 @@ test('unfinished optional titles stay literal until distant completion and undo'
         [{ from: start, to: start + insert.length, insert: removed }],
         'undo',
       )
+    }
+})
+
+test('ordinary suffix edits after pending escaped closers invalidate the earlier definition', (t) => {
+  for (const eol of ['\n', '\r\n']) {
+    const source =
+      `[ref]: /x "first\\"\n\n${'plain words here\n\n'.repeat(30)}middle\\" trailing\n\nend`.replaceAll(
+        '\n',
+        eol,
+      )
+    const { edit } = counterFixture(t, source)
+    const from = source.indexOf(' trailing')
+    edit([{ from, to: from + ' trailing'.length, insert: '' }])
+    edit([{ from, to: from, insert: ' trailing' }], 'undo')
+    edit([{ from, to: from + ' trailing'.length, insert: '' }], 'redo')
+  }
+})
+
+test('filling a blank title line notifies a previously invalid definition', (t) => {
+  for (const eol of ['\n', '\r\n']) {
+    const source = "[ref]: /x 'one\n\nlast'".replaceAll('\n', eol)
+    const f = fixture(t, source)
+    assert.equal(f.brackets.canClose(0), false)
+    const from = source.indexOf(eol + eol) + eol.length
+    assert.deepEqual(f.edit([{ from, to: from, insert: 'x' }]), [0])
+    assert.equal(f.brackets.canClose(0), true)
+  }
+})
+
+test('definition candidates retain native destination post-validation', (t) => {
+  for (const destination of [
+    '/target(',
+    '/target)',
+    '/target(x',
+    '/target(x)',
+    '<target(>',
+  ]) {
+    const source = `[ref\n\n]: ${destination}`
+    const f = fixture(t, source)
+    const valid =
+      Object.keys(countParser(syntax).lexer(source).links).length > 0
+    assert.equal(f.brackets.canClose(0), valid, destination)
+  }
+  for (const paragraphs of [100, 400])
+    for (const destination of ['/target(', '/target)', '/target(x']) {
+      const source = `[first\n\n${'plain words here\n\n'.repeat(paragraphs)}last]: ${destination}`
+      const { counter } = counterFixture(t, source)
+      counter.counters(true)
+      const from = source.indexOf('words', source.length / 2) + 2
+      counter.apply(operation(counter.store, [{ from, to: from, insert: 'x' }]))
+      assert.deepEqual(
+        read(counter),
+        expected(`${source.slice(0, from)}x${source.slice(from)}`),
+      )
+      const work = counter.counters()
+      assert.ok(work.countedUnits < 1024, JSON.stringify(work))
+      assert.ok(work.referenceUnits < 1024, JSON.stringify(work))
+      assert.ok(work.brackets.readUnits < 1024, JSON.stringify(work))
+      assert.equal(work.source.materializations, 0)
     }
 })

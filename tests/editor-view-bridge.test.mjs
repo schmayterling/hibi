@@ -181,26 +181,11 @@ test('installed addon addresses source and rich selections by live view', {
     const view = window.viewProbe.active()
     return window.viewProbe.selection(view).value
   })
-  await t.test(
-    'source switches retain the hosting view identity',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap api-003: switching source view must retain the hosting view identity'
-          : undefined,
-    },
-    () => {
-      assert.equal(source.view.viewId, rich.view.viewId)
-    },
-  )
+  await t.test('source switches retain the hosting view identity', () => {
+    assert.equal(source.view.viewId, rich.view.viewId)
+  })
   await t.test(
     'switching to source makes the previous formatted selection stale',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap api-006: switching to source must stale the previous formatted selection'
-          : undefined,
-    },
     async () => {
       assert.equal(
         (

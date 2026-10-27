@@ -18,7 +18,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | syntax-003 | [code-syntax-settings.test.mjs:442](code-syntax-settings.test.mjs#L442) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
 | split-001 | [cursor.test.mjs:266](cursor.test.mjs#L266) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | history-001 | [edit-menu-history.test.mjs:341](edit-menu-history.test.mjs#L341) | keyboard redo must preserve read-only formatted source and history | 3: read-only access and shared history guards |
-| api-002 | [editor-extension-context.test.mjs:251](editor-extension-context.test.mjs#L251) | source and formatted editors must preserve hosting view identities | 6: verbatim projections and selection contracts |
 | input-001 | [editor-input.test.mjs:2280](editor-input.test.mjs#L2280) | native multiline markdown preserves literal text and block structure | 8a: native input, structure and toolbar state |
 | input-002 | [editor-input.test.mjs:2284](editor-input.test.mjs#L2284) | native multiline paragraph preserves literal text and block structure | 8a: native input, structure and toolbar state |
 | input-003 | [editor-input.test.mjs:2286](editor-input.test.mjs#L2286) | native multiline paragraph keeps inserted caret and following text | 8a: native input, structure and toolbar state |
@@ -94,8 +93,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | input-073 | [editor-input.test.mjs:3440](editor-input.test.mjs#L3440) | native bold typing keeps bold action pressed | 8a: native input, structure and toolbar state |
 | input-074 | [editor-input.test.mjs:3454](editor-input.test.mjs#L3454) | native bold typing renders strong text in canonical source | 8a: native input, structure and toolbar state |
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
-| api-003 | [editor-view-bridge.test.mjs:189](editor-view-bridge.test.mjs#L189) | switching source view must retain the hosting view identity | 6: verbatim projections and selection contracts |
-| api-006 | [editor-view-bridge.test.mjs:201](editor-view-bridge.test.mjs#L201) | switching to source must stale the previous formatted selection | 6: verbatim projections and selection contracts |
 | split-002 | [editor.test.mjs:187](editor.test.mjs#L187) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | api-004 | [formatted-completions.test.mjs:223](formatted-completions.test.mjs#L223) | typing context must preserve rich selection offsets | 6: verbatim projections and selection contracts |
 | find-001 | [formatted-find.test.mjs:210](formatted-find.test.mjs#L210) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |

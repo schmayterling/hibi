@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
-import { GFM, parser } from '@lezer/markdown'
+import { GFM } from '@lezer/markdown'
 import { blockStep } from '../src/addons/block-drag/formatted.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
@@ -11,7 +11,10 @@ import {
 import { Footnotes, GithubAlerts } from '../src/shared/markdown-extra-syntax.ts'
 
 const extensions = [GFM, Footnotes, GithubAlerts]
-const md = parser.configure(extensions)
+const grammar = EditorState.create({
+  extensions: formattedSyntax({ extensions }).extension,
+})
+const md = grammar.facet(formattedBlockParser)(grammar)
 const containers = new Set([
   'Blockquote',
   'BulletList',

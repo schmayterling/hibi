@@ -149,6 +149,53 @@ test('late ready-to-show skips windows that are closing, destroyed or quitting',
   }
 })
 
+test('hosted visibility policy lets a worker-only fixture launch and close', async (t) => {
+  const child = { stdout: new PassThrough(), stderr: new PassThrough() }
+  let windowWaits = 0
+  let closed = 0
+  const application = {
+    process: () => child,
+    evaluate: async () => {},
+    windows: () => [],
+    firstWindow: async () => {
+      windowWaits++
+      throw new Error('worker-only fixture has no window')
+    },
+    close: async () => {
+      closed++
+    },
+  }
+  t.after(async () => {
+    if (!closed) await application.close()
+    child.stdout.destroy()
+    child.stderr.destroy()
+  })
+  // Exercise hosted policy without revealing a native window.
+  const launch = new Function(
+    '_electron',
+    'showTestWindows',
+    'forwardElectronDiagnostics',
+    'showElectronTestWindows',
+    'waitForElectronShutdown',
+    'moduleUrl',
+    `return ({${electron.launch.toString().replace('import.meta.url', 'moduleUrl')}}).launch`,
+  )(
+    { launch: async () => application },
+    true,
+    () => {},
+    showElectronTestWindows,
+    (_child, pending) => pending,
+    new URL('./electron.mjs', import.meta.url).href,
+  )
+  assert.equal(
+    await launch({ args: ['worker-only'], diagnostics: false }),
+    application,
+  )
+  assert.equal(windowWaits, 0)
+  await application.close()
+  assert.equal(closed, 1)
+})
+
 test('delayed ready-to-show does not reveal a real window during its close', {
   timeout: 10000,
 }, async (t) => {

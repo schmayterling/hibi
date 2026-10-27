@@ -330,7 +330,83 @@ const richQuirks = [
     difference: { words: 0, characters: -1 },
     states: ['29:1', '29:2', '29:3'],
   },
+  {
+    // CommonMark limits ordered markers to nine digits; the rich tokenizer
+    // accepts ten and removes the marker from its text.
+    source: '1234567890. a',
+    syntax: {},
+    text: '\n\na',
+    difference: { words: -1, characters: -10 },
+    states: [],
+  },
 ]
+
+test('schema corpus: paragraph boundary edits retain markdown ownership', () => {
+  const syntax = countSyntax(corpus.configs[0])
+  const rich = richOracle(syntax)
+  const cases = [
+    [
+      'foo',
+      [
+        [3, 3, ' '],
+        [4, 4, 'x'],
+        [4, 5, ''],
+      ],
+    ],
+    ['x word', [[0, 1, '']]],
+    ['x\u00a0word', [[0, 1, '']]],
+    ['words more', [[0, 0, '    ']]],
+    ['x1. a', [[0, 1, '']]],
+    ['1234567890. a', [[0, 1, '']]],
+    ['. a', [[0, 0, '1']]],
+    ['1', [[1, 1, ')']]],
+    ...[
+      ['"', '"'],
+      ["'", "'"],
+      ['(', ')'],
+    ].flatMap(([open, close]) => [
+      [`[a]: /url\nfoo${close}`, [[10, 10, open]]],
+      [`[a]: /url\n${open}foo`, [[14, 14, close]]],
+    ]),
+  ]
+  for (const [initial, changes] of cases) {
+    let source = initial
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'boundary-oracle', revision: 0 }),
+      syntax,
+    )
+    try {
+      const initialRich = countText(rich(source).text)
+      const quirk = richQuirks.find((quirk) => quirk.source === source)
+      assert.deepEqual(
+        read(counter),
+        quirk
+          ? {
+              words: initialRich.words - quirk.difference.words,
+              characters: initialRich.characters - quirk.difference.characters,
+            }
+          : initialRich,
+      )
+      for (const [from, to, insert] of changes) {
+        const snapshot = counter.store.snapshot()
+        counter.apply({
+          document: snapshot.document,
+          operationId: crypto.randomUUID(),
+          baseVersion: snapshot.version,
+          contentVersion: snapshot.version + 1,
+          origin: 'source',
+          historyGroup: 'boundary-oracle',
+          changes: [{ from, to, insert }],
+        })
+        source = `${source.slice(0, from)}${insert}${source.slice(to)}`
+        assert.deepEqual(read(counter), countText(rich(source).text), source)
+      }
+    } finally {
+      counter.dispose()
+    }
+  }
+  markdownSyntax.reset()
+})
 
 test('schema corpus: escaped title alternatives retain native definition spans', () => {
   const syntax = countSyntax(corpus.configs[0])
@@ -383,6 +459,9 @@ test('schema corpus: styled unicode edits keep the rich text boundary context', 
     ['x\u0301**word**', '\u0301', 0],
     ['`word`\u0301x', '\u0301', 1],
     ['**👩**\u200d💻x', '\u200d', 1],
+    ['ordinary words', 'ordinary', 0],
+    ['ordinary words', 'words', 5],
+    ['**bold** ordinary words', 'words', 5],
   ]) {
     const counter = new FormattedCounter(
       new SourceStore(source, { tabId: 'styled-unicode', revision: 0 }),

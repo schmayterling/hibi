@@ -44,7 +44,7 @@ export class FormattedCounter {
   #owners: SourceOwners | null = null
   #epoch: string | null = null
   #referencesDirty = false
-  #plainValid = false
+  #plainOwners: SourceOwners | null = null
   readonly #plainCounts = new Map<Entry, Count>()
   #total: Count = { words: 0, characters: 0 }
   #work = { countedRegions: 0, countedUnits: 0, referenceUnits: 0 }
@@ -73,10 +73,19 @@ export class FormattedCounter {
   apply(operation: SourceOperation) {
     const prepared = this.store.prepare(operation)
     const [change] = operation.changes
-    const row =
-      this.#plainValid && operation.changes.length === 1 && change
-        ? this.#model.state().owners?.at(change.from)
+    let row =
+      this.#plainOwners && operation.changes.length === 1 && change
+        ? this.#plainOwners.at(change.from)
         : null
+    if (
+      this.#plainOwners &&
+      row &&
+      change &&
+      change.from === change.to &&
+      row.from === change.from &&
+      !this.#entries.get(row.owner.slot)?.plain
+    )
+      row = this.#plainOwners.at(change.from, -1)
     const entry = row && this.#entries.get(row.owner.slot)
     const delta =
       entry?.plain && row && change
@@ -102,7 +111,13 @@ export class FormattedCounter {
         this.#model.invalidate(from, from + 1)
         invalidated = true
       }
-    if (delta && row && entry && !invalidated) {
+    if (delta && row && entry && this.#plainOwners && !invalidated) {
+      // retain proven paragraphs while the parser keeps boundary edits pending.
+      this.#plainOwners = this.#plainOwners.update(row.index, {
+        ...row.owner,
+        length:
+          typeof delta.spans === 'number' ? delta.spans : delta.spans.length,
+      })
       entry.plain = delta.spans
       const previous = this.#plainCounts.get(entry) ?? entry.count
       this.#plainCounts.set(entry, {
@@ -112,7 +127,7 @@ export class FormattedCounter {
       this.#work.countedRegions++
       this.#work.countedUnits += delta.units
     } else {
-      this.#plainValid = false
+      this.#plainOwners = null
       this.#plainCounts.clear()
     }
   }
@@ -142,7 +157,7 @@ export class FormattedCounter {
     }
   }
   *read(): Generator<void, Count> {
-    if (this.#plainValid) {
+    if (this.#plainOwners) {
       for (const [entry, count] of this.#plainCounts) {
         this.#total.words += count.words - entry.count.words
         this.#total.characters += count.characters - entry.count.characters
@@ -315,7 +330,7 @@ export class FormattedCounter {
     }
     this.#owners = owners
     this.#referencesDirty = false
-    this.#plainValid = true
+    this.#plainOwners = owners
     return {
       words: this.#total.words,
       characters: Math.max(0, this.#total.characters - 1),
@@ -341,6 +356,7 @@ export class FormattedCounter {
     this.#entries.clear()
     this.#members.clear()
     this.#plainCounts.clear()
+    this.#plainOwners = null
     this.#literal.clear()
   }
 }

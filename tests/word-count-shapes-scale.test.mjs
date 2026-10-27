@@ -31,12 +31,12 @@ function change(counter, at, insert) {
     changes: [{ from: at, to: at, insert }],
   })
 }
-function bounded(counter, before, at, name) {
+function bounded(counter, before, at, name, insert = ' y ', words = 2) {
   counter.counters(true)
-  change(counter, at, ' y ')
+  change(counter, at, insert)
   const result = read(counter)
-  assert.equal(result.words, before.words + 2)
-  assert.equal(result.characters, before.characters + 3)
+  assert.equal(result.words, before.words + words)
+  assert.equal(result.characters, before.characters + insert.length)
   const work = counter.counters()
   console.log(
     JSON.stringify({
@@ -55,11 +55,14 @@ function bounded(counter, before, at, name) {
   assert.equal(work.source.materializedUnits, 0)
   assert.equal(work.parser.parser.readUnits, 0)
   assert.ok(work.brackets.readUnits < 1024, JSON.stringify(work))
-  assert.equal(counter.store.snapshot().sliceRaw(at, at + 3), ' y ')
+  assert.equal(
+    counter.store.snapshot().sliceRaw(at, at + insert.length),
+    insert,
+  )
   return result
 }
 
-test('50 MiB single paragraph retains local counts at three depths', {
+test('50 MiB single paragraph retains local counts at its endpoints and three depths', {
   timeout: 180000,
 }, () => {
   const size = 50 * 1024 * 1024
@@ -73,12 +76,21 @@ test('50 MiB single paragraph retains local counts at three depths', {
     // each complete sentence has two words; this fixture ends at a sentence boundary.
     assert.equal(total.words, (size / 16) * 2)
     assert.equal(total.characters, size)
-    let shift = 0
+    total = bounded(counter, total, 0, 'single-paragraph-start', 'z', 0)
+    let shift = 1
     for (const depth of [1 / 4, 1 / 2, 3 / 4]) {
       const at = Math.floor((size * depth) / 16) * 16 + 3 + shift
       total = bounded(counter, total, at, 'single-paragraph')
       shift += 3
     }
+    bounded(
+      counter,
+      total,
+      counter.store.snapshot().utf16Length,
+      'single-paragraph-end',
+      'z',
+      1,
+    )
   } finally {
     counter.dispose()
   }

@@ -104,7 +104,7 @@ export function localCount(
   if (span?.owner.kind !== 'plain') return null
   const start = base + span.from,
     end = base + span.to
-  if (from <= start || to >= end || syntax.test(insert)) return null
+  if (from < start || to > end || syntax.test(insert)) return null
   // ponytail: a run without stable spaces needs its whole segmentation context;
   // composable unicode segmentation summaries would bound edits within that run.
   let left = from,
@@ -142,8 +142,12 @@ export function localCount(
     return null
   const before = source.sliceRaw(left, right)
   const after = `${before.slice(0, from - left)}${insert}${before.slice(to - left)}`
-  // punctuation or deletion can turn the first word into an ordered marker.
-  if (left === base && /^\d{1,9}[.)](?:\s|$)/.test(after)) return null
+  // indentation, punctuation or deletion can change paragraph ownership.
+  if (
+    left === base &&
+    (!/^\S/.test(after) || /^\d{1,9}[.)](?:\s|$)/.test(after))
+  )
+    return null
   // url/email recognition can change when ordinary letters are edited beside these.
   if (
     /[:@]/.test(before) ||

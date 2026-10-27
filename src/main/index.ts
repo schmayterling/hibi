@@ -410,13 +410,8 @@ const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererUrl = devUrl ? new URL(devUrl).href : 'app://hibi/'
 const rendererRoot = join(import.meta.dirname, '../renderer')
 let mainWindow: BrowserWindow | null = null
-const followAccessibility = followAccessibilitySupport(
+const accessibility = followAccessibilitySupport(
   () => app.isAccessibilitySupportEnabled(),
-  () =>
-    !!mainWindow &&
-    !mainWindow.isDestroyed() &&
-    mainWindow.isVisible() &&
-    !mainWindow.isMinimized(),
   (enabled) =>
     mainWindow?.webContents.send(ACCESSIBILITY_CHANNELS.changed, enabled),
 )
@@ -944,9 +939,9 @@ function createWindow(): void {
     if (!window.isDestroyed()) window.webContents.setIgnoreMenuShortcuts(false)
   }
   window.on('blur', stopRecording)
-  window.on('show', followAccessibility)
-  window.on('focus', followAccessibility)
-  window.on('restore', followAccessibility)
+  accessibility.start()
+  window.on('show', accessibility.sample)
+  window.on('focus', accessibility.sample)
   window.webContents.on('did-start-loading', stopRecording)
   window.webContents.on('did-start-loading', () => {
     backgroundSettingsReady = false
@@ -1141,6 +1136,7 @@ function createWindow(): void {
       new Error('The editor closed before confirming its changes.'),
     )
     mainWindow = null
+    accessibility.stop()
     if (process.platform !== 'darwin' || quitting) globalShortcuts.clear()
     // Hidden addon windows must not keep Hibi running where closing it quits.
     if (process.platform !== 'darwin') releaseAddonWindows(true)
@@ -1408,7 +1404,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
-  app.on('accessibility-support-changed', followAccessibility)
+  app.on('accessibility-support-changed', accessibility.sample)
 
   void app
     .whenReady()
@@ -1575,7 +1571,11 @@ if (!app.requestSingleInstanceLock()) {
         },
         Promise.resolve(),
       )
-      handle(ACCESSIBILITY_CHANNELS.get, followAccessibility, Promise.resolve())
+      handle(
+        ACCESSIBILITY_CHANNELS.get,
+        accessibility.sample,
+        Promise.resolve(),
+      )
       handle(
         SIDELOAD_CHANNELS.documentation,
         (event, id: unknown, path: unknown) => {

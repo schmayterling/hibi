@@ -275,11 +275,8 @@ NAPI_MODULE_INIT() {
   await open(app, page, file)
   await page.locator('[data-source-ready="true"]').waitFor()
   assert.ok((await page.locator(everyHeading).count()) < 200)
-  const state = await app.evaluate(({ app, BrowserWindow }, path) => {
-    // Test windows stay hidden; this one reads as shown.
-    const [window] = BrowserWindow.getAllWindows()
-    window.isVisible = () => true
-    window.emit('show')
+  // The test window stays hidden and gets no show or focus.
+  const state = await app.evaluate(({ app }, path) => {
     globalThis.accessibilityEvents = []
     app.on('accessibility-support-changed', (_event, enabled) =>
       globalThis.accessibilityEvents.push(enabled),

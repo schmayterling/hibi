@@ -267,6 +267,10 @@ export function useEditorAddons(
   return { knownFlavors, manifests, enabledAddons }
 }
 
+/** The activation main gave an addon, which grows each time it stops. */
+const activationOf = (states: readonly AddonState[], id: string) =>
+  states.find((state) => state.id === id)?.activation
+
 export function useAddons(
   environment: Environment,
   documentName?: string,
@@ -660,12 +664,10 @@ export function useAddons(
       }
     >(),
   ).current
-  /** Editor features that failed in any window, with their addons and times, until those are turned off. */
+  /** Editor features that failed in any window, with their addons and activations, until those stop. */
   const failedFeatures = useRef(
-    new Map<string, { addonId: string; at: number }>(),
+    new Map<string, { addonId: string; activation: number }>(),
   ).current
-  /** When this window last saw each addon turned off. */
-  const turnedOff = useRef(new Map<string, number>()).current
   const featureFailures = useRef<BroadcastChannel | null>(null)
   useEffect(() => {
     const channel = new BroadcastChannel('hibi-editor-feature-failures')
@@ -677,20 +679,20 @@ export function useAddons(
           channel.postMessage({ key, ...failure })
         return
       }
-      const { key, addonId, at } = (data ?? {}) as Record<string, unknown>
+      const { key, addonId, activation } = (data ?? {}) as Record<
+        string,
+        unknown
+      >
       if (
         typeof key !== 'string' ||
         typeof addonId !== 'string' ||
-        typeof at !== 'number'
+        typeof activation !== 'number'
       )
         return
-      // A failure that arrives late belongs to a run the addon has left.
-      const state = currentActivation.current.states.find(
-        (state) => state.id === addonId,
-      )
-      if (state?.enabled === false || at <= (turnedOff.get(addonId) ?? 0))
-        return
-      failedFeatures.set(key, { addonId, at })
+      // One from an earlier activation is stale, however late it arrives.
+      const current = activationOf(currentActivation.current.states, addonId)
+      if (current !== undefined && activation < current) return
+      failedFeatures.set(key, { addonId, activation })
       sources.get(key)?.drop?.()
     }
     channel.postMessage(null)
@@ -698,14 +700,15 @@ export function useAddons(
       featureFailures.current = null
       channel.close()
     }
-  }, [failedFeatures, turnedOff, sources])
+  }, [failedFeatures, sources])
   useEffect(() => {
-    const now = Date.now()
-    for (const state of states) if (!state.enabled) turnedOff.set(state.id, now)
-    for (const [key, { addonId }] of failedFeatures)
-      if (!states.some((state) => state.id === addonId && state.enabled))
+    // A newer activation restores what failed in earlier ones.
+    for (const [key, { addonId, activation }] of failedFeatures) {
+      const current = activationOf(states, addonId)
+      if (current !== undefined && activation < current)
         failedFeatures.delete(key)
-  }, [failedFeatures, turnedOff, states])
+    }
+  }, [failedFeatures, states])
   const [sourceExtensions, setSourceExtensions] = useState<SourceExtension[]>(
     [],
   )
@@ -788,10 +791,6 @@ export function useAddons(
   useEffect(
     () =>
       latest.current.subscribeStates?.((next) => {
-        // Each message counts, also an off and on that render together.
-        const now = Date.now()
-        for (const state of next)
-          if (!state.enabled) turnedOff.set(state.id, now)
         // Toggling elsewhere retries failed addons, as toggling here does.
         const {
           states: previous,
@@ -821,7 +820,7 @@ export function useAddons(
           )
         setStates(next)
       }),
-    [started, turnedOff],
+    [started],
   )
   useEffect(() => {
     void window.hibi.bootstrap
@@ -1155,15 +1154,27 @@ export function useAddons(
             ? {}
             : {
                 fail(error: unknown) {
-                  if (disposed || !sources.has(`${presentation}:${key}`)) return
-                  const failure = { addonId: id, at: Date.now() }
-                  failedFeatures.set(`${presentation}:${key}`, failure)
-                  featureFailures.current?.postMessage({
-                    key: `${presentation}:${key}`,
-                    ...failure,
+                  const feature = `${presentation}:${key}`
+                  if (disposed || !sources.has(feature)) return
+                  failedFeatures.set(feature, {
+                    addonId: id,
+                    activation:
+                      activationOf(currentActivation.current.states, id) ?? 0,
                   })
                   remove()
                   latest.current.error(error)
+                  // Other windows compare it with the activation main has now,
+                  // which this window may not have heard of.
+                  void window.hibi.getAddonStates().then((states) => {
+                    const activation = activationOf(states, id)
+                    if (activation === undefined) return
+                    failedFeatures.set(feature, { addonId: id, activation })
+                    featureFailures.current?.postMessage({
+                      key: feature,
+                      addonId: id,
+                      activation,
+                    })
+                  }, latest.current.error)
                 },
                 drop: () => remove(),
               }),

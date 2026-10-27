@@ -464,6 +464,58 @@ test('an addon source state field that fails on a pasted edit is removed and the
   assert.deepEqual(errors, [])
 })
 
+/** A failing field with a command that dispatches two transactions, the second of which it fails on. */
+const failingBatch = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  const { StateField } = sdk.codeMirror.state
+  const { EditorView, keymap } = sdk.codeMirror.view
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    StateField.define({
+      create: () => 0,
+      update(value, transaction) {
+        if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('batch boom')
+        return value
+      },
+    }),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+    keymap.of([{ key: 'F8', run(view) {
+      const at = view.state.selection.main.head
+      const first = view.state.update({ changes: { from: at, insert: 'a' }, userEvent: 'input.type' })
+      const second = first.state.update({ changes: { from: at + 1, insert: 'Q' }, userEvent: 'input.type' })
+      view.dispatch([first, second])
+      return true
+    } }]),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`an addon ${presentation} field that fails on the second transaction of a dispatch is named and removed, and the dispatch is rejected (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: failingBatch,
+    })
+    await caret(page, pane)
+    await page.keyboard.press('F8')
+    await reported(page, 'bad-ext.bad: batch boom')
+    await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+    const rejected = await state(page, pane)
+    t.diagnostic(JSON.stringify({ rejected, errors }))
+    assert.equal(rejected.canonical, plain)
+    assert.equal(rejected.view, rejected.canonical)
+    assert.deepEqual(rejected.shown, ['end'])
+    await type(page, pane, ['Q'])
+    const after = await state(page, pane)
+    assert.equal(after.canonical, plain.replace(/end\n$/, 'endQ\n'))
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(after.shown, ['endQ'])
+    assert.deepEqual(errors, [])
+  })
+
 /** A failing state field with a filter that rebuilds every transaction from its parts, without annotations. */
 const rebuildingFilter = (
   presentation,
@@ -720,27 +772,28 @@ test('a failing formatted feature leaves the editors of every window, and turnin
   assert.deepEqual(previewErrors, [])
 })
 
+/** Makes windows opened later hold failure messages while `window.holdFailures` is set. */
+const holdFailures = (page) =>
+  page.context().addInitScript(() => {
+    const Channel = window.BroadcastChannel
+    window.heldFailures = []
+    window.BroadcastChannel = class extends Channel {
+      set onmessage(receive) {
+        super.onmessage = (event) => {
+          if (window.holdFailures && event.data)
+            window.heldFailures.push(() => receive(event))
+          else receive(event)
+        }
+      }
+    }
+  })
+
 for (const late of ['while it is off', 'after it is on again'])
   test(`a failure from another window that arrives ${late} does not remove the feature from the addon's next run (codemirror)`, {
     timeout: 180000,
   }, async (t) => {
     const { app, page, pane, errors, preview, previewErrors, feature } =
-      await openWindows(t, (page) =>
-        // The other window holds failure messages until the test releases them.
-        page.context().addInitScript(() => {
-          const Channel = window.BroadcastChannel
-          window.heldFailures = []
-          window.BroadcastChannel = class extends Channel {
-            set onmessage(receive) {
-              super.onmessage = (event) => {
-                if (window.holdFailures && event.data)
-                  window.heldFailures.push(() => receive(event))
-                else receive(event)
-              }
-            }
-          }
-        }),
-      )
+      await openWindows(t, holdFailures)
     await preview.evaluate(() => {
       window.holdFailures = true
     })
@@ -784,6 +837,55 @@ for (const late of ['while it is off', 'after it is on again'])
     assert.deepEqual(errors, [])
     assert.deepEqual(previewErrors, [])
   })
+
+test("a failure from the addon's next run still removes the feature from a window that learns of that run later (codemirror)", {
+  timeout: 180000,
+}, async (t) => {
+  const { app, page, pane, errors, preview, previewErrors, feature } =
+    await openWindows(t, holdFailures)
+  await preview.evaluate(() => {
+    window.holdFailures = true
+  })
+  // Main holds the addon states it sends to the other window.
+  await app.evaluate(({ BrowserWindow }) => {
+    const { webContents } = BrowserWindow.getAllWindows().find((window) =>
+      window.webContents.getURL().endsWith('/addon-window.html'),
+    )
+    const send = webContents.send.bind(webContents)
+    globalThis.heldStates = { webContents, send, states: [] }
+    webContents.send = (channel, ...args) => {
+      if (channel !== 'addon-windows:states-changed')
+        return send(channel, ...args)
+      globalThis.heldStates.states.push(args)
+    }
+  })
+  try {
+    await restartTextExtras(app, page)
+    await page.locator('.rich-pane [data-window-fault]').waitFor()
+    await type(page, pane, ['Q'])
+    await reported(page, 'text-extras.window-fault: window boom')
+    await preview.waitForFunction(() => window.heldFailures.length > 0)
+  } finally {
+    await app.evaluate(() => {
+      const { webContents, send, states } = globalThis.heldStates
+      webContents.send = send
+      for (const args of states) send('addon-windows:states-changed', ...args)
+    })
+  }
+  // The other window learns of the new run, then of its failure.
+  await preview.locator('.rich-pane [data-window-fault]').waitFor()
+  await preview.evaluate(() => {
+    window.holdFailures = false
+    for (const receive of window.heldFailures.splice(0)) receive()
+  })
+  await frame(preview)
+  await frame(preview)
+  const removed = { main: await feature(page), other: await feature(preview) }
+  t.diagnostic(JSON.stringify({ removed, errors, previewErrors }))
+  assert.deepEqual(removed, { main: 0, other: 0 })
+  assert.deepEqual(errors, [])
+  assert.deepEqual(previewErrors, [])
+})
 
 /** A feature whose extension CodeMirror cannot install. */
 const invalidExtension = (

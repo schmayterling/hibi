@@ -975,7 +975,18 @@ test('filters and extenders that read a state never see one an extension failed 
     assert.equal(failedEdit([typed]), null)
     // Leaving it out does not run its extender, which may require its field.
     assert.deepEqual(
-      names(start, [failed.edit], [{ name: 'feature', extension }]),
+      names(start, failed.edits, [{ name: 'feature', extension }]),
+      ['feature: field failed'],
+    )
+    // In a batch, the edits before it are replayed first.
+    const first = start.update({ changes: { from: 3, insert: 'a' } })
+    const batch = failedEdit([
+      first,
+      first.state.update({ changes: { from: 4, insert: 'Q' } }),
+    ])
+    assert.equal(batch?.edits.length, 2)
+    assert.deepEqual(
+      names(start, batch.edits, [{ name: 'feature', extension }]),
       ['feature: field failed'],
     )
     const removed = reconfiguration(start, install([])).state

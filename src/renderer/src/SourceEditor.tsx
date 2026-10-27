@@ -1425,7 +1425,7 @@ export function SourceEditor({
       dispatchTransactions(transactions, editor) {
         const failed = failedEdit(transactions)
         if (failed) {
-          reject(editor, failed.error, [failed.edit])
+          reject(editor, failed.error, failed.edits)
           return
         }
         try {

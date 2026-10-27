@@ -229,15 +229,20 @@ export const failedEditGuard = Prec.lowest(
 )
 
 /**
- * The edit an extension failed on that these transactions stand in for, with
- * its error. Each is taken once; a change from the same state is new input.
+ * The edit an extension failed on that these transactions stand in for, after
+ * the ones before it, with its error. Each is taken once; a change from the
+ * same state is new input.
  */
 export function failedEdit(transactions: readonly Transaction[]) {
-  for (const transaction of transactions) {
+  for (const [index, transaction] of transactions.entries()) {
     const edit = failedEdits.get(transaction.startState)
     if (!edit) continue
     failedEdits.delete(transaction.startState)
-    if (!transaction.docChanged) return { edit, error: failedStates.get(edit) }
+    if (!transaction.docChanged)
+      return {
+        edits: [...transactions.slice(0, index), edit],
+        error: failedStates.get(edit),
+      }
   }
   return null
 }
@@ -324,8 +329,11 @@ export function failingParts<Part>(
 ) {
   const replay = (installed: readonly Part[]) => {
     let state = reachedState(reconfiguration(start, install(installed)))
-    const reach = (made: Transaction) =>
-      reachedState(failedEdit([made])?.edit ?? made)
+    const reach = (made: Transaction) => {
+      const failed = failedEdit([made])
+      if (failed) throw failed.error
+      return reachedState(made)
+    }
     if (edit.every((part) => part instanceof Transaction))
       for (const transaction of edit as readonly Transaction[])
         state = reach(state.update(editSpec(transaction)))

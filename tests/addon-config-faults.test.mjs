@@ -73,9 +73,27 @@ for (const engine of ['default', 'codemirror']) {
       await page.evaluate(() =>
         localStorage.setItem('hibi:formatted-engine', 'codemirror'),
       )
-      await page.reload()
-      await waitForDocumentEditor(app, page)
     }
+    // Opening a note clears the current error toast. Retain startup attribution.
+    await page.addInitScript(() => {
+      window.configurationNotices = []
+      const seen = new Set()
+      new MutationObserver(() => {
+        for (const toast of document.querySelectorAll('.toast')) {
+          const text = toast.textContent
+          if (text && !seen.has(text)) {
+            seen.add(text)
+            window.configurationNotices.push(text)
+          }
+        }
+      }).observe(document, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      })
+    })
+    await page.reload()
+    await waitForDocumentEditor(app, page)
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -100,12 +118,19 @@ for (const engine of ['default', 'codemirror']) {
     await page
       .locator('.source-pane .cm-content[contenteditable="true"]')
       .waitFor()
-    await page
-      .getByRole('region', { name: 'Notifications', exact: true })
-      .getByText(
-        /configuration-proof\.bad:.*unknown parser MissingConfigAnchor/,
-      )
-      .waitFor()
+    await waitForAsync(page, () =>
+      window.configurationNotices.some((text) =>
+        /configuration-proof\.bad:.*unknown parser MissingConfigAnchor/.test(
+          text,
+        ),
+      ),
+    )
+    t.diagnostic(
+      JSON.stringify({
+        engine,
+        notices: await page.evaluate(() => window.configurationNotices),
+      }),
+    )
     assert.equal(
       await page
         .getByText('The editor stopped working', { exact: true })

@@ -81,10 +81,9 @@ export const flavors = {
     })
     if (flavor.syntax || flavor.render)
       void import('./load-formatted-flavor')
-        .then(({ loadFormattedFlavor }) => loadFormattedFlavor())
-        .then(({ registerFormattedFlavor }) => {
-          if (active)
-            removeFormatted = registerFormattedFlavor(addonId, item, onError)
+        .then(({ load }) => load())
+        .then((register) => {
+          if (active) removeFormatted = register(addonId, item, onError)
         }, onError)
     registry.set(id, item)
     publish()

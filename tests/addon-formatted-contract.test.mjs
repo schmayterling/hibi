@@ -36,7 +36,11 @@ test('bundled rich-only addons remain on an explicit migration allowlist', async
 
 test('formatted sdk shares the host Lezer common runtime', async () => {
   const { outputFiles } = await build({
-    entryPoints: ['src/addons/sdk-formatted.ts'],
+    stdin: {
+      contents:
+        "export * from './src/addons/sdk-formatted.ts'; export * as host from '@lezer/common'",
+      resolveDir: process.cwd(),
+    },
     bundle: true,
     write: false,
     platform: 'node',
@@ -49,6 +53,9 @@ test('formatted sdk shares the host Lezer common runtime', async () => {
     sdk.common?.NodeProp,
     'formatted addons receive the host NodeProp constructor',
   )
+  assert.deepEqual(Object.keys(sdk.common).sort(), Object.keys(sdk.host).sort())
+  for (const [key, value] of Object.entries(sdk.host))
+    assert.equal(sdk.common[key], value, key)
   const prop = new sdk.common.NodeProp()
   const configured = sdk.markdown.parser.configure({
     props: [prop.add({ Paragraph: 'shared' })],

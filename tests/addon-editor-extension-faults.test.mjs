@@ -527,6 +527,79 @@ for (const presentation of ['formatted', 'source'])
       assert.deepEqual(errors, [])
     })
 
+/** An extender that fails on `Q`, next to a feature of the same addon that allows several selections. */
+const failingWithCursors = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  window.faultSdk = sdk
+  const { EditorState } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
+  context.editor.${register(presentation)}({ id: 'cursors', create: () => EditorState.allowMultipleSelections.of(true) })
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    EditorState.transactionExtender.of((transaction) => {
+      if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('cursors boom')
+      return null
+    }),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`an addon ${presentation} extender that fails while a composition at two cursors is made into an edit is removed, and the composition lands at both (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors, cdp } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: failingWithCursors,
+    })
+    await ready(page, pane)
+    await page.evaluate((pane) => {
+      const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+        .view
+      const { EditorSelection } = window.faultSdk.codeMirror.state
+      const text = view.state.doc.toString()
+      view.dispatch({
+        selection: EditorSelection.create(
+          [
+            EditorSelection.cursor(text.indexOf('text') + 4),
+            EditorSelection.cursor(text.lastIndexOf('end') + 3),
+          ],
+          1,
+        ),
+      })
+      view.focus()
+    }, pane)
+    for (const text of ['日', '日Q', '日本']) {
+      await cdp.send('Input.imeSetComposition', {
+        text,
+        selectionStart: text.length,
+        selectionEnd: text.length,
+      })
+      await frame(page)
+    }
+    await cdp.send('Input.insertText', { text: '日本語' })
+    await frame(page)
+    await reported(page, 'bad-ext.bad: cursors boom')
+    const after = await state(page, pane)
+    const ranges = await page
+      .locator(`${pane} .cm-content`)
+      .evaluate(
+        (content) => content.cmTile.root.view.state.selection.ranges.length,
+      )
+    t.diagnostic(JSON.stringify({ after, ranges, errors }))
+    assert.equal(
+      after.canonical,
+      plain.replace('text\n', 'text日本語\n').replace(/end\n$/, 'end日本語\n'),
+    )
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(after.shown, ['end日本語'])
+    assert.equal(ranges, 2)
+    assert.equal(await page.locator(`${pane} [data-bad]`).count(), 0)
+    assert.deepEqual(errors, [])
+  })
+
 /** An extender that throws once, on the first edit that leaves a `Q`, so a replay cannot name it. */
 const throwingOnce = (
   presentation,

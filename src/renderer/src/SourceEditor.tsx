@@ -1361,6 +1361,8 @@ export function SourceEditor({
       return true
     }
     installed.current = []
+    /** While typing is made into an edit: the first transaction made, once there is one. */
+    let inputEdit: Transaction | null | undefined
     /**
      * Rejects input that failed, with the features named that it failed with
      * when `edit` is replayed from `start`. The DOM may still show what it left
@@ -1454,6 +1456,14 @@ export function SourceEditor({
         doc: preparedText.text,
         ...(selection ? { selection } : {}),
         extensions: [
+          // The first transaction typing makes, as CodeMirror made it, before
+          // anything else can fail on it.
+          Prec.highest(
+            EditorState.changeFilter.of((transaction) => {
+              if (inputEdit === null) inputEdit = transaction
+              return true
+            }),
+          ),
           addons.current.of([]),
           findHighlights.current.of([]),
           search({
@@ -1791,23 +1801,30 @@ export function SourceEditor({
           }),
           failedEditGuard,
           // Typing read from the DOM is made into an edit here, last, so an
-          // extension that fails while it is made is named from that edit.
+          // extension that fails while it is made is named from that edit,
+          // with every range CodeMirror changed and selected.
           Prec.lowest(
             EditorView.inputHandler.of((view, from, to, text, insert) => {
+              inputEdit = null
               try {
                 insert()
                 return false
               } catch (error) {
-                reject(view, error, [
-                  {
-                    changes: { from, to, insert: text },
-                    selection: { anchor: from + text.length },
-                    userEvent: view.composing
-                      ? 'input.type.compose'
-                      : 'input.type',
-                  },
-                ])
+                reject(
+                  view,
+                  error,
+                  inputEdit
+                    ? [inputEdit]
+                    : [
+                        {
+                          changes: { from, to, insert: text },
+                          userEvent: 'input',
+                        },
+                      ],
+                )
                 return true
+              } finally {
+                inputEdit = undefined
               }
             }),
           ),

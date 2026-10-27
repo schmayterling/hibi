@@ -4,12 +4,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -87,7 +90,7 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
   }, workspace)
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  await waitForDocumentEditor(app, page)
+  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
   await page.evaluate(
     (preferences) => {
       localStorage.setItem(
@@ -100,7 +103,7 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
   await page.getByRole('button', { name: /toggle workspace sidebar/i }).click()
   await page.evaluate(() => window.hibi.openWorkspace())
   await page.getByRole('treeitem', { name: 'active.md', exact: true }).click()
-  await page.locator('.tiptap').getByText(saved, { exact: true }).waitFor()
+  await rich.getByText(saved, { exact: true }).waitFor()
   await waitForDocumentEditor(app, page)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i }).click()
@@ -606,12 +609,12 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
         textOf(await tool('read_document', { path: 'active.md' })),
         'Unsaved MCP draft.',
       )
-      assert.equal(
-        await page
-          .locator('.tiptap')
-          .evaluate((element) => element.editor.commands.undo()),
-        true,
-      )
+      if (t.formattedEngine === 'tiptap')
+        assert.equal(
+          await rich.evaluate((element) => element.editor.commands.undo()),
+          true,
+        )
+      else await rich.press('ControlOrMeta+z')
       await waitForAppState(
         page,
         async () =>

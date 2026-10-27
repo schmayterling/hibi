@@ -44,6 +44,7 @@ import {
   Prec,
   type Text,
   Transaction,
+  type TransactionSpec,
 } from '@codemirror/state'
 import {
   type Command,
@@ -148,6 +149,8 @@ import {
 import { sourceIndentation } from './source-indent'
 import {
   createSourceSession,
+  editSpec,
+  failedEditGuard,
   failingParts,
   sourceEditorTextCooperatively,
   sourceEditTransaction,
@@ -197,6 +200,18 @@ type EditorFeature = (SourceExtension | FormattedExtension) & {
 }
 type InstalledFeature = { feature: EditorFeature; extension: Extension }
 
+/** Input does not wait for features this editor removed after they failed to leave. */
+const installedFor = (
+  installed: readonly EditorFeature[],
+  wanted: readonly EditorFeature[],
+  failed: WeakSet<EditorFeature>,
+) =>
+  installed === wanted ||
+  (wanted.every((feature) => installed.includes(feature)) &&
+    installed.every(
+      (feature) => wanted.includes(feature) || failed.has(feature),
+    ))
+
 const featureExtensions = (
   installed: readonly InstalledFeature[],
   formatted: boolean,
@@ -212,14 +227,14 @@ const featureExtensions = (
  */
 function isolateFeatures(
   start: EditorState,
-  transactions: readonly Transaction[],
+  edit: readonly Transaction[] | readonly TransactionSpec[],
   installed: readonly InstalledFeature[],
   compartment: Compartment,
   formatted: boolean,
 ) {
   const failing = failingParts(
     start,
-    transactions,
+    edit,
     installed.filter(({ feature }) => feature.fail),
     (kept) =>
       compartment.reconfigure(
@@ -390,10 +405,15 @@ export function SourceEditor({
   const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
     typeof createSourceSession
   > | null>(null)
+  const failedFeatures = useRef(new WeakSet<EditorFeature>())
   const inputReady =
     preparedText?.bridge === bridge &&
     installedExtensions?.bridge === bridge &&
-    installedExtensions.extensions === sourceExtensions &&
+    installedFor(
+      installedExtensions.extensions,
+      sourceExtensions,
+      failedFeatures.current,
+    ) &&
     languageReady &&
     !echoError
   const editContext = useRef({
@@ -1340,6 +1360,50 @@ export function SourceEditor({
       return true
     }
     installed.current = []
+    /**
+     * Rejects input that failed, with the features named that it failed with.
+     * The DOM may still show what it left out; an update could fail again, so
+     * setState draws the state as it is.
+     */
+    const reject = (
+      view: EditorView,
+      error: unknown,
+      edit?: readonly Transaction[] | readonly TransactionSpec[],
+    ) => {
+      setInputError(error instanceof Error ? error.message : String(error))
+      const kept = edit
+        ? isolateFeatures(
+            view.state,
+            edit,
+            installed.current,
+            addons.current,
+            formatted,
+          )
+        : installed.current
+      for (const { feature } of installed.current)
+        if (!kept.some((part) => part.feature === feature))
+          failedFeatures.current.add(feature)
+      if (!view.compositionStarted) {
+        view.setState(view.state)
+        return
+      }
+      // A composition must keep the note's text: CodeMirror redraws text that
+      // differs, which ends the composition, and the IME then starts over
+      // beside it. Without the features named, the edit is made again.
+      if (!edit || kept.length === installed.current.length) return
+      installed.current = kept
+      const reinstall = addons.current.reconfigure(
+        featureExtensions(kept, formatted),
+      )
+      view.dispatch(
+        ...edit.map((part, index) => {
+          const spec = part instanceof Transaction ? editSpec(part) : part
+          return index
+            ? { ...spec, sequential: true }
+            : { ...spec, effects: [reinstall].concat(spec.effects ?? []) }
+        }),
+      )
+    }
     const editor = new EditorView({
       parent: host.current,
       ...(place
@@ -1353,22 +1417,21 @@ export function SourceEditor({
       dispatchTransactions(transactions, editor) {
         try {
           bridge.dispatch(transactions, editor, exactChanges.current)
-          setInputError('')
-        } catch (error) {
-          setInputError(error instanceof Error ? error.message : String(error))
+          // Only the user's next action clears a failure, not the view's own.
           if (
-            transactions.some((transaction) => !transactionState(transaction))
-          )
-            isolateFeatures(
-              editor.state,
-              transactions,
-              installed.current,
-              addons.current,
-              formatted,
+            transactions.some((transaction) =>
+              transaction.annotation(Transaction.userEvent),
             )
-          // The DOM may still show input the edit left out. An update could
-          // fail again; setState draws the state as it is.
-          editor.setState(editor.state)
+          )
+            setInputError('')
+        } catch (error) {
+          reject(
+            editor,
+            error,
+            transactions.some((transaction) => !transactionState(transaction))
+              ? transactions
+              : undefined,
+          )
         }
       },
       state: EditorState.create({
@@ -1710,9 +1773,46 @@ export function SourceEditor({
               requestFind()
             }
           }),
+          failedEditGuard,
         ],
       }),
     })
+    // A filter or extender may also fail while a transaction is made, before
+    // dispatch: from specs here, and from typing CodeMirror reads in the
+    // DOM observer (internal to CodeMirror). That input is rejected too.
+    const dispatch = editor.dispatch.bind(editor) as (
+      ...input: unknown[]
+    ) => void
+    editor.dispatch = ((...input: unknown[]) => {
+      if (
+        input.some(
+          (value) => value instanceof Transaction || Array.isArray(value),
+        )
+      )
+        return dispatch(...input)
+      let transaction: Transaction
+      try {
+        transaction = editor.state.update(...(input as TransactionSpec[]))
+      } catch (error) {
+        reject(editor, error, input as TransactionSpec[])
+        return
+      }
+      dispatch(transaction)
+    }) as EditorView['dispatch']
+    const observer = (
+      editor as unknown as {
+        observer: { flush: (readSelection?: boolean) => boolean }
+      }
+    ).observer
+    const flush = observer.flush.bind(observer)
+    observer.flush = (readSelection) => {
+      try {
+        return flush(readSelection)
+      } catch (error) {
+        reject(editor, error)
+        return true
+      }
+    }
     view.current = editor
     setMountedView(editor)
     const detachSession = bridge.attach(editor, (error) =>

@@ -656,9 +656,39 @@ export function useAddons(
         addonId: string
         presentation: 'source' | 'formatted'
         fail?: (error: unknown) => void
+        drop?: () => void
       }
     >(),
   ).current
+  /** Editor features that failed in any window, with their addons, until those are turned off. */
+  const failedFeatures = useRef(new Map<string, string>()).current
+  const featureFailures = useRef<BroadcastChannel | null>(null)
+  useEffect(() => {
+    const channel = new BroadcastChannel('hibi-editor-feature-failures')
+    featureFailures.current = channel
+    channel.onmessage = ({ data }: MessageEvent<unknown>) => {
+      // A window that opens later asks for the failures so far.
+      if (data === null) {
+        for (const [key, addonId] of failedFeatures)
+          channel.postMessage({ key, addonId })
+        return
+      }
+      const { key, addonId } = (data ?? {}) as Record<string, unknown>
+      if (typeof key !== 'string' || typeof addonId !== 'string') return
+      failedFeatures.set(key, addonId)
+      sources.get(key)?.drop?.()
+    }
+    channel.postMessage(null)
+    return () => {
+      featureFailures.current = null
+      channel.close()
+    }
+  }, [failedFeatures, sources])
+  useEffect(() => {
+    for (const [key, addonId] of failedFeatures)
+      if (!states.some((state) => state.id === addonId && state.enabled))
+        failedFeatures.delete(key)
+  }, [failedFeatures, states])
   const [sourceExtensions, setSourceExtensions] = useState<SourceExtension[]>(
     [],
   )
@@ -1098,18 +1128,27 @@ export function useAddons(
             }
           },
           // Input waits for modal editing. Another feature's first failure
-          // removes it from every editor and is reported; later ones are not.
+          // removes it from the editors of every window until the addon is
+          // turned off, and is reported; later ones are not.
           ...(addon.manifest.capabilities?.includes('modalEditing')
             ? {}
             : {
                 fail(error: unknown) {
                   if (disposed || !sources.has(`${presentation}:${key}`)) return
+                  failedFeatures.set(`${presentation}:${key}`, id)
+                  featureFailures.current?.postMessage({
+                    key: `${presentation}:${key}`,
+                    addonId: id,
+                  })
                   remove()
                   latest.current.error(error)
                 },
+                drop: () => remove(),
               }),
         }
         remove = batch.register(`${presentation}:${extension.id}`, () => {
+          if (entry.fail && failedFeatures.has(`${presentation}:${key}`))
+            return () => {}
           sources.set(`${presentation}:${key}`, entry)
           const removeCompatibility =
             presentation === 'formatted'

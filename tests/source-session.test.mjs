@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  Annotation,
   Compartment,
   EditorSelection,
   EditorState,
@@ -10,6 +11,7 @@ import {
 } from '@codemirror/state'
 import {
   createSourceSession,
+  failedEditGuard,
   failingParts,
   sourceEditTransaction,
   transactionState,
@@ -871,6 +873,22 @@ test('an edit an extension fails on names that extension and keeps the others', 
   assert.deepEqual(names(failingParts(start, [pasted], parts, install)), [
     'q: q failed',
   ])
+  // An extension's own annotation is replayed with the edit.
+  const own = Annotation.define()
+  const annotated = {
+    name: 'annotated',
+    extension: failsOn('annotated', (transaction) =>
+      transaction.annotation(own),
+    ),
+  }
+  const command = start.update({
+    changes: { from: 3, insert: 'x' },
+    annotations: own.of(true),
+  })
+  assert.deepEqual(
+    names(failingParts(start, [command], [...parts, annotated], install)),
+    ['annotated: annotated failed'],
+  )
   // Installing alone: a value that is no extension is named.
   const invalid = { name: 'invalid', extension: { not: 'an extension' } }
   const empty = EditorState.create({
@@ -890,6 +908,85 @@ test('an edit an extension fails on names that extension and keeps the others', 
   })
   const baseTyped = base.update({ changes: { from: 3, insert: 'Q' } })
   assert.deepEqual(failingParts(base, [baseTyped], parts, install), [])
+})
+
+test('filters and extenders that read a state never see one an extension failed on', () => {
+  const failing = StateField.define({
+    create: () => 0,
+    update(value, transaction) {
+      if (transaction.newDoc.toString().includes('Q'))
+        throw new Error('field failed')
+      return value
+    },
+  })
+  // An addon's filter and extender that read its own field.
+  const reading = (required) => [
+    failing,
+    EditorState.transactionFilter.of((transaction) => {
+      transaction.state.field(failing, required)
+      return transaction
+    }),
+    EditorState.transactionExtender.of((transaction) => {
+      transaction.state.field(failing, required)
+      return null
+    }),
+  ]
+  const feature = reading(true)
+  const typedQ = { changes: { from: 3, insert: 'Q' }, userEvent: 'input.type' }
+  // Without the guard, the failure escapes while the edit is made: first from
+  // the filter, then, once a read has swallowed it, from the half-built state.
+  const reader = EditorState.transactionExtender.of((transaction) => {
+    transactionState(transaction)
+    return null
+  })
+  for (const extensions of [feature, [failing, feature[2], reader]])
+    assert.throws(
+      () => EditorState.create({ doc: 'end', extensions }).update(typedQ),
+      extensions === feature ? /field failed/ : /Cyclic dependency/,
+    )
+  const compartment = new Compartment()
+  const install = (kept) =>
+    compartment.reconfigure(kept.map(({ extension }) => extension))
+  const names = (start, edit, parts) =>
+    failingParts(start, edit, parts, install).map(
+      ({ part, error }) => `${part.name}: ${error.message}`,
+    )
+  for (const required of [true, false]) {
+    const extension = reading(required)
+    const start = EditorState.create({
+      doc: 'end',
+      extensions: [compartment.of(extension), failedEditGuard],
+    })
+    const typed = start.update(typedQ)
+    assert.equal(typed.docChanged, false)
+    assert.equal(transactionState(typed), null)
+    // Leaving out a feature runs its extender, which may require its field:
+    // then it cannot be named and the edit is only rejected.
+    assert.deepEqual(
+      names(start, [typed], [{ name: 'feature', extension }]),
+      required ? [] : ['feature: field failed'],
+    )
+    const typedB = start.update({ changes: { from: 3, insert: 'b' } })
+    assert.equal(transactionState(typedB)?.doc.toString(), 'endb')
+  }
+  // A transaction an extender fails to make is replayed from its specs.
+  const extending = [
+    EditorState.transactionExtender.of((transaction) => {
+      if (transaction.newDoc.toString().includes('Z'))
+        throw new Error('extender failed')
+      return null
+    }),
+  ]
+  const typedZ = { changes: { from: 3, insert: 'Z' } }
+  const made = EditorState.create({
+    doc: 'end',
+    extensions: [compartment.of(extending), failedEditGuard],
+  })
+  assert.throws(() => made.update(typedZ), /extender failed/)
+  assert.deepEqual(
+    names(made, [typedZ], [{ name: 'extending', extension: extending }]),
+    ['extending: extender failed'],
+  )
 })
 
 test('an edit an extension fails on reaches neither the session nor the view', () => {

@@ -435,6 +435,31 @@ test('incidental copy-marker text does not bypass html conversion', {
   await settled(note)
 })
 
+test('html in a native clipboard envelope pastes only its fragment, in its context', {
+  timeout: 30000,
+}, async () => {
+  const end = note.length
+  // Multibyte text before and inside the fragment markers.
+  for (const [fragment, expected] of [
+    [
+      '<p>outside é</p><ul><li>outside 😀</li><!--StartFragment--><li>in é</li><li>中 😀</li><!--EndFragment--><li>after</li></ul><p>after 😀</p>',
+      '- in é\n- 中 😀',
+    ],
+    [
+      '<p>before é <!--StartFragment--><strong>bold</strong> 中 😀<!--EndFragment--> after</p>',
+      '**bold** 中 😀',
+    ],
+  ]) {
+    await clipboardEvent('paste', end, end, {
+      'text/html': `<html>\r\n<head><meta charset="utf-8"></head>\r\n<body>\r\n${fragment}\r\n</body>\r\n</html>`,
+      'text/plain': 'ignored',
+    })
+    await settled(note + expected)
+    await undo()
+    await settled(note)
+  }
+})
+
 test('large html pastes convert without losing their text', {
   timeout: 60000,
 }, async () => {

@@ -296,9 +296,34 @@ function table(element: Element): string {
   ].join('\n')
 }
 
+/**
+ * Keep only the selection of clipboard HTML. Native clipboards can wrap it in
+ * a page whose `StartFragment` and `EndFragment` comments mark it: what lies
+ * outside them goes, and the elements around them stay as its context.
+ */
+function cropToFragment(body: HTMLElement) {
+  const comments = body.ownerDocument.createTreeWalker(
+    body,
+    NodeFilter.SHOW_COMMENT,
+  )
+  let start: Node | null = null
+  for (let node = comments.nextNode(); node; node = comments.nextNode()) {
+    if (!start) {
+      if (/^StartFragment$/i.test(node.nodeValue ?? '')) start = node
+    } else if (/^EndFragment$/i.test(node.nodeValue ?? '')) {
+      for (let at: Node | null = start; at && at !== body; at = at.parentNode)
+        while (at.previousSibling) at.previousSibling.remove()
+      for (let at: Node | null = node; at && at !== body; at = at.parentNode)
+        while (at.nextSibling) at.nextSibling.remove()
+      return
+    }
+  }
+}
+
 /** Markdown for pasted HTML. */
 export function htmlToMarkdown(html: string, original?: string) {
   const document = new DOMParser().parseFromString(html, 'text/html')
+  cropToFragment(document.body)
   if (
     original !== undefined &&
     document.body.firstElementChild?.hasAttribute('data-hibi-markdown')

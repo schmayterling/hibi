@@ -239,20 +239,30 @@ const sample = (target, selectors, title) =>
       const pane = root.getBoundingClientRect()
       const textBox = (element, text) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const index = node.data.indexOf(text)
-          if (index < 0) continue
-          const range = document.createRange()
-          range.setStart(node, index)
-          range.setEnd(node, index + text.length)
-          const box = range.getBoundingClientRect()
-          return {
-            left: box.left - pane.left,
-            top: box.top - pane.top,
-            height: box.height,
+        const nodes = []
+        for (let node = walker.nextNode(); node; node = walker.nextNode())
+          nodes.push(node)
+        const index = nodes
+          .map((node) => node.data)
+          .join('')
+          .indexOf(text)
+        if (index < 0) return null
+        const point = (offset) => {
+          for (const node of nodes) {
+            if (offset <= node.length) return [node, offset]
+            offset -= node.length
           }
         }
-        return null
+        const range = document.createRange()
+        range.setStart(...point(index))
+        range.setEnd(...point(index + text.length))
+        const box = range.getBoundingClientRect()
+        return {
+          width: box.width,
+          left: box.left - pane.left,
+          top: box.top - pane.top,
+          height: box.height,
+        }
       }
       return Object.fromEntries(
         Object.entries(selectors).map(([key, { selector, text }]) => {
@@ -264,6 +274,8 @@ const sample = (target, selectors, title) =>
           return [
             key,
             {
+              fontKerning: style.fontKerning,
+              textRendering: style.textRendering,
               fontFamily: style.fontFamily,
               fontSize: style.fontSize,
               fontWeight: style.fontWeight,
@@ -272,8 +284,7 @@ const sample = (target, selectors, title) =>
               backgroundColor: style.backgroundColor,
               textDecorationLine: style.textDecorationLine,
               letterSpacing: style.letterSpacing,
-              // Highlighting splits text into spans; the first word is one text node.
-              box: textBox(element, text.split(' ')[0]),
+              box: textBox(element, text),
             },
           ]
         }),
@@ -320,6 +331,24 @@ const formatted = {
   closing: { selector: '.cm-line', text: 'Closing paragraph' },
   after: { selector: '.cm-line', text: 'After the rule' },
 }
+
+const captureState = (pane) =>
+  pane.evaluate((pane) => {
+    const { x, y, width, height } = pane.getBoundingClientRect()
+    return {
+      viewport: [innerWidth, innerHeight],
+      dpr: devicePixelRatio,
+      visual: [
+        visualViewport.offsetLeft,
+        visualViewport.offsetTop,
+        visualViewport.scale,
+      ],
+      pane: { x, y, width, height },
+      scroll: [pane.scrollLeft, pane.scrollTop],
+      range: [pane.clientHeight, pane.scrollHeight],
+      fonts: document.fonts.status,
+    }
+  })
 
 /** Compare a note in the rich view and the formatted view: styles, text positions and pixels. */
 async function parity(title, doc, rich, formatted, name) {
@@ -383,7 +412,7 @@ async function parity(title, doc, rich, formatted, name) {
     for (const key of Object.keys(rich)) {
       const a = before[key],
         b = after[key]
-      assert.ok(a && b, `${key}: ${JSON.stringify({ a, b })}`)
+      assert.ok(a?.box && b?.box, `${key}: ${JSON.stringify({ a, b })}`)
       for (const property of [
         'fontFamily',
         'fontSize',
@@ -398,8 +427,12 @@ async function parity(title, doc, rich, formatted, name) {
         key,
         dx: Math.round((b.box.left - a.box.left) * 10) / 10,
         dy: Math.round((b.box.top - a.box.top) * 10) / 10,
+        dw: Math.round((b.box.width - a.box.width) * 10) / 10,
+        dh: Math.round((b.box.height - a.box.height) * 10) / 10,
       })
     }
+    const panes = [richPane, harness.locator('.rich-pane')]
+    const beforeCapture = await Promise.all(panes.map(captureState))
     const images = [
       await richPane.screenshot({
         path: `test-results/live-preview-${name}-rich-${id}.png`,
@@ -408,58 +441,136 @@ async function parity(title, doc, rich, formatted, name) {
         path: `test-results/live-preview-${name}-formatted-${id}.png`,
       }),
     ].map((image) => image.toString('base64'))
-    const { difference, box } = await app.evaluate(
-      ({ nativeImage }, images) => {
+    const afterCapture = await Promise.all(panes.map(captureState))
+    const { difference, box, diagnostic } = await app.evaluate(
+      async (
+        { nativeImage, BrowserWindow },
+        { images, beforeCapture, boxes },
+      ) => {
         const [a, b] = images.map((image) =>
           nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
         )
-        const size = a.getSize()
-        const other = b.getSize()
-        if (size.width !== other.width || size.height !== other.height)
-          return { difference: 1, box: [size, other] }
-        const left = a.toBitmap(),
-          right = b.toBitmap()
-        let changed = 0,
-          box = null
-        for (let i = 0; i < left.length; i += 4)
-          if (
-            Math.abs(left[i] - right[i]) > 8 ||
-            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-            Math.abs(left[i + 2] - right[i + 2]) > 8
-          ) {
-            changed++
-            const x = (i / 4) % size.width,
-              y = Math.floor(i / 4 / size.width)
-            box = box
-              ? [
-                  Math.min(box[0], x),
-                  Math.min(box[1], y),
-                  Math.max(box[2], x),
-                  Math.max(box[3], y),
-                ]
-              : [x, y, x, y]
+        const compare = (a, b) => {
+          const size = a.getSize()
+          const other = b.getSize()
+          if (size.width !== other.width || size.height !== other.height)
+            return { difference: 1, box: [size, other] }
+          const left = a.toBitmap(),
+            right = b.toBitmap()
+          let changed = 0,
+            box = null
+          for (let i = 0; i < left.length; i += 4)
+            if (
+              Math.abs(left[i] - right[i]) > 8 ||
+              Math.abs(left[i + 1] - right[i + 1]) > 8 ||
+              Math.abs(left[i + 2] - right[i + 2]) > 8
+            ) {
+              changed++
+              const x = (i / 4) % size.width,
+                y = Math.floor(i / 4 / size.width)
+              box = box
+                ? [
+                    Math.min(box[0], x),
+                    Math.min(box[1], y),
+                    Math.max(box[2], x),
+                    Math.max(box[3], y),
+                  ]
+                : [x, y, x, y]
+            }
+          return { difference: changed / (left.length / 4), box }
+        }
+        const result = compare(a, b)
+        if (result.difference >= 0.002) {
+          try {
+            const windows = BrowserWindow.getAllWindows()
+            const targets = [
+              windows.find(
+                (window) =>
+                  !window.webContents.getURL().endsWith('/bundle/index.html'),
+              ),
+              windows.find((window) =>
+                window.webContents.getURL().endsWith('/bundle/index.html'),
+              ),
+            ]
+            const native = []
+            for (const [index, window] of targets.entries()) {
+              const rect = beforeCapture[index].pane
+              const image = await window.webContents.capturePage(
+                {
+                  x: Math.floor(rect.x),
+                  y: Math.floor(rect.y),
+                  width: Math.ceil(rect.width),
+                  height: Math.ceil(rect.height),
+                },
+                { stayHidden: true },
+              )
+              native.push(nativeImage.createFromBuffer(image.toPNG()))
+            }
+            result.diagnostic = {
+              native: compare(native[0], native[1]),
+              nativePngSizes: native.map((image) => image.getSize()),
+              sameWindow: {
+                rich: compare(a, native[0]),
+                formatted: compare(b, native[1]),
+              },
+            }
+          } catch (error) {
+            result.diagnostic = { error: String(error) }
           }
-        return { difference: changed / (left.length / 4), box }
+          result.diagnostic.pngSizes = [a.getSize(), b.getSize()]
+          result.diagnostic.runtime = {
+            electron: process.versions.electron,
+            chrome: process.versions.chrome,
+            platform: process.platform,
+          }
+          result.diagnostic.glyphs = [a, b].map((image, index) => {
+            const scale =
+              image.getSize().width / beforeCapture[index].pane.width
+            const x = Math.floor(boxes[index].left * scale)
+            const y = Math.floor(boxes[index].top * scale)
+            const crop = { x, y, width: 64, height: 32 }
+            return { crop, png: image.crop(crop).toPNG().toString('base64') }
+          })
+        }
+        return result
       },
-      images,
+      { images, beforeCapture, boxes: [before.title.box, after.title.box] },
     )
+    if (diagnostic)
+      console.log(
+        JSON.stringify({
+          id,
+          key: 'capture',
+          beforeCapture,
+          afterCapture,
+          text: { rich: before.title, formatted: after.title },
+          geometry: Object.fromEntries(
+            Object.keys(before).map((key) => [
+              key,
+              { rich: before[key].box, formatted: after[key].box },
+            ]),
+          ),
+          ...diagnostic,
+        }),
+      )
     // Where the screenshots differ, in their pixels: left, top, right, bottom.
     report.push({ id, key: 'pixels', difference, box })
   }
   console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
-  // The same text at the same positions renders the same pixels; a failure
-  // reports the text positions too.
+  // keep the pixel gate strict; failures also report full phrase bounds.
   for (const { id, key, difference } of report)
     if (key === 'pixels')
       assert.ok(
         difference < 0.002,
         `${id}: ${difference} ${JSON.stringify(report)}`,
       )
-  // Text positions match the rich view within a pixel.
+  // full phrase bounds match the rich view within a pixel.
   const offsets = report.filter(
     (entry) =>
       entry.key !== 'pixels' &&
-      (Math.abs(entry.dx) > 1 || Math.abs(entry.dy) > 1),
+      [entry.dx, entry.dy, entry.dw, entry.dh].some(
+        (value) => Math.abs(value) > 1,
+      ),
   )
   assert.deepEqual(offsets, [], JSON.stringify(report))
 }

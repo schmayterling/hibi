@@ -197,7 +197,10 @@ function syntaxField(options: FormattedSyntaxOptions) {
       if (tree)
         return {
           tree,
-          retained,
+          retained:
+            unindexedFrom(tree) === null
+              ? TreeFragment.addTree(tree)
+              : retained,
           demand,
           prefix,
           complete: !uncovered(tree, demand.from, demand.to),

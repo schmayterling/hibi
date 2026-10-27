@@ -868,6 +868,66 @@ test('a 50 MiB note renders and edits with viewport-bounded work', {
   }
 })
 
+test('after an idle moment, scrolling near the viewport parses nothing in its frames', {
+  timeout: 90000,
+}, async () => {
+  // The paired benchmark's 575 kb prose: 100,000 words in paragraphs of 20.
+  const words =
+    'alpha beta gamma delta epsilon zeta eta theta iota kappa'.split(' ')
+  const doc = Array.from(
+    { length: 100000 },
+    (_, i) => `${i ? (i % 20 === 0 ? '\n\n' : ' ') : ''}${words[i % 10]}`,
+  ).join('')
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    // Earlier cases leave the pane scrolled; this note opens at its start.
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 1200, height: 800 })
+    const view = preview.view()
+    preview.reset()
+    // Quiet once long idle periods pass without parse progress. Text ahead
+    // is parsed meanwhile, and the viewport never shows unparsed text.
+    let unparsedViewport = 0,
+      calm = 0,
+      last = ''
+    while (calm < 3) {
+      const remaining = await new Promise((resolve) =>
+        requestIdleCallback((deadline) => resolve(deadline.timeRemaining())),
+      )
+      if (!preview.covered(view.viewport.from, view.viewport.to))
+        unparsedViewport++
+      const progress = JSON.stringify(preview.probe)
+      calm = remaining >= 40 && progress === last ? calm + 1 : 0
+      last = progress
+    }
+    const ahead = { ...preview.probe }
+    preview.reset()
+    // 3600 px over twelve frames, as the paired benchmark scrolls.
+    for (let frame = 1; frame <= 12; frame++) {
+      pane.scrollTop = frame * 300
+      await new Promise(requestAnimationFrame)
+    }
+    await preview.settle()
+    return {
+      length: view.state.doc.length,
+      scrolled: pane.scrollTop,
+      unparsedViewport,
+      ahead,
+      scroll: { ...preview.probe },
+    }
+  }, doc)
+  console.log(JSON.stringify(result))
+  assert.equal(result.scrolled, 3600, JSON.stringify(result))
+  assert.equal(result.unparsedViewport, 0, JSON.stringify(result))
+  // Idle-time parsing covers a bounded window around the viewport, not the note.
+  assert.ok(result.ahead.parsedUnits <= 24 * 4096, JSON.stringify(result))
+  assert.ok(result.length > 4 * 24 * 4096)
+  assert.equal(result.scroll.parsedChunks, 0, JSON.stringify(result))
+  assert.equal(result.scroll.parsedUnits, 0, JSON.stringify(result))
+  assert.equal(result.scroll.scannedUnits, 0, JSON.stringify(result))
+})
+
 test('links whose destination spans lines render on one line while mounting and scrolling', {
   timeout: 90000,
 }, async () => {

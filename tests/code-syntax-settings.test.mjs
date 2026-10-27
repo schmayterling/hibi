@@ -86,6 +86,27 @@ test('code highlighting controls update both panes, persist, and discover addon 
   await page
     .locator('.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword')
     .waitFor()
+    .catch(async (error) => {
+      t.diagnostic(
+        JSON.stringify(
+          await page.evaluate(() => ({
+            mode: document.querySelector('.editor-panes')?.className,
+            blocks: document.querySelectorAll('.rich-pane .hibi-lp-codeblock')
+              .length,
+            keywords: document.querySelectorAll(
+              '.rich-pane .hibi-token-keyword',
+            ).length,
+            firstCode: document
+              .querySelector('.rich-pane .hibi-lp-codeblock')
+              ?.outerHTML.slice(0, 400),
+            prefix: document
+              .querySelector('.rich-pane .cm-content')
+              ?.cmTile.root.view.state.sliceDoc(0, 128),
+          })),
+        ),
+      )
+      throw error
+    })
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
@@ -131,7 +152,7 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     })
     .waitFor()
   const tokens = page.locator(
-    '.rich-pane :is(pre, .hibi-lp-codeblock) [class^="hibi-token-"]',
+    '.rich-pane :is(pre, .hibi-lp-codeblock) [class*="hibi-token-"]',
   )
   await tokens.first().waitFor({ state: 'attached' })
   // The block has about 40,000 tokens; only text near the viewport is decorated.
@@ -155,7 +176,7 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
       cm ? '.rich-pane .hibi-lp-codeblock-last' : '.tiptap pre',
     )
     if (!pre) return false
-    const last = [...pre.querySelectorAll('[class^="hibi-token-"]')].at(-1)
+    const last = [...pre.querySelectorAll('[class*="hibi-token-"]')].at(-1)
     return (
       last &&
       pre.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom <
@@ -167,17 +188,22 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   await page.keyboard.press('End')
   await page.keyboard.press('Enter')
   await page.keyboard.insertText('const typed = 1')
-  await page.waitForFunction(() =>
-    [
-      ...document.querySelectorAll(
-        '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
+  await page.waitForFunction(
+    (cm) =>
+      [
+        ...document.querySelectorAll(
+          '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
+        ),
+      ].some(
+        (token) =>
+          token.textContent === 'const' &&
+          (cm
+            ? token.closest('.cm-line')?.textContent.trim() ===
+              'const typed = 1'
+            : token.nextSibling?.textContent === ' ' &&
+              token.nextSibling.nextSibling?.textContent === 'typed'),
       ),
-    ].some(
-      (token) =>
-        token.textContent === 'const' &&
-        token.nextSibling?.textContent === ' ' &&
-        token.nextSibling.nextSibling?.textContent === 'typed',
-    ),
+    cm,
   )
   // Long lines scroll inside the block; highlighting follows both axes.
   const wide = join(profile, 'wide-code.md')
@@ -216,7 +242,7 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
           const box = pre.getBoundingClientRect()
           const pane = pre.closest('.rich-pane').getBoundingClientRect()
           const shown = [
-            ...pre.querySelectorAll('[class^="hibi-token-"]'),
+            ...pre.querySelectorAll('[class*="hibi-token-"]'),
           ].some((token) => {
             const rect = token.getBoundingClientRect()
             return (
@@ -345,7 +371,7 @@ test('rich highlighting waits while source mode hides it, and long lines stay wi
       ),
     )
   const tokens = page.locator(
-    '.rich-pane :is(pre, .hibi-lp-codeblock) [class^="hibi-token-"]',
+    '.rich-pane :is(pre, .hibi-lp-codeblock) [class*="hibi-token-"]',
   )
   await tokens.first().waitFor({ state: 'attached' })
   assert.ok((await tokens.count()) < 1000, 'the line is windowed')
@@ -408,7 +434,7 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
         markdown,
       )
     await page
-      .locator('.rich-pane :is(pre, .hibi-lp-codeblock) [class^="hibi-token-"]')
+      .locator('.rich-pane :is(pre, .hibi-lp-codeblock) [class*="hibi-token-"]')
       .first()
       .waitFor({ state: 'attached' })
     const block = page.locator(cm ? '.rich-pane' : '.tiptap pre')
@@ -427,7 +453,7 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
             const box = pre.getBoundingClientRect()
             const pane = pre.closest('.rich-pane').getBoundingClientRect()
             const shown = [
-              ...pre.querySelectorAll('[class^="hibi-token-"]'),
+              ...pre.querySelectorAll('[class*="hibi-token-"]'),
             ].some((token) => {
               const rect = token.getBoundingClientRect()
               return (

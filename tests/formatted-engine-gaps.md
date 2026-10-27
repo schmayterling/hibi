@@ -117,14 +117,10 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | marker-006 | [markdown-markers.test.mjs:785](markdown-markers.test.mjs#L785) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
 | split-013 | [markdown-markers.test.mjs:850](markdown-markers.test.mjs#L850) | read-only split formatting must hide editable markers | 3: read-only access and shared history guards |
 | corpus-002 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | gfm tables and alerts must report native formatted character counts | 9: outline semantics and diagram lifecycle |
-| corpus-004 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | forward definitions must resolve formatted labels without showing definitions | 9: outline semantics and diagram lifecycle |
-| corpus-007 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | formatted grapheme character counts must match native counts | 9: outline semantics and diagram lifecycle |
-| corpus-008 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | multiline reference titles must hide and avoid false headings | 9: outline semantics and diagram lifecycle |
-| corpus-011 | [markdown-semantics-native.test.mjs:106](markdown-semantics-native.test.mjs#L106) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
-| corpus-012 | [markdown-semantics-native.test.mjs:108](markdown-semantics-native.test.mjs#L108) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
-| corpus-014 | [markdown-semantics-native.test.mjs:110](markdown-semantics-native.test.mjs#L110) | disabled heading syntax must hide forward reference definitions | 9: outline semantics and diagram lifecycle |
-| corpus-017 | [markdown-semantics-native.test.mjs:112](markdown-semantics-native.test.mjs#L112) | disabled heading syntax must preserve native grapheme character counts | 9: outline semantics and diagram lifecycle |
-| corpus-018 | [markdown-semantics-native.test.mjs:114](markdown-semantics-native.test.mjs#L114) | disabled heading syntax must hide multiline reference titles | 9: outline semantics and diagram lifecycle |
+| corpus-007 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | formatted grapheme character counts must match native counts | 9: outline semantics and diagram lifecycle |
+| corpus-011 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
+| corpus-012 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
+| corpus-017 | [markdown-semantics-native.test.mjs:106](markdown-semantics-native.test.mjs#L106) | disabled heading syntax must preserve native grapheme character counts | 9: outline semantics and diagram lifecycle |
 | split-012 | [markdown-syntax.test.mjs:163](markdown-syntax.test.mjs#L163) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | math-001 | [math-rendering.test.mjs:626](math-rendering.test.mjs#L626) | tall formula rendering must preserve the reading position | 8b: hidden markers and math caret placement |
 | split-005 | [motion.test.mjs:223](motion.test.mjs#L223) | split formatted view must remain read-only without an input caret | 3: read-only access and shared history guards |
@@ -151,3 +147,14 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | split-011 | [split-preview-ime.test.mjs:491](split-preview-ime.test.mjs#L491) | split formatted view must remain read-only during native composition | 3: read-only access and shared history guards |
 | split-017 | [split-preview-ime.test.mjs:575](split-preview-ime.test.mjs#L575) | composition in a read-only split preview must preserve source and content version | 3: read-only access and shared history guards |
 | split-014 | [typst.test.mjs:432](typst.test.mjs#L432) | split formatted view must remain read-only | 3: read-only access and shared history guards |
+
+## accepted differences
+
+these are not gaps: each engine asserts its own outcome, the rich view keeping its frozen native result.
+
+| test file:line | difference | reason |
+| --- | --- | --- |
+| [markdown-semantics-native.test.mjs:116](markdown-semantics-native.test.mjs#L116) | a reference in a `-# ` subtext line resolves against a definition later in the note (was corpus-004) | the native schema reads subtext text before later definitions exist, so tiptap, export and word count leave it literal; the formatted view resolves it like any other reference |
+| [markdown-semantics-native.test.mjs:117](markdown-semantics-native.test.mjs#L117) | the same with heading syntax off (was corpus-014) | as above |
+| [markdown-semantics-native.test.mjs:118](markdown-semantics-native.test.mjs#L118) | a definition whose double-quoted title holds a blank line stays visible text and the `# ` line inside that title a heading (was corpus-008) | CommonMark titles cannot contain a blank line; marked accepts one. the formatted view follows CommonMark |
+| [markdown-semantics-native.test.mjs:122](markdown-semantics-native.test.mjs#L122) | the same with heading syntax off (was corpus-018) | as above |

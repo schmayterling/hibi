@@ -262,13 +262,15 @@ test('split panes align corresponding carets in both directions without feedback
     markdown,
   )
   if (cm) {
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    const before = await page.evaluate(() => window.hibi.getDocument())
     await page.keyboard.insertText('x')
     await page.evaluate(() => window.hibi.flushDocumentChanges())
-    const typed = (await page.evaluate(() => window.hibi.getDocument()))
-      .markdown
-    // Typing in the codemirror split pane edits the source, and undo takes it back.
-    assert.equal(typed.length, markdown.length + 1)
-    assert.equal(typed.replace('x', ''), markdown)
+    const typed = await page.evaluate(() => window.hibi.getDocument())
+    // Typing in the codemirror split pane makes one source edit, and undo takes it back.
+    assert.equal(typed.markdown.length, markdown.length + 1)
+    assert.equal(typed.markdown.replace('x', ''), markdown)
+    assert.equal(typed.contentVersion, before.contentVersion + 1)
     await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
     await waitForAsync(
       page,

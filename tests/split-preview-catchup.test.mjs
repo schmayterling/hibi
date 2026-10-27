@@ -574,12 +574,14 @@ test('codemirror: editable split preserves catch-up, save, mapped selections and
     view.dispatch({ selection: { anchor: view.state.doc.length } })
     view.focus()
   })
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  const beforeTyping = await page.evaluate(() => window.hibi.getDocument())
   await page.keyboard.insertText('!')
   await page.evaluate(() => window.hibi.flushDocumentChanges())
-  const splitTyped = (await page.evaluate(() => window.hibi.getDocument()))
-    .markdown
-  // Typing in the codemirror split pane edits the source, and undo takes it back.
-  assert.equal(splitTyped, `${later}!`)
+  const splitTyped = await page.evaluate(() => window.hibi.getDocument())
+  // Typing in the codemirror split pane makes one source edit, and undo takes it back.
+  assert.equal(splitTyped.markdown, `${later}!`)
+  assert.equal(splitTyped.contentVersion, beforeTyping.contentVersion + 1)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await pressShortcut(app, `${mod}+z`)
   await expectSource(later)

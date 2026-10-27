@@ -53,6 +53,10 @@ export function formattedLiteralEdits(
     }
     if (!block) {
       const indexed = boundaryWindow(tree, from, to)
+      if (indexed === 'building') {
+        pending = true
+        return
+      }
       if (indexed?.opaque) {
         valid = false
         return
@@ -60,7 +64,7 @@ export function formattedLiteralEdits(
       block = indexed
     }
     if (!block) {
-      pending = true
+      valid = false
       return
     }
     blocks.set(block.from, block)

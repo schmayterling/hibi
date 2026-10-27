@@ -2519,12 +2519,14 @@ export function boundaryWindow(tree: Tree, from: number, to: number) {
   const index = Math.max(0, childBefore(group, from - groupFrom))
   const chunk = group.children[index] as Tree | undefined
   const info = chunk?.prop(chunkInfo)
-  if (!chunk || info?.kind === 'tail') return null
+  if (info?.kind === 'tail') return 'building' as const
+  if (!chunk || !info) return null
   const start = groupFrom + group.positions[index]!
   const opaque =
     info?.kind === 'giant' &&
     info.block.leaf &&
-    info.block.opaque &&
+    (info.block.opaque ||
+      /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(info.block.key ?? '')) &&
     info.block.key !== 'Table'
   return to <= start + chunk.length
     ? { from: start, to: start + chunk.length, opaque }

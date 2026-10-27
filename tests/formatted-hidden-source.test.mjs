@@ -163,9 +163,6 @@ test("a large note's source view comes back with its selection and scroll, mappe
   await sourceShown(page)
   await t.test(
     'source view restores its unchanged selection and scroll',
-    {
-      todo: 'formatted gap release-001: reopening source must restore its saved scroll position',
-    },
     async () => {
       assert.deepEqual(await place(page), before)
     },
@@ -184,9 +181,6 @@ test("a large note's source view comes back with its selection and scroll, mappe
   await sourceShown(page)
   await t.test(
     'source view maps selection and scroll through a formatted edit',
-    {
-      todo: 'formatted gap release-002: formatted edits must map the saved source scroll position',
-    },
     async () => {
       assert.deepEqual(await place(page), {
         anchor: before.anchor + 2,

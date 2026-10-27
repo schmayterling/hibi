@@ -74,7 +74,9 @@ export function useEditorPanes(
       const source = content.current?.querySelector<HTMLElement>(
         '.source-pane .cm-content',
       )
-      if (source !== window.document.activeElement) source?.focus()
+      // The view's scroll position, such as a restored place, stays.
+      if (source !== window.document.activeElement)
+        source?.focus({ preventScroll: true })
       if (source === window.document.activeElement) focusOwner.current = null
     }
   }, [markdownDocument, sourceReady, paneMode, mode, focusOwnedByEditor])

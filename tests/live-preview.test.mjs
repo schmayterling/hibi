@@ -1384,3 +1384,59 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
     )
   }
 })
+
+test('a code language change inside one 50 MiB fence parses only the code on screen', {
+  timeout: 240000,
+}, async () => {
+  // A worker indexing the note is covered in formatted-boundary-worker.
+  await harness.evaluate(async () => {
+    const line = 'const value = 1\n'
+    await window.livePreview.mount(
+      `\`\`\`js\n${line.repeat(Math.ceil((50 * 1024 * 1024) / line.length))}\`\`\`\n\nend\n`,
+      { width: 800, height: 600 },
+      { editable: true },
+    )
+    window.codeKeywords = () =>
+      [
+        ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
+      ].filter((token) => token.textContent === 'const').length
+    const preview = window.livePreview
+    preview.scrollTo(preview.view().state.doc.length - 2048)
+  })
+  await harness.waitForFunction(
+    () =>
+      window.livePreview.view().viewport.from > 40 * 1024 * 1024 &&
+      window.codeKeywords() > 0 &&
+      !window.livePreview.settling(),
+    undefined,
+    { timeout: 90000 },
+  )
+  try {
+    // Turning the language off and on again near the fence's far end keeps
+    // the fence's known bounds: a scan of the lines on screen rather than of
+    // the fence, and at most its window around the screen parses again.
+    for (const enabled of [false, true]) {
+      await harness.evaluate(async (enabled) => {
+        const preview = window.livePreview
+        await preview.settle()
+        preview.reset()
+        preview.setCodeLanguage('javascript', enabled)
+      }, enabled)
+      await harness.waitForFunction(
+        (enabled) =>
+          window.codeKeywords() > 0 === enabled &&
+          !window.livePreview.settling(),
+        enabled,
+      )
+      const result = await harness.evaluate(() => window.livePreview.probe)
+      const label = JSON.stringify({ enabled, ...result })
+      console.log(label)
+      assert.ok(result.scannedUnits <= 16 * 1024, label)
+      assert.ok(result.parsedUnits <= 2 * 64 * 1024, label)
+    }
+  } finally {
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', true),
+    )
+  }
+})

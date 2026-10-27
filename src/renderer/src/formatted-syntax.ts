@@ -3,6 +3,7 @@ import {
   type ChangeDesc,
   type EditorState,
   type Extension,
+  MapMode,
   StateEffect,
   StateField,
 } from '@codemirror/state'
@@ -423,33 +424,42 @@ function syntaxField(options: FormattedSyntaxOptions) {
   return { field, chunkedFor, prefixOf }
 }
 
-/** Fenced code in `ranges` whose nested parse is not its language's current parser. */
-function staleCode(
+/**
+ * Fenced code with text in `ranges`, by start, and the part of each in
+ * `ranges` whose nested parse is not its language's current parser. A fence
+ * without text has nothing to parse, so no parser is mounted on it.
+ */
+function visibleCode(
   state: EditorState,
   tree: Tree,
   ranges: readonly Demand[],
-): Demand[] {
-  const stale: Demand[] = []
-  for (const { from, to } of ranges)
+) {
+  const starts = new Set<number>()
+  const stale: (Demand & { start: number })[] = []
+  for (const range of ranges)
     tree.iterate({
-      from,
-      to,
+      from: range.from,
+      to: range.to,
       mode: IterMode.IgnoreMounts,
       enter(node) {
         if (node.name !== 'FencedCode') return !node.type.is('LeafBlock')
+        if (!node.node.getChild('CodeText')) return false
+        starts.add(node.from)
         const info = node.node.getChild('CodeInfo')
         const parser =
           codeLanguages.resolve(info ? state.sliceDoc(info.from, info.to) : '')
             ?.parser ?? null
-        if (
-          (node.tree?.prop(NodeProp.mounted)?.parser ?? null) !== parser &&
-          stale.at(-1)?.from !== node.from
-        )
-          stale.push({ from: node.from, to: node.to })
+        // Only the part on screen parses again: a giant fence keeps its known bounds.
+        if ((node.tree?.prop(NodeProp.mounted)?.parser ?? null) !== parser)
+          stale.push({
+            start: node.from,
+            from: Math.max(node.from, range.from),
+            to: Math.min(node.to, range.to),
+          })
         return false
       },
     })
-  return stale
+  return { starts, stale }
 }
 
 /** Hidden panes keep their layout, so their visibility comes from the style. */
@@ -485,7 +495,7 @@ function driver(
       private boundaryFrom: number | null = null
       private boundaryTree: BoundaryTree | null = null
       private destroyed = false
-      /** Starts of code blocks refreshed for this code language version. */
+      /** Starts of fences on screen refreshed for this code language version. */
       private refreshed: number[] = []
       private languages = codeLanguages.version()
       private codeQueued = false
@@ -498,8 +508,12 @@ function driver(
       }
       update(update: ViewUpdate) {
         this.followBoundaries(update.changes)
+        // A refreshed fence whose text after its start changed may refresh again.
         if (update.docChanged)
-          this.refreshed = this.refreshed.map((at) => update.changes.mapPos(at))
+          this.refreshed = this.refreshed.flatMap((at) => {
+            const mapped = update.changes.mapPos(at, 1, MapMode.TrackAfter)
+            return mapped === null ? [] : [mapped]
+          })
         if (
           update.viewportChanged ||
           update.state.field(field).tree !== update.startState.field(field).tree
@@ -744,11 +758,12 @@ function driver(
           this.languages = version
           this.refreshed = []
         }
-        const stale = staleCode(
-          view.state,
-          syntax.tree,
-          view.visibleRanges,
-        ).filter(({ from }) => !this.refreshed.includes(from))
+        const code = visibleCode(view.state, syntax.tree, view.visibleRanges)
+        // Only fences on screen keep their attempt; one that returns may try again.
+        this.refreshed = this.refreshed.filter((at) => code.starts.has(at))
+        const stale = code.stale.filter(
+          ({ start }) => !this.refreshed.includes(start),
+        )
         if (stale.length && hidden(view.dom)) {
           if (this.reveal) return
           this.reveal = new MutationObserver(() => this.queueCode())
@@ -766,8 +781,11 @@ function driver(
         this.reveal?.disconnect()
         this.reveal = null
         if (!stale.length) return
-        this.refreshed.push(...stale.map(({ from }) => from))
-        view.dispatch({ effects: refreshCode.of(stale) })
+        for (const { start } of stale)
+          if (!this.refreshed.includes(start)) this.refreshed.push(start)
+        view.dispatch({
+          effects: refreshCode.of(stale.map(({ from, to }) => ({ from, to }))),
+        })
       }
       destroy() {
         this.destroyed = true

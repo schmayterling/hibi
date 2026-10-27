@@ -1,25 +1,16 @@
-name: cancel closed pull request runs
+name: cancel closed pull request checks
 on:
   # pull_request_target also fires for forks and conflicted pull requests; it checks out nothing.
   pull_request_target:
     types: [closed]
-permissions:
-  actions: write
+permissions: {}
+concurrency:
+  # check.yml uses this group for pull request runs, so starting here cancels them.
+  group: check-refs/pull/${{ github.event.number }}/merge
+  cancel-in-progress: true
 jobs:
   cancel:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 1
     steps:
-      - name: Cancel queued and running pull request runs for this head
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          for status in queued in_progress waiting pending requested; do
-            gh api --paginate "repos/$REPO/actions/runs?event=pull_request&status=$status&per_page=100" \
-              --jq ".workflow_runs[] | select(.head_branch == env.HEAD_REF and .head_repository.full_name == env.HEAD_REPO) | .id"
-          done | sort -u | while read -r id; do
-            gh run cancel "$id" --repo "$REPO" || true
-          done
+      - run: 'true'

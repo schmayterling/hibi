@@ -341,12 +341,15 @@ test('codemirror: Tab preserves paragraph, code, list, table, focus and source b
     rich.evaluate(
       (element, { text, anchor, head }) => {
         const view = element.cmTile.root.view
+        view.focus()
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: text },
           selection: { anchor, head },
           userEvent: 'input.fixture',
         })
-        view.focus()
+        return new Promise((resolve) =>
+          view.requestMeasure({ read: () => null, write: resolve }),
+        )
       },
       { text, anchor, head },
     )
@@ -478,6 +481,10 @@ test('codemirror: Tab preserves paragraph, code, list, table, focus and source b
       ).join('\n')
       const text = `\`\`\`\n${big}\n\`\`\``
       await set(text, 4, big.length + 4)
+      const selected = await state()
+      assert.equal(selected.anchor, 4)
+      assert.equal(selected.head, big.length + 4)
+      assert.equal(selected.focused, true)
       await page.keyboard.press('Tab')
       const result = await rich.evaluate((element) => {
         const view = element.cmTile.root.view

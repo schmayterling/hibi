@@ -394,6 +394,7 @@ it('app and exported site share heading destinations and retain legacy links', {
   })
   await page.locator('.tiptap h2').first().waitFor()
   const desktop = await app.firstWindow()
+  desktop.setDefaultTimeout(7000)
   await waitForDocumentEditor(app, desktop)
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1 })

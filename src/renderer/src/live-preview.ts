@@ -16,6 +16,7 @@ import {
   BlockWrapper,
   Decoration,
   type DecorationSet,
+  Direction,
   EditorView,
   keymap,
   ViewPlugin,
@@ -33,6 +34,7 @@ import { highlightTree } from '@lezer/highlight'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
+  blank,
   blockBreak,
   codeIndent,
   deleteBackward,
@@ -315,6 +317,7 @@ function inline(
   decorations: DecorationSet
   groupMarks: DecorationSet
   atomic: DecorationSet
+  runs: DecorationSet
   outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
@@ -400,10 +403,14 @@ function inline(
         }).range(from, to),
       )
   }
+  /** Hidden delimiters, which the caret crosses together where they touch. */
+  const delimiters: { from: number; to: number }[] = []
   /** Markers of formatting under the selection stay visible and editable. */
   const syntax = (from: number, to: number, revealed: boolean) => {
-    if (!revealed) hideRange(from, to)
-    else if (to > from) {
+    if (!revealed) {
+      hideRange(from, to)
+      if (to > from) delimiters.push({ from, to })
+    } else if (to > from) {
       mark('hibi-lp-marker hibi-lp-syntax', from, to)
     }
   }
@@ -775,6 +782,18 @@ function inline(
     )
   }
   blocks = noBlocks
+  // Touching delimiters, such as `***` closing strong emphasis inside
+  // emphasis, are one step: the caret never rests between them.
+  const runs: Range<Decoration>[] = []
+  let run: { from: number; to: number } | null = null
+  delimiters.sort((a, b) => a.from - b.from)
+  for (const { from, to } of delimiters)
+    if (run && from <= run.to) run.to = Math.max(run.to, to)
+    else {
+      if (run) runs.push(hide.range(run.from, run.to))
+      run = { from, to }
+    }
+  if (run) runs.push(hide.range(run.from, run.to))
   const wrappers: Range<BlockWrapper>[] = []
   for (const { from, to, level } of headings.values()) {
     wrappers.push(
@@ -791,6 +810,7 @@ function inline(
     decorations: Decoration.set(decorations, true),
     groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
+    runs: Decoration.set(runs),
     outer: Decoration.set(outer, true),
     wrappers: BlockWrapper.set(wrappers, true),
     end,
@@ -1459,6 +1479,8 @@ export function livePreview(
       decorations: DecorationSet
       groupMarks: DecorationSet
       atomic: DecorationSet
+      /** Touching hidden delimiters, each crossed in one step. */
+      runs: DecorationSet
       outer: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
@@ -1470,6 +1492,7 @@ export function livePreview(
           decorations: this.decorations,
           groupMarks: this.groupMarks,
           atomic: this.atomic,
+          runs: this.runs,
           outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
@@ -1505,6 +1528,7 @@ export function livePreview(
           this.decorations = mapLines(this.decorations, update)
           this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)
+          this.runs = mapLines(this.runs, update)
           this.outer = this.outer.map(update.changes)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
@@ -1529,6 +1553,7 @@ export function livePreview(
             decorations: this.decorations,
             groupMarks: this.groupMarks,
             atomic: this.atomic,
+            runs: this.runs,
             outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
@@ -1539,6 +1564,52 @@ export function livePreview(
   )
   const hidden = (view: EditorView) =>
     view.plugin(preview)?.atomic ?? Decoration.none
+  const runs = (view: EditorView) =>
+    view.plugin(preview)?.runs ?? Decoration.none
+  /**
+   * Arrows move as in the rich view: past the blank line between blocks, and
+   * out of formatting that ends a line only at the end of the note.
+   */
+  const arrow = (right: boolean) => (view: EditorView) => {
+    const { state } = view
+    const range = state.selection.main
+    if (state.selection.ranges.length > 1 || !range.empty) return false
+    const tree = syntax.tree(state)
+    const end = tree.topNode.lastChild?.to ?? 0
+    const passed = (pos: number) => {
+      const line = state.doc.lineAt(pos)
+      if (pos === line.to && pos < end) {
+        let after = false
+        runs(view).between(pos, pos, (from, to) => {
+          if (from < pos && to === pos) after = true
+        })
+        if (after) return true
+      }
+      if (line.number === 1 || !blank(line.text)) return false
+      if (blank(state.doc.line(line.number - 1).text)) return false
+      for (
+        let node: SyntaxNode | null = tree.resolve(pos, 1);
+        node;
+        node = node.parent
+      )
+        if (node.type.is('LeafBlock')) return false
+      return true
+    }
+    const forward =
+      right === (view.textDirectionAt(range.head) === Direction.LTR)
+    let next = view.moveByChar(range, forward)
+    if (!passed(next.head)) return false
+    for (let at = range.head; next.head !== at && passed(next.head); ) {
+      at = next.head
+      next = view.moveByChar(next, forward)
+    }
+    view.dispatch({
+      selection: next,
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    return true
+  }
   const run =
     (command: (view: EditorView) => TransactionSpec | null) =>
     (view: EditorView) => {
@@ -1627,6 +1698,7 @@ export function livePreview(
       return end ? { style: `--hibi-end: ${end}px` } : null
     }),
     EditorView.atomicRanges.of(hidden),
+    EditorView.atomicRanges.of(runs),
     // Lines the layout hides whole, with the line breaks around them, so the
     // caret never rests on one.
     EditorView.atomicRanges.of((view) => {
@@ -1704,6 +1776,8 @@ export function livePreview(
           run: run((view) => exitBlock(view.state, syntax.tree(view.state))),
         },
         { key: 'Tab', run: tab(false), shift: tab(true) },
+        { key: 'ArrowLeft', run: arrow(false) },
+        { key: 'ArrowRight', run: arrow(true) },
       ]),
     ),
     EditorView.inputHandler.of((view, from, to, text) => {

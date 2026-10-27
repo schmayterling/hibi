@@ -507,90 +507,83 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     '`hello`',
     '***hello***',
   ]) {
-    await t.test(
-      source,
-      {
-        todo:
-          source === '***hello***'
-            ? 'formatted gap marker-001: left arrow must reenter nested final formatting before typing'
-            : undefined,
-      },
-      async () => {
-        await replaceSourceText(page, rich, source)
-        const inside = source.indexOf('hello') + 5
-        await markerSelection(rich, inside)
-        await rich.press('ArrowRight')
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source,
-        )
-        await rich.press('ArrowRight')
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source,
-          'repeated right arrows must not insert spaces',
-        )
-        await rich.press('ArrowLeft')
-        await page.keyboard.insertText('y')
-        await page.evaluate(() => window.hibi.flushDocumentChanges())
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source.replace('hello', 'helloy'),
-          'left arrow returns inside the formatted text',
-        )
-        await pressShortcut(
-          app,
-          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
-        )
-        await waitForAsync(
-          page,
-          async (expected) =>
-            (await window.hibi.getDocument()).markdown === expected,
-          source,
-        )
-        await rich.press('ArrowRight')
-        await rich.press('ArrowRight')
-        await page.keyboard.insertText('x')
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          `${source}x`,
-          'input after formatting remains plain text',
-        )
-        await pressShortcut(
-          app,
-          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
-        )
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source,
-          'one undo removes only the plain text',
-        )
-      },
-    )
-  }
-  await t.test(
-    'next paragraph',
-    {
-      todo: 'formatted gap marker-002: one right arrow must leave final formatting for the next paragraph',
-    },
-    async () => {
-      await replaceSourceText(page, rich, '*hello*\n\nnext')
-      await markerSelection(rich, 6)
+    await t.test(source, async () => {
+      await replaceSourceText(page, rich, source)
+      const inside = source.indexOf('hello') + 5
+      await markerSelection(rich, inside)
       await rich.press('ArrowRight')
       assert.equal(
-        await rich.evaluate(
-          (element) => element.cmTile.root.view.state.selection.main.head,
-        ),
-        9,
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source,
       )
+      await rich.press('ArrowRight')
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source,
+        'repeated right arrows must not insert spaces',
+      )
+      await rich.press('ArrowLeft')
+      await page.keyboard.insertText('y')
+      await page.evaluate(() => window.hibi.flushDocumentChanges())
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source.replace('hello', 'helloy'),
+        'left arrow returns inside the formatted text',
+      )
+      await pressShortcut(
+        app,
+        process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+      )
+      await waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        source,
+      )
+      await rich.press('ArrowRight')
+      await rich.press('ArrowRight')
       await page.keyboard.insertText('x')
       assert.equal(
         (await page.evaluate(() => window.hibi.getDocument())).markdown,
-        '*hello*\n\nxnext',
-        'right arrow still advances to the next paragraph',
+        `${source}x`,
+        'input after formatting remains plain text',
       )
-    },
-  )
+      await pressShortcut(
+        app,
+        process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+      )
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source,
+        'one undo removes only the plain text',
+      )
+    })
+  }
+  await t.test('next paragraph', async () => {
+    await replaceSourceText(page, rich, '*hello*\n\nnext')
+    await markerSelection(rich, 6)
+    await rich.press('ArrowRight')
+    assert.equal(
+      await rich.evaluate(
+        (element) => element.cmTile.root.view.state.selection.main.head,
+      ),
+      9,
+    )
+    await page.keyboard.insertText('x')
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      '*hello*\n\nxnext',
+      'right arrow still advances to the next paragraph',
+    )
+    await rich.press('ArrowLeft')
+    await rich.press('ArrowLeft')
+    await page.keyboard.insertText('y')
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      '*helloy*\n\nxnext',
+      'left arrow returns inside the formatting that ends the paragraph',
+    )
+  })
   await t.test('hidden markers', async () => {
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
     await page.reload()

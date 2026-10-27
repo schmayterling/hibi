@@ -109,13 +109,11 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | release-003 | [formatted-hidden-source.test.mjs:327](formatted-hidden-source.test.mjs#L327) | a note that grows huge must release its hidden source view | 2c: hidden source release and mapped bookmarks |
 | release-004 | [formatted-hidden-source.test.mjs:336](formatted-hidden-source.test.mjs#L336) | releasing a grown huge source must destroy its editor | 2c: hidden source release and mapped bookmarks |
 | split-004 | [github-alerts.test.mjs:203](github-alerts.test.mjs#L203) | split formatted view must remain read-only | 3: read-only access and shared history guards |
-| marker-001 | [markdown-markers.test.mjs:515](markdown-markers.test.mjs#L515) | left arrow must reenter nested final formatting before typing | 8b: hidden markers and math caret placement |
-| marker-002 | [markdown-markers.test.mjs:574](markdown-markers.test.mjs#L574) | one right arrow must leave final formatting for the next paragraph | 8b: hidden markers and math caret placement |
-| marker-003 | [markdown-markers.test.mjs:700](markdown-markers.test.mjs#L700) | the caret beside tall math must remain text sized | 8b: hidden markers and math caret placement |
-| marker-004 | [markdown-markers.test.mjs:729](markdown-markers.test.mjs#L729) | focused paragraphs must reveal all their formatting markers | 8b: hidden markers and math caret placement |
-| marker-005 | [markdown-markers.test.mjs:757](markdown-markers.test.mjs#L757) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
-| marker-006 | [markdown-markers.test.mjs:785](markdown-markers.test.mjs#L785) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
-| split-013 | [markdown-markers.test.mjs:850](markdown-markers.test.mjs#L850) | read-only split formatting must hide editable markers | 3: read-only access and shared history guards |
+| marker-003 | [markdown-markers.test.mjs:693](markdown-markers.test.mjs#L693) | the caret beside tall math must remain text sized | 8b: hidden markers and math caret placement |
+| marker-004 | [markdown-markers.test.mjs:722](markdown-markers.test.mjs#L722) | focused paragraphs must reveal all their formatting markers | 8b: hidden markers and math caret placement |
+| marker-005 | [markdown-markers.test.mjs:750](markdown-markers.test.mjs#L750) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
+| marker-006 | [markdown-markers.test.mjs:778](markdown-markers.test.mjs#L778) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
+| split-013 | [markdown-markers.test.mjs:843](markdown-markers.test.mjs#L843) | read-only split formatting must hide editable markers | 3: read-only access and shared history guards |
 | corpus-001 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | lazy reference definitions must render only native paragraph text | 9: outline semantics and diagram lifecycle |
 | corpus-002 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | gfm tables and alerts must report native formatted character counts | 9: outline semantics and diagram lifecycle |
 | corpus-003 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | reference definitions must hide while resolved labels remain visible | 9: outline semantics and diagram lifecycle |

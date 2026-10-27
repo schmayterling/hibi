@@ -150,6 +150,15 @@ test('tab on selected code lines indents each line, and delete never joins a fen
   )
   // A selection reaching a fence line leaves the fence alone.
   assert.equal(run('^```\nx|\n```', tab), '^```\n\tx|\n```')
+  // Code indents like its first indented line, as in the rich editor.
+  assert.equal(run('```\n  x\n|y\n```', tab), '```\n  x\n  |y\n```')
+  assert.equal(run('```\n  x\n^y\nz|\n```', tab), '```\n  x\n  ^y\n  z|\n```')
+  assert.equal(
+    run('> ```\n⟦> ⟧  x\n⟦> ⟧|y\n> ```', tab),
+    '> ```\n>   x\n>   |y\n> ```',
+  )
+  // Before, Shift-Tab took four spaces off code indented by two.
+  assert.equal(run('```\n  x\n    |y\n```', untab), '```\n  x\n  |y\n```')
   // Before, Delete joined `code~~~` and the prose after became code.
   assert.equal(
     run('~~~\ncode|\n~~~\n\nafter', deleteForward),

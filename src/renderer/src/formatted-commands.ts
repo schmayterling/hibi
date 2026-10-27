@@ -9,6 +9,7 @@ import {
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { formattedFormatting } from './formatted-contributions.ts'
+import { detectIndentUnit, tabIndent } from './tab-indent.ts'
 
 /*
  * Structure keys for the formatted view. They edit the Markdown source the
@@ -362,6 +363,16 @@ function delimiterLine(state: EditorState, tree: Tree, line: Line) {
   )
 }
 
+/** Code indents like its first indented line, else with the preferred unit, as in the rich editor. */
+function codeIndentUnit(state: EditorState, code: SyntaxNode) {
+  for (let child = code.firstChild; child; child = child.nextSibling)
+    if (child.name === 'CodeText') {
+      const unit = detectIndentUnit(state.sliceDoc(child.from, child.to))
+      if (unit) return unit
+    }
+  return tabIndent.snapshot().unit
+}
+
 /** Where a line's visible content starts: after hidden prefixes such as markers. */
 function contentStart(line: Line, hidden: Hidden) {
   let start = line.from
@@ -615,10 +626,11 @@ export function indent(
   }
   const code = around(tree, range.head, ['FencedCode', 'CodeBlock'])
   if (code) {
+    const unit = codeIndentUnit(state, code)
     if (range.empty && !outdent)
       return {
-        changes: { from: range.from, insert: '\t' },
-        selection: EditorSelection.cursor(range.from + 1),
+        changes: { from: range.from, insert: unit },
+        selection: EditorSelection.cursor(range.from + unit.length),
         userEvent: 'input.indent',
       }
     // Otherwise each code line the selection covers is indented or
@@ -636,6 +648,9 @@ export function indent(
         ? end.number - 1
         : end.number
     const changes: { from: number; to?: number; insert?: string }[] = []
+    const leading = new RegExp(
+      `^(?:\t| {1,${unit === '\t' ? 4 : unit.length}})`,
+    )
     for (
       let number = Math.max(
         state.doc.lineAt(range.from).number,
@@ -647,9 +662,9 @@ export function indent(
     ) {
       const line = state.doc.line(number)
       const start = contentStart(line, hidden)
-      if (!outdent) changes.push({ from: start, insert: '\t' })
+      if (!outdent) changes.push({ from: start, insert: unit })
       else {
-        const lead = /^(?:\t| {1,4})/.exec(state.sliceDoc(start, line.to))
+        const lead = leading.exec(state.sliceDoc(start, line.to))
         if (lead) changes.push({ from: start, to: start + lead[0].length })
       }
     }

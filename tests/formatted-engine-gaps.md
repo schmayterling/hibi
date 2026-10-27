@@ -154,7 +154,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | link-003 | [site.test.mjs:518](site.test.mjs#L518) | heading links must navigate to canonical and legacy destinations | 5a: reference labels and destinations |
 | split-008 | [slash.test.mjs:344](slash.test.mjs#L344) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | split-009 | [source-markdown-lifecycle.test.mjs:337](source-markdown-lifecycle.test.mjs#L337) | split formatted view must remain read-only | 3: read-only access and shared history guards |
-| projection-002 | [source-preservation.test.mjs:105](source-preservation.test.mjs#L105) | formatted body edits must preserve custom source prefixes and line endings | 6: verbatim projections and selection contracts |
 | semantics-002 | [source-reference-navigation.test.mjs:160](source-reference-navigation.test.mjs#L160) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | addon-001 | [source-reference-navigation.test.mjs:185](source-reference-navigation.test.mjs#L185) | rich-only addon syntax must retain native editing and source reference isolation | 2b: legacy feature notices and literal fallback |
 | split-010 | [split-preview-catchup.test.mjs:470](split-preview-catchup.test.mjs#L470) | split formatted view must remain read-only | 3: read-only access and shared history guards |

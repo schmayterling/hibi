@@ -96,12 +96,31 @@ export function MarkdownEditor({
     markdownExtensions.some(
       ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
     )
+  const projectionExtensions = useMemo<readonly FormattedExtension[]>(() => {
+    const adapters = markdownExtensions.filter(
+      ({ id, preservation }) =>
+        id !== 'frontmatter.metadata' && preservation?.level === 'verbatim',
+    )
+    if (!adapters.length) return []
+    return [
+      {
+        id: 'formatted.projection',
+        create: () =>
+          import('./formatted-projection').then(({ formattedProjection }) =>
+            formattedProjection(adapters, () =>
+              documentRuntime.session(documentState.tabId)?.snapshot(),
+            ),
+          ),
+      },
+    ]
+  }, [markdownExtensions, documentState.tabId])
   const editorExtensions = useMemo(
-    () =>
-      showProperties
-        ? [...propertiesExtensions, ...formattedExtensions]
-        : formattedExtensions,
-    [showProperties, formattedExtensions],
+    () => [
+      ...(showProperties ? propertiesExtensions : []),
+      ...projectionExtensions,
+      ...formattedExtensions,
+    ],
+    [showProperties, projectionExtensions, formattedExtensions],
   )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,

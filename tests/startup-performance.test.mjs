@@ -499,9 +499,10 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
   await page.locator('.source-pane .hibi-token-type').first().waitFor()
   assert.match(modules(), /src\/addons\/_shared\/format-language\.ts/)
   assert.match(modules(), /node_modules\/@codemirror\/lang-html\//)
-  if (t.formattedEngine === 'tiptap')
-    assert.doesNotMatch(modules(), /node_modules\/@codemirror\/lang-markdown\//)
-  else assert.match(modules(), /node_modules\/@codemirror\/lang-markdown\//)
+  assert.doesNotMatch(modules(), /node_modules\/@codemirror\/lang-markdown\//)
+  // The formatted host loads the shared chunked language.
+  if (t.formattedEngine === 'codemirror')
+    assert.match(modules(), /src\/shared\/chunked-markdown\.ts/)
   assert.doesNotMatch(
     modules(),
     /node_modules\/@codemirror\/legacy-modes\/mode\/(?:stex|textile|r)\./,

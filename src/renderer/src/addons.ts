@@ -267,6 +267,10 @@ export function useEditorAddons(
   return { knownFlavors, manifests, enabledAddons }
 }
 
+/** The activation main gave an addon, which grows each time it stops. */
+const activationOf = (states: readonly AddonState[], id: string) =>
+  states.find((state) => state.id === id)?.activation
+
 export function useAddons(
   environment: Environment,
   documentName?: string,
@@ -655,9 +659,56 @@ export function useAddons(
       SourceExtension & {
         addonId: string
         presentation: 'source' | 'formatted'
+        fail?: (error: unknown) => void
+        drop?: () => void
       }
     >(),
   ).current
+  /** Editor features that failed in any window, with their addons and activations, until those stop. */
+  const failedFeatures = useRef(
+    new Map<string, { addonId: string; activation: number }>(),
+  ).current
+  const featureFailures = useRef<BroadcastChannel | null>(null)
+  useEffect(() => {
+    const channel = new BroadcastChannel('hibi-editor-feature-failures')
+    featureFailures.current = channel
+    channel.onmessage = ({ data }: MessageEvent<unknown>) => {
+      // A window that opens later asks for the failures so far.
+      if (data === null) {
+        for (const [key, failure] of failedFeatures)
+          channel.postMessage({ key, ...failure })
+        return
+      }
+      const { key, addonId, activation } = (data ?? {}) as Record<
+        string,
+        unknown
+      >
+      if (
+        typeof key !== 'string' ||
+        typeof addonId !== 'string' ||
+        typeof activation !== 'number'
+      )
+        return
+      // One from an earlier activation is stale, however late it arrives.
+      const current = activationOf(currentActivation.current.states, addonId)
+      if (current !== undefined && activation < current) return
+      failedFeatures.set(key, { addonId, activation })
+      sources.get(key)?.drop?.()
+    }
+    channel.postMessage(null)
+    return () => {
+      featureFailures.current = null
+      channel.close()
+    }
+  }, [failedFeatures, sources])
+  useEffect(() => {
+    // A newer activation restores what failed in earlier ones.
+    for (const [key, { addonId, activation }] of failedFeatures) {
+      const current = activationOf(states, addonId)
+      if (current !== undefined && activation < current)
+        failedFeatures.delete(key)
+    }
+  }, [failedFeatures, states])
   const [sourceExtensions, setSourceExtensions] = useState<SourceExtension[]>(
     [],
   )
@@ -705,9 +756,19 @@ export function useAddons(
         stop: () => void
         /** Swap package stylesheets and themes without restarting code; false when superseded. */
         restyle: () => Promise<boolean>
+        /** The activation this run belongs to; its failures carry it. */
+        activation: number
       }
     >(),
   ).current
+  useEffect(() => {
+    // A run that continues while main moves the addon on belongs to the new activation.
+    for (const [id, runtime] of running) {
+      const activation = activationOf(states, id)
+      if (activation !== undefined && activation > runtime.activation)
+        runtime.activation = activation
+    }
+  }, [running, states])
   const mounted = useRef(false)
   useEffect(() => {
     mounted.current = true
@@ -1075,6 +1136,7 @@ export function useAddons(
           throw new Error(
             `This addon supplied a duplicate or invalid ${presentation}-editor feature: ${key}.`,
           )
+        let remove = () => {}
         const entry = {
           id: key,
           addonId: id,
@@ -1095,8 +1157,33 @@ export function useAddons(
               )
             }
           },
+          // Input waits for modal editing. Another feature's first failure
+          // removes it from the editors of every window until the addon is
+          // turned off, and is reported; later ones are not.
+          ...(addon.manifest.capabilities?.includes('modalEditing')
+            ? {}
+            : {
+                fail(error: unknown) {
+                  const feature = `${presentation}:${key}`
+                  if (disposed || !sources.has(feature)) return
+                  const failure = {
+                    addonId: id,
+                    activation: running.get(id)?.activation ?? 0,
+                  }
+                  failedFeatures.set(feature, failure)
+                  featureFailures.current?.postMessage({
+                    key: feature,
+                    ...failure,
+                  })
+                  remove()
+                  latest.current.error(error)
+                },
+                drop: () => remove(),
+              }),
         }
-        return batch.register(`${presentation}:${extension.id}`, () => {
+        remove = batch.register(`${presentation}:${extension.id}`, () => {
+          if (entry.fail && failedFeatures.has(`${presentation}:${key}`))
+            return () => {}
           sources.set(`${presentation}:${key}`, entry)
           const removeCompatibility =
             presentation === 'formatted'
@@ -1109,6 +1196,7 @@ export function useAddons(
             if (!disposed && mounted.current) publishSources()
           }
         })
+        return remove
       }
       const live = <T>(
         call: () => Promise<T>,
@@ -1382,7 +1470,12 @@ export function useAddons(
           throw new Error(
             `The ${id} addon needs an update before it can run in this version of Hibi.`,
           )
-        running.set(id, { addon, stop, restyle })
+        running.set(id, {
+          addon,
+          stop,
+          restyle,
+          activation: activationOf(currentActivation.current.states, id) ?? 0,
+        })
         const start = async () => {
           const { renderMarkdown } = await import('./render-markdown')
           if (disposed) return
@@ -2275,6 +2368,7 @@ export function useAddons(
     extensions,
     publishExtensions,
     sources,
+    failedFeatures,
     publishSources,
     status,
     app,

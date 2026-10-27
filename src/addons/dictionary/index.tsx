@@ -16,7 +16,7 @@ import type {
   ViewId,
   ViewTarget,
 } from '../../shared/foundation-contracts'
-import { defineAddon } from '../api'
+import { defineAddon, type EditorExtensionContext } from '../api'
 import { Button, PanelMessage } from '../ui'
 import { createDictionaryApi, type DictionaryApi } from './api'
 import {
@@ -366,6 +366,7 @@ export default defineAddon({
     })
     const richEditors = new Map<Editor, ViewId>()
     const sourceViews = new Map<EditorView, ViewId>()
+    const formattedViews = new Map<EditorView, ViewId>()
     context.editor.registerRich({
       id: 'lookup',
       preview: 'deferred',
@@ -375,15 +376,19 @@ export default defineAddon({
         return () => richEditors.delete(editor)
       },
     })
-    context.editor.registerSource({
-      id: 'lookup',
-      async create(editorContext) {
+    const track =
+      (views: Map<EditorView, ViewId>) =>
+      async (editorContext?: EditorExtensionContext) => {
         if (!editorContext) return []
         return (await import('./source')).trackSourceViews(
-          sourceViews,
+          views,
           editorContext.viewId,
         )
-      },
+      }
+    context.editor.registerSource({ id: 'lookup', create: track(sourceViews) })
+    context.editor.registerFormatted({
+      id: 'lookup',
+      create: track(formattedViews),
     })
     async function target(invocation: CommandExecutionContext) {
       // Palette and shortcut invocations capture the view but not its selection.
@@ -401,7 +406,21 @@ export default defineAddon({
         head === selection.head
       let found: LookupTarget | null = null
       let inView = () => false
-      if (selection.editor === 'rich') {
+      // CodeMirror views: the source view, or the formatted view as the rich
+      // editor. Their selections are read after the module loads.
+      const views = selection.editor === 'rich' ? formattedViews : sourceViews
+      const source = views.size ? await import('./source') : null
+      const codeMirror = [...views].find(([editor, viewId]) =>
+        at(
+          viewId,
+          editor.state.selection.main.anchor,
+          editor.state.selection.main.head,
+        ),
+      )?.[0]
+      if (source && codeMirror) {
+        found = source.sourceTarget(codeMirror, from, to)
+        inView = () => views.get(codeMirror) === view.viewId
+      } else if (selection.editor === 'rich') {
         const editor = [...richEditors].find(
           ([editor, viewId]) =>
             !editor.isDestroyed &&
@@ -414,19 +433,6 @@ export default defineAddon({
         if (editor) {
           found = richTarget(editor, from, to)
           inView = () => richEditors.get(editor) === view.viewId
-        }
-      } else {
-        const { sourceTarget } = await import('./source')
-        const editor = [...sourceViews].find(([editor, viewId]) =>
-          at(
-            viewId,
-            editor.state.selection.main.anchor,
-            editor.state.selection.main.head,
-          ),
-        )?.[0]
-        if (editor) {
-          found = sourceTarget(editor, from, to)
-          inView = () => sourceViews.get(editor) === view.viewId
         }
       }
       if (!found) return null

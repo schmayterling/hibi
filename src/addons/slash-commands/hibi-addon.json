@@ -2,9 +2,9 @@
   "id": "slash-commands",
   "name": "Slash commands",
   "description": "Type / at the start of a line to insert a block.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "authors": [
     {
       "discordId": "1262793452236570667",

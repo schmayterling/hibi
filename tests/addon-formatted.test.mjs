@@ -26,6 +26,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     entryPoints: ['src/addons/slash-commands/source.ts'],
     bundle: true,
     write: false,
+    metafile: true,
     format: 'iife',
     globalName: 'slashFixture',
     plugins: [
@@ -35,14 +36,8 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
           const exports = {
             commands: ['isolateHistory'],
             language: ['syntaxTree'],
-            state: [
-              'Facet',
-              'Prec',
-              'StateEffect',
-              'StateField',
-              'Transaction',
-            ],
-            view: ['Decoration', 'EditorView', 'ViewPlugin', 'keymap'],
+            state: ['Prec', 'Transaction'],
+            view: ['EditorView', 'ViewPlugin'],
           }
           builder.onResolve({ filter: /^@codemirror\// }, (args) => ({
             path: args.path.split('/')[1],
@@ -59,6 +54,12 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       },
     ],
   })
+  assert.deepEqual(
+    Object.keys(slash.metafile.inputs).filter((path) =>
+      path.startsWith('src/renderer/'),
+    ),
+    [],
+  )
   await install(
     profile,
     'formatted-slash-proof',
@@ -133,6 +134,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   await writeFile(
     join(profile, 'addons.json'),
     JSON.stringify({
+      'slash-commands': false,
       'v1-proof': true,
       'legacy-proof': true,
       'formatted-proof': true,

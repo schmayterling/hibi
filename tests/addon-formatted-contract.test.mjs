@@ -27,11 +27,7 @@ test('bundled rich-only addons remain on an explicit migration allowlist', async
       missing.push(entry.name)
   }
   // This allowlist must be empty before the CodeMirror formatted view becomes the default.
-  assert.deepEqual(missing.sort(), [
-    'dictionary',
-    'slash-commands',
-    'word-count',
-  ])
+  assert.deepEqual(missing.sort(), ['word-count'])
 })
 
 test('formatted sdk shares the host Lezer common runtime', async () => {

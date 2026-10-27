@@ -1,17 +1,32 @@
 import { isolateHistory } from '@codemirror/commands'
 import { syntaxTree } from '@codemirror/language'
-import { Prec, Transaction } from '@codemirror/state'
+import { type EditorState, Prec, Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin } from '@codemirror/view'
-import { frontmatterBounds } from '../../renderer/src/formatted-frontmatter'
+import type { SyntaxNode, Tree } from '@lezer/common'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
 import { maximumSlashQueryUnits, slashQuery } from './commands'
 import { createSlashMenu } from './menu'
 
-function current(view: EditorView) {
+type FrontmatterReader = (state: EditorState) =>
+  | {
+      end: number
+      open: boolean
+      closer: number
+      searched: number
+    }
+  | undefined
+
+function current(
+  view: EditorView,
+  formattedTree?: (state: EditorState) => Tree | null,
+  sourceBounds?: FrontmatterReader,
+) {
+  const formatted = Boolean(formattedTree)
   const selection = view.state.selection.main
   if (
     !view.hasFocus ||
+    view.composing ||
     view.state.readOnly ||
     !view.state.facet(EditorView.editable) ||
     !selection.empty ||
@@ -20,22 +35,55 @@ function current(view: EditorView) {
   )
     return null
   const line = view.state.doc.lineAt(selection.head)
-  if (selection.head - line.from > maximumSlashQueryUnits) return null
-  const query = slashQuery(
-    view.state.doc.sliceString(line.from, selection.head),
-  )
-  if (query === null) return null
+  if (!formatted && selection.head - line.from > maximumSlashQueryUnits)
+    return null
+  const sourcePrefix = formatted
+    ? null
+    : view.state.doc.sliceString(line.from, selection.head)
+  if (sourcePrefix !== null && slashQuery(sourcePrefix) === null) return null
+  const tree = formattedTree
+    ? formattedTree(view.state)
+    : syntaxTree(view.state)
+  let block: SyntaxNode | null = null
   for (
-    let node = syntaxTree(view.state).resolveInner(selection.head, -1);
+    let node: SyntaxNode | null =
+      tree?.resolveInner(selection.head, -1) ?? null;
     node;
-    node = node.parent!
+    node = node.parent
   ) {
-    if (/^(FencedCode|CodeBlock|InlineCode|HTMLBlock|HTMLTag)$/.test(node.name))
+    if (
+      /^(FencedCode|CodeBlock|InlineCode|HTMLBlock|HTMLTag|Frontmatter)$/.test(
+        node.name,
+      )
+    )
       return null
+    if (
+      formatted &&
+      !block &&
+      /^(Paragraph|Task|Subtext|ATXHeading[1-6]|SetextHeading[12])$/.test(
+        node.name,
+      )
+    )
+      block = node
   }
-  // Markdown's syntax tree does not recognize YAML frontmatter. Keep
-  // commands out until the editor's bounded search can classify the prefix.
-  const bounds = view.state.field(frontmatterBounds, false)
+  let from = line.from
+  if (formatted) {
+    if (!block) return null
+    from = block.from
+    const mark = block.firstChild
+    if (mark?.name === 'TaskMarker' || /^ATXHeading/.test(block.name))
+      from = mark?.to ?? from
+    if (block.name === 'Subtext') from += 3
+  }
+  if (selection.head - from > maximumSlashQueryUnits) return null
+  const prefix =
+    sourcePrefix ?? view.state.doc.sliceString(from, selection.head)
+  const spacing = formatted ? (/^[ \t]*/.exec(prefix)?.[0].length ?? 0) : 0
+  from += spacing
+  const query = slashQuery(prefix.slice(spacing))
+  if (query === null) return null
+  // The source language does not recognize YAML; use the host's bounded search.
+  const bounds = !formatted && sourceBounds?.(view.state)
   if (
     bounds &&
     (selection.head < bounds.end ||
@@ -44,10 +92,15 @@ function current(view: EditorView) {
         bounds.searched < view.state.doc.length))
   )
     return null
-  return { from: line.from, to: selection.head, query }
+  return { from, to: selection.head, query, block }
 }
 
-export function sourceSlashCommands(context: AddonContext) {
+export function sourceSlashCommands(
+  context: AddonContext,
+  formattedTree?: (state: EditorState) => Tree | null,
+  sourceBounds?: FrontmatterReader,
+) {
+  const formatted = Boolean(formattedTree)
   return Prec.highest(
     ViewPlugin.fromClass(
       class {
@@ -63,7 +116,7 @@ export function sourceSlashCommands(context: AddonContext) {
           this.schedule()
         }
         schedule() {
-          const match = current(this.view)
+          const match = current(this.view, formattedTree, sourceBounds)
           this.menu.observe(match)
           if (!match) this.menu.update(null)
           cancelAnimationFrame(this.frame)
@@ -76,7 +129,7 @@ export function sourceSlashCommands(context: AddonContext) {
             this.menu.update(null)
             return
           }
-          const match = current(this.view)
+          const match = current(this.view, formattedTree, sourceBounds)
           const rect = match ? this.view.coordsAtPos(match.to) : null
           this.menu.update(
             match && rect
@@ -84,7 +137,11 @@ export function sourceSlashCommands(context: AddonContext) {
                   ...match,
                   rect,
                   run: (command) => {
-                    const latest = current(this.view)
+                    const latest = current(
+                      this.view,
+                      formattedTree,
+                      sourceBounds,
+                    )
                     if (
                       !latest ||
                       latest.from !== match.from ||
@@ -114,16 +171,40 @@ export function sourceSlashCommands(context: AddonContext) {
                       this.view.focus()
                       return
                     }
+                    const block = latest.block
+                    const replaceBlock =
+                      formatted &&
+                      block &&
+                      (command.id === 'text' ||
+                        context.editor
+                          .getSyntaxFeatures()
+                          .some(
+                            (feature) =>
+                              feature.id === command.id &&
+                              feature.level === 'block',
+                          ))
+                    const from = replaceBlock ? block.from : match.from
+                    const changes = [
+                      { from, to: match.to, insert: command.markdown },
+                    ]
+                    const closing = replaceBlock && block.lastChild
+                    if (
+                      closing &&
+                      closing.name === 'HeaderMark' &&
+                      closing.from >= match.to
+                    )
+                      changes.push({
+                        from: block.name.startsWith('SetextHeading')
+                          ? this.view.state.doc.lineAt(closing.from).from - 1
+                          : closing.from,
+                        to: closing.to,
+                        insert: '',
+                      })
                     this.view.dispatch({
-                      changes: {
-                        from: match.from,
-                        to: match.to,
-                        insert: command.markdown,
-                      },
+                      changes,
                       selection: {
                         anchor:
-                          match.from +
-                          (command.cursor ?? command.markdown.length),
+                          from + (command.cursor ?? command.markdown.length),
                       },
                       annotations: [
                         Transaction.userEvent.of('input.complete'),
@@ -147,7 +228,6 @@ export function sourceSlashCommands(context: AddonContext) {
         }
       },
       {
-        provide: () => frontmatterBounds,
         eventHandlers: {
           keydown(event) {
             if (event.key === 'Enter' || event.key === 'Tab') this.refresh()

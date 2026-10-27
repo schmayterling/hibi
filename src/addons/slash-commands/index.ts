@@ -12,10 +12,32 @@ export default defineAddon({
       preview: 'deferred',
       attach: (editor) => attachRich(editor, context),
     })
+    context.editor.registerFormatted({
+      id: 'menu',
+      async create() {
+        const [{ sourceSlashCommands }, { formattedSyntaxTree }] =
+          await Promise.all([
+            import('./source'),
+            import('../../renderer/src/formatted-contributions'),
+          ])
+        return sourceSlashCommands(context, formattedSyntaxTree)
+      },
+    })
     context.editor.registerSource({
       id: 'menu',
-      create: async () =>
-        (await import('./source')).sourceSlashCommands(context),
+      async create() {
+        const [{ sourceSlashCommands }, { frontmatterBounds }] =
+          await Promise.all([
+            import('./source'),
+            import('../../renderer/src/formatted-frontmatter'),
+          ])
+        return [
+          frontmatterBounds,
+          sourceSlashCommands(context, undefined, (state) =>
+            state.field(frontmatterBounds, false),
+          ),
+        ]
+      },
     })
   },
 })

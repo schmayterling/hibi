@@ -902,6 +902,10 @@ test('after an idle moment, scrolling near the viewport parses nothing in its fr
       last = progress
     }
     const ahead = { ...preview.probe }
+    const coveredAhead = preview.covered(
+      view.viewport.from,
+      Math.min(view.state.doc.length, view.viewport.to + 32 * 1024),
+    )
     preview.reset()
     // 3600 px over twelve frames, as the paired benchmark scrolls.
     for (let frame = 1; frame <= 12; frame++) {
@@ -914,12 +918,14 @@ test('after an idle moment, scrolling near the viewport parses nothing in its fr
       scrolled: pane.scrollTop,
       unparsedViewport,
       ahead,
+      coveredAhead,
       scroll: { ...preview.probe },
     }
   }, doc)
   console.log(JSON.stringify(result))
   assert.equal(result.scrolled, 3600, JSON.stringify(result))
   assert.equal(result.unparsedViewport, 0, JSON.stringify(result))
+  assert.equal(result.coveredAhead, true, JSON.stringify(result))
   // Idle-time parsing covers a bounded window around the viewport, not the note.
   assert.ok(result.ahead.parsedUnits <= 24 * 4096, JSON.stringify(result))
   assert.ok(result.length > 4 * 24 * 4096)

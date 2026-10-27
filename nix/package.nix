@@ -9,11 +9,13 @@ let
   # scripts/docs.mjs normally clones hibigarden/docs at ./docs-revision.
   # No network in the sandbox, so fetch that revision here and hand it
   # over through HIBI_DOCS_SOURCE (read as plain files, no git needed).
+  # docs-pin.yml opens a PR to refresh the revision and this hash after
+  # hibigarden/docs publishes.
   docs = fetchFromGitHub {
     owner = "hibigarden";
     repo = "docs";
     rev = lib.fileContents ../docs-revision;
-    hash = "sha256-dk66ES0xh5DSFdj4qwuxGz2MZ99LmsX/1xuqEy3/mm8=";
+    hash = "sha256-M77Cxp3rekcxAVEfRAlUiNqBfk8drn2xUOUIbDlLIr0=";
   };
 
   mimeTypes = [

@@ -359,7 +359,43 @@ test('receiving views reject unscanned boundary records before adopting any page
   )
 })
 
-test('edits during active boundary repairs keep the last completed suffix', () => {
+test('continued typing lets a long worker repair finish within a fixed advance budget', (t) => {
+  const unit = '# heading\n\nparagraph words\n\n'
+  const text = unit.repeat(Math.ceil((8 * 1024 * 1024) / unit.length))
+  const store = new SourceStore(text, { tabId: 'continued', revision: 0 })
+  const probe = counts()
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    configuration({
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+      opaque: ['Table'],
+    }),
+    probe,
+  )
+  drain(index)
+  probe.scannedUnits = 0
+  const fence = text.indexOf('# heading', Math.floor(text.length / 2))
+  index.apply(edit(store, [{ from: fence, to: fence, insert: '~~~\n' }]))
+  const at = text.indexOf('paragraph', Math.floor(text.length / 10)) + 4
+  let typed = 0,
+    complete = false
+  while (typed < 12) {
+    for (let step = 0; step < 30 && !complete; step++)
+      complete = index.advance()
+    if (complete) break
+    index.apply(
+      edit(store, [{ from: at + typed, to: at + typed, insert: 'x' }]),
+    )
+    typed++
+  }
+  t.diagnostic(JSON.stringify({ typed, complete, scanned: probe.scannedUnits }))
+  assert.equal(complete, true)
+  assert.ok(probe.scannedUnits < 8 * 1024 * 1024, JSON.stringify(probe))
+})
+
+test('edits during active boundary repairs retain progress and the saved suffix', (t) => {
   const text = '# heading\n\nparagraph words\n\n'.repeat(
     Math.ceil((8 * 1024 * 1024) / 28),
   )
@@ -384,6 +420,7 @@ test('edits during active boundary repairs keep the last completed suffix', () =
   index.apply(edit(store, [{ from: at + 3, to: at + 3, insert: 'y' }]))
   drain(index)
   assert.ok(probe.scannedUnits < 512 * 1024, JSON.stringify(probe))
+  const ordinaryScanned = probe.scannedUnits
   probe.scannedUnits = 0
   let pos = at
   for (const character of '<!-- note -->') {
@@ -393,6 +430,9 @@ test('edits during active boundary repairs keep the last completed suffix', () =
   }
   drain(index)
   assert.ok(probe.scannedUnits < 2 * 1024 * 1024, JSON.stringify(probe))
+  t.diagnostic(
+    JSON.stringify({ ordinaryScanned, commentScanned: probe.scannedUnits }),
+  )
   assert.ok(
     [...index.records()].every(
       (record) => record.kind !== 'chunk' || record.type !== 'tail',

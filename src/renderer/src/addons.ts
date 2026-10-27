@@ -2328,6 +2328,7 @@ export function useAddons(
     extensions,
     publishExtensions,
     sources,
+    failedFeatures,
     publishSources,
     status,
     app,

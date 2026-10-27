@@ -12,7 +12,10 @@ import { DocumentSession } from '../../src/shared/document-session'
 import '../../src/renderer/src/styles.css'
 // The app's control styles, such as its thin scrollbars, so panes look alike.
 import '../../src/ui/controls.css'
-import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
+import {
+  type ChunkedMarkdownProbe,
+  uncovered,
+} from '../../src/renderer/src/chunked-markdown'
 import { codeLanguages } from '../../src/renderer/src/code-languages'
 import {
   formattedDocument,
@@ -302,6 +305,9 @@ Object.assign(window, {
     },
     /** The formatted view's syntax tree. */
     tree: () => (view ? syntax.tree(view.state) : null),
+    /** The shown syntax tree has parsed text from `from` to `to`. */
+    covered: (from: number, to: number) =>
+      !!view && !uncovered(syntax.tree(view.state), from, to),
     /** An edit's reparse is still running. */
     settling: () => (view ? syntax.settling(view.state) : false),
     reset() {

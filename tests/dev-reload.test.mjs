@@ -930,12 +930,22 @@ dialog.showMessageBox = (...args) => {
       },
     )
     await overlappingUpdate
-    await page.waitForFunction(
-      () =>
-        document
-          .querySelector('[role="textbox"][aria-label="Document editor"]')
-          ?.getAttribute('aria-readonly') === 'false' &&
-        getSelection().toString() === 'draft',
+    await t.test(
+      'overlapping reload restores the chosen draft selection',
+      async () => {
+        await page.waitForFunction((engine) => {
+          const editor = document.querySelector(
+            '[role="textbox"][aria-label="Document editor"]',
+          )
+          const ready =
+            engine === 'tiptap'
+              ? editor?.getAttribute('aria-readonly') === 'false'
+              : editor?.getAttribute('aria-readonly') !== 'true' &&
+                editor?.cmTile?.root.view.state.readOnly === false &&
+                editor.isContentEditable
+          return ready && getSelection().toString() === 'draft'
+        }, t.formattedEngine)
+      },
     )
     await page.waitForFunction(
       () =>
@@ -1287,19 +1297,28 @@ dialog.showMessageBox = (...args) => {
         await page.evaluate(() => window.focus())
       }
       await page
-        .waitForFunction((expected) => {
-          const editor = document.querySelector(
-            '[role="textbox"][aria-label="Document editor"]',
-          )
-          const panel = editor?.closest('.editor-page')
-          return (
-            editor?.textContent === expected &&
-            editor.getAttribute('contenteditable') === 'true' &&
-            editor.getAttribute('aria-readonly') === 'false' &&
-            panel?.getAttribute('aria-busy') === 'false' &&
-            !panel.hasAttribute('inert')
-          )
-        }, expected)
+        .waitForFunction(
+          ({ expected, engine }) => {
+            const editor = document.querySelector(
+              '[role="textbox"][aria-label="Document editor"]',
+            )
+            const view = editor?.cmTile?.root.view
+            const panel = editor?.closest('.editor-page')
+            return (
+              (engine === 'tiptap'
+                ? editor?.textContent
+                : view?.state.doc.toString()) === expected &&
+              editor.getAttribute('contenteditable') === 'true' &&
+              (engine === 'tiptap'
+                ? editor.getAttribute('aria-readonly') === 'false'
+                : editor.getAttribute('aria-readonly') !== 'true' &&
+                  view?.state.readOnly === false) &&
+              panel?.getAttribute('aria-busy') === 'false' &&
+              !panel.hasAttribute('inert')
+            )
+          },
+          { expected, engine: t.formattedEngine },
+        )
         .catch(async (error) => {
           const state = await page.evaluate(async () => {
             const editor = document.querySelector(

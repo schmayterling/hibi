@@ -262,19 +262,25 @@ const appWindows = (app) =>
 
 // Count every call that could raise or focus the main window.
 const watchMainWindow = (app) =>
-  app.evaluate(({ BrowserWindow }) => {
+  app.evaluate(({ BrowserWindow }, showWindows) => {
     const main = BrowserWindow.getAllWindows().find(
       (window) => window.webContents.getURL() === 'app://hibi/',
     )
     globalThis.mainWindowRaised = 0
-    for (const name of ['show', 'focus', 'restore', 'moveTop']) {
+    for (const name of [
+      'show',
+      'showInactive',
+      'focus',
+      'restore',
+      'moveTop',
+    ]) {
       const original = main[name].bind(main)
       main[name] = (...args) => {
         globalThis.mainWindowRaised++
-        return original(...args)
+        if (showWindows) return original(...args)
       }
     }
-  })
+  }, showTestWindows)
 const mainWindowRaised = (app) =>
   app.evaluate(() => globalThis.mainWindowRaised)
 
@@ -781,7 +787,9 @@ test('the capture window renders markdown like the main editor', {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
+  const focusSessions = []
   t.after(async () => {
+    for (const session of focusSessions) await session.detach()
     await app.close()
     await rm(root, { recursive: true, force: true })
   })
@@ -827,6 +835,14 @@ test('the capture window renders markdown like the main editor', {
       window.parityEditor = editor
     })
   const capture = await openCapture(app, page)
+  if (t.formattedEngine === 'codemirror')
+    for (const editor of [page, capture]) {
+      const session = await editor.context().newCDPSession(editor)
+      focusSessions.push(session)
+      await session.send('Emulation.setFocusEmulationEnabled', {
+        enabled: true,
+      })
+    }
   const shape = async (editor) => {
     if (t.formattedEngine === 'codemirror') {
       const root = editor.getByRole('textbox', {
@@ -839,9 +855,17 @@ test('the capture window renders markdown like the main editor', {
       await click(paragraph, 'The first paragraph')
       await root.press('End')
       await waitForAsync(editor, () => {
-        const view = document.querySelector('.rich-pane .cm-content').cmTile
-          .root.view
+        const element = document.querySelector('.rich-pane .cm-content')
+        const view = element.cmTile.root.view
+        const selection = getSelection()
         return (
+          document.hasFocus() &&
+          document.activeElement === element &&
+          view.hasFocus &&
+          selection?.isCollapsed &&
+          element.contains(selection.focusNode) &&
+          view.posAtDOM(selection.focusNode, selection.focusOffset) ===
+            view.state.selection.main.head &&
           view.state.selection.main.empty &&
           view.state.selection.main.head ===
             view.state.doc.toString().indexOf('Find the essay.') +

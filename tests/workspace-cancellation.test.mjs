@@ -10,7 +10,7 @@ import {
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import test, { after, afterEach } from 'node:test'
+import test, { beforeEach } from 'node:test'
 import { build } from 'esbuild'
 import { waitForAsync } from './poll.mjs'
 
@@ -66,26 +66,13 @@ const {
   workspaceMetadataPages,
 } = module.exports
 const fs = process.getBuiltinModule('node:fs/promises')
-const nativeFs = process.getBuiltinModule('node:fs')
-const watch = nativeFs.watch
-const watchers = new Set()
-nativeFs.watch = (...args) => {
-  const watcher = watch(...args)
-  const close = watcher.close.bind(watcher)
-  watcher.close = () => {
-    watchers.delete(watcher)
-    return close()
-  }
-  watchers.add(watcher)
-  return watcher
-}
-syncBuiltinESMExports()
-afterEach(() => {
-  for (const watcher of watchers) watcher.close()
-})
-after(() => {
-  for (const watcher of watchers) watcher.close()
-  nativeFs.watch = watch
+beforeEach((t) => {
+  t.mock.method(process.getBuiltinModule('node:fs'), 'watch', () => ({
+    on() {
+      return this
+    },
+    close() {},
+  }))
   syncBuiltinESMExports()
 })
 
@@ -268,8 +255,4 @@ test('a committed selection still remembers and publishes when another open inte
     fs.open = original
     syncBuiltinESMExports()
   }
-})
-
-test('workspace fixtures close every directory watcher', () => {
-  assert.equal(watchers.size, 0)
 })

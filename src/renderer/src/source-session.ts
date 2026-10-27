@@ -183,6 +183,23 @@ const editorSelection = (
     selection.mainIndex,
   )
 
+/**
+ * A view whose update throws, as when an extension fails while it draws, may
+ * hold the new text while its DOM keeps the old, and would read the next
+ * input from that DOM twice. It is redrawn at the state the update reached.
+ */
+function update(
+  view: Pick<EditorView, 'state' | 'update' | 'setState'>,
+  transactions: readonly Transaction[],
+) {
+  try {
+    view.update(transactions)
+  } catch (error) {
+    view.setState(transactions.at(-1)?.state ?? view.state)
+    throw error
+  }
+}
+
 /** How far above a pane's kept top line its scroll position was, per session and view. */
 const keptMargins = new WeakMap<DocumentSession, Map<string, number>>()
 
@@ -202,7 +219,7 @@ export function createSourceSession(
     flush = () => {}
   const dispatch = (
     transactions: readonly Transaction[],
-    view: Pick<EditorView, 'state' | 'update'> & {
+    view: Pick<EditorView, 'state' | 'update' | 'setState'> & {
       readonly composing?: boolean
     },
     exactChanges?: readonly RawEdit[],
@@ -243,7 +260,7 @@ export function createSourceSession(
         )
       }
       rememberSourceHistory(state, session.historyDepth())
-      view.update(transactions)
+      update(view, transactions)
       return
     }
     if (pending) {
@@ -283,7 +300,7 @@ export function createSourceSession(
       (prepared) => {
         snapshot = prepared.after
         rememberSourceHistory(state, session.historyDepth())
-        view.update(transactions)
+        update(view, transactions)
       },
       (prepared) => rawSelection(prepared.after, state.selection),
       viewId,
@@ -306,7 +323,7 @@ export function createSourceSession(
       visible = next
       if (visible) flush()
     },
-    attach(view: Pick<EditorView, 'state' | 'update'>) {
+    attach(view: Pick<EditorView, 'state' | 'update' | 'setState'>) {
       if (!session.ownsCurrentSnapshot(snapshot))
         throw new Error('The source editor is synchronizing.')
       snapshot = session.snapshot()
@@ -332,7 +349,7 @@ export function createSourceSession(
         })
         pending = selection = null
         rememberSourceHistory(transaction.state, session.historyDepth())
-        view.update([transaction])
+        update(view, [transaction])
       }
       const unsubscribe = session.subscribeOperations((prepared) => {
         if (snapshot === prepared.after) return

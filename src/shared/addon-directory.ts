@@ -1,4 +1,5 @@
 import {
+  ADDON_API_VERSION,
   type AddonAuthor,
   type AddonManifest,
   compatibleAddonManifest,
@@ -65,7 +66,13 @@ export function parseAddonDirectory(value: unknown): AddonDirectoryEntry[] {
   if (!Array.isArray(value) || value.length > 500)
     throw new Error('The addon directory is invalid.')
   const ids = new Set<string>()
-  return value.map((entry: unknown) => {
+  return value.flatMap((entry: unknown) => {
+    if (
+      object(entry) &&
+      Number.isSafeInteger(entry.apiVersion) &&
+      (entry.apiVersion as number) > ADDON_API_VERSION
+    )
+      return []
     if (
       !object(entry) ||
       Object.keys(entry).some(
@@ -143,7 +150,7 @@ export function parseAddonDirectory(value: unknown): AddonDirectoryEntry[] {
         throw new Error('The addon directory contains an invalid download.')
       addonPackageUrl(source.url)
     }
-    return entry as AddonDirectoryEntry
+    return [entry as AddonDirectoryEntry]
   })
 }
 

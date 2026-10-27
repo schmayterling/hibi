@@ -606,3 +606,78 @@ test('ENG24: 100k-line local input retains native CM Text and bounded source wor
   surface.dispose()
   f.session.dispose()
 })
+
+test('a view update that throws while drawing is redrawn at the accepted state', () => {
+  const f = fixture('one\r\ntwo\r\n')
+  const surface = f.attach()
+  const other = f.attach('other')
+  const resets = []
+  const draw = surface.view.update
+  // CodeMirror sets its new state before drawing, so a draw can fail after it.
+  let failure = 'after'
+  surface.view.update = function (transactions) {
+    const mode = failure
+    failure = ''
+    if (mode !== 'before') draw.call(this, transactions)
+    if (mode) throw new Error(`draw failed ${mode}`)
+  }
+  surface.view.setState = function (state) {
+    resets.push(state)
+    this.state = state
+  }
+  surface.dispatch(type(3, 'X', 1))
+  assert.equal(f.session.snapshot().materialize(), 'oneX\r\ntwo\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'oneX\ntwo\n')
+  assert.equal(resets.at(-1), surface.view.state)
+  surface.dispatch(type(4, 'Y', 2))
+  failure = 'before'
+  surface.dispatch(type(5, 'Z', 3))
+  assert.equal(f.session.snapshot().materialize(), 'oneXYZ\r\ntwo\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'oneXYZ\ntwo\n')
+  assert.equal(resets.at(-1), surface.view.state)
+  // Canonical edits from another view reach a failing view the same way.
+  failure = 'after'
+  other.dispatch(type(10, '!', 600))
+  assert.equal(f.session.snapshot().materialize(), 'oneXYZ\r\ntwo!\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'oneXYZ\ntwo!\n')
+  assert.equal(resets.length, 3)
+  assert.deepEqual(
+    f.errors.map((error) => error.message),
+    ['draw failed after', 'draw failed before', 'draw failed after'],
+  )
+  surface.bridge.undo()
+  surface.bridge.undo()
+  assert.equal(f.session.snapshot().materialize(), 'one\r\ntwo\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'one\ntwo\n')
+  assert.equal(other.view.state.doc.toString(), 'one\ntwo\n')
+  surface.bridge.redo()
+  assert.equal(surface.view.state.doc.toString(), 'oneXYZ\ntwo\n')
+  assert.equal(resets.length, 3)
+  surface.dispose()
+  other.dispose()
+  f.session.dispose()
+})
+
+test('an edit the session rejects leaves the view at the canonical text', () => {
+  let reject = false
+  const f = fixture('ab\r\n', {
+    admit: () => {
+      if (reject) throw new Error('rejected')
+    },
+  })
+  const surface = f.attach()
+  const resets = []
+  surface.view.setState = (state) => resets.push(state)
+  reject = true
+  assert.throws(() => surface.dispatch(type(2, 'X', 1)), /rejected/)
+  assert.equal(f.session.snapshot().materialize(), 'ab\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'ab\n')
+  reject = false
+  surface.dispatch(type(2, 'Y', 2))
+  assert.equal(f.session.snapshot().materialize(), 'abY\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'abY\n')
+  assert.deepEqual(resets, [])
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
+  f.session.dispose()
+})

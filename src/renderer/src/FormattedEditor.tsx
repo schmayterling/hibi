@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
-import type { SourceExtension } from '../../addons/api'
+import type { FormattedExtension } from '../../addons/api'
 import { builtInFlavors } from '../../shared/built-in-grammar'
 import { sourceChange } from '../../shared/document-journal'
 import type { ViewId } from '../../shared/foundation-contracts'
@@ -38,9 +38,9 @@ const MarkdownSourceEditor = lazy(() =>
 )
 
 /** Source extensions such as Vim belong to the source pane only. */
-const noFormattedExtensions: readonly SourceExtension[] = []
+const noFormattedExtensions: readonly FormattedExtension[] = []
 /** A properties editor above the text shows the frontmatter instead. */
-const propertiesExtensions: readonly SourceExtension[] = [
+const propertiesExtensions: readonly FormattedExtension[] = [
   {
     id: 'formatted.frontmatter',
     create: () =>
@@ -87,7 +87,7 @@ export function MarkdownEditor({
   const markdownDocument = format?.editing === 'markdown'
   // Large notes keep frontmatter in the text while properties are unavailable.
   const showProperties =
-    !!value &&
+    !largeOpening(documentRuntime, documentState) &&
     markdownDocument &&
     markdownExtensions.some(
       ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,

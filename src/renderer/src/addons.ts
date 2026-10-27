@@ -339,9 +339,11 @@ export function useAddons(
         ? false
         : manifest.activation === 'source'
           ? activeView !== 'normal'
-          : manifest.activation === 'rich'
-            ? activeView !== 'markdown'
-            : true),
+          : manifest.activation === 'formatted'
+            ? codemirrorFormattedView && activeView !== 'markdown'
+            : manifest.activation === 'rich'
+              ? activeView !== 'markdown'
+              : true),
     [activeView, requested],
   )
   const relevantIds = useMemo(() => {
@@ -1050,7 +1052,7 @@ export function useAddons(
           )
       }
       const registerEditorExtension = (
-        extension: SourceExtension,
+        extension: SourceExtension | FormattedExtension,
         presentation: 'source' | 'formatted',
       ) => {
         if (disposed) return () => {}
@@ -1073,7 +1075,7 @@ export function useAddons(
               const result = await performanceDiagnostics.measure(
                 id,
                 `${presentation} attachment:${extension.id}`,
-                () => extension.create(...args),
+                () => (extension.create as SourceExtension['create'])(...args),
               )
               return disposed ? [] : result
             } catch (error) {

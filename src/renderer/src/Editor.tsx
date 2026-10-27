@@ -18,6 +18,7 @@ import {
 } from 'react'
 import type {
   DocumentFormat,
+  FormattedExtension,
   MarkdownExtension,
   MarkdownFlavor,
   RichExtension,
@@ -281,7 +282,7 @@ export function MarkdownEditor({
   findOpen: boolean
   onCloseFind: () => void
   markdownExtensions: readonly MarkdownExtension[]
-  formattedExtensions?: readonly SourceExtension[]
+  formattedExtensions?: readonly FormattedExtension[]
   sourceExtensions: readonly SourceExtension[]
   richExtensions: readonly RichExtension[]
   cursorSettings: CursorSettings

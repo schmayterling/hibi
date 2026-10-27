@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
+import { build } from 'esbuild'
 import { formattedCompatibility } from '../src/renderer/src/formatted-compatibility.ts'
 
 test('bundled rich-only addons remain on an explicit migration allowlist', async () => {
@@ -31,6 +32,31 @@ test('bundled rich-only addons remain on an explicit migration allowlist', async
     'slash-commands',
     'word-count',
   ])
+})
+
+test('formatted sdk shares the host Lezer common runtime', async () => {
+  const { outputFiles } = await build({
+    entryPoints: ['src/addons/sdk-formatted.ts'],
+    bundle: true,
+    write: false,
+    platform: 'node',
+    format: 'esm',
+  })
+  const sdk = await import(
+    `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`
+  )
+  assert.ok(
+    sdk.common?.NodeProp,
+    'formatted addons receive the host NodeProp constructor',
+  )
+  const prop = new sdk.common.NodeProp()
+  const configured = sdk.markdown.parser.configure({
+    props: [prop.add({ Paragraph: 'shared' })],
+  })
+  assert.equal(
+    configured.parse('text').topNode.firstChild.type.prop(prop),
+    'shared',
+  )
 })
 
 test('legacy compatibility follows registrations, including dual-engine updates and cleanup', () => {

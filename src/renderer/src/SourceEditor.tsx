@@ -61,7 +61,11 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { DocumentFormat, SourceExtension } from '../../addons/api'
+import type {
+  DocumentFormat,
+  FormattedExtension,
+  SourceExtension,
+} from '../../addons/api'
 import {
   type CompletionItem,
   type CompletionRequest,
@@ -235,7 +239,7 @@ export function SourceEditor({
   findMove: FindMove
   onFindStatus: (status: FindStatus) => void
   showLineNumbers: boolean
-  sourceExtensions: readonly SourceExtension[]
+  sourceExtensions: readonly (SourceExtension | FormattedExtension)[]
   onFormatting: (formatting: SourceFormatting | null) => void
   onLink: (href: string) => void
   /** Formatted renders Markdown in place over the same source session. */
@@ -278,6 +282,7 @@ export function SourceEditor({
   }
   const flavorKey = flavors?.join(',')
   const configureParser = useRef(() => {})
+  const configureFlavors = useRef(() => {})
   // biome-ignore lint/correctness/useExhaustiveDependencies: parser configuration reads these current values through parserOptions.
   useEffect(() => {
     configureParser.current()
@@ -289,8 +294,11 @@ export function SourceEditor({
     label,
     sourceFormat,
     supportsMedia,
-    flavorKey,
   ])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: flavor configuration reads the current flavors through parserOptions.
+  useEffect(() => {
+    configureFlavors.current()
+  }, [flavorKey])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const keepingPlace = useRef(keepPlace)
@@ -299,7 +307,7 @@ export function SourceEditor({
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
     bridge: ReturnType<typeof createSourceSession>
-    extensions: readonly SourceExtension[]
+    extensions: readonly (SourceExtension | FormattedExtension)[]
   } | null>(null)
   const [extensionError, setExtensionError] = useState('')
   const [languageError, setLanguageError] = useState('')
@@ -657,6 +665,20 @@ export function SourceEditor({
     )
     const tree = (state: EditorState) =>
       formatted ? syntax.tree(state) : syntaxTree(state)
+    // Flavor syntax extends only the Markdown parser.
+    const flavorConfigs = () =>
+      parserOptions.current.markdownMode
+        ? markdownFlavors
+            .snapshot()
+            .filter(
+              (flavor) =>
+                !parserOptions.current.flavors ||
+                parserOptions.current.flavors.includes(flavor.id),
+            )
+            .flatMap((flavor) => flavorSyntax(flavor) ?? [])
+        : []
+    /** The flavor syntax the source parser was configured with. */
+    let parsedFlavors: ReturnType<typeof flavorConfigs> = []
     const markdown = () => {
       const {
         markdownMode,
@@ -676,14 +698,7 @@ export function SourceEditor({
             'aria-description': 'Press Escape, then Tab, to leave the editor.',
           }),
         ]
-      const extensions = markdownFlavors
-        .snapshot()
-        .filter(
-          (flavor) =>
-            !parserOptions.current.flavors ||
-            parserOptions.current.flavors.includes(flavor.id),
-        )
-        .flatMap((flavor) => flavorSyntax(flavor) ?? [])
+      parsedFlavors = flavorConfigs()
       const support =
         markdownMode && !(codeLanguage && !codeLanguages.resolve(codeLanguage))
           ? markdownLanguage?.({
@@ -693,7 +708,7 @@ export function SourceEditor({
       if (support)
         support.language.parser = protectMarkdownParser(
           support.language.parser as MarkdownParser,
-          extensions,
+          parsedFlavors,
         )
       return [
         markdownMode
@@ -1914,8 +1929,18 @@ export function SourceEditor({
       reportFormatting.current(formatting.current)
     }
     const unsubscribe = codeLanguages.subscribe(() => configureParser.current())
+    // Flavors that bring no source syntax keep the parser and its parse.
+    configureFlavors.current = () => {
+      const configs = formatted ? null : flavorConfigs()
+      if (
+        !configs ||
+        configs.length !== parsedFlavors.length ||
+        configs.some((config, index) => config !== parsedFlavors[index])
+      )
+        configureParser.current()
+    }
     const unsubscribeFlavors = markdownFlavors.subscribe(() => {
-      if (!formatted) configureParser.current()
+      if (!formatted) configureFlavors.current()
     })
     configureParser.current()
     const measure = () => {
@@ -1956,6 +1981,7 @@ export function SourceEditor({
       unsubscribe()
       unsubscribeFlavors()
       configureParser.current = () => {}
+      configureFlavors.current = () => {}
       disposed = true
       unsubscribeInteractions()
       unregisterSelection()

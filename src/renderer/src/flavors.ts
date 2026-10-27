@@ -80,10 +80,12 @@ export const flavors = {
       onError,
     })
     if (flavor.syntax || flavor.render)
-      void import('./formatted-flavor').then(({ registerFormattedFlavor }) => {
-        if (active)
-          removeFormatted = registerFormattedFlavor(addonId, item, onError)
-      })
+      void import('./load-formatted-flavor')
+        .then(({ loadFormattedFlavor }) => loadFormattedFlavor())
+        .then(({ registerFormattedFlavor }) => {
+          if (active)
+            removeFormatted = registerFormattedFlavor(addonId, item, onError)
+        }, onError)
     registry.set(id, item)
     publish()
     return remove

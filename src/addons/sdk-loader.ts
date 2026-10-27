@@ -4,8 +4,14 @@ import type { Addon, AddonCapability } from './api'
 export type CapabilitySdk = {
   React?: typeof import('react')
   ui?: typeof import('./ui')
+  /**
+   * @deprecated Available only when the rich capability is requested in the legacy editor.
+   * @throws Access in the CodeMirror formatted engine throws an update-required error.
+   * Check codeMirror.markdown first when supporting both editor engines.
+   */
   tiptap?: typeof import('@tiptap/core')
   codeMirror?: typeof import('./sdk-source') & {
+    common?: typeof import('@lezer/common')
     markdown?: typeof import('@lezer/markdown')
   }
   markdown?: { Marked: typeof import('marked').Marked }

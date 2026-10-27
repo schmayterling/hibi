@@ -158,7 +158,12 @@ before(
     await writeFile(join(folder, 'notes', 'nested.md'), nested)
     await writeFile(join(folder, 'notes', 'markers.md'), markers)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      // compare grayscale text in both compositing paths on every platform.
+      args: [
+        resolve('.'),
+        '--disable-lcd-text',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
@@ -239,20 +244,30 @@ const sample = (target, selectors, title) =>
       const pane = root.getBoundingClientRect()
       const textBox = (element, text) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const index = node.data.indexOf(text)
-          if (index < 0) continue
-          const range = document.createRange()
-          range.setStart(node, index)
-          range.setEnd(node, index + text.length)
-          const box = range.getBoundingClientRect()
-          return {
-            left: box.left - pane.left,
-            top: box.top - pane.top,
-            height: box.height,
+        const nodes = []
+        for (let node = walker.nextNode(); node; node = walker.nextNode())
+          nodes.push(node)
+        const index = nodes
+          .map((node) => node.data)
+          .join('')
+          .indexOf(text)
+        if (index < 0) return null
+        const point = (offset) => {
+          for (const node of nodes) {
+            if (offset <= node.length) return [node, offset]
+            offset -= node.length
           }
         }
-        return null
+        const range = document.createRange()
+        range.setStart(...point(index))
+        range.setEnd(...point(index + text.length))
+        const box = range.getBoundingClientRect()
+        return {
+          width: box.width,
+          left: box.left - pane.left,
+          top: box.top - pane.top,
+          height: box.height,
+        }
       }
       return Object.fromEntries(
         Object.entries(selectors).map(([key, { selector, text }]) => {
@@ -272,8 +287,7 @@ const sample = (target, selectors, title) =>
               backgroundColor: style.backgroundColor,
               textDecorationLine: style.textDecorationLine,
               letterSpacing: style.letterSpacing,
-              // Highlighting splits text into spans; the first word is one text node.
-              box: textBox(element, text.split(' ')[0]),
+              box: textBox(element, text),
             },
           ]
         }),
@@ -383,7 +397,7 @@ async function parity(title, doc, rich, formatted, name) {
     for (const key of Object.keys(rich)) {
       const a = before[key],
         b = after[key]
-      assert.ok(a && b, `${key}: ${JSON.stringify({ a, b })}`)
+      assert.ok(a?.box && b?.box, `${key}: ${JSON.stringify({ a, b })}`)
       for (const property of [
         'fontFamily',
         'fontSize',
@@ -398,6 +412,8 @@ async function parity(title, doc, rich, formatted, name) {
         key,
         dx: Math.round((b.box.left - a.box.left) * 10) / 10,
         dy: Math.round((b.box.top - a.box.top) * 10) / 10,
+        dw: Math.round((b.box.width - a.box.width) * 10) / 10,
+        dh: Math.round((b.box.height - a.box.height) * 10) / 10,
       })
     }
     const images = [
@@ -447,19 +463,20 @@ async function parity(title, doc, rich, formatted, name) {
     report.push({ id, key: 'pixels', difference, box })
   }
   console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
-  // The same text at the same positions renders the same pixels; a failure
-  // reports the text positions too.
+  // keep the pixel gate strict; failures also report full phrase bounds.
   for (const { id, key, difference } of report)
     if (key === 'pixels')
       assert.ok(
         difference < 0.002,
         `${id}: ${difference} ${JSON.stringify(report)}`,
       )
-  // Text positions match the rich view within a pixel.
+  // full phrase bounds match the rich view within a pixel.
   const offsets = report.filter(
     (entry) =>
       entry.key !== 'pixels' &&
-      (Math.abs(entry.dx) > 1 || Math.abs(entry.dy) > 1),
+      [entry.dx, entry.dy, entry.dw, entry.dh].some(
+        (value) => Math.abs(value) > 1,
+      ),
   )
   assert.deepEqual(offsets, [], JSON.stringify(report))
 }

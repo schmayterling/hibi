@@ -111,7 +111,7 @@ function Host({
       },
       runCommand: async () => false,
       runAction: () => {},
-      getMarkdown: () => documentRuntime.get(document.tabId)?.markdown ?? '',
+      getEditorDocument: () => documentRuntime.get(document.tabId),
       openSidebar: () => {},
       closeSidebar: () => {},
       openTab: () => {},

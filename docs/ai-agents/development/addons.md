@@ -85,7 +85,7 @@ Updates after disposal are ignored. Click failures produce an error notification
 
 ## Slash actions
 
-An existing command can join the slash menu with `slash: { label, description, keywords?, when?, transform }`. `when(source)` checks the complete note. `transform(source)` synchronously receives the whole note with its slash query removed, then returns replacement text or `null` to cancel. Keep transforms pure. Frontmatter shares one `addFrontmatter` transform between its palette and slash actions.
+An existing command can join the slash menu with `slash: { label, description, keywords?, available?, when?, transform }`. `available(note)` decides whether the action is offered and reads only what it needs: `note.slice(from, to)` returns part of the note and `note.length` is its length, in UTF-16 code units. `when(source)` receives the complete note instead, which is read again whenever the menu changes, so prefer `available`; Hibi checks `available` when both are set. `transform(source)` synchronously receives the whole note with its slash query removed, then returns replacement text or `null` to cancel. Keep checks and transforms pure. Frontmatter's check reads a few pieces of the note each time, reads on in idle time, and keeps its answer through edits that cannot change it; it shares one `addFrontmatter` transform between its palette and slash actions.
 
 ```typescript
 context.commands.register({
@@ -96,7 +96,7 @@ context.commands.register({
     label: 'properties',
     description: 'add page metadata',
     keywords: 'frontmatter yaml',
-    when: source => !hasProperties(source),
+    available: note => !hasProperties(note),
     transform: addProperties,
   },
 })

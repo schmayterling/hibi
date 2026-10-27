@@ -36,7 +36,7 @@ before(
     folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-counts-'))
     await writeFile(
       join(folder, 'addons.json'),
-      JSON.stringify({ 'word-count': true }),
+      JSON.stringify({ 'word-count': true, dictionary: true }),
     )
     await writeFile(join(folder, 'counts.md'), source)
     await writeFile(

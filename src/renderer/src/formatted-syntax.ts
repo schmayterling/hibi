@@ -36,6 +36,7 @@ import {
 } from './chunked-markdown.ts'
 import { codeLanguages } from './code-languages.ts'
 import {
+  formattedBlockParser,
   formattedFlavors,
   formattedLiteral,
   formattedMarkdown,
@@ -694,7 +695,15 @@ export function formattedSyntax(
   const syntax = syntaxField(options)
   const { field } = syntax
   return {
-    extension: [field, driver(syntax, options)],
+    extension: [
+      field,
+      formattedBlockParser.of((state) =>
+        Object.assign(syntax.chunkedFor(state).scan.configure({}), {
+          parseInline: () => [],
+        }),
+      ),
+      driver(syntax, options),
+    ],
     tree: (state) => state.field(field).tree,
     settling: (state) => state.field(field).settling,
   }

@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from 'node:module'
 import test from 'node:test'
 import { EditorState, Text } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
+import { GFM, parser } from '@lezer/markdown'
 import { Schema } from '@tiptap/pm/model'
 import {
   maximumSlashQueryUnits,
@@ -39,6 +40,7 @@ const schema = new Schema({
   },
   marks: { strong: {}, em: {} },
 })
+const sourceBounds = (state) => state.field(frontmatterBounds, false)
 const astral = '\u{10400}'.repeat(48)
 
 // Run the actual plugin update and its frame callback against native PM nodes.
@@ -156,9 +158,13 @@ test('rich prefix checks stop early across marked spans and inline containers', 
 
 test('source reads only a possible slash prefix, even near the start of a long line', async () => {
   const ranges = []
+  let treeReads = 0
   const current = await load('source', 'current', {
     EditorView: { editable: Symbol('editable') },
-    syntaxTree: () => ({ resolveInner: () => null }),
+    syntaxTree: () => {
+      treeReads++
+      return { resolveInner: () => null }
+    },
     slashQuery,
     maximumSlashQueryUnits,
     frontmatterBounds,
@@ -191,6 +197,9 @@ test('source reads only a possible slash prefix, even near the start of a long l
   }
   assert.equal(match('x'.repeat(100_000)), null)
   assert.deepEqual(ranges, [])
+  assert.equal(match('ordinary'), null)
+  assert.equal(treeReads, 0)
+  assert.deepEqual(ranges, [[0, 8]])
   assert.equal(match(`/a${'x'.repeat(100_000)}`, 2).query, 'a')
   assert.deepEqual(ranges, [[0, 2]])
   assert.equal(match(`/${astral}`).query, astral)
@@ -227,13 +236,13 @@ test('source slash queries stay blocked while frontmatter bounds are unfinished'
     })
     assert.equal(state.field(frontmatterBounds).end, 0)
     assert.ok(state.field(frontmatterBounds).searched < state.doc.length)
-    assert.equal(current(view()), null)
+    assert.equal(current(view(), undefined, sourceBounds), null)
     while (!state.field(frontmatterBounds).closer)
       state = state.update({ effects: frontmatterSearch.of(null) }).state
     assert.ok(state.field(frontmatterBounds).end > state.selection.main.head)
-    assert.equal(current(view()), null)
+    assert.equal(current(view(), undefined, sourceBounds), null)
     state = state.update({ selection: { anchor: state.doc.length } }).state
-    assert.equal(current(view()).query, 'h2')
+    assert.equal(current(view(), undefined, sourceBounds).query, 'h2')
   }
 })
 
@@ -253,29 +262,33 @@ test('source frontmatter checks read nothing per query, and edits only the lines
   const check = (state) => {
     let units = 0
     const { head } = state.selection.main
-    const match = current({
-      hasFocus: true,
-      scrollDOM: { classList: { contains: () => false } },
-      state: {
-        readOnly: false,
-        facet: () => true,
-        selection: { main: { head, empty: true }, ranges: [{}] },
-        field: (field, require) => state.field(field, require),
-        doc: {
-          length: state.doc.length,
-          lineAt: (pos) => state.doc.lineAt(pos),
-          sliceString(from, to) {
-            const read = state.doc.sliceString(from, to)
-            units += read.length
-            return read
-          },
-          toString() {
-            units += state.doc.length
-            return state.doc.toString()
+    const match = current(
+      {
+        hasFocus: true,
+        scrollDOM: { classList: { contains: () => false } },
+        state: {
+          readOnly: false,
+          facet: () => true,
+          selection: { main: { head, empty: true }, ranges: [{}] },
+          field: (field, require) => state.field(field, require),
+          doc: {
+            length: state.doc.length,
+            lineAt: (pos) => state.doc.lineAt(pos),
+            sliceString(from, to) {
+              const read = state.doc.sliceString(from, to)
+              units += read.length
+              return read
+            },
+            toString() {
+              units += state.doc.length
+              return state.doc.toString()
+            },
           },
         },
       },
-    })
+      undefined,
+      sourceBounds,
+    )
     return { query: match?.query ?? null, units }
   }
   const note = (before, after) =>
@@ -302,4 +315,98 @@ test('source frontmatter checks read nothing per query, and edits only the lines
   frontmatterProbe.lines = 0
   divider = divider.update({ changes: { from: 4, insert: 'x' } }).state
   assert.ok(frontmatterProbe.lines <= 2, String(frontmatterProbe.lines))
+})
+
+test('formatted queries begin at text blocks, keep container prefixes and reject code and continuation lines', async () => {
+  const current = await load('source', 'current', {
+    EditorView: { editable: Symbol('editable') },
+    syntaxTree: (state) => parser.configure(GFM).parse(state.doc.toString()),
+    slashQuery,
+    maximumSlashQueryUnits,
+  })
+  const match = (source, properties = {}) => {
+    const head = source.indexOf('/h2') + 3
+    return current(
+      {
+        hasFocus: true,
+        composing: false,
+        scrollDOM: { classList: { contains: () => false } },
+        state: {
+          doc: Text.of(source.split('\n')),
+          selection: { main: { head, empty: true }, ranges: [{}] },
+          readOnly: false,
+          facet: () => true,
+        },
+        ...properties,
+      },
+      (state) => parser.configure(GFM).parse(state.doc.toString()),
+    )
+  }
+  for (const [source, from] of [
+    ['/h2', 0],
+    ['> /h2', 2],
+    ['- /h2', 2],
+    ['1. /h2', 3],
+    ['# /h2', 2],
+    ['- [ ] /h2', 6],
+    ['/h2\n---', 0],
+  ]) {
+    const value = match(source)
+    assert.equal(value?.query, 'h2', source)
+    assert.equal(value.from, from, source)
+  }
+  for (const source of [
+    'one\n/h2',
+    '`/h2`',
+    '```\n/h2\n```',
+    '    /h2',
+    '<div>\n/h2\n</div>',
+  ])
+    assert.equal(match(source), null, source)
+  assert.equal(match('/h2', { composing: true }), null)
+  assert.equal(match('/h2', { hasFocus: false }), null)
+  assert.equal(
+    match('/h2', { scrollDOM: { classList: { contains: () => true } } }),
+    null,
+  )
+})
+
+test('formatted prefix reads stay bounded without materializing complete documents', async () => {
+  const source = '/h2' + 'x'.repeat(100_000)
+  const parsed = parser.configure(GFM).parse(source)
+  const state = EditorState.create({ doc: source, selection: { anchor: 3 } })
+  const reads = []
+  const current = await load('source', 'current', {
+    EditorView: { editable: Symbol('editable') },
+    slashQuery,
+    maximumSlashQueryUnits,
+  })
+  const doc = {
+    lineAt: (position) => ({ from: state.doc.lineAt(position).from }),
+    sliceString: (from, to) => {
+      reads.push(to - from)
+      return state.doc.sliceString(from, to)
+    },
+    toString() {
+      throw new Error('must not materialize the document')
+    },
+  }
+  const view = {
+    hasFocus: true,
+    composing: false,
+    scrollDOM: { classList: { contains: () => false } },
+    state: { doc, selection: state.selection, facet: () => true },
+  }
+  assert.equal(current(view, () => parsed).query, 'h2')
+  assert.deepEqual(reads, [3])
+  reads.length = 0
+  view.state.selection = {
+    main: { head: source.length, empty: true },
+    ranges: [{}],
+  }
+  assert.equal(
+    current(view, () => parsed),
+    null,
+  )
+  assert.deepEqual(reads, [])
 })

@@ -7,7 +7,11 @@ import {
 } from '@codemirror/state'
 import { type EditorView, type KeyBinding, keymap } from '@codemirror/view'
 import type { NodeType, Tree } from '@lezer/common'
-import type { MarkdownConfig } from '@lezer/markdown'
+import {
+  type MarkdownConfig,
+  type MarkdownParser,
+  parser,
+} from '@lezer/markdown'
 import type { FormattedNodeView } from '../../addons/api'
 
 export type {
@@ -74,6 +78,19 @@ export type FormattedContribution = {
 
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
+
+/** The view's block grammar without inline scans, for validating source transforms. */
+export const formattedBlockParser = Facet.define<
+  (state: EditorState) => MarkdownParser,
+  (state: EditorState) => MarkdownParser
+>({
+  combine: (values) =>
+    values[0] ??
+    ((state) =>
+      Object.assign(parser.configure([{}, ...state.facet(formattedMarkdown)]), {
+        parseInline: () => [],
+      })),
+})
 
 /** Block overlays opt into measuring the edges the container renderer draws. */
 export const formattedBlockEdges = Facet.define<boolean, boolean>({

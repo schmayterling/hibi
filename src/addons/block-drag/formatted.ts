@@ -780,7 +780,11 @@ export function moveBlock(
   changes.push(insert)
   // A bare quote prefix must not consume the first space of a joined block.
   let quoted = false
-  for (let parent = block.parent; parent; parent = parent.parent)
+  for (
+    let parent: SyntaxNode | null = block.parent;
+    parent;
+    parent = parent.parent
+  )
     if (parent.name === 'Blockquote') quoted = true
   if (quoted) {
     const bare = (text: string) => /^[ \t>]*>$/.test(text)

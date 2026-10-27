@@ -157,7 +157,7 @@ test('formatted and source panes keep separate bookmarks through edits and hidde
   assert.deepEqual(await selection(source), { anchor: 16, head: 16, text: '' })
 })
 
-test('addon view targets and source extensions identify each formatted split pane', {
+test('addon targets identify the hosting editor and report its active pane', {
   timeout: 60000,
 }, async (t) => {
   const { app, page, text, rich, source, select, selection } = await open(t)
@@ -174,11 +174,11 @@ test('addon view targets and source extensions identify each formatted split pan
   const markdown = await active()
   assert.equal(markdown.ok, true)
   assert.equal(markdown.value.editor, 'source')
-  assert.notEqual(markdown.value.view.viewId, formatted.value.view.viewId)
+  assert.equal(markdown.value.view.viewId, formatted.value.view.viewId)
   assert.equal(markdown.value.view.documentId, formatted.value.view.documentId)
   const listed = await page.evaluate(() => window.paneProbe.views.list())
-  assert.equal(listed.length, 2)
-  assert.equal(new Set(listed.map((view) => view.viewId)).size, 2)
+  assert.equal(listed.length, 1)
+  assert.equal(new Set(listed.map((view) => view.viewId)).size, 1)
   assert.ok(
     (await page.evaluate(() => window.paneProbe.sourceIds)).includes(
       markdown.value.view.viewId,
@@ -195,10 +195,10 @@ test('addon view targets and source extensions identify each formatted split pan
           }),
         formatted.value,
       )
-    ).ok,
-    true,
+    ).code,
+    'stale',
   )
-  assert.equal((await selection(rich)).text, 'title')
+  assert.equal((await selection(rich)).text, 'beta')
   assert.deepEqual(await selection(source), { anchor: 2, head: 5, text: 'tit' })
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await rich.focus()

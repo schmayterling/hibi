@@ -167,8 +167,11 @@ export function MarkdownEditor({
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane
   useEffect(() => {
     editorViewRegistry.setActive(viewId as ViewId, findTarget)
-    return () => editorViewRegistry.clearActive(viewId as ViewId)
   }, [viewId, findTarget])
+  useEffect(
+    () => () => editorViewRegistry.clearActive(viewId as ViewId),
+    [viewId],
+  )
   useEffect(() => {
     if (focused && documentTarget) documentRuntime.focusView(viewId as ViewId)
   }, [focused, documentTarget, viewId])

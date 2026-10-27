@@ -1,13 +1,14 @@
 import { journalMessageBytes } from '../../shared/document-journal.ts'
 import type { DocumentSession } from '../../shared/document-session.ts'
-import type {
-  BoundaryReceive,
-  DocumentWorkerReply,
-  DocumentWorkerRequest,
-  MarkdownReferenceRequest,
-  MarkdownReferenceSyntax,
-  MarkdownSemanticResult,
-  MetadataDialect,
+import {
+  type BoundaryReceive,
+  boundaryKey,
+  type DocumentWorkerReply,
+  type DocumentWorkerRequest,
+  type MarkdownReferenceRequest,
+  type MarkdownReferenceSyntax,
+  type MarkdownSemanticResult,
+  type MetadataDialect,
 } from '../../shared/document-worker-protocol.ts'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer.ts'
 import type { BoundaryConfig } from '../../shared/markdown-boundary-syntax.ts'
@@ -174,10 +175,11 @@ export class DocumentWorkerClient {
     baseVersion?: number,
   ) {
     if (this.#disposed || this.#failed) return
-    const key = JSON.stringify(config),
+    const key = boundaryKey(config),
       version = this.#session.snapshot().version
     if (
       this.#boundaries?.key === key &&
+      this.#boundaries.config.prefix === config.prefix &&
       this.#boundaries.version === version &&
       this.#boundaries.from === from &&
       this.#boundaries.baseVersion === baseVersion

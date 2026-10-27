@@ -22,6 +22,7 @@ import {
 } from '../../shared/markdown-boundary-syntax.ts'
 import { protectMarkdownParser } from '../../shared/markdown-flavor-guard.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
+import { mappedPrefix } from '../../shared/source-projection.ts'
 import {
   BoundaryTree,
   ChunkedMarkdownParser,
@@ -63,10 +64,20 @@ type Syntax = {
    * edited chunks' nodes until it does.
    */
   settling: boolean
+  /**
+   * An unfinished parse of text around the viewport in idle time. Its tree
+   * replaces `tree` only when it ends, since a partial parse shows the text
+   * after its position as unscanned.
+   */
+  ahead: { parse: ChunkedPartialParse; window: Demand } | null
 }
 
 const setDemand = StateEffect.define<Demand>()
 const resume = StateEffect.define<boolean>()
+const parseAhead = StateEffect.define<{
+  window: Demand
+  deadline: IdleDeadline
+}>()
 const adoptBoundaries = StateEffect.define<{
   doc: EditorState['doc']
   key: string
@@ -207,6 +218,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
           complete: !uncovered(tree, demand.from, demand.to),
           parse: null,
           settling: false,
+          ahead: null,
         }
       // Keep the verified progress; the driver resumes in an idle slice.
       if (oneStep || performance.now() >= end)
@@ -218,7 +230,38 @@ function syntaxField(options: FormattedSyntaxOptions) {
           complete: false,
           parse,
           settling,
+          ahead: null,
         }
+    }
+  }
+  /** Parse toward `window` while the main thread stays idle; the shown tree is kept until that parse ends. */
+  const parseNear = (
+    value: Syntax,
+    state: EditorState,
+    window: Demand,
+    deadline: IdleDeadline,
+  ): Syntax => {
+    const parse =
+      value.ahead?.parse ??
+      chunkedFor(state).startChunkedParse(
+        new DocInput(state.doc),
+        TreeFragment.addTree(value.tree),
+        window,
+        value.prefix,
+      )
+    const end = performance.now() + slice
+    for (;;) {
+      const tree = parse.advance()
+      if (tree)
+        return {
+          ...value,
+          tree,
+          complete: !uncovered(tree, value.demand.from, value.demand.to),
+          ahead: null,
+        }
+      // At most one slice, and less once input or another task waits.
+      if (performance.now() >= end || deadline.timeRemaining() < 1)
+        return { ...value, ahead: { parse, window } }
     }
   }
   const start = (
@@ -257,7 +300,8 @@ function syntaxField(options: FormattedSyntaxOptions) {
       let demand = value.demand,
         resumed = false,
         moved = false,
-        oneStep = false
+        oneStep = false,
+        near: { window: Demand; deadline: IdleDeadline } | null = null
       for (const effect of transaction.effects) {
         if (effect.is(setDemand)) {
           demand = effect.value
@@ -265,7 +309,8 @@ function syntaxField(options: FormattedSyntaxOptions) {
         } else if (effect.is(resume)) {
           resumed = true
           oneStep = effect.value
-        } else if (effect.is(adoptBoundaries)) {
+        } else if (effect.is(parseAhead)) near = effect.value
+        else if (effect.is(adoptBoundaries)) {
           const adopted = effect.value
           const config = boundaryConfig(
             transaction.state,
@@ -295,13 +340,24 @@ function syntaxField(options: FormattedSyntaxOptions) {
           }
         }
       }
-      // New syntax contributions or a new unparsed prefix parse the document again.
+      // New syntax or edits crossing the unparsed prefix parse the document again.
       const { state, startState } = transaction
+      const prefix = prefixOf(state)
+      const ranges: {
+        fromA: number
+        toA: number
+        fromB: number
+        toB: number
+      }[] = []
+      transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+        ranges.push({ fromA, toA, fromB, toB })
+      })
       if (
         state.facet(formattedMarkdown) !==
           startState.facet(formattedMarkdown) ||
         state.facet(formattedOpaque) !== startState.facet(formattedOpaque) ||
-        prefixOf(state) !== value.prefix
+        (prefix !== value.prefix &&
+          mappedPrefix(value.prefix, ranges) !== prefix)
       )
         return start(
           transaction.state,
@@ -313,15 +369,6 @@ function syntaxField(options: FormattedSyntaxOptions) {
         )
       if (transaction.docChanged) {
         demand = mapDemand(demand, transaction.changes)
-        const ranges: {
-          fromA: number
-          toA: number
-          fromB: number
-          toB: number
-        }[] = []
-        transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-          ranges.push({ fromA, toA, fromB, toB })
-        })
         // The unfinished parse belongs to the old text; its verified chunks are in the tree.
         const fragments = TreeFragment.applyChanges(
           TreeFragment.addTree(value.tree),
@@ -335,6 +382,8 @@ function syntaxField(options: FormattedSyntaxOptions) {
           TreeFragment.applyChanges(value.retained, ranges),
         )
       }
+      if (near && !moved && !resumed)
+        return parseNear(value, transaction.state, near.window, near.deadline)
       if (demand === value.demand && !resumed) return value
       if (value.parse) {
         value.parse.setDemand(demand)
@@ -348,8 +397,9 @@ function syntaxField(options: FormattedSyntaxOptions) {
           oneStep,
         )
       }
+      // The viewport needs its text now; an unfinished parse ahead starts over later.
       if (!uncovered(value.tree, demand.from, demand.to))
-        return { ...value, demand, complete: true }
+        return { ...value, demand, complete: true, ahead: null }
       return start(
         transaction.state,
         TreeFragment.addTree(value.tree),
@@ -371,11 +421,16 @@ function driver(
     class {
       private timer: ReturnType<typeof setTimeout> | null = null
       private idle = 0
+      /** The idle callback that parses text around the viewport before it is shown. */
+      private near = 0
+      /** The tree and viewport a parse ahead last finished with: the same again finds nothing new. */
+      private nearFor: { tree: Tree; from: number; to: number } | null = null
       private view: EditorView
       private boundaryIdle = 0
       private boundaryDoc: EditorState['doc'] | null = null
       /** The last boundary configuration followed; undefined before the first. */
       private boundaryKey: string | null | undefined = undefined
+      private boundaryPrefix: number | null = null
       private boundaryStream: string | null = null
       private boundarySeeded = false
       private boundaryVersion: number | undefined
@@ -388,20 +443,35 @@ function driver(
         this.followBoundaries()
       }
       update(update: ViewUpdate) {
-        this.followBoundaries()
+        this.followBoundaries(update.changes)
         if (update.viewportChanged) this.schedule(true)
         else if (!update.state.field(field).complete) this.schedule(false)
+        else this.scheduleNear()
       }
       private declined = () => {
         const probe = options.probe
         if (probe) probe.adoptionDeclined = (probe.adoptionDeclined ?? 0) + 1
       }
-      private followBoundaries() {
+      private followBoundaries(changes?: ChangeDesc) {
         if (!options.boundaries) return
         const { state } = this.view
         const config = boundaryConfig(state, options, prefixOf(state))
         const key = config ? boundaryKey(config) : null
-        const sameConfig = key === this.boundaryKey
+        let samePrefix = (config?.prefix ?? null) === this.boundaryPrefix
+        if (!samePrefix && changes && this.boundaryPrefix !== null) {
+          const ranges: {
+            fromA: number
+            toA: number
+            fromB: number
+            toB: number
+          }[] = []
+          changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+            ranges.push({ fromA, toA, fromB, toB })
+          })
+          samePrefix =
+            mappedPrefix(this.boundaryPrefix, ranges) === config?.prefix
+        }
+        const sameConfig = key === this.boundaryKey && samePrefix
         // Syntax the worker cannot parse requests nothing; releasing once covers every later update.
         if (sameConfig && !config) return
         const syntax = state.field(field)
@@ -420,6 +490,7 @@ function driver(
           return
         this.boundaryDoc = state.doc
         this.boundaryKey = key
+        this.boundaryPrefix = config?.prefix ?? null
         this.boundaryStream = null
         if (!sameConfig) {
           this.boundarySeeded = false
@@ -541,6 +612,55 @@ function driver(
           ],
         })
       }
+      private scheduleNear() {
+        if (this.near || this.timer !== null || this.idle) return
+        this.near = requestIdleCallback((deadline) => this.runNear(deadline))
+      }
+      /**
+       * Text around the viewport is parsed while the main thread has nothing
+       * else to do, so scrolling into it parses nothing in its frames.
+       */
+      private runNear(deadline: IdleDeadline) {
+        this.near = 0
+        const { view } = this
+        const { state } = view
+        const syntax = state.field(field)
+        if (!syntax.complete || this.timer !== null || this.idle) return
+        const { from, to } = view.viewport
+        const reach = 16 * chunkedFor(state).chunkSize,
+          length = state.doc.length
+        if (!syntax.ahead) {
+          const tried = this.nearFor
+          // Once per tree and viewport, and only when unparsed text comes within half the reach.
+          if (
+            (tried?.tree === syntax.tree &&
+              tried.from === from &&
+              tried.to === to) ||
+            !uncovered(
+              syntax.tree,
+              Math.max(0, from - reach / 2),
+              Math.min(length, to + reach / 2),
+            )
+          )
+            return
+        }
+        // A frame, input or other task is pending: wait for a quiet main thread.
+        if (deadline.timeRemaining() < 40) {
+          this.scheduleNear()
+          return
+        }
+        view.dispatch({
+          effects: parseAhead.of({
+            window: syntax.ahead?.window ?? {
+              from: Math.max(0, from - reach),
+              to: Math.min(length, to + reach),
+            },
+            deadline,
+          }),
+        })
+        const parsed = view.state.field(field)
+        if (!parsed.ahead) this.nearFor = { tree: parsed.tree, from, to }
+      }
       destroy() {
         this.destroyed = true
         if (this.boundaryIdle) cancelIdleCallback(this.boundaryIdle)
@@ -548,6 +668,7 @@ function driver(
         options.boundaries?.release()
         if (this.timer !== null) clearTimeout(this.timer)
         if (this.idle) cancelIdleCallback(this.idle)
+        if (this.near) cancelIdleCallback(this.near)
       }
     },
   )

@@ -1,3 +1,5 @@
+import { tags } from '@lezer/highlight'
+import { Strikethrough, Table } from '@lezer/markdown'
 import { build } from 'esbuild'
 import {
   BoundaryTree,
@@ -6,6 +8,7 @@ import {
 } from '../src/shared/chunked-markdown.ts'
 import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import {
+  boundaryKey,
   boundaryParser,
   boundarySyntaxIds,
 } from '../src/shared/markdown-boundary-syntax.ts'
@@ -220,6 +223,49 @@ test('frontmatter prefixes and empty notes transfer without syntax nodes', () =>
       parsed.topNode.firstChild?.name,
       text ? 'Frontmatter' : undefined,
     )
+  }
+})
+
+test('properties edits map worker prefixes and retain boundaries without scanning body text', () => {
+  const prefix = '---\ntitle: exact\n---\n\n'
+  const config = configuration({
+    prefix: prefix.length,
+    chunkSize: 4096,
+    groupSize: 64,
+    giantBlock: 65536,
+  })
+  assert.equal(
+    boundaryKey(config),
+    boundaryKey({ ...config, prefix: prefix.length + 1 }),
+  )
+  for (const ending of ['\n', '\r\n', '\r']) {
+    const unit = '# heading\n\nparagraph words\n\n'
+    const length = ending === '\n' ? 8 * 1024 * 1024 : 128 * 1024
+    const text = prefix + unit.repeat(Math.ceil(length / unit.length))
+    const store = new SourceStore(text.replaceAll('\n', ending), {
+      tabId: 'properties',
+      revision: 0,
+    })
+    const probe = counts()
+    const index = new MarkdownBoundaryIndex(store.snapshot(), config, probe)
+    drain(index)
+    let expected = prefix.length
+    for (const insert of ['x', ending + 'other: value', 'z']) {
+      const at = store.snapshot().materialize().indexOf('exact') + 5
+      probe.scannedUnits = probe.reusedNodes = 0
+      index.apply(edit(store, [{ from: at, to: at, insert }]))
+      expected += normalizedSource(insert).length
+      drain(index)
+      assert.equal(index.config.prefix, expected)
+      assert.equal(index.key, boundaryKey({ ...config, prefix: expected }))
+      assert.equal(probe.scannedUnits, 0, JSON.stringify(probe))
+      assert.ok(probe.reusedNodes > 0)
+      assert.ok(
+        [...index.records()].every(
+          (record) => record.kind !== 'chunk' || record.type !== 'tail',
+        ),
+      )
+    }
   }
 })
 
@@ -681,6 +727,142 @@ test('giant replay points, ordered counts, read-ahead, and ends survive bounded 
       within(boundaryParser(configuration()).parse(text)),
     )
   }
+})
+
+test('pure inline syntax including copied configs keeps worker boundary eligibility', () => {
+  const inline = {
+    defineNodes: ['AddonProof'],
+    parseInline: [{ name: 'AddonProof', parse: () => -1 }],
+  }
+  const copied = {
+    ...inline,
+    parseInline: inline.parseInline.map((rule) => ({
+      ...rule,
+      parse: (...args) => rule.parse(...args),
+    })),
+  }
+  assert.deepEqual(boundarySyntaxIds(inline), [])
+  assert.deepEqual(boundarySyntaxIds([{}, copied]), [])
+  assert.deepEqual(boundarySyntaxIds([inline, []]), [])
+})
+
+test('inline neutrality rejects hidden and inherited grammar fields', () => {
+  for (const config of [
+    Object.defineProperty({}, 'parseBlock', { value: [] }),
+    Object.defineProperty({}, 'remove', { value: [] }),
+    Object.create({ parseBlock: [] }),
+    { defineNodes: [Object.create({ name: 'InheritedInline' })] },
+    {
+      defineNodes: [
+        Object.defineProperty({ name: 'HiddenInline' }, 'unknown', {
+          value: true,
+        }),
+      ],
+    },
+    { parseInline: [], [Symbol('unknown')]: true },
+    Object.defineProperty({}, 'parseInline', { get: () => assert.fail() }),
+    {
+      defineNodes: [
+        Object.defineProperty({ name: 'AccessorInline' }, 'style', {
+          get: () => assert.fail(),
+        }),
+      ],
+    },
+  ])
+    assert.equal(boundarySyntaxIds(config), null)
+})
+
+test('safe inline styles and null prototypes preserve catalog order', () => {
+  const styled = {
+    defineNodes: [{ name: 'StyledInline', style: tags.strong }],
+    parseInline: [],
+  }
+  assert.deepEqual(boundarySyntaxIds(styled), [])
+  assert.deepEqual(
+    boundarySyntaxIds({
+      parseInline: [
+        Object.assign(Object.create(null), {
+          name: 'Emphasis',
+          parse: () => -1,
+          before: 'Escape',
+          after: 'Entity',
+        }),
+      ],
+    }),
+    [],
+  )
+  assert.deepEqual(
+    boundarySyntaxIds({
+      defineNodes: [Object.assign(Object.create(null), styled.defineNodes[0])],
+    }),
+    [],
+  )
+  assert.deepEqual(
+    boundarySyntaxIds(Object.assign(Object.create(null), styled)),
+    [],
+  )
+  assert.deepEqual(boundarySyntaxIds([Table, styled, Strikethrough, styled]), [
+    'table@1',
+    'strike@1',
+  ])
+})
+
+test('inline neutrality rejects rules sharing block parser names', () => {
+  for (const name of [
+    'LinkReference',
+    'IndentedCode',
+    'FencedCode',
+    'Blockquote',
+    'HorizontalRule',
+    'BulletList',
+    'OrderedList',
+    'ATXHeading',
+    'HTMLBlock',
+    'SetextHeading',
+    'Table',
+    'TaskList',
+    'EmptyTask',
+    'FootnoteDefinition',
+    'BlockMath',
+    'AlertQuoteStart',
+    'AlertTitle',
+    'Subtext',
+  ]) {
+    assert.equal(
+      boundarySyntaxIds({ parseInline: [{ name, parse: () => -1 }] }),
+      null,
+      name,
+    )
+  }
+  for (const rule of [
+    Object.create({ name: 'InheritedInline', parse: () => -1 }),
+    Object.defineProperty({ parse: () => -1 }, 'name', {
+      get: () => assert.fail('name accessors must not run'),
+    }),
+    Object.defineProperty({ name: 'HiddenInline' }, 'unknown', {
+      value: true,
+    }),
+    { name: 'Inline', [Symbol('unknown')]: true },
+  ])
+    assert.equal(boundarySyntaxIds({ parseInline: [rule] }), null)
+})
+
+test('inline neutrality rejects every boundary-affecting declaration', () => {
+  for (const config of [
+    { parseBlock: [] },
+    { remove: [] },
+    { wrap: (parse) => parse },
+    { props: [() => undefined] },
+    { futureBlockOption: true },
+    { defineNodes: [{ name: 'CustomBlock', block: true }] },
+    { defineNodes: [{ name: 'CustomComposite', composite: () => false }] },
+    { defineNodes: ['Paragraph'] },
+    { defineNodes: ['Table'] },
+    { defineNodes: ['Subtext'] },
+    { defineNodes: ['Frontmatter'] },
+    { defineNodes: [{ name: 'Own', unknownProperty: true }] },
+  ])
+    assert.equal(boundarySyntaxIds(config), null, JSON.stringify(config))
 })
 
 test('unknown syntax and catalog version mismatches cannot claim worker parity', () => {

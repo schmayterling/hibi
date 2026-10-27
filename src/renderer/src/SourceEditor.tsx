@@ -112,6 +112,7 @@ import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { DocumentWorkerClient, type FindAction } from './document-worker-client'
 import { registerEditorSelectionCapture } from './editor-command-targets'
+import { captureEditorFocus } from './editor-focus-restore'
 import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
@@ -301,6 +302,7 @@ export function SourceEditor({
   }, [flavorKey])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
+  const restoreFocus = useRef<(() => void) | null>(null)
   const keepingPlace = useRef(keepPlace)
   keepingPlace.current = keepPlace
   // Effects follow the actual view, which mounts after source preparation.
@@ -1875,15 +1877,21 @@ export function SourceEditor({
     const unregister = registerSourceView(
       editor,
       (raw) => {
-        const anchor = bridge.snapshot().rawToEditor(raw)
-        if (anchor !== null)
-          editor.dispatch({
-            selection: { anchor },
-            effects: EditorView.scrollIntoView(anchor, {
-              y: 'start',
-              yMargin: 48,
-            }),
-          })
+        const at = bridge.snapshot().rawToEditor(raw)
+        if (at === null) return
+        // Like the rich view, the formatted view puts the caret in a heading's
+        // text, after the opening mark and the space it hides with it.
+        const end = Math.min(editor.state.doc.lineAt(at).to, at + 7),
+          mark = formatted
+            ? /^#{1,6}(?:[ \t]|$)/.exec(editor.state.sliceDoc(at, end))
+            : null
+        editor.dispatch({
+          selection: { anchor: at + (mark?.[0].length ?? 0) },
+          effects: EditorView.scrollIntoView(at, {
+            y: 'start',
+            yMargin: 48,
+          }),
+        })
       },
       {
         toSource: (position) =>
@@ -1989,6 +1997,7 @@ export function SourceEditor({
       .load(formatted ? '16px "Geist"' : '13px "Geist Mono"')
       .then(finishFont, finishFont)
     return () => {
+      restoreFocus.current ??= captureEditorFocus(editor.contentDOM)
       cancelAnimationFrame(compositionFrame)
       editor.contentDOM.removeEventListener('keydown', onTypingCommand, true)
       editor.contentDOM.removeEventListener(
@@ -2142,6 +2151,8 @@ export function SourceEditor({
   ])
   useEffect(() => {
     if (mountedView !== view.current) return
+    if (mountedView && (disabled || !inputReady))
+      restoreFocus.current ??= captureEditorFocus(mountedView.contentDOM)
     mountedView?.dispatch({
       effects: editable.current.reconfigure([
         EditorView.editable.of(!disabled && inputReady),
@@ -2155,15 +2166,21 @@ export function SourceEditor({
 
   useEffect(() => {
     // Publish readiness after CodeMirror configures input, before its next frame.
-    ready.current(
+    const status =
       extensionError || languageError || echoError
         ? 'failed'
         : inputReady && (!waitForFont || fontReadyBridge === bridge)
           ? 'ready'
-          : 'loading',
-    )
+          : 'loading'
+    ready.current(status)
+    if (status === 'ready' && !disabled) {
+      const restore = restoreFocus.current
+      restoreFocus.current = null
+      restore?.()
+    }
   }, [
     bridge,
+    disabled,
     inputReady,
     waitForFont,
     fontReadyBridge,

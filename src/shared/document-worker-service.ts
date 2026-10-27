@@ -1,9 +1,10 @@
-import type {
-  DocumentWorkerReply,
-  DocumentWorkerRequest,
-  MarkdownReferenceSyntax,
-  MarkdownSemanticResult,
-  MarkdownSemanticRow,
+import {
+  boundaryKey,
+  type DocumentWorkerReply,
+  type DocumentWorkerRequest,
+  type MarkdownReferenceSyntax,
+  type MarkdownSemanticResult,
+  type MarkdownSemanticRow,
 } from './document-worker-protocol.ts'
 import type { MarkdownSemanticCache } from './markdown-semantic-cache.ts'
 import type { MarkdownSourceModel } from './markdown-source-model.ts'
@@ -138,7 +139,7 @@ export class DocumentWorkerService {
         epoch: this.#epoch,
         id: request.id,
         version: request.version,
-        key: JSON.stringify(request.config),
+        key: boundaryKey(request.config),
       })
     this.#stopBoundaries(true)
   }
@@ -386,7 +387,10 @@ export class DocumentWorkerService {
         )
           return
         this.#stopBoundaries()
-        if (this.#boundaryModel?.key !== JSON.stringify(message.config))
+        if (
+          this.#boundaryModel?.key !== boundaryKey(message.config) ||
+          this.#boundaryModel?.config.prefix !== message.config.prefix
+        )
           this.#boundaryModel = null
         this.#boundaryRequest = message
         this.#scheduleBoundaries()

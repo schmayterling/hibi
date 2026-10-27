@@ -91,7 +91,10 @@ class EmbedWidget extends WidgetType {
               anchor: event.key === 'ArrowLeft' ? from : from + this.length,
             },
           })
-        }
+        } else if (!['Alt', 'Control', 'Meta', 'Shift'].includes(event.key))
+          // Other keys edit at the caret beside the embed, which the editor
+          // keeps: it takes focus back before the key reaches it.
+          view.focus()
       })
       dom.append(link)
       return dom
@@ -124,8 +127,8 @@ class EmbedWidget extends WidgetType {
     return dom
   }
   override ignoreEvent(event: Event) {
-    // Mouse events reach the editor; keys stay with the focused link.
-    return !(event instanceof MouseEvent)
+    // Mouse events reach the editor, and so do keys the focused link leaves.
+    return !(event instanceof MouseEvent) && event.defaultPrevented
   }
   override destroy(dom: HTMLElement) {
     stops.get(dom)?.()
@@ -190,20 +193,20 @@ export const contribution: FormattedContribution = {
         const parts = wikiParts(node.node)
         const label = parts?.label.tree?.prop(wikiText)
         if (!parts || label === undefined) return false
+        const widget = new EmbedWidget(
+          parts.target,
+          label,
+          state.facet(formattedDocument).revision,
+          node.to - node.from,
+        )
         if (revealed) {
           out.syntax(node.from, node.from + 3)
           out.syntax(node.to - 2, node.to)
-        } else
-          out.replace(
-            node.from,
-            node.to,
-            new EmbedWidget(
-              parts.target,
-              label,
-              state.facet(formattedDocument).revision,
-              node.to - node.from,
-            ),
-          )
+          // An image stays beside its source, as core images do; a note's
+          // link would only repeat the label.
+          if (image.test(parts.target.split('#')[0] ?? ''))
+            out.widget(node.to, widget)
+        } else out.replace(node.from, node.to, widget)
         return false
       },
     },

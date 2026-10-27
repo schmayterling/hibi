@@ -114,6 +114,7 @@ test('dropping onto the upper half of a title lands below the title', {
   await open('alert-drop.md', doc, 'second body')
   const body = page.locator('.rich-pane .cm-line', { hasText: 'second body' })
   const box = await body.boundingBox()
+  await page.mouse.move(0, 0)
   await page.mouse.move(box.x + 90, box.y + box.height - 5)
   const handle = page.locator('.rich-pane .block-drag-handle')
   await page.waitForFunction(() => {

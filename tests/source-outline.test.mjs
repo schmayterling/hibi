@@ -51,6 +51,25 @@ const edit = (store, model, changes) => {
   return prepared
 }
 
+test('outline structure skips pathological inline parsing outside the viewport', (t) => {
+  const prefix = 'ordinary body\n\n'.repeat(1000)
+  const source = `${prefix}# ${'['.repeat(32768)}x${']'.repeat(32768)}\n\n## tail\n`
+  const { model } = setup(source, { frontmatter: false })
+  try {
+    const { value } = finish(model.read())
+    const work = model.counters()
+    assert.equal(value.length, 2)
+    assert.equal(value[1].label, 'tail')
+    t.diagnostic(JSON.stringify(work))
+    assert.ok(
+      work.longestAdvanceMs < 100,
+      `outline parser blocked for ${work.longestAdvanceMs}ms`,
+    )
+  } finally {
+    model.dispose()
+  }
+})
+
 test('source outline hides confirmed math after frontmatter with exact CRLF source offsets', () => {
   const source =
       '---\r\nname: sample\r\n---\r\n\r\n$$\r\n# inside math\r\n$$\r\n\r\n# real\r\n',

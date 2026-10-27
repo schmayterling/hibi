@@ -44,6 +44,7 @@ const everyHeading =
 const headingCount = (page, count, options) =>
   page.waitForFunction(
     ({ selector, count }) =>
+      !window.headingWork?.pending &&
       document.querySelectorAll(selector).length === count,
     { selector: everyHeading, count },
     options,
@@ -60,6 +61,38 @@ test('every heading of a long formatted note reaches assistive technology once, 
       `${i % 3 ? '##' : '#'} heading ${i}\n\nparagraph ${i} with some words to fill the line.\n`,
   ).join('\n')
   await writeFile(file, text)
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const outline = chunks.find((chunk) =>
+    chunk.modules.some((module) =>
+      module.endsWith('src/renderer/src/source-outline.ts'),
+    ),
+  ).file
+  const list = chunks.find((chunk) =>
+    chunk.modules.some((module) =>
+      module.endsWith('src/renderer/src/formatted-headings.ts'),
+    ),
+  ).file
+  await page.evaluate(
+    async ({ outline, list }) => {
+      window.headingWork = Object.values(
+        await import(`app://hibi/${list}`),
+      ).find((value) => typeof value?.placed === 'number')
+      const model = Object.values(await import(`app://hibi/${outline}`)).find(
+        (value) => value?.prototype?.read && value.prototype.counters,
+      )
+      const read = model.prototype.read
+      window.outlineReads = 0
+      model.prototype.read = function* () {
+        while (window.holdOutline) yield
+        const result = yield* read.call(this)
+        window.outlineReads++
+        return result
+      }
+    },
+    { outline, list },
+  )
   await open(app, page, file)
   await headingCount(page, 200)
   const cdp = await page.context().newCDPSession(page)
@@ -120,6 +153,141 @@ test('every heading of a long formatted note reaches assistive technology once, 
       .count(),
     0,
   )
+
+  // Stop scrolling while a body-only outline reread is pending. Its heading
+  // array stays identical, but the entries must reconcile against the new view.
+  const reads = await page.evaluate((from) => {
+    window.holdOutline = true
+    const content = document.querySelector('.rich-pane .cm-content')
+    content.cmTile.root.view.dispatch({
+      changes: { from, to: from + 1, insert: 'P' },
+    })
+    document.querySelector('.rich-pane').scrollTop = 0
+    return window.outlineReads
+  }, text.indexOf('paragraph'))
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.rich-pane .cm-content > [role="heading"]')
+        ?.textContent === 'heading 0',
+  )
+  await page.evaluate(() => {
+    window.holdOutline = false
+  })
+  await waitForAsync(page, (reads) => window.outlineReads > reads, reads)
+  await page.waitForFunction(() => !window.headingWork.pending)
+  const reconciled = await headings()
+  t.diagnostic(
+    JSON.stringify({
+      count: reconciled.length,
+      unique: new Set(reconciled.map(([name]) => name)).size,
+    }),
+  )
+  assert.deepEqual(reconciled, expected)
+})
+
+test('heading entry work at real note scale', {
+  timeout: 120000,
+}, async (t) => {
+  const { page } = await launch(t, 'hibi-heading-entry-scale-')
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const file = chunks.find((chunk) =>
+    chunk.modules.some((module) =>
+      module.endsWith('src/renderer/src/formatted-headings.ts'),
+    ),
+  ).file
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Accessibility.enable')
+  const result = await page.evaluate(async (file) => {
+    const module = Object.values(await import(`app://hibi/${file}`))
+    const List = module.find((value) => value?.prototype?.show)
+    const work = module.find((value) => typeof value?.placed === 'number')
+    const before = document.createElement('div')
+    const after = document.createElement('div')
+    before.className = after.className = 'formatted-headings'
+    document.body.append(before, after)
+    let activated = -1
+    const list = new List(before, after, (index) => {
+      activated = index
+    })
+    const headings = Array.from({ length: 13548 }, (_, i) => ({
+      id: `source:${i}:0`,
+      label: `heading ${i}`,
+      level: 2,
+    }))
+    const settle = async () => {
+      while (work.pending)
+        await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const start = performance.now()
+    const created = work.created
+    list.update(headings)
+    const synchronousCreated = work.created - created
+    // Keep the unchanged build's failure about bounded work, not a missing API.
+    if (synchronousCreated > 2048) return { synchronousCreated }
+    await settle()
+    const initialMs = performance.now() - start
+    list.show(5, 15)
+    await settle()
+    const placed = work.placed
+    const jumpStart = performance.now()
+    list.show(13538, 13548)
+    await settle()
+    const jumpMs = performance.now() - jumpStart
+    before.lastChild.firstChild.click()
+    const result = {
+      initialMs,
+      jumpMs,
+      synchronousCreated,
+      maximumCreated: work.maximumCreated,
+      maximumSliceMs: work.maximumSliceMs,
+      created: work.created,
+      jumpPlaced: work.placed - placed,
+      count: before.children.length + after.children.length,
+      ordered: [...before.children].every(
+        (entry, i) => entry.textContent === headings[i].label,
+      ),
+      activated,
+    }
+    // Supersede a pending heading update and viewport; only the latest may settle.
+    list.update(headings.slice(0, 100))
+    activated = -1
+    before.lastChild.firstChild.click()
+    result.staleActivationBlocked = activated === -1
+    list.show(0, 0)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    list.update(headings.slice(0, 200))
+    list.show(150, 160)
+    await settle()
+    result.superseded =
+      before.children.length + after.children.length === 190 &&
+      before.lastChild.textContent === 'heading 149' &&
+      after.firstChild.textContent === 'heading 160'
+    // Closing the pane cancels creation and prevents later DOM writes.
+    list.update(headings)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    list.dispose()
+    const stopped = work.created
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    result.cancelled =
+      work.created === stopped &&
+      !before.childNodes.length &&
+      !after.childNodes.length &&
+      work.pending === 0
+    before.remove()
+    after.remove()
+    return result
+  }, file)
+  t.diagnostic(JSON.stringify(result))
+  assert.ok(result.synchronousCreated <= 2048, JSON.stringify(result))
+  assert.ok(result.maximumCreated <= 2048, JSON.stringify(result))
+  assert.equal(result.count, 13538)
+  assert.equal(result.superseded, true)
+  assert.equal(result.staleActivationBlocked, true)
+  assert.equal(result.cancelled, true)
+  assert.equal(result.ordered, true)
+  assert.equal(result.activated, 13537)
 })
 
 test('a 50 MiB note keeps its heading entries through body edits and scrolling', {
@@ -142,9 +310,26 @@ test('a 50 MiB note keeps its heading entries through body edits and scrolling',
     ).file
   await page.evaluate(
     async ({ list, outline }) => {
-      window.headingWork = Object.values(
-        await import(`app://hibi/${list}`),
-      ).find((value) => typeof value?.placed === 'number')
+      const values = Object.values(await import(`app://hibi/${list}`))
+      window.headingWork = values.find(
+        (value) => typeof value?.placed === 'number',
+      )
+      const List = values.find((value) => value?.prototype?.show)
+      window.headingDurations = { update: 0, show: 0 }
+      for (const name of ['update', 'show']) {
+        const method = List.prototype[name]
+        List.prototype[name] = function (...args) {
+          const started = performance.now()
+          try {
+            return method.apply(this, args)
+          } finally {
+            window.headingDurations[name] = Math.max(
+              window.headingDurations[name],
+              performance.now() - started,
+            )
+          }
+        }
+      }
       const model = Object.values(await import(`app://hibi/${outline}`)).find(
         (value) => value?.prototype?.read && value.prototype.counters,
       )
@@ -205,6 +390,24 @@ test('a 50 MiB note keeps its heading entries through body edits and scrolling',
   const moved = await work()
   assert.equal(moved.created, scrolled.created)
   assert.ok(moved.placed - scrolled.placed < 100, JSON.stringify(moved))
+  await page.locator('.rich-pane').evaluate((pane) => {
+    pane.scrollTop = pane.scrollHeight
+  })
+  await page.waitForFunction(
+    (total) =>
+      document.querySelector('.formatted-headings').children.length >
+      total - 50,
+    total,
+  )
+  await headingCount(page, total)
+  assert.equal((await work()).created, moved.created)
+  t.diagnostic(
+    JSON.stringify({
+      total,
+      ...(await work()),
+      maximumMs: await page.evaluate(() => window.headingDurations),
+    }),
+  )
   assert.deepEqual(
     await page
       .pageErrors()

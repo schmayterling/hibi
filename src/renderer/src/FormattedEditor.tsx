@@ -273,9 +273,8 @@ export function MarkdownEditor({
     })
     return () => {
       stopped = true
+      headingList.current?.dispose()
       headingList.current = null
-      before.replaceChildren()
-      after.replaceChildren()
     }
   }, [])
   // The headings the formatted view draws change with its top-level lines.

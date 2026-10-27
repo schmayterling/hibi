@@ -253,7 +253,8 @@ export function useSourceOutline({
                 outline: step.value,
               }
               onOutlineUnavailable?.(null)
-              if (changed) onOutline(headings)
+              // Positions and the drawn viewport can change even when labels do not.
+              onOutline(headings)
               reportActiveHeading()
               return
             }

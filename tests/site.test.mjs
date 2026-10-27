@@ -4,6 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
+import { replaceRichText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 async function openSite(t, folder, snapshot) {
   const html = join(folder, 'docs.html')
@@ -21,7 +27,9 @@ async function openSite(t, folder, snapshot) {
     await app.close()
     await rm(folder, { recursive: true, force: true })
   })
-  await app.firstWindow()
+  const desktop = await app.firstWindow()
+  if (t.formattedEngine)
+    await selectFormattedEngine(app, desktop, t.formattedEngine)
   const nextWindow = app.waitForEvent('window')
   await app.evaluate(({ BrowserWindow }, html) => {
     const window = new BrowserWindow({
@@ -368,7 +376,7 @@ test('exported site applies layout options, addon themes, and heading search', {
   assert.deepEqual(errors, [])
 })
 
-test('app and exported site share heading destinations and retain legacy links', {
+it('app and exported site share heading destinations and retain legacy links', {
   timeout: 30000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-heading-anchors-'))
@@ -390,20 +398,65 @@ test('app and exported site share heading destinations and retain legacy links',
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
-  const rich = desktop.locator('.tiptap')
-  await rich.evaluate(
-    (element, html) => {
-      element.editor.commands.setContent(html)
-    },
-    `<p>${anchors
-      .map(
-        (anchor, index) =>
-          `<a href="#${encodeURIComponent(anchor)}">jump ${index}</a>`,
-      )
-      .join(' ')} <a href="#apiv2">legacy jump</a></p>${html}`,
-  )
+  const rich = desktop.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  const markdown = `[${anchors.map((anchor, index) => `jump ${index}](#${encodeURIComponent(anchor)})`).join(' [')} [legacy jump](#apiv2)\n\n${texts.map((text) => `## ${text}`).join('\n\n')}`
+  if (t.formattedEngine === 'codemirror')
+    await replaceRichText(desktop, rich, markdown)
+  else
+    await rich.evaluate(
+      (element, html) => {
+        element.editor.commands.setContent(html)
+      },
+      `<p>${anchors
+        .map(
+          (anchor, index) =>
+            `<a href="#${encodeURIComponent(anchor)}">jump ${index}</a>`,
+        )
+        .join(' ')} <a href="#apiv2">legacy jump</a></p>${html}`,
+    )
 
-  for (const window of [desktop, page])
+  const assertDesktopTarget = async (index) => {
+    if (t.formattedEngine === 'tiptap') {
+      assert.deepEqual(
+        await desktop.evaluate(() => globalThis.headingTargets),
+        [index],
+      )
+      return
+    }
+    const from = [...markdown.matchAll(/^## /gm)][index].index
+    await waitForAsync(
+      desktop,
+      (from) =>
+        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+          .selection.main.head === from,
+      from,
+    )
+    assert.equal(
+      await rich.evaluate((element, from) => {
+        const view = element.cmTile.root.view
+        const caret = view.coordsAtPos(from)
+        const pane = element.closest('.rich-pane').getBoundingClientRect()
+        return (
+          !!caret &&
+          caret.top >= pane.top - 1 &&
+          caret.bottom <= pane.bottom + 1
+        )
+      }, from),
+      true,
+      'the requested heading is visible after link activation',
+    )
+    assert.equal(
+      (await desktop.evaluate(() => window.hibi.getDocument())).markdown,
+      markdown,
+    )
+  }
+
+  for (const window of t.formattedEngine === 'tiptap'
+    ? [desktop, page]
+    : [page])
     await window.evaluate(() => {
       globalThis.headingTargets = []
       HTMLElement.prototype.scrollIntoView = function () {
@@ -465,10 +518,7 @@ test('app and exported site share heading destinations and retain legacy links',
         await rich
           .getByRole('link', { name: `jump ${index}`, exact: true })
           .click({ modifiers: ['Shift'] })
-        assert.deepEqual(
-          await desktop.evaluate(() => globalThis.headingTargets),
-          [index],
-        )
+        await assertDesktopTarget(index)
       }
       await desktop.evaluate(() => {
         globalThis.headingTargets = []
@@ -476,10 +526,7 @@ test('app and exported site share heading destinations and retain legacy links',
       await rich
         .getByRole('link', { name: 'legacy jump', exact: true })
         .click({ modifiers: ['Shift'] })
-      assert.deepEqual(
-        await desktop.evaluate(() => globalThis.headingTargets),
-        [0],
-      )
+      await assertDesktopTarget(0)
     },
   )
 })

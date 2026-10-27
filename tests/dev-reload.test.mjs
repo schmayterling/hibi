@@ -14,7 +14,6 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
@@ -23,6 +22,7 @@ import {
   startupDiagnostics,
   waitForDocumentEditor,
 } from './electron.mjs'
+import { testFormattedEngines as test } from './formatted-engine.mjs'
 import { replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -628,6 +628,20 @@ dialog.showMessageBox = (...args) => {
     true,
   )
   await waitForDocumentEditor(undefined, page)
+  await page.evaluate(
+    (engine) => localStorage.setItem('hibi:formatted-engine', engine),
+    t.formattedEngine,
+  )
+  await page.reload({ waitUntil: 'commit' })
+  await waitForDocumentEditor(undefined, page)
+  await page
+    .locator(
+      t.formattedEngine === 'tiptap'
+        ? '.rich-pane .tiptap'
+        : '.rich-pane .hibi-formatted .cm-content',
+    )
+    .waitFor()
+  await page.locator('[data-status-id="typing-probe.count"]').waitFor()
   mark('initial editor ready')
   await replaceRichText(
     page,

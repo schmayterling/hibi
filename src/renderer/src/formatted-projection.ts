@@ -6,7 +6,7 @@ import {
   Prec,
   StateEffect,
   StateField,
-  Transaction,
+  type Transaction,
 } from '@codemirror/state'
 import { Decoration, EditorView, keymap } from '@codemirror/view'
 import type { MarkdownExtension } from '../../addons/api'
@@ -14,6 +14,7 @@ import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import { normalizedSource } from '../../shared/source-projection.ts'
 import { formattedPrefix } from './formatted-contributions.ts'
 import { projectMarkdown } from './markdown-projection.ts'
+import { sourceOperationEcho } from './source-session.ts'
 
 type Body = {
   from: number
@@ -85,7 +86,7 @@ export function formattedProjection(
     if (!transaction.docChanged) return value
     const replacement = transaction.annotation(formattedProjectionSource)
     if (replacement !== undefined) return read(transaction.state, replacement)
-    const echo = transaction.annotation(Transaction.addToHistory) === false
+    const echo = transaction.annotation(sourceOperationEcho) !== undefined
     let reprove = value.readOnly && echo
     transaction.changes.iterChangedRanges((from, to) => {
       if (

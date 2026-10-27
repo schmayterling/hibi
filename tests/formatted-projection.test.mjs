@@ -204,6 +204,16 @@ test('a stale canonical echo rechecks before the next local selection and input'
   assert.equal(f.session.snapshot().materialize(), 'AB! typedbody')
 })
 
+test('local history-neutral edits are not canonical session echoes', () => {
+  const f = fixture('plain text', adapter)
+  f.dispatch({
+    changes: { from: 0, insert: 'new ' },
+    annotations: Transaction.addToHistory.of(false),
+  })
+  assert.equal(f.session.snapshot().materialize(), 'new plain text')
+  assert.equal(f.view.state.readOnly, false)
+})
+
 test('stale local input cannot consume a newly protected prefix', () => {
   const f = fixture('AB? body', {
     id: 'interior-input',

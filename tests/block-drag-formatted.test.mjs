@@ -150,6 +150,11 @@ test('frontmatter and an item’s first block keep their places', () => {
     step(note, 'first', 1, [frontmatter]),
     '---\na: 1\n---\nsecond\n\nfirst\n',
   )
+  const fencedMetadata = '---\na: |\n  \x60\x60\x60\n---\nfirst\n\nsecond\n'
+  assert.equal(
+    step(fencedMetadata, 'first', 1, [frontmatter]),
+    fencedMetadata.replace('first\n\nsecond', 'second\n\nfirst'),
+  )
   assert.equal(step('- p1\n\n  p2\n', 'p2', -1), null)
 })
 

@@ -168,13 +168,17 @@ export type FormattedContribution = {
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
-/** The same block grammar the view uses, for validating local source transforms. */
+/** The view's block grammar without inline scans, for validating source transforms. */
 export const formattedBlockParser = Facet.define<
   (state: EditorState) => MarkdownParser,
   (state: EditorState) => MarkdownParser
 >({
   combine: (values) =>
-    values[0] ?? ((state) => parser.configure(state.facet(formattedMarkdown))),
+    values[0] ??
+    ((state) =>
+      Object.assign(parser.configure([{}, ...state.facet(formattedMarkdown)]), {
+        parseInline: () => [],
+      })),
 })
 
 /** The view's active flavor ids also identify worker boundary configurations. */

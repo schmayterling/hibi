@@ -549,7 +549,11 @@ export function formattedSyntax(
   return {
     extension: [
       field,
-      formattedBlockParser.of((state) => syntax.chunkedFor(state).scan),
+      formattedBlockParser.of((state) =>
+        Object.assign(syntax.chunkedFor(state).scan.configure({}), {
+          parseInline: () => [],
+        }),
+      ),
       driver(syntax, options),
     ],
     tree: (state) => state.field(field).tree,

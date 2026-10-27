@@ -103,6 +103,22 @@ test('quoted list moves preserve their following paragraph and do not grow blank
   }
 })
 
+test('a move cannot absorb the paragraph following a quote', {
+  timeout: 60000,
+}, async () => {
+  const doc = '> quoted paragraph\n>\n> # heading\noutside paragraph\n'
+  await open('lazy.md', doc, 'quoted paragraph')
+  assert.equal(await (await menu('quoted paragraph')).isEnabled(), false)
+  await page.keyboard.press('Escape')
+  await saved(doc)
+  assert.equal(
+    await page
+      .locator('.rich-pane .cm-line', { hasText: 'outside paragraph' })
+      .evaluate((line) => line.classList.contains('hibi-lp-quote')),
+    false,
+  )
+})
+
 test('moving indented code below a list is disabled before source changes', {
   timeout: 60000,
 }, async () => {

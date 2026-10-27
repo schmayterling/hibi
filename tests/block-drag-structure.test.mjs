@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { GFM } from '@lezer/markdown'
-import { blockStep } from '../src/addons/block-drag/formatted.ts'
+import { blockStep, moveBlock } from '../src/addons/block-drag/formatted.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import { formattedBlockParser } from '../src/renderer/src/formatted-contributions.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
@@ -101,7 +101,7 @@ test('moves reject absorption at both the old and new neighbors', () => {
   }
 })
 
-test('every block in 400 seeded mixed notes preserves structure in both directions', () => {
+test('every block in 800 seeded mixed notes preserves structure in both directions', () => {
   const kinds = [
     (i) => `para ${i} with a ref[^n${i}]`,
     (i) => `## heading ${i}`,
@@ -128,33 +128,63 @@ test('every block in 400 seeded mixed notes preserves structure in both directio
   }
   const examples = []
   for (let i = 0; i < 400; i++) {
-    let doc = `${Array.from({ length: 6 }, (_, j) => kinds[Math.floor(random() * kinds.length)](j)).join('\n\n')}\n`
-    if (i % 4 === 3)
-      doc = `${doc
-        .trimEnd()
-        .split('\n')
-        .map((line) => (line ? `> ${line}` : '>'))
-        .join('\n')}\n`
-    const { state, tree } = view(doc)
-    const before = leaves(doc)
-    tree.iterate({
-      enter(node) {
-        if (!node.type.is('Block') || node.name === 'Document') return
-        for (const direction of [-1, 1]) {
-          const spec = blockStep(state, tree, node.node, direction)
-          if (!spec) continue
-          moves++
-          const after = state.update(spec).state.doc.toString()
-          if (JSON.stringify(leaves(after)) === JSON.stringify(before)) continue
-          changed++
-          if (examples.length < 3) examples.push({ doc, after })
-        }
-      },
-    })
+    const blocks = Array.from({ length: 6 }, (_, j) =>
+      kinds[Math.floor(random() * kinds.length)](j),
+    )
+    for (const spacing of ['\n\n', '\n']) {
+      let doc = `${blocks.join(spacing)}\n`
+      if (i % 4 === 3)
+        doc = `${doc
+          .trimEnd()
+          .split('\n')
+          .map((line) => (line ? `> ${line}` : '>'))
+          .join('\n')}\n`
+      const { state, tree } = view(doc)
+      const before = leaves(doc)
+      tree.iterate({
+        enter(node) {
+          if (!node.type.is('Block') || node.name === 'Document') return
+          for (const direction of [-1, 1]) {
+            const spec = blockStep(state, tree, node.node, direction)
+            if (!spec) continue
+            moves++
+            const after = state.update(spec).state.doc.toString()
+            if (JSON.stringify(leaves(after)) === JSON.stringify(before))
+              continue
+            changed++
+            if (examples.length < 3) examples.push({ doc, after })
+          }
+        },
+      })
+    }
   }
   console.log(JSON.stringify({ moves, changed, examples }))
   assert.ok(moves > 4000, String(moves))
   assert.equal(changed, 0)
+})
+
+test('lazy continuation and paragraph interruption at either seam stay unchanged', () => {
+  for (const [doc, token, name, direction] of [
+    ['> para\n>\n> # heading\nlazy text\n', 'para', 'Paragraph', 1],
+    ['> para\n>\n> # heading\nlazy text\n', 'heading', 'ATXHeading1', -1],
+    ['> > para\n> >\n> > # h\n> after\n', 'para', 'Paragraph', 1],
+    ['- x\n\n  para\n\n  # h\nlazy\n', 'para', 'Paragraph', 1],
+    ['> para\n>\n> ***\nnext\n', 'para', 'Paragraph', 1],
+    ['> para\n>\n> ```\n> code\n> ```\nnext\n', 'para', 'Paragraph', 1],
+    ['> > reply\n> >\n> > ---\n> answer\n', 'reply', 'Paragraph', 1],
+    ['para\n- b\n-\n  a\n', '-\n  a', 'ListItem', -1],
+    ['para\n1. one\n2.\n', '2.', 'ListItem', -1],
+  ]) {
+    assert.equal(moved(doc, token, name, direction), null, doc)
+  }
+  for (const doc of [
+    '> ```\n> code\n> ```\n>\n> p1\n>\n> p2\n>\n> p3\n',
+    '```\ncode\n```\n> p1\n>\n> p2\n>\n> p3\n',
+  ])
+    assert.equal(
+      moved(doc, 'p2', 'Paragraph', 1),
+      doc.replace('p2\n>\n> p3', 'p3\n>\n> p2'),
+    )
 })
 
 test('validation reads local ranges in a 20,000-item container', () => {
@@ -194,13 +224,140 @@ test('validation reads local ranges in a 20,000-item container', () => {
     })
     let node = tree.resolveInner(at + 4, 1)
     while (node.name !== 'ListItem') node = node.parent
-    assert.ok(blockStep(state, tree, node, 1))
+    const prototype = Object.getPrototypeOf(state.doc)
+    const read = prototype.sliceString
+    let widest = 0
+    try {
+      prototype.sliceString = function (from = 0, to = this.length, ...args) {
+        widest = Math.max(widest, to - from)
+        return read.call(this, from, to, ...args)
+      }
+      assert.ok(blockStep(state, tree, node, 1))
+    } finally {
+      prototype.sliceString = read
+    }
+    assert.ok(widest < 2048, String(widest))
     assert.equal(calls, 2)
     return units
   }
   const small = measure(100),
     large = measure(20000)
   console.log(JSON.stringify({ validationUnits: { small, large } }))
+  assert.equal(large, small)
+  assert.ok(large < 2048, String(large))
+})
+
+test('validation skips interiors of 50 mib neighbors and distant unchanged siblings', () => {
+  const counted = (doc, tree, source, destination, drop = false) => {
+    let units = 0
+    const state = EditorState.create({
+      doc,
+      extensions: formattedBlockParser.of(() => ({
+        parse(input, fragments, ranges) {
+          units += ranges.reduce((sum, range) => sum + range.to - range.from, 0)
+          return md.parse(input, fragments, ranges)
+        },
+      })),
+    })
+    const node = (token) => {
+      let n = tree.resolveInner(doc.indexOf(token), 1)
+      while (n && n.name !== 'Paragraph') n = n.parent
+      assert.ok(n)
+      return n
+    }
+    const block = node(source)
+    assert.ok(
+      drop
+        ? moveBlock(state, tree, block, node(destination), true)
+        : blockStep(state, tree, block, 1),
+    )
+    return units
+  }
+  for (const fence of [false, true]) {
+    const measure = (mib) => {
+      const row = fence
+        ? 'code ' + 'x'.repeat(1000) + '\n'
+        : '| ' + 'x'.repeat(1000) + ' | y |\n'
+      const header = fence ? '\x60\x60\x60txt\n' : '| a | b |\n| - | - |\n'
+      const body = row.repeat(Math.ceil((mib * 1024 * 1024) / row.length))
+      const doc =
+        'before\n\n' +
+        header +
+        body +
+        (fence ? '\x60\x60\x60\n' : '') +
+        '\nmiddle\n\nlast\n'
+      // A known block's head and tail, as in the view's giant-block tree.
+      const tail = doc.lastIndexOf(row)
+      const tree = md.parse(
+        doc,
+        [],
+        [
+          { from: 0, to: 8 + header.length },
+          { from: tail, to: doc.length },
+        ],
+      )
+      return counted(doc, tree, 'before') + counted(doc, tree, 'middle')
+    }
+    const small = measure(2),
+      large = measure(50)
+    console.log(
+      JSON.stringify({ kind: fence ? 'fence' : 'table', small, large }),
+    )
+    assert.equal(large, small)
+    assert.ok(large < 16384, String(large))
+  }
+  const measure = (count) => {
+    const doc =
+      Array.from(
+        { length: count },
+        (_, i) => 'paragraph ' + String(i).padStart(5, '0') + ' text',
+      ).join('\n\n') + '\n'
+    return counted(
+      doc,
+      md.parse(doc),
+      'paragraph 00010',
+      'paragraph ' + String(count - 10).padStart(5, '0'),
+      true,
+    )
+  }
+  const small = measure(100),
+    large = measure(20000)
+  console.log(JSON.stringify({ farDrop: { small, large } }))
+  assert.equal(large, small)
+  assert.ok(large < 2048, String(large))
+})
+
+test('a 50 mib commonmark paragraph neighbor does not trigger an inline character walk', () => {
+  const grammar = EditorState.create({
+    extensions: formattedSyntax().extension,
+  })
+  const plain = grammar.facet(formattedBlockParser)(grammar)
+  const measure = (mib) => {
+    const doc =
+      'first\n\n' +
+      'word '.repeat(Math.ceil((mib * 1024 * 1024) / 5)) +
+      '\n\nlast\n'
+    const tree = plain.parse(doc)
+    const state = EditorState.create({
+      doc,
+      extensions: formattedBlockParser.of(() => plain),
+    })
+    const original = String.prototype.charCodeAt
+    let calls = 0
+    try {
+      String.prototype.charCodeAt = function (...args) {
+        calls++
+        return original.apply(this, args)
+      }
+      assert.ok(blockStep(state, tree, tree.topNode.firstChild, 1))
+    } finally {
+      String.prototype.charCodeAt = original
+    }
+    return calls
+  }
+  const small = measure(2),
+    large = measure(50)
+  console.log(JSON.stringify({ wideLineCharacters: { small, large } }))
   assert.equal(large, small)
   assert.ok(large < 2048, String(large))
 })
@@ -232,5 +389,22 @@ test('structure validation serializes nested containers once', () => {
       JSON.stringify({ depth, source: doc.length, serialized: units }),
     )
     assert.ok(units < 50 * doc.length, String(units))
+  }
+})
+
+test('later item blocks move after a closed first block', () => {
+  for (const first of [
+    '\x60\x60\x60txt\n  code\n  \x60\x60\x60',
+    '<!--\n  body\n  -->',
+    '<?php\n  body\n  ?>',
+    '<script>\n  body\n  </script>',
+    '| a |\n  | - |\n  | b |',
+  ]) {
+    const doc = `- ${first}\n\n  one\n\n  two\n\n  three\n\n  four\n`
+    assert.equal(
+      moved(doc, 'three', 'Paragraph', 1),
+      doc.replace('  three\n\n  four', '  four\n\n  three'),
+      first,
+    )
   }
 })

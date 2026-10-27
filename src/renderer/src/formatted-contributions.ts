@@ -295,7 +295,7 @@ const coreNodes: Partial<Record<string, readonly string[]>> = {
 export const formattedContributions = {
   /** Changes when registered or loaded contributions or the syntax settings they follow change. */
   version: () =>
-    `${formattedRegistry.version()} ${loads} ${markdownSyntax.version()} ${formattedCompatibility.snapshot().join(',')}`,
+    `${formattedRegistry.version()} ${loads} ${markdownSyntax.version()} ${formattedCompatibility.features().join(',')}`,
   subscribe(listener: () => void) {
     listeners.add(listener)
     const registry = formattedRegistry.subscribe(listener)
@@ -318,7 +318,7 @@ export const formattedContributions = {
       .snapshot()
       .flatMap((feature) =>
         (!feature.enabled ||
-          formattedCompatibility.snapshot().includes(feature.owner)) &&
+          formattedCompatibility.features().includes(feature.id)) &&
         feature.scope !== 'document'
           ? (feature.nodes ?? coreNodes[feature.id] ?? [])
           : [],

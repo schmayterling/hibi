@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { build } from 'esbuild'
 import {
   electron,
   stopElectronTree,
@@ -178,13 +179,7 @@ test('source reference links use current definitions and coexist with find', {
 
 test(
   'rich-only addon syntax keeps source references out of the built-in reader',
-  (engine) => ({
-    timeout: 30000,
-    todo:
-      engine === 'codemirror'
-        ? 'formatted gap addon-001: rich-only addon syntax must retain native editing and source reference isolation'
-        : undefined,
-  }),
+  () => ({ timeout: 30000 }),
   async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'hibi-rich-reference-links-'))
     const profile = join(root, 'profile')
@@ -204,14 +199,17 @@ test(
         apiVersion: 2,
         version: '1.0.0',
         authors: [{ displayName: 'Test' }],
-        capabilities: ['rich'],
+        capabilities: [],
         entry: 'index.js',
       }),
     )
-    await writeFile(
-      join(folder, 'index.js'),
-      `export default sdk => ({ start(context) {
-      const literalDefinition = sdk.tiptap.Node.create({
+    // A legacy package may ship its own node without accessing the guarded host SDK.
+    const fixture = await build({
+      stdin: {
+        resolveDir: process.cwd(),
+        contents: `import { Node } from '@tiptap/core';
+      export default () => ({ start(context) {
+      const literalDefinition = Node.create({
         name: 'literalDefinition', group: 'block', content: 'text*',
         parseHTML: () => [{ tag: 'p.literal-definition' }],
         renderHTML: () => ['p', { class: 'literal-definition' }, 0],
@@ -233,7 +231,12 @@ test(
         detect: () => true, richExtensions: [literalDefinition]
       });
     } });`,
-    )
+      },
+      bundle: true,
+      write: false,
+      format: 'esm',
+    })
+    await writeFile(join(folder, 'index.js'), fixture.outputFiles[0].text)
     await writeFile(
       join(folder, '.hibi-install.json'),
       JSON.stringify({

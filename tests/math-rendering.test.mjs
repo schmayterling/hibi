@@ -408,14 +408,20 @@ test('codemirror: formulas accept input before completion, keep the reading posi
   await page.evaluate(() => {
     window.mathOpen = {}
     window.mathDraws = 0
+    window.mathNeighbors = []
     const count = () => document.querySelectorAll('.rich-pane .katex').length
     new MutationObserver((records) => {
-      for (const record of records)
+      for (const record of records) {
+        if (
+          !window.mathNeighbors.some(({ host }) => host.contains(record.target))
+        )
+          continue
         for (const node of record.addedNodes)
           if (node.nodeType === 1)
             window.mathDraws += node.matches('.katex')
               ? 1
               : node.querySelectorAll('.katex').length
+      }
       if (
         window.mathOpen.frame !== undefined ||
         !document
@@ -443,9 +449,26 @@ test('codemirror: formulas accept input before completion, keep the reading posi
   assert.ok(mounted > 0 && mounted < 200, `${mounted} formulas mounted`)
   await rich.locator('.hibi-lp-h1').click()
   await rich.press('End')
-  await page.evaluate(() => {
+  // Only already rendered neighbors participate; other formulas may still finish.
+  const neighbors = await rich.evaluate((element) => {
+    window.mathNeighbors = ['inline-math', 'block-math'].map((type) => {
+      const host = [
+        ...element.querySelectorAll('[data-type="' + type + '"]'),
+      ].find((node) => node.querySelector('.katex'))
+      if (!host) throw new Error('No completed ' + type + ' neighbor')
+      const output = host.querySelector('.katex')
+      return { host, output, latex: host.dataset.latex, html: output.outerHTML }
+    })
     window.mathDraws = 0
+    return window.mathNeighbors.map(({ host, html }) => ({
+      type: host.dataset.type,
+      rendered: html.length > 0,
+    }))
   })
+  assert.deepEqual(neighbors, [
+    { type: 'inline-math', rendered: true },
+    { type: 'block-math', rendered: true },
+  ])
   await page.keyboard.insertText('Z')
   const edited = body.replace('# Formulas', '# FormulasZ')
   await waitForAsync(
@@ -459,11 +482,31 @@ test('codemirror: formulas accept input before completion, keep the reading posi
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
   )
-  assert.equal(
-    await page.evaluate(() => window.mathDraws),
-    0,
-    'plain typing reuses nearby formula output',
-  )
+  await t.test('typing retains completed formula output', async () => {
+    assert.equal(
+      await page.evaluate(() => window.mathDraws),
+      0,
+      'plain typing reuses nearby formula output',
+    )
+    assert.deepEqual(
+      await rich.evaluate((element) =>
+        window.mathNeighbors.map(({ host, output, latex, html }) => ({
+          connected:
+            host.isConnected && output.isConnected && element.contains(host),
+          sourceUnchanged: host.dataset.latex === latex,
+          sameOutput: host.querySelector('.katex') === output,
+          outputUnchanged: output.outerHTML === html,
+        })),
+      ),
+      Array.from({ length: 2 }, () => ({
+        connected: true,
+        sourceUnchanged: true,
+        sameOutput: true,
+        outputUnchanged: true,
+      })),
+      'completed neighbors retain the same compiled output after unrelated typing',
+    )
+  })
   await clickMenu(app, 'Save')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), edited)
@@ -501,9 +544,50 @@ test('codemirror: formulas accept input before completion, keep the reading posi
         window.tallRemounted = { top: box.top, height: box.height }
     }).observe(element, { childList: true, subtree: true })
     const from = view.state.doc.toString().indexOf('anchor 50')
-    view.dispatch({ selection: { anchor: from }, scrollIntoView: true })
+    view.dispatch({
+      selection: { anchor: from },
+      effects: view.constructor.scrollIntoView(from, {
+        y: 'start',
+        yMargin: 120,
+      }),
+    })
   })
-  await page.waitForFunction(() => !!window.tallOpening)
+  try {
+    await page.waitForFunction(() => !!window.tallOpening)
+  } catch (error) {
+    t.diagnostic(
+      'tall formula opening: ' +
+        JSON.stringify(
+          await rich.evaluate((element) => {
+            const view = element.cmTile.root.view
+            const pane = element.closest('.rich-pane')
+            const box = pane.getBoundingClientRect()
+            return {
+              canonicalUnits: view.state.doc.length,
+              selection: view.state.selection.main.toJSON(),
+              ranges: view.visibleRanges,
+              pane: {
+                top: box.top,
+                bottom: box.bottom,
+                scrollTop: pane.scrollTop,
+              },
+              blocks: [...element.querySelectorAll('[data-type="block-math"]')]
+                .slice(-8)
+                .map((node) => {
+                  const rect = node.getBoundingClientRect()
+                  return {
+                    latex: node.dataset.latex,
+                    rendered: !!node.querySelector('.katex'),
+                    top: rect.top,
+                    bottom: rect.bottom,
+                  }
+                }),
+            }
+          }),
+        ),
+    )
+    throw error
+  }
   await page.waitForFunction(() =>
     [...document.querySelectorAll('.rich-pane [data-type="block-math"]')].some(
       (node) =>
@@ -528,10 +612,12 @@ test('codemirror: formulas accept input before completion, keep the reading posi
     settled.height > settled.opening.height + 100,
     JSON.stringify(settled),
   )
-  assert.ok(
-    Math.abs(settled.top - settled.opening.top) < 1,
-    JSON.stringify(settled),
-  )
+  await t.test('tall formula rendering keeps the reading position', () => {
+    assert.ok(
+      Math.abs(settled.top - settled.opening.top) < 1,
+      JSON.stringify(settled),
+    )
+  })
   await rich.evaluate((element) => {
     const view = element.cmTile.root.view
     window.tallArm = null
@@ -549,9 +635,13 @@ test('codemirror: formulas accept input before completion, keep the reading posi
   await rich.evaluate((element) => {
     const view = element.cmTile.root.view
     window.tallArm = 'remount'
+    const from = view.state.doc.toString().indexOf('anchor 50')
     view.dispatch({
-      selection: { anchor: view.state.doc.toString().indexOf('anchor 50') },
-      scrollIntoView: true,
+      selection: { anchor: from },
+      effects: view.constructor.scrollIntoView(from, {
+        y: 'start',
+        yMargin: 120,
+      }),
     })
   })
   await page.waitForFunction(() => !!window.tallRemounted)
@@ -560,11 +650,17 @@ test('codemirror: formulas accept input before completion, keep the reading posi
     Math.abs(remounted.height - settled.height) < 1,
     JSON.stringify({ settled, remounted }),
   )
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll('.rich-pane [data-type="block-math"]')]
-      .filter((node) => node.dataset.latex.includes('pmatrix} 50'))
-      .every((node) => node.querySelector('.katex') && !node.style.minHeight),
-  )
+  await page.waitForFunction(() => {
+    const blocks = [
+      ...document.querySelectorAll('.rich-pane [data-type="block-math"]'),
+    ].filter((node) => node.dataset.latex.includes('pmatrix} 50'))
+    return (
+      blocks.length > 0 &&
+      blocks.every(
+        (node) => node.querySelector('.katex') && !node.style.minHeight,
+      )
+    )
+  })
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     tall,

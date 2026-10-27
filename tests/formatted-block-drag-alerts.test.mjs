@@ -107,6 +107,32 @@ test('an alert title handle moves the whole alert and keeps its title attached',
   await pressShortcut(app, `${mod}+z`)
   await saved(doc)
 })
+test('dropping onto the upper half of a title lands below the title', {
+  timeout: 60000,
+}, async () => {
+  const doc = '> [!NOTE]\n> first body\n>\n> second body\n\nafter paragraph\n'
+  await open('alert-drop.md', doc, 'second body')
+  const body = page.locator('.rich-pane .cm-line', { hasText: 'second body' })
+  const box = await body.boundingBox()
+  await page.mouse.move(box.x + 90, box.y + box.height - 5)
+  const handle = page.locator('.rich-pane .block-drag-handle')
+  await page.waitForFunction(() => {
+    const handle = document.querySelector('.rich-pane .block-drag-handle')
+    return handle && getComputedStyle(handle).visibility === 'visible'
+  })
+  const transfer = await page.evaluateHandle(() => new DataTransfer())
+  await handle.dispatchEvent('dragstart', { dataTransfer: transfer })
+  const title = page.locator('.rich-pane .hibi-lp-alert-title')
+  const heading = await title.boundingBox()
+  const coords = { clientX: heading.x + 80, clientY: heading.y + 2 }
+  await title.dispatchEvent('dragover', { ...coords, dataTransfer: transfer })
+  await title.dispatchEvent('drop', { ...coords, dataTransfer: transfer })
+  await handle.dispatchEvent('dragend', { dataTransfer: transfer })
+  await saved(
+    '> [!NOTE]\n>\n> second body\n>\n> first body\n\nafter paragraph\n',
+  )
+})
+
 test('the first alert body cannot land above its title', {
   timeout: 60000,
 }, async () => {

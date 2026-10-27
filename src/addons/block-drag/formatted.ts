@@ -868,7 +868,9 @@ class BlockHandle {
     const top = view.lineBlockAt(near.from).top,
       bottom = view.lineBlockAt(near.to).bottom
     const after =
-      y - view.documentTop > (top + bottom) / 2 || near.name === 'Frontmatter'
+      y - view.documentTop > (top + bottom) / 2 ||
+      near.name === 'Frontmatter' ||
+      near.name === 'AlertTitle'
     return { tree, block, near, after, text }
   }
 

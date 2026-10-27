@@ -3,6 +3,7 @@ import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import {
   blockStep,
+  dropSibling,
   handleTarget,
   moveBlock,
   selectionStep,
@@ -37,12 +38,20 @@ test('an alert title is fixed and its handle targets the whole alert', () => {
   assert.equal(moveBlock(state, tree, title, second, true), null)
 })
 test('body blocks still reorder below the title; title commands move the whole alert', () => {
-  const { state, tree, first } = view(doc.indexOf('[!NOTE]'))
+  const { state, tree, first, second } = view(doc.indexOf('[!NOTE]'))
   const body = blockStep(state, tree, first, 1)
   assert.ok(body)
   assert.equal(
     state.update(body).state.doc.toString(),
     '> [!NOTE]\n>\n> second body\n>\n> first body\n\nafter\n',
+  )
+  const near = dropSibling(tree, second, doc.indexOf('[!NOTE]'))
+  assert.equal(near.name, 'AlertTitle')
+  assert.equal(
+    state
+      .update(moveBlock(state, tree, second, near, true))
+      .state.doc.toString(),
+    state.update(body).state.doc.toString(),
   )
   const whole = selectionStep(state, tree, 1)
   assert.ok(whole)

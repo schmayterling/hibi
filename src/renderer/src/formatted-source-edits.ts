@@ -3,7 +3,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 
 type Syntax = Pick<Tree, 'resolveInner' | 'iterate'>
 const prose =
-  /^(Paragraph|ATXHeading[1-6]|SetextHeading[12]|Emphasis|StrongEmphasis|Strikethrough|Link)$/
+  /^(Paragraph|ATXHeading[1-6]|SetextHeading[12]|TableCell|Emphasis|StrongEmphasis|Strikethrough|Link)$/
 const plain = (node: SyntaxNode) =>
   node.name === 'HibiPlainTextRun' ? node.parent : node
 

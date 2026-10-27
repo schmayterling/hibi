@@ -27,6 +27,14 @@ test('literal corrections preserve paragraph, heading, mark and link structure',
   assert.equal(check('# teh', { from: 2, to: 5, insert: 'the' }), true)
   assert.equal(check('[teh](url)', { from: 1, to: 4, insert: 'the' }), true)
   assert.equal(check('**teh**', { from: 2, to: 5, insert: 'the 😀' }), true)
+  assert.equal(
+    check('| teh | other |\n| --- | --- |', {
+      from: 2,
+      to: 5,
+      insert: 'the',
+    }),
+    true,
+  )
 })
 
 test('source corrections cannot remove or introduce structure or edit opaque syntax', () => {
@@ -39,6 +47,7 @@ test('source corrections cannot remove or introduce structure or edit opaque syn
     ['`teh`', { from: 1, to: 4, insert: 'the' }],
     ['word', { from: 4, insert: '\nnext' }],
     ['word\nnext', { from: 4, to: 5, insert: ' ' }],
+    ['| teh | other |\n| --- | --- |', { from: 2, to: 5, insert: 'the | new' }],
   ])
     assert.equal(
       check(source, changes),

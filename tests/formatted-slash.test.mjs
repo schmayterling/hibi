@@ -298,3 +298,83 @@ test('replacing a focused table preserves selection with slash disabled', {
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   assert.deepEqual(errors.slice(start), [])
 })
+
+test('formatted slash in a table cell offers inline commands and runs them in the cell', {
+  timeout: 60000,
+}, async () => {
+  const table = '| a | b |\n| - | - |\n| beta | end |\n\nafter'
+  const cell = () => page.locator('.hibi-lp-cell-editor .cm-content')
+  const cellHead = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('.hibi-lp-cell-editor .cm-content').cmTile.root
+          .view.state.selection.main.head,
+    )
+  /** Type `text` at the start of the cell `beta`, after its padding. */
+  const query = async (text) => {
+    // Escape closes the menu, then leaves the table for the formatted view.
+    if (await menu().count()) await cell().press('Escape')
+    if (await cell().count()) await cell().press('Escape')
+    await cell().waitFor({ state: 'detached' })
+    await set(table)
+    await page.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+    await cell().waitFor()
+    await page.evaluate(() =>
+      document
+        .querySelector('.hibi-lp-cell-editor .cm-content')
+        .cmTile.root.view.dispatch({ selection: { anchor: 1 } }),
+    )
+    await cell().pressSequentially(text)
+    await matches(table.replace('beta', `${text}beta`))
+    await menu().waitFor()
+  }
+  // Block commands have no place in a cell.
+  await query('/')
+  const options = await menu().getByRole('option').allTextContents()
+  for (const inline of ['Text', 'Bold', 'Italic', 'Inline code', 'Frontmatter'])
+    assert.ok(
+      options.some((option) => option.startsWith(inline)),
+      inline,
+    )
+  for (const block of [
+    'Heading',
+    'Code blocks',
+    'Quotes',
+    'Bullet lists',
+    'Numbered lists',
+    'Dividers',
+    'Tables',
+  ])
+    assert.ok(!options.some((option) => option.startsWith(block)), block)
+  // Escape closes the menu and keeps editing the cell.
+  await cell().press('Escape')
+  await menu().waitFor({ state: 'hidden' })
+  await cell().pressSequentially('x')
+  await matches(table.replace('beta', '/xbeta'))
+  assert.equal(await menu().count(), 0)
+
+  // An inline command replaces the query in the cell, with the caret inside
+  // its markers, and undo restores the query.
+  await query('/bold')
+  await cell().press('Enter')
+  await matches(table.replace('beta', '****beta'))
+  assert.equal(await cellHead(), 3)
+  await cell().press(`${mod}+z`)
+  await matches(table.replace('beta', '/boldbeta'))
+  await menu().waitFor()
+
+  // Document commands remove the query from the cell.
+  await query('/frontmatter')
+  await cell().press('Enter')
+  await waitForAsync(
+    page,
+    async (table) => {
+      const source = (await window.hibi.getDocument()).markdown
+      return source.startsWith('---\n') && source.endsWith(`\n${table}`)
+    },
+    table,
+  )
+  await pressShortcut(app, `${mod}+z`)
+  await matches(table.replace('beta', '/frontmatterbeta'))
+  assert.deepEqual(errors, [])
+})

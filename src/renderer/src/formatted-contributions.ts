@@ -196,6 +196,10 @@ export const formattedRefresh = StateEffect.define<null>()
  */
 export const formattedRenderInputs = Facet.define<unknown>()
 
+/** Extensions of the editors of table cells, which the formatted view `main` holds apart from its own text. */
+export const formattedCellExtensions =
+  Facet.define<(main: EditorView) => Extension>()
+
 /** The formatted view's state, in the state a renderer gets for text drawn apart from it, such as a table cell's. */
 export const formattedOwner = Facet.define<EditorState, EditorState | null>({
   combine: (values) => values[0] ?? null,

@@ -175,7 +175,17 @@ test('enabling block drag in an open note keeps task checkboxes clickable', {
   const toggle = async () => {
     await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+    const toggled = !(await page.locator('#addon-block-drag').isChecked())
     await page.locator('#addon-block-drag').click()
+    // The switch stays disabled, with focus, until the addon has changed.
+    await waitForAsync(
+      page,
+      (toggled) => {
+        const control = document.getElementById('addon-block-drag')
+        return control.checked === toggled && !control.disabled
+      },
+      toggled,
+    )
     await page.keyboard.press('Escape')
     await page
       .getByRole('button', { name: 'Back to app', exact: true })

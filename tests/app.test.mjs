@@ -196,6 +196,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'onWorkspaceChanged',
         'onWorkspaceListChanged',
         'getAppInfo',
+        'onAccessibilitySupport',
         'setUiCase',
         'getDocument',
         'selectDocumentTab',

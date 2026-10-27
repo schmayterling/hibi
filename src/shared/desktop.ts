@@ -1,4 +1,8 @@
 export const APP_INFO_CHANNEL = 'app:info'
+export const ACCESSIBILITY_CHANNELS = {
+  get: 'accessibility:get',
+  changed: 'accessibility:changed',
+} as const
 export const BOOTSTRAP_CHANNELS = {
   document: 'bootstrap:document',
   addons: 'bootstrap:addons',
@@ -541,6 +545,8 @@ export type DesktopApi = {
     callback: (known: import('./workspace').KnownWorkspace[]) => void,
   ) => () => void
   getAppInfo: () => Promise<AppInfo>
+  /** Calls back with whether Chromium serves a screen reader, now and on each change. */
+  onAccessibilitySupport: (callback: (enabled: boolean) => void) => () => void
   setUiCase: (value: import('./ui-case').UiCase) => Promise<void>
   getDocument: () => Promise<DocumentState>
   selectDocumentTab: (id: string) => Promise<DocumentState>

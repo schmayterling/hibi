@@ -39,6 +39,7 @@ import { CLIPBOARD_CHANNELS, MAX_CLIPBOARD_TEXT } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
 import {
+  ACCESSIBILITY_CHANNELS,
   APP_INFO_CHANNEL,
   type AppInfo,
   BOOTSTRAP_CHANNELS,
@@ -77,6 +78,7 @@ import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
+import { followAccessibilitySupport } from './accessibility-support'
 import { AddonHotkeys } from './addon-hotkeys'
 import { createAddonStorage } from './addon-storage'
 import {
@@ -408,6 +410,11 @@ const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererUrl = devUrl ? new URL(devUrl).href : 'app://hibi/'
 const rendererRoot = join(import.meta.dirname, '../renderer')
 let mainWindow: BrowserWindow | null = null
+const accessibility = followAccessibilitySupport(
+  () => app.isAccessibilitySupportEnabled(),
+  (enabled) =>
+    mainWindow?.webContents.send(ACCESSIBILITY_CHANNELS.changed, enabled),
+)
 let networkWindowKey: object = {}
 const addonStorage = createAddonStorage(
   join(app.getPath('userData'), 'addon-storage'),
@@ -932,6 +939,9 @@ function createWindow(): void {
     if (!window.isDestroyed()) window.webContents.setIgnoreMenuShortcuts(false)
   }
   window.on('blur', stopRecording)
+  accessibility.start()
+  window.on('show', accessibility.sample)
+  window.on('focus', accessibility.sample)
   window.webContents.on('did-start-loading', stopRecording)
   window.webContents.on('did-start-loading', () => {
     backgroundSettingsReady = false
@@ -1126,6 +1136,7 @@ function createWindow(): void {
       new Error('The editor closed before confirming its changes.'),
     )
     mainWindow = null
+    accessibility.stop()
     if (process.platform !== 'darwin' || quitting) globalShortcuts.clear()
     // Hidden addon windows must not keep Hibi running where closing it quits.
     if (process.platform !== 'darwin') releaseAddonWindows(true)
@@ -1393,6 +1404,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
+  app.on('accessibility-support-changed', accessibility.sample)
 
   void app
     .whenReady()
@@ -1557,6 +1569,11 @@ if (!app.requestSingleInstanceLock()) {
           trustedWindow(event)
           return appInfo()
         },
+        Promise.resolve(),
+      )
+      handle(
+        ACCESSIBILITY_CHANNELS.get,
+        accessibility.sample,
         Promise.resolve(),
       )
       handle(

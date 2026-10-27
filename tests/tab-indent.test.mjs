@@ -5,7 +5,10 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { sourceIndent } from '../src/renderer/src/source-indent.ts'
-import { detectIndentUnit } from '../src/renderer/src/tab-indent.ts'
+import {
+  codeIndentLines,
+  detectIndentUnit,
+} from '../src/renderer/src/tab-indent.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, replaceSourceText } from './keyboard.mjs'
@@ -18,6 +21,9 @@ test('indentation follows the first indented line', () => {
   assert.equal(detectIndentUnit('plain\n'), undefined)
   const late = `${'line\n'.repeat(1499)}    late`
   assert.equal(detectIndentUnit(late), '    ')
+  // Code blocks read their first thousand lines, in both editors.
+  assert.equal(detectIndentUnit(late, codeIndentLines), undefined)
+  assert.equal(detectIndentUnit(late.slice(500 * 5), codeIndentLines), '    ')
 
   let state = EditorState.create({ doc: late, extensions: sourceIndent })
   const unit = () => state.field(sourceIndent)?.unit

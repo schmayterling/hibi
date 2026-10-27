@@ -15,12 +15,19 @@ export default defineAddon({
     context.editor.registerFormatted({
       id: 'menu',
       async create() {
-        const [{ sourceSlashCommands }, { formattedSyntaxTree }] =
-          await Promise.all([
-            import('./source'),
-            import('../../renderer/src/formatted-contributions'),
-          ])
-        return sourceSlashCommands(context, formattedSyntaxTree)
+        const [
+          { sourceSlashCommands },
+          { formattedCellExtensions, formattedSyntaxTree },
+        ] = await Promise.all([
+          import('./source'),
+          import('../../renderer/src/formatted-contributions'),
+        ])
+        return [
+          sourceSlashCommands(context, formattedSyntaxTree),
+          formattedCellExtensions.of((main) =>
+            sourceSlashCommands(context, undefined, undefined, main),
+          ),
+        ]
       },
     })
     context.editor.registerSource({

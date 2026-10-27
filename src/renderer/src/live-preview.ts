@@ -1561,9 +1561,10 @@ export function livePreview(
       node = node.parent
     )
       if (node.name === 'ListItem') item = true
-    if (!item && !view.state.facet(formattedTabIndents)) return false
+    const enabled = view.state.facet(formattedTabIndents)
+    if (!item && !enabled) return false
     return run((current) =>
-      indent(current.state, tree, outdent, hidden(current)),
+      indent(current.state, tree, outdent, hidden(current), enabled),
     )(view)
   }
   // Registered features and their syntax settings reconfigure the view.

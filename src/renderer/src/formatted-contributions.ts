@@ -176,9 +176,23 @@ export const formattedFlavors = Facet.define<
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
 
+/** The active node views for nodes of one type, each once. */
+export type FormattedNodeViews = {
+  /**
+   * Views that name the node, then views that name one of its groups, so
+   * the node's own container, spacing and layout come first.
+   */
+  views: readonly FormattedNodeView[]
+  /**
+   * The same views in the order they decorate: those for a group first, so
+   * where both mark the same text, the node's own marks wrap theirs.
+   */
+  decorators: readonly FormattedNodeView[]
+}
+
 const viewsByType = new WeakMap<
   readonly FormattedNodeView[],
-  WeakMap<NodeType, readonly FormattedNodeView[]>
+  WeakMap<NodeType, FormattedNodeViews>
 >()
 /** The active node views for nodes of a type: those that name it or one of its groups. */
 export function formattedNodeViews(state: EditorState) {
@@ -192,7 +206,15 @@ export function formattedNodeViews(state: EditorState) {
   return (type: NodeType) => {
     let matched = found.get(type)
     if (!matched) {
-      matched = views.filter((view) => view.nodes.some((name) => type.is(name)))
+      const named = views.filter((view) => view.nodes.includes(type.name))
+      const grouped = views.filter(
+        (view) =>
+          !named.includes(view) && view.nodes.some((name) => type.is(name)),
+      )
+      matched = {
+        views: [...named, ...grouped],
+        decorators: [...grouped, ...named],
+      }
       found.set(type, matched)
     }
     return matched

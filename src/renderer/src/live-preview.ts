@@ -47,6 +47,7 @@ import {
   type FormattedDecorations,
   type FormattedLayout,
   type FormattedNodeView,
+  type FormattedNodeViews,
   formattedContributions,
   formattedDocument,
   formattedLiteral,
@@ -114,12 +115,13 @@ function blockSpace(name: string): { top: number; bottom: number } {
 /** Rules of the render in progress: syntax shown as written and contributed node views. */
 type Blocks = {
   literal: ReadonlySet<string>
-  views: (type: NodeType) => readonly FormattedNodeView[]
+  views: (type: NodeType) => FormattedNodeViews
   shapes: (node: SyntaxNode) => FormattedContainer | undefined
 }
+const noViews: FormattedNodeViews = { views: [], decorators: [] }
 const noBlocks: Blocks = {
   literal: new Set(),
-  views: () => [],
+  views: () => noViews,
   shapes: () => undefined,
 }
 let blocks = noBlocks
@@ -133,7 +135,7 @@ const isContainer = (node: SyntaxNode) =>
   (node.name === 'Blockquote' ||
     node.name === 'ListItem' ||
     isList(node) ||
-    blocks.views(node.type).some((view) => view.container))
+    blocks.views(node.type).views.some((view) => view.container))
 
 function blockSibling(node: SyntaxNode, forward: boolean) {
   let next = forward ? node.nextSibling : node.prevSibling
@@ -195,7 +197,7 @@ function margins(node: SyntaxNode): { top: number; bottom: number } {
   if (parent && isList(parent))
     return { top: blockSibling(node, false) ? 4.8 : 0, bottom: 0 }
   const space =
-    blocks.views(node.type).find((view) => view.space)?.space ??
+    blocks.views(node.type).views.find((view) => view.space)?.space ??
     blockSpace(node.name)
   // A quote's last block has no bottom margin.
   return parent?.name === 'Blockquote' && !blockSibling(node, true)
@@ -330,7 +332,7 @@ function inline(
       revealed: touched(node.from, node.to),
       visible: null,
     }
-    for (const nodeView of views(node.type)) {
+    for (const nodeView of views(node.type).views) {
       shape = nodeView.container?.(node, context)
       if (shape) break
     }
@@ -494,20 +496,20 @@ function inline(
         if (literal.has(name)) return false
         const contributed = views(ref.type)
         let skip = false
-        if (contributed.length) {
+        if (contributed.decorators.length) {
           const out = sink(touched(ref.from, ref.to))
           const context = {
             state,
             revealed: touched(ref.from, ref.to),
             visible: range,
           }
-          for (const nodeView of contributed)
+          for (const nodeView of contributed.decorators)
             if (nodeView.decorate?.(ref, out, context) === false) skip = true
           // Other blocks with a container hook hold their lines like quotes.
           if (
             name !== 'Blockquote' &&
             name !== 'ListItem' &&
-            contributed.some((nodeView) => nodeView.container)
+            contributed.views.some((nodeView) => nodeView.container)
           ) {
             const node = ref.node
             eachLine(doc, ref.from, ref.to, range, (current) => {
@@ -1000,7 +1002,7 @@ function chunkLayout(
       enter(ref) {
         if (ref.to <= range.from || ref.from >= range.to) return false
         if (literal.has(ref.name)) return false
-        const contributed = views(ref.type)
+        const contributed = views(ref.type).views
         if (contributed.some((view) => view.layout)) {
           sensitive = true
           // A node spanning covered ranges is laid out once, where it starts.

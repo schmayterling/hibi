@@ -144,7 +144,7 @@ function decorateCell(
         let skip = false
         // A cell draws its line breaks itself, so contributed HTML renderers
         // add no second one.
-        const nodeViews = lineBreakAt(node) ? [] : views(node.type)
+        const nodeViews = lineBreakAt(node) ? [] : views(node.type).decorators
         for (const nodeView of nodeViews) {
           cellState ??= EditorState.create({
             doc: text,

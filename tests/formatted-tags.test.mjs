@@ -45,6 +45,7 @@ a hard break
 -# small text #small
 
 - -# listed small text #smalllist
+- -# #smallonly
 
 > -# quoted small text #smallquote
 
@@ -257,8 +258,9 @@ test('tags render in the formatted view as in the rich view, in light and dark',
       .locator('.rich-pane')
       .screenshot({ path: `test-results/formatted-tags-rich-${scheme}.png` })
   }
-  // Small text renders as small text in both views, its tags inside it.
-  const small = ['small', 'smalllist', 'smallquote']
+  // Small text renders as small text in both views, its tags inside it, also
+  // where a listed one holds only a tag.
+  const small = ['small', 'smalllist', 'smallonly', 'smallquote']
   assert.deepEqual(await smallTags('.tiptap .hibi-tag'), small)
   await open('differences.md')
   await page.locator('.tiptap h1', { hasText: 'Differences' }).waitFor()

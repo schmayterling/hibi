@@ -500,7 +500,8 @@ test('in a long note the handle follows the block under the pointer and moves it
       scrollIntoView: true,
     })
   })
-  const line = '.rich-pane .cm-line:has-text("Paragraph 2500 ")'
+  // Its markers hidden: the formatted view has laid out the blocks around it.
+  const line = '.rich-pane .cm-line:has-text("Paragraph 2500 with bold text.")'
   await page.locator(line).waitFor()
   const text = await hover(line)
   const handle = await grip().boundingBox()

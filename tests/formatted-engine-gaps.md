@@ -26,33 +26,29 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | input-029 | [editor-input.test.mjs:2290](editor-input.test.mjs#L2290) | native table cells input emits one signal with inserted text | 8a: native input, structure and toolbar state |
 | input-030 | [editor-input.test.mjs:2292](editor-input.test.mjs#L2292) | native table cells input advances source version once | 8a: native input, structure and toolbar state |
 | input-031 | [editor-input.test.mjs:2294](editor-input.test.mjs#L2294) | native multiline cells keeps inserted caret and following text | 8a: native input, structure and toolbar state |
-| input-041 | [editor-input.test.mjs:2298](editor-input.test.mjs#L2298) | native multiline block kinds preserves literal text and block structure | 8a: native input, structure and toolbar state |
-| input-042 | [editor-input.test.mjs:2300](editor-input.test.mjs#L2300) | native multiline block kinds keeps inserted caret and following text | 8a: native input, structure and toolbar state |
-| input-043 | [editor-input.test.mjs:2304](editor-input.test.mjs#L2304) | native table into a table selection preserves both source endpoints | 8a: native input, structure and toolbar state |
-| input-044 | [editor-input.test.mjs:2306](editor-input.test.mjs#L2306) | native multiline into a table preserves literal text and block structure | 8a: native input, structure and toolbar state |
-| input-045 | [editor-input.test.mjs:2308](editor-input.test.mjs#L2308) | native table into a table input preserves rendered cells | 8a: native input, structure and toolbar state |
-| input-046 | [editor-input.test.mjs:2310](editor-input.test.mjs#L2310) | native multiline into a table keeps inserted caret and following text | 8a: native input, structure and toolbar state |
-| input-048 | [editor-input.test.mjs:2314](editor-input.test.mjs#L2314) | native multiline task keeps inserted caret and following text | 8a: native input, structure and toolbar state |
-| input-049 | [editor-input.test.mjs:2318](editor-input.test.mjs#L2318) | native multiline nested list end preserves literal text and block structure | 8a: native input, structure and toolbar state |
-| input-057 | [editor-input.test.mjs:2324](editor-input.test.mjs#L2324) | toolbar states match live heading selection | 8a: native input, structure and toolbar state |
-| input-058 | [editor-input.test.mjs:2326](editor-input.test.mjs#L2326) | toolbar states match live plain text selection | 8a: native input, structure and toolbar state |
-| input-059 | [editor-input.test.mjs:2328](editor-input.test.mjs#L2328) | toolbar states match live bold text selection | 8a: native input, structure and toolbar state |
-| input-060 | [editor-input.test.mjs:2330](editor-input.test.mjs#L2330) | toolbar states match live italic selection selection | 8a: native input, structure and toolbar state |
-| input-061 | [editor-input.test.mjs:2332](editor-input.test.mjs#L2332) | toolbar states match live mixed selection selection | 8a: native input, structure and toolbar state |
-| input-062 | [editor-input.test.mjs:2334](editor-input.test.mjs#L2334) | toolbar states match live inline code selection | 8a: native input, structure and toolbar state |
-| input-063 | [editor-input.test.mjs:2335](editor-input.test.mjs#L2335) | toolbar states match live link selection | 8a: native input, structure and toolbar state |
-| input-064 | [editor-input.test.mjs:2337](editor-input.test.mjs#L2337) | toolbar states match live first list item selection | 8a: native input, structure and toolbar state |
-| input-065 | [editor-input.test.mjs:2339](editor-input.test.mjs#L2339) | toolbar states match live second list item selection | 8a: native input, structure and toolbar state |
-| input-066 | [editor-input.test.mjs:2341](editor-input.test.mjs#L2341) | toolbar states match live nested list item selection | 8a: native input, structure and toolbar state |
-| input-067 | [editor-input.test.mjs:2343](editor-input.test.mjs#L2343) | toolbar states match live numbered list selection | 8a: native input, structure and toolbar state |
-| input-068 | [editor-input.test.mjs:2345](editor-input.test.mjs#L2345) | toolbar states match live checklist selection | 8a: native input, structure and toolbar state |
-| input-069 | [editor-input.test.mjs:2346](editor-input.test.mjs#L2346) | toolbar states match live quote selection | 8a: native input, structure and toolbar state |
-| input-070 | [editor-input.test.mjs:2348](editor-input.test.mjs#L2348) | toolbar states match live code block selection | 8a: native input, structure and toolbar state |
-| input-071 | [editor-input.test.mjs:2350](editor-input.test.mjs#L2350) | toolbar states match live table cell selection | 8a: native input, structure and toolbar state |
-| input-072 | [editor-input.test.mjs:2352](editor-input.test.mjs#L2352) | toolbar states match live whole document selection | 8a: native input, structure and toolbar state |
-| input-056 | [editor-input.test.mjs:2937](editor-input.test.mjs#L2937) | native enter preserves four line feeds between paragraphs | 8a: native input, structure and toolbar state |
-| input-073 | [editor-input.test.mjs:3310](editor-input.test.mjs#L3310) | native bold typing keeps bold action pressed | 8a: native input, structure and toolbar state |
-| input-074 | [editor-input.test.mjs:3324](editor-input.test.mjs#L3324) | native bold typing renders strong text in canonical source | 8a: native input, structure and toolbar state |
+| input-043 | [editor-input.test.mjs:2298](editor-input.test.mjs#L2298) | native table into a table selection preserves both source endpoints | 8a: native input, structure and toolbar state |
+| input-044 | [editor-input.test.mjs:2300](editor-input.test.mjs#L2300) | native multiline into a table preserves literal text and block structure | 8a: native input, structure and toolbar state |
+| input-045 | [editor-input.test.mjs:2302](editor-input.test.mjs#L2302) | native table into a table input preserves rendered cells | 8a: native input, structure and toolbar state |
+| input-046 | [editor-input.test.mjs:2304](editor-input.test.mjs#L2304) | native multiline into a table keeps inserted caret and following text | 8a: native input, structure and toolbar state |
+| input-057 | [editor-input.test.mjs:2318](editor-input.test.mjs#L2318) | toolbar states match live heading selection | 8a: native input, structure and toolbar state |
+| input-058 | [editor-input.test.mjs:2320](editor-input.test.mjs#L2320) | toolbar states match live plain text selection | 8a: native input, structure and toolbar state |
+| input-059 | [editor-input.test.mjs:2322](editor-input.test.mjs#L2322) | toolbar states match live bold text selection | 8a: native input, structure and toolbar state |
+| input-060 | [editor-input.test.mjs:2324](editor-input.test.mjs#L2324) | toolbar states match live italic selection selection | 8a: native input, structure and toolbar state |
+| input-061 | [editor-input.test.mjs:2326](editor-input.test.mjs#L2326) | toolbar states match live mixed selection selection | 8a: native input, structure and toolbar state |
+| input-062 | [editor-input.test.mjs:2328](editor-input.test.mjs#L2328) | toolbar states match live inline code selection | 8a: native input, structure and toolbar state |
+| input-063 | [editor-input.test.mjs:2329](editor-input.test.mjs#L2329) | toolbar states match live link selection | 8a: native input, structure and toolbar state |
+| input-064 | [editor-input.test.mjs:2331](editor-input.test.mjs#L2331) | toolbar states match live first list item selection | 8a: native input, structure and toolbar state |
+| input-065 | [editor-input.test.mjs:2333](editor-input.test.mjs#L2333) | toolbar states match live second list item selection | 8a: native input, structure and toolbar state |
+| input-066 | [editor-input.test.mjs:2335](editor-input.test.mjs#L2335) | toolbar states match live nested list item selection | 8a: native input, structure and toolbar state |
+| input-067 | [editor-input.test.mjs:2337](editor-input.test.mjs#L2337) | toolbar states match live numbered list selection | 8a: native input, structure and toolbar state |
+| input-068 | [editor-input.test.mjs:2339](editor-input.test.mjs#L2339) | toolbar states match live checklist selection | 8a: native input, structure and toolbar state |
+| input-069 | [editor-input.test.mjs:2340](editor-input.test.mjs#L2340) | toolbar states match live quote selection | 8a: native input, structure and toolbar state |
+| input-070 | [editor-input.test.mjs:2342](editor-input.test.mjs#L2342) | toolbar states match live code block selection | 8a: native input, structure and toolbar state |
+| input-071 | [editor-input.test.mjs:2344](editor-input.test.mjs#L2344) | toolbar states match live table cell selection | 8a: native input, structure and toolbar state |
+| input-072 | [editor-input.test.mjs:2346](editor-input.test.mjs#L2346) | toolbar states match live whole document selection | 8a: native input, structure and toolbar state |
+| input-056 | [editor-input.test.mjs:2934](editor-input.test.mjs#L2934) | native enter preserves four line feeds between paragraphs | 8a: native input, structure and toolbar state |
+| input-073 | [editor-input.test.mjs:3307](editor-input.test.mjs#L3307) | native bold typing keeps bold action pressed | 8a: native input, structure and toolbar state |
+| input-074 | [editor-input.test.mjs:3321](editor-input.test.mjs#L3321) | native bold typing renders strong text in canonical source | 8a: native input, structure and toolbar state |
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
 | api-003 | [editor-view-bridge.test.mjs:189](editor-view-bridge.test.mjs#L189) | switching source view must retain the hosting view identity | 6: verbatim projections and selection contracts |
 | api-006 | [editor-view-bridge.test.mjs:201](editor-view-bridge.test.mjs#L201) | switching to source must stale the previous formatted selection | 6: verbatim projections and selection contracts |
@@ -122,3 +118,11 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | split-011 | [split-preview-ime.test.mjs:491](split-preview-ime.test.mjs#L491) | split formatted view must remain read-only during native composition | 3: read-only access and shared history guards |
 | split-017 | [split-preview-ime.test.mjs:575](split-preview-ime.test.mjs#L575) | composition in a read-only split preview must preserve source and content version | 3: read-only access and shared history guards |
 | split-014 | [typst.test.mjs:432](typst.test.mjs#L432) | split formatted view must remain read-only | 3: read-only access and shared history guards |
+
+## accepted differences
+
+the formatted view does not repeat these rich editor results, so their tests assert the formatted outcome and are not gaps. evidence: electron 45 (chromium 156), `page.keyboard.insertText` into the rich editor's own DOM with its input handler off and its DOM observer paused, and into a plain `contenteditable`.
+
+- input-041, `editor-input.test.mjs` multiline block kinds, structure: replacing `b`…`c` in `ab` / `## cd` with `X\nY`, the rich editor makes `Yd` bold. chromium copies the heading's theme style onto the joined text (`<span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em; caret-color: transparent;">Yd</span>`) and the rich editor reads the weight as bold; with default styles chromium leaves `Yd` plain. the formatted view keeps it plain: `aX\n\nYd`.
+- input-042 (block kinds) and input-048 (task), caret: the rich editor leaves the caret before the last typed line (`|Yd`, `|b`). chromium's own multi-line input leaves the caret early even in a plain paragraph (`start|END` with `a\n\nb` leaves it in the empty middle paragraph), and the rich editor's handler moves it after the input in every case it handles; these two are cases it leaves to the browser. the formatted view puts the caret after the last typed line: `Y|d`, `b|`.
+- input-049, multiline nested list end, structure: with `a\n\nb` at the end of `y` in `- x` / `  - y`, the rich editor gives `- x\n- ya\n- b`. chromium outdents the emptied item by moving the nested list out of its item (`<ul><li><p>x</p></li><ul><li><p>ya</p></li></ul><li>b</li></ul>`, which still shows `ya` nested), and the rich editor's parser flattens that invalid nesting, so `ya` loses its level. the formatted view keeps `ya` nested and outdents the new item, as its Enter does: `- x\n  - ya\n- b`.

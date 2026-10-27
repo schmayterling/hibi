@@ -2293,12 +2293,6 @@ const multilineInputGaps = {
     caret:
       'formatted gap input-031: native multiline cells keeps inserted caret and following text',
   },
-  'block kinds': {
-    structure:
-      'formatted gap input-041: native multiline block kinds preserves literal text and block structure',
-    caret:
-      'formatted gap input-042: native multiline block kinds keeps inserted caret and following text',
-  },
   'into a table': {
     selection:
       'formatted gap input-043: native table into a table selection preserves both source endpoints',
@@ -2309,14 +2303,14 @@ const multilineInputGaps = {
     caret:
       'formatted gap input-046: native multiline into a table keeps inserted caret and following text',
   },
-  task: {
-    caret:
-      'formatted gap input-048: native multiline task keeps inserted caret and following text',
-  },
-  'nested list end': {
-    structure:
-      'formatted gap input-049: native multiline nested list end preserves literal text and block structure',
-  },
+}
+
+// Accepted differences (formatted-engine-gaps.md): the rich editor kept these
+// browser results, which the formatted view does not repeat.
+const formattedInputOutcomes = {
+  'block kinds': { markdown: 'aX\n\nYd', caret: ['Y', 'd'] },
+  task: { caret: ['b', ''] },
+  'nested list end': { markdown: '- x\n  - ya\n- b' },
 }
 
 const toolbarInputGaps = {
@@ -2495,7 +2489,10 @@ for (const [what, , text, select] of multilineInputCases) {
     const actual = await acceptedInput(page)
     const work = await page.evaluate(() => window.cmInputWork)
     const normalized = text.replace(/\r\n?|\n/g, '\n')
-    const expected = oracle.result.markdown
+    const expected =
+      formattedInputOutcomes[what]?.markdown ?? oracle.result.markdown
+    const expectedCaret =
+      formattedInputOutcomes[what]?.caret ?? oracle.result.caret
     await t.test(
       'formatted structure and marks preserve the historical browser outcome',
       { todo: multilineInputGaps[what]?.structure },
@@ -2591,12 +2588,12 @@ for (const [what, , text, select] of multilineInputCases) {
       async () => {
         const caret = await cmCaretText(rich)
         assert.ok(caret)
-        assert.equal(caret[1], oracle.result.caret[1])
+        assert.equal(caret[1], expectedCaret[1])
         const last = normalized.split('\n').at(-1)
         assert.ok(
           what === 'code'
             ? caret[0].endsWith(last)
-            : caret[0] === oracle.result.caret[0],
+            : caret[0] === expectedCaret[0],
           JSON.stringify(caret),
         )
       },

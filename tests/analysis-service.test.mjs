@@ -4,16 +4,21 @@ import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import unit from 'node:test'
 import { validateAnalysisProjection } from '../src/shared/analysis.ts'
 import {
   electron,
   waitForDocumentEditor,
   waitForElectronExit,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
-test('electron cleanup waits for exit and transport and reports close and crash failures', async (t) => {
+// biome-ignore format: preserve the historical assertion layout.
+unit('electron cleanup waits for exit and transport and reports close and crash failures', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const child = () => {
     const process = Object.assign(new EventEmitter(), {
@@ -83,7 +88,8 @@ test('electron cleanup waits for exit and transport and reports close and crash 
   assert.equal(crashed.drained, 2)
 })
 
-test('electron cleanup drains transport pipes inherited by a surviving child', {
+// biome-ignore format: preserve the historical assertion layout.
+unit('electron cleanup drains transport pipes inherited by a surviving child', {
   timeout: 5000,
 }, async () => {
   const parent = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setTimeout(()=>{},2000)'],{stdio:['ignore',1,2,3,4],detached:true});child.unref();`
@@ -99,7 +105,8 @@ test('electron cleanup drains transport pipes inherited by a surviving child', {
   await closed
 })
 
-test('analysis grants contain only exact ranges from the active source', () => {
+// biome-ignore format: preserve the historical assertion layout.
+unit('analysis grants contain only exact ranges from the active source', () => {
   const document = {
     tabId: 'a',
     revision: 1,
@@ -206,6 +213,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const editor = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -293,6 +301,10 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
   const typedAt = Date.now()
   await replaceRichText(page, editor, 'typing stays responsive')
   assert.ok(Date.now() - typedAt < 1500)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'typing stays responsive',
+  )
   const timedOut = await page.evaluate(() => window.analysisPending)
   assert.equal(timedOut.status, 'failed')
   assert.match(timedOut.message, /too long/)
@@ -372,7 +384,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
     'complete',
   )
   await page.reload()
-  await page.locator('.tiptap[contenteditable="true"]').waitFor()
+  await waitForDocumentEditor(app, page)
   await page.evaluate(() => window.hibi.flushDocumentChanges())
   const remaining = await app.evaluate(
     ({ BrowserWindow }) =>

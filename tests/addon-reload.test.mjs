@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const scheme = {
@@ -154,6 +157,8 @@ test('reload restarts an addon and its consumers in place, refuses open windows 
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => window.consumerSaw === 1)
   const reload = (id, scope) => sendReload(app, id, scope)
@@ -431,6 +436,8 @@ test('a reviewed replacement stays enabled and reloads in place unless its acces
     }
   })
   const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.evaluate(() =>
     window.hibi.setAddonTrustSettings({
       allowUnsigned: true,
@@ -625,6 +632,8 @@ async function launchRetryFixtures(t) {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await waitForDocumentEditor(app, page)
   const counts = () => page.evaluate(() => ({ ...window.starts }))
   const live = (...ids) =>
@@ -720,6 +729,8 @@ test('reloading an editor extension restores the selection and focus once it set
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await waitForDocumentEditor(app, page)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   await editor.click()
@@ -738,7 +749,9 @@ test('reloading an editor extension restores the selection and focus once it set
   await page.waitForFunction(
     () =>
       getSelection().toString() === 'ad me' &&
-      document.activeElement?.matches('.ProseMirror[contenteditable="true"]'),
+      document.activeElement?.matches(
+        '.rich-pane :is(.ProseMirror, .cm-content)[contenteditable="true"]',
+      ),
   )
   assert.match(await editor.innerText(), /Hello world, reload me/)
   assert.equal(
@@ -800,6 +813,8 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => window.consumerStarts === 1)
   const editor = page.getByRole('textbox', { name: /document editor/i })
@@ -818,12 +833,14 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   })
   await sendReload(app, 'frontmatter')
   await page.waitForFunction(() => !!window.releaseConsumer)
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector('[role="textbox"][aria-label="Document editor"]')
-        ?.getAttribute('aria-readonly') === 'true',
-  )
+  await page.waitForFunction((cm) => {
+    const editor = document.querySelector(
+      '[role="textbox"][aria-label="Document editor"]',
+    )
+    return cm
+      ? editor?.isContentEditable === false
+      : editor?.getAttribute('aria-readonly') === 'true'
+  }, t.formattedEngine === 'codemirror')
   // The user moves the selection with the mouse; typing changes nothing while the reload runs.
   await editor.getByText(/Hello world/).dblclick({ position: { x: 5, y: 5 } })
   // Windows word selection includes the trailing space.
@@ -832,21 +849,35 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   await page.keyboard.type('xyz')
   assert.equal(await markdown(), before)
   await page.evaluate(() => {
-    document.querySelector('.ProseMirror').dataset.chosenIn = ''
+    document.querySelector(
+      '.rich-pane :is(.ProseMirror, .cm-content)',
+    ).dataset.chosenIn = ''
     window.releaseConsumer()
   })
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector('[role="textbox"][aria-label="Document editor"]')
-        ?.getAttribute('aria-readonly') === 'false',
-  )
-  assert.equal(
-    await page.locator('.ProseMirror[data-chosen-in]').count(),
-    0,
-    'the editor rebuilt after the selection was chosen',
-  )
-  await editor.getByText('Rendered widget text').waitFor()
+  await page.waitForFunction((cm) => {
+    const editor = document.querySelector(
+      '[role="textbox"][aria-label="Document editor"]',
+    )
+    return cm
+      ? editor?.isContentEditable === true
+      : editor?.getAttribute('aria-readonly') === 'false'
+  }, t.formattedEngine === 'codemirror')
+  if (t.formattedEngine === 'codemirror') {
+    // Design §11: API 2 rich extensions are inert; CM keeps its native editor.
+    // The selection, read-only gate and subsequent native input are checked on both engines below.
+    assert.equal(
+      await page.locator('.rich-pane .cm-content[data-chosen-in]').count(),
+      1,
+    )
+    assert.equal(await editor.getByText('Rendered widget text').count(), 0)
+  } else {
+    assert.equal(
+      await page.locator('.ProseMirror[data-chosen-in]').count(),
+      0,
+      'the editor rebuilt after the selection was chosen',
+    )
+    await editor.getByText('Rendered widget text').waitFor()
+  }
   await page.waitForFunction(
     (moved) => getSelection().toString() === moved,
     moved,

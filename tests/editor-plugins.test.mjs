@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -31,24 +34,41 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cm = t.formattedEngine === 'codemirror'
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const read = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
   const status = page.locator('[data-status-id="word-count.total"]')
-  const grip = page.locator('.block-drag-handle')
+  const grip = page.locator('.rich-pane .block-drag-handle')
+  const heading = page.locator(cm ? '.rich-pane .hibi-lp-h1' : '.tiptap h1')
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
   })
-  const count = (text) =>
-    page.waitForFunction(
-      (text) =>
-        document.querySelector('[data-status-id="word-count.total"]')
-          ?.textContent === text,
-      text,
-    )
+  let countCase = 0
+  const count = async (text) => {
+    const matches = () =>
+      page.waitForFunction(
+        (text) =>
+          document.querySelector('[data-status-id="word-count.total"]')
+            ?.textContent === text,
+        text,
+      )
+    if (!cm) return matches()
+    // Keep count failures visible while independently exercising block moves, undo and cleanup.
+    await t.test(`formatted count ${++countCase}: ${text}`, async () => {
+      try {
+        await matches()
+      } catch (error) {
+        assert.equal(await status.textContent(), text)
+        throw error
+      }
+      assert.equal(await status.textContent(), text)
+    })
+  }
   const open = async (name) => {
     await app.evaluate(
       ({ dialog }, path) => {
@@ -70,7 +90,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
   await count('0 words · 0 characters')
   await open('sample.md')
   await count('12 words · 85 characters')
-  await page.locator('.tiptap h1').hover()
+  await heading.hover()
   await grip.click()
   await page
     .getByRole('menuitem', { name: 'Move block down', exact: true })
@@ -83,8 +103,10 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
     initial,
   )
 
-  await page.locator('.tiptap h1').hover()
-  const target = page.locator('.tiptap > p').last()
+  await heading.hover()
+  const target = cm
+    ? page.locator('.rich-pane .cm-line').filter({ hasText: 'last paragraph' })
+    : page.locator('.tiptap > p').last()
   const box = await target.boundingBox()
   await grip.dragTo(target, { targetPosition: { x: 20, y: box.height - 1 } })
   await waitForAsync(
@@ -101,7 +123,10 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
     initial,
   )
 
-  await page.locator('.tiptap li').first().hover()
+  await page
+    .locator(cm ? '.rich-pane .hibi-lp-list-item' : '.tiptap li')
+    .first()
+    .hover()
   await grip.click()
   await page
     .getByRole('menuitem', { name: 'Move block down', exact: true })
@@ -113,7 +138,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
     async (initial) => (await window.hibi.getDocument()).markdown === initial,
     initial,
   )
-  await page.locator('.tiptap h1').click()
+  await heading.click()
   await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: 'Search commands' })
@@ -161,7 +186,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
     }
     const stateRequest = Promise.race([
       page.evaluate(() => {
-        const content = document.querySelector('.cm-content')
+        const content = document.querySelector('.source-pane .cm-content')
         const path = []
         for (
           let node = content;

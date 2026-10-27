@@ -2,9 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  replaceRichText,
+  replaceSourceText,
+} from './keyboard.mjs'
 
 test('code highlighting controls update both panes, persist, and discover addon languages', {
   timeout: 30000,
@@ -21,6 +29,7 @@ test('code highlighting controls update both panes, persist, and discover addon 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6500)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
@@ -47,7 +56,10 @@ test('code highlighting controls update both panes, persist, and discover addon 
     () =>
       ![...document.querySelectorAll('.source-pane .hibi-token-keyword')].some(
         (element) => element.textContent === 'const',
-      ) && !document.querySelector('.tiptap pre .hibi-token-keyword'),
+      ) &&
+      !document.querySelector(
+        '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
+      ),
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -71,7 +83,9 @@ test('code highlighting controls update both panes, persist, and discover addon 
   await page.getByRole('button', { name: /back to app/i }).click()
   await page.locator('.settings-screen').waitFor({ state: 'hidden' })
   await pressShortcut(app, `${mod}+Shift+[`)
-  await page.locator('.tiptap pre .hibi-token-keyword').waitFor()
+  await page
+    .locator('.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword')
+    .waitFor()
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
@@ -103,36 +117,62 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cm = t.formattedEngine === 'codemirror'
   page.setDefaultTimeout(10000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   await clickMenu(app, 'Open…')
-  await page.locator('.tiptap h1', { hasText: 'Long code' }).waitFor()
-  const tokens = page.locator('.tiptap pre [class^="hibi-token-"]')
+  await page
+    .locator(cm ? '.rich-pane .hibi-lp-h1' : '.tiptap h1', {
+      hasText: 'Long code',
+    })
+    .waitFor()
+  const tokens = page.locator(
+    '.rich-pane :is(pre, .hibi-lp-codeblock) [class^="hibi-token-"]',
+  )
   await tokens.first().waitFor({ state: 'attached' })
   // The block has about 40,000 tokens; only text near the viewport is decorated.
   assert.ok((await tokens.count()) < 4000)
-  await page
-    .locator('.tiptap pre')
-    .evaluate((pre) => pre.scrollIntoView({ block: 'end' }))
-  await page.waitForFunction(() => {
-    const pre = document.querySelector('.tiptap pre')
+  if (cm) {
+    await page.locator('.rich-pane .cm-content').evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        selection: {
+          anchor: view.state.doc.line(view.state.doc.lines - 2).from,
+        },
+        scrollIntoView: true,
+      })
+    })
+  } else
+    await page
+      .locator('.tiptap pre')
+      .evaluate((pre) => pre.scrollIntoView({ block: 'end' }))
+  await page.waitForFunction((cm) => {
+    const pre = document.querySelector(
+      cm ? '.rich-pane .hibi-lp-codeblock-last' : '.tiptap pre',
+    )
+    if (!pre) return false
     const last = [...pre.querySelectorAll('[class^="hibi-token-"]')].at(-1)
     return (
       last &&
       pre.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom <
         100
     )
-  })
+  }, cm)
   assert.ok((await tokens.count()) < 4000)
   await tokens.last().click()
   await page.keyboard.press('End')
   await page.keyboard.press('Enter')
   await page.keyboard.insertText('const typed = 1')
   await page.waitForFunction(() =>
-    [...document.querySelectorAll('.tiptap pre .hibi-token-keyword')].some(
+    [
+      ...document.querySelectorAll(
+        '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
+      ),
+    ].some(
       (token) =>
         token.textContent === 'const' &&
         token.nextSibling?.textContent === ' ' &&
@@ -147,12 +187,27 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, wide)
   await clickMenu(app, 'Open…')
-  const block = page.locator('.tiptap:has(h1:text-is("Wide code")) pre')
+  await page
+    .locator(cm ? '.rich-pane .hibi-lp-h1' : '.tiptap h1', {
+      hasText: 'Wide code',
+    })
+    .waitFor()
+  const block = page.locator(
+    cm ? '.rich-pane' : '.tiptap:has(h1:text-is("Wide code")) pre',
+  )
   await block.waitFor()
   await block.evaluate((pre) => {
     pre.scrollLeft = pre.scrollWidth
-    pre.scrollIntoView({ block: 'end' })
+    if (pre.matches('.rich-pane')) pre.scrollTop = pre.scrollHeight
+    else pre.scrollIntoView({ block: 'end' })
   })
+  if (cm)
+    await t.test('wide code can scroll horizontally', async () => {
+      assert.ok(
+        await block.evaluate((pre) => pre.scrollLeft > 0),
+        'wide code retains horizontal scrolling',
+      )
+    })
   await block.evaluate(
     (pre) =>
       new Promise((resolve, reject) => {
@@ -196,16 +251,20 @@ test('rich highlighting waits while source mode hides it, and long lines stay wi
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cm = t.formattedEngine === 'codemirror'
   page.setDefaultTimeout(10000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  const rich = page.locator('.tiptap')
-  await rich.evaluate((element) =>
-    element.editor.commands.setContent('```js\nconst hidden = 42;\n```', {
-      contentType: 'markdown',
-    }),
-  )
-  await page.locator('.tiptap .hibi-token-keyword').waitFor()
+  const rich = page.locator(cm ? '.rich-pane .cm-content' : '.tiptap')
+  if (cm) await replaceRichText(page, rich, '```js\nconst hidden = 42;\n```')
+  else
+    await rich.evaluate((element) =>
+      element.editor.commands.setContent('```js\nconst hidden = 42;\n```', {
+        contentType: 'markdown',
+      }),
+    )
+  await page.locator('.rich-pane .hibi-token-keyword').waitFor()
   // Source mode hides the rich pane with its style; it keeps its size.
   await pressShortcut(app, `${mod}+Shift+]`)
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -214,16 +273,30 @@ test('rich highlighting waits while source mode hides it, and long lines stay wi
       getComputedStyle(document.querySelector('.rich-pane')).visibility ===
       'hidden',
   )
-  await rich.evaluate((element) => {
-    const { editor } = element
-    const plugin = editor.state.plugins.find((plugin) =>
-      plugin.key.startsWith('codeHighlight'),
-    )
-    window.richRefreshes = 0
-    editor.on('transaction', ({ transaction }) => {
-      if (transaction.getMeta(plugin)) window.richRefreshes++
+  if (cm)
+    await rich.evaluate((element) => {
+      // PM plugin metadata has no CM equivalent; observe hidden highlighting work and visible refresh.
+      window.richRefreshes = 0
+      window.richHighlightObserver = new MutationObserver((records) => {
+        window.richRefreshes += records.length
+      })
+      window.richHighlightObserver.observe(element, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+      })
     })
-  })
+  else
+    await rich.evaluate((element) => {
+      const { editor } = element
+      const plugin = editor.state.plugins.find((plugin) =>
+        plugin.key.startsWith('codeHighlight'),
+      )
+      window.richRefreshes = 0
+      editor.on('transaction', ({ transaction }) => {
+        if (transaction.getMeta(plugin)) window.richRefreshes++
+      })
+    })
   await clickMenu(app, 'Settings')
   await page
     .getByRole('tab', { name: /^code highlight$/i, exact: true })
@@ -255,24 +328,46 @@ test('rich highlighting waits while source mode hides it, and long lines stay wi
   assert.equal(await page.evaluate(() => window.richRefreshes), 0)
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(
-    () =>
-      window.richRefreshes === 1 &&
-      !!document.querySelector('.tiptap .hibi-token-keyword'),
+    (cm) =>
+      (cm ? window.richRefreshes > 0 : window.richRefreshes === 1) &&
+      !!document.querySelector('.rich-pane .hibi-token-keyword'),
+    cm,
   )
+  if (cm) await page.evaluate(() => window.richHighlightObserver.disconnect())
   // One long line decorates the columns near the visible ones, also after typing.
-  await rich.evaluate((element) =>
-    element.editor.commands.setContent(
-      `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``,
-      { contentType: 'markdown' },
-    ),
+  const longLine = `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``
+  if (cm) await replaceRichText(page, rich, longLine)
+  else
+    await rich.evaluate((element) =>
+      element.editor.commands.setContent(
+        `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``,
+        { contentType: 'markdown' },
+      ),
+    )
+  const tokens = page.locator(
+    '.rich-pane :is(pre, .hibi-lp-codeblock) [class^="hibi-token-"]',
   )
-  const tokens = page.locator('.tiptap pre [class^="hibi-token-"]')
   await tokens.first().waitFor({ state: 'attached' })
   assert.ok((await tokens.count()) < 1000, 'the line is windowed')
-  await rich.evaluate((element) => {
-    element.editor.commands.setTextSelection(10)
-    element.editor.commands.insertContent(' ')
-  })
+  if (cm) {
+    await rich.focus()
+    await rich.evaluate((element) =>
+      element.cmTile.root.view.dispatch({
+        selection: { anchor: 15 },
+        scrollIntoView: true,
+      }),
+    )
+    await page.keyboard.insertText(' ')
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      `${longLine.slice(0, 15)} ${longLine.slice(15)}`,
+    )
+  } else
+    await rich.evaluate((element) => {
+      element.editor.commands.setTextSelection(10)
+      element.editor.commands.insertContent(' ')
+    })
   await page.evaluate(
     () =>
       new Promise((resolve) =>
@@ -297,24 +392,34 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cm = t.formattedEngine === 'codemirror'
   page.setDefaultTimeout(10000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  const rich = page.locator('.tiptap')
+  const rich = page.locator(cm ? '.rich-pane .cm-content' : '.tiptap')
   const show = async (markdown, place) => {
-    await rich.evaluate(
-      (element, markdown) =>
-        element.editor.commands.setContent(markdown, {
-          contentType: 'markdown',
-        }),
-      markdown,
-    )
+    if (cm) await replaceRichText(page, rich, markdown)
+    else
+      await rich.evaluate(
+        (element, markdown) =>
+          element.editor.commands.setContent(markdown, {
+            contentType: 'markdown',
+          }),
+        markdown,
+      )
     await page
-      .locator('.tiptap pre [class^="hibi-token-"]')
+      .locator('.rich-pane :is(pre, .hibi-lp-codeblock) [class^="hibi-token-"]')
       .first()
       .waitFor({ state: 'attached' })
-    await page.locator('.tiptap pre').evaluate(place)
+    const block = page.locator(cm ? '.rich-pane' : '.tiptap pre')
+    await block.evaluate(place)
+    if (cm)
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        markdown,
+      )
     // Highlighted text must appear where the block is scrolled to.
-    await page.locator('.tiptap pre').evaluate(
+    await block.evaluate(
       (pre) =>
         new Promise((resolve, reject) => {
           const started = performance.now()
@@ -354,16 +459,20 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
   await show(`\`\`\`js\nconst text = "${'漢'.repeat(20_000)}";\n\`\`\``, right)
   // A short first line, then one long line that wraps.
   await page.addStyleTag({
-    content: '.tiptap pre { white-space: pre-wrap; overflow-wrap: anywhere; }',
+    content:
+      '.rich-pane :is(pre, .hibi-lp-codeblock) { white-space: pre-wrap; overflow-wrap: anywhere; }',
   })
   await show(
     `\`\`\`js\nconst header = 42;\n${'const wrapped = 42; '.repeat(5000)}\n\`\`\``,
     (pre) => {
       const pane = pre.closest('.rich-pane')
+      const content = pre.matches('.rich-pane')
+        ? pre.querySelector('.cm-content')
+        : pre
       pane.scrollTop +=
-        pre.getBoundingClientRect().top -
+        content.getBoundingClientRect().top -
         pane.getBoundingClientRect().top +
-        pre.offsetHeight / 2
+        content.offsetHeight / 2
     },
   )
 })

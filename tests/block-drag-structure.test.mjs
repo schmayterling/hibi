@@ -275,6 +275,39 @@ test('every block in 800 seeded mixed notes preserves structure in both directio
   assert.ok(moves > 4000, String(moves))
 })
 
+test('mixed math decisions preserve the complete block tree in both directions', () => {
+  const kinds = [
+    '$$ a',
+    'm $$ x',
+    'z $$',
+    '$$\nx\n$$',
+    'a1\na2\n$$ q\na4\na5',
+    'paragraph',
+    '- item\n- second',
+    '> quote\n>\n> after',
+    '## heading',
+  ]
+  let seed = 29
+  let moves = 0
+  for (let i = 0; i < 300; i++) {
+    const blocks = Array.from({ length: 7 }, () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0
+      return kinds[seed % kinds.length]
+    })
+    for (const spacing of ['\n', '\n\n']) {
+      let doc = blocks.join(spacing) + '\n'
+      if (i % 3 === 0)
+        doc = doc
+          .split('\n')
+          .map((line) => `> ${line}`)
+          .join('\n')
+      moves += checkMoves(doc)
+    }
+  }
+  console.log(JSON.stringify({ mathMoves: moves, changed: 0 }))
+  assert.ok(moves > 500, String(moves))
+})
+
 test('varied list marker widths and blank runs retain the complete block tree', () => {
   let moves = 0
   for (const [first, second] of [

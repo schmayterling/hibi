@@ -11,9 +11,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { promisify } from 'node:util'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -79,12 +82,14 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await waitForDocumentEditor(app, page, { timeout: 30000 })
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await pressShortcut(app, `${mod}+Shift+o`)
   await page.getByRole('button', { name: /new workspace file/i }).waitFor()
   await pressShortcut(app, `${mod}+o`)
   await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.textContent === 'initial',
+    () =>
+      document.querySelector('.rich-pane [aria-label="Document editor"]')
+        ?.textContent === 'initial',
   )
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()

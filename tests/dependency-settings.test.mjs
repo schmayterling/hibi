@@ -9,8 +9,11 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -89,6 +92,7 @@ test('dependency settings discover addon requirements, manage shared paths, and 
     }
   }, process.execPath)
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(10000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1200, height: 900 })

@@ -6,6 +6,7 @@ import test, { after, before } from 'node:test'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT } from './poll.mjs'
 
@@ -114,7 +115,7 @@ before(
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(30000)
-    await waitForDocumentEditor(app, page)
+    await selectFormattedEngine(app, page, 'tiptap')
   },
   { timeout: 90000 },
 )

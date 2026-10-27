@@ -2,8 +2,15 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron, stopElectronTree } from './electron.mjs'
+import {
+  electron,
+  stopElectronTree,
+  waitForDocumentEditor,
+} from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -88,11 +95,15 @@ test('source reference links use current definitions and coexist with find', {
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
   await app.evaluate(({ dialog, shell }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
     shell.openExternal = async (href) => {
       globalThis.openedReference = href
     }
@@ -111,6 +122,9 @@ test('source reference links use current definitions and coexist with find', {
     exact: true,
   })
   await editor.waitFor()
+  const establishedWorkers = page
+    .workers()
+    .filter((worker) => worker.url().includes('/document.worker-'))
   await observeDocumentWorkers(page)
   await clickSourceLink(page, editor, 'reference')
   await waitForOpened(app, 'https://first.example/')
@@ -133,37 +147,70 @@ test('source reference links use current definitions and coexist with find', {
   await page.keyboard.press('Escape')
   await clickSourceLink(page, editor, 'reference')
   await waitForOpened(app, 'https://changed.example/')
-  assert.equal(await page.evaluate(() => window.documentWorkers.length), 1)
+  if (t.formattedEngine === 'tiptap') {
+    assert.equal(await page.evaluate(() => window.documentWorkers.length), 1)
+  } else {
+    // The formatted pane may already own the shared document worker.
+    const workers = page
+      .workers()
+      .filter((worker) => worker.url().includes('/document.worker-'))
+    await t.test(
+      'source references reuse one document worker',
+      {
+        todo: 'formatted gap semantics-002: formatted and source references must reuse one document worker',
+      },
+      async () => {
+        assert.equal(workers.length, 1)
+        for (const worker of establishedWorkers)
+          assert.ok(workers.includes(worker))
+        assert.equal(
+          await page.evaluate(() => window.documentWorkers.length),
+          1 - establishedWorkers.length,
+        )
+      },
+    )
+  }
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    source.replace('https://first.example/', 'https://changed.example/'),
+  )
 })
 
-test('rich-only addon syntax keeps source references out of the built-in reader', {
-  timeout: 30000,
-}, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-rich-reference-links-'))
-  const profile = join(root, 'profile')
-  const folder = join(profile, 'installed-addons', 'literal-definitions')
-  const source =
-    '[reference][target]\n\n[direct](https://direct.example/)\n\n[target]: https://must-not-open.example/\n'
-  const path = join(root, 'references.md')
-  await mkdir(folder, { recursive: true })
-  await writeFile(path, source)
-  await writeFile(
-    join(folder, 'hibi-addon.json'),
-    JSON.stringify({
-      id: 'literal-definitions',
-      name: 'Literal definitions',
-      description: 'Rich-only reference syntax fixture',
-      kind: 'extension',
-      apiVersion: 2,
-      version: '1.0.0',
-      authors: [{ displayName: 'Test' }],
-      capabilities: ['rich'],
-      entry: 'index.js',
-    }),
-  )
-  await writeFile(
-    join(folder, 'index.js'),
-    `export default sdk => ({ start(context) {
+test(
+  'rich-only addon syntax keeps source references out of the built-in reader',
+  (engine) => ({
+    timeout: 30000,
+    todo:
+      engine === 'codemirror'
+        ? 'formatted gap addon-001: rich-only addon syntax must retain native editing and source reference isolation'
+        : undefined,
+  }),
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'hibi-rich-reference-links-'))
+    const profile = join(root, 'profile')
+    const folder = join(profile, 'installed-addons', 'literal-definitions')
+    const source =
+      '[reference][target]\n\n[direct](https://direct.example/)\n\n[target]: https://must-not-open.example/\n'
+    const path = join(root, 'references.md')
+    await mkdir(folder, { recursive: true })
+    await writeFile(path, source)
+    await writeFile(
+      join(folder, 'hibi-addon.json'),
+      JSON.stringify({
+        id: 'literal-definitions',
+        name: 'Literal definitions',
+        description: 'Rich-only reference syntax fixture',
+        kind: 'extension',
+        apiVersion: 2,
+        version: '1.0.0',
+        authors: [{ displayName: 'Test' }],
+        capabilities: ['rich'],
+        entry: 'index.js',
+      }),
+    )
+    await writeFile(
+      join(folder, 'index.js'),
+      `export default sdk => ({ start(context) {
       const literalDefinition = sdk.tiptap.Node.create({
         name: 'literalDefinition', group: 'block', content: 'text*',
         parseHTML: () => [{ tag: 'p.literal-definition' }],
@@ -186,70 +233,112 @@ test('rich-only addon syntax keeps source references out of the built-in reader'
         detect: () => true, richExtensions: [literalDefinition]
       });
     } });`,
-  )
-  await writeFile(
-    join(folder, '.hibi-install.json'),
-    JSON.stringify({
-      hash: 'a'.repeat(64),
-      files: ['hibi-addon.json', 'index.js'],
-      source: 'local',
-    }),
-  )
-  await writeFile(
-    join(profile, 'addons.json'),
-    JSON.stringify({ 'literal-definitions': true }),
-  )
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`],
-  })
-  const watchdog = setTimeout(() => stopElectronTree(app.process()), 25000)
-  t.after(async () => {
-    await app
-      .evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
+    )
+    await writeFile(
+      join(folder, '.hibi-install.json'),
+      JSON.stringify({
+        hash: 'a'.repeat(64),
+        files: ['hibi-addon.json', 'index.js'],
+        source: 'local',
+      }),
+    )
+    await writeFile(
+      join(profile, 'addons.json'),
+      JSON.stringify({ 'literal-definitions': true }),
+    )
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
+    })
+    const watchdog = setTimeout(() => stopElectronTree(app.process()), 25000)
+    t.after(async () => {
+      await app
+        .evaluate(({ dialog }) => {
+          dialog.showMessageBox = async () => ({ response: 1 })
+        })
+        .catch(() => {})
+      await app.close().catch(() => {})
+      clearTimeout(watchdog)
+      await rm(root, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(7000)
+    const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+    await selectFormattedEngine(app, page, t.formattedEngine)
+    await page
+      .getByRole('textbox', { name: 'Document editor', exact: true })
+      .waitFor()
+    await app.evaluate(({ dialog, shell }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
       })
-      .catch(() => {})
-    await app.close().catch(() => {})
-    clearTimeout(watchdog)
-    await rm(root, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  page.setDefaultTimeout(7000)
-  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .waitFor()
-  await app.evaluate(({ dialog, shell }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-    shell.openExternal = async (href) => {
-      globalThis.openedReference = href
+      shell.openExternal = async (href) => {
+        globalThis.openedReference = href
+      }
+    }, path)
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'references.md',
+    )
+    await waitForDocumentEditor(app, page)
+    if (t.formattedEngine === 'tiptap') {
+      await page.locator('.literal-definition').waitFor()
+      assert.equal(
+        await page.locator('.literal-definition').textContent(),
+        '[target]: https://must-not-open.example/',
+      )
+      assert.equal(await page.locator('.tiptap a').count(), 1)
+    } else {
+      // API 2 rich nodes do not render in the CodeMirror pane.
+      assert.equal(await page.locator('.literal-definition').count(), 0)
+      assert.equal(
+        await page
+          .locator('.rich-pane .cm-content')
+          .getAttribute('contenteditable'),
+        'true',
+      )
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source,
+      )
     }
-  }, path)
-  await pressShortcut(app, `${mod}+o`)
-  await page.locator('.literal-definition').waitFor()
-  assert.equal(
-    await page.locator('.literal-definition').textContent(),
-    '[target]: https://must-not-open.example/',
-  )
-  assert.equal(await page.locator('.tiptap a').count(), 1)
-  await page.waitForFunction(
-    () => document.querySelector('.app').getAttribute('aria-busy') === 'false',
-  )
-  await pressShortcut(app, `${mod}+Shift+\\`)
-  const editor = page.getByRole('textbox', {
-    name: 'Markdown editor',
-    exact: true,
-  })
-  await editor.waitFor()
-  await observeDocumentWorkers(page)
-  await clickSourceLink(page, editor, 'reference')
-  // A tiny source bootstrap has at most two task turns before worker creation.
-  await page.evaluate(
-    () => new Promise((done) => setTimeout(() => setTimeout(done, 0), 0)),
-  )
-  assert.equal(await page.evaluate(() => window.documentWorkers.length), 0)
-  assert.equal(await app.evaluate(() => globalThis.openedReference), undefined)
-  await clickSourceLink(page, editor, 'direct')
-  await waitForOpened(app, 'https://direct.example/')
-  assert.equal(await page.evaluate(() => window.documentWorkers.length), 0)
-})
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.app').getAttribute('aria-busy') === 'false',
+    )
+    await pressShortcut(app, `${mod}+Shift+\\`)
+    const editor = page.getByRole('textbox', {
+      name: 'Markdown editor',
+      exact: true,
+    })
+    await editor.waitFor()
+    const establishedWorkers = page
+      .workers()
+      .filter((worker) => worker.url().includes('/document.worker-'))
+    await observeDocumentWorkers(page)
+    await clickSourceLink(page, editor, 'reference')
+    // A tiny source bootstrap has at most two task turns before worker creation.
+    await page.evaluate(
+      () => new Promise((done) => setTimeout(() => setTimeout(done, 0), 0)),
+    )
+    assert.equal(await page.evaluate(() => window.documentWorkers.length), 0)
+    assert.equal(
+      await app.evaluate(() => globalThis.openedReference),
+      undefined,
+    )
+    await clickSourceLink(page, editor, 'direct')
+    await waitForOpened(app, 'https://direct.example/')
+    assert.equal(await page.evaluate(() => window.documentWorkers.length), 0)
+    assert.deepEqual(
+      page
+        .workers()
+        .filter((worker) => worker.url().includes('/document.worker-')),
+      establishedWorkers,
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      source,
+    )
+  },
+)

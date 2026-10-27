@@ -9,14 +9,18 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { crashAndReload, electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('native file operations preserve drafts and avoid silent overwrites', {
   timeout: 30000,
 }, async (t) => {
+  const engine = t.formattedEngine
   const folder = await mkdtemp(join(tmpdir(), 'hibi-files-'))
   const alias = join(folder, 'linked')
   await symlink(folder, alias, 'junction')
@@ -40,7 +44,7 @@ test('native file operations preserve drafts and avoid silent overwrites', {
   })
   const page = await app.firstWindow()
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, engine)
   await app.evaluate(({ dialog }, path) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
   }, destination)

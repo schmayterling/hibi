@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import unit from 'node:test'
 import { parseDocument } from 'yaml'
 import {
   addFrontmatter,
@@ -11,50 +11,57 @@ import {
   splitFrontmatter,
 } from '../src/addons/frontmatter/markdown.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
 
-test('frontmatter preserves raw metadata, spacing, and delimiter boundaries', () => {
-  const prefix =
-    '\uFEFF---  \r\ntitle: keep me\r\ntags: [one, two]\r\n...\r\n\r\n'
-  const projection = parseFrontmatter(`${prefix}original body`)
-  assert.equal(projection.content, 'original body')
-  assert.equal(projection.serialize('edited body'), `${prefix}edited body`)
-  assert.equal(
-    parseFrontmatter('---\ntitle: note\n---').serialize('body'),
-    '---\ntitle: note\n---\nbody',
-  )
-  assert.equal(
-    parseFrontmatter('---\ntitle: note\n---').serialize(''),
-    '---\ntitle: note\n---',
-  )
-  assert.equal(parseFrontmatter('paragraph\n---\ntitle: note\n---'), null)
-  assert.equal(parseFrontmatter('---\nnot closed'), null)
-  for (const source of [
-    '---',
-    '---\n',
-    '---\n\n',
-    '---\n---\n',
-    '---\nparagraph\n---\nbody',
-    '---\ntitle: not closed',
-  ])
-    assert.equal(parseFrontmatter(source), null)
-  assert.ok(parseFrontmatter('---\n{}\n---\n'))
-  assert.equal(
-    addFrontmatter('\uFEFFbody\r\n'),
-    '\uFEFF---\r\n{}\r\n---\r\n\r\nbody\r\n',
-  )
-  assert.equal(
-    addFrontmatter(`${prefix}original body`),
-    `${prefix}original body`,
-  )
-  assert.equal(
-    replaceFrontmatter(`${prefix}original body`, 'title: changed\n'),
-    '\uFEFF---  \r\ntitle: changed\r\n...\r\n\r\noriginal body',
-  )
-})
+unit(
+  'frontmatter preserves raw metadata, spacing, and delimiter boundaries',
+  () => {
+    const prefix =
+      '\uFEFF---  \r\ntitle: keep me\r\ntags: [one, two]\r\n...\r\n\r\n'
+    const projection = parseFrontmatter(`${prefix}original body`)
+    assert.equal(projection.content, 'original body')
+    assert.equal(projection.serialize('edited body'), `${prefix}edited body`)
+    assert.equal(
+      parseFrontmatter('---\ntitle: note\n---').serialize('body'),
+      '---\ntitle: note\n---\nbody',
+    )
+    assert.equal(
+      parseFrontmatter('---\ntitle: note\n---').serialize(''),
+      '---\ntitle: note\n---',
+    )
+    assert.equal(parseFrontmatter('paragraph\n---\ntitle: note\n---'), null)
+    assert.equal(parseFrontmatter('---\nnot closed'), null)
+    for (const source of [
+      '---',
+      '---\n',
+      '---\n\n',
+      '---\n---\n',
+      '---\nparagraph\n---\nbody',
+      '---\ntitle: not closed',
+    ])
+      assert.equal(parseFrontmatter(source), null)
+    assert.ok(parseFrontmatter('---\n{}\n---\n'))
+    assert.equal(
+      addFrontmatter('\uFEFFbody\r\n'),
+      '\uFEFF---\r\n{}\r\n---\r\n\r\nbody\r\n',
+    )
+    assert.equal(
+      addFrontmatter(`${prefix}original body`),
+      `${prefix}original body`,
+    )
+    assert.equal(
+      replaceFrontmatter(`${prefix}original body`, 'title: changed\n'),
+      '\uFEFF---  \r\ntitle: changed\r\n...\r\n\r\noriginal body',
+    )
+  },
+)
 
 test('frontmatter contributes slash actions in rich and source panes only while available', {
   timeout: 30000,
@@ -71,6 +78,7 @@ test('frontmatter contributes slash actions in rich and source panes only while 
     await rm(folder, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(5000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -98,7 +106,7 @@ test('frontmatter contributes slash actions in rich and source panes only while 
   )
   await mode('normal')
   await rich
-    .locator('p')
+    .locator('p, .cm-line')
     .filter({ hasText: /\/frontmatter/i })
     .click()
   await rich.press('End')
@@ -200,6 +208,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     dialog.showMessageBox = async () => ({ response: 1 })
   }, fixture)
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   assert.equal(
     await page.getByRole('region', { name: /frontmatter properties/i }).count(),
@@ -209,9 +218,19 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
   const properties = page.getByRole('region', {
     name: /frontmatter properties/i,
   })
+  await waitForDocumentEditor(app, page)
   await properties
     .getByRole('textbox', { name: /^title$/i, exact: true })
     .fill('changed: title # literal')
+  t.diagnostic(
+    JSON.stringify(
+      await page.evaluate(async () => ({
+        stage: 'title property input',
+        active: document.activeElement?.outerHTML.slice(0, 400),
+        markdown: (await window.hibi.getDocument()).markdown,
+      })),
+    ),
+  )
   await properties
     .getByRole('checkbox', { name: /^public$/i, exact: true })
     .check()
@@ -286,11 +305,27 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
   assert.equal(values.alias, 'light')
   assert.equal(values.draft, true)
   assert.equal(values.order, undefined)
-  await replaceRichText(
-    page,
-    page.getByRole('textbox', { name: /document editor/i }),
-    'updated body',
-  )
+  if (t.formattedEngine === 'codemirror') {
+    const rich = page.getByRole('textbox', {
+      name: 'Document editor',
+      exact: true,
+    })
+    await rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      const from = view.state.doc.toString().indexOf('body stays here')
+      if (from < 0) throw new Error('The body fixture is not in the editor.')
+      view.dispatch({
+        selection: { anchor: from, head: from + 'body stays here'.length },
+      })
+      view.focus()
+    })
+    await page.keyboard.insertText('updated body')
+  } else
+    await replaceRichText(
+      page,
+      page.getByRole('textbox', { name: /document editor/i }),
+      'updated body',
+    )
   assert.equal(splitFrontmatter(await read()).content, 'updated body\r\n')
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
@@ -347,9 +382,19 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     .waitFor({ state: 'hidden' })
   assert.equal(await readFile(fixture, 'utf8'), await read())
   await clickMenu(app, 'New')
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.textContent === '',
-  )
+  if (t.formattedEngine === 'tiptap')
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.rich-pane [role="textbox"]')?.textContent ===
+        '',
+    )
+  else {
+    await waitForDocumentEditor(app, page)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === '',
+    )
+  }
   await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /search commands/i })
@@ -377,6 +422,7 @@ test('typing a leading divider never activates frontmatter or disables editing',
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await rich.pressSequentially('---')
@@ -452,6 +498,7 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
     { fixture, folder },
   )
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   const center = await page.locator('.open-workspace').evaluate((button) => {
@@ -491,9 +538,11 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
   await clickMenu(app, 'Open…')
   await page.waitForFunction(
     () =>
-      document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-        'true' &&
-      document.querySelector('.tiptap')?.textContent === 'original body',
+      document
+        .querySelector('.rich-pane [role="textbox"]')
+        ?.getAttribute('contenteditable') === 'true' &&
+      document.querySelector('.rich-pane [role="textbox"]')?.textContent ===
+        'original body',
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,

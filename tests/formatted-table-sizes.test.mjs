@@ -4,14 +4,15 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { tableKey } from '../src/renderer/src/table-layout-store.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const markdown =
   '# Sizes\n\n| Name | Notes |\n| --- | --- |\n| one | first row |\n| two | second row |\n'
 
 /** Open the workspace's note in a fresh app on `profile`. */
-async function openNote(root, profile, apps) {
+async function openNote(root, profile, apps, engine) {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -23,7 +24,7 @@ async function openNote(root, profile, apps) {
   }, root)
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, engine)
   await page.evaluate(() => window.hibi.openWorkspace())
   await page.getByRole('button', { name: 'Toggle workspace sidebar' }).click()
   await page.getByRole('treeitem', { name: 'note.md' }).click()
@@ -66,7 +67,7 @@ test('formatted tables show and resize the column and row sizes the rich editor 
   const profile = join(folder, 'profile')
 
   // Sizes set in the rich editor.
-  let page = await openNote(root, profile, apps)
+  let page = await openNote(root, profile, apps, 'tiptap')
   const rich = page.locator('.tiptap table')
   await rich.getByText('first row').waitFor()
   await drag(
@@ -101,7 +102,7 @@ test('formatted tables show and resize the column and row sizes the rich editor 
   await apps.pop().close()
 
   // The formatted view finds them by the table's key.
-  page = await openNote(root, profile, apps)
+  page = await openNote(root, profile, apps, 'codemirror')
   const table = page.locator('.rich-pane .hibi-lp-table')
   await table.getByText('first row').waitFor()
   const measure = () =>
@@ -218,7 +219,7 @@ test('the rich editor stores only the tables it changes', {
     for (const app of apps) await app.close()
     await rm(folder, { recursive: true, force: true })
   })
-  const page = await openNote(root, join(folder, 'profile'), apps)
+  const page = await openNote(root, join(folder, 'profile'), apps, 'tiptap')
   const rich = page.locator('.tiptap table')
   await rich.nth(1).getByText('3').waitFor()
   // Another view or window stores a new width for the first table.

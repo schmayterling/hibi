@@ -9,9 +9,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { electron, startupDiagnostics } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -38,6 +41,7 @@ test('local history snapshots on save, previews, and restores without overwritin
   }, file)
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await pressShortcut(app, `${mod}+o`)
@@ -48,9 +52,11 @@ test('local history snapshots on save, previews, and restores without overwritin
   )
   await page.waitForFunction(
     () =>
-      document.querySelector('.tiptap')?.textContent === 'original' &&
-      document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-        'true',
+      document.querySelector('[aria-label="Document editor"]')?.textContent ===
+        'original' &&
+      document
+        .querySelector('[aria-label="Document editor"]')
+        ?.getAttribute('contenteditable') === 'true',
   )
   await replaceRichText(page, rich, 'saved change')
   await waitForAsync(page, async () => {
@@ -179,9 +185,11 @@ test('local history snapshots on save, previews, and restores without overwritin
   await page.waitForFunction(
     () =>
       document.querySelector('.app').getAttribute('aria-busy') === 'false' &&
-      document.querySelector('.tiptap')?.textContent === 'original' &&
-      document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-        'true',
+      document.querySelector('[aria-label="Document editor"]')?.textContent ===
+        'original' &&
+      document
+        .querySelector('[aria-label="Document editor"]')
+        ?.getAttribute('contenteditable') === 'true',
   )
   await replaceRichText(page, rich, 'unsaved buffer')
   await waitForAsync(page, async () => {

@@ -214,11 +214,26 @@ export class SourceParserSession {
                 openStarts.has(fragment.from + fragment.offset),
               openEnd =
                 fragment.openEnd || openEnds.has(fragment.to + fragment.offset)
-            return openStart === fragment.openStart &&
+            // markdown can reuse an open fragment at an indented line start.
+            // keep its first unit outside reuse to reparse that line.
+            const rawFrom = openStart ? source.editorToRaw(fragment.from) : null
+            const lineStart =
+              rawFrom !== null &&
+              source.lineAt(rawFrom)?.from === rawFrom &&
+              (rawFrom === 0 ||
+                /^[ \t]/.test(
+                  source.sliceRaw(
+                    rawFrom,
+                    Math.min(rawFrom + 1, source.utf16Length),
+                  ),
+                ))
+            const from = lineStart ? fragment.from + 1 : fragment.from
+            return from === fragment.from &&
+              openStart === fragment.openStart &&
               openEnd === fragment.openEnd
               ? fragment
               : new TreeFragment(
-                  fragment.from,
+                  from,
                   fragment.to,
                   fragment.tree,
                   fragment.offset,

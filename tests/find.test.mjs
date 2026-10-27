@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -48,6 +49,7 @@ test('find in document searches rich text and offscreen markdown without editing
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await page

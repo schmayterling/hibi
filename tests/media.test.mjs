@@ -10,8 +10,11 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import {
   pressShortcut,
   replaceRichText,
@@ -53,7 +56,7 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
   page.setDefaultTimeout(6000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await app.evaluate(
     ({ dialog }, { gif, workspace }) => {
       dialog.showOpenDialog = async () => ({
@@ -80,7 +83,7 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
   }
   await replaceRichText(page, rich, 'hello')
   await choose('image')
-  await rich.locator('img').waitFor()
+  await rich.locator('img:not(.cm-widgetBuffer)').waitFor()
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('assets/animation.gif'),
   )
@@ -117,7 +120,7 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
   const movie = rich.locator('video')
   await movie.waitFor()
   await page.waitForFunction(
-    () => document.querySelector('.tiptap video')?.readyState >= 1,
+    () => document.querySelector('.rich-pane video')?.readyState >= 1,
   )
   assert.equal(await movie.getAttribute('controls'), '')
   const url = await movie.getAttribute('src')

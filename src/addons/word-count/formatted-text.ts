@@ -169,7 +169,7 @@ function maskDisabled(tokens: Token[], syntax: CountSyntax) {
 /** A run of blank lines at the end of a token's source. */
 const trailingBlankLines = /\n[^\S\n]*(?:\n[^\S\n]*)+$/
 const taskLine = /^\s*[-+*]\s+\[([ xX])\]\s+(.*)$/
-const emptyTask = /^\s*[-+*]\s+\[[ xX]\]\s*$/
+const taskMarker = /^\[[ xX]\](?:[ \t\n]|$)/
 
 function decodeEntities(text: string) {
   return text.replace(
@@ -325,8 +325,7 @@ function list(token: Tokens.List, syntax: ProjectionSyntax, out: string[]) {
   const taskEnabled =
     syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
   const taskEntry = (entry: Tokens.ListItem) =>
-    taskEnabled &&
-    (entry.task || emptyTask.test(entry.raw.split('\n')[0] ?? ''))
+    taskEnabled && (entry.task || taskMarker.test(entry.text))
   for (let index = 0; index < token.items.length; index++) {
     const entry = token.items[index]!
     const isTask = taskEntry(entry)

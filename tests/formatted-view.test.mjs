@@ -4,12 +4,37 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-test('behind the switch, notes open in the codemirror formatted view and edit their markdown', {
+test('tiptap: the legacy formatted-engine switch replaces the editor root', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-switch-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
+  // The switch is a local-storage flag for tests and development profiles.
+  assert.equal(await page.locator('.rich-pane .hibi-formatted').count(), 0)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
+  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
+})
+
+test('codemirror: notes open in the formatted view and edit their markdown', {
   timeout: 90000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-view-'))
@@ -28,14 +53,7 @@ test('behind the switch, notes open in the codemirror formatted view and edit th
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
-  // The switch is a local-storage flag for tests and development profiles.
-  assert.equal(await page.locator('.rich-pane .hibi-formatted').count(), 0)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, 'codemirror')
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)

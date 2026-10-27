@@ -2,13 +2,16 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   startupDiagnostics,
   stopElectronTree,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 
 async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
@@ -100,10 +103,12 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
       })
       await editor.waitFor({ timeout: 5000 })
       mark('editorReady')
+      await selectFormattedEngine(app, page, t.formattedEngine)
       await page.waitForFunction(
         () =>
-          document.querySelector('.tiptap')?.getAttribute('spellcheck') ===
-          'true',
+          document
+            .querySelector('[aria-label="Document editor"]')
+            ?.getAttribute('spellcheck') === 'true',
       )
       mark('spellcheckReady')
       await waitForDocumentEditor(app, page)
@@ -239,7 +244,14 @@ test('standalone source skips rich attachment and hidden previews while preservi
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
-  await page.waitForFunction(() => window.sourceFormatFixture?.rich === 1)
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  if (t.formattedEngine === 'tiptap')
+    await page.waitForFunction(() => window.sourceFormatFixture?.rich === 1)
+  else {
+    // Legacy rich attachments stay inert on the formatted engine.
+    assert.equal(await page.evaluate(() => window.sourceFormatFixture.rich), 0)
+    assert.equal(await page.locator('.tiptap').count(), 0)
+  }
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   // A stalled font load must not leave the source editor inert.
   await page.evaluate(() => {

@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
@@ -27,6 +30,7 @@ test('command palette, full-height settings, and local geist fonts', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   const rich = page.getByRole('textbox', { name: /document editor/i })
@@ -306,6 +310,7 @@ test('recent workspace submenu filters, returns, and opens a workspace', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Command palette')
   const palette = page.getByRole('dialog', { name: 'Command palette' })

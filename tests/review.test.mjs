@@ -2,13 +2,18 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import unit from 'node:test'
 import { analyze } from '../src/addons/review/analyze.ts'
 import { textProjection } from '../src/renderer/src/text-projection.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
-test('review checks exact literal spans and bounds its results', () => {
+unit('review checks exact literal spans and bounds its results', () => {
   const projection = textProjection(
     '---\ntitle: teh\n---\n\nTeh very very note.\n\n`teh`\n\n[teh](https://teh.example)',
     true,
@@ -40,7 +45,7 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: 'Document editor', exact: true }),
@@ -65,9 +70,9 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
     exact: true,
   })
   await finding.click()
-  await page.locator('.tiptap .editor-annotation').waitFor()
+  await page.locator('.rich-pane .editor-annotation').waitFor()
   assert.equal(
-    await page.locator('.tiptap .editor-annotation').textContent(),
+    await page.locator('.rich-pane .editor-annotation').textContent(),
     'teh',
   )
   await mkdir('test-results', { recursive: true })
@@ -91,8 +96,17 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'the very very note',
   )
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.undo(),
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) => element.editor.commands.undo())
+  else await rich.press('ControlOrMeta+z')
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown === 'teh very very note',
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -100,10 +114,10 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
   )
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
+    () => document.querySelector('.source-pane .cm-content')?.isContentEditable,
   )
   await finding.click()
-  await page.locator('.cm-content .editor-annotation').waitFor()
+  await page.locator('.source-pane .cm-content .editor-annotation').waitFor()
   await page
     .getByRole('button', { name: 'Apply: Change “teh” to “the”', exact: true })
     .click()

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import unit from 'node:test'
 import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import {
@@ -12,6 +12,10 @@ import {
   themePreferences,
 } from '../src/shared/colorschemes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
@@ -34,7 +38,8 @@ function contrast(a, b) {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
 }
 
-test('bundled palettes retain licenses, provide every role, and keep text readable', async () => {
+// biome-ignore format: preserve the historical assertion layout.
+unit('bundled palettes retain licenses, provide every role, and keep text readable', async () => {
   assert.equal(bundledColorschemes.length, 10)
   for (const scheme of bundledColorschemes) {
     assert.deepEqual(
@@ -133,11 +138,14 @@ test('app palettes update all surfaces, preserve editing, and persist native app
   })
   let page = await app.firstWindow()
   page.setDefaultTimeout(5000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   await waitForDocumentEditor(app, page)
   await replaceRichText(page, editor, 'keep this note')
   await page.evaluate(() => {
-    window.originalEditor = document.querySelector('.tiptap')
+    window.originalEditor = document.querySelector(
+      '.rich-pane :is(.tiptap, .cm-content)',
+    )
   })
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
@@ -204,7 +212,9 @@ test('app palettes update all surfaces, preserve editing, and persist native app
     }
   }
   await page.waitForFunction(
-    () => window.originalEditor === document.querySelector('.tiptap'),
+    () =>
+      window.originalEditor ===
+      document.querySelector('.rich-pane :is(.tiptap, .cm-content)'),
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -296,10 +306,10 @@ test('app palettes update all surfaces, preserve editing, and persist native app
     void w.loadFile(path)
   }, html)
   const harness = await next
-  await harness.waitForFunction(() => typeof ThemeStore !== 'undefined')
+  await harness.waitForFunction(() => typeof window.ThemeStore !== 'undefined')
   await harness.emulateMedia({ colorScheme: 'light' })
   const result = await harness.evaluate(() => {
-    const store = ThemeStore.createColorschemeStore('test')
+    const store = window.ThemeStore.createColorschemeStore('test')
     store.start()
     const scheme = {
       ...store.snapshot().active,

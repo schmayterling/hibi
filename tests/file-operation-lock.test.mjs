@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 async function setup(t, keepAlive = false) {
@@ -25,7 +28,7 @@ async function setup(t, keepAlive = false) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   // The editor reports its initial value and schedules an empty draft write.
   // Drain that real writer before injecting draft requests from the test.
   await app.evaluate(({ ipcMain }) => {
@@ -53,7 +56,24 @@ async function setup(t, keepAlive = false) {
     keepAlive,
   )
   const capture = await opened
-  await capture.locator('.tiptap[contenteditable="true"]').waitFor()
+  await capture
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .waitFor()
+  if (t.formattedEngine === 'codemirror')
+    await capture
+      .locator('.hibi-formatted .cm-content[contenteditable="true"]')
+      .waitFor()
+  assert.equal(
+    await capture
+      .locator(
+        t.formattedEngine === 'tiptap'
+          ? '.tiptap[contenteditable="true"]'
+          : '.hibi-formatted .cm-content[contenteditable="true"]',
+      )
+      .count(),
+    1,
+    'quick note uses the selected formatted engine',
+  )
   assert.deepEqual(await app.evaluate(() => globalThis.initialDraftSaved), {
     keptAs: null,
   })
@@ -478,7 +498,7 @@ test('capture text typed during the quit confirmation is kept', {
   try {
     await replaceRichText(
       capture,
-      capture.locator('.tiptap[contenteditable="true"]'),
+      capture.getByRole('textbox', { name: 'Document editor', exact: true }),
       'typed during quit',
     )
     assert.deepEqual(
@@ -566,7 +586,7 @@ test('opening and quitting an untouched capture preserves the previous draft', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await app.evaluate(({ ipcMain }) => {
     const channel = 'addon-windows:invoke'
     const invoke = ipcMain._invokeHandlers.get(channel)
@@ -590,8 +610,22 @@ test('opening and quitting an untouched capture preserves the previous draft', {
     .fill('Quick note: capture')
   await page.getByRole('option', { name: /Quick note: capture/i }).click()
   const capture = await opened
-  const editor = capture.locator('.tiptap[contenteditable="true"]')
+  const editor = capture.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
   await editor.waitFor()
+  assert.equal(
+    await capture
+      .locator(
+        t.formattedEngine === 'tiptap'
+          ? '.tiptap[contenteditable="true"]'
+          : '.hibi-formatted .cm-content[contenteditable="true"]',
+      )
+      .count(),
+    1,
+    'quick note uses the selected formatted engine',
+  )
   assert.equal(await editor.textContent(), markdown)
   const saved = await app.evaluate(() => globalThis.captureMount.saved)
   assert.deepEqual(saved, { input: { markdown }, value: { keptAs: null } })

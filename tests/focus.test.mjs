@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
 
 test('closing settings never overrides a newer editor focus', {
@@ -21,6 +24,7 @@ test('closing settings never overrides a newer editor focus', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(5000)
   await waitForDocumentEditor(app, page)
   await replaceRichText(

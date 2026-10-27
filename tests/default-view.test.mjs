@@ -2,13 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 
 test('default view persists separately from temporary switches and respects format support', {
   timeout: 30000,
 }, async (t) => {
+  const engine = t.formattedEngine
   const temp = await mkdtemp(join(tmpdir(), 'hibi-default-view-'))
   const profile = join(temp, 'profile')
   const file = join(temp, 'plain.txt')
@@ -36,6 +40,7 @@ test('default view persists separately from temporary switches and respects form
     return page
   }
   let page = await launch()
+  await selectFormattedEngine(app, page, engine)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await waitForDocumentEditor(app, page)
   await replaceRichText(page, rich, 'Keep this draft')

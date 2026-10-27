@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -246,4 +247,222 @@ test('rich codec attachments invalidate plain certificates and source outline as
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     `${changed}x`,
   )
+})
+
+test('codemirror: legacy rich codecs stay inert while native edits and source safeguards remain', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-rich-codec-'))
+  const folder = join(profile, 'installed-addons', 'codec-fixture')
+  const file = join(profile, 'paragraph.md')
+  const initial = '# title\n\nsteady words\n\nmiddle words\n\nhello'
+  await mkdir(folder, { recursive: true })
+  await writeFile(file, initial)
+  await writeFile(
+    join(folder, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'codec-fixture',
+      name: 'Codec fixture',
+      description: 'Mutable renderer codec fixture',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      capabilities: ['rich'],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(folder, 'index.js'),
+    `export default () => ({ start(context) {
+      window.codecLifecycle = { attached: 0, detached: 0 };
+      context.editor.registerRich({ id: 'codec', attach(editor) {
+        window.codecLifecycle.attached++;
+        const manager = editor.markdown;
+        const remove = context.patches.instead(
+          Object.getPrototypeOf(manager), 'renderNodeToMarkdown',
+          (args, next, receiver) => {
+            const result = next(...args);
+            return receiver === manager && args[0]?.type === 'paragraph' &&
+              result.length >= 6 && /^[A-Za-z ]+$/.test(result)
+              ? '&#' + result.charCodeAt(0) + ';' + result.slice(1)
+              : result;
+          });
+        window.paragraphCodecEditor = editor;
+        return () => {
+          window.codecLifecycle.detached++;
+          remove();
+          if (window.paragraphCodecEditor === editor)
+            window.paragraphCodecEditor = null;
+        };
+      }});
+    }});`,
+  )
+  await writeFile(
+    join(folder, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'codec-fixture': false, 'word-count': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await page
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .waitFor()
+
+  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await rich.locator('.cm-line', { hasText: /^hello$/ }).waitFor()
+  await page.locator('[data-status-id="word-count.total"]').waitFor()
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const expected = (text) =>
+    waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  const end = () =>
+    rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({ selection: { anchor: view.state.doc.length } })
+      view.focus()
+    })
+  await end()
+  await page.keyboard.insertText('s')
+  await expected(`${initial}s`)
+  await pressShortcut(app, `${mod}+z`)
+  await expected(initial)
+  const before = await page.evaluate(() => window.hibi.getDocument())
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  assert.equal(await page.locator('#addon-codec-fixture').isChecked(), false)
+  await page.locator('#addon-codec-fixture').click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('#addon-codec-fixture')?.checked &&
+      window.codecLifecycle,
+  )
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  // API v1/v2 rich addons do not execute in the formatted engine.
+  assert.deepEqual(await page.evaluate(() => window.codecLifecycle), {
+    attached: 0,
+    detached: 0,
+  })
+  assert.equal(
+    await page.evaluate(() => window.paragraphCodecEditor),
+    undefined,
+  )
+  assert.equal(await page.locator('.tiptap').count(), 0)
+  const enabled = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(enabled.markdown, initial)
+  assert.equal(enabled.contentVersion, before.contentVersion)
+  await end()
+  await page.keyboard.insertText('s')
+  const changed = `${initial}s`
+  await expected(changed)
+  assert.equal(
+    await rich.locator('.cm-line', { hasText: /^hellos$/ }).count(),
+    1,
+  )
+  await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), changed)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  await rich.focus()
+  await pressShortcut(app, `${mod}+z`)
+  await expected(initial)
+  await pressShortcut(app, `${mod}+Shift+z`)
+  await expected(changed)
+
+  await t.test(
+    'the inert codec has an explicit compatibility notice',
+    async () => {
+      const matches =
+        /codec fixture.*(?:legacy|formatted|incompatible|unsupported)|(?:legacy|formatted|incompatible|unsupported).*codec fixture/i
+      const messages = [
+        ...(await page.getByRole('alert').allTextContents()),
+        ...(await page.getByRole('status').allTextContents()),
+      ]
+      t.diagnostic(JSON.stringify({ stage: 'compatibility notice', messages }))
+      assert.ok(
+        messages.some((message) => matches.test(message)),
+        'API v2 rich addon needs an explicit notice that its formatted feature is inactive.',
+      )
+    },
+  )
+  await page.getByRole('button', { name: /^source view$/i }).click()
+  await page
+    .getByRole('textbox', { name: 'Markdown editor', exact: true })
+    .waitFor()
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  const outline = page.locator(
+    '.outline-sidebar[data-side="right"][data-open="true"]',
+  )
+  t.diagnostic(
+    JSON.stringify({
+      stage: 'inert codec outline',
+      text: await outline.innerText(),
+    }),
+  )
+  await t.test(
+    'source outline keeps the legacy syntax guard until the addon is disabled',
+    async () => {
+      await outline
+        .getByText(/source outline is unavailable for the active addon syntax/i)
+        .waitFor()
+    },
+  )
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  assert.equal(await page.locator('#addon-codec-fixture').isChecked(), true)
+  await page.locator('#addon-codec-fixture').click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-codec-fixture')?.checked,
+  )
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  await outline.getByRole('treeitem', { name: 'title', exact: true }).waitFor()
+  await pressShortcut(app, `${mod}+Shift+[`)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  await end()
+  await page.keyboard.insertText('x')
+  await expected(`${changed}x`)
+  assert.equal(
+    await rich.evaluate(
+      (element) => element.cmTile.root.view.state.selection.main.head,
+    ),
+    changed.length + 1,
+  )
+  await cdp.detach()
 })

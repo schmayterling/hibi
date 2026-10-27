@@ -267,7 +267,7 @@ export class MarkdownSourceModel {
       ? { first, last }
       : null
   }
-  #boundary(tree: Tree, raw: number, side: -1 | 1): Range | null {
+  #boundary(tree: Tree, raw: number, side: -1 | 1): Block | null {
     const position = this.#state.source.rawToEditor(raw)
     if (position === null)
       throw new Error('Owner boundary splits a line ending.')
@@ -282,11 +282,41 @@ export class MarkdownSourceModel {
       if (!node.type.isAnonymous) block = node
     }
     return block
-      ? { from: this.#raw(block.from), to: this.#raw(block.to) }
+      ? {
+          from: this.#raw(block.from),
+          to: this.#raw(block.to),
+          kind: `markdown:${block.name}`,
+        }
       : null
   }
   #expand(tree: Tree, range: Range, owners: SourceOwners): Range {
-    let { from, to } = range
+    // edits can change either neighboring block across unchanged trivia.
+    const boundaryStart = owners.at(range.from),
+      boundaryEnd = owners.at(range.to, -1)
+    let preceding = boundaryStart && owners.get(boundaryStart.index - 1),
+      following = boundaryEnd && owners.get(boundaryEnd.index + 1)
+    if (preceding?.owner.kind === 'trivia')
+      preceding = owners.get(preceding.index - 1)
+    if (following?.owner.kind === 'trivia')
+      following = owners.get(following.index + 1)
+    const previousBlock = preceding && this.#boundary(tree, preceding.to, -1),
+      nextBlock = following && this.#boundary(tree, following.from, 1)
+    let from =
+        preceding &&
+        (!previousBlock ||
+          previousBlock.from !== preceding.from ||
+          previousBlock.to !== preceding.to ||
+          previousBlock.kind !== preceding.owner.kind)
+          ? preceding.from
+          : range.from,
+      to =
+        following &&
+        (!nextBlock ||
+          nextBlock.from !== following.from ||
+          nextBlock.to !== following.to ||
+          nextBlock.kind !== following.owner.kind)
+          ? following.to
+          : range.to
     for (;;) {
       const first = owners.at(from),
         last = owners.at(to, -1)

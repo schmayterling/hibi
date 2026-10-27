@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { formulaCache, formulaScheduler } from '../src/addons/math/rendering.ts'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 /** Frames, idle slices, visibility, and a clock where each render costs 1 ms. */
 function environment(t) {
@@ -231,7 +233,7 @@ test('a formula KaTeX cannot render shows its source', (t) => {
   assert.throws(() => scheduler.render('broken', false), /KaTeX failed/)
 })
 
-test('opening 2,000 formulas accepts input before rendering them all', {
+test('tiptap: opening 2,000 formulas accepts input before rendering them all', {
   timeout: 90000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-math-rendering-'))
@@ -255,6 +257,7 @@ test('opening 2,000 formulas accepts input before rendering them all', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   page.setDefaultTimeout(60000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await app.evaluate(({ dialog }, file) => {
@@ -368,5 +371,312 @@ test('opening 2,000 formulas accepts input before rendering them all', {
           .length,
     ),
     0,
+  )
+})
+
+test('codemirror: formulas accept input before completion, keep the reading position and reserve cached heights', {
+  timeout: 90000,
+}, async function formattedFormulas(t) {
+  const profile = await mkdtemp(
+    join(tmpdir(), 'hibi-formatted-math-scheduling-'),
+  )
+  const file = join(profile, 'formulas.md')
+  let body = '# Formulas\n\n'
+  for (let index = 0; index < 400; index++) {
+    for (let line = 0; line < 4; line++)
+      body += `Line ${index}.${line} has $\\frac{a+${index}}{c+d}+\\sqrt{x^2+y^2}$ inline.\n\n`
+    body += `$$\n\\sum_{i=1}^{${index}} \\frac{i^2}{\\sqrt{i+1}}\n$$\n\n`
+  }
+  await writeFile(join(profile, 'addons.json'), JSON.stringify({ math: true }))
+  await writeFile(file, body)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await page.evaluate(() => {
+    window.mathOpen = {}
+    window.mathDraws = 0
+    window.mathNeighbors = []
+    const count = () => document.querySelectorAll('.rich-pane .katex').length
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (
+          !window.mathNeighbors.some(({ host }) => host.contains(record.target))
+        )
+          continue
+        for (const node of record.addedNodes)
+          if (node.nodeType === 1)
+            window.mathDraws += node.matches('.katex')
+              ? 1
+              : node.querySelectorAll('.katex').length
+      }
+      if (
+        window.mathOpen.frame !== undefined ||
+        !document
+          .querySelector('.rich-pane .hibi-lp-h1')
+          ?.textContent.includes('Formulas')
+      )
+        return
+      window.mathOpen.synchronous ??= count()
+      requestAnimationFrame(() => {
+        window.mathOpen.frame = count()
+      })
+    }).observe(document.body, { childList: true, subtree: true })
+  })
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(() => window.mathOpen.frame !== undefined)
+  const opened = await page.evaluate(() => window.mathOpen)
+  assert.equal(opened.synchronous, 0)
+  assert.ok(opened.frame < 200, JSON.stringify(opened))
+  await rich.locator('[data-type="inline-math"] .katex').first().waitFor()
+  await rich.locator('[data-type="block-math"] .katex').first().waitFor()
+  // The same scheduler's unit oracles above apply to both hosts. Offscreen
+  // formulas stay virtualized, rather than mounting all 2,000 nodes.
+  const mounted = await rich.locator('.katex').count()
+  assert.ok(mounted > 0 && mounted < 200, `${mounted} formulas mounted`)
+  await rich.locator('.hibi-lp-h1').click()
+  await rich.press('End')
+  // Only already rendered neighbors participate; other formulas may still finish.
+  const neighbors = await rich.evaluate((element) => {
+    window.mathNeighbors = ['inline-math', 'block-math'].map((type) => {
+      const host = [
+        ...element.querySelectorAll('[data-type="' + type + '"]'),
+      ].find((node) => node.querySelector('.katex'))
+      if (!host) throw new Error('No completed ' + type + ' neighbor')
+      const output = host.querySelector('.katex')
+      return { host, output, latex: host.dataset.latex, html: output.outerHTML }
+    })
+    window.mathDraws = 0
+    return window.mathNeighbors.map(({ host, html }) => ({
+      type: host.dataset.type,
+      rendered: html.length > 0,
+    }))
+  })
+  assert.deepEqual(neighbors, [
+    { type: 'inline-math', rendered: true },
+    { type: 'block-math', rendered: true },
+  ])
+  await page.keyboard.insertText('Z')
+  const edited = body.replace('# Formulas', '# FormulasZ')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    edited,
+  )
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  await t.test('typing retains completed formula output', async () => {
+    assert.equal(
+      await page.evaluate(() => window.mathDraws),
+      0,
+      'plain typing reuses nearby formula output',
+    )
+    assert.deepEqual(
+      await rich.evaluate((element) =>
+        window.mathNeighbors.map(({ host, output, latex, html }) => ({
+          connected:
+            host.isConnected && output.isConnected && element.contains(host),
+          sourceUnchanged: host.dataset.latex === latex,
+          sameOutput: host.querySelector('.katex') === output,
+          outputUnchanged: output.outerHTML === html,
+        })),
+      ),
+      Array.from({ length: 2 }, () => ({
+        connected: true,
+        sourceUnchanged: true,
+        sameOutput: true,
+        outputUnchanged: true,
+      })),
+      'completed neighbors retain the same compiled output after unrelated typing',
+    )
+  })
+  await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), edited)
+
+  let tall = ''
+  for (let index = 0; index < 80; index++)
+    tall += `anchor ${index}\n\n$$\n\\begin{pmatrix} ${index}\\\\b\\\\c\\\\d\\\\e\\\\f\\\\g\\\\h \\end{pmatrix}\n$$\n\n`
+  const tallFile = join(profile, 'tall.md')
+  await writeFile(tallFile, tall)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, tallFile)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction((source) => {
+    const view = document.querySelector('.rich-pane .cm-content:not([inert] *)')
+      ?.cmTile?.root?.view
+    return (
+      view?.state.doc.length === source.length &&
+      view.state.doc.sliceString(0, 32) === source.slice(0, 32)
+    )
+  }, tall)
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    window.tallOpening = null
+    window.tallRemounted = null
+    window.tallArm = 'opening'
+    new MutationObserver(() => {
+      const block = [
+        ...element.querySelectorAll('[data-type="block-math"]'),
+      ].find((node) => node.dataset.latex.includes('pmatrix} 50'))
+      if (!block) return
+      const box = block.getBoundingClientRect()
+      const pane = element.closest('.rich-pane').getBoundingClientRect()
+      if (box.top >= pane.bottom || box.bottom <= pane.top) return
+      if (
+        window.tallArm === 'opening' &&
+        !window.tallOpening &&
+        !block.querySelector('.katex')
+      )
+        window.tallOpening = { top: box.top, height: box.height }
+      if (window.tallArm === 'remount' && !window.tallRemounted)
+        window.tallRemounted = { top: box.top, height: box.height }
+    }).observe(element, { childList: true, subtree: true })
+    const from = view.state.doc.toString().indexOf('anchor 50')
+    view.dispatch({
+      selection: { anchor: from },
+      effects: view.constructor.scrollIntoView(from, {
+        y: 'start',
+        yMargin: 120,
+      }),
+    })
+  })
+  try {
+    await page.waitForFunction(() => !!window.tallOpening)
+  } catch (error) {
+    t.diagnostic(
+      'tall formula opening: ' +
+        JSON.stringify(
+          await rich.evaluate((element) => {
+            const view = element.cmTile.root.view
+            const pane = element.closest('.rich-pane')
+            const box = pane.getBoundingClientRect()
+            return {
+              canonicalUnits: view.state.doc.length,
+              selection: view.state.selection.main.toJSON(),
+              ranges: view.visibleRanges,
+              pane: {
+                top: box.top,
+                bottom: box.bottom,
+                scrollTop: pane.scrollTop,
+              },
+              blocks: [...element.querySelectorAll('[data-type="block-math"]')]
+                .slice(-8)
+                .map((node) => {
+                  const rect = node.getBoundingClientRect()
+                  return {
+                    latex: node.dataset.latex,
+                    rendered: !!node.querySelector('.katex'),
+                    top: rect.top,
+                    bottom: rect.bottom,
+                  }
+                }),
+            }
+          }),
+        ),
+    )
+    throw error
+  }
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.rich-pane [data-type="block-math"]')].some(
+      (node) =>
+        node.dataset.latex.includes('pmatrix} 50') &&
+        node.querySelector('.katex'),
+    ),
+  )
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  const settled = await rich.evaluate((element) => {
+    const block = [
+      ...element.querySelectorAll('[data-type="block-math"]'),
+    ].find((node) => node.dataset.latex.includes('pmatrix} 50'))
+    const box = block.getBoundingClientRect()
+    return { opening: window.tallOpening, top: box.top, height: box.height }
+  })
+  assert.ok(
+    settled.height > settled.opening.height + 100,
+    JSON.stringify(settled),
+  )
+  await t.test(
+    'tall formula rendering keeps the reading position',
+    {
+      todo: 'formatted gap math-001: tall formula rendering must preserve the reading position',
+    },
+    () => {
+      assert.ok(
+        Math.abs(settled.top - settled.opening.top) < 1,
+        JSON.stringify(settled),
+      )
+    },
+  )
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    window.tallArm = null
+    view.dispatch({
+      selection: { anchor: view.state.doc.length },
+      scrollIntoView: true,
+    })
+  })
+  await page.waitForFunction(
+    () =>
+      ![
+        ...document.querySelectorAll('.rich-pane [data-type="block-math"]'),
+      ].some((node) => node.dataset.latex.includes('pmatrix} 50')),
+  )
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    window.tallArm = 'remount'
+    const from = view.state.doc.toString().indexOf('anchor 50')
+    view.dispatch({
+      selection: { anchor: from },
+      effects: view.constructor.scrollIntoView(from, {
+        y: 'start',
+        yMargin: 120,
+      }),
+    })
+  })
+  await page.waitForFunction(() => !!window.tallRemounted)
+  const remounted = await page.evaluate(() => window.tallRemounted)
+  assert.ok(
+    Math.abs(remounted.height - settled.height) < 1,
+    JSON.stringify({ settled, remounted }),
+  )
+  await page.waitForFunction(() => {
+    const blocks = [
+      ...document.querySelectorAll('.rich-pane [data-type="block-math"]'),
+    ].filter((node) => node.dataset.latex.includes('pmatrix} 50'))
+    return (
+      blocks.length > 0 &&
+      blocks.every(
+        (node) => node.querySelector('.katex') && !node.style.minHeight,
+      )
+    )
+  })
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    tall,
   )
 })

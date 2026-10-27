@@ -233,7 +233,7 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   const block = page
     .locator(
       cm
-        ? '.rich-pane .hibi-lp-codeblock'
+        ? '.rich-pane .hibi-lp-codescroll'
         : '.tiptap:has(h1:text-is("Wide code")) pre',
     )
     .first()
@@ -477,7 +477,7 @@ test(
         .first()
         .waitFor({ state: 'attached' })
       const block = page
-        .locator(cm ? '.rich-pane .hibi-lp-codeblock' : '.tiptap pre')
+        .locator(cm ? '.rich-pane .hibi-lp-codescroll' : '.tiptap pre')
         .first()
       await block.evaluate(place)
       if (cm)

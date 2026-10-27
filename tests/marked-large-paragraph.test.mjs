@@ -498,6 +498,16 @@ test('wrapped 50 mib paragraphs avoid the recursive paragraph rule', (t) => {
     assert.equal(recursive.mock.callCount(), 0)
     recursive.mock.restore()
   }
+  assert.deepEqual(noteHeadings(wrapped), { items: [], complete: true })
+  const metadata = parseWorkspaceMetadata(
+    { path: 'note.md', markdown: wrapped },
+    syntax,
+  )
+  assert.equal(metadata.referenceComplete, true)
+  assert.deepEqual(metadata.headings, { items: [], complete: true })
+  assert.deepEqual([...imageSources(wrapped)], [])
+  assert.equal(lexMarkdown(wrapped)[0].raw, wrapped)
+  assert.equal(renderMarkdown(wrapped).html, `<p>${wrapped}</p>\n`)
 })
 
 test('metadata worker keeps 50 mib note metadata complete and stays alive for the next note', async (t) => {

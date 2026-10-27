@@ -12,6 +12,7 @@ import {
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 async function reportSelection(t, editor) {
   t.diagnostic(
@@ -866,7 +867,7 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
     await page.keyboard.press('Shift+ArrowLeft')
   const markdown = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
-  await page.waitForFunction(async () =>
+  await waitForAsync(page, async () =>
     /reload me/.test((await window.hibi.getDocument()).markdown),
   )
   const before = await markdown()
@@ -934,7 +935,7 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   assert.equal(await markdown(), before)
   await page.keyboard.press('End')
   await page.keyboard.type('!')
-  await page.waitForFunction(async () =>
+  await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('reload me!'),
   )
 })

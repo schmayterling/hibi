@@ -14,6 +14,7 @@ import {
   testFormattedEngines,
 } from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('verbatim projections preserve surrounding bytes and reject unprovable bodies', () => {
   const adapter = {
@@ -269,7 +270,8 @@ testFormattedEngines(
         }),
       )
       await rich.press('ControlOrMeta+z')
-      await page.waitForFunction(
+      await waitForAsync(
+        page,
         async (text) => (await window.hibi.getDocument()).markdown === text,
         `${prefix}Unsaved body`,
       )

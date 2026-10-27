@@ -8,6 +8,7 @@ import {
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 import { checkSidebarResize } from './sidebar-resize.mjs'
 import { uiName } from './ui.mjs'
 
@@ -272,7 +273,8 @@ test('split panes align corresponding carets in both directions without feedback
       `${markdown.slice(0, head)}x${markdown.slice(head)}`,
     )
     await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
-    await page.waitForFunction(
+    await waitForAsync(
+      page,
       async (markdown) =>
         (await window.hibi.getDocument()).markdown === markdown,
       markdown,
@@ -368,10 +370,17 @@ test('source font and layout are ready before the pane starts moving', {
         .querySelector('.source-pane .cm-content')
         ?.getAttribute('contenteditable') === 'true',
   )
-  assert.equal(
-    await page.locator('.editor-panes').getAttribute('data-source-ready'),
-    'false',
-  )
+  if (t.formattedEngine === 'codemirror')
+    // The formatted ready flag describes its visible editor while source waits.
+    assert.equal(
+      await page.locator('.source-pane').evaluate((element) => element.inert),
+      true,
+    )
+  else
+    assert.equal(
+      await page.locator('.editor-panes').getAttribute('data-source-ready'),
+      'false',
+    )
   assert.match(
     await page.locator('.editor-panes').getAttribute('class'),
     /mode-normal/,
@@ -388,10 +397,17 @@ test('source font and layout are ready before the pane starts moving', {
       window.sourceFontLoadSettled &&
       typeof window.releaseSourceMeasure === 'function',
   )
-  assert.equal(
-    await page.locator('.editor-panes').getAttribute('data-source-ready'),
-    'false',
-  )
+  if (t.formattedEngine === 'codemirror')
+    // The formatted ready flag describes its visible editor while source waits.
+    assert.equal(
+      await page.locator('.source-pane').evaluate((element) => element.inert),
+      true,
+    )
+  else
+    assert.equal(
+      await page.locator('.editor-panes').getAttribute('data-source-ready'),
+      'false',
+    )
   assert.match(
     await page.locator('.editor-panes').getAttribute('class'),
     /mode-normal/,

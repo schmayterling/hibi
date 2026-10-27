@@ -146,6 +146,28 @@ test('alert and footnote handles follow the actual content offset', {
   }
 })
 
+test('nested heading handles follow the rendered text line', {
+  timeout: 60000,
+}, async () => {
+  for (const [name, doc] of [
+    ['quoted-heading', '> # nested heading\n'],
+    ['item-heading', '- first\n\n  # nested heading\n'],
+    ['alert-heading', '> [!NOTE]\n> # nested heading\n'],
+    ['footnote-heading', 'ref[^f]\n\n[^f]: first\n\n    # nested heading\n'],
+  ]) {
+    await open(`${name}.md`, doc, 'nested heading')
+    const line = await hover('nested heading')
+    const box = await line.boundingBox()
+    const handle = await page
+      .locator('.rich-pane:not([inert]) .block-drag-handle')
+      .boundingBox()
+    assert.ok(
+      Math.abs(handle.x + handle.width - box.x) <= 1,
+      JSON.stringify({ name, handle, box }),
+    )
+  }
+})
+
 test('enabling block drag in an open note keeps task checkboxes clickable', {
   timeout: 90000,
 }, async () => {

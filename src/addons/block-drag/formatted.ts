@@ -575,7 +575,10 @@ function blockLeft(view: EditorView, block: SyntaxNode) {
   const edge = line?.querySelector(
     `[data-hibi-block-edge="${block.name}:${depth}"]`,
   )
-  return (edge ?? line)?.getBoundingClientRect().left ?? column(view).left
+  const text = line?.classList.contains('cm-line')
+    ? line
+    : (line?.querySelector('.cm-line') ?? line)
+  return (edge ?? text)?.getBoundingClientRect().left ?? column(view).left
 }
 
 /**

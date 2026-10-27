@@ -62,7 +62,8 @@ import {
   showMarkdownMarkers,
 } from './formatted-contributions'
 import {
-  referenceDefined,
+  drawReference,
+  knownReference,
   referenceLink,
   referenceLinks,
 } from './formatted-references'
@@ -427,13 +428,18 @@ function inline(
       doc.sliceString(close.to, close.to + 1) !== '(' &&
       referenceLink(doc, node)
     if (reference === null) return false
-    if (reference && !referenceDefined(state, reference.label)) return undefined
+    const answer = reference ? drawReference(state, reference.label) : null
+    if (reference && !answer) return undefined
     const revealed = touched(node.from, node.to)
     syntax(node.from, open.to, revealed)
     // A destination or label on later lines is hidden with its line breaks by the layout field.
     if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
       syntax(close.from, node.to, revealed)
-    linkText(open.to, close.from)
+    linkText(
+      open.to,
+      close.from,
+      answer?.title ? { title: answer.title } : undefined,
+    )
     return undefined
   }
 
@@ -1241,7 +1247,7 @@ function chunkLayout(
               referenceLink(doc, ref.node)
             if (
               reference === false ||
-              (reference && referenceDefined(state, reference.label))
+              (reference && knownReference(state, reference.label))
             ) {
               leaf.hidden.push({ from: close.from, to: ref.to })
               if (starts(close.from))

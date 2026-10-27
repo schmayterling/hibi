@@ -40,7 +40,7 @@ import {
   formattedRefresh,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
-import { referenceDefined, referenceLink } from '../formatted-references.ts'
+import { drawReference, referenceLink } from '../formatted-references.ts'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -240,10 +240,17 @@ function decorateCell(
           state.sliceDoc(close.to, close.to + 1) !== '(' &&
           referenceLink(state.doc, node.node)
         if (reference === null) return false
-        if (reference && !referenceDefined(state, reference.label)) return
+        const answer = reference
+          ? drawReference(state, reference.label, true)
+          : null
+        if (reference && !answer) return
         out.syntax(node.from, open.to)
         out.syntax(close.from, node.to)
-        out.link(open.to, close.from)
+        out.link(
+          open.to,
+          close.from,
+          answer?.title ? { title: answer.title } : undefined,
+        )
         return
       }
       case 'Autolink': {

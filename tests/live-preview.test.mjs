@@ -1017,10 +1017,14 @@ test('reference links render the labels the note defines and keep their brackets
     '[**bold** words\non two lines][ref] end',
     'missing [nope] and [t][nope] and [**kept**][nope]',
     'inline [site](https://example.com/) end',
+    // Labels match definitions trimmed and case folded, as navigation reads them.
+    'padded [t][ A\tB ] end',
+    'folded [ẞ] end',
   ].join('\n\n')
   const shown = await harness.evaluate(async (doc) => {
     const preview = window.livePreview
-    preview.references.defined = new Set(['ref', 'a b'])
+    preview.references.defined = new Set(['ref', 'a b', 'ss'])
+    preview.references.titles = { ref: 'Go there' }
     preview.references.asked = []
     await preview.mount(doc, { width: 800, height: 600 }, { references: true })
     await preview.settle()
@@ -1035,6 +1039,11 @@ test('reference links render the labels the note defines and keep their brackets
           ),
         ),
       ],
+      // Titles of defined labels, as the rich view shows them, per line.
+      titles: [...document.querySelectorAll('.cm-line')]
+        .map((line) => line.querySelector('.hibi-lp-link'))
+        .filter(Boolean)
+        .map((link) => link.getAttribute('title')),
       // Link text per line, which a widget inside it may split.
       links: [...document.querySelectorAll('.cm-line')]
         .map((line) =>
@@ -1059,6 +1068,8 @@ test('reference links render the labels the note defines and keep their brackets
     'bold words on two lines end',
     'missing [nope] and [t][nope] and [kept][nope]',
     'inline site end',
+    'padded t end',
+    'folded ẞ end',
   ])
   assert.deepEqual(shown.links, [
     'text',
@@ -1067,12 +1078,24 @@ test('reference links render the labels the note defines and keep their brackets
     'x',
     'bold words on two lines',
     'site',
+    't',
+    'ẞ',
   ])
   assert.deepEqual(shown.roles, ['link'])
+  assert.deepEqual(shown.titles, [
+    'Go there',
+    'Go there',
+    'Go there',
+    null,
+    'Go there',
+    null,
+    null,
+    null,
+  ])
   // Formatting inside a reference's text renders whether or not it resolves.
   assert.deepEqual(shown.strong, ['bold', 'kept'])
   // Each drawn label is asked about once, normalized as definitions are.
-  assert.deepEqual(shown.asked, ['a b', 'nope', 'ref'])
+  assert.deepEqual(shown.asked, ['a b', 'nope', 'ref', 'ss'])
 })
 
 test('reference labels follow definition changes after an edit and ask only about drawn labels in a 50 MiB note', {
@@ -1124,7 +1147,7 @@ test('reference labels follow definition changes after an edit and ask only abou
     preview.references.asked = []
     const doc = unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length))
     await preview.mount(doc, { width: 800, height: 600 }, { references: true })
-    await preview.settle()
+    while (!document.querySelector('.hibi-lp-link')) await preview.settle()
     const opened = {
       length: preview.view().state.doc.length,
       asked: preview.references.asked.length,
@@ -1148,6 +1171,30 @@ test('reference labels follow definition changes after an edit and ask only abou
   // Labels drawn on screen, at most the 50 distinct ones, never the note's.
   assert.ok(scale.opened.asked <= 50, JSON.stringify(scale))
   assert.ok(scale.scrolled <= 100, JSON.stringify(scale))
+  // Layout hides labels on later lines over parsed text past the viewport
+  // too, but only labels drawn in view are asked about.
+  const multiline = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    preview.references.defined = { has: () => true }
+    preview.references.asked = []
+    const count = Math.ceil((50 * 1024 * 1024) / 32)
+    const doc = Array.from(
+      { length: count },
+      (_, i) => `Paragraph [link][label\n${i}] words.`,
+    ).join('\n\n')
+    await preview.mount(doc, { width: 800, height: 600 }, { references: true })
+    // Answers redraw the viewport's links once its labels are asked about.
+    while (!document.querySelector('.hibi-lp-link')) await preview.settle()
+    await preview.settle()
+    return {
+      length: doc.length,
+      asked: preview.references.asked.length,
+      links: document.querySelectorAll('.hibi-lp-link').length,
+    }
+  })
+  assert.ok(multiline.length > 50 * 1024 * 1024)
+  assert.ok(multiline.links > 0, JSON.stringify(multiline))
+  assert.ok(multiline.asked <= multiline.links, JSON.stringify(multiline))
 })
 
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {

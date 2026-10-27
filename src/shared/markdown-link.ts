@@ -1,6 +1,13 @@
 import { Lexer, marked, type Token, Tokenizer, type TokensList } from 'marked'
 
 /**
+ * A reference label as the tokenizer matches it to definitions: whitespace
+ * runs as one space, trimmed and case folded.
+ */
+export const referenceLabel = (label: string) =>
+  label.replace(/\s+/g, ' ').trim().toLowerCase().toUpperCase().toLowerCase()
+
+/**
  * Let the existing tokenizer normalize reference labels and distinguish images.
  * With `gfm`, a bare URL such as `www.example.com` is a link too.
  */

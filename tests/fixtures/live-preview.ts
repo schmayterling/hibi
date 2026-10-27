@@ -86,7 +86,11 @@ class RevisionWidget extends WidgetType {
 }
 let syntax = formattedSyntax({ probe })
 /** Labels the note defines, as a reference service would answer, and the labels asked about. */
-const references = { defined: new Set<string>(), asked: [] as string[] }
+const references = {
+  defined: new Set<string>(),
+  titles: {} as Record<string, string>,
+  asked: [] as string[],
+}
 
 document.body.innerHTML =
   '<main class="editor-panes mode-normal"><div class="editor-content"><section class="rich-pane" aria-label="Formatted document"><div class="rich-editor-host"></div></section></div></main>'
@@ -222,7 +226,10 @@ Object.assign(window, {
                     return {
                       status: 'resolved',
                       value: references.defined.has(label)
-                        ? { href: '/target' }
+                        ? {
+                            href: '/target',
+                            title: references.titles[label] ?? null,
+                          }
                         : null,
                     }
                   },

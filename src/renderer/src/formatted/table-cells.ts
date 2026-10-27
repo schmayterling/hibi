@@ -29,15 +29,14 @@ import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   claimFormattedReplacement,
   type FormattedDecorations,
-  type FormattedNodeView,
   type FormattedRenderContext,
   followsLink,
   formattedLinkAttributes,
   formattedLiteral,
   formattedMarkdown,
+  formattedNodeViews,
   formattedOwner,
   formattedRefresh,
-  formattedViews,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import {
@@ -64,24 +63,6 @@ function cellParser(state: EditorState) {
       (inline as unknown as { blockNames?: readonly string[] }).blockNames ?? []
     found = inline.configure({ remove: [...blocks] })
     cellParsers.set(contributed, found)
-  }
-  return found
-}
-
-/** Contributed node views by node name, per set of views. */
-const named = new WeakMap<
-  readonly FormattedNodeView[],
-  Map<string, FormattedNodeView[]>
->()
-function namedViews(state: EditorState) {
-  const views = state.facet(formattedViews)
-  let found = named.get(views)
-  if (!found) {
-    found = new Map()
-    for (const view of views)
-      for (const name of view.nodes)
-        found.set(name, [...(found.get(name) ?? []), view])
-    named.set(views, found)
   }
   return found
 }
@@ -130,7 +111,7 @@ function decorateCell(
   out: CellDecorations,
   touched: (from: number, to: number) => boolean,
 ) {
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = literalNodes(state)
   const replacements = new Set<string>()
   // Line breaks in cells are written as <br>, as the rich editor saved them.
@@ -170,7 +151,7 @@ function decorateCell(
         let skip = false
         // A cell draws its line breaks itself, so contributed HTML renderers
         // add no second one.
-        const nodeViews = lineBreakAt(node) ? [] : (views.get(node.name) ?? [])
+        const nodeViews = lineBreakAt(node) ? [] : views(node.type).views
         for (const nodeView of nodeViews) {
           cellState ??= EditorState.create({
             doc: text,
@@ -280,8 +261,9 @@ function decorateCell(
   }
 }
 
-/** Where rendered text nodes start in their cell's content. */
+/** Where rendered text nodes and mark elements start in their cell's content. */
 export const textStarts = new WeakMap<Node, number>()
+export const markStarts = new WeakMap<Element, number>()
 
 /** A cell's inline Markdown as static DOM, as the formatted view renders text it does not reveal. */
 export function renderInline(
@@ -310,6 +292,7 @@ export function renderInline(
     const parent = parents.at(-1)!
     if (op.type === 'open') {
       const element = document.createElement('span')
+      markStarts.set(element, op.mark.from)
       for (const [key, value] of Object.entries(op.mark.attributes))
         element.setAttribute(key, value)
       parent.append(element)

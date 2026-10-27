@@ -4,7 +4,24 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+
+const editorSelector = {
+  tiptap: '.tiptap[contenteditable="true"]',
+  codemirror: '.hibi-formatted .cm-content[contenteditable="true"]',
+}
+
+// Addon windows follow the formatted view selected in the main window.
+async function selectEngine(app, page, engine) {
+  await waitForDocumentEditor(app, page)
+  if (engine === 'tiptap') return
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await page.locator(`.rich-pane ${editorSelector.codemirror}`).waitFor()
+}
 
 test('addon window boot code loads no addon module before taking the bridge', async () => {
   const chunks = JSON.parse(
@@ -40,9 +57,7 @@ test('addon window boot code loads no addon module before taking the bridge', as
   assert.deepEqual(addonModules(), [])
 })
 
-test('addon windows host the editor without desktop privileges', {
-  timeout: 45000,
-}, async (t) => {
+async function hostEditor(t, engine) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-addon-window-editor-'))
   const profile = join(root, 'profile')
   await mkdir(profile)
@@ -59,7 +74,7 @@ test('addon windows host the editor without desktop privileges', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await selectEngine(app, page, engine)
   await page.evaluate(() =>
     window.hibi.openAddonWindow('ui-preview', {
       id: 'editor',
@@ -70,8 +85,11 @@ test('addon windows host the editor without desktop privileges', {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!findPreview()) await setTimeout(30)
   const preview = findPreview()
-  const editor = preview.locator('.tiptap[contenteditable="true"]')
-  await editor.waitFor()
+  await preview
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .waitFor()
+  const editor = preview.locator(editorSelector[engine])
+  assert.equal(await editor.count(), 1, 'the selected formatted view')
   assert.equal(await preview.locator('.editor-toolbar').count(), 1)
   // Mermaid also opens its own diagram files, but Markdown notes still start it.
   await preview
@@ -86,20 +104,29 @@ test('addon windows host the editor without desktop privileges', {
   await preview.keyboard.type('# Title')
   await preview.keyboard.press('Enter')
   await preview.keyboard.type('Body')
-  await preview.locator('.tiptap h1').getByText('Title').waitFor()
-  await preview.locator('.tiptap p').getByText('Body').waitFor()
+  const heading = preview.locator(
+    engine === 'tiptap' ? '.tiptap h1' : '.hibi-lp-h1',
+  )
+  await heading.getByText('Title').waitFor()
+  await preview
+    .locator(engine === 'tiptap' ? '.tiptap p' : '.cm-line')
+    .getByText('Body')
+    .waitFor()
 
   // Slash transforms that rewrite the whole note apply to the window's note.
-  await preview.keyboard.press('Enter')
-  await preview.keyboard.type('/front')
-  await preview
-    .getByRole('listbox', { name: /slash commands/i })
-    .getByRole('option', { name: /frontmatter add page properties/i })
-    .click()
-  await preview
-    .getByRole('region', { name: /frontmatter properties/i })
-    .waitFor()
-  await preview.locator('.tiptap h1').getByText('Title').waitFor()
+  // The formatted view has no slash commands yet.
+  if (engine === 'tiptap') {
+    await preview.keyboard.press('Enter')
+    await preview.keyboard.type('/front')
+    await preview
+      .getByRole('listbox', { name: /slash commands/i })
+      .getByRole('option', { name: /frontmatter add page properties/i })
+      .click()
+    await preview
+      .getByRole('region', { name: /frontmatter properties/i })
+      .waitFor()
+    await heading.getByText('Title').waitFor()
+  }
 
   // Preferences saved in the main window apply to open windows.
   assert.equal(await editor.getAttribute('spellcheck'), 'true')
@@ -107,13 +134,13 @@ test('addon windows host the editor without desktop privileges', {
     localStorage.setItem('spell-check', 'false')
     localStorage.setItem('hibi:toolbar', JSON.stringify({ mode: 'text' }))
   })
-  await preview.locator('.tiptap[spellcheck="false"]').waitFor()
+  await editor.locator('xpath=self::*[@spellcheck="false"]').waitFor()
   await preview.locator('.editor-toolbar[data-mode="text"]').waitFor()
   await page.evaluate(() => {
     localStorage.removeItem('spell-check')
     localStorage.removeItem('hibi:toolbar')
   })
-  await preview.locator('.tiptap[spellcheck="true"]').waitFor()
+  await editor.locator('xpath=self::*[@spellcheck="true"]').waitFor()
 
   // Addons started for the editor cannot take the owner's bridge from the global.
   await assert.rejects(
@@ -151,12 +178,12 @@ test('addon windows host the editor without desktop privileges', {
     window.hibi.openAddonWindow('ui-preview', { id: 'editor' }),
   )
   while (!findPreview()) await setTimeout(30)
-  const source = findPreview()
-  await source.locator('.cm-content[contenteditable="true"]').waitFor()
-  assert.equal(
-    await source.locator('.cm-content[contenteditable="true"]').isVisible(),
-    true,
-  )
+  const source = findPreview().getByRole('textbox', {
+    name: 'Markdown editor',
+    exact: true,
+  })
+  await source.waitFor()
+  assert.equal(await source.isVisible(), true)
   await page.evaluate(() =>
     window.hibi.closeAddonWindow('ui-preview', 'editor'),
   )
@@ -199,7 +226,9 @@ test('addon windows host the editor without desktop privileges', {
   const extras = kept.locator(
     'style[data-addon-style="text-extras.text-extras"]',
   )
-  await kept.locator('.cm-content[contenteditable="true"]').waitFor()
+  await kept
+    .getByRole('textbox', { name: 'Markdown editor', exact: true })
+    .waitFor()
   await extras.waitFor({ state: 'attached' })
   await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', false))
   await extras.waitFor({ state: 'detached' })
@@ -215,11 +244,9 @@ test('addon windows host the editor without desktop privileges', {
     await page.evaluate(async () => (await window.hibi.getDocument()).markdown),
     '',
   )
-})
+}
 
-test('addons that failed in a hidden window recover when toggled in settings', {
-  timeout: 45000,
-}, async (t) => {
+async function recoverAddons(t, engine) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-addon-window-retry-'))
   const profile = join(root, 'profile')
   await mkdir(profile)
@@ -249,7 +276,7 @@ test('addons that failed in a hidden window recover when toggled in settings', {
     }
   })
   const page = await app.firstWindow()
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await selectEngine(app, page, engine)
   await page.evaluate(() =>
     window.hibi.openAddonWindow('ui-preview', {
       id: 'editor',
@@ -260,7 +287,14 @@ test('addons that failed in a hidden window recover when toggled in settings', {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!find()) await setTimeout(30)
   const kept = find()
-  await kept.locator('.tiptap[contenteditable="true"]').waitFor()
+  await kept
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .waitFor()
+  assert.equal(
+    await kept.locator(editorSelector[engine]).count(),
+    1,
+    'the selected formatted view',
+  )
   const extras = kept.locator(
     'style[data-addon-style="text-extras.text-extras"]',
   )
@@ -276,4 +310,21 @@ test('addons that failed in a hidden window recover when toggled in settings', {
     await window.hibi.setAddonEnabled('text-extras', true)
   })
   await extras.waitFor({ state: 'attached' })
-})
+}
+
+for (const engine of ['tiptap', 'codemirror']) {
+  test(
+    `${engine}: addon windows host the editor without desktop privileges`,
+    {
+      timeout: 45000,
+    },
+    (t) => hostEditor(t, engine),
+  )
+  test(
+    `${engine}: addons that failed in a hidden window recover when toggled in settings`,
+    {
+      timeout: 45000,
+    },
+    (t) => recoverAddons(t, engine),
+  )
+}

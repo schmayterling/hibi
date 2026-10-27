@@ -19,6 +19,12 @@ Around ~~[struck](b.md)~~ and [x **y** z](b.md).
 | --- | --- |
 | row | [cell link](b.md) |
 | wiki | [[c]] |
+| wiki-entity | [[c\\|&copy;]] |
+| wiki-alias | [[b \\|x &amp; y]] |
+| wiki-empty | [[b\\|]] |
+| wiki-blank | [[b\\|   ]] |
+| entity | [&amp;](b.md) |
+| mapped | left \\| \\| [&copy;&#x1f331;](c.md) |
 `
 // The rich view's links, in order: one each, named by the text it shows.
 const names = [
@@ -33,6 +39,12 @@ const names = [
   'x y z',
   'cell link',
   'c',
+  '©',
+  'x & y',
+  'b',
+  'b',
+  '&',
+  '©🌱',
 ]
 
 async function open(t, engine) {
@@ -148,6 +160,10 @@ for (const engine of ['tiptap', 'codemirror']) {
       ['alias text', 'b.md'],
       ['cell link', 'b.md'],
       ['c', 'c.md'],
+      ['©', 'c.md'],
+      ['x & y', 'b.md'],
+      ['&', 'b.md'],
+      ['©🌱', 'c.md'],
     ])
       for (const modifiers of follows) {
         await link(name).click({ modifiers })
@@ -160,14 +176,64 @@ for (const engine of ['tiptap', 'codemirror']) {
           assert.deepEqual(await settled(), { name: 'a.md', opened: [target] })
       }
     // The link of the cell being edited follows the same way.
-    await link('cell link').click()
-    if (engine === 'codemirror')
-      await rich
-        .locator('.hibi-lp-cell-editor')
-        .getByRole('link', { name: 'cell link', exact: true })
-        .waitFor()
-    assert.deepEqual(await settled(), { name: 'a.md', opened: [] })
-    await link('cell link').click({ modifiers: ['Shift'] })
-    await shown(app, page, 'b.md')
+    for (const [name, target] of [
+      ['cell link', 'b.md'],
+      ['&', 'b.md'],
+      ['©🌱', 'c.md'],
+    ])
+      for (const modifiers of follows) {
+        await link(name).click()
+        if (engine === 'codemirror')
+          await rich
+            .locator('.hibi-lp-cell-editor')
+            .getByRole('link', { name, exact: true })
+            .waitFor()
+        assert.equal(await link(name).count(), 1)
+        assert.deepEqual(await settled(), { name: 'a.md', opened: [] })
+        await link(name).click({ modifiers })
+        await shown(app, page, target)
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
+        await link('c').waitFor()
+      }
+    // Empty aliases also keep a table escape while their shown label is the target.
+    for (const rowName of ['wiki-empty', 'wiki-blank'])
+      for (const modifiers of follows) {
+        const row = rich.locator('tr').filter({ hasText: rowName })
+        await row
+          .getByRole('link', { name: 'b', exact: true })
+          .click({ modifiers })
+        await shown(app, page, 'b.md')
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
+        await row.getByRole('link', { name: 'b', exact: true }).click()
+        const active =
+          engine === 'codemirror'
+            ? row.locator('.hibi-lp-cell-editor [data-wiki-link]')
+            : row.getByRole('link', { name: 'b', exact: true })
+        await active.waitFor()
+        await active.click({ modifiers })
+        await shown(app, page, 'b.md')
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
+      }
+    // Editing keeps table escapes in the source, but follows the same wiki target.
+    for (const [name, target] of [
+      ['©', 'c.md'],
+      ['x & y', 'b.md'],
+    ])
+      for (const modifiers of follows) {
+        await link(name).click()
+        const active =
+          engine === 'codemirror'
+            ? rich.locator('.hibi-lp-cell-editor [data-wiki-link]')
+            : link(name)
+        await active.waitFor()
+        await active.click({ modifiers })
+        await shown(app, page, target)
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
+        await link('c').waitFor()
+      }
   })
 }

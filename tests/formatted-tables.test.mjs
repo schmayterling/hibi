@@ -556,6 +556,62 @@ test('a selection from outside into a table opens no cell editor', {
   assert.equal(selection.anchor, 0)
 })
 
+test('a selection in a table edits the cell it is in once the table has redrawn', {
+  timeout: 30000,
+}, async () => {
+  // An edit before the table, made before the cell editor opens, moves the
+  // table and the selection with it: the editor opens where the selection is.
+  const doc = 'intro\n\n| a | b |\n| - | - |\n| x | y |\n\nafter'
+  await mount(doc)
+  await harness.evaluate((at) => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: at } })
+    view.dispatch({ changes: { from: 0, insert: 'more ' } })
+  }, doc.indexOf('y |'))
+  await harness.evaluate(() => window.tables.settle())
+  const now = await state()
+  assert.deepEqual(
+    [now.cell, now.editor, now.head],
+    ['2:1', 'y', doc.indexOf('y |') + 'more '.length],
+  )
+})
+
+test('a change that removes a table under the selection opens no cell editor in it', {
+  timeout: 30000,
+}, async () => {
+  const errors = []
+  const listen = (error) => errors.push(error.message)
+  harness.on('pageerror', listen)
+  // CodeMirror places a removed table's detached DOM at the start or the end
+  // of the new document; neither may open an editor or move the selection.
+  for (const [text, at] of [
+    ['/h2', 3],
+    ['q  r', 1],
+  ]) {
+    await mount('| a | b |\n| - | - |\n| /h2 | end |\n\n/h2')
+    await harness.evaluate(
+      ({ text, at }) => {
+        const view = window.tables.view()
+        view.focus()
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: text },
+          selection: { anchor: at },
+        })
+      },
+      { text, at },
+    )
+    await harness.evaluate(() => window.tables.settle())
+    const now = await state()
+    assert.deepEqual(
+      [now.doc, now.anchor, now.head, now.editor],
+      [text, at, at, null],
+    )
+  }
+  harness.off('pageerror', listen)
+  assert.deepEqual(errors, [])
+})
+
 test('a <br> in a cell is one line break, drawn alike in the cell and its editor', {
   timeout: 30000,
 }, async () => {
@@ -661,6 +717,58 @@ test('a cell editor follows its row when rows are added or deleted around it', {
   now = await state()
   assert.match(now.doc, /\| beta \|\n\| NEWY \|\n\nafter$/)
   assert.deepEqual([now.cell, now.editor], ['4:0', 'NEWY'])
+})
+
+test('a cell editor whose row is deleted edits the row now there after later changes', {
+  timeout: 30000,
+}, async () => {
+  await mount(
+    '| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n| delta |\n\nafter',
+  )
+  await harness.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+  await harness.keyboard.press('End')
+  // Before the editor follows, another change adds a row above.
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    view.dispatch({
+      changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
+    })
+    view.dispatch({
+      changes: { from: text.indexOf('| alpha'), insert: '| NEW |\n' },
+    })
+  })
+  await harness.evaluate(() => window.tables.settle())
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('X')
+  const now = await state()
+  assert.deepEqual([now.cell, now.editor], ['4:0', 'gammaX'])
+  assert.match(now.doc, /\| alpha \|\n\| gammaX \|\n\| delta \|/)
+})
+
+test('a cell editor whose row is deleted leaves focus that moved out of the editor', {
+  timeout: 30000,
+}, async () => {
+  await mount('| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n\nafter')
+  await harness.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+  await harness.keyboard.press('End')
+  const focused = await harness.evaluate(async () => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    view.dispatch({
+      changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
+    })
+    const button = document.createElement('button')
+    button.textContent = 'outside'
+    document.body.append(button)
+    button.focus()
+    await window.tables.settle()
+    const active = document.activeElement === button
+    button.remove()
+    return active
+  })
+  assert.equal(focused, true)
+  assert.equal((await state()).editor, null)
 })
 
 test('cell editors take no input while the formatted view takes none', {

@@ -22,7 +22,13 @@ function wikiParts(node: SyntaxNode) {
   const target = node.getChild('WikiTarget')
   const label = node.getChild('WikiAlias') ?? target
   const text = target?.tree?.prop(wikiText)
-  return label && text !== undefined ? { target: text, label } : null
+  return label && text !== undefined
+    ? {
+        target: text,
+        label,
+        aliased: node.getChildren('WikiMark').length === 3,
+      }
+    : null
 }
 
 /**
@@ -91,7 +97,10 @@ class EmbedWidget extends WidgetType {
               anchor: event.key === 'ArrowLeft' ? from : from + this.length,
             },
           })
-        }
+        } else if (!['Alt', 'Control', 'Meta', 'Shift'].includes(event.key))
+          // Other keys edit at the caret beside the embed, which the editor
+          // keeps: it takes focus back before the key reaches it.
+          view.focus()
       })
       dom.append(link)
       return dom
@@ -124,8 +133,8 @@ class EmbedWidget extends WidgetType {
     return dom
   }
   override ignoreEvent(event: Event) {
-    // Mouse events reach the editor; keys stay with the focused link.
-    return !(event instanceof MouseEvent)
+    // Mouse events reach the editor, and so do keys the focused link leaves.
+    return !(event instanceof MouseEvent) && event.defaultPrevented
   }
   override destroy(dom: HTMLElement) {
     stops.get(dom)?.()
@@ -164,6 +173,9 @@ export const contribution: FormattedContribution = {
   id: 'markdown.obsidian',
   flavor: 'markdown.obsidian',
   syntax: obsidianSyntax,
+  // Embeds, wikilinks and highlights start at `!`, `[` and `=`, so text
+  // without them is still skipped.
+  inlineStops: true,
   views: [
     {
       nodes: ['WikiLink'],
@@ -178,7 +190,10 @@ export const contribution: FormattedContribution = {
           context,
           from,
           to,
-          { 'data-wiki-link': parts.target },
+          {
+            'data-wiki-link': parts.target,
+            'data-wiki-alias': String(parts.aliased),
+          },
           true,
         )
         out.syntax(to, node.to)
@@ -191,20 +206,20 @@ export const contribution: FormattedContribution = {
         const parts = wikiParts(node.node)
         const label = parts?.label.tree?.prop(wikiText)
         if (!parts || label === undefined) return false
+        const widget = new EmbedWidget(
+          parts.target,
+          label,
+          state.facet(formattedDocument).revision,
+          node.to - node.from,
+        )
         if (revealed) {
           out.syntax(node.from, node.from + 3)
           out.syntax(node.to - 2, node.to)
-        } else
-          out.replace(
-            node.from,
-            node.to,
-            new EmbedWidget(
-              parts.target,
-              label,
-              state.facet(formattedDocument).revision,
-              node.to - node.from,
-            ),
-          )
+          // An image stays beside its source, as core images do; a note's
+          // link would only repeat the label.
+          if (image.test(parts.target.split('#')[0] ?? ''))
+            out.widget(node.to, widget)
+        } else out.replace(node.from, node.to, widget)
         return false
       },
     },

@@ -9,7 +9,6 @@ import {
   builtInFlavors,
   builtInRichAttachments,
 } from '../../shared/built-in-grammar'
-import type { ReferenceValue } from '../../shared/source-references'
 import { addonRegistry } from './addon-registry'
 import { documentRuntime } from './document-runtime'
 import { flavors as flavorRegistry } from './flavors'
@@ -18,8 +17,10 @@ import type { OutlineHeading } from './OutlineSidebar'
 import type {
   SourceOutline,
   SourceOutlineHeading,
+  SourceOutlineInput,
   SourceOutlineModel,
 } from './source-outline'
+import { SourceOutlineLabelClient } from './source-outline-label-client'
 import {
   resolveSourceReference,
   revealSourcePosition,
@@ -166,8 +167,18 @@ export function useSourceOutline({
         return () => {}
       }
       onOutlineUnavailable?.(null)
+      const disabled = markdownSyntax
+        .snapshot()
+        .filter((feature) => !feature.enabled)
+        .map((feature) => feature.id)
+      const labels = new SourceOutlineLabelClient({
+        syntax: outlineSyntax,
+        flavors: flavors.map((flavor) => flavor.id),
+        disabled,
+      })
       const model = new SourceOutlineModel(session.snapshot(), {
         ...outlineSyntax,
+        deferLabels: true,
         renderLabel: (tokens, level) =>
           semantics.read(
             [
@@ -181,16 +192,13 @@ export function useSourceOutline({
             ],
             { before: false, after: false },
           )?.headings[0]?.label ?? null,
-        disabled: markdownSyntax
-          .snapshot()
-          .filter((feature) => !feature.enabled)
-          .map((feature) => feature.id),
+        disabled,
       })
       let disposed = false,
         timer: ReturnType<typeof setTimeout> | null = null,
         idle: number | null = null,
         work: ReturnType<SourceOutlineModel['read']> | null = null,
-        referenceValue: ReferenceValue | null | undefined,
+        referenceValue: SourceOutlineInput,
         referenceAbort = new AbortController(),
         previous: readonly SourceOutlineHeading[] | null = null,
         headings: OutlineHeading[] = [],
@@ -210,6 +218,7 @@ export function useSourceOutline({
         )
       }
       const cancel = () => {
+        labels.cancel()
         referenceAbort.abort()
         referenceAbort = new AbortController()
         referenceValue = undefined
@@ -223,6 +232,17 @@ export function useSourceOutline({
         if (typeof requestIdleCallback === 'function')
           idle = requestIdleCallback(read, { timeout: 16 })
         else timer = setTimeout(read, 16)
+      }
+      const failed = (error: unknown) => {
+        cancel()
+        previous = null
+        sourceOutline.current = null
+        onOutline([])
+        onActiveOutline(null)
+        onOutlineUnavailable?.(
+          'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
+        )
+        console.error('Source outline failed:', error)
       }
       const read = () => {
         timer = idle = null
@@ -255,6 +275,24 @@ export function useSourceOutline({
               onOutlineUnavailable?.(null)
               if (changed) onOutline(headings)
               reportActiveHeading()
+              return
+            }
+            if (step.value && 'label' in step.value) {
+              const pending = work
+              labels.read(
+                step.value.label,
+                (result) => {
+                  if (
+                    disposed ||
+                    work !== pending ||
+                    version !== session.snapshot().version
+                  )
+                    return
+                  referenceValue = result
+                  queue()
+                },
+                failed,
+              )
               return
             }
             if (step.value) {
@@ -294,15 +332,7 @@ export function useSourceOutline({
           // every short slice makes large outlines stall on busy pages.
           timer = setTimeout(read, 0)
         } catch (error) {
-          work = null
-          previous = null
-          sourceOutline.current = null
-          onOutline([])
-          onActiveOutline(null)
-          onOutlineUnavailable?.(
-            'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
-          )
-          console.error('Source outline failed:', error)
+          failed(error)
         }
       }
       const schedule = () => {

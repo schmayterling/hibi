@@ -767,14 +767,13 @@ test('bundled inline syntax keeps skipping plain text, and inline syntax that ma
       plain.calls <= prose.length / 100,
       `${plain.calls} obsidian inline parser calls for ${prose.length} characters of prose`,
     )
-    // The worker has no grammar for the obsidian flavor's syntax, so its
-    // documents decline worker boundaries and parse on the view's thread.
+    // Inline-only obsidian syntax leaves the worker's block grammar unchanged.
     assert.ok(boundarySyntaxIds(formatted('', ['markdown.github']).markdown))
-    assert.equal(
+    assert.deepEqual(
       boundarySyntaxIds(
         formatted('', ['markdown.github', 'markdown.obsidian']).markdown,
       ),
-      null,
+      boundarySyntaxIds(formatted('', ['markdown.github']).markdown),
     )
     // Inline syntax without declared stops may start at any character.
     const word = {

@@ -267,7 +267,7 @@ export class MarkdownSourceModel {
       ? { first, last }
       : null
   }
-  #boundary(tree: Tree, raw: number, side: -1 | 1): Range | null {
+  #boundary(tree: Tree, raw: number, side: -1 | 1): Block | null {
     const position = this.#state.source.rawToEditor(raw)
     if (position === null)
       throw new Error('Owner boundary splits a line ending.')
@@ -282,11 +282,28 @@ export class MarkdownSourceModel {
       if (!node.type.isAnonymous) block = node
     }
     return block
-      ? { from: this.#raw(block.from), to: this.#raw(block.to) }
+      ? {
+          from: this.#raw(block.from),
+          to: this.#raw(block.to),
+          kind: `markdown:${block.name}`,
+        }
       : null
   }
   #expand(tree: Tree, range: Range, owners: SourceOwners): Range {
-    let { from, to } = range
+    // recheck the next block even when changed indentation becomes trivia.
+    const last = owners.at(range.to, -1)
+    let next = last && owners.get(last.index + 1)
+    if (next?.owner.kind === 'trivia') next = owners.get(next.index + 1)
+    const block = next && this.#boundary(tree, next.from, 1)
+    let from = range.from,
+      to =
+        next &&
+        (!block ||
+          block.from !== next.from ||
+          block.to !== next.to ||
+          block.kind !== next.owner.kind)
+          ? next.to
+          : range.to
     for (;;) {
       const first = owners.at(from),
         last = owners.at(to, -1)

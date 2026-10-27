@@ -277,6 +277,66 @@ test('coarse source ownership stays exact through edits, cancellations, fences a
   }
 })
 
+test('every single-position edit and undo matches fresh owners across block indentation', (t) => {
+  const corpus = [
+    '```\n```\nd',
+    '~~~typst\nx\n~~~\n\ntail',
+    '\t```\n```\nd',
+    '    a\n\nb',
+    '- a\n  - b\n\nlast',
+    'a\n===\n\ntail',
+    '[ref]: x\n\nlast',
+    '> a\n> b\n\ntail',
+    '<div>\na\n</div>\n\ntail',
+    '- [ ]\tbuy milk',
+  ]
+  const inserts = ['\t', ' ', '  ', '    ', '\n', 'x', '`', '-', '---\n']
+  let checked = 0
+  for (const dialect of [parser, parser.configure(GFM)])
+    for (const prefix of ['', 'before\n\n'])
+      for (const text of corpus) {
+        const source = prefix + text
+        const store = new SourceStore(source, { tabId: 'sweep', revision: 0 })
+        const model = new MarkdownSourceModel(
+          store.snapshot(),
+          dialect,
+          'sweep',
+        )
+        const original = rows(finish(model).owners)
+        try {
+          for (let from = 0; from <= source.length; from++)
+            for (const insert of [...inserts, '']) {
+              const to = from + Number(insert === '')
+              if (to > source.length) continue
+              const change = { from, to, insert }
+              const label = JSON.stringify({ source, change })
+              edit(store, model, [change])
+              assert.deepEqual(
+                rows(finish(model).owners),
+                oracle(store.snapshot(), dialect),
+                label,
+              )
+              edit(store, model, [
+                {
+                  from,
+                  to: from + insert.length,
+                  insert: source.slice(from, to),
+                },
+              ])
+              assert.deepEqual(
+                rows(finish(model).owners),
+                original,
+                `undo ${label}`,
+              )
+              checked += 2
+            }
+        } finally {
+          model.dispose()
+        }
+      }
+  t.diagnostic(`${checked} incremental/fresh and undo comparisons`)
+})
+
 test('100k-line prefix edits preserve later owners without a metadata tree walk', () => {
   const source = '# heading\n\nparagraph\n\n'.repeat(25_000).slice(0, -1)
   const store = new SourceStore(source, { tabId: 'large', revision: 0 })

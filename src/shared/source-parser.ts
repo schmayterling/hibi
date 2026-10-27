@@ -214,11 +214,15 @@ export class SourceParserSession {
                 openStarts.has(fragment.from + fragment.offset),
               openEnd =
                 fragment.openEnd || openEnds.has(fragment.to + fragment.offset)
-            return openStart === fragment.openStart &&
+            // markdown can reuse an open fragment at offset zero after indentation
+            // is removed. keep its first unit outside reuse to reparse that line.
+            const from = openStart && fragment.from === 0 ? 1 : fragment.from
+            return from === fragment.from &&
+              openStart === fragment.openStart &&
               openEnd === fragment.openEnd
               ? fragment
               : new TreeFragment(
-                  fragment.from,
+                  from,
                   fragment.to,
                   fragment.tree,
                   fragment.offset,

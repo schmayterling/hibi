@@ -86,6 +86,35 @@ for (const language of ['mermaid', 'typst'])
     assert.equal(counter.store.snapshot().sliceRaw(0, source.length), source)
   })
 
+test('leading indentation and undo keep fence counts equal to a fresh projection', (t) => {
+  const config = { ...syntax, typst: true, mermaid: true }
+  const expected = (text) => countText(richText(text, config).slice(1))
+  for (const body of ['```\n```\nd', '~~~typst\nx\n~~~\n\ntail'])
+    for (const prefix of ['', 'before\n\n'])
+      for (const insert of ['\t', '    ']) {
+        const source = prefix + body
+        const changed = prefix + insert + body
+        const counter = new FormattedCounter(
+          new SourceStore(source, { tabId: 'indent', revision: 0 }),
+          config,
+        )
+        t.after(() => counter.dispose())
+        assert.deepEqual(count(counter), expected(source))
+        for (let cycle = 0; cycle < 2; cycle++) {
+          edit(counter, prefix.length, prefix.length, insert)
+          assert.deepEqual(count(counter), expected(changed), changed)
+          edit(
+            counter,
+            prefix.length,
+            prefix.length + insert.length,
+            '',
+            'undo',
+          )
+          assert.deepEqual(count(counter), expected(source), `undo ${changed}`)
+        }
+      }
+})
+
 test('regional fence termination matches Marked through tab edits and undo', (t) => {
   for (const language of ['mermaid', 'js', 'typst']) {
     for (const marker of ['```', '~~~']) {

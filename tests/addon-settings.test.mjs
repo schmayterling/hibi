@@ -75,16 +75,16 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
     }
   }, zip)
   const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
+  const errors = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.evaluate(() =>
     window.hibi.setAddonTrustSettings({
       allowUnsigned: true,
       checkRevocations: false,
     }),
   )
-  page.setDefaultTimeout(6500)
-  const errors = []
-  page.on('pageerror', (error) => errors.push(error.message))
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   // Keep Hibi garden offline once main has registered its handlers; the
   // directory has its own tests.
   await app.evaluate(({ ipcMain }) => {

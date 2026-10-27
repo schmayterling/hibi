@@ -1,6 +1,7 @@
 import { FrontmatterSourceModel } from '../../shared/frontmatter-source-model.ts'
 import { MarkdownSemanticCache } from '../../shared/markdown-semantic-cache.ts'
 import type { SemanticRegion } from '../../shared/markdown-semantic-tokens.ts'
+import { BlockTokenizer } from '../../shared/marked-blocks.ts'
 import {
   MarkdownSourceModel,
   metadataParsers,
@@ -244,7 +245,7 @@ export class FormattedCounter {
       this.#work.referenceUnits += region.to - region.from
       const links = new parser.Lexer({
         ...parser.defaults,
-        tokenizer: null,
+        tokenizer: new BlockTokenizer(),
       }).lex(source.sliceRaw(region.from, region.to)).links
       const key = Object.keys(links).length ? JSON.stringify(links) : ''
       if ((this.#definitions.get(region.owner.slot) ?? '') !== key)

@@ -1759,6 +1759,7 @@
   "181e7ec5a25b": "Synonyms",
   "2ca28cc19a91": "Synonyms for “{word}”",
   "dc93879e3107": "Syntax",
+  "22b222cf96e0": "Syntax node \"{name}\" is already defined. Use a unique addon-prefixed name.",
   "5d56d0cefb9f": "Syntax owners must activate before editing.",
   "6725e7bbcd28": "System",
   "49c50576529d": "TODO note",

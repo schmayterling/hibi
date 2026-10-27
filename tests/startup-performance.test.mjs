@@ -128,6 +128,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
     /addons\/sdk-(?:loader|formatted|legacy-rich)\.ts|renderer\/src\/formatted-(?:flavor|addon-compatibility|compatibility)\.ts/,
   )
   assert.doesNotMatch(modules, /src\/renderer\/src\/window-desktop\.ts/)
+  assert.doesNotMatch(modules, /src\/shared\/marked-blocks\.ts/)
   assert.ok(
     chunks.some(
       (chunk) =>

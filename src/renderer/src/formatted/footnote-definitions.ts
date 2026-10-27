@@ -13,6 +13,7 @@ import {
   parser,
 } from '@lezer/markdown'
 import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
+import { mappedPrefix } from '../../../shared/source-projection.ts'
 import { ChunkedMarkdownParser } from '../chunked-markdown.ts'
 import {
   formattedMarkdown,
@@ -53,7 +54,11 @@ export const footnoteScan = {
 /** Stretches per group: changing one copies its group and the list of groups. */
 const groupSize = 64
 
-type Stretch = { readonly length: number; readonly labels: readonly string[] }
+type Definition = { readonly label: string; readonly offset: number }
+type Stretch = {
+  readonly length: number
+  readonly definitions: readonly Definition[]
+}
 type Group = { readonly length: number; readonly stretches: readonly Stretch[] }
 /** Label counts in a hash trie: a change copies the nodes and leaves on its labels' paths. */
 type Leaf = Map<string, number>
@@ -313,8 +318,8 @@ type Lines = readonly { from: number; to: number }[]
  * The stretch from `from` continues at line start `at`: parsing the lines in
  * `head`, the opening lines of the blocks open there, and then the text from
  * `at` should recreate the blocks open there, `chain`. When it did not,
- * `whole` reads from `from` again, twice as far each time. `labels` were
- * defined since `from`.
+ * `whole` reads from `from` again, twice as far each time. `definitions`
+ * have offsets relative to `from`.
  */
 type Pending = {
   from: number
@@ -323,7 +328,7 @@ type Pending = {
   head: Lines | null
   chain: string
   whole: boolean
-  labels: readonly string[]
+  definitions: readonly Definition[]
   ahead?: Lookahead | undefined
 }
 
@@ -352,31 +357,42 @@ const prefixOf = (state: EditorState) =>
   Math.max(0, ...state.facet(formattedPrefix).map((prefix) => prefix(state)))
 
 /**
- * Labels of the definitions starting in `from`-`to` of a window parsed from
- * `base`, whose tree positions start at the window, lowercased as references
- * match them.
+ * Definitions starting in `from`-`to` of a window parsed from `base`:
+ * normalized labels and content offsets relative to the stretch's `start`.
  */
-function labelsIn(
+function definitionsIn(
   tree: Tree,
   doc: Text,
   base: number,
   from: number,
   to: number,
+  start: number,
 ) {
-  const labels: string[] = []
+  const definitions: Definition[] = []
   tree.iterate({
     from: from - base,
     to: to - base,
     enter(node) {
       if (node.name !== 'FootnoteDefinition') return
-      const label = node.node.getChild('FootnoteLabel')
-      if (label && node.from + base >= from && node.from + base < to)
-        labels.push(
-          doc.sliceString(label.from + base, label.to + base).toLowerCase(),
-        )
+      const label = node.node.getChild('FootnoteLabel'),
+        mark = node.node.getChildren('FootnoteMark')[1]
+      if (!label || !mark || node.from + base < from || node.from + base >= to)
+        return
+      let content = base + mark.to
+      for (const text of doc.iterRange(content)) {
+        const next = text.search(/[^ \t]/)
+        content += next < 0 ? text.length : next
+        if (next >= 0) break
+      }
+      definitions.push({
+        label: doc
+          .sliceString(label.from + base, label.to + base)
+          .toLowerCase(),
+        offset: content - start,
+      })
     },
   })
-  return labels
+  return definitions
 }
 
 /** Find three following lines, retaining the edges of runs of empty lines. */
@@ -470,8 +486,9 @@ function step(index: Index, doc: Text, budget: number): Index {
   const { start } = index
   const scan = scanner(index.configs)
   const deltas = new Map<string, number>()
-  const count = (labels: readonly string[], by: number) => {
-    for (const label of labels) deltas.set(label, (deltas.get(label) ?? 0) + by)
+  const count = (definitions: readonly Definition[], by: number) => {
+    for (const { label } of definitions)
+      deltas.set(label, (deltas.get(label) ?? 0) + by)
   }
   // Stretches read past the rest, added at the end.
   const appended: Stretch[] = []
@@ -481,7 +498,7 @@ function step(index: Index, doc: Text, budget: number): Index {
       // Nothing is left past stale stretches that an edit emptied.
       if (stale) {
         const done = replace(groups, start, from, read, () => [])
-        for (const stretch of done.removed) count(stretch.labels, -1)
+        for (const stretch of done.removed) count(stretch.definitions, -1)
         groups = done.groups
       }
       read = doc.length
@@ -519,7 +536,7 @@ function step(index: Index, doc: Text, budget: number): Index {
         head: replay?.head ?? null,
         chain: replay?.chain ?? '',
         whole: going?.whole ?? false,
-        labels: replay?.labels ?? [],
+        definitions: replay?.definitions ?? [],
         ahead,
       }
       continue
@@ -577,19 +594,19 @@ function step(index: Index, doc: Text, budget: number): Index {
         head: openingLines(tree, doc, base, limit),
         chain: chainAt(tree, doc, base, limit),
         whole: false,
-        labels: [
-          ...(replay?.labels ?? []),
-          ...labelsIn(tree, doc, base, at, limit),
+        definitions: [
+          ...(replay?.definitions ?? []),
+          ...definitionsIn(tree, doc, base, at, limit, from),
         ],
       }
       continue
     }
     pending = null
-    const labels = [
-      ...(replay?.labels ?? []),
-      ...labelsIn(tree, doc, base, at, cut),
+    const definitions = [
+      ...(replay?.definitions ?? []),
+      ...definitionsIn(tree, doc, base, at, cut, from),
     ]
-    count(labels, 1)
+    count(definitions, 1)
     if (from < read) {
       // A stretch running past the cut keeps its labels until it is read again.
       let rest = 0
@@ -599,14 +616,14 @@ function step(index: Index, doc: Text, budget: number): Index {
         from,
         Math.min(cut, read),
         (removed, end) => {
-          for (const stretch of removed) count(stretch.labels, -1)
+          for (const stretch of removed) count(stretch.definitions, -1)
           const tail = end > cut ? removed.at(-1)! : null
-          if (!tail) return [{ length: cut - from, labels }]
+          if (!tail) return [{ length: cut - from, definitions }]
           rest = end
-          count(tail.labels, 1)
+          count(tail.definitions, 1)
           return [
-            { length: cut - from, labels },
-            { length: end - cut, labels: tail.labels },
+            { length: cut - from, definitions },
+            { length: end - cut, definitions: tail.definitions },
           ]
         },
       )
@@ -617,7 +634,7 @@ function step(index: Index, doc: Text, budget: number): Index {
       } else if (resync) stale = null
       else stale = { from: cut, to: Math.max(stale?.to ?? cut, rest) }
     } else {
-      appended.push({ length: cut - from, labels })
+      appended.push({ length: cut - from, definitions })
       read = cut
     }
   }
@@ -676,7 +693,7 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
       const deltas = new Map<string, number>()
       groups = replace(groups, start, cut, read, (removed) => {
         for (const stretch of removed)
-          for (const label of stretch.labels)
+          for (const { label } of stretch.definitions)
             deltas.set(label, (deltas.get(label) ?? 0) - 1)
         return []
       }).groups
@@ -695,7 +712,7 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
       (removed, end) => [
         {
           length: end - first.from + size,
-          labels: removed.flatMap((stretch) => stretch.labels),
+          definitions: removed.flatMap((stretch) => stretch.definitions),
         },
       ],
     )
@@ -716,31 +733,73 @@ type EditorStateChanges = readonly {
   toB: number
 }[]
 
+/** Groups are relative to start; unfinished reads also carry absolute offsets and line numbers. */
+function shiftPrefix(index: Index, start: number, lines: number): Index {
+  const size = start - index.start
+  if (!size && !lines) return index
+  const shift = (ranges: Lines) =>
+    ranges.map(({ from, to }) => ({ from: from + size, to: to + size }))
+  const { pending, stale } = index
+  const ahead = pending?.ahead
+  return {
+    ...index,
+    start,
+    read: index.read + size,
+    stale: stale ? { from: stale.from + size, to: stale.to + size } : null,
+    pending: pending
+      ? {
+          ...pending,
+          from: pending.from + size,
+          at: pending.at + size,
+          head: pending.head ? shift(pending.head) : null,
+          ...(ahead
+            ? {
+                ahead: {
+                  ...ahead,
+                  last: ahead.last + lines,
+                  end: ahead.end + size,
+                  found: ahead.found.map((line) => line + lines),
+                  ranges: shift(ahead.ranges),
+                },
+              }
+            : {}),
+        }
+      : null,
+  }
+}
+
 export const footnoteDefinitions = StateField.define<Index>({
   create,
   update(index, transaction) {
     const { state } = transaction
     const prefix = prefixOf(state)
-    // Other syntax, or a prefix that appeared or went away, reads the note again.
-    if (
-      state.facet(formattedMarkdown) !== index.configs ||
-      prefix !== index.start ||
-      prefix !== transaction.changes.mapPos(index.start, -1)
-    )
-      return create(state)
+    if (state.facet(formattedMarkdown) !== index.configs) return create(state)
+    const changes: EditorStateChanges[number][] = []
+    transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+      changes.push({ fromA, toA, fromB, toB })
+    })
     let next = index
-    if (transaction.docChanged) {
-      const changes: {
-        fromA: number
-        toA: number
-        fromB: number
-        toB: number
-      }[] = []
-      transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-        changes.push({ fromA, toA, fromB, toB })
-      })
-      next = edit(index, state, changes)
-      if (next.stale) next = step(next, state.doc, footnoteScan.slice >> 4)
+    if (
+      transaction.docChanged &&
+      mappedPrefix(index.start, changes) === prefix
+    ) {
+      next = shiftPrefix(
+        index,
+        prefix,
+        state.doc.lineAt(prefix).number -
+          transaction.startState.doc.lineAt(index.start).number,
+      )
+    } else {
+      // A changed prefix boundary or replacement of the body needs a fresh index.
+      if (
+        prefix !== index.start ||
+        prefix !== transaction.changes.mapPos(index.start, -1)
+      )
+        return create(state)
+      if (transaction.docChanged) {
+        next = edit(index, state, changes)
+        if (next.stale) next = step(next, state.doc, footnoteScan.slice >> 4)
+      }
     }
     for (const effect of transaction.effects)
       if (effect.is(readDefinitions)) next = step(next, state.doc, effect.value)
@@ -755,6 +814,25 @@ export function defined(state: EditorState, label: string) {
     state.field(footnoteDefinitions, false) ??
     state.facet(formattedOwner)?.field(footnoteDefinitions, false)
   return !!index && countOf(index.labels, label.toLowerCase()) > 0
+}
+
+/**
+ * Where the text of the first definition of a reference's label starts.
+ * Null until changed blocks have been read again or no definition was read.
+ * Content offsets were retained by the cooperative scan, relative to each stretch.
+ */
+export function definitionOf(state: EditorState, label: string) {
+  const index = state.field(footnoteDefinitions, false)
+  if (!index || index.stale) return null
+  const wanted = label.toLowerCase()
+  let from = index.start
+  for (const group of index.groups)
+    for (const stretch of group.stretches) {
+      const found = stretch.definitions.find(({ label }) => label === wanted)
+      if (found) return from + found.offset
+      from += stretch.length
+    }
+  return null
 }
 
 /** Whether all of the note has been read. */

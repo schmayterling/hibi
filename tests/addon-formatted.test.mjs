@@ -35,8 +35,14 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
           const exports = {
             commands: ['isolateHistory'],
             language: ['syntaxTree'],
-            state: ['Prec', 'Transaction'],
-            view: ['EditorView', 'ViewPlugin'],
+            state: [
+              'Facet',
+              'Prec',
+              'StateEffect',
+              'StateField',
+              'Transaction',
+            ],
+            view: ['Decoration', 'EditorView', 'ViewPlugin', 'keymap'],
           }
           builder.onResolve({ filter: /^@codemirror\// }, (args) => ({
             path: args.path.split('/')[1],
@@ -58,9 +64,10 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     'formatted-slash-proof',
     3,
     ['formatted'],
-    'export default sdk => { ' +
+    'export default sdk => { window.formattedActivations = (window.formattedActivations || 0) + 1; ' +
       slash.outputFiles[0].text +
-      "; return { start(context) { context.editor.registerFormatted({ id: 'slash', create() { return slashFixture.sourceSlashCommands(context) } }) } } }",
+      "; return { start(context) { context.editor.registerFormatted({ id: 'slash', create() { return slashFixture.sourceSlashCommands(context) } }) }, stop() { window.formattedStops = (window.formattedStops || 0) + 1 } } }",
+    'formatted',
   )
   await install(
     profile,
@@ -90,6 +97,8 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       'export default sdk => ({ start(context) {',
       'const { EditorView } = sdk.codeMirror.view',
       'window.formattedMarkdownAvailable = !!sdk.codeMirror.markdown.parser',
+      "const prop = new sdk.codeMirror.common.NodeProp(); const parser = sdk.codeMirror.markdown.parser.configure({ props: [prop.add({ Paragraph: 'shared' })] }); window.formattedCommonShared = parser.parse('text').topNode.firstChild.type.prop(prop) === 'shared'",
+
       "const proofDelimiter = { resolve: 'ProofHighlight', mark: 'ProofMark' }",
       "context.editor.registerSyntax({ id: 'highlight', label: 'Proof highlight', group: 'Proof', level: 'inline', nodes: ['ProofHighlight'], matches: () => false, slash: { markdown: '==slash proof==', cursor: 2, rich() { window.legacySlashCalled = true; throw Error('legacy slash must not run') } } })",
       "context.editor.registerFlavor({ id: 'highlight', name: 'Proof highlight', kind: 'syntax', description: 'Proof', detect: () => true,",
@@ -151,6 +160,11 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       window.richSdkAvailable &&
       window.formattedMarkdownAvailable,
   )
+  assert.equal(
+    await page.evaluate(() => window.formattedActivations),
+    undefined,
+  )
+  assert.equal(await page.evaluate(() => window.formattedCommonShared), true)
   assert.equal(await page.getByText(notice, { exact: true }).count(), 0)
   assert.equal(await page.locator('[data-formatted-proof]').count(), 0)
   await app.evaluate(({ dialog }, path) => {
@@ -180,6 +194,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     .locator('.rich-pane .fixture-formatted', { hasText: 'formatted proof' })
     .waitFor()
   await page.locator('.rich-pane [data-formatted-proof]').waitFor()
+  await page.waitForFunction(() => window.formattedActivations === 1)
   assert.equal(await page.locator('.rich-pane [data-source-proof]').count(), 0)
   assert.equal(await page.evaluate(() => window.legacyRichAttached), undefined)
   assert.equal(await page.evaluate(() => window.richSdkAvailable), undefined)
@@ -233,6 +248,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   }, source.length)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.locator('.source-pane [data-source-proof]').waitFor()
+  await page.waitForFunction(() => window.formattedStops === 1)
   assert.equal(
     await page.locator('.source-pane [data-formatted-proof]').count(),
     0,
@@ -412,7 +428,7 @@ test('installed flavor state stays current in static and editable table cells', 
                 if (size !== state.doc.length) throw Error('Stale field')
                 if (node.name === 'StrongEmphasis' && !source.startsWith('**')) throw Error('Wrong source positions')
                 if (visible.from > node.from || visible.to < node.to) throw Error('Wrong visible range')
-                out.mark(node.from, node.to, { class: 'cell-state-proof', 'data-length': String(size) })
+                out.link(node.from, node.to, { class: 'cell-state-proof', 'data-length': String(size) })
               } catch (error) {
                 window.cellStateError = String(error)
                 throw error
@@ -461,7 +477,7 @@ test('installed flavor state stays current in static and editable table cells', 
     view.dispatch({ selection: { anchor: 0 } })
   })
   await page.locator('.rich-pane .cell-state-proof').first().waitFor()
-  await page.locator('.rich-pane table .cell-state-proof').first().waitFor()
+  await page.getByRole('link', { name: 'a|b', exact: true }).first().waitFor()
   const addition = '\n| **head** |\n| --- |\n| **a\\|b** |\n'
   await page.evaluate((text) => {
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root
@@ -483,6 +499,7 @@ test('installed flavor state stays current in static and editable table cells', 
     async (size) => (await window.hibi.getDocument()).markdown.length === size,
     before.length + 1,
   )
+  await cell.getByRole('link').first().waitFor()
   await cell
     .locator(`.cell-state-proof[data-length="${before.length + 1}"]`)
     .first()
@@ -501,7 +518,14 @@ test('installed flavor state stays current in static and editable table cells', 
   assert.equal(await page.evaluate(() => window.cellStateError), undefined)
 })
 
-async function install(profile, id, apiVersion, capabilities, code) {
+async function install(
+  profile,
+  id,
+  apiVersion,
+  capabilities,
+  code,
+  activation,
+) {
   const folder = join(profile, 'installed-addons', id)
   await mkdir(folder, { recursive: true })
   await writeFile(
@@ -512,6 +536,7 @@ async function install(profile, id, apiVersion, capabilities, code) {
       description: 'Formatted fixture',
       apiVersion,
       capabilities,
+      activation,
       version: '1.0.0',
       kind: 'extension',
       authors: [{ displayName: 'Test' }],

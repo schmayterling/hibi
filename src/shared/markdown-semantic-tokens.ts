@@ -1,6 +1,7 @@
 import type { Lexer, Marked, MarkedOptions, Token, TokensList } from 'marked'
 import type { MarkdownReferenceSyntax } from './document-worker-protocol.ts'
 import { markdownSourceParser } from './markdown-source-references.ts'
+import { BlockTokenizer } from './marked-blocks.ts'
 import type { SourceSnapshot } from './source-buffer.ts'
 import type { SourceOwner, SourceOwners } from './source-owners.ts'
 import type { ReferenceValue, SourceReferences } from './source-references.ts'
@@ -160,7 +161,8 @@ export class MarkdownSemanticLexer {
     parser: Marked = markdownSourceParser(syntax),
   ) {
     const context = () => this.#context!
-    this.#options = { ...parser.defaults, tokenizer: null }
+    this.#options = { ...parser.defaults }
+    delete this.#options.tokenizer
     this.#Lexer = class extends parser.Lexer {
       #blockDepth = 0
       override blockTokens(
@@ -239,7 +241,10 @@ export class MarkdownSemanticLexer {
       return Object.freeze({ ...previous, region })
     this.#context = { scope, owners, region }
     try {
-      const lexer = new this.#Lexer({ ...this.#options, tokenizer: null })
+      const lexer = new this.#Lexer({
+        ...this.#options,
+        tokenizer: new BlockTokenizer(),
+      })
       // Own strings and omit the live links proxy before caching or transport.
       const tokens = structuredClone([
         ...lexer.lex(source.sliceRaw(region.from, region.to)),

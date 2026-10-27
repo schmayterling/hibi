@@ -1,5 +1,6 @@
 import { Lexer, Marked, type Token } from 'marked'
 import { readFrontmatter } from './frontmatter.ts'
+import { blockMarkdown } from './marked-blocks.ts'
 import { defaultNoteSyntax, type NoteSyntax } from './note-syntax-config.ts'
 
 export {
@@ -151,7 +152,7 @@ export function disabledToken(
 
 /** Pure built-in grammar shared by bounded worker projections. */
 export function noteParser(syntax: NoteSyntax = defaultNoteSyntax) {
-  const parser = new Marked({ gfm: syntax.gfm, breaks: false })
+  const parser = new Marked({ gfm: syntax.gfm, breaks: false }, blockMarkdown)
   if (syntax.wikilinks) {
     parser.use({
       extensions: [

@@ -183,6 +183,23 @@ const editorSelection = (
     selection.mainIndex,
   )
 
+/**
+ * A view whose update throws, as when an extension fails while it draws, may
+ * hold the new text while its DOM keeps the old, and would read the next
+ * input from that DOM twice. It is redrawn at the state the update reached.
+ */
+function update(
+  view: Pick<EditorView, 'state' | 'update' | 'setState'>,
+  transactions: readonly Transaction[],
+) {
+  try {
+    view.update(transactions)
+  } catch (error) {
+    view.setState(transactions.at(-1)?.state ?? view.state)
+    throw error
+  }
+}
+
 /** How far above a pane's kept top line its scroll position was, per session and view. */
 const keptMargins = new WeakMap<DocumentSession, Map<string, number>>()
 
@@ -199,15 +216,26 @@ export function createSourceSession(
   // A hidden view keeps one composed echo until it is shown or read.
   let visible = true,
     pending: ChangeSet | null = null,
-    flush = () => {}
+    flush = () => {},
+    // A view that could not show an echo takes no edits until it is rebuilt.
+    failed = false
+  const undo = () => !failed && !!session.undo()
+  const redo = () => !failed && !!session.redo()
   const dispatch = (
     transactions: readonly Transaction[],
-    view: Pick<EditorView, 'state' | 'update'> & {
+    view: Pick<EditorView, 'state' | 'update' | 'setState'> & {
       readonly composing?: boolean
     },
     exactChanges?: readonly RawEdit[],
   ) => {
     if (!transactions.length) return
+    if (failed) {
+      if (transactions.some((transaction) => transaction.docChanged))
+        throw new Error('The source editor is synchronizing.')
+      // Its text can still be selected and copied.
+      update(view, transactions)
+      return
+    }
     if (snapshot !== session.snapshot())
       throw new Error('The source editor is synchronizing.')
     let state: EditorState = view.state
@@ -243,7 +271,7 @@ export function createSourceSession(
         )
       }
       rememberSourceHistory(state, session.historyDepth())
-      view.update(transactions)
+      update(view, transactions)
       return
     }
     if (pending) {
@@ -283,7 +311,7 @@ export function createSourceSession(
       (prepared) => {
         snapshot = prepared.after
         rememberSourceHistory(state, session.historyDepth())
-        view.update(transactions)
+        update(view, transactions)
       },
       (prepared) => rawSelection(prepared.after, state.selection),
       viewId,
@@ -300,44 +328,56 @@ export function createSourceSession(
     },
     selection: () => editorSelection(snapshot, session.selection(viewId)),
     /** Whether the view has echoed canonical edits, without flushing a hidden view. */
-    isCurrent: () => !pending && snapshot === session.snapshot(),
+    isCurrent: () => !failed && !pending && snapshot === session.snapshot(),
     dispatch,
     setVisible(next: boolean) {
       visible = next
       if (visible) flush()
     },
-    attach(view: Pick<EditorView, 'state' | 'update'>) {
+    /** `reject` hears once that an echo could not be shown. */
+    attach(
+      view: Pick<EditorView, 'state' | 'update' | 'setState'>,
+      reject: (error: unknown) => void = () => {},
+    ) {
       if (!session.ownsCurrentSnapshot(snapshot))
         throw new Error('The source editor is synchronizing.')
       snapshot = session.snapshot()
-      const unregister = registerSourceHistory(view, {
-        undo: () => !!session.undo(),
-        redo: () => !!session.redo(),
-      })
+      const unregister = registerSourceHistory(view, { undo, redo })
       rememberSourceHistory(view.state, session.historyDepth())
       // A waiting view gets the caret immediate echoes would have left: the
       // session selection, or its own caret mapped through each operation.
       let echo = '',
         selection: EditorSelection | null = null
       flush = () => {
-        if (!pending) return
-        const transaction = view.state.update({
-          changes: pending,
-          ...(selection ? { selection } : {}),
-          annotations: [
-            sourceOperationEcho.of(echo),
-            Transaction.addToHistory.of(false),
-          ],
-          filter: false,
-        })
-        pending = selection = null
-        rememberSourceHistory(transaction.state, session.historyDepth())
-        view.update([transaction])
+        if (!pending || failed) return
+        try {
+          const transaction = view.state.update({
+            changes: pending,
+            ...(selection ? { selection } : {}),
+            annotations: [
+              sourceOperationEcho.of(echo),
+              Transaction.addToHistory.of(false),
+            ],
+            filter: false,
+          })
+          pending = selection = null
+          rememberSourceHistory(transaction.state, session.historyDepth())
+          update(view, [transaction])
+        } catch (error) {
+          // Like a failed rich synchronization: the view stays, read-only.
+          pending = selection = null
+          failed = true
+          reject(error)
+        }
       }
       const unsubscribe = session.subscribeOperations((prepared) => {
         if (snapshot === prepared.after) return
         if (snapshot !== prepared.before)
           throw new Error('The source replica missed an operation.')
+        if (failed) {
+          snapshot = prepared.after
+          return
+        }
         const changes = ChangeSet.of(
           editorChangesFromSource(prepared.before, prepared.operation.changes),
           prepared.before.normalizedLength,
@@ -381,6 +421,7 @@ export function createSourceSession(
       margin: number,
     ) {
       flush()
+      if (failed) return
       try {
         session.select(
           rawSelection(snapshot, view.state.selection),
@@ -423,7 +464,7 @@ export function createSourceSession(
         return null
       }
     },
-    undo: () => !!session.undo(),
-    redo: () => !!session.redo(),
+    undo,
+    redo,
   }
 }

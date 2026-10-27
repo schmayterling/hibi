@@ -10,6 +10,10 @@ const { outputFiles } = await build({
       export { protectMarkdownParser } from './src/shared/markdown-flavor-guard.ts'
       export { formattedRegistry } from './src/renderer/src/formatted-registry.ts'
       export { parser } from '@lezer/markdown'
+      export { EditorState } from '@codemirror/state'
+      export { contributionExtension, formattedMarkdown, inlineStops } from './src/renderer/src/formatted-contributions.ts'
+      export { formattedSyntax } from './src/renderer/src/formatted-syntax.ts'
+      export { boundarySyntaxIds } from './src/shared/markdown-boundary-syntax.ts'
     `,
     resolveDir: process.cwd(),
   },
@@ -38,6 +42,12 @@ const {
   protectMarkdownParser,
   formattedRegistry,
   parser,
+  EditorState,
+  contributionExtension,
+  formattedMarkdown,
+  inlineStops,
+  formattedSyntax,
+  boundarySyntaxIds,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`
 )
@@ -49,6 +59,55 @@ const flavor = (id, syntax) => ({
   kind: 'syntax',
   description: 'Test',
   detect: () => true,
+})
+
+test('public inline stops keep guarded parsers and worker boundaries fast on plain text', async (t) => {
+  let calls = 0
+  const remove = flavors.register(
+    'owner',
+    {
+      ...flavor('fast', {
+        defineNodes: ['OwnedInlineFast'],
+        parseInline: [
+          {
+            name: 'OwnedInlineFast',
+            parse() {
+              calls++
+              return -1
+            },
+          },
+        ],
+      }),
+      inlineStops: true,
+    },
+    assert.fail,
+  )
+  try {
+    await new Promise((resolve) => setImmediate(resolve))
+    const entry = formattedRegistry
+      .entries()
+      .find((item) => item.id === 'flavor:owner.fast')
+    assert.ok(entry)
+    const contribution = await entry.load()
+    const syntax = formattedSyntax({ slice: 1000 })
+    const state = EditorState.create({
+      doc: `**strong**\n\n${'plain text '.repeat(2000)}`,
+      extensions: [contributionExtension(contribution), syntax.extension],
+    })
+    const configs = state.facet(formattedMarkdown)
+    assert.ok(configs.every((config) => inlineStops(config)))
+    assert.deepEqual(boundarySyntaxIds(configs), [])
+    assert.match(syntax.tree(state).toString(), /StrongEmphasis/)
+    t.diagnostic(
+      `${state.doc.length} characters: ${calls} contributed inline calls`,
+    )
+    assert.ok(
+      calls < 50,
+      `plain text called contributed inline parser ${calls} times`,
+    )
+  } finally {
+    remove()
+  }
 })
 
 test('quarantine reports its owner once and old cleanup cannot remove a replacement', async () => {

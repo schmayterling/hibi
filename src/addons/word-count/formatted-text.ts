@@ -1,6 +1,7 @@
 import { decodeHTMLStrict } from 'entities'
 import type { Marked, Token, TokenizerExtension, Tokens } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
+import { BlockTokenizer } from '../../shared/marked-blocks.ts'
 import {
   disabledToken,
   type NoteSyntax,
@@ -83,7 +84,10 @@ function countFootnotes(parser: Marked) {
 
 function lex(source: string, syntax: ProjectionSyntax) {
   const parser = countParser(syntax)
-  const lexer = new parser.Lexer({ ...parser.defaults, tokenizer: null })
+  const lexer = new parser.Lexer({
+    ...parser.defaults,
+    tokenizer: new BlockTokenizer(),
+  })
   if (syntax.references)
     lexer.tokens.links = new Proxy(Object.create(null), {
       get: (local, name) =>

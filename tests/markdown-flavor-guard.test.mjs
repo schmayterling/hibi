@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { NodeProp, TreeFragment } from '@lezer/common'
-import { parser } from '@lezer/markdown'
+import { GFM, parser } from '@lezer/markdown'
 import {
   guardMarkdownSyntax,
   protectMarkdownParser,
@@ -30,6 +30,162 @@ function owner(syntax) {
 function protectedParser(configs) {
   return protectMarkdownParser(parser, configs)
 }
+
+test('malformed syntax construction is quarantined before source startup', () => {
+  for (const syntax of [null, { parseInline: 'invalid' }, { props: 1 }]) {
+    const bad = owner(syntax)
+    const configured = protectedParser(bad.config)
+    assert.equal(bad.errors.length, 1)
+    assert.equal(
+      configured.parse('**strong**').toString(),
+      parser.parse('**strong**').toString(),
+    )
+  }
+})
+
+for (const [kind, syntax] of [
+  [
+    'inline',
+    {
+      defineNodes: ['InvalidInline'],
+      parseInline: [
+        { name: 'InvalidInline', before: 'Highlight', parse: () => -1 },
+      ],
+    },
+  ],
+  [
+    'block',
+    {
+      defineNodes: [{ name: 'InvalidBlock', block: true }],
+      parseBlock: [
+        { name: 'InvalidBlock', after: 'BlockMath', parse: () => false },
+      ],
+    },
+  ],
+]) {
+  test(`${kind} configure failure quarantines its owner and retains healthy syntax`, () => {
+    const bad = owner(syntax)
+    const good = owner({ defineNodes: ['HealthyNode'] })
+    const configured = protectedParser([bad.config, good.config])
+    assert.equal(
+      configured.parse('**strong**').toString(),
+      parser.parse('**strong**').toString(),
+    )
+    assert.equal(bad.errors.length, 1)
+    assert.match(bad.errors[0].message, /unknown parser/)
+    assert.equal(good.errors.length, 0)
+    assert.ok(
+      configured.nodeSet.types.some((type) => type.name === 'HealthyNode'),
+    )
+    configured.configure({}).parse('**again**')
+    assert.equal(bad.errors.length, 1)
+  })
+}
+
+test('configure recovery keeps one registration’s dependent configs together', () => {
+  const good = owner([
+    {
+      defineNodes: ['Dependent'],
+      parseInline: [{ name: 'FirstOwned', parse: () => -1 }],
+    },
+    {
+      parseInline: [
+        { name: 'SecondOwned', before: 'FirstOwned', parse: () => -1 },
+      ],
+    },
+  ])
+  const bad = owner({
+    parseInline: [{ name: 'BadOrder', before: 'Missing', parse: () => -1 }],
+  })
+  const configured = protectedParser([good.config, bad.config])
+  assert.equal(
+    configured.parse('**strong**').toString(),
+    parser.parse('**strong**').toString(),
+  )
+  assert.equal(good.errors.length, 0)
+  assert.equal(bad.errors.length, 1)
+})
+
+test('derived configuration removes owned inline rules after their registration', () => {
+  let calls = 0
+  const extension = owner({
+    parseInline: [
+      {
+        name: 'OwnedInlineRule',
+        parse() {
+          calls++
+          return -1
+        },
+      },
+    ],
+  })
+  const configured = protectedParser(extension.config).configure({
+    remove: ['OwnedInlineRule'],
+  })
+  configured.parse('plain text')
+  assert.equal(calls, 0)
+  assert.equal(extension.errors.length, 0)
+})
+
+for (const name of ['Paragraph', 'Highlight', 'InlineMath']) {
+  test(`external node collision with bundled ${name} is owned and rejected`, () => {
+    const bad = owner({ defineNodes: [name] })
+    const trusted = { defineNodes: ['Highlight', 'InlineMath'] }
+    const configured = protectedParser([trusted, bad.config])
+    assert.equal(bad.errors.length, 1)
+    assert.match(bad.errors[0].message, /already defined/)
+    assert.ok(bad.errors[0].message.includes(name))
+    assert.equal(
+      configured.parse('**strong**').toString(),
+      parser.parse('**strong**').toString(),
+    )
+  })
+}
+
+test('a node declaration getter failure is attributed before namespace validation', () => {
+  const failure = new Error('node declaration failed')
+  const bad = owner({
+    defineNodes: [
+      {
+        get name() {
+          throw failure
+        },
+      },
+    ],
+  })
+  const configured = protectedParser(bad.config)
+  assert.deepEqual(bad.errors, [failure])
+  assert.equal(
+    configured.parse('**strong**').toString(),
+    parser.parse('**strong**').toString(),
+  )
+})
+
+test('two external owners cannot silently merge their node declarations', () => {
+  const first = owner({ defineNodes: ['UniqueOwnedNode'] })
+  const second = owner({ defineNodes: ['UniqueOwnedNode'] })
+  const configured = protectedParser([first.config, second.config])
+  assert.equal(first.errors.length, 0)
+  assert.equal(second.errors.length, 1)
+  assert.equal(
+    configured.nodeSet.types.filter((type) => type.name === 'UniqueOwnedNode')
+      .length,
+    1,
+  )
+})
+
+test('host GFM configs remain reusable by external flavors', () => {
+  const imported = owner(GFM)
+  const configured = protectMarkdownParser(
+    parser.configure(GFM),
+    imported.config,
+  )
+  assert.equal(imported.errors.length, 0)
+  assert.equal(
+    configured.parse('~~strike~~').toString(),
+    parser.configure(GFM).parse('~~strike~~').toString(),
+  )
+})
 
 for (const hook of [
   'inline',

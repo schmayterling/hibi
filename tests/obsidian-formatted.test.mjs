@@ -7,9 +7,10 @@ import { contribution } from '../src/addons/markdown/formatted-obsidian.ts'
 import {
   obsidianSyntax,
   obsidianWork,
-  wikiParts,
+  wikiText,
 } from '../src/addons/markdown/formatted-syntax.ts'
 import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
+import { formattedTree } from '../src/renderer/src/formatted-contributions.ts'
 
 const lezer = parser.configure([GFM, obsidianSyntax])
 const marked = new Marked({ gfm: true }, obsidianMarkdown)
@@ -20,11 +21,19 @@ function formattedItems(source) {
   lezer.parse(source).iterate({
     enter(node) {
       if (node.name === 'WikiLink' || node.name === 'WikiEmbed') {
-        const parts = wikiParts(source.slice(node.from, node.to))
+        // The text the parse kept, which must be what the label's span shows.
+        const text = (name) => {
+          const part = node.node.getChild(name)
+          if (!part) return undefined
+          const kept = part.tree.prop(wikiText)
+          assert.equal(kept, source.slice(part.from, part.to), name)
+          return kept
+        }
+        const target = text('WikiTarget')
         found.push([
           node.name === 'WikiEmbed' ? 'embed' : 'link',
-          parts.target,
-          parts.label,
+          target,
+          text('WikiAlias') ?? target,
         ])
         return false
       }
@@ -145,10 +154,15 @@ test('openers without closers cost each character a bounded number of reads', ()
 
 /** What the contribution's views draw for `source`. */
 function drawn(source, revealed = false) {
-  const state = EditorState.create({ doc: source })
+  const tree = lezer.parse(source)
+  const state = EditorState.create({
+    doc: source,
+    extensions: [formattedTree.of(() => tree)],
+  })
   const calls = []
   const out = {
     mark: (from, to, attributes) => calls.push(['mark', from, to, attributes]),
+    link: (from, to, attributes) => calls.push(['link', from, to, attributes]),
     syntax: (from, to) => calls.push(['syntax', from, to]),
     replace: (from, to, widget) =>
       calls.push([
@@ -156,7 +170,7 @@ function drawn(source, revealed = false) {
         from,
         to,
         widget.text
-          ? [widget.text, widget.className]
+          ? [widget.text, widget.attributes.class]
           : { target: widget.target, label: widget.label },
       ]),
     line() {},
@@ -182,12 +196,32 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
   assert.equal(contribution.flavor, 'markdown.obsidian')
   assert.deepEqual(drawn('[[Note]]'), [
     ['syntax', 0, 2],
-    ['mark', 2, 6, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'false' }],
     ['syntax', 6, 8],
+  ])
+  assert.deepEqual(drawn('[[Note|]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
+    ['syntax', 6, 9],
+  ])
+  assert.deepEqual(drawn('[[Note|   ]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
+    ['syntax', 6, 12],
+  ])
+  assert.deepEqual(drawn('[[Note   ]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'false' }],
+    ['syntax', 6, 11],
   ])
   assert.deepEqual(drawn('[[ Note#Part | Shown ]]'), [
     ['syntax', 0, 15],
-    ['mark', 15, 20, { class: 'hibi-lp-link', 'data-wiki-link': 'Note#Part' }],
+    [
+      'link',
+      15,
+      20,
+      { 'data-wiki-link': 'Note#Part', 'data-wiki-alias': 'true' },
+    ],
     ['syntax', 20, 23],
   ])
   assert.deepEqual(drawn('==mark=='), [
@@ -204,6 +238,61 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
   ])
 })
 
+test('table wiki aliases remove only their table-owned escape before rendering', () => {
+  const table = (source) => `| media |\n| --- |\n| ${source} |`
+  for (const [alias, label] of [
+    ['200', '200'],
+    ['200x100', '200x100'],
+    ['caption', 'caption'],
+    ['', 'picture.png'],
+    ['   ', 'picture.png'],
+  ]) {
+    const embed = String.raw`![[picture.png\|${alias}]]`
+    const calls = drawn(table(embed))
+    const replacement = calls.find(([kind]) => kind === 'replace')
+    assert.deepEqual(
+      replacement,
+      [
+        'replace',
+        table(embed).indexOf(embed),
+        table(embed).indexOf(embed) + embed.length,
+        { target: 'picture.png', label },
+      ],
+      alias,
+    )
+  }
+  for (const target of [
+    'picture.png',
+    String.raw`folder\picture.png`,
+    String.raw`literal\\`,
+  ]) {
+    const embed = `![[ ${target}\\|caption ]]`
+    assert.deepEqual(
+      drawn(table(embed)).find(([kind]) => kind === 'replace')?.[3],
+      {
+        target,
+        label: 'caption',
+      },
+    )
+  }
+  assert.deepEqual(
+    drawn(table(String.raw`[[Other \|alias]]`)).find(
+      ([kind]) => kind === 'link',
+    )?.[3],
+    { 'data-wiki-link': 'Other', 'data-wiki-alias': 'true' },
+  )
+  for (const source of [
+    String.raw`![[picture.png\|200]]`,
+    String.raw`![[folder\picture.png|200]]`,
+    '![[picture.png]]',
+  ])
+    assert.deepEqual(
+      drawn(source).find(([kind]) => kind === 'replace')?.[3],
+      { target: richItems(source)[0][1], label: richItems(source)[0][2] },
+      source,
+    )
+})
+
 test('decoded glyphs pass mouse events through to the editor', () => {
   for (const source of ['[[Note|&amp;]]', '==&#x1f600;==']) {
     const state = EditorState.create({ doc: source })
@@ -218,6 +307,7 @@ test('decoded glyphs pass mouse events through to the editor', () => {
           {
             syntax() {},
             mark() {},
+            link() {},
             replace: (_from, _to, widget) => widgets.push(widget),
           },
           { state, revealed: false, visible: { from: 0, to: source.length } },
@@ -233,7 +323,7 @@ test('decoded glyphs pass mouse events through to the editor', () => {
 test('entities in labels and highlights show their characters, as in the rich view, until the caret reveals them', () => {
   assert.deepEqual(drawn('[[Note|&amp;]]'), [
     ['syntax', 0, 7],
-    ['mark', 7, 12, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['link', 7, 12, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
     ['replace', 7, 12, ['&', 'hibi-lp-link']],
     ['syntax', 12, 14],
   ])

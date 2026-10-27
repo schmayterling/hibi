@@ -87,6 +87,7 @@ import {
 import type { ViewMode } from './Editor'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
+import { focusEditor } from './editor-focus'
 import { setEditorCommandMenu } from './editor-interaction-presence'
 import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { FlavorPicker } from './FlavorPicker'
@@ -551,35 +552,10 @@ function App() {
   useEffect(() => {
     const side = focusSplitSide.current
     if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
-    const reveal = () => {
-      if (
-        window.document.activeElement?.matches('.document-tabs [role="tab"]')
-      ) {
-        focusSplitSide.current = null
-        observer.disconnect()
-        return
-      }
-      const target = Array.from(
-        window.document.querySelectorAll<HTMLElement>(
-          `.editor-page[data-side="${side}"] [contenteditable="true"]`,
-        ),
-      ).find(
-        (element) =>
-          !element.closest('[inert]') && element.getClientRects().length,
-      )
-      if (target) {
-        target.focus({ preventScroll: true })
-        focusSplitSide.current = null
-        observer.disconnect()
-      }
-    }
-    const observer = new MutationObserver(reveal)
-    observer.observe(window.document.body, { childList: true, subtree: true })
-    const frame = requestAnimationFrame(reveal)
-    return () => {
-      observer.disconnect()
-      cancelAnimationFrame(frame)
-    }
+    focusSplitSide.current = null
+    if (window.document.activeElement?.matches('.document-tabs [role="tab"]'))
+      return
+    focusEditor({ preventScroll: true })
   }, [busy, DocumentEditor, splitTabs?.active])
   const acknowledgeSave = useCallback(
     (
@@ -981,7 +957,7 @@ function App() {
       },
       focusDocument,
       isBusy: () => busyRef.current,
-      getMarkdown: () => editorDocument.get()?.markdown ?? '',
+      getEditorDocument: () => editorDocument.get(),
       runAction: (command) => runAction(command),
       runCommand: (command) => runCommand(command),
       updateMarkdown(transform, options) {
@@ -1120,14 +1096,8 @@ function App() {
       !(active instanceof HTMLElement && active.closest('.settings-screen'))
     )
       return
-    window.document
-      .querySelector<HTMLElement>(
-        mode === 'markdown'
-          ? '.editor-surface:not([inert]) .cm-content'
-          : '.editor-surface:not([inert]) .tiptap',
-      )
-      ?.focus()
-  }, [settingsOpen, mode])
+    focusEditor()
+  }, [settingsOpen])
   const sidebarViews = [
     ...builtInViews,
     ...addonHost.sidebarViews.map(viewShortcut),
@@ -1341,12 +1311,7 @@ function App() {
   openUpdates.current = () => openSetting('hibi', 'install-update')
 
   function startWriting() {
-    const focus = () =>
-      window.document
-        .querySelector<HTMLElement>(
-          mode === 'normal' ? '.tiptap' : '.cm-content',
-        )
-        ?.focus()
+    const focus = () => focusEditor()
     // Wait for a closing dialog to restore focus before moving it to the editor.
     if (!showWelcome) requestAnimationFrame(focus)
     else
@@ -1827,11 +1792,9 @@ function App() {
       }
       if (next.tabs.length === 0)
         requestAnimationFrame(() =>
-          window.document
-            .querySelector<HTMLElement>(
-              mode === 'normal' ? '.tiptap' : '.cm-content',
-            )
-            ?.focus({ preventScroll: true }),
+          focusEditor({
+            preventScroll: true,
+          }),
         )
     } catch (error) {
       setError(
@@ -2123,20 +2086,9 @@ function App() {
     setSettingsOpen(false)
     requestAnimationFrame(() => {
       if (currentDocument.current?.tabId !== tabId) return
-      const current = splitTabsRef.current
-      const pane = window.document.querySelector<HTMLElement>(
-        current
-          ? `.editor-page[data-side="${current.active}"]`
-          : '#document-editor-panel',
-      )
-      Array.from(
-        pane?.querySelectorAll<HTMLElement>('[contenteditable="true"]') ?? [],
-      )
-        .find(
-          (element) =>
-            !element.closest('[inert]') && element.getClientRects().length,
-        )
-        ?.focus({ preventScroll: true })
+      focusEditor({
+        preventScroll: true,
+      })
     })
     return true
   }
@@ -2278,13 +2230,7 @@ function App() {
         setZen(!zen)
         setSettingsOpen(false)
         showTitlebar()
-        requestAnimationFrame(() =>
-          window.document
-            .querySelector<HTMLElement>(
-              mode === 'normal' ? '.tiptap' : '.cm-content',
-            )
-            ?.focus(),
-        )
+        requestAnimationFrame(() => focusEditor())
         break
       case 'install-addon':
         void addonHost.install()

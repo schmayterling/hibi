@@ -30,12 +30,13 @@ import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   claimFormattedReplacement,
   type FormattedDecorations,
-  type FormattedNodeView,
   type FormattedRenderContext,
+  followsLink,
+  formattedLinkAttributes,
   formattedLiteral,
   formattedMarkdown,
+  formattedNodeViews,
   formattedRefresh,
-  formattedViews,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import {
@@ -66,24 +67,6 @@ function cellParser(state: EditorState) {
   return found
 }
 
-/** Contributed node views by node name, per set of views. */
-const named = new WeakMap<
-  readonly FormattedNodeView[],
-  Map<string, FormattedNodeView[]>
->()
-function namedViews(state: EditorState) {
-  const views = state.facet(formattedViews)
-  let found = named.get(views)
-  if (!found) {
-    found = new Map()
-    for (const view of views)
-      for (const name of view.nodes)
-        found.set(name, [...(found.get(name) ?? []), view])
-    named.set(views, found)
-  }
-  return found
-}
-
 /** Nodes of syntax settings that are off, per facet value. */
 const literals = new WeakMap<readonly string[], ReadonlySet<string>>()
 function literalNodes(state: EditorState) {
@@ -108,6 +91,8 @@ const lineBreak = new BreakWidget()
 
 type CellDecorations = {
   mark(from: number, to: number, attributes: Record<string, string>): void
+  /** Text that reads as a link, whole around the decorations in it. */
+  link(from: number, to: number, attributes: Record<string, string>): void
   /** Syntax hidden, or replaced by a widget. */
   hide(from: number, to: number, widget: WidgetType | null): void
   /** Syntax shown as an editable marker. */
@@ -129,7 +114,7 @@ function decorateCell(
   source?: readonly number[],
 ) {
   const to = from + (source?.[text.length] ?? text.length)
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = literalNodes(state)
   const replacements = new Set<string>()
   // Node and context positions stay in the owning document. Only the sink
@@ -157,6 +142,11 @@ function decorateCell(
       const from = local(start),
         to = local(end)
       if (to > from) out.mark(from, to, attributes)
+    },
+    link(start, end, attributes) {
+      const from = local(start),
+        to = local(end)
+      if (to > from) out.link(from, to, formattedLinkAttributes(attributes))
     },
     syntax(start, end) {
       const from = local(start),
@@ -187,7 +177,7 @@ function decorateCell(
     let skip = false
     // A cell draws its line breaks itself, so contributed HTML renderers
     // add no second one.
-    const nodeViews = lineBreakAt(node) ? [] : (views.get(node.name) ?? [])
+    const nodeViews = lineBreakAt(node) ? [] : views(node.type).views
     for (const nodeView of nodeViews) {
       const context: FormattedRenderContext = {
         state,
@@ -251,7 +241,7 @@ function decorateCell(
           return false
         out.syntax(node.from, open.to)
         out.syntax(close.from, node.to)
-        style('hibi-lp-link', open.to, close.from)
+        out.link(open.to, close.from)
         return
       }
       case 'Autolink': {
@@ -259,7 +249,7 @@ function decorateCell(
         if (!url) return false
         out.syntax(node.from, url.from)
         out.syntax(url.to, node.to)
-        style('hibi-lp-link', url.from, url.to)
+        out.link(url.from, url.to)
         return false
       }
       case 'URL': {
@@ -269,7 +259,7 @@ function decorateCell(
           parent !== 'Image' &&
           parent !== 'LinkReference'
         )
-          style('hibi-lp-link', node.from, node.to)
+          out.link(node.from, node.to)
         return
       }
       case 'Escape':
@@ -287,8 +277,9 @@ function decorateCell(
   }
 }
 
-/** Where rendered text nodes start in their cell's content. */
+/** Where rendered text nodes and mark elements start in their cell's content. */
 export const textStarts = new WeakMap<Node, number>()
+export const markStarts = new WeakMap<Element, number>()
 
 /** A cell's inline Markdown as static DOM, as the formatted view renders text it does not reveal. */
 export function renderInline(
@@ -306,6 +297,7 @@ export function renderInline(
     text,
     {
       mark: (from, to, attributes) => marks.push({ from, to, attributes }),
+      link: (from, to, attributes) => marks.push({ from, to, attributes }),
       hide: (from, to, widget) => hidden.push({ from, to, widget }),
       marker() {},
       widget: (at, widget, side) => widgets.push({ at, widget, side }),
@@ -320,6 +312,7 @@ export function renderInline(
     const parent = parents.at(-1)!
     if (op.type === 'open') {
       const element = document.createElement('span')
+      markStarts.set(element, op.mark.from)
       for (const [key, value] of Object.entries(op.mark.attributes))
         element.setAttribute(key, value)
       parent.append(element)
@@ -374,6 +367,11 @@ function editorDecorations(main: EditorState, view: EditorView, from?: number) {
       {
         mark: (from, to, attributes) =>
           decorations.push(Decoration.mark({ attributes }).range(from, to)),
+        // Inclusive, so that widgets at the text's ends are inside the link too.
+        link: (from, to, attributes) =>
+          decorations.push(
+            Decoration.mark({ attributes, inclusive: true }).range(from, to),
+          ),
         hide,
         marker: (from, to) =>
           decorations.push(
@@ -408,6 +406,8 @@ export type CellMove = 'next' | 'previous' | 'up' | 'down' | 'left' | 'right'
 export type CellHost = {
   /** The formatted view. */
   readonly main: EditorView
+  /** Whether the table's cell spans describe the current document. */
+  current(): boolean
   /** The cell's text between its delimiters in the formatted view's document now; null while its row ends before it. */
   span(): { from: number; to: number; closed: boolean } | null
   /** The change that ends the cell's row with this cell, holding `text`. */
@@ -489,6 +489,11 @@ export class CellEditor {
     }
     const content = (view: EditorView) => padding(view.state.doc.toString())
     const move = (to: CellMove) => () => host.move(to)
+    /** A line break in the cell, which Enter, Shift-Enter and Mod-Enter all make in the rich editor's cells. */
+    const lineBreak = (view: EditorView) => {
+      view.dispatch(view.state.replaceSelection('<br>'), { userEvent: 'input' })
+      return true
+    }
     // Inline formatting shortcuts format the cell's source; block ones do nothing in a cell.
     let formatting: SourceFormatting | null = null
     const inline = ['bold', 'italic', 'strike', 'inline-code']
@@ -512,11 +517,11 @@ export class CellEditor {
           preview,
           this.access.of(access(main)),
           EditorState.transactionFilter.of((transaction) => {
-            // Nothing writes the cell while the formatted view takes no input.
+            // Nothing writes while the host takes no input or has old spans.
             if (
               transaction.docChanged &&
               !this.remote &&
-              !writable(host.main.state)
+              (!writable(host.main.state) || !host.current())
             )
               return []
             // The caret moves within the content, not into the padding.
@@ -568,23 +573,8 @@ export class CellEditor {
                 shift: edge(false, true),
               },
               { key: 'End', run: edge(true, false), shift: edge(true, true) },
-              { key: 'Enter', run: move('down') },
-              {
-                key: 'Shift-Enter',
-                run: (view) => {
-                  view.dispatch(view.state.replaceSelection('<br>'), {
-                    userEvent: 'input',
-                  })
-                  return true
-                },
-              },
-              {
-                key: 'Mod-Enter',
-                run: () => {
-                  host.leave(true)
-                  return true
-                },
-              },
+              { key: 'Enter', run: lineBreak, shift: lineBreak },
+              { key: 'Mod-Enter', run: lineBreak },
               {
                 key: 'Escape',
                 run: () => {
@@ -627,6 +617,11 @@ export class CellEditor {
           // undo of the cell's DOM never runs.
           Prec.lowest(
             EditorView.domEventHandlers({
+              // A click that follows a link leaves the selection; the table follows it.
+              mousedown: (event) =>
+                followsLink(event) &&
+                event.target instanceof Element &&
+                !!event.target.closest('.hibi-lp-link'),
               keydown: (event) =>
                 (event.metaKey || event.ctrlKey) &&
                 /^[yz]$/i.test(event.key) &&
@@ -674,7 +669,7 @@ export class CellEditor {
       return
     }
     for (const transaction of transactions) {
-      if (!view.dom.isConnected) return
+      if (!view.dom.isConnected || !this.host.current()) return
       const span = this.host.span()
       const changes: ChangeSpec[] = []
       if (transaction.docChanged) {

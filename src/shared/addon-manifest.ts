@@ -148,7 +148,9 @@ export function parseAddonManifest(
     throw new Error('The addon lists invalid SDK capabilities.')
   if (
     data.activation !== undefined &&
-    !['command', 'source', 'rich'].includes(String(data.activation))
+    !['command', 'source', 'rich', 'formatted'].includes(
+      String(data.activation),
+    )
   )
     throw new Error('The addon activation mode is invalid.')
   if (

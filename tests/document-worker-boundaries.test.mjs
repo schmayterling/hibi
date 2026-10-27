@@ -114,6 +114,25 @@ function fixture(t, source = '# title\n\ntext\n\n'.repeat(20000)) {
   return { transports, pages, declined, errors, session, client, request }
 }
 
+test('a prefix change without an edit replaces a held boundary request', async (t) => {
+  const prefix = '---\ntitle: exact\n---\n\n'
+  const f = fixture(t, prefix + '# heading\n\nbody\n\n'.repeat(100))
+  f.request(config, (page) => f.pages.push(page))
+  await until(() => f.pages.length === 1)
+  const firstId = f.pages[0].id
+  f.request({ ...config, prefix: prefix.length })
+  await new Promise(setImmediate)
+  assert.equal(
+    f.transports[0].messages.filter((message) => message.type === 'boundaries')
+      .length,
+    2,
+  )
+  await until(() => f.pages.some((page) => page.id !== firstId && page.done))
+  const page = f.pages.find((page) => page.id !== firstId)
+  assert.equal(page.records[0].length, prefix.length)
+  assert.deepEqual(f.errors, [])
+})
+
 test('index pages are bounded and acknowledged one at a time on the existing replica', async (t) => {
   const advance = MarkdownBoundaryIndex.prototype.advance
   const progress = { advances: 0 }
@@ -306,6 +325,32 @@ test('completed indexes stay idle through edits and stream only a requested suff
   assert.ok(suffix.every((page) => page.from > 0 && page.from <= from))
   assert.deepEqual(f.declined, [])
   assert.deepEqual(f.errors, [])
+})
+
+test('invalid or inconsistent unchanged-suffix markers cannot publish another page', async (t) => {
+  for (const [to, baseVersion] of [
+    [-1, 0],
+    [0.5, 0],
+    [Number.MAX_SAFE_INTEGER, 0],
+    [0, 0],
+    [0, undefined],
+  ]) {
+    const f = fixture(t)
+    f.client.boundaries(
+      config,
+      (page) => f.pages.push(page),
+      (reason) => f.declined.push(reason),
+      0,
+      baseVersion,
+    )
+    await until(() => f.pages.length === 1)
+    f.transports[0].onmessage({
+      data: { ...f.pages[0], sequence: 1, to },
+    })
+    assert.deepEqual(f.declined, ['mismatch'])
+    assert.equal(f.pages.length, 1)
+    assert.deepEqual(f.errors, [])
+  }
 })
 
 test('invalid suffix offsets cannot publish another boundary page', async (t) => {

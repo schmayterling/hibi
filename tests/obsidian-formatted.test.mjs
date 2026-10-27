@@ -7,7 +7,7 @@ import { contribution } from '../src/addons/markdown/formatted-obsidian.ts'
 import {
   obsidianSyntax,
   obsidianWork,
-  wikiParts,
+  wikiText,
 } from '../src/addons/markdown/formatted-syntax.ts'
 import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
 
@@ -20,11 +20,19 @@ function formattedItems(source) {
   lezer.parse(source).iterate({
     enter(node) {
       if (node.name === 'WikiLink' || node.name === 'WikiEmbed') {
-        const parts = wikiParts(source.slice(node.from, node.to))
+        // The text the parse kept, which must be what the label's span shows.
+        const text = (name) => {
+          const part = node.node.getChild(name)
+          if (!part) return undefined
+          const kept = part.tree.prop(wikiText)
+          assert.equal(kept, source.slice(part.from, part.to), name)
+          return kept
+        }
+        const target = text('WikiTarget')
         found.push([
           node.name === 'WikiEmbed' ? 'embed' : 'link',
-          parts.target,
-          parts.label,
+          target,
+          text('WikiAlias') ?? target,
         ])
         return false
       }
@@ -156,7 +164,7 @@ function drawn(source, revealed = false) {
         from,
         to,
         widget.text
-          ? [widget.text, widget.className]
+          ? [widget.text, widget.attributes.class]
           : { target: widget.target, label: widget.label },
       ]),
     line() {},

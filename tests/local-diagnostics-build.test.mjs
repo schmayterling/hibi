@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -26,6 +27,9 @@ test('built catalog retains the actual renderer entry and lazy workers; exported
   const html = readFileSync('out/renderer/index.html', 'utf8')
   const entry = html.match(/src="\.\/(assets\/[^"]+\.js)"/)?.[1]
   assert.ok(entry && catalog.artifacts.some(([name]) => name === entry))
+  const listed = new Set(catalog.artifacts.map(([name]) => name))
+  for (const name of readdirSync('out/renderer/assets'))
+    if (name.endsWith('.js')) assert.ok(listed.has(`assets/${name}`), name)
   for (const prefix of [
     'document.worker-',
     'counter.worker-',
@@ -140,6 +144,75 @@ test('build catalog contains generated app and lazy worker artifacts, never sour
   assert.ok(!emitted.source.includes('/owned'))
   assert.ok(!emitted.source.includes('user-addon'))
   assert.ok(emitted.source.length <= 64 * 1024)
+})
+
+test('all trusted renderer and worker artifacts survive more than 256 chunks', () => {
+  const plugins = diagnosticsBuild()
+  const modules = { [`${process.cwd()}/src/main.tsx`]: {} }
+  const workers = Object.fromEntries(
+    Array.from({ length: 300 }, (_, i) => [
+      `assets/worker-${i}.js`,
+      { type: 'chunk', modules },
+    ]),
+  )
+  plugins.worker().generateBundle({}, workers)
+  const bundle = {
+    ...Object.fromEntries(
+      Object.keys(workers).map((name) => [name, { type: 'asset' }]),
+    ),
+    ...Object.fromEntries(
+      Array.from({ length: 300 }, (_, i) => [
+        `assets/renderer-${i}.js`,
+        { type: 'chunk', modules },
+      ]),
+    ),
+  }
+  let emitted
+  plugins.renderer.generateBundle.call(
+    {
+      emitFile: (value) => {
+        emitted = value
+      },
+    },
+    {},
+    bundle,
+  )
+  assert.deepEqual(
+    JSON.parse(emitted.source).artifacts.map(([name]) => name),
+    Object.keys(bundle).sort(),
+  )
+})
+
+test('an artifact catalog beyond the session byte bound fails the build instead of dropping chunks', () => {
+  const bundle = Object.fromEntries(
+    Array.from({ length: 600 }, (_, i) => [
+      `assets/${'a'.repeat(70)}-${String(i).padStart(3, '0')}.js`,
+      { type: 'chunk', modules: { [`${process.cwd()}/src/main.tsx`]: {} } },
+    ]),
+  )
+  const artifacts = Object.keys(bundle)
+    .sort()
+    .map((name, i) => [name, i + 100])
+  assert.ok(
+    Buffer.byteLength(JSON.stringify({ schema: 1, artifacts })) < 64 * 1024,
+  )
+  assert.ok(
+    Buffer.byteLength(
+      JSON.stringify(artifacts.map(([name, id]) => [`app://hibi/${name}`, id])),
+    ) >
+      60 * 1024,
+  )
+  assert.throws(
+    () =>
+      diagnosticsBuild().renderer.generateBundle.call(
+        {
+          emitFile: () => assert.fail('oversized catalog must not be emitted'),
+        },
+        {},
+        bundle,
+      ),
+    /diagnostic artifact catalog exceeds its transport bounds/i,
+  )
 })
 
 test('catalog trusts only the configured dependency directory and its resolved symlink target', () => {

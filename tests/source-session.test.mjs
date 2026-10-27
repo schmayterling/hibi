@@ -11,7 +11,6 @@ import {
 } from '@codemirror/state'
 import {
   createSourceSession,
-  failedEdit,
   failedEditGuard,
   failingParts,
   reconfiguration,
@@ -846,9 +845,9 @@ test('an edit an extension fails on names that extension and keeps the others', 
     changes: { from: 3, insert: 'Q' },
     userEvent: 'input.type',
   })
-  // CodeMirror returns the part of the state it reached on a later read.
-  assert.equal(typed.state.doc.toString(), 'endQ')
   assert.equal(transactionState(typed), null)
+  // Read later, it is the state the edit started from, not the part CodeMirror reached.
+  assert.equal(typed.state, start)
   const moved = start.update({ selection: { anchor: 0 } })
   assert.equal(transactionState(moved), moved.state)
   assert.deepEqual(names(failingParts(start, [moved], parts, install)), [])
@@ -936,12 +935,14 @@ test('filters and extenders that read a state never see one an extension failed 
   const feature = reading(true)
   const typedQ = { changes: { from: 3, insert: 'Q' }, userEvent: 'input.type' }
   // Without the guard, the failure escapes while the edit is made: first from
-  // the filter, then, once a read has swallowed it, from the half-built state.
-  const reader = EditorState.transactionExtender.of((transaction) => {
-    transactionState(transaction)
+  // the filter, then, once a raw read has swallowed it, from the half-built state.
+  const swallowing = EditorState.transactionExtender.of((transaction) => {
+    try {
+      transaction.state
+    } catch {}
     return null
   })
-  for (const extensions of [feature, [failing, feature[2], reader]])
+  for (const extensions of [feature, [failing, feature[2], swallowing]])
     assert.throws(
       () => EditorState.create({ doc: 'end', extensions }).update(typedQ),
       extensions === feature ? /field failed/ : /Cyclic dependency/,
@@ -969,24 +970,19 @@ test('filters and extenders that read a state never see one an extension failed 
       extensions: [compartment.of(extension), failedEditGuard],
     })
     const typed = start.update(typedQ)
-    assert.equal(typed.docChanged, false)
-    const failed = failedEdit([typed])
-    assert.equal(failed?.error.message, 'field failed')
-    assert.equal(failedEdit([typed]), null)
+    assert.equal(transactionState(typed), null)
+    // Read later, it is the state the edit started from, not a half-built one.
+    assert.equal(typed.state, start)
     // Leaving it out does not run its extender, which may require its field.
-    assert.deepEqual(
-      names(start, failed.edits, [{ name: 'feature', extension }]),
-      ['feature: field failed'],
-    )
+    assert.deepEqual(names(start, [typed], [{ name: 'feature', extension }]), [
+      'feature: field failed',
+    ])
     // In a batch, the edits before it are replayed first.
     const first = start.update({ changes: { from: 3, insert: 'a' } })
-    const batch = failedEdit([
-      first,
-      first.state.update({ changes: { from: 4, insert: 'Q' } }),
-    ])
-    assert.equal(batch?.edits.length, 2)
+    const second = first.state.update({ changes: { from: 4, insert: 'Q' } })
+    assert.equal(transactionState(second), null)
     assert.deepEqual(
-      names(start, batch.edits, [{ name: 'feature', extension }]),
+      names(start, [first, second], [{ name: 'feature', extension }]),
       ['feature: field failed'],
     )
     const removed = reconfiguration(start, install([])).state
@@ -994,6 +990,29 @@ test('filters and extenders that read a state never see one an extension failed 
     const typedB = start.update({ changes: { from: 3, insert: 'b' } })
     assert.equal(transactionState(typedB)?.doc.toString(), 'endb')
   }
+  // Of two edits made from one state, the one dispatched is named.
+  const alternatives = ['A', 'B'].map((letter) => ({
+    name: letter,
+    extension: StateField.define({
+      create: () => 0,
+      update(value, transaction) {
+        if (transaction.newDoc.toString().includes(letter))
+          throw new Error(`${letter} failed`)
+        return value
+      },
+    }),
+  }))
+  const both = EditorState.create({
+    doc: 'end',
+    extensions: [
+      compartment.of(alternatives.map(({ extension }) => extension)),
+      failedEditGuard,
+    ],
+  })
+  const [chosen] = ['A', 'B'].map((insert) =>
+    both.update({ changes: { from: 3, insert } }),
+  )
+  assert.deepEqual(names(both, [chosen], alternatives), ['A: A failed'])
   // A transaction an extender fails to make is replayed from its specs.
   const extending = [
     EditorState.transactionExtender.of((transaction) => {

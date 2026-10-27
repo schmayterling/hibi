@@ -209,54 +209,42 @@ function update(
 const failedStates = new WeakMap<Transaction, unknown>()
 
 /**
- * Edits an extension failed on, by the state they started from. Other filters
- * may rebuild the empty transaction that stands in for one, but not its start.
+ * The state a transaction reaches. When an extension fails on it, every read
+ * throws that error, and the transaction's own `state` reads as its start,
+ * so extensions that read it later never get the half-built state.
  */
-const failedEdits = new WeakMap<EditorState, Transaction>()
-
-/**
- * Reads each edit's state before other filters and extenders can: when an
- * extension fails on it, they get an empty transaction, which dispatch rejects
- * with that failure, and never the half-built state CodeMirror would return.
- * Filters run from the last one, so this goes last.
- */
-export const failedEditGuard = Prec.lowest(
-  EditorState.transactionFilter.of((transaction) => {
-    if (transactionState(transaction)) return transaction
-    failedEdits.set(transaction.startState, transaction)
-    return []
-  }),
-)
-
-/**
- * The edit an extension failed on that these transactions stand in for, after
- * the ones before it, with its error. Each is taken once; a change from the
- * same state is new input.
- */
-export function failedEdit(transactions: readonly Transaction[]) {
-  for (const [index, transaction] of transactions.entries()) {
-    const edit = failedEdits.get(transaction.startState)
-    if (!edit) continue
-    failedEdits.delete(transaction.startState)
-    if (!transaction.docChanged)
-      return {
-        edits: [...transactions.slice(0, index), edit],
-        error: failedStates.get(edit),
-      }
-  }
-  return null
-}
-
-/** The state a transaction reaches. When an extension fails on it, every read throws that error. */
 function reachedState(transaction: Transaction): EditorState {
   if (failedStates.has(transaction)) throw failedStates.get(transaction)
   try {
     return transaction.state
   } catch (error) {
     failedStates.set(transaction, error)
+    Object.defineProperty(transaction, 'state', {
+      value: transaction.startState,
+    })
     throw error
   }
 }
+
+/**
+ * Reads each new state before other filters and extenders can, so a failure
+ * is kept on its transaction before any of them reads it, and dispatch
+ * rejects that transaction. Both run from the last one, so these go last.
+ */
+export const failedEditGuard = [
+  Prec.lowest(
+    EditorState.transactionFilter.of((transaction) => {
+      transactionState(transaction)
+      return transaction
+    }),
+  ),
+  Prec.lowest(
+    EditorState.transactionExtender.of((transaction) => {
+      transactionState(transaction)
+      return null
+    }),
+  ),
+]
 
 /**
  * The state a transaction reaches, or null when an extension fails on it.
@@ -329,15 +317,10 @@ export function failingParts<Part>(
 ) {
   const replay = (installed: readonly Part[]) => {
     let state = reachedState(reconfiguration(start, install(installed)))
-    const reach = (made: Transaction) => {
-      const failed = failedEdit([made])
-      if (failed) throw failed.error
-      return reachedState(made)
-    }
     if (edit.every((part) => part instanceof Transaction))
       for (const transaction of edit as readonly Transaction[])
-        state = reach(state.update(editSpec(transaction)))
-    else reach(state.update(...(edit as readonly TransactionSpec[])))
+        state = reachedState(state.update(editSpec(transaction)))
+    else reachedState(state.update(...(edit as readonly TransactionSpec[])))
   }
   const accepted: Part[] = []
   const failing: { part: Part; error: unknown }[] = []

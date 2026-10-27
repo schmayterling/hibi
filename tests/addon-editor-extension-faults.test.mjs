@@ -516,6 +516,59 @@ for (const presentation of ['formatted', 'source'])
     assert.deepEqual(errors, [])
   })
 
+/** Two features that fail on `A` and on `B`, and a command that makes both edits from one state but dispatches only `A`. */
+const failingAlternatives = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  const { StateField } = sdk.codeMirror.state
+  const { EditorView, keymap } = sdk.codeMirror.view
+  const register = context.editor.${register(presentation)}
+  for (const letter of ['A', 'B'])
+    register({ id: letter.toLowerCase(), create: () => [
+      StateField.define({
+        create: () => 0,
+        update(value, transaction) {
+          if (transaction.docChanged && transaction.newDoc.toString().includes(letter)) throw new Error(letter + ' failed')
+          return value
+        },
+      }),
+      EditorView.editorAttributes.of({ ['data-field-' + letter.toLowerCase()]: 'yes' }),
+    ] })
+  register({ id: 'command', create: () => keymap.of([{ key: 'F8', run(view) {
+    const at = view.state.selection.main.head
+    const chosen = view.state.update({ changes: { from: at, insert: 'A' }, userEvent: 'input.type' })
+    view.state.update({ changes: { from: at, insert: 'B' }, userEvent: 'input.type' })
+    view.dispatch(chosen)
+    return true
+  } }]) })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`of two failing edits an addon ${presentation} command makes from one state, the one it dispatches names its feature (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: failingAlternatives,
+    })
+    await caret(page, pane)
+    await page.keyboard.press('F8')
+    await reported(page, 'bad-ext.a: A failed')
+    await page.locator(`${pane} [data-field-a]`).waitFor({ state: 'detached' })
+    const after = await state(page, pane)
+    const kept = await page.locator(`${pane} [data-field-b]`).count()
+    const toasts = await page.locator('.toast').allTextContents()
+    t.diagnostic(JSON.stringify({ after, kept, toasts, errors }))
+    assert.equal(kept, 1)
+    assert.equal(toasts.filter((text) => text.includes('B failed')).length, 0)
+    assert.equal(after.canonical, plain)
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(after.shown, ['end'])
+    assert.deepEqual(errors, [])
+  })
+
 /** A failing state field with a filter that rebuilds every transaction from its parts, without annotations. */
 const rebuildingFilter = (
   presentation,

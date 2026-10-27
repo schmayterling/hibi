@@ -108,7 +108,7 @@ async function launchTargetProbe(t, engine) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  page.setDefaultTimeout(7000)
+  if (engine === 'codemirror') page.setDefaultTimeout(7000)
   await selectFormattedEngine(app, page, engine)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.waitForFunction(() => !!window.targetProbe)
@@ -478,6 +478,19 @@ test('codemirror: inactive addon target edits save exact source without changing
   )
   assert.equal(await acceptedMarkdown(page), '# two')
   assert.equal(await readFile(first, 'utf8'), '# ONE')
+  await page.getByRole('tab', { name: 'first.md', exact: true }).click()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === '# ONE',
+    undefined,
+    { timeout: 30000 },
+  )
+  await waitForDocumentEditor(app, page)
+  assert.equal(await acceptedMarkdown(page), '# ONE')
+  assert.equal(
+    await rich.locator('[role="heading"][aria-level="1"]').innerText(),
+    'ONE',
+  )
 })
 
 test('codemirror: active formatted addon target edits keep canonical source and native history', {
@@ -773,7 +786,7 @@ test('codemirror: split-focused target edits retain native focus in the editable
         ?.getAttribute('data-source-ready') === 'true',
   )
   assert.equal(await left.locator('.source-pane[inert]').count(), 0)
-  // Design §11(7): CM's formatted split pane is editable; the old readonly preview proof stays TipTap-only above.
+  // The formatted split pane keeps native editing and target focus.
   assert.equal(await leftRich.getAttribute('contenteditable'), 'true')
   await leftRich.focus()
   assert.equal(

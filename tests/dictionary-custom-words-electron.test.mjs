@@ -14,7 +14,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, pressPastCompletionDelay } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
 test('legacy words migrate in the native worker and remain available to older builds', {}, async (t) => {
@@ -218,9 +218,13 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
     .getByRole('option', { name: /^Hibiland/ })
     .filter({ hasText: 'Your word' })
     .waitFor()
-  await page.keyboard.press('ArrowDown')
+  if (t.formattedEngine === 'codemirror')
+    await pressPastCompletionDelay(page, 'ArrowDown')
+  else await page.keyboard.press('ArrowDown')
   await menu.getByRole('option', { selected: true }).waitFor()
-  await page.keyboard.press('Enter')
+  if (t.formattedEngine === 'codemirror')
+    await pressPastCompletionDelay(page, 'Enter')
+  else await page.keyboard.press('Enter')
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.endsWith(' Hibiland'),
   )

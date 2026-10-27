@@ -52,8 +52,16 @@ for (const engine of ['tiptap', 'codemirror']) {
         throw error
       }
     }
+    const settleSelection = () =>
+      page.evaluate(async () => {
+        await new Promise(requestAnimationFrame)
+        await new Promise(requestAnimationFrame)
+      })
+    await rich.focus()
+    await settleSelection()
     await replaceRichText(page, rich, 'before chosen after 😀')
     await saved('before chosen after 😀')
+    await settleSelection()
     await rich.press('Home')
     for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowRight')
     for (let i = 0; i < 6; i++) await page.keyboard.press('Shift+ArrowRight')
@@ -64,7 +72,7 @@ for (const engine of ['tiptap', 'codemirror']) {
     await saved('before chosen after 😀')
     await pressShortcut(
       app,
-      process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+      process.platform === 'win32' ? 'Control+y' : `${mod}+Shift+z`,
     )
     await saved('before 日本語 after 😀')
     await page.getByRole('button', { name: 'Source view', exact: true }).click()

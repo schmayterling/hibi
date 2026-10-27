@@ -367,7 +367,7 @@ test('codemirror: legacy rich codecs stay inert while native edits and source sa
   await page.waitForFunction(
     () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
   )
-  // Design §11: API v1/v2 rich addons do not execute in the formatted engine.
+  // API v1/v2 rich addons do not execute in the formatted engine.
   assert.deepEqual(await page.evaluate(() => window.codecLifecycle), {
     attached: 0,
     detached: 0,
@@ -412,7 +412,7 @@ test('codemirror: legacy rich codecs stay inert while native edits and source sa
       t.diagnostic(JSON.stringify({ stage: 'compatibility notice', messages }))
       assert.ok(
         messages.some((message) => matches.test(message)),
-        'API v2 rich addon needs an explicit notice that its formatted feature is inactive (design §11).',
+        'API v2 rich addon needs an explicit notice that its formatted feature is inactive.',
       )
     },
   )

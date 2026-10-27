@@ -59,6 +59,10 @@ async function setup(t, keepAlive = false) {
   await capture
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
+  if (t.formattedEngine === 'codemirror')
+    await capture
+      .locator('.hibi-formatted .cm-content[contenteditable="true"]')
+      .waitFor()
   assert.equal(
     await capture
       .locator(

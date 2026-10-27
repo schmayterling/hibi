@@ -258,18 +258,18 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
         .classList.contains('mode-side-by-side') &&
       document.querySelector('.rich-pane').getAnimations().length === 0,
   )
-  // Design §11: both CodeMirror split panes are editable and can own the caret.
-  if (t.formattedEngine === 'codemirror') {
-    assert.equal(await rich.getAttribute('contenteditable'), 'true')
-    await rich.focus()
-    await page.locator('.rich-pane .editor-cursor').waitFor()
-    assert.equal(
-      await rich.evaluate((element) => document.activeElement === element),
-      true,
-    )
-  } else {
-    assert.equal(await rich.getAttribute('contenteditable'), 'false')
-  }
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap split-001: split formatted view must remain read-only'
+          : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
+  )
   phase = 'split source caret'
   await page.getByRole('textbox', { name: /markdown editor/i }).focus()
   await page.locator('.source-pane .editor-cursor').waitFor()

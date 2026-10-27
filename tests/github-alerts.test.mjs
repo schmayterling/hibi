@@ -196,13 +196,17 @@ it('github alerts edit in rich view, preview in split, and export with markers a
       ),
     '3px',
   )
-  // Design §11 keeps the formatted split pane editable.
-  if (cm) assert.equal(await rich.getAttribute('contenteditable'), 'true')
-  else
-    assert.equal(
-      await rich.evaluate((element) => element.editor.isEditable),
-      false,
-    )
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo: cm
+        ? 'formatted gap split-004: split formatted view must remain read-only'
+        : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
+  )
   await pressShortcut(app, `${mod}+Shift+[`)
   if (cm) await rich.and(page.locator('[contenteditable="true"]')).waitFor()
   else

@@ -641,7 +641,7 @@ test('select all stays in the active pane after changing views or clicking line 
   const select = async () => {
     await pressShortcut(
       app,
-      process.platform === 'darwin' ? 'Meta+a' : 'ControlOrMeta+a',
+      process.platform === 'darwin' ? 'Meta+a' : 'Control+a',
     )
     await page.waitForFunction(() =>
       window.getSelection()?.toString().includes('last'),

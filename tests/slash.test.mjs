@@ -337,6 +337,16 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
+  if (t.formattedEngine === 'codemirror')
+    await t.test(
+      'split formatted view is read-only',
+      {
+        todo: 'formatted gap split-008: split formatted view must remain read-only',
+      },
+      async () => {
+        assert.equal(await rich.getAttribute('contenteditable'), 'false')
+      },
+    )
   await t.test(
     'formatted heading slash commands survive split mode',
     async () => {
@@ -344,7 +354,6 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
         await page.waitForFunction(
           () => document.querySelector('.tiptap')?.editor?.isEditable === false,
         )
-      else assert.equal(await rich.getAttribute('contenteditable'), 'true')
       await rich.getByRole('heading', { level: 2 }).last().waitFor()
       await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
       if (t.formattedEngine === 'tiptap')

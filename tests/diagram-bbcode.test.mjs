@@ -424,6 +424,13 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
   timeout: 90000,
 }, async (t) => {
   t.formattedEngine = 'codemirror'
+  const catalog = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const diagramChunk = catalog.find((chunk) =>
+    chunk.modules.includes('src/addons/mermaid/render.ts'),
+  )
+  assert.ok(diagramChunk, 'the built catalog identifies the diagram scheduler')
   const count = 120
   const markdown = Array.from(
     { length: count },
@@ -462,6 +469,16 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
     view.dispatch({ selection: { anchor: gap } })
   })
   await page.locator('.rich-pane .mermaid-diagram > svg').first().waitFor()
+  await page.waitForFunction(() => {
+    const pane = document.querySelector('.rich-pane').getBoundingClientRect()
+    const visible = [
+      ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
+    ].filter((figure) => {
+      const box = figure.getBoundingClientRect()
+      return box.bottom > pane.top && box.top < pane.bottom
+    })
+    return visible.length > 0 && visible.every((figure) => figure.firstChild)
+  })
   const progress = await page.evaluate(() => {
     const figures = [
       ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
@@ -483,29 +500,37 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
     JSON.stringify(progress),
   )
   assert.equal(progress.pending, 0)
-  // Offscreen source is virtualized rather than eagerly mounting every block (§11).
+  // Offscreen source is virtualized rather than eagerly mounting every block.
   assert.ok(
     progress.mounted < count && progress.drawn < count,
     JSON.stringify(progress),
   )
-  // Visible work can be frame-pending even when virtualization leaves no idle work.
-  await page.evaluate(() => {
+  // Hold diagram work while editor layout and addon teardown keep running.
+  await page.evaluate((diagramChunk) => {
     const nativeFrame = window.requestAnimationFrame.bind(window)
     window.nextDiagramFrame = () => new Promise(nativeFrame)
     window.heldFrames = []
     window.heldIdle = []
+    window.holdNewDiagramWork = true
     const resumes = []
     for (const [request, cancel, queue] of [
+      ['queueMicrotask', null, window.heldFrames],
       ['requestAnimationFrame', 'cancelAnimationFrame', window.heldFrames],
       ['requestIdleCallback', 'cancelIdleCallback', window.heldIdle],
     ]) {
       const nativeRequest = window[request].bind(window)
-      const nativeCancel = window[cancel].bind(window)
+      const nativeCancel = cancel && window[cancel].bind(window)
       const callbacks = new Map()
       let holding = true
       let sequence = 1_000_000_000
       window[request] = (callback, ...options) => {
-        if (!holding) return nativeRequest(callback, ...options)
+        const caller = new Error().stack.split('\n')[2]
+        if (
+          !holding ||
+          !window.holdNewDiagramWork ||
+          !caller?.includes(diagramChunk)
+        )
+          return nativeRequest(callback, ...options)
         const id = ++sequence
         const held = (value) => {
           if (!callbacks.delete(id)) return false
@@ -517,14 +542,15 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
         queue.push(held)
         return id
       }
-      window[cancel] = (id) => {
-        const held = callbacks.get(id)
-        if (!held) return nativeCancel(id)
-        callbacks.delete(id)
-        const index = queue.indexOf(held)
-        if (index >= 0) queue.splice(index, 1)
-        if (held.nativeId !== undefined) nativeCancel(held.nativeId)
-      }
+      if (cancel)
+        window[cancel] = (id) => {
+          const held = callbacks.get(id)
+          if (!held) return nativeCancel(id)
+          callbacks.delete(id)
+          const index = queue.indexOf(held)
+          if (index >= 0) queue.splice(index, 1)
+          if (held.nativeId !== undefined) nativeCancel(held.nativeId)
+        }
       resumes.push(() => {
         holding = false
         for (const held of queue.splice(0))
@@ -574,7 +600,10 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
       const before =
         probe?.targets.filter((node) => node.querySelector('svg')).length ?? 0
       const callback = window.heldFrames.shift()
-      const released = callback?.(time) ?? false
+      const idle = !callback && window.heldIdle.shift()
+      const released = callback
+        ? callback(time)
+        : (idle?.({ didTimeout: false, timeRemaining: () => 50 }) ?? false)
       if (probe && released) probe.released++
       // Keep real paints/resize delivery live while all newly queued app frames stay held.
       await window.nextDiagramFrame()
@@ -583,7 +612,7 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
           probe.targets.filter((node) => node.querySelector('svg')).length -
           before
     }
-  })
+  }, diagramChunk.file)
   const diagnose = async (phase) =>
     t.diagnostic(
       'diagram frame fixture: ' +
@@ -600,7 +629,8 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
               mounted: figures.length,
               drawn: figures.filter((node) => node.querySelector('svg')).length,
               controlTargets: window.diagramControlTargets.length,
-              disable: window.diagramDisable,
+              disabled:
+                document.querySelector('#addon-mermaid')?.checked === false,
               samples: figures.slice(0, 8).map((node) => {
                 const box = node.getBoundingClientRect()
                 return {
@@ -680,6 +710,7 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
         svgAdds,
         pendingTargets: targets.length,
         held: window.heldFrames.length,
+        heldIdle: window.heldIdle.length,
       }
     })
     if (positive.controlled > 0) break
@@ -687,7 +718,7 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
   t.diagnostic('diagram frame positive: ' + JSON.stringify(positive))
   assert.ok(
     positive.released > 0 && positive.controlled > 0 && positive.svgAdds > 0,
-    'held frame work draws actual pending diagrams: ' +
+    'held scheduling work draws actual pending diagrams: ' +
       JSON.stringify(positive),
   )
   const afterFrames = await page.evaluate(
@@ -710,68 +741,63 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
   assert.ok(pending.pending > 0 && pending.held > 0, JSON.stringify(pending))
   t.diagnostic('diagram frame cancellation: ' + JSON.stringify(pending))
   const draws = await page.evaluate(() => window.diagramDraws)
-  await page.evaluate(() => {
-    window.diagramDisable = { pending: true }
-    window.diagramDisableResult = window.hibi
-      .setAddonEnabled('mermaid', false)
-      .then(
-        (states) => {
-          const enabled = states.find(({ id }) => id === 'mermaid').enabled
-          window.diagramDisable = { pending: false, enabled }
-          return enabled
-        },
-        (error) => {
-          window.diagramDisable = { pending: false, error: String(error) }
-          throw error
-        },
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.locator('#addon-mermaid').click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-mermaid').checked,
+  )
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await t.test('disabling cancels queued diagram work', async () => {
+    try {
+      // Polling cannot release the queued diagram work used by this proof.
+      await waitForAsync(
+        page,
+        () => !document.querySelector('.rich-pane .mermaid-block'),
+        undefined,
+        { timeout: 15000 },
       )
-    void window.diagramDisableResult.catch(() => {})
+      for (let turn = 0; turn < 3; turn++)
+        await page.evaluate(async () => {
+          const time = await window.nextDiagramFrame()
+          for (const callback of window.heldFrames.splice(0)) callback(time)
+          for (const callback of window.heldIdle.splice(0))
+            callback({ didTimeout: false, timeRemaining: () => 50 })
+          await window.nextDiagramFrame()
+          await window.nextDiagramFrame()
+        })
+      assert.equal(await page.evaluate(() => window.diagramDraws), draws)
+      assert.equal(await page.locator('.rich-pane .mermaid-block').count(), 0)
+      assert.deepEqual(
+        await page.evaluate(() => ({
+          pendingTargets: window.diagramProbe.targets.length,
+          svgAdds: window.diagramProbe.svgAdds,
+          renderedAfterDisable: window.diagramProbe.targets.filter((node) =>
+            node.querySelector('svg'),
+          ).length,
+        })),
+        {
+          pendingTargets: pending.pending,
+          svgAdds: 0,
+          renderedAfterDisable: 0,
+        },
+        'canceled targets stay empty even after their DOM detaches',
+      )
+    } catch (error) {
+      await diagnose('disable detachment blocked')
+      throw error
+    } finally {
+      // Restore scheduling even when cancellation itself fails.
+      await page.evaluate(async () => {
+        window.resumeDiagramScheduling()
+        await window.nextDiagramFrame()
+        await window.nextDiagramFrame()
+      })
+    }
   })
-  try {
-    // Host polling cannot accidentally release app frames needed by this proof.
-    await waitForAsync(
-      page,
-      () => !document.querySelector('.rich-pane .mermaid-block'),
-      undefined,
-      { timeout: 15000 },
-    )
-  } catch (error) {
-    await diagnose('disable detachment blocked')
-    throw error
-  }
-  for (let turn = 0; turn < 3; turn++)
-    await page.evaluate(async () => {
-      const time = await window.nextDiagramFrame()
-      for (const callback of window.heldFrames.splice(0)) callback(time)
-      for (const callback of window.heldIdle.splice(0))
-        callback({ didTimeout: false, timeRemaining: () => 50 })
-      await window.nextDiagramFrame()
-      await window.nextDiagramFrame()
-    })
-  await waitForAsync(page, () => !window.diagramDisable.pending)
-  assert.equal(await page.evaluate(() => window.diagramDisableResult), false)
-  // Resume remaining unrelated work with its original cancellation handles intact.
-  await page.evaluate(async () => {
-    window.resumeDiagramScheduling()
-    await window.nextDiagramFrame()
-    await window.nextDiagramFrame()
-  })
-  assert.equal(await page.evaluate(() => window.diagramDraws), draws)
-  assert.equal(await page.locator('.rich-pane .mermaid-block').count(), 0)
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     markdown,
-  )
-  assert.deepEqual(
-    await page.evaluate(() => ({
-      pendingTargets: window.diagramProbe.targets.length,
-      svgAdds: window.diagramProbe.svgAdds,
-      renderedAfterDisable: window.diagramProbe.targets.filter((node) =>
-        node.querySelector('svg'),
-      ).length,
-    })),
-    { pendingTargets: pending.pending, svgAdds: 0, renderedAfterDisable: 0 },
-    'canceled targets stay empty even after their DOM detaches',
   )
   await page.evaluate(() => window.diagramProbe.observer.disconnect())
   await clickMenu(app, 'Settings')

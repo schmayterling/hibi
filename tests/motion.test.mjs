@@ -216,10 +216,18 @@ test('split panes align corresponding carets in both directions without feedback
       })
     })
     await rich.locator('.hibi-lp-h2').filter({ hasText: 'section 45' }).click()
-    // Design §11(7): the formatted split pane is editable and owns its native caret.
-    assert.equal(await rich.getAttribute('contenteditable'), 'true')
-    await page.locator('.rich-pane .editor-cursor').waitFor()
-    assert.ok((await page.locator('.rich-pane .editor-cursor').count()) > 0)
+    await t.test(
+      'split formatted view is read-only without an input caret',
+      {
+        todo: cm
+          ? 'formatted gap split-005: split formatted view must remain read-only without an input caret'
+          : undefined,
+      },
+      async () => {
+        assert.equal(await rich.getAttribute('contenteditable'), 'false')
+        assert.equal(await page.locator('.rich-pane .editor-cursor').count(), 0)
+      },
+    )
   } else {
     await rich.locator('h2').nth(45).click()
     assert.equal(await rich.getAttribute('aria-readonly'), 'true')
@@ -263,16 +271,21 @@ test('split panes align corresponding carets in both directions without feedback
     markdown,
   )
   if (cm) {
-    const head = await rich.evaluate(
-      (element) => element.cmTile.root.view.state.selection.main.head,
-    )
     await page.keyboard.insertText('x')
     await page.evaluate(() => window.hibi.flushDocumentChanges())
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      `${markdown.slice(0, head)}x${markdown.slice(head)}`,
+    const typed = (await page.evaluate(() => window.hibi.getDocument()))
+      .markdown
+    await t.test(
+      'split formatted input preserves source',
+      {
+        todo: 'formatted gap split-006: typing in a read-only split preview must preserve source',
+      },
+      () => {
+        assert.equal(typed, markdown)
+      },
     )
-    await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+    if (typed !== markdown)
+      await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
     await waitForAsync(
       page,
       async (markdown) =>

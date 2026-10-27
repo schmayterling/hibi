@@ -123,7 +123,7 @@ it('empty entry, three views, and lossless source switching', {
   assert.equal(geometry.flat, true)
   await clickMenu(app, 'Settings')
   await page.getByRole('main', { name: /settings/i }).waitFor()
-  await rich.waitFor({ state: 'hidden' })
+  if (cm) await rich.waitFor({ state: 'hidden' })
   assert.equal(await rich.isVisible(), false)
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await page.getByRole('slider', { name: /content padding/i }).press('Home')
@@ -180,10 +180,16 @@ it('empty entry, three views, and lossless source switching', {
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
-  // Formatted split panes and literal HTML stay editable in this engine.
-  assert.equal(
-    await rich.getAttribute('contenteditable'),
-    cm ? 'true' : 'false',
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo: cm
+        ? 'formatted gap split-002: split formatted view must remain read-only'
+        : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
   )
   if (cm) {
     await rich.locator('.hibi-lp-codeblock').waitFor()

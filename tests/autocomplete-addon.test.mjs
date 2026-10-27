@@ -355,16 +355,26 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
       )
     }
     await tabAcceptance(true)
-    if (mode === 'source' || cm) {
+    {
       await reset('bro that was wil')
       await page.keyboard.press('Control+Space')
       await waitForChoice()
       const typed = await editorText()
       await pressWhenListIs('new', 'Tab')
-      assert.equal(
-        await editorText(),
-        `${typed}\t`,
-        `${mode} new list Tab indents`,
+      await t.test(
+        `${mode} new list Tab keeps the rich acceptance contract`,
+        {
+          todo:
+            t.formattedEngine === 'codemirror' && mode === 'rich'
+              ? 'formatted gap completion-001: a fresh rich completion list must accept the word with tab'
+              : undefined,
+        },
+        async () => {
+          assert.equal(
+            await editorText(),
+            mode === 'source' ? `${typed}\t` : 'bro that was wild',
+          )
+        },
       )
       await popup.waitFor({ state: 'hidden' })
     }

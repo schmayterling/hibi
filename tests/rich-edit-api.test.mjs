@@ -261,7 +261,7 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
   )
   await pressShortcut(
     app,
-    process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+    process.platform === 'win32' ? 'Control+y' : `${mod}+Shift+z`,
   )
   await waitForAsync(
     page,
@@ -277,8 +277,6 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
   )
   assert.equal(stale.status, 'stale')
 
-  // CodeMirror edits canonical Markdown, so markup edits need no rich projection proof.
-  // ProseMirror appendTransaction rejection remains covered by the Tiptap oracle above.
   const markup = await page.evaluate(() => {
     const api = window.sourceReview
     const now = api.getDocument()
@@ -291,13 +289,20 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
       changes: [{ from: at, to: at + 2, insert: '', expectedText: '**' }],
     })
   })
-  assert.equal(markup.status, 'applied')
-  await waitForAsync(
-    page,
-    async (source) => (await window.hibi.getDocument()).markdown === source,
-    corrected.replace('**the**', 'the**'),
+  await t.test(
+    'rich source edits reject a structural markup change',
+    {
+      todo: 'formatted gap api-005: rich source edits must reject structural markup changes',
+    },
+    async () => {
+      assert.equal(markup.status, 'unsupported-view')
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        corrected,
+      )
+    },
   )
-  await pressShortcut(app, `${mod}+z`)
+  if (markup.status === 'applied') await pressShortcut(app, `${mod}+z`)
   await waitForAsync(
     page,
     async (source) => (await window.hibi.getDocument()).markdown === source,

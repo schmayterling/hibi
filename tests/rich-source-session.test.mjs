@@ -672,4 +672,67 @@ test('codemirror: accepted transformations are immediately savable and rejected 
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'source echo fixture',
   )
+  stage = 'source echo rejection blocks further input until Retry'
+  const message = 'Fixture rejected the source echo before rendering.'
+  await page.evaluate((message) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    const update = view.update
+    view.update = function (transactions) {
+      if (transactions.some((tr) => tr.docChanged)) {
+        view.update = update
+        throw new Error(message)
+      }
+      update.call(this, transactions)
+    }
+  }, message)
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await replaceSourceText(
+    page,
+    page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
+    'rejected echo',
+  )
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'rejected echo',
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await page.getByText(message, { exact: true }).waitFor()
+  const rejectedEcho = await page.evaluate(async () => {
+    const element = document.querySelector('.rich-pane .cm-content')
+    const view = element.cmTile.root.view
+    const before = await window.hibi.getDocument()
+    view.dispatch({
+      changes: { from: 0, insert: 'unsafe' },
+      userEvent: 'input.type',
+    })
+    return {
+      before,
+      after: await window.hibi.getDocument(),
+      editable: element.isContentEditable,
+    }
+  })
+  await t.test(
+    'a rejected source echo refuses further edits without advancing canonical version',
+    () => {
+      assert.equal(rejectedEcho.before.markdown, 'rejected echo')
+      assert.equal(rejectedEcho.after.markdown, 'rejected echo')
+      assert.equal(
+        rejectedEcho.after.contentVersion,
+        rejectedEcho.before.contentVersion,
+      )
+      assert.equal(rejectedEcho.editable, false)
+    },
+  )
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await waitForDocumentEditor(app, page)
+  assert.equal(
+    await page.locator('.rich-pane .cm-content').textContent(),
+    'rejected echo',
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'rejected echo',
+  )
 })

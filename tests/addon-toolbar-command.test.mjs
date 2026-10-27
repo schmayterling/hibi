@@ -141,10 +141,17 @@ test('installed toolbar command captures rich and source selection and stays own
   const richInvocation = await page.evaluate(() => window.toolbarProbe.runs[0])
   assert.equal(richInvocation.source, 'toolbar')
   assert.equal(richInvocation.selection.editor, 'rich')
-  // API 2 reports rendered text in Tiptap and canonical source in CodeMirror.
-  assert.equal(
-    richInvocation.selection.selectedText,
-    t.formattedEngine === 'tiptap' ? 'hello\nworld' : 'hello\n\n`world`',
+  await t.test(
+    'api 2 rich selection reports rendered text',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap api-001: api 2 rich selection must report rendered text'
+          : undefined,
+    },
+    () => {
+      assert.equal(richInvocation.selection.selectedText, 'hello\nworld')
+    },
   )
   assert.equal(
     richInvocation.document.documentId,

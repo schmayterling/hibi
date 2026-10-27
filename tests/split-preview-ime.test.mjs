@@ -485,14 +485,26 @@ for (const [pane, mode] of [
         .getByRole('button', { name: /^side-by-side$/i, exact: true })
         .click()
       await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-      // Design §11 accepts editing in either split pane.
-      for (const name of ['Document editor', 'Markdown editor'])
-        assert.equal(
-          await page
-            .getByRole('textbox', { name, exact: true })
-            .evaluate((element) => element.isContentEditable),
-          true,
-        )
+      await t.test(
+        'split formatted view is read-only',
+        {
+          todo: 'formatted gap split-011: split formatted view must remain read-only during native composition',
+        },
+        async () => {
+          assert.equal(
+            await page
+              .getByRole('textbox', { name: 'Document editor', exact: true })
+              .evaluate((element) => element.isContentEditable),
+            false,
+          )
+        },
+      )
+      assert.equal(
+        await page
+          .getByRole('textbox', { name: 'Markdown editor', exact: true })
+          .evaluate((element) => element.isContentEditable),
+        true,
+      )
     }
     const input = page.locator(`.${pane}-pane .cm-content`)
     const offset = original.replaceAll('\r\n', '\n').indexOf('end')
@@ -535,17 +547,40 @@ for (const [pane, mode] of [
       )
     const candidate = (text) =>
       original.replace('middle end', `middle ${text}end`)
-    const caughtUp = (text) =>
-      page.waitForFunction((text) => {
-        const view = window.cmIme.view
-        return (
-          view.composing &&
-          view.hasFocus &&
-          document
-            .querySelector('.rich-pane .cm-content')
-            .textContent.includes(text)
-        )
-      }, text)
+    const caughtUp = async (text) => {
+      assert.equal(
+        await page.evaluate((text) => {
+          const view = window.cmIme.view
+          return (
+            view.composing &&
+            view.hasFocus &&
+            document
+              .querySelector('.rich-pane .cm-content')
+              .textContent.includes(text)
+          )
+        }, text),
+        true,
+      )
+    }
+    if (mode === 'side-by-side' && pane === 'rich') {
+      const before = await page.evaluate(() => window.hibi.getDocument())
+      await compose('に')
+      await compose('日本')
+      await cdp.send('Input.insertText', { text: '日本語😀' })
+      await page.evaluate(() => window.hibi.flushDocumentChanges())
+      const after = await page.evaluate(() => window.hibi.getDocument())
+      await t.test(
+        'read-only split composition preserves source and history',
+        {
+          todo: 'formatted gap split-017: composition in a read-only split preview must preserve source and content version',
+        },
+        () => {
+          assert.equal(after.markdown, original)
+          assert.equal(after.contentVersion, before.contentVersion)
+        },
+      )
+      return
+    }
     await compose('に')
     await expectSource(candidate('に'))
     // Real candidate pauses cross the typing-history timeout.

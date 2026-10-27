@@ -75,7 +75,7 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     if (message.type() === 'error') pageErrors.push(message.text())
   })
   if (cm) {
-    // Design §11(9): API 1 rich hooks are inert. Source hooks still belong to source view.
+    // API 1 rich hooks are inert. Source hooks still belong to source view.
     // The CM counterpart checks native editing here and the failing source attachment below.
     await waitForDocumentEditor(app, page)
     const formatted = page.locator('.rich-pane .cm-content')
@@ -158,7 +158,7 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     false,
   )
   if (cm) {
-    // Design §11: API 1 rich hooks are inert. Their PM attachment/cleanup
+    // API 1 rich hooks are inert. Their PM attachment/cleanup
     // signal is TipTap-only; the failing source extension still blocks source input.
     assert.equal(
       await page.evaluate(

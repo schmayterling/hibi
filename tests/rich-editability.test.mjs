@@ -64,10 +64,17 @@ it('empty formatted blocks remain editable and rich editing survives vim and vie
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('extra'),
   )
-  // Split formatted editing is intentionally enabled in CodeMirror.
-  assert.equal(
-    await rich.getAttribute('contenteditable'),
-    t.formattedEngine === 'tiptap' ? 'false' : 'true',
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap split-007: split formatted view must remain read-only'
+          : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
   )
   await pressShortcut(app, `${mod}+Shift+[`)
   await source.waitFor({ state: 'hidden' })

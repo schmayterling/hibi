@@ -163,8 +163,13 @@ test('local images resolve from the note, validate content, and retain their Mar
     ),
     null,
   )
-  await rich.focus()
-  await rich.press('ControlOrMeta+End')
+  if (t.formattedEngine === 'tiptap') {
+    await rich.locator('p').last().click()
+    await page.keyboard.press('End')
+  } else {
+    await rich.focus()
+    await rich.press('ControlOrMeta+End')
+  }
   await page.keyboard.type(' edited')
   const markdown = (await page.evaluate(() => window.hibi.getDocument()))
     .markdown

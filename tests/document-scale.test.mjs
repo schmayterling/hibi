@@ -233,65 +233,75 @@ for (const size of sizes)
       await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     }
     if (!baseline && cm) {
-      // Design §9/11 replaces paged, read-only rich previews with an editable
-      // virtualized view. No pager or retained hidden-source identity applies;
-      // formatted-hidden-source.test.mjs also checks rope release and mapping.
-      const formatted = page.locator('.rich-pane .cm-content')
-      assert.equal(await formatted.getAttribute('contenteditable'), 'true')
-      assert.equal(await page.locator('.editor-panes.mode-normal').count(), 1)
-      assert.ok((await formatted.locator('.cm-line').count()) < 512)
-      const normalized = source.replace(/\r\n?/g, '\n')
-      assert.deepEqual(
-        await formatted.evaluate((element) => {
-          const view = element.cmTile.root.view
-          return {
-            length: view.state.doc.length,
-            first: view.state.doc.sliceString(0, 32),
-            last: view.state.doc.sliceString(view.state.doc.length - 32),
+      await t.test(
+        'formatted mib notes stay editable and preserve their source',
+        async () => {
+          // Formatted notes use an editable
+          // virtualized view. No pager or retained hidden-source identity applies;
+          // formatted-hidden-source.test.mjs also checks rope release and mapping.
+          const formatted = page.locator('.rich-pane .cm-content')
+          assert.equal(await formatted.getAttribute('contenteditable'), 'true')
+          assert.equal(
+            await page.locator('.editor-panes.mode-normal').count(),
+            1,
+          )
+          assert.ok((await formatted.locator('.cm-line').count()) < 512)
+          const normalized = source.replace(/\r\n?/g, '\n')
+          assert.deepEqual(
+            await formatted.evaluate((element) => {
+              const view = element.cmTile.root.view
+              return {
+                length: view.state.doc.length,
+                first: view.state.doc.sliceString(0, 32),
+                last: view.state.doc.sliceString(view.state.doc.length - 32),
+              }
+            }),
+            {
+              length: normalized.length,
+              first: normalized.slice(0, 32),
+              last: normalized.slice(-32),
+            },
+          )
+          for (const anchor of [Math.floor(normalized.length / 2), 0]) {
+            await formatted.evaluate((element, anchor) => {
+              element.cmTile.root.view.dispatch({
+                selection: { anchor },
+                scrollIntoView: true,
+              })
+            }, anchor)
+            await page.waitForFunction((anchor) => {
+              const view = document.querySelector('.rich-pane .cm-content')
+                .cmTile.root.view
+              const caret = view.coordsAtPos(anchor),
+                box = view.scrollDOM.getBoundingClientRect()
+              return caret && caret.bottom >= box.top && caret.top <= box.bottom
+            }, anchor)
+            assert.ok((await formatted.locator('.cm-line').count()) < 512)
           }
-        }),
-        {
-          length: normalized.length,
-          first: normalized.slice(0, 32),
-          last: normalized.slice(-32),
+          if (size === 2)
+            for (const character of ['Q', '#']) {
+              await formatted.evaluate((element) => {
+                const view = element.cmTile.root.view
+                view.dispatch({ selection: { anchor: 0, head: 1 } })
+                view.focus()
+              })
+              await page.keyboard.insertText(character)
+              await page.evaluate(() => window.hibi.flushDocumentChanges())
+            }
+          await page
+            .getByRole('button', { name: 'Source view', exact: true })
+            .click()
+          await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+          await page
+            .getByRole('button', { name: 'normal', exact: true })
+            .click()
+          await page
+            .locator('.source-pane .cm-editor')
+            .waitFor({ state: 'detached' })
+          assert.equal(await page.locator('.source-pane .cm-editor').count(), 0)
+          assert.equal(await page.locator('.large-markdown-preview').count(), 0)
         },
       )
-      for (const anchor of [Math.floor(normalized.length / 2), 0]) {
-        await formatted.evaluate((element, anchor) => {
-          element.cmTile.root.view.dispatch({
-            selection: { anchor },
-            scrollIntoView: true,
-          })
-        }, anchor)
-        await page.waitForFunction((anchor) => {
-          const view = document.querySelector('.rich-pane .cm-content').cmTile
-            .root.view
-          const caret = view.coordsAtPos(anchor),
-            box = view.scrollDOM.getBoundingClientRect()
-          return caret && caret.bottom >= box.top && caret.top <= box.bottom
-        }, anchor)
-        assert.ok((await formatted.locator('.cm-line').count()) < 512)
-      }
-      if (size === 2)
-        for (const character of ['Q', '#']) {
-          await formatted.evaluate((element) => {
-            const view = element.cmTile.root.view
-            view.dispatch({ selection: { anchor: 0, head: 1 } })
-            view.focus()
-          })
-          await page.keyboard.insertText(character)
-          await page.evaluate(() => window.hibi.flushDocumentChanges())
-        }
-      await page
-        .getByRole('button', { name: 'Source view', exact: true })
-        .click()
-      await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-      await page.getByRole('button', { name: 'normal', exact: true }).click()
-      await page
-        .locator('.source-pane .cm-editor')
-        .waitFor({ state: 'detached' })
-      assert.equal(await page.locator('.source-pane .cm-editor').count(), 0)
-      assert.equal(await page.locator('.large-markdown-preview').count(), 0)
     } else if (!baseline) {
       await page.evaluate(() => {
         window.scaleSourceView = document.querySelector(

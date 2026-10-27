@@ -59,6 +59,7 @@ test('codemirror: notes open in the formatted view and edit their markdown', {
   }, file)
   await pressShortcut(app, `${mod}+o`)
   await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
+  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
   // Hidden windows have no focus; markers under the caret need a focused editor.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })

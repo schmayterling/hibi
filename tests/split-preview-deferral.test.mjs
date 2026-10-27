@@ -821,9 +821,8 @@ test('tiptap: split preview catch-up keeps selections after a block is wrapped o
     )
 })
 
-// Design §11 makes both split panes editable over canonical source. A PM-only
-// deferred parse, immutable PM doc identity and PM All/Node/CellSelection JSON
-// have no CM counterpart. These tests preserve their user contracts: current
+// Deferred parsing and immutable PM selections have no CM counterpart.
+// These tests preserve their user contracts: current
 // rendering, save/history, focus and mapped text/image/table source ranges.
 // Native cell-editor mapping is also covered by formatted-tables.test.mjs:
 // "a cell editor follows its row when rows are added or deleted around it".
@@ -881,6 +880,24 @@ async function cmSplit(t, original) {
         ),
         canonical.replace(/\r\n?/g, '\n'),
       )
+    if (!sourceMode) {
+      const tail = canonical.match(/^omega[^\n]*$/m)?.[0]
+      if (tail) assert.ok((await rich.innerText()).includes(tail), tail)
+      if (
+        await source.evaluate((element) => document.activeElement === element)
+      ) {
+        if (canonical.includes('$y^2$'))
+          assert.ok(
+            (
+              await rich.locator('.katex annotation').allTextContents()
+            ).includes('y^2'),
+          )
+        if (canonical.includes('![first]'))
+          assert.ok(await rich.locator('img').count())
+        if (canonical.includes('| a | b |'))
+          assert.ok(await rich.locator('table').count())
+      }
+    }
     return canonical
   }
   const edit = async (changes) => {
@@ -1177,6 +1194,10 @@ test('codemirror: hidden preview edits copy only current input and retain select
       return clone(value, ...rest)
     }
     try {
+      window.structuredClone('probe')
+      if (units !== 5)
+        throw new Error('clone counter must observe the positive control')
+      units = 0
       for (let index = 0; index < 30; index++)
         view.dispatch({
           changes: { from: view.state.doc.line(1).to, insert: '?' },

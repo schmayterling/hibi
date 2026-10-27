@@ -88,6 +88,8 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
   )
   const page = await app.firstWindow()
   await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(APP_STATE_TIMEOUT)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ ipcMain }) => {
@@ -371,29 +373,38 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     )
     await page.keyboard.type(' ha')
     await page.evaluate(() => {
-      // Keystroke to rendered suggestion, measured inside the window.
-      window.suggestionLatency = new Promise((resolve) => {
-        let start
-        document.addEventListener(
-          'keydown',
-          () => {
-            start = performance.now()
-          },
-          { capture: true, once: true },
+      // Both completion hosts reuse options; check a visible result after keydown.
+      window.suggestionLatency = undefined
+      let start
+      const check = () => {
+        const shown = [
+          ...document.querySelectorAll(
+            '[aria-label="Completions"] [role="option"]',
+          ),
+        ].find(
+          (option) =>
+            option.getClientRects().length &&
+            option.textContent.startsWith('happy'),
         )
-        const observer = new MutationObserver(() => {
-          const shown = document.querySelector(
-            '[aria-label="Completions"]:popover-open [role="option"]',
-          )
-          if (start === undefined || !shown?.textContent?.startsWith('happy'))
-            return
-          observer.disconnect()
-          resolve(performance.now() - start)
-        })
-        observer.observe(document.body, { childList: true, subtree: true })
-      })
+        if (start === undefined || !shown) return
+        observer.disconnect()
+        window.suggestionLatency = performance.now() - start
+      }
+      document.addEventListener(
+        'keydown',
+        () => {
+          start = performance.now()
+          requestAnimationFrame(check)
+        },
+        { capture: true, once: true },
+      )
+      const observer = new MutationObserver(check)
+      observer.observe(document.body, { childList: true, subtree: true })
     })
     await page.keyboard.type('p')
+    await page.waitForFunction(
+      () => typeof window.suggestionLatency === 'number',
+    )
     latencies.push(await page.evaluate(() => window.suggestionLatency))
     if (t.formattedEngine === 'codemirror')
       assert.ok(
@@ -406,9 +417,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
       .getByRole('option', { name: /^happy/ })
       .filter({ hasText: 'English' })
       .first()
-      .waitFor()
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('Enter')
+      .click()
     await waitForAsync(page, async () =>
       (await window.hibi.getDocument()).markdown.endsWith(' happy'),
     )
@@ -417,9 +426,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
   t.diagnostic(
     `keystroke to suggestion (ms): ${latencies.map((ms) => ms.toFixed(1)).join(', ')}`,
   )
-  // Preserve the legacy timing oracle; CM work is bounded above per input key.
-  if (t.formattedEngine === 'tiptap')
-    assert.ok(latencies[2] < 500, `median ${latencies[2]} ms`)
+  assert.ok(latencies[2] < 500, `median ${latencies[2]} ms`)
 
   // Source view: the same Tab preference, then Tab accepts once turned back on.
   await page.getByRole('button', { name: 'Source view', exact: true }).click()

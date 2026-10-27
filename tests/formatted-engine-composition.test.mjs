@@ -63,7 +63,7 @@ test('native composition replaces selected text in one undo step and cancels at 
   await saved('before chosen after 😀')
   await pressShortcut(
     app,
-    process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+    process.platform === 'win32' ? 'Control+y' : `${mod}+Shift+z`,
   )
   await saved('before 日本語 after 😀')
   await rich.press('End')

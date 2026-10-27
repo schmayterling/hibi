@@ -68,7 +68,7 @@ test('formatted multiline native input replaces one selection in one edit and pr
   await saved(original)
   await pressShortcut(
     app,
-    process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+    process.platform === 'win32' ? 'Control+y' : `${mod}+Shift+z`,
   )
   await saved(expected)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()

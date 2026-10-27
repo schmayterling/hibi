@@ -76,6 +76,8 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
   await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const choose = async (query) => {
@@ -106,19 +108,26 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
     .locator('[data-status-id="flavor"]')
     .filter({ hasText: /math/i })
     .waitFor()
-  assert.equal(
-    await page
-      .locator('.rich-pane [aria-label="Document editor"]')
-      .textContent(),
-    hiddenText,
-    'source typing must not refresh the hidden rich document',
+  await t.test(
+    'source typing does not refresh the hidden formatted document',
+    async () => {
+      assert.equal(
+        await page
+          .locator('.rich-pane [aria-label="Document editor"]')
+          .textContent(),
+        hiddenText,
+        'source typing must not refresh the hidden rich document',
+      )
+    },
   )
-  assert.equal(
-    await page
-      .locator('.rich-pane [aria-label="Document editor"] .katex')
-      .count(),
-    0,
-  )
+  await t.test('source typing does not render hidden math', async () => {
+    assert.equal(
+      await page
+        .locator('.rich-pane [aria-label="Document editor"] .katex')
+        .count(),
+      0,
+    )
+  })
   await choose('enable latex')
   // Enabling a flavor does not parse the hidden rich document in source view.
   await pressShortcut(app, `${mod}+Shift+[`)
@@ -165,10 +174,15 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     initial,
   )
-  await page
-    .locator('.rich-pane .hibi-token-keyword')
-    .filter({ hasText: /const/i })
-    .waitFor()
+  await t.test(
+    'formatted flavor renders code syntax highlighting',
+    async () => {
+      await page
+        .locator('.rich-pane .hibi-token-keyword')
+        .filter({ hasText: /const/i })
+        .waitFor()
+    },
+  )
   await waitForDocumentEditor(app, page)
   if (cm)
     await page
@@ -285,15 +299,12 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
     0,
   )
   await pressShortcut(app, `${mod}+o`)
-  // Design §11 leaves the formatted split pane editable.
-  if (cm) await waitForDocumentEditor(app, page)
-  else
-    await page.waitForFunction(
-      () =>
-        document
-          .querySelector('.rich-pane [aria-label="Document editor"]')
-          ?.getAttribute('contenteditable') === 'false',
-    )
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('.rich-pane [aria-label="Document editor"]')
+        ?.getAttribute('contenteditable') === 'false',
+  )
   assert.equal(
     await page
       .locator('.rich-pane [aria-label="Document editor"] .katex')
@@ -356,6 +367,8 @@ it('math source bytes survive source and visual view round trips and saving', {
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
   await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -462,6 +475,8 @@ it('split focus preserves each file flavor', {
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
   await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   await waitForDocumentEditor(app, page)
   const open = async (file) => {
@@ -622,6 +637,8 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
   await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -637,116 +654,52 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
     async () =>
       (await window.hibi.getDocument()).markdown === 'Keep this draft.',
   )
-  if (cm) {
-    // Instance destruction and schema-extension lists are Tiptap proofs.
-    // Reconfiguration must preserve the same editable canonical draft.
-    const checkDraft = async () => {
-      await waitForDocumentEditor(app, page)
-      assert.equal(
-        (await page.evaluate(() => window.hibi.getDocument())).markdown,
-        'Keep this draft.',
-      )
-      assert.equal(await editor.textContent(), 'Keep this draft.')
-      assert.equal(await editor.getAttribute('contenteditable'), 'true')
-    }
-    await page.evaluate(async () => {
-      window.syntaxProbe.registerDocumentSyntax({
-        id: 'preview',
-        label: 'Probe preview',
-        group: 'Probe',
-        level: 'block',
-      })
-      for (let frame = 0; frame < 2; frame++)
-        await new Promise((resolve) => requestAnimationFrame(resolve))
-    })
-    await checkDraft()
-    for (const enabled of [false, true]) {
-      await clickMenu(app, 'Settings')
-      await page
-        .getByRole('tab', { name: /^addon manager$/i, exact: true })
-        .click()
-      await page.locator('#addon-text-extras').click()
-      await page.waitForFunction(
-        (enabled) =>
-          document.querySelector('#addon-text-extras').checked === enabled,
-        enabled,
-      )
-      await page.getByRole('button', { name: /^back to app$/i }).click()
-      await checkDraft()
-    }
-    await clickMenu(app, 'Command palette')
-    const palette = page.getByRole('dialog', { name: 'Command palette' })
-    await palette
-      .getByRole('combobox', { name: /search commands/i })
-      .fill('Use plain Markdown flavor')
-    await palette
-      .getByRole('option', { name: /Use plain Markdown flavor/i })
-      .press('Enter')
-    await palette.waitFor({ state: 'hidden' })
-    // The native host may stay mounted; wait for the deferred palette action itself.
-    await waitForAsync(page, async () => {
-      const snapshot = await window.hibi.getDocument()
-      const choice = JSON.parse(
-        localStorage.getItem(`hibi:flavor:${snapshot.id}`),
-      )
-      return choice?.dialect === 'markdown' && choice.syntax?.length === 0
-    })
-    await checkDraft()
-    await page.evaluate(async () => {
-      window.syntaxProbe.registerFlavor({
-        id: 'unchosen',
-        name: 'Unchosen',
-        kind: 'syntax',
-        description: 'Flavor outside the explicit choice',
-        detect: () => false,
-      })
-      for (let frame = 0; frame < 2; frame++)
-        await new Promise((resolve) => requestAnimationFrame(resolve))
-    })
-    await checkDraft()
-    await editor.press('End')
+  const checkDraft = async () => {
+    await waitForDocumentEditor(app, page)
     assert.equal(
-      await editor.evaluate((element) => document.activeElement === element),
-      true,
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      'Keep this draft.',
     )
-    await page.keyboard.insertText('!')
-    await waitForAsync(
-      page,
-      async () =>
-        (await window.hibi.getDocument()).markdown === 'Keep this draft.!',
-    ).catch(async (error) => {
-      t.diagnostic(
-        JSON.stringify(
-          await editor.evaluate(async (element) => {
-            const snapshot = await window.hibi.getDocument()
-            const view = element.cmTile.root.view
-            const { anchor, head } = view.state.selection.main
-            return {
-              source: snapshot.markdown,
-              native: view.state.doc.toString(),
-              anchor,
-              head,
-              focused: document.activeElement === element,
-              documentFocused: document.hasFocus(),
-              editable: element.isContentEditable,
-              readOnly: view.state.readOnly,
-            }
-          }),
-        ),
-      )
-      throw error
-    })
-    assert.deepEqual(errors, [])
-    return
+    assert.equal(await editor.textContent(), 'Keep this draft.')
+    assert.equal(await editor.getAttribute('contenteditable'), 'true')
   }
+  const sameView = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('.rich-pane .cm-content')?.cmTile.root.view ===
+        window.richEditor,
+    )
   const remember = () =>
-    page.evaluate(() => {
-      window.richEditor = document.querySelector(
+    page.evaluate((cm) => {
+      const element = document.querySelector(
         '.rich-pane [aria-label="Document editor"]',
-      ).editor
-    })
-  const subscript = (expected) =>
-    page.waitForFunction(
+      )
+      window.richEditor = cm ? element.cmTile.root.view : element.editor
+    }, cm)
+  const subscript = async (expected) => {
+    if (cm) {
+      await page.evaluate(() =>
+        window.syntaxProbe.updateMarkdown(() => 'Keep this draft. ~probe~'),
+      )
+      await waitForAsync(
+        page,
+        async () =>
+          (await window.hibi.getDocument()).markdown ===
+          'Keep this draft. ~probe~',
+      )
+      await page.waitForFunction(
+        (expected) =>
+          !!document.querySelector('.rich-pane .hibi-lp-subscript') ===
+          expected,
+        expected,
+      )
+      await page.evaluate(() =>
+        window.syntaxProbe.updateMarkdown(() => 'Keep this draft.'),
+      )
+      await checkDraft()
+      return
+    }
+    await page.waitForFunction(
       (expected) =>
         document
           .querySelector('.rich-pane [aria-label="Document editor"]')
@@ -755,6 +708,7 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
           ) === expected,
       expected,
     )
+  }
   await remember()
   // Format addons such as rst register preview-only syntax after the editor is ready.
   await page.evaluate(async () => {
@@ -768,10 +722,13 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
     await new Promise((resolve) => setTimeout(resolve))
   })
   assert.equal(
-    await page.evaluate(() => window.richEditor.isDestroyed),
-    false,
+    cm
+      ? await sameView()
+      : await page.evaluate(() => !window.richEditor.isDestroyed),
+    true,
     'document-only syntax keeps the rich editor',
   )
+  if (cm) await checkDraft()
   for (const enabled of [false, true]) {
     await clickMenu(app, 'Settings')
     await page
@@ -784,7 +741,8 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
       enabled,
     )
     await page.getByRole('button', { name: /^back to app$/i }).click()
-    await page.waitForFunction(() => window.richEditor.isDestroyed)
+    if (cm) assert.equal(await sameView(), true)
+    else await page.waitForFunction(() => window.richEditor.isDestroyed)
     await subscript(enabled)
     await waitForDocumentEditor(app, page)
     assert.equal(await editor.textContent(), 'Keep this draft.')
@@ -802,7 +760,19 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
   await palette
     .getByRole('option', { name: /Use plain Markdown flavor/i })
     .press('Enter')
-  await page.waitForFunction(() => window.richEditor.isDestroyed)
+  if (cm) {
+    await palette.waitFor({ state: 'hidden' })
+    await waitForAsync(page, async () => {
+      const snapshot = await window.hibi.getDocument()
+      const choice = JSON.parse(
+        localStorage.getItem(`hibi:flavor:${snapshot.id}`),
+      )
+      return choice?.dialect === 'markdown' && choice.syntax?.length === 0
+    })
+    assert.equal(await sameView(), true)
+    await subscript(false)
+    await checkDraft()
+  } else await page.waitForFunction(() => window.richEditor.isDestroyed)
   await waitForDocumentEditor(app, page)
   await remember()
   await page.evaluate(async () => {
@@ -819,10 +789,26 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
     await new Promise((resolve) => setTimeout(resolve))
   })
   assert.equal(
-    await page.evaluate(() => window.richEditor.isDestroyed),
-    false,
+    cm
+      ? await sameView()
+      : await page.evaluate(() => !window.richEditor.isDestroyed),
+    true,
     'a flavor outside the explicit choice keeps the rich editor',
   )
+  if (cm) await checkDraft()
   assert.equal(await editor.textContent(), 'Keep this draft.')
+  if (cm) {
+    await editor.press('End')
+    assert.equal(
+      await editor.evaluate((element) => document.activeElement === element),
+      true,
+    )
+    await page.keyboard.insertText('!')
+    await waitForAsync(
+      page,
+      async () =>
+        (await window.hibi.getDocument()).markdown === 'Keep this draft.!',
+    )
+  }
   assert.deepEqual(errors, [])
 })

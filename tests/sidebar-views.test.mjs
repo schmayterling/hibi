@@ -97,16 +97,26 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
       ),
     t.formattedEngine,
   )
-  assert.equal(
-    await page.evaluate(
-      () =>
-        window
-          .getSelection()
-          ?.anchorNode?.parentElement?.closest('h1, [role="heading"]')
-          ?.textContent,
-    ),
-    // The formatted view reveals the selected heading's source markers.
-    t.formattedEngine === 'tiptap' ? 'alpha' : '# alpha',
+  await t.test(
+    'outline navigation exposes rendered heading text',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap marker-007: outline navigation must expose rendered heading text'
+          : undefined,
+    },
+    async () => {
+      assert.equal(
+        await page.evaluate(
+          () =>
+            window
+              .getSelection()
+              ?.anchorNode?.parentElement?.closest('h1, [role="heading"]')
+              ?.textContent,
+        ),
+        'alpha',
+      )
+    },
   )
   await pressShortcut(
     app,

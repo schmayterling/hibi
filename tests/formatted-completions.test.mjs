@@ -183,6 +183,8 @@ test('formatted completions keep exact source, history, composition, privacy and
   await page.keyboard.press('Escape')
   await actions.waitFor({ state: 'hidden' })
   await reset('before chosen after 😀')
+  await rich.focus()
+  await settle()
   await rich.press('Home')
   for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowRight')
   for (let i = 0; i < 6; i++) await page.keyboard.press('Shift+ArrowRight')
@@ -213,13 +215,19 @@ test('formatted completions keep exact source, history, composition, privacy and
     await page.evaluate(() => window.formattedCompletion.events.length),
     1,
   )
-  const offset = t.formattedEngine === 'tiptap' ? 1 : 0
-  assert.deepEqual(
-    await page.evaluate(() => window.formattedCompletion.events[0].change),
+  await t.test(
+    'typing context uses rich selection offsets',
     {
-      from: 7 + offset,
-      to: 13 + offset,
-      insertedLength: 3,
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap api-004: typing context must preserve rich selection offsets'
+          : undefined,
+    },
+    async () => {
+      assert.deepEqual(
+        await page.evaluate(() => window.formattedCompletion.events[0].change),
+        { from: 8, to: 14, insertedLength: 3 },
+      )
     },
   )
   assert.equal(

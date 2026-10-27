@@ -10,7 +10,11 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForAppState } from './electron.mjs'
+import {
+  electron,
+  waitForAppState,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import {
   selectFormattedEngine,
   testFormattedEngines as test,

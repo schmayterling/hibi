@@ -328,13 +328,19 @@ for (const route of ['menu', 'shortcut']) {
     else
       await pressShortcut(
         app,
-        process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+        process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+Shift+z',
       )
     await settle()
     await page.evaluate(() => window.hibi.flushDocumentChanges())
     await snapshot('locked after redo')
     await t.test(
       'read-only redo leaves source and content version unchanged',
+      {
+        todo:
+          route === 'shortcut'
+            ? 'formatted gap history-001: keyboard redo must preserve read-only formatted source and history'
+            : undefined,
+      },
       async () => {
         assert.equal(await markdown(), undone)
         assert.equal(

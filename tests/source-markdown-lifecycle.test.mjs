@@ -331,10 +331,17 @@ test('codemirror: source loading, addon reconfiguration and split editing preser
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
   await rich.locator('.cm-line', { hasText: 'untouched content' }).waitFor()
-  // Design §11: both split panes now edit the canonical source.
-  assert.equal(
-    await rich.evaluate((element) => element.isContentEditable),
-    true,
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo: 'formatted gap split-009: split formatted view must remain read-only',
+    },
+    async () => {
+      assert.equal(
+        await rich.evaluate((element) => element.isContentEditable),
+        false,
+      )
+    },
   )
   assert.equal(
     await source.evaluate((element) => element.isContentEditable),

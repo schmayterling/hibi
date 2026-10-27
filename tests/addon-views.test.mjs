@@ -129,7 +129,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
     })
     await editor.waitFor()
     await idle()
-    // Design §11(1): CM keeps editable markers; compare the visible document and exact source.
+    // Compare the visible document and exact source.
     if (
       t.formattedEngine === 'codemirror' &&
       editorName === 'Document editor'

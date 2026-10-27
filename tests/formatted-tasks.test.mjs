@@ -3,6 +3,7 @@ import { registerHooks } from 'node:module'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { parser } from '@lezer/markdown'
+import { obsidianSyntax } from '../src/addons/markdown/formatted-syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 
 // Feature modules import their styles; these tests need only the code.
@@ -16,7 +17,7 @@ const { contribution, TaskWidget, toggleTask } = await import(
   '../src/renderer/src/formatted/tasks.ts'
 )
 
-const markdown = parser.configure(contribution.syntax)
+const markdown = parser.configure([contribution.syntax, obsidianSyntax])
 const tasks = (doc) => {
   const out = []
   markdown.parse(doc).iterate({
@@ -162,6 +163,11 @@ test('the marker and the space after it become one checkbox', () => {
       '- [ ] [label][ref] and https://example.com/bare',
       '[label][ref] and https://example.com/bare',
     ],
+    ['- [ ] read [[b|alias]] today', 'read alias today'],
+    ['- [ ] [[ b | alias &amp; &#169; |ignored]]', 'alias & ©'],
+    ['- [ ] [[ b | ]]', 'b'],
+    ['- [ ] [[b|literal\\*star]]', 'literal\\*star'],
+    ['- [ ] \\[[b|alias]]', '[[b|alias]]'],
   ])
     assert.equal(render(doc)[0].widget.text, text, doc)
   // Like outline labels, names read a bounded start of a long task.

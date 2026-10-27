@@ -308,6 +308,95 @@ test('revealed markers stay readable heading text but leave its name', {
   )
 })
 
+for (const engine of ['tiptap', 'codemirror']) {
+  test(`${engine}: adjacent heading text keeps its spacing across revealed markers`, {
+    timeout: 60000,
+  }, async (t) => {
+    const source = '# pre**fix**ed\n\n## co`de`word\n\nclosing paragraph\n'
+    const page = await open(t, source, engine, true)
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    const results = []
+    for (const theme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: theme })
+      for (const word of ['fix', 'de']) {
+        if (engine === 'codemirror') await place(page, source.indexOf(word) + 1)
+        else
+          await page.evaluate((word) => {
+            const editor = document.querySelector('.tiptap').editor
+            editor.state.doc.descendants((node, pos) => {
+              if (node.isText && node.text.includes(word))
+                editor.commands.setTextSelection(
+                  pos + node.text.indexOf(word) + 1,
+                )
+            })
+            editor.view.focus()
+          }, word)
+        const headings = await headingTree(cdp)
+        results.push({ theme, word, names: headings.map((node) => node.name) })
+        if (engine === 'codemirror')
+          assert.equal(
+            headings[word === 'fix' ? 0 : 1].text,
+            word === 'fix' ? '# pre**fix**ed' : '## co`de`word',
+          )
+      }
+    }
+    for (const result of results)
+      assert.deepEqual(
+        result.names,
+        ['prefixed', 'codeword'],
+        JSON.stringify(result),
+      )
+  })
+}
+
+test('revealed setext naming stays within rendered lines in a 20k-line heading', {
+  timeout: 60000,
+}, async (t) => {
+  const source = `pre**fix**ed\n${'continuation\n'.repeat(19999)}==========\n\nclosing paragraph\n`
+  const page = await open(t, source, 'codemirror', true)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await page.locator('.rich-pane .hibi-lp-heading').first().waitFor()
+  await place(page, source.indexOf('closing'))
+  const counts = await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    const saved = []
+    let lines = 0
+    for (const key of ['line', 'lineAt']) {
+      let owner = Object.getPrototypeOf(view.state.doc)
+      while (!Object.hasOwn(owner, key)) owner = Object.getPrototypeOf(owner)
+      const original = owner[key]
+      saved.push(() => {
+        owner[key] = original
+      })
+      owner[key] = function (...args) {
+        lines++
+        return original.apply(this, args)
+      }
+    }
+    try {
+      view.dispatch({ selection: { anchor: 7 } })
+      const heading = view.contentDOM.querySelector('[role="heading"]')
+      return {
+        lines,
+        rendered: view.contentDOM.querySelectorAll('.cm-line').length,
+        ids:
+          heading.getAttribute('aria-labelledby')?.trim().split(/\s+/).length ??
+          0,
+      }
+    } finally {
+      for (const restore of saved) restore()
+    }
+  })
+  t.diagnostic(JSON.stringify(counts))
+  // The selection also reads the parser/layout's local chunks, independent of heading length.
+  assert.ok(counts.lines <= 4096 + counts.rendered * 16, JSON.stringify(counts))
+  assert.equal(counts.ids, 0, JSON.stringify(counts))
+  assert.ok((await headingTree(cdp))[0].name.startsWith('prefixed'))
+})
+
 test('with markers hidden, the heading under the caret keeps its name', {
   timeout: 60000,
 }, async (t) => {

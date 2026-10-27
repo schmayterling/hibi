@@ -306,11 +306,11 @@ test('task checkboxes are named by the text they show, without markdown', {
 }, async () => {
   await open(
     'task-names.md',
-    '- [ ] buy **milk** at [the store](https://example.com)\n- [x] call &amp; `write`\n',
+    '- [ ] buy **milk** at [the store](https://example.com)\n- [x] call &amp; `write`\n- [ ] read [[b|alias]] today\n',
     'buy milk',
   )
   const boxes = pane('input.hibi-lp-task')
-  await boxes.nth(1).waitFor()
+  await boxes.nth(2).waitFor()
   const cdp = await page.context().newCDPSession(page)
   const { nodes } = await cdp.send('Accessibility.getFullAXTree')
   assert.deepEqual(
@@ -321,6 +321,7 @@ test('task checkboxes are named by the text they show, without markdown', {
     [
       'Task item checkbox for buy milk at the store',
       'Task item checkbox for call & write',
+      'Task item checkbox for read alias today',
     ],
   )
 })

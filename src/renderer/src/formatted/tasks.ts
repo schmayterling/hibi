@@ -3,6 +3,7 @@ import { type EditorView, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { TaskList } from '@lezer/markdown'
 import { decodeHTMLStrict } from 'entities'
+import { wikiParts } from '../../../addons/markdown/formatted-syntax.ts'
 import { EmptyTask } from '../../../shared/markdown-extra-syntax.ts'
 import type { FormattedContribution } from '../formatted-contributions.ts'
 import './tasks.css'
@@ -109,7 +110,21 @@ function taskText(state: EditorState, task: SyntaxNode, from: number) {
         take(node)
       else if (name === 'Escape')
         take(node, state.sliceDoc(node.to - 1, node.to))
-      else if (name === 'HardBreak') take(node, ' ')
+      else if (name === 'WikiLink') {
+        const parts =
+          node.to <= end && wikiParts(state.sliceDoc(node.from, node.to))
+        take(
+          node,
+          parts
+            ? decodeHTMLStrict(
+                state.sliceDoc(
+                  node.from + parts.labelFrom,
+                  node.from + parts.labelTo,
+                ),
+              )
+            : '',
+        )
+      } else if (name === 'HardBreak') take(node, ' ')
       else if (name === 'Entity')
         take(node, decodeHTMLStrict(state.sliceDoc(node.from, node.to)))
       else visit(node.firstChild)

@@ -7,7 +7,7 @@ import { contribution } from '../src/addons/markdown/formatted-obsidian.ts'
 import {
   obsidianSyntax,
   obsidianWork,
-  wikiParts,
+  wikiText,
 } from '../src/addons/markdown/formatted-syntax.ts'
 import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
 
@@ -20,11 +20,19 @@ function formattedItems(source) {
   lezer.parse(source).iterate({
     enter(node) {
       if (node.name === 'WikiLink' || node.name === 'WikiEmbed') {
-        const parts = wikiParts(source.slice(node.from, node.to))
+        // The text the parse kept, which must be what the label's span shows.
+        const text = (name) => {
+          const part = node.node.getChild(name)
+          if (!part) return undefined
+          const kept = part.tree.prop(wikiText)
+          assert.equal(kept, source.slice(part.from, part.to), name)
+          return kept
+        }
+        const target = text('WikiTarget')
         found.push([
           node.name === 'WikiEmbed' ? 'embed' : 'link',
-          parts.target,
-          parts.label,
+          target,
+          text('WikiAlias') ?? target,
         ])
         return false
       }
@@ -149,6 +157,7 @@ function drawn(source, revealed = false) {
   const calls = []
   const out = {
     mark: (from, to, attributes) => calls.push(['mark', from, to, attributes]),
+    link: (from, to, attributes) => calls.push(['link', from, to, attributes]),
     syntax: (from, to) => calls.push(['syntax', from, to]),
     replace: (from, to, widget) =>
       calls.push([
@@ -156,7 +165,7 @@ function drawn(source, revealed = false) {
         from,
         to,
         widget.text
-          ? [widget.text, widget.className]
+          ? [widget.text, widget.attributes.class]
           : { target: widget.target, label: widget.label },
       ]),
     line() {},
@@ -182,12 +191,32 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
   assert.equal(contribution.flavor, 'markdown.obsidian')
   assert.deepEqual(drawn('[[Note]]'), [
     ['syntax', 0, 2],
-    ['mark', 2, 6, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'false' }],
     ['syntax', 6, 8],
+  ])
+  assert.deepEqual(drawn('[[Note|]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
+    ['syntax', 6, 9],
+  ])
+  assert.deepEqual(drawn('[[Note|   ]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
+    ['syntax', 6, 12],
+  ])
+  assert.deepEqual(drawn('[[Note   ]]'), [
+    ['syntax', 0, 2],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'false' }],
+    ['syntax', 6, 11],
   ])
   assert.deepEqual(drawn('[[ Note#Part | Shown ]]'), [
     ['syntax', 0, 15],
-    ['mark', 15, 20, { class: 'hibi-lp-link', 'data-wiki-link': 'Note#Part' }],
+    [
+      'link',
+      15,
+      20,
+      { 'data-wiki-link': 'Note#Part', 'data-wiki-alias': 'true' },
+    ],
     ['syntax', 20, 23],
   ])
   assert.deepEqual(drawn('==mark=='), [
@@ -218,6 +247,7 @@ test('decoded glyphs pass mouse events through to the editor', () => {
           {
             syntax() {},
             mark() {},
+            link() {},
             replace: (_from, _to, widget) => widgets.push(widget),
           },
           { state, revealed: false, visible: { from: 0, to: source.length } },
@@ -233,7 +263,7 @@ test('decoded glyphs pass mouse events through to the editor', () => {
 test('entities in labels and highlights show their characters, as in the rich view, until the caret reveals them', () => {
   assert.deepEqual(drawn('[[Note|&amp;]]'), [
     ['syntax', 0, 7],
-    ['mark', 7, 12, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['link', 7, 12, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
     ['replace', 7, 12, ['&', 'hibi-lp-link']],
     ['syntax', 12, 14],
   ])

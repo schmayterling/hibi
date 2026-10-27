@@ -5,8 +5,13 @@ import {
   Prec,
   StateEffect,
 } from '@codemirror/state'
-import { type KeyBinding, keymap, type WidgetType } from '@codemirror/view'
-import type { SyntaxNodeRef, Tree } from '@lezer/common'
+import {
+  type EditorView,
+  type KeyBinding,
+  keymap,
+  type WidgetType,
+} from '@codemirror/view'
+import type { NodeType, SyntaxNodeRef, Tree } from '@lezer/common'
 import type { MarkdownConfig } from '@lezer/markdown'
 import { type FormattedEntry, formattedRegistry } from './formatted-registry.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
@@ -23,6 +28,11 @@ import { markdownSyntax } from './markdown-syntax.ts'
 export type FormattedDecorations = {
   /** Attributes, such as `class`, for text in the node. */
   mark(from: number, to: number, attributes: Record<string, string>): void
+  /**
+   * Text that reads as a link, such as a link's label: one element with the
+   * link role and style, whole around the other decorations in it.
+   */
+  link(from: number, to: number, attributes?: Record<string, string>): void
   /**
    * Markdown syntax: hidden and atomic, or an editable marker while the node
    * is revealed. Stays on one line.
@@ -103,8 +113,9 @@ export type FormattedContainer = {
   marker?: boolean
 }
 
-/** Rendering for syntax nodes by name. */
+/** Rendering for syntax nodes by name or Lezer group. */
 export type FormattedNodeView = {
+  /** Names of the nodes it renders, or of their Lezer groups, such as `LeafBlock`. */
   nodes: readonly string[]
   /** Inline decorations. Return false to skip the node's children. */
   decorate?(
@@ -144,7 +155,7 @@ export type FormattedContribution = {
   syntax?: MarkdownConfig | readonly MarkdownConfig[]
   /**
    * The syntax's inline parsers start only at characters in
-   * ``\`&*_![]<>~^$:``, URLs or email addresses, so the language keeps
+   * ``\`&*_![]<>~^$:=``, URLs or email addresses, so the language keeps
    * skipping text without them; other contributed inline syntax turns that off.
    */
   inlineStops?: boolean
@@ -164,6 +175,11 @@ export type FormattedContribution = {
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
+/** Block overlays opt into measuring the edges the container renderer draws. */
+export const formattedBlockEdges = Facet.define<boolean, boolean>({
+  combine: (values) => values.some(Boolean),
+})
+
 /** The view's active flavor ids also identify worker boundary configurations. */
 export const formattedFlavors = Facet.define<
   readonly string[],
@@ -174,6 +190,48 @@ export const formattedFlavors = Facet.define<
 
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
+
+/** The active node views for nodes of one type, each once. */
+export type FormattedNodeViews = {
+  /**
+   * Views that name the node, then views that name one of its groups, so
+   * the node's own container, spacing and layout come first.
+   */
+  views: readonly FormattedNodeView[]
+  /**
+   * The views that name one of the node's groups. The formatted view draws
+   * their marks inside its other marks, so small text wraps the tags in it.
+   */
+  grouped: readonly FormattedNodeView[]
+}
+
+const viewsByType = new WeakMap<
+  readonly FormattedNodeView[],
+  WeakMap<NodeType, FormattedNodeViews>
+>()
+/** The active node views for nodes of a type: those that name it or one of its groups. */
+export function formattedNodeViews(state: EditorState) {
+  const views = state.facet(formattedViews)
+  let byType = viewsByType.get(views)
+  if (!byType) {
+    byType = new WeakMap()
+    viewsByType.set(views, byType)
+  }
+  const found = byType
+  return (type: NodeType) => {
+    let matched = found.get(type)
+    if (!matched) {
+      const named = views.filter((view) => view.nodes.includes(type.name))
+      const grouped = views.filter(
+        (view) =>
+          !named.includes(view) && view.nodes.some((name) => type.is(name)),
+      )
+      matched = { views: [...named, ...grouped], grouped }
+      found.set(type, matched)
+    }
+    return matched
+  }
+}
 
 /** Opaque node names of the active contributions, read by the formatted syntax. */
 export const formattedOpaque = Facet.define<string>()
@@ -225,6 +283,30 @@ export const formattedRenderInputs = Facet.define<unknown>()
 export const formattedOwner = Facet.define<EditorState, EditorState | null>({
   combine: (values) => values[0] ?? null,
 })
+
+/** The attributes of text that reads as a link, with a renderer's own. */
+export const formattedLinkAttributes = (
+  attributes?: Record<string, string>,
+) => ({
+  ...attributes,
+  class: attributes?.class
+    ? `hibi-lp-link ${attributes.class}`
+    : 'hibi-lp-link',
+  role: 'link',
+})
+
+/** A click that follows the link under it: Shift-click, or Ctrl+Cmd-click as in the rich view. */
+export const followsLink = (event: MouseEvent) =>
+  event.shiftKey || (event.ctrlKey && event.metaKey)
+
+/**
+ * Follow the link at a position of the formatted view's document, as a
+ * modified click on it does; its host provides it. False when there is none.
+ */
+export const formattedFollowLink = Facet.define<
+  (view: EditorView, pos: number, wikiTarget?: string) => boolean,
+  ((view: EditorView, pos: number, wikiTarget?: string) => boolean) | null
+>({ combine: (values) => values.at(-1) ?? null })
 
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({

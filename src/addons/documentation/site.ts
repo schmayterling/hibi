@@ -8,6 +8,7 @@ import { bundledColorschemes } from '../../shared/color-palettes.ts'
 import { COLOR_TOKENS, defineColorscheme } from '../../shared/colorschemes.ts'
 import { readFrontmatter } from '../../shared/frontmatter.ts'
 import { headingAnchors } from '../../shared/heading-anchor.ts'
+import { lexMarkdown, parseMarkdown } from '../../shared/marked-blocks.ts'
 import type { WorkspaceSnapshot } from '../../shared/workspace'
 import {
   homePage,
@@ -266,7 +267,7 @@ export function prepareSite(
       return typeof value === 'string' ? value.trim() : ''
     }
     const source = frontmatter?.content ?? page.markdown
-    const tokens = marked.lexer(source)
+    const tokens = lexMarkdown(source)
     const images: Record<string, string> = Object.create(null)
     marked.walkTokens(tokens, (token) => {
       if (token.type !== 'image') return
@@ -297,11 +298,7 @@ export function prepareSite(
         : '') ||
       options.description
     const headings: SearchHeading[] = []
-    const html = renderedHtml(
-      page.html ?? marked.parse(source, { async: false }),
-      {},
-      headings,
-    )
+    const html = renderedHtml(page.html ?? parseMarkdown(source), {}, headings)
     headings.sort((left, right) => left.position - right.position)
     const anchors = headingAnchors(headings.map((heading) => heading.label))
     return {

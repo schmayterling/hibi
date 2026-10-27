@@ -166,6 +166,9 @@ test('the marker and the space after it become one checkbox', () => {
     ['- [ ] read [[b|alias]] today', 'read alias today'],
     ['- [ ] [[ b | alias &amp; &#169; |ignored]]', 'alias & ©'],
     ['- [ ] [[ b | ]]', 'b'],
+    // A wikilink must fit wholly inside the source naming budget.
+    [`- [ ] ${'x'.repeat(500)}[[b|alias]]`, `${'x'.repeat(500)}alias`],
+    [`- [ ] ${'x'.repeat(501)}[[b|alias]]`, 'x'.repeat(501)],
     ['- [ ] [[b|literal\\*star]]', 'literal\\*star'],
     ['- [ ] \\[[b|alias]]', '[[b|alias]]'],
   ])

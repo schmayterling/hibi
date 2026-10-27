@@ -1,6 +1,7 @@
-import { marked, type Token } from 'marked'
+import type { Token } from 'marked'
 import type { TextProjection } from '../../shared/document-projection.ts'
 import { readFrontmatter } from '../../shared/frontmatter.ts'
+import { lexMarkdown } from '../../shared/marked-blocks.ts'
 import { sourceText } from './source-text.ts'
 
 /** Conservative literal spans: code, images, HTML, escapes, and generated text are omitted. */
@@ -104,6 +105,6 @@ export function textProjection(
         append(token.text, start)
     }
   }
-  visit(marked.lexer(source), source, offset)
+  visit(lexMarkdown(source), source, offset)
   return { text: pieces.join(''), spans }
 }

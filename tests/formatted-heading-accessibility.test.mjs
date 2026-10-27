@@ -397,6 +397,73 @@ test('revealed setext naming stays within rendered lines in a 20k-line heading',
   assert.ok((await headingTree(cdp))[0].name.startsWith('prefixed'))
 })
 
+test('heading names keep link wrappers and task aliases through edits and viewport changes', {
+  timeout: 60000,
+}, async (t) => {
+  const source =
+    '# pre[**fix**](b.md)ed and [co`de`word](c.md)\n\n- [ ] read [[b|alias]] today\n\n' +
+    'plain paragraph\n\n'.repeat(120) +
+    'far pre[**fix**](b.md)ed\nsecond line\n==========\n\nclosing paragraph\n'
+  const page = await open(t, source, 'codemirror', true)
+  const rich = page.locator('.rich-pane')
+  const heading = rich.getByRole('heading', {
+    name: 'prefixed and codeword',
+    level: 1,
+    exact: true,
+  })
+  await heading.waitFor()
+  await rich
+    .getByRole('checkbox', {
+      name: 'Task item checkbox for read alias today',
+      exact: true,
+    })
+    .waitFor()
+  assert.deepEqual(await heading.getByRole('link').allTextContents(), [
+    'fix',
+    'codeword',
+  ])
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await place(page, source.indexOf('fix') + 3)
+  assert.equal(await heading.getByRole('link').count(), 2)
+  assert.equal((await headingTree(cdp))[0].name, 'prefixed and codeword')
+  assert.ok((await headingTree(cdp))[0].text.includes('[**fix**](b.md)'))
+  await page.keyboard.insertText('x')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    source.replace('fix', 'fixx'),
+  )
+  await rich
+    .getByRole('heading', { name: 'prefixxed and codeword', exact: true })
+    .waitFor()
+  await page.keyboard.press('ControlOrMeta+z')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    source,
+  )
+  for (const [anchor, name] of [
+    [source.indexOf('far pre') + 3, 'far prefixed second line'],
+    [source.indexOf('fix') + 3, 'prefixed and codeword'],
+  ]) {
+    await page.evaluate((anchor) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({ selection: { anchor }, scrollIntoView: true })
+    }, anchor)
+    await rich.getByRole('heading', { name, level: 1, exact: true }).waitFor()
+    assert.equal(await rich.getByRole('heading').count(), 1)
+    assert.equal((await headingTree(cdp))[0].name, name)
+  }
+  await place(page, source.indexOf('today'))
+  assert.equal(await heading.getAttribute('aria-label'), null)
+  assert.deepEqual(await heading.getByRole('link').allTextContents(), [
+    'fix',
+    'codeword',
+  ])
+})
+
 test('with markers hidden, the heading under the caret keeps its name', {
   timeout: 60000,
 }, async (t) => {

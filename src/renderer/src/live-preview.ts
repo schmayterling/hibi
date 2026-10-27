@@ -24,6 +24,7 @@ import {
 } from '@codemirror/view'
 import {
   IterMode,
+  type NodeType,
   type SyntaxNode,
   type SyntaxNodeRef,
   type Tree,
@@ -33,6 +34,7 @@ import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
   blockBreak,
+  codeIndent,
   deleteBackward,
   deleteForward,
   exitBlock,
@@ -46,9 +48,13 @@ import {
   type FormattedDecorations,
   type FormattedLayout,
   type FormattedNodeView,
+  type FormattedNodeViews,
+  formattedBlockEdges,
   formattedContributions,
   formattedDocument,
+  formattedLinkAttributes,
   formattedLiteral,
+  formattedNodeViews,
   formattedRefresh,
   formattedRenderInputs,
   formattedTree,
@@ -68,33 +74,12 @@ import './live-preview.css'
 
 const hide = Decoration.replace({})
 
-/** Whether Tab indents formatted text; list items and code always take Tab. */
+/** Whether Tab indents formatted text and code; list items always take Tab. */
 export const formattedTabIndents = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,
 })
 
 type Revealed = { from: number; to: number }
-
-/** Contributed node views by node name, per set of views. */
-const viewsByName = new WeakMap<
-  readonly FormattedNodeView[],
-  Map<string, FormattedNodeView[]>
->()
-function namedViews(state: EditorState) {
-  const views = state.facet(formattedViews)
-  let named = viewsByName.get(views)
-  if (!named) {
-    named = new Map()
-    for (const view of views)
-      for (const name of view.nodes) {
-        const list = named.get(name)
-        if (list) list.push(view)
-        else named.set(name, [view])
-      }
-    viewsByName.set(views, named)
-  }
-  return named
-}
 
 class SpaceWidget extends WidgetType {
   override eq() {
@@ -133,12 +118,13 @@ function blockSpace(name: string): { top: number; bottom: number } {
 /** Rules of the render in progress: syntax shown as written and contributed node views. */
 type Blocks = {
   literal: ReadonlySet<string>
-  views: Map<string, FormattedNodeView[]>
+  views: (type: NodeType) => FormattedNodeViews
   shapes: (node: SyntaxNode) => FormattedContainer | undefined
 }
+const noViews: FormattedNodeViews = { views: [], grouped: [] }
 const noBlocks: Blocks = {
   literal: new Set(),
-  views: new Map(),
+  views: () => noViews,
   shapes: () => undefined,
 }
 let blocks = noBlocks
@@ -152,7 +138,7 @@ const isContainer = (node: SyntaxNode) =>
   (node.name === 'Blockquote' ||
     node.name === 'ListItem' ||
     isList(node) ||
-    !!blocks.views.get(node.name)?.some((view) => view.container))
+    blocks.views(node.type).views.some((view) => view.container))
 
 function blockSibling(node: SyntaxNode, forward: boolean) {
   let next = forward ? node.nextSibling : node.prevSibling
@@ -214,7 +200,7 @@ function margins(node: SyntaxNode): { top: number; bottom: number } {
   if (parent && isList(parent))
     return { top: blockSibling(node, false) ? 4.8 : 0, bottom: 0 }
   const space =
-    blocks.views.get(node.name)?.find((view) => view.space)?.space ??
+    blocks.views(node.type).views.find((view) => view.space)?.space ??
     blockSpace(node.name)
   // A quote's last block has no bottom margin.
   return parent?.name === 'Blockquote' && !blockSibling(node, true)
@@ -327,13 +313,15 @@ function inline(
   layout: DecorationSet,
 ): {
   decorations: DecorationSet
+  groupMarks: DecorationSet
   atomic: DecorationSet
+  outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
 } {
   const { state } = view
   const doc = state.doc
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
@@ -349,7 +337,7 @@ function inline(
       revealed: touched(node.from, node.to),
       visible: null,
     }
-    for (const nodeView of views.get(node.name) ?? []) {
+    for (const nodeView of views(node.type).views) {
       shape = nodeView.container?.(node, context)
       if (shape) break
     }
@@ -358,6 +346,13 @@ function inline(
   }
   blocks = { literal, views, shapes }
   const decorations: Range<Decoration>[] = []
+  /**
+   * Marks of views for a node's group. One set nests marks over the same
+   * text in no fixed order, so these get a source of their own.
+   */
+  const groupMarks: Range<Decoration>[] = []
+  // Text that has to stay one element wraps the other decorations.
+  const outer: Range<Decoration>[] = []
   const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
   const headings = new Map<number, Heading>()
@@ -391,6 +386,20 @@ function inline(
     if (to > from)
       decorations.push(Decoration.mark({ class: className }).range(from, to))
   }
+  /** Inclusive, so that widgets at the text's ends are inside the link too. */
+  const linkText = (
+    from: number,
+    to: number,
+    attributes?: Record<string, string>,
+  ) => {
+    if (to > from)
+      outer.push(
+        Decoration.mark({
+          attributes: formattedLinkAttributes(attributes),
+          inclusive: true,
+        }).range(from, to),
+      )
+  }
   /** Markers of formatting under the selection stay visible and editable. */
   const syntax = (from: number, to: number, revealed: boolean) => {
     if (!revealed) hideRange(from, to)
@@ -419,7 +428,7 @@ function inline(
     // A destination on later lines is hidden with its line breaks by the layout field.
     if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
       syntax(close.from, node.to, revealed)
-    mark('hibi-lp-link', open.to, close.from)
+    linkText(open.to, close.from)
     return undefined
   }
 
@@ -474,11 +483,14 @@ function inline(
   }
 
   /** Decorations from a contributed view for one node, revealed while the selection touches it. */
-  const sink = (revealed: boolean): FormattedDecorations => ({
+  const sink = (
+    revealed: boolean,
+    marks = decorations,
+  ): FormattedDecorations => ({
     mark(from, to, attributes) {
-      if (to > from)
-        decorations.push(Decoration.mark({ attributes }).range(from, to))
+      if (to > from) marks.push(Decoration.mark({ attributes }).range(from, to))
     },
+    link: linkText,
     syntax: (from, to) => syntax(from, to, revealed),
     line(at, attributes) {
       const info = line(at)
@@ -511,33 +523,68 @@ function inline(
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
-        // Syntax whose setting is off shows as written, its children too.
-        if (literal.has(name)) return false
-        const contributed = views.get(name)
-        let skip = false
-        if (contributed) {
-          const out = sink(touched(ref.from, ref.to))
-          const context = {
-            state,
-            revealed: touched(ref.from, ref.to),
-            visible: range,
+        let skip = literal.has(name)
+        if (!skip) {
+          const contributed = views(ref.type)
+          if (contributed.views.length) {
+            const out = sink(touched(ref.from, ref.to))
+            const grouped = sink(touched(ref.from, ref.to), groupMarks)
+            const context = {
+              state,
+              revealed: touched(ref.from, ref.to),
+              visible: range,
+            }
+            for (const nodeView of contributed.views)
+              if (
+                nodeView.decorate?.(
+                  ref,
+                  contributed.grouped.includes(nodeView) ? grouped : out,
+                  context,
+                ) === false
+              )
+                skip = true
+            // Other blocks with a container hook hold their lines like quotes.
+            if (
+              name !== 'Blockquote' &&
+              name !== 'ListItem' &&
+              contributed.views.some((nodeView) => nodeView.container)
+            ) {
+              const node = ref.node
+              eachLine(doc, ref.from, ref.to, range, (current) => {
+                line(current.from).containers.push(node)
+              })
+            }
           }
-          for (const nodeView of contributed)
-            if (nodeView.decorate?.(ref, out, context) === false) skip = true
-          // Other blocks with a container hook hold their lines like quotes.
-          if (
-            name !== 'Blockquote' &&
-            name !== 'ListItem' &&
-            contributed.some((nodeView) => nodeView.container)
-          ) {
-            const node = ref.node
-            eachLine(doc, ref.from, ref.to, range, (current) => {
-              line(current.from).containers.push(node)
-            })
+
+          skip = builtIn(ref, range) === false || skip
+        }
+        if (!skip) return
+        // Container syntax stays independent of skipped inline or literal nodes.
+        if (
+          !literal.has('Blockquote') &&
+          lines
+            .get(doc.lineAt(Math.max(ref.from, range.from)).from)
+            ?.containers.some((node) => node.name === 'Blockquote')
+        ) {
+          const pending = [ref.node.cursor(IterMode.IgnoreMounts)]
+          for (let cursor = pending.pop(); cursor; cursor = pending.pop()) {
+            if (!cursor.childAfter(range.from)) continue
+            do {
+              if (cursor.from > range.to) break
+              if (cursor.name === 'QuoteMark') {
+                const current = doc.lineAt(cursor.from)
+                const depth = line(current.from).containers.filter(
+                  (node) => node.name === 'Blockquote',
+                ).length
+                // Quotes nested in literal containers stay literal too.
+                const before = doc.sliceString(current.from, cursor.from)
+                if ((before.match(/>/g)?.length ?? 0) < depth)
+                  builtIn(cursor.node, range)
+              } else pending.push(cursor.node.cursor(IterMode.IgnoreMounts))
+            } while (cursor.nextSibling())
           }
         }
-        const result = builtIn(ref, range)
-        return skip ? false : result
+        return false
       },
     })
   }
@@ -636,7 +683,7 @@ function inline(
         const revealed = touched(ref.from, ref.to)
         syntax(ref.from, url.from, revealed)
         syntax(url.to, ref.to, revealed)
-        mark('hibi-lp-link', url.from, url.to)
+        linkText(url.from, url.to)
         return false
       }
       case 'URL': {
@@ -646,15 +693,15 @@ function inline(
           parent !== 'Image' &&
           parent !== 'LinkReference'
         )
-          mark('hibi-lp-link', ref.from, ref.to)
+          linkText(ref.from, ref.to)
         return
       }
-      case 'Image':
-      case 'LinkReference':
       case 'HTMLBlock':
-      case 'HTMLTag':
       case 'CommentBlock':
       case 'ProcessingInstructionBlock':
+      case 'Image':
+      case 'LinkReference':
+      case 'HTMLTag':
       case 'Table':
       case 'Entity':
         // Rendered by later formatted-view slices; shown as source text for now.
@@ -699,7 +746,15 @@ function inline(
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
-    containers(doc, at, info, layout)
+    const edges = containers(
+      doc,
+      at,
+      info,
+      layout,
+      state.facet(formattedBlockEdges),
+    )
+    if (edges)
+      decorations.push(Decoration.widget({ widget: edges, side: -1 }).range(at))
     let prefix = info.quoteEnd ?? at
     if (info.code !== null) prefix = info.code
     else if (info.item) prefix = itemLine(doc, current, info, prefix, ordinals)
@@ -734,7 +789,9 @@ function inline(
   }
   return {
     decorations: Decoration.set(decorations, true),
+    groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
+    outer: Decoration.set(outer, true),
     wrappers: BlockWrapper.set(wrappers, true),
     end,
   }
@@ -775,6 +832,37 @@ function lastLine(doc: Text, node: SyntaxNode, layout: DecorationSet) {
   return last.from
 }
 
+/** Invisible anchors let overlays measure each rendered container's actual edge. */
+class ContainerEdges extends WidgetType {
+  readonly edges: readonly (readonly [string, string])[]
+  constructor(edges: readonly (readonly [string, string])[]) {
+    super()
+    this.edges = edges
+  }
+  override eq(other: ContainerEdges) {
+    return (
+      this.edges.length === other.edges.length &&
+      this.edges.every(
+        ([key, left], i) =>
+          key === other.edges[i]?.[0] && left === other.edges[i]?.[1],
+      )
+    )
+  }
+  toDOM() {
+    const wrap = document.createElement('span')
+    wrap.setAttribute('aria-hidden', 'true')
+    wrap.style.cssText =
+      'position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none'
+    for (const [key, left] of this.edges) {
+      const edge = document.createElement('span')
+      edge.dataset.hibiBlockEdge = key
+      edge.style.cssText = `position: absolute; left: calc(-1 * var(--hibi-indent) + ${left}); width: 0; height: 0`
+      wrap.append(edge)
+    }
+    return wrap
+  }
+}
+
 /**
  * Containers indent a line by their widths: a quote's 20px padding and 1px
  * bar, a list's 1.5em, or what a contributed view gives. Bars and paint are
@@ -786,9 +874,12 @@ function containers(
   at: number,
   info: LineInfo,
   layout: DecorationSet,
+  measure: boolean,
 ) {
   if (!info.containers.length) return
   const widths: string[] = []
+  const edges: [string, string][] | null = measure ? [] : null
+  const depths = measure ? new Map<string, number>() : null
   const paint: string[] = []
   let top = 0,
     bottom = 0,
@@ -796,6 +887,12 @@ function containers(
   for (const container of info.containers) {
     const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
     const shape = blocks.shapes(container)
+    const depth = depths?.get(container.name) ?? 0
+    depths?.set(container.name, depth + 1)
+    // Nesting keys survive mapped decorations while a reparse is unfinished.
+    const key = edges ? `${container.name}:${depth}` : ''
+    if (container.name !== 'ListItem' || shape?.marker === false)
+      edges?.push([key, left])
     const first = shownLine(doc, container).from === at
     const offset = `${first ? info.gap + top : 0}px`
     if (shape?.class) info.classes.push(shape.class)
@@ -827,6 +924,8 @@ function containers(
             ? '1.5 * var(--text-editor)'
             : '0px'),
     )
+    if (container.name === 'ListItem' && shape?.marker !== false)
+      edges?.push([key, `calc(${widths.join(' + ')})`])
   }
   info.gap += top
   if (bottom) info.style.push(`padding-bottom: ${bottom}px`)
@@ -837,6 +936,7 @@ function containers(
     info.classes.push('hibi-lp-painted')
     info.style.push(`--hibi-paint: ${paint.join(', ')}`)
   }
+  return edges ? new ContainerEdges(edges) : undefined
 }
 
 /** List lines: native markers in the indentation, source markers and continuation indentation hidden. */
@@ -1017,7 +1117,7 @@ function chunkLayout(
   reveal: readonly Revealed[],
 ) {
   const doc = state.doc
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
@@ -1058,8 +1158,8 @@ function chunkLayout(
       enter(ref) {
         if (ref.to <= range.from || ref.from >= range.to) return false
         if (literal.has(ref.name)) return false
-        const contributed = views.get(ref.name)
-        if (contributed?.some((view) => view.layout)) {
+        const contributed = views(ref.type).views
+        if (contributed.some((view) => view.layout)) {
           sensitive = true
           // A node spanning covered ranges is laid out once, where it starts.
           if (!starts(ref.from)) return
@@ -1355,7 +1455,9 @@ export function livePreview(
   const preview = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
+      groupMarks: DecorationSet
       atomic: DecorationSet
+      outer: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
       end: number
@@ -1364,7 +1466,9 @@ export function livePreview(
         this.reveal = revealed(view)
         ;({
           decorations: this.decorations,
+          groupMarks: this.groupMarks,
           atomic: this.atomic,
+          outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
         } = inline(
@@ -1397,11 +1501,15 @@ export function livePreview(
         // An edit's unfinished reparse keeps what was drawn, mapped through it.
         if (syntax.settling(update.state)) {
           this.decorations = mapLines(this.decorations, update)
+          this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)
+          this.outer = this.outer.map(update.changes)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
           update.docChanged ||
           update.viewportChanged ||
+          update.state.facet(formattedBlockEdges) !==
+            update.startState.facet(formattedBlockEdges) ||
           changedReveal ||
           tree !== syntax.tree(update.startState) ||
           update.state.field(layout) !== update.startState.field(layout) ||
@@ -1417,7 +1525,9 @@ export function livePreview(
         )
           ({
             decorations: this.decorations,
+            groupMarks: this.groupMarks,
             atomic: this.atomic,
+            outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
           } = inline(update.view, tree, reveal, update.state.field(layout)))
@@ -1439,7 +1549,7 @@ export function livePreview(
     }
   const tab = (outdent: boolean) => (view: EditorView) => {
     const tree = syntax.tree(view.state)
-    let structured = false
+    let item = false
     for (
       let node: SyntaxNode | null = tree.resolveInner(
         view.state.selection.main.head,
@@ -1448,9 +1558,8 @@ export function livePreview(
       node;
       node = node.parent
     )
-      if (['ListItem', 'FencedCode', 'CodeBlock'].includes(node.name))
-        structured = true
-    if (!structured && !view.state.facet(formattedTabIndents)) return false
+      if (node.name === 'ListItem') item = true
+    if (!item && !view.state.facet(formattedTabIndents)) return false
     return run((current) =>
       indent(current.state, tree, outdent, hidden(current)),
     )(view)
@@ -1487,6 +1596,7 @@ export function livePreview(
     formattedTree.of(syntax.tree),
     follow,
     syntax.extension,
+    codeIndent,
     focused,
     layout,
     EditorView.decorations.compute([layout, 'selection'], (state) =>
@@ -1496,7 +1606,15 @@ export function livePreview(
     EditorView.atomicRanges.of((view) =>
       revealDestinations(view.state.field(layout), view.state),
     ),
+    // A source of higher precedence than the preview's own: the editor
+    // draws its marks inside the preview's.
+    EditorView.decorations.of(
+      (view) => view.plugin(preview)?.groupMarks ?? Decoration.none,
+    ),
     preview,
+    EditorView.outerDecorations.of(
+      (view) => view.plugin(preview)?.outer ?? Decoration.none,
+    ),
     EditorView.blockWrappers.of(
       (view) => view.plugin(preview)?.wrappers ?? RangeSet.empty,
     ),

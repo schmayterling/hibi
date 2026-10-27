@@ -162,6 +162,31 @@ after(
 )
 
 /**
+ * The window's pixels in `rect`, as drawn. Not page.screenshot: on Windows and
+ * Linux its clip resizes the page while capturing, and a shown window then
+ * gets a mouse move from wherever the desktop's pointer rests.
+ */
+async function capture(rect) {
+  // A frame drawn after the last change.
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  )
+  const png = await app.evaluate(async ({ BrowserWindow }, rect) => {
+    const window = BrowserWindow.getAllWindows().find(
+      (window) => window.webContents.getURL() === 'app://hibi/',
+    )
+    const image = await window.webContents.capturePage(rect, {
+      stayHidden: true,
+    })
+    return image.toPNG().toString('base64')
+  }, rect)
+  return Buffer.from(png, 'base64')
+}
+
+/**
  * Hover each block's first line of text and report where the handle goes,
  * relative to the pane, with its look at rest and under the pointer.
  */
@@ -186,17 +211,18 @@ async function handles(targets) {
         transition: style.transitionDuration,
       }
     })
-    const image = await page.screenshot({
-      clip: {
-        x: box.x - 40,
-        y: box.y + top - 4,
-        width: 40,
-        height: 34,
-      },
+    const image = await capture({
+      x: Math.round(box.x - 40),
+      y: Math.round(box.y + top - 4),
+      width: 40,
+      height: 34,
     })
     // Under the pointer, the handle takes the hover colors.
     const handle = await grip().boundingBox()
     await page.mouse.move(handle.x + 11, handle.y + 13)
+    await page.waitForFunction(() =>
+      document.querySelector('.rich-pane .block-drag-handle').matches(':hover'),
+    )
     await settled()
     const hovered = await grip().evaluate((handle) => {
       const style = getComputedStyle(handle)
@@ -474,7 +500,8 @@ test('in a long note the handle follows the block under the pointer and moves it
       scrollIntoView: true,
     })
   })
-  const line = '.rich-pane .cm-line:has-text("Paragraph 2500 ")'
+  // Its markers hidden: the formatted view has laid out the blocks around it.
+  const line = '.rich-pane .cm-line:has-text("Paragraph 2500 with bold text.")'
   await page.locator(line).waitFor()
   const text = await hover(line)
   const handle = await grip().boundingBox()

@@ -3,6 +3,7 @@ import { alertMarkdown } from '../addons/markdown/alerts.ts'
 import { mathTokens } from '../addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../addons/text-extras/syntax.ts'
 import type { MarkdownReferenceSyntax } from './document-worker-protocol.ts'
+import { BlockTokenizer, blockMarkdown } from './marked-blocks.ts'
 import type { SourceSnapshot } from './source-buffer.ts'
 import type { SourceOwners } from './source-owners.ts'
 import {
@@ -12,7 +13,7 @@ import {
 } from './source-references.ts'
 
 export function markdownSourceParser(syntax: MarkdownReferenceSyntax) {
-  const parser = new Marked({ gfm: syntax.gfm, breaks: false })
+  const parser = new Marked({ gfm: syntax.gfm, breaks: false }, blockMarkdown)
   if (syntax.alerts) parser.use(alertMarkdown)
   if (syntax.textExtras) parser.use(textExtrasMarkdown)
   if (syntax.math) parser.use(mathTokens)
@@ -53,7 +54,7 @@ export class MarkdownSourceReferences {
     const lex = (text: string) =>
       new this.#parser.Lexer({
         ...this.#parser.defaults,
-        tokenizer: null,
+        tokenizer: new BlockTokenizer(),
       }).lex(text)
     const read = (region: ReferenceRegion) => {
       if (region.owner.kind === 'markdown:Frontmatter') return {}

@@ -42,6 +42,13 @@ Setext #setext
 a hard break
 #afterbreak
 
+-# small text #small
+
+- -# listed small text #smalllist
+- -# #smallonly
+
+> -# quoted small text #smallquote
+
 \`\`\`
 #fenced
 \`\`\`
@@ -155,6 +162,16 @@ async function choose(name) {
     .click()
 }
 
+/** Tags in the pane that are inside small text, in document order. */
+const smallTags = (selector) =>
+  page.evaluate(
+    (selector) =>
+      [...document.querySelectorAll(selector)]
+        .filter((element) => element.closest('.markdown-subtext'))
+        .map((element) => element.dataset.tag),
+    selector,
+  )
+
 /** Tags in the pane, in document order, with their attributes, computed styles and size. */
 const sampleTags = (selector) =>
   page.evaluate(
@@ -202,6 +219,11 @@ before(
     page = await app.firstWindow()
     page.setDefaultTimeout(30000)
     await waitForDocumentEditor(app, page)
+    // The parity note's small text needs the text extras syntax.
+    await page.evaluate(() => window.hibi.setAddonEnabled('text-extras', true))
+    await page
+      .locator('style[data-addon-style="text-extras.text-extras"]')
+      .waitFor({ state: 'attached' })
     // Tall enough that every line of the parity note renders.
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setContentSize(1100, 2000),
@@ -236,6 +258,10 @@ test('tags render in the formatted view as in the rich view, in light and dark',
       .locator('.rich-pane')
       .screenshot({ path: `test-results/formatted-tags-rich-${scheme}.png` })
   }
+  // Small text renders as small text in both views, its tags inside it, also
+  // where a listed one holds only a tag.
+  const small = ['small', 'smalllist', 'smallonly', 'smallquote']
+  assert.deepEqual(await smallTags('.tiptap .hibi-tag'), small)
   await open('differences.md')
   await page.locator('.tiptap h1', { hasText: 'Differences' }).waitFor()
   const richDifferences = (await sampleTags('.tiptap .hibi-tag')).map(
@@ -249,6 +275,10 @@ test('tags render in the formatted view as in the rich view, in light and dark',
       document.querySelectorAll('.rich-pane .hibi-formatted .hibi-tag')
         .length === count,
     expected.length,
+  )
+  assert.deepEqual(
+    await smallTags('.rich-pane .hibi-formatted .hibi-tag'),
+    small,
   )
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)

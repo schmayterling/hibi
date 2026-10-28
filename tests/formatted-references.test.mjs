@@ -5,6 +5,7 @@ import { parser } from '@lezer/markdown'
 import {
   drawReference,
   formattedReferences,
+  knownReference,
   referenceLink,
   referenceLinks,
   referenceWork,
@@ -171,3 +172,50 @@ for (const order of [
     assert.deepEqual(aborted, [])
     plugin.destroy()
   })
+
+test('only definitive host answers make reference labels known', async () => {
+  for (const [result, expected] of [
+    [{ status: 'unavailable' }, undefined],
+    [{ status: 'resolved', value: null }, null],
+    [
+      { status: 'resolved', value: { href: '/x', title: 'title' } },
+      { title: 'title' },
+    ],
+  ]) {
+    const { view, plugin } = referenceView(async () => result)
+    try {
+      assert.equal(knownReference(view.state, 'label'), undefined)
+      drawReference(view.state, 'label')
+      plugin.later()
+      await settle()
+      assert.deepEqual(knownReference(view.state, 'label'), expected)
+    } finally {
+      plugin.destroy()
+    }
+  }
+})
+
+test('an edit makes a cached negative reference answer unknown until refreshed', async () => {
+  let result = { status: 'resolved', value: null }
+  const { view, plugin } = referenceView(async () => result)
+  try {
+    drawReference(view.state, 'label')
+    plugin.later()
+    await settle()
+    assert.equal(knownReference(view.state, 'label'), null)
+    result = {
+      status: 'resolved',
+      value: { href: '/x', title: 'new definition' },
+    }
+    view.dispatch({ changes: { from: 0, insert: 'x' } })
+    assert.equal(knownReference(view.state, 'label'), undefined)
+    drawReference(view.state, 'label')
+    plugin.later()
+    await settle()
+    assert.deepEqual(knownReference(view.state, 'label'), {
+      title: 'new definition',
+    })
+  } finally {
+    plugin.destroy()
+  }
+})

@@ -22,7 +22,6 @@ import {
   selectAll,
 } from '@codemirror/commands'
 import {
-  DocInput,
   ensureSyntaxTree,
   HighlightStyle,
   indentUnit,
@@ -95,7 +94,6 @@ import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { protectMarkdownParser } from '../../shared/markdown-flavor-guard'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
-import { renderedBoundary } from '../../shared/rendered-range'
 import type { RawEdit } from '../../shared/source-operations'
 import { editorChangesFromSource } from '../../shared/source-projection'
 import { Button } from '../../ui/Controls'
@@ -137,7 +135,7 @@ import {
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedReferences } from './formatted-references'
-import { formattedSelectionText } from './formatted-selection-text'
+import { formattedSelectionPreview } from './formatted-selection-text'
 import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
@@ -1038,31 +1036,17 @@ export function SourceEditor({
       const snapshot = bridge.snapshot()
       if (snapshot.version !== active.contentVersion) return null
       const from = selected.main.from
-      let to = toolbarSelection
-        ? Math.min(selected.main.to, from + 256)
-        : selected.main.to
-      if (
-        toolbarSelection &&
-        to < selected.main.to &&
-        !renderedBoundary(new DocInput(editor.state.doc), to)
-      )
-        to--
-      if (
-        formatted &&
-        (!renderedBoundary(new DocInput(editor.state.doc), from) ||
-          !renderedBoundary(new DocInput(editor.state.doc), to))
-      )
-        return null
       const selectedText = formatted
-        ? formattedSelectionText(
+        ? formattedSelectionPreview(
             editor.state,
-            syntax.selectionTree(editor.state, from, to),
-            syntax.parser(editor.state),
+            syntax,
             from,
-            to,
+            selected.main.to,
             toolbarSelection ? '\n' : '',
           )
-        : editor.state.sliceDoc(from, to)
+        : editor.state
+            .sliceDoc(from, Math.min(selected.main.to, from + 256))
+            .replace(/[\uD800-\uDBFF]$/, '')
       if (selectedText === null) return null
       return {
         view: target,

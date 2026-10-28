@@ -90,6 +90,7 @@ function selectionWork({ from, to, separator = '' }) {
       cursor[name] = original
     })
   }
+  const before = { ...preview.probe }
   let text
   try {
     text = preview.selectedText(from, to, separator)
@@ -100,13 +101,16 @@ function selectionWork({ from, to, separator = '' }) {
     units,
     materializations,
     moves,
+    parsedChunks: preview.probe.parsedChunks - before.parsedChunks,
+    parsedUnits: preview.probe.parsedUnits - before.parsedUnits,
+    scannedUnits: preview.probe.scannedUnits - before.scannedUnits,
     length: text.length,
     first: text.slice(0, 32),
     last: text.slice(-32),
   }
 }
 
-test('formatted selection capture stays bounded in a 50 mib code block', {
+test('formatted selection previews stay bounded in 50 mib code and prose notes', {
   timeout: 240000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-selection-worker-'))
@@ -234,6 +238,9 @@ test('formatted selection capture stays bounded in a 50 mib code block', {
     units: 0,
     materializations: 0,
     moves: 0,
+    parsedChunks: 0,
+    parsedUnits: 0,
+    scannedUnits: 0,
     length: 0,
     first: '',
     last: '',
@@ -270,24 +277,67 @@ test('formatted selection capture stays bounded in a 50 mib code block', {
     from: 0,
     to: selection.length,
   })
-  assert.equal(
-    all.length,
-    selection.length - '```js\n'.length - '```\n\nend\n'.length + 2,
-  )
+  assert.equal(all.length, 256)
   assert.equal(all.first, 'const value = 1\n'.repeat(2))
-  assert.equal(
-    all.last,
-    ('const value = 1\n'.repeat(3).slice(0, -1) + 'end').slice(-32),
-  )
-  // One local syntax pass and one output pass; no flattened source copy.
+  assert.equal(all.last, 'const value = 1\n'.repeat(2))
   assert.ok(
-    all.units >= all.length && all.units <= 2 * selection.length + 8 * 4096,
+    all.units >= all.length && all.units <= 8 * 4096,
     JSON.stringify(all),
   )
-  assert.ok(all.moves <= 4 * selection.length + 128, JSON.stringify(all))
+  assert.ok(all.moves > 0 && all.moves <= 256, JSON.stringify(all))
+  assert.ok(
+    all.parsedChunks <= 8 && all.parsedUnits <= 8 * 4096,
+    JSON.stringify(all),
+  )
+  assert.ok(all.scannedUnits <= 16 * 4096, JSON.stringify(all))
   assert.equal(all.materializations, 0)
   t.diagnostic(
     JSON.stringify({ selectionCapture: { caret, interior, tail, all } }),
+  )
+  await page.evaluate(async () => {
+    const block = '**alpha** &amp; beta\n\n'
+    await window.livePreview.mount(
+      block.repeat(Math.ceil((50 * 1024 * 1024) / block.length)),
+      { width: 800, height: 600 },
+      { worker: true, editable: true },
+    )
+  })
+  await page.waitForFunction(
+    () =>
+      window.livePreview.workerState.ready && !window.livePreview.settling(),
+    undefined,
+    { timeout: 120000 },
+  )
+  const proseLength = await page.evaluate(
+    () => window.livePreview.view().state.doc.length,
+  )
+  assert.ok(proseLength >= 50 * 1024 * 1024)
+  const prose = []
+  // A menu capture and its liveness check both take the bounded preview path.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const work = await page.evaluate(selectionWork, {
+      from: 0,
+      to: proseLength,
+    })
+    const expected = 'alpha & beta'.repeat(40).slice(0, 256)
+    assert.equal(work.length, 256)
+    assert.equal(work.first, expected.slice(0, 32))
+    assert.equal(work.last, expected.slice(-32))
+    assert.equal(work.materializations, 0)
+    assert.ok(
+      work.units >= 256 && work.units <= 32 * 4096,
+      JSON.stringify(work),
+    )
+    assert.ok(work.moves > 0 && work.moves <= 4 * 4096, JSON.stringify(work))
+    assert.ok(
+      work.parsedChunks <= 8 && work.parsedUnits <= 8 * 4096,
+      JSON.stringify(work),
+    )
+    assert.ok(work.scannedUnits <= 16 * 4096, JSON.stringify(work))
+    prose.push(work)
+  }
+  t.diagnostic(
+    JSON.stringify({ prosePreview: { length: proseLength, captures: prose } }),
   )
   await page.evaluate(() =>
     window.livePreview.view().dispatch({ selection: { anchor: 0 } }),

@@ -3,12 +3,14 @@ import { registerHooks } from 'node:module'
 import test from 'node:test'
 import { DocInput } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
+import { Autolink, Strikethrough, Table, TaskList } from '@lezer/markdown'
 import { formattedTextWindow } from '../src/shared/formatted-text-effects.ts'
+import { boundaryParser } from '../src/shared/markdown-boundary-syntax.ts'
 import {
-  boundaryInlineParser,
-  boundaryParser,
-} from '../src/shared/markdown-boundary-syntax.ts'
-import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
+  EmptyTask,
+  Footnotes,
+  GithubAlerts,
+} from '../src/shared/markdown-extra-syntax.ts'
 import { renderedBoundary } from '../src/shared/rendered-range.ts'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
@@ -34,7 +36,15 @@ function fixture(text, config = renderedConfig) {
     extensions: [
       config.literal.map((name) => formattedLiteral.of(name)),
       config.textFeatures.map((name) => formattedTextFeatures.of(name)),
-      formattedMarkdown.of(Footnotes),
+      [
+        Table,
+        TaskList,
+        EmptyTask,
+        Footnotes,
+        GithubAlerts,
+        Strikethrough,
+        Autolink,
+      ].map((config) => formattedMarkdown.of(config)),
       footnoteDefinitions,
     ],
   })
@@ -42,13 +52,12 @@ function fixture(text, config = renderedConfig) {
     state = state.update({
       effects: readDefinitions.of(footnoteScan.slice),
     }).state
-  const tree = boundaryParser(config).parse(new DocInput(state.doc)),
-    inline = boundaryInlineParser(config)
+  const tree = boundaryParser(config).parse(new DocInput(state.doc))
   return {
     state,
     tree,
     read: (from = 0, to = state.doc.length, separator = '\n') =>
-      formattedSelectionText(state, tree, inline, from, to, separator),
+      formattedSelectionText(state, tree, from, to, separator),
   }
 }
 
@@ -229,14 +238,7 @@ test('completing selection syntax skips code-language parsing', async (t) => {
     const tree = syntax.selectionTree(state, 0, state.doc.length)
     assert.equal(parse.mock.calls.length, before)
     assert.equal(
-      formattedSelectionText(
-        state,
-        tree,
-        syntax.parser(state),
-        0,
-        state.doc.length,
-        '\n',
-      ),
+      formattedSelectionText(state, tree, 0, state.doc.length, '\n'),
       'before\n' + body.slice(0, -1) + '\nafter',
     )
     assert.equal(parse.mock.calls.length, before)

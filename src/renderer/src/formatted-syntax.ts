@@ -8,7 +8,13 @@ import {
   StateField,
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
-import { IterMode, NodeProp, type Tree, TreeFragment } from '@lezer/common'
+import {
+  type Input,
+  IterMode,
+  NodeProp,
+  type Tree,
+  TreeFragment,
+} from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
@@ -841,6 +847,13 @@ function driver(
   )
 }
 
+/** Source work still available to one synchronous interaction preview. */
+export type SelectionBudget = {
+  input: Input
+  exhausted: symbol
+  steps: number
+}
+
 export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
@@ -848,7 +861,12 @@ export type FormattedSyntax = {
   /** The same configured grammar for a bounded source-block proof. */
   parser: (state: EditorState) => MarkdownParser
   /** Complete only missing syntax for the selected range. */
-  selectionTree: (state: EditorState, from: number, to: number) => Tree
+  selectionTree: (
+    state: EditorState,
+    from: number,
+    to: number,
+    budget?: SelectionBudget,
+  ) => Tree | null
   /**
    * An edit's reparse has not finished, so renderers keep what they drew,
    * mapped through the edit, instead of rendering the edited chunks bare.
@@ -874,21 +892,29 @@ export function formattedSyntax(
     ],
     tree: (state) => state.field(field).tree,
     parser: (state) => syntax.chunkedFor(state).full,
-    selectionTree: (state, from, to) => {
+    selectionTree: (state, from, to, budget) => {
       const value = state.field(field)
       if (from === to || !uncovered(value.tree, from, to)) return value.tree
-      const parse = syntax
-        .textFor(state)
-        .startChunkedParse(
-          new DocInput(state.doc),
-          TreeFragment.addTree(value.tree),
-          { from, to },
-          value.prefix,
-        )
-      let tree: Tree | null
-      do tree = parse.advance()
-      while (!tree)
-      return tree
+      const input = budget?.input ?? new DocInput(state.doc)
+      const steps = budget?.steps ?? Number.POSITIVE_INFINITY
+      try {
+        const parse = syntax
+          .textFor(state)
+          .startChunkedParse(
+            input,
+            TreeFragment.addTree(value.tree),
+            { from, to },
+            value.prefix,
+          )
+        for (let step = 0; step < steps; step++) {
+          const tree = parse.advance()
+          if (tree) return tree
+        }
+        return null
+      } catch (error) {
+        if (budget && error === budget.exhausted) return null
+        throw error
+      }
     },
     settling: (state) => state.field(field).settling,
   }

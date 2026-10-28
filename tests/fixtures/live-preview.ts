@@ -26,7 +26,7 @@ import {
   referenceWork,
 } from '../../src/renderer/src/formatted-references'
 import { formattedRegistry } from '../../src/renderer/src/formatted-registry'
-import { formattedSelectionText } from '../../src/renderer/src/formatted-selection-text'
+import { formattedSelectionPreview } from '../../src/renderer/src/formatted-selection-text'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 
@@ -348,10 +348,9 @@ Object.assign(window, {
     /** The addon capture path, using the view's retained syntax and grammar. */
     selectedText(from: number, to: number, blockSeparator = '') {
       if (!view) return null
-      return formattedSelectionText(
+      return formattedSelectionPreview(
         view.state,
-        syntax.selectionTree(view.state, from, to),
-        syntax.parser(view.state),
+        syntax,
         from,
         to,
         blockSeparator,

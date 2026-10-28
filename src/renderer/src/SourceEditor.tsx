@@ -1506,6 +1506,12 @@ export function SourceEditor({
             override: [sourceCompletions],
             selectOnOpen: false,
             defaultKeymap: false,
+            // Like the rich view's list, the formatted view's answers keys as
+            // soon as it opens, whatever the wall clock does. The source view
+            // keeps CodeMirror's delay.
+            ...(formatted
+              ? { interactionDelay: Number.NEGATIVE_INFINITY }
+              : {}),
           }),
           EditorState.transactionExtender.of((transaction) => {
             const state = transactionState(transaction)

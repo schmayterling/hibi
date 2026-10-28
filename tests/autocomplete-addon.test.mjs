@@ -7,7 +7,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('autocomplete learns locally, disables learning, excludes documents and clears disk through settings and palette', {
@@ -174,7 +174,15 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
     }
     const reset = async (text) => {
       if (mode === 'rich') {
-        if (cm) await replaceRichText(page, rich, text)
+        // Like setContent, a replacement that is not typing, which would read
+        // as overwriting the word just accepted.
+        if (cm)
+          await rich.evaluate((element, text) => {
+            const { view } = element.cmTile.root
+            view.dispatch({
+              changes: { from: 0, to: view.state.doc.length, insert: text },
+            })
+          }, text)
         else
           await rich.evaluate((element, text) => {
             const editor = element.editor
@@ -363,12 +371,6 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
       await pressWhenListIs('new', 'Tab')
       await t.test(
         `${mode} new list Tab keeps the rich acceptance contract`,
-        {
-          todo:
-            t.formattedEngine === 'codemirror' && mode === 'rich'
-              ? 'formatted gap completion-001: a fresh rich completion list must accept the word with tab'
-              : undefined,
-        },
         async () => {
           assert.equal(
             await editorText(),

@@ -634,7 +634,7 @@ export type DocumentsApi = {
     target: import('../shared/foundation-contracts').VersionedDocumentTarget,
   ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
 }
-/** UTF-16 positions belong to the named editor: normalized source offsets in CodeMirror source/formatted views, ProseMirror positions in the legacy rich view. These are not raw Markdown source offsets. */
+/** Positions are opaque and editor-local. `editor: 'rich'` names either implementation, without an engine discriminator. Derive ranges from selection, before/after, and documentLength, never Markdown text or constants. CodeMirror uses normalized-source UTF-16 offsets; legacy rich uses ProseMirror positions, including node boundaries. */
 export type EditorViewSelection = {
   view: import('../shared/foundation-contracts').ViewTarget
   editor: 'source' | 'rich'

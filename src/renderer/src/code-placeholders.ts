@@ -124,7 +124,7 @@ function refresh(
   ])
   const add: Range<Decoration>[] = []
   const { metrics, live } = value
-  const tree = state.facet(formattedTree)?.(state)
+  const tree = treeOf(state)
   if (metrics && live)
     value.extents.between(from, to, (start, end, lines) => {
       if (
@@ -212,13 +212,6 @@ const placeholders = StateField.define<Placeholders>({
         next = { ...next, live: effect.value }
         dirty.push(effect.value)
       }
-    // Code in the window the view has parsed since.
-    if (
-      next.live &&
-      state.facet(formattedTree)?.(state) !==
-        startState.facet(formattedTree)?.(startState)
-    )
-      dirty.push(next.live)
     // Blocks a selection end leaves or enters.
     if (transaction.selection || transaction.docChanged)
       for (const range of [
@@ -241,6 +234,22 @@ const placeholders = StateField.define<Placeholders>({
   provide: (field) =>
     Prec.highest(EditorView.decorations.from(field, (value) => value.set)),
 })
+
+const treeOf = (state: EditorState) => state.facet(formattedTree)?.(state)
+
+/** The window has placeholders for code the view has parsed since. */
+function parsed({ set, live }: Placeholders, state: EditorState) {
+  const tree = treeOf(state)
+  let found = false
+  if (live && tree)
+    set.between(live.from, live.to, (from, to) => {
+      if (!uncovered(tree, from, to)) {
+        found = true
+        return false
+      }
+    })
+  return found
+}
 
 /** Code lines and boxes as drawn, once one shows. */
 function measure(view: EditorView): Metrics | null {
@@ -310,7 +319,8 @@ const follow = ViewPlugin.fromClass(
         update.viewportChanged ||
         update.geometryChanged ||
         update.docChanged ||
-        !this.measured
+        !this.measured ||
+        treeOf(update.state) !== treeOf(update.startState)
       )
         this.check()
     }
@@ -323,7 +333,8 @@ const follow = ViewPlugin.fromClass(
           viewport: view.viewport,
         }),
         write: ({ metrics, viewport }, view) => {
-          const { metrics: known, live } = view.state.field(placeholders)
+          const value = view.state.field(placeholders)
+          const { metrics: known, live } = value
           const effects: StateEffect<unknown>[] = []
           if (metrics) {
             this.measured = true
@@ -336,7 +347,12 @@ const follow = ViewPlugin.fromClass(
             )
               effects.push(setMetrics.of(metrics))
           }
-          if (live?.from !== viewport.from || live.to !== viewport.to)
+          // Parsed code turns into lines here too, never in the parser's update.
+          if (
+            live?.from !== viewport.from ||
+            live.to !== viewport.to ||
+            parsed(value, view.state)
+          )
             effects.push(setLive.of({ from: viewport.from, to: viewport.to }))
           // After the measure, before the frame is painted.
           if (effects.length)

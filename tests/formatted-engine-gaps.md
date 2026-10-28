@@ -8,10 +8,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 
 | gap id | test file:line | behavior | owning slice |
 | --- | --- | --- | --- |
-| reload-001 | [addon-reload.test.mjs:783](addon-reload.test.mjs#L783) | addon reload must retain selection and document focus | 3b: addon reload selection and focus |
-| reload-004 | [addon-reload.test.mjs:929](addon-reload.test.mjs#L929) | unlocked formatted editor must expose aria-readonly false | 3b: addon reload selection and focus |
-| reload-002 | [addon-reload.test.mjs:956](addon-reload.test.mjs#L956) | addon reload must retain selection moved while read-only | 3b: addon reload selection and focus |
-| reload-003 | [addon-reload.test.mjs:974](addon-reload.test.mjs#L974) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
 | completion-001 | [autocomplete-addon.test.mjs:369](autocomplete-addon.test.mjs#L369) | a fresh rich completion list must accept the word with tab | 8a: native input, structure and toolbar state |
 | syntax-004 | [code-syntax-settings.test.mjs:238](code-syntax-settings.test.mjs#L238) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
 | syntax-002 | [code-syntax-settings.test.mjs:281](code-syntax-settings.test.mjs#L281) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
@@ -94,8 +90,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | find-001 | [formatted-find.test.mjs:401](formatted-find.test.mjs#L401) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
 | find-003 | [formatted-find.test.mjs:664](formatted-find.test.mjs#L664) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
 | find-005 | [formatted-find.test.mjs:916](formatted-find.test.mjs#L916) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
-| release-001 | [formatted-hidden-source.test.mjs:167](formatted-hidden-source.test.mjs#L167) | reopening source must restore its saved scroll position | 2c: hidden source release and mapped bookmarks |
-| release-002 | [formatted-hidden-source.test.mjs:188](formatted-hidden-source.test.mjs#L188) | formatted edits must map the saved source scroll position | 2c: hidden source release and mapped bookmarks |
 | corpus-008 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | a quoted title with a blank line must not define a reference | 5a: shared reference definition parsing |
 | corpus-011 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
 | corpus-012 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |

@@ -1,6 +1,7 @@
 import type { AddonManifest } from '../../addons/api'
 import { addonDependents } from '../../shared/addon-dependencies'
 import type { ViewTarget } from '../../shared/foundation-contracts'
+import { focusEditor } from './editor-focus-restore'
 import { editorViewRegistry } from './editor-view-api'
 
 export type AddonReloadResult =
@@ -172,16 +173,19 @@ function keepEditorState(activeView: () => ViewTarget | null) {
   const start = view ? editorViewRegistry.getSelection(view) : null
   if (!view || !start?.ok) return async () => {}
   // A remounted editor registers a new view generation for the same document.
-  const read = () => {
+  const live = () => {
     const current = activeView()
     return current?.documentId === view.documentId &&
       current.documentGeneration === view.documentGeneration
-      ? editorViewRegistry.getSelection(current)
+      ? current
       : null
+  }
+  const read = () => {
+    const current = live()
+    return current ? editorViewRegistry.getSelection(current) : null
   }
   const active = document.activeElement
   const focused = active instanceof HTMLElement && active.isContentEditable
-  const surface = `.editor-panes :is(.rich-pane, .source-pane):not([inert]) ${start.value.editor === 'rich' ? '.ProseMirror' : '.cm-content'}`
   let pick: { root: Element; anchor?: number; head?: number } | undefined
   let frame = 0
   // While the picked surface is on the page, its view's latest selection is the pick; a rebuild after it ends sampling.
@@ -203,9 +207,14 @@ function keepEditorState(activeView: () => ViewTarget | null) {
       !(event.key === 'a' && (event.metaKey || event.ctrlKey))
     )
       return
-    const root =
-      event.target instanceof Element ? event.target.closest(surface) : null
-    if (!root) return
+    const current = live()
+    const root = current && editorViewRegistry.surface(current)
+    if (
+      !root ||
+      !(event.target instanceof Node) ||
+      !root.contains(event.target)
+    )
+      return
     pick = { root }
     cancelAnimationFrame(frame)
     follow()
@@ -244,9 +253,14 @@ function keepEditorState(activeView: () => ViewTarget | null) {
         anchor: target.anchor,
         head: target.head,
       })
-    if (focused && document.activeElement === document.body)
-      document
-        .querySelector<HTMLElement>(surface)
-        ?.focus({ preventScroll: true })
+    if (focused && document.activeElement === document.body) {
+      if (current?.ok)
+        editorViewRegistry
+          .surface(current.value.view)
+          ?.focus({ preventScroll: true })
+      // A read-only surface that cannot take focus gets it once editable, unless the user moves it first.
+      if (document.activeElement === document.body)
+        focusEditor({ preventScroll: true })
+    }
   }
 }

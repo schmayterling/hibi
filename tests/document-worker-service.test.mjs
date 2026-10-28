@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import nodeTest from 'node:test'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
 import { renderedConfig } from './rendered-config.mjs'
+import { WORKER_HANG_TIMEOUT, waitForProgress } from './worker-progress.mjs'
+
+const test = (name, run) =>
+  nodeTest(name, { timeout: WORKER_HANG_TIMEOUT }, run)
 
 function fixture(t, source = 'one two one') {
   const messages = [],
@@ -15,35 +19,31 @@ function fixture(t, source = 'one two one') {
   })
   t.after(() => worker.dispose())
   const next = (predicate) =>
-    new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(check)
-        reject(
-          Object.assign(new Error('Missing worker reply'), {
-            expected: String(predicate),
-            recent: messages
-              .slice(-8)
-              .map(({ type, epoch, id, version, stage, message }) => ({
-                type,
-                epoch,
-                id,
-                version,
-                stage,
-                message,
-              })),
-          }),
-        )
-      }, 2000)
-      const check = () => {
-        const found = messages.find(predicate)
-        if (!found) return
-        pending.delete(check)
-        clearTimeout(timer)
-        resolve(found)
-      }
-      pending.add(check)
-      check()
-    })
+    waitForProgress(
+      () => messages.find(predicate),
+      () => messages.length,
+      2000,
+      () =>
+        Object.assign(new Error('Missing worker reply: no progress'), {
+          expected: String(predicate),
+          recent: messages
+            .slice(-8)
+            .map(({ type, epoch, id, version, stage, message }) => ({
+              type,
+              epoch,
+              id,
+              version,
+              stage,
+              message,
+            })),
+        }),
+      {
+        subscribe: (check) => {
+          pending.add(check)
+          return () => pending.delete(check)
+        },
+      },
+    )
   const load = (epoch = 'first', body = source) => {
     loadWorker(worker, messages, body, epoch)
   }

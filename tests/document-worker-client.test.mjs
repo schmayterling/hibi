@@ -6,6 +6,7 @@ import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceSearchIndex } from '../src/shared/source-search-index.ts'
 import { renderedConfig } from './rendered-config.mjs'
+import { WORKER_HANG_TIMEOUT, waitForProgress } from './worker-progress.mjs'
 
 const wait = async (predicate) => {
   const end = Date.now() + 3000
@@ -22,8 +23,10 @@ class TestWorker {
   onerror = null
   onmessageerror = null
   replies = []
+  observeReply = null
   service = new DocumentWorkerService((reply) => {
     this.replies.push(reply)
+    this.observeReply?.(reply)
     setImmediate(() => {
       if (!this.terminated) this.onmessage?.({ data: structuredClone(reply) })
     })
@@ -465,22 +468,83 @@ test('reference-link unsupported reason reaches the client and source mode remai
 })
 
 test('32 mib real find build completes with progress on one worker', {
-  timeout: 60000,
+  timeout: WORKER_HANG_TIMEOUT,
 }, async (t) => {
   // Same ordinary-word corpus as the review probe, with one distant match.
   const unit = `${'ordinary words '.repeat(16)}\n\n`,
     length = 32 * 1024 * 1024,
     source =
       unit.repeat(Math.ceil(length / unit.length)).slice(0, length - 11) +
-      'scale-start',
-    done = Promise.withResolvers(),
-    f = fixture(t, source, {
-      result: (location) => done.resolve(location),
-      error: (message) => done.reject(new Error(message)),
-    })
+      'scale-start'
+  let result,
+    failure,
+    scanned = 0,
+    located = 0,
+    transferred = 0,
+    loaded = false
+  const build = SourceSearchIndex.prototype.build
+  t.mock.method(SourceSearchIndex.prototype, 'build', function* (...args) {
+    const steps = build.apply(this, args)
+    try {
+      for (;;) {
+        const next = steps.next()
+        if (next.done) return next.value
+        assert.ok(Number.isSafeInteger(next.value.scanned))
+        assert.ok(next.value.scanned >= 0 && next.value.scanned <= length)
+        scanned = Math.max(scanned, next.value.scanned)
+        yield next.value
+      }
+    } finally {
+      steps.return?.()
+    }
+  })
+  const locate = SourceSearchIndex.prototype.locate
+  t.mock.method(SourceSearchIndex.prototype, 'locate', function* (...args) {
+    const steps = locate.apply(this, args)
+    try {
+      for (;;) {
+        const next = steps.next()
+        if (next.done) return next.value
+        located++
+        // This corpus has one distant match: each batch scans 8192 source units.
+        assert.ok(located <= Math.ceil(length / 8192) + 1)
+        yield next.value
+      }
+    } finally {
+      steps.return?.()
+    }
+  })
+  const f = fixture(t, source, {
+    worker: () => {
+      const worker = new TestWorker()
+      worker.observeReply = (reply) => {
+        if (reply.type === 'load-ack')
+          transferred = Math.max(transferred, reply.request.sequence)
+        if (reply.type === 'ack') loaded = true
+      }
+      f.workers.push(worker)
+      return worker
+    },
+    result: (location) => {
+      result = location
+    },
+    error: (message) => {
+      failure = new Error(message)
+    },
+  })
   f.find('scale-start')
-  const location = await done.promise
+  const location = await waitForProgress(
+    () => {
+      if (failure) throw failure
+      return result
+    },
+    () => transferred + Number(loaded) + scanned + located,
+    3000,
+    () =>
+      `Find worker made no progress: ${JSON.stringify({ transferred, loaded, scanned, located })}`,
+  )
   assert.equal(location.total, 1)
+  assert.equal(scanned, length)
   assert.equal(location.next.match.from, source.length - 11)
   assert.equal(f.workers.length, 1)
   const worker = f.workers[0],
@@ -501,6 +565,8 @@ test('32 mib real find build completes with progress on one worker', {
   t.diagnostic(
     JSON.stringify({
       units: source.length,
+      scanned,
+      located,
       workers: f.workers.length,
       progress: progress.length,
       total: location.total,
@@ -1189,42 +1255,25 @@ test('worker restarts are finite and disposal cancels bootstrap, listeners and p
   assert.equal(immediate.workers.length, 0)
 })
 
-test('a new document identity gets a fresh worker after a failed generation', async (t) => {
-  const workers = []
-  let blocked = true
-  let findSent
-  const freshFind = new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Fresh worker did not receive find')),
-      3000,
-    )
-    findSent = (worker) => {
-      clearTimeout(timer)
-      resolve(worker)
-    }
-  })
-  const f = fixture(t, 'one', {
-    timeoutMs: 5,
-    worker: () => {
-      const worker = new TestWorker()
-      worker.blocked = blocked
-      if (!blocked) {
-        const postMessage = worker.postMessage.bind(worker)
-        worker.postMessage = (message) => {
-          postMessage(message)
-          if (message.type === 'find') findSent(worker)
-        }
-      }
-      workers.push(worker)
-      return worker
-    },
-  })
+test('a new document identity gets a fresh worker after a failed generation', (t) => {
+  const f = queuedFixture(t, 'one', { timeoutMs: 5 })
   f.find('one')
-  await wait(() => f.errors.length === 1)
-  blocked = false
+  t.mock.timers.tick(0)
+  // Hold both bootstrap handshakes until the two generations time out.
+  t.mock.timers.tick(5)
+  t.mock.timers.tick(5)
+  assert.equal(f.errors.length, 1)
+  assert.equal(f.workers.length, 2)
+  assert.ok(f.workers.every((worker) => worker.terminated))
   f.session.reidentify({ tabId: 'a', revision: 1 })
-  const freshWorker = await freshFind
-  assert.equal(workers.length, 3)
-  assert.equal(freshWorker, workers[2])
+  t.mock.timers.tick(0)
+  f.drain()
+  const freshWorker = f.workers.find((worker) =>
+    worker.messages.some((message) => message.type === 'find'),
+  )
+  assert.equal(f.workers.length, 3)
+  assert.equal(freshWorker, f.workers[2])
   assert.equal(freshWorker.messages[0].head.revision, 1)
+  assert.equal(f.results.length, 1, 'fresh worker must reply to find')
+  assert.equal(f.results.at(-1).location.total, 1)
 })

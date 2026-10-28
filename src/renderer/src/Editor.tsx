@@ -622,6 +622,7 @@ export function MarkdownEditor({
       viewId as ViewId,
       'rich',
       {
+        surface: () => editor.view.dom,
         read: () => {
           const source = richSourceSnapshot(editor)
           if (!source || !richSourceCurrent(editor)) return null

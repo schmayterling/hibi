@@ -55,37 +55,40 @@ test('development runtime uses the hibi bundle name and supplied icon', {
     .waitFor()
   assert.equal(await app.evaluate(({ app }) => app.getName()), 'hibi')
   const icons = await app.evaluate(({ app, nativeImage }) =>
-    ['mac', 'win', 'linux'].map((platform) => {
-      const icon = nativeImage.createFromPath(
-        `${app.getAppPath()}/build/icon-${platform}.png`,
-      )
-      const { width, height } = icon.getSize()
-      const pixels = icon.toBitmap()
-      let left = width,
-        right = 0
-      for (let y = 0; y < height; y++)
-        for (let x = 0; x < width; x++) {
-          if (pixels[(y * width + x) * 4 + 3]) {
-            left = Math.min(left, x)
-            right = Math.max(right, x)
+    ['mac', 'win', 'linux', 'mac-dark', 'win-dark', 'linux-dark'].map(
+      (platform) => {
+        const icon = nativeImage.createFromPath(
+          `${app.getAppPath()}/build/icon-${platform}.png`,
+        )
+        const { width, height } = icon.getSize()
+        const pixels = icon.toBitmap()
+        let left = width,
+          right = 0
+        for (let y = 0; y < height; y++)
+          for (let x = 0; x < width; x++) {
+            if (pixels[(y * width + x) * 4 + 3]) {
+              left = Math.min(left, x)
+              right = Math.max(right, x)
+            }
           }
+        return {
+          platform,
+          width,
+          ratio: (right - left + 1) / width,
+          corner: pixels[3],
         }
-      return {
-        platform,
-        width,
-        ratio: (right - left + 1) / width,
-        corner: pixels[3],
-      }
-    }),
+      },
+    ),
   )
   assert.deepEqual(
     icons.map((icon) => icon.width),
-    [1024, 256, 512],
+    [1024, 256, 512, 1024, 256, 512],
   )
   for (const icon of icons) {
     assert.equal(icon.corner, 0)
     assert.ok(
-      Math.abs(icon.ratio - (icon.platform === 'mac' ? 0.8 : 0.875)) < 0.005,
+      Math.abs(icon.ratio - (icon.platform.startsWith('mac') ? 0.8 : 0.875)) <
+        0.005,
     )
   }
 })

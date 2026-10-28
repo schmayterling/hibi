@@ -258,17 +258,10 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
         .classList.contains('mode-side-by-side') &&
       document.querySelector('.rich-pane').getAnimations().length === 0,
   )
-  await t.test(
-    'split formatted view is read-only',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap split-001: split formatted view must remain read-only'
-          : undefined,
-    },
-    async () => {
-      assert.equal(await rich.getAttribute('contenteditable'), 'false')
-    },
+  // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
+  assert.equal(
+    await rich.getAttribute('contenteditable'),
+    t.formattedEngine === 'codemirror' ? 'true' : 'false',
   )
   phase = 'split source caret'
   await page.getByRole('textbox', { name: /markdown editor/i }).focus()

@@ -701,9 +701,6 @@ for (const kind of ['code', 'wrapped', 'wide code start']) {
       )
       await t.test(
         'wide code scrolls horizontally with its start visible',
-        {
-          todo: 'formatted gap find-005: wide code matches must scroll horizontally with their start visible',
-        },
         async () => {
           assert.ok(
             await rich.evaluate((element) => {

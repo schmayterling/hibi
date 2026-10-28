@@ -179,6 +179,40 @@ for (const [name, html, expected] of [
     envelope(`<p>OUTSIDE BEFORE</p>${start}${end}<p>OUTSIDE AFTER</p>`),
     '',
   ],
+  // Content before the start stays out too, and nothing inside is lost.
+  [
+    'table row before a misnested start',
+    envelope(
+      `<table><tr><td>OUTSIDE BEFORE</td></tr><div>${start}selected</div><tr><td>also selected</td></tr>${end}</table>`,
+    ),
+    'selected\n\nalso selected',
+  ],
+  [
+    'table text at the start',
+    envelope(
+      `<table>${start}selected<tr><td>also selected</td></tr>${end}</table>`,
+    ),
+    'selected\n\n| also selected |\n| --- |',
+  ],
+  [
+    'start after the body',
+    `<html><body><p>OUTSIDE BEFORE</p></body>${start}<p>selected${end}</p><p>OUTSIDE AFTER</p></html>`,
+    'selected',
+  ],
+  [
+    'implicitly closed list items',
+    envelope(
+      `<ol start="4"><li>OUTSIDE BEFORE<li>before ${start}selected${end}<li>OUTSIDE AFTER</ol>`,
+    ),
+    '5. selected',
+  ],
+  [
+    'preformatted text',
+    envelope(
+      `<p>OUTSIDE BEFORE</p><pre>before ${start}selected${end} after</pre><p>OUTSIDE AFTER</p>`,
+    ),
+    '```\nselected\n```',
+  ],
   // Content after the end marker stays out, whatever the parser repairs.
   [
     'table repair after the end',
@@ -383,15 +417,22 @@ test('a wrapped copy from the formatted view restores its own markdown', async (
   )
 })
 
-test('cropping 20,000 siblings removes only those before the selection', async () => {
+test('a selection among 20,000 siblings parses on its own after one read of the page', async () => {
   const result = await page.evaluate(
     ({ start, end }) => {
       const piece = '<p>outside é 中 😀</p>'
-      const html = `<html><body>${piece.repeat(10000)}${start}<p>selected é 中 😀</p>${end}${piece.repeat(10000)}</body></html>`
+      const selection = '<p>selected é 中 😀</p>'
+      const html = `<html><body>${piece.repeat(10000)}${start}${selection}${end}${piece.repeat(10000)}</body></html>`
+      const parsed = [],
+        parse = DOMParser.prototype.parseFromString
       let removed = 0,
         visited = 0
       const remove = Element.prototype.remove,
         walk = Document.prototype.createTreeWalker
+      DOMParser.prototype.parseFromString = function (source, type) {
+        parsed.push(source.length)
+        return parse.call(this, source, type)
+      }
       Element.prototype.remove = function () {
         removed++
         return remove.call(this)
@@ -406,24 +447,30 @@ test('cropping 20,000 siblings removes only those before the selection', async (
         return walker
       }
       try {
+        const pasted = HtmlMarkdown.htmlToMarkdown(html)
         return {
-          pasted: HtmlMarkdown.htmlToMarkdown(html),
+          pasted,
+          parses: parsed.length,
+          selection: parsed[1] === selection.length,
           removed,
           visited,
         }
       } finally {
+        DOMParser.prototype.parseFromString = parse
         Element.prototype.remove = remove
         Document.prototype.createTreeWalker = walk
       }
     },
     { start, end },
   )
-  // Nothing after the end marker is parsed; the two markers take one read
-  // each, plus the walks' ends.
+  // One parse reads the page to find the markers (two comments and the
+  // walk's end); the second parses the selection alone, so nothing is removed.
   assert.deepEqual(result, {
     pasted: 'selected é 中 😀',
-    removed: 10000,
-    visited: 4,
+    parses: 2,
+    selection: true,
+    removed: 0,
+    visited: 3,
   })
 })
 

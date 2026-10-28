@@ -300,9 +300,9 @@ function table(element: Element): string {
  * Parse clipboard HTML, keeping only its selection. Native clipboards can wrap
  * it in a page and mark it with `<!--StartFragment-->` and
  * `<!--EndFragment-->`; as in Chromium, the first start and the last end
- * count. The source is cut at the end, so the parser's repairs cannot bring
- * anything after it inside; before the start, nodes go up to the body, and
- * the elements around it stay as its context, ordered lists keeping their
+ * count. Only the source between them is parsed, after start tags for the
+ * elements around the start, so the parser's repairs cannot bring anything
+ * from outside it in, nor drop what is inside; ordered lists keep their
  * numbers.
  */
 function parseSelection(html: string) {
@@ -321,40 +321,49 @@ function parseSelection(html: string) {
     at = marker.index + marker[0].length
   }
   const probe = parse(named + html.slice(at))
-  const read = new Set<string | null>()
+  const read = new Map<string | null, Node>()
   const comments = probe.createTreeWalker(probe, NodeFilter.SHOW_COMMENT)
   for (let node = comments.nextNode(); node; node = comments.nextNode())
-    read.add(node.nodeValue)
-  const genuine = markers.filter((_, index) => read.has(`${id}-${index}`))
-  const start = genuine.find((marker) => /^<!--s/i.test(marker[0]))
+    read.set(node.nodeValue, node)
+  const genuine = markers.flatMap((marker, index) => {
+    const node = read.get(`${id}-${index}`)
+    return node ? [{ marker, node }] : []
+  })
+  const start = genuine.find(({ marker }) => /^<!--s/i.test(marker[0]))
   const end =
     start &&
     genuine.findLast(
-      (marker) => marker.index > start.index && /^<!--e/i.test(marker[0]),
+      ({ marker }) =>
+        marker.index > start.marker.index && /^<!--e/i.test(marker[0]),
     )
   if (!start || !end) return parse(html)
-  const document = parse(
-    `${html.slice(0, start.index)}<!--${id}-->${html.slice(start.index + start[0].length, end.index)}`,
-  )
-  const found = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT)
-  let marker = found.nextNode()
-  while (marker && marker.nodeValue !== id) marker = found.nextNode()
-  if (!marker) return parse('')
-  const { body } = document
-  for (
-    let node: Node | null = marker;
-    node && node !== body;
-    node = node.parentNode
-  ) {
-    let items = 0
-    while (node.previousSibling) {
-      if (node.previousSibling.nodeName === 'LI') items++
-      node.previousSibling.remove()
+  let context = ''
+  const { body } = probe
+  if (body?.contains(start.node))
+    for (
+      let child = start.node;
+      child.parentNode !== body;
+      child = child.parentNode as Node
+    ) {
+      const element = child.parentNode as Element
+      const open = element.cloneNode(false) as Element
+      if (open instanceof HTMLOListElement) {
+        let items = 0
+        for (
+          let item = child.previousSibling;
+          item;
+          item = item.previousSibling
+        )
+          if (item.nodeName === 'LI') items++
+        open.start = (element as HTMLOListElement).start + items
+      }
+      const tags = open.outerHTML
+      context = tags.slice(0, tags.lastIndexOf('</')) + context
     }
-    if (items && node.parentNode instanceof HTMLOListElement)
-      node.parentNode.start += items
-  }
-  return document
+  return parse(
+    context +
+      html.slice(start.marker.index + start.marker[0].length, end.marker.index),
+  )
 }
 
 /** Markdown for pasted HTML. */

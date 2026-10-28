@@ -40,6 +40,7 @@ import {
   formattedRefresh,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
+import { drawReference, referenceLink } from '../formatted-references.ts'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -232,17 +233,24 @@ function decorateCell(
         const close = linkMarks.find(
           (mark) => state.sliceDoc(mark.from, mark.to) === ']',
         )
-        // Reference links need the note's definitions, so they stay literal.
-        if (
-          !open ||
-          !close ||
-          state.sliceDoc(open.from, open.from + 1) !== '[' ||
-          state.sliceDoc(close.to, close.to + 1) !== '('
-        )
+        if (!open || !close || state.sliceDoc(open.from, open.from + 1) !== '[')
           return false
+        // A reference link renders when the note defines its label.
+        const reference =
+          state.sliceDoc(close.to, close.to + 1) !== '(' &&
+          referenceLink(state.doc, node.node)
+        if (reference === null) return false
+        const answer = reference
+          ? drawReference(state, reference.label, node.from)
+          : null
+        if (reference && !answer) return
         out.syntax(node.from, open.to)
         out.syntax(close.from, node.to)
-        out.link(open.to, close.from)
+        out.link(
+          open.to,
+          close.from,
+          answer?.title ? { title: answer.title } : undefined,
+        )
         return
       }
       case 'Autolink': {

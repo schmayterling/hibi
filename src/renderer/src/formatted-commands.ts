@@ -628,6 +628,7 @@ export function deleteBackward(
     while (blank(previous.text) && previous.number > 1)
       previous = state.doc.line(previous.number - 1)
     if (blank(previous.text)) return remove(previous.from, line.from)
+    // A hidden definition before the paragraph stays apart from it.
     const before = around(tree, previous.to, [
       'FencedCode',
       'CodeBlock',
@@ -636,8 +637,9 @@ export function deleteBackward(
       'HTMLBlock',
       'SetextHeading1',
       'SetextHeading2',
+      'LinkReference',
     ])
-    if (before) return remove(previous.to + 1, line.from, line.from)
+    if (before) return remove(previous.to + 1, line.from, previous.to + 1)
     return remove(previous.to, line.from, previous.to)
   }
   // Skip hidden syntax so the visible character before it is the one

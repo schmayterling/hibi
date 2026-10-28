@@ -14,123 +14,111 @@ import {
   replaceSourceText,
 } from './keyboard.mjs'
 
-test(
-  'code highlighting controls update both panes, persist, and discover addon languages',
-  (engine) => ({
-    timeout: 30000,
-    todo:
-      engine === 'codemirror'
-        ? 'formatted gap syntax-001: syntax settings must refresh formatted code highlighting'
-        : undefined,
-  }),
-  async (t) => {
-    const profile = await mkdtemp(join(tmpdir(), 'hibi-code-syntax-'))
-    const app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${profile}`],
+test('code highlighting controls update both panes, persist, and discover addon languages', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-code-syntax-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
     })
-    t.after(async () => {
-      await app.evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
-      })
-      await app.close()
-      await rm(profile, { recursive: true, force: true })
-    })
-    const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
-    page.setDefaultTimeout(6500)
-    const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-    await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-    await pressShortcut(app, `${mod}+Shift+]`)
-    const original = '```js\nconst answer = 42\n```'
-    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-    await replaceSourceText(
-      page,
-      page.getByRole('textbox', { name: /markdown editor/i }),
-      original,
-    )
-    await page
-      .locator('.source-pane .hibi-token-keyword')
-      .filter({ hasText: /const/i })
-      .waitFor()
-    await clickMenu(app, 'Settings')
-    await page
-      .getByRole('tab', { name: /^code highlight$/i, exact: true })
-      .click()
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  page.setDefaultTimeout(6500)
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await pressShortcut(app, `${mod}+Shift+]`)
+  const original = '```js\nconst answer = 42\n```'
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await replaceSourceText(
+    page,
+    page.getByRole('textbox', { name: /markdown editor/i }),
+    original,
+  )
+  await page
+    .locator('.source-pane .hibi-token-keyword')
+    .filter({ hasText: /const/i })
+    .waitFor()
+  await clickMenu(app, 'Settings')
+  await page
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
+    .click()
+  await page
+    .getByRole('checkbox', { name: /^javascript$/i, exact: true })
+    .click()
+  await page.waitForFunction(
+    () =>
+      ![...document.querySelectorAll('.source-pane .hibi-token-keyword')].some(
+        (element) => element.textContent === 'const',
+      ) &&
+      !document.querySelector(
+        '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
+      ),
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    original,
+  )
+  await page.reload()
+  await clickMenu(app, 'Settings')
+  await page
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
+    .click()
+  assert.equal(
     await page
       .getByRole('checkbox', { name: /^javascript$/i, exact: true })
-      .click()
-    await page.waitForFunction(
-      () =>
-        ![
-          ...document.querySelectorAll('.source-pane .hibi-token-keyword'),
-        ].some((element) => element.textContent === 'const') &&
-        !document.querySelector(
-          '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
+      .isChecked(),
+    false,
+  )
+  await page
+    .getByRole('checkbox', { name: /^javascript$/i, exact: true })
+    .click()
+  // The hidden rich pane refreshes its highlighting once it is shown.
+  await page.getByRole('button', { name: /back to app/i }).click()
+  await page.locator('.settings-screen').waitFor({ state: 'hidden' })
+  await pressShortcut(app, `${mod}+Shift+[`)
+  await page
+    .locator('.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword')
+    .waitFor()
+    .catch(async (error) => {
+      t.diagnostic(
+        JSON.stringify(
+          await page.evaluate(() => ({
+            mode: document.querySelector('.editor-panes')?.className,
+            blocks: document.querySelectorAll('.rich-pane .hibi-lp-codeblock')
+              .length,
+            keywords: document.querySelectorAll(
+              '.rich-pane .hibi-token-keyword',
+            ).length,
+            firstCode: document
+              .querySelector('.rich-pane .hibi-lp-codeblock')
+              ?.outerHTML.slice(0, 400),
+            prefix: document
+              .querySelector('.rich-pane .cm-content')
+              ?.cmTile.root.view.state.sliceDoc(0, 128),
+          })),
         ),
-    )
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      original,
-    )
-    await page.reload()
-    await clickMenu(app, 'Settings')
-    await page
-      .getByRole('tab', { name: /^code highlight$/i, exact: true })
-      .click()
-    assert.equal(
-      await page
-        .getByRole('checkbox', { name: /^javascript$/i, exact: true })
-        .isChecked(),
-      false,
-    )
-    await page
-      .getByRole('checkbox', { name: /^javascript$/i, exact: true })
-      .click()
-    // The hidden rich pane refreshes its highlighting once it is shown.
-    await page.getByRole('button', { name: /back to app/i }).click()
-    await page.locator('.settings-screen').waitFor({ state: 'hidden' })
-    await pressShortcut(app, `${mod}+Shift+[`)
-    await page
-      .locator('.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword')
-      .waitFor()
-      .catch(async (error) => {
-        t.diagnostic(
-          JSON.stringify(
-            await page.evaluate(() => ({
-              mode: document.querySelector('.editor-panes')?.className,
-              blocks: document.querySelectorAll('.rich-pane .hibi-lp-codeblock')
-                .length,
-              keywords: document.querySelectorAll(
-                '.rich-pane .hibi-token-keyword',
-              ).length,
-              firstCode: document
-                .querySelector('.rich-pane .hibi-lp-codeblock')
-                ?.outerHTML.slice(0, 400),
-              prefix: document
-                .querySelector('.rich-pane .cm-content')
-                ?.cmTile.root.view.state.sliceDoc(0, 128),
-            })),
-          ),
-        )
-        throw error
-      })
-    await clickMenu(app, 'Settings')
-    await page
-      .getByRole('tab', { name: /^addon manager$/i, exact: true })
-      .click()
-    await page.locator('#addon-typst').click()
-    await page
-      .getByRole('tab', { name: /^code highlight$/i, exact: true })
-      .click()
-    await page
-      .getByRole('checkbox', { name: /^typst$/i, exact: true })
-      .waitFor()
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      original,
-    )
-  },
-)
+      )
+      throw error
+    })
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
+  await page.locator('#addon-typst').click()
+  await page
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
+    .click()
+  await page.getByRole('checkbox', { name: /^typst$/i, exact: true }).waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    original,
+  )
+})
 
 test('long rich code blocks highlight near the viewport through scrolling and typing', {
   timeout: 30000,

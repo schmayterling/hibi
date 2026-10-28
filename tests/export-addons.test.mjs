@@ -226,7 +226,8 @@ test('addon dates come from the first-parent history of each addon folder', asyn
     first: { released: '2026-01-04', updated: '2026-03-01' },
     second: { released: '2026-02-01', updated: '2026-02-01' },
   })
-  // Commits across more than three addons are sweeping changes and never count.
+  // A bulk commit still releases the folders it creates, but a commit across
+  // more than three addons never counts as an update.
   await commit(
     '2026-04-01T00:00:00Z',
     'first/a.md',
@@ -239,6 +240,8 @@ test('addon dates come from the first-parent history of each addon folder', asyn
     {
       first: { released: '2026-01-04', updated: '2026-03-01' },
       second: { released: '2026-02-01', updated: '2026-02-01' },
+      third: { released: '2026-04-01', updated: '2026-04-01' },
+      fourth: { released: '2026-04-01', updated: '2026-04-01' },
     },
   )
   await commit(
@@ -252,7 +255,8 @@ test('addon dates come from the first-parent history of each addon folder', asyn
     {
       first: { released: '2026-01-04', updated: '2026-04-02' },
       second: { released: '2026-02-01', updated: '2026-04-02' },
-      third: { released: '2026-04-02', updated: '2026-04-02' },
+      third: { released: '2026-04-01', updated: '2026-04-02' },
+      fourth: { released: '2026-04-01', updated: '2026-04-01' },
     },
   )
   run(

@@ -22,8 +22,8 @@ const git = async (cwd, ...args) =>
   ).stdout
 
 /**
- * First and last day (UTC) each addon folder changed on the first-parent
- * history, ignoring sweeping commits, or null outside a full git checkout so a missing or shallow
+ * The day (UTC) each addon folder was created on the first-parent history and
+ * the last day it changed outside sweeping commits, or null outside a full git checkout so a missing or shallow
  * history never publishes wrong dates.
  */
 export async function addonDates(source, ids) {
@@ -56,16 +56,21 @@ export async function addonDates(source, ids) {
     const touched = new Set(
       files.map((file) => file.split('/')[0]).filter((id) => ids.includes(id)),
     )
-    // A commit across more than three addons is a sweeping change, not a
-    // release or an update of any one of them.
-    if (touched.size > 3) continue
+    // The commit that creates a folder releases it, even in bulk. A later
+    // commit across more than three addons is a sweeping change, not an update.
     for (const id of touched) {
-      dates[id] ??= { released: day, updated: day }
+      dates[id] ??= { released: day, updated: null }
       dates[id].released = day
+      if (touched.size <= 3) dates[id].updated ??= day
     }
   }
   return Object.fromEntries(
-    Object.entries(dates).sort(([a], [b]) => a.localeCompare(b)),
+    Object.entries(dates)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, { released, updated }]) => [
+        id,
+        { released, updated: updated ?? released },
+      ]),
   )
 }
 

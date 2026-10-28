@@ -1964,6 +1964,11 @@ class ChunkedParse implements ChunkedPartialParse {
   ) {
     const input = this.input,
       demand = this.demand()
+    // Short blocks requested in full keep both complete syntax and replay data.
+    const complete =
+      block.end !== null &&
+      to - from <= this.parser.giantBlock &&
+      (!demand || (demand.from <= from && demand.to >= to))
     // The last line end inside the chunk that belongs to the block.
     const last = block.end === null ? to - 1 : from + block.end
     // Room to scroll before the window is rebuilt.
@@ -2011,6 +2016,7 @@ class ChunkedParse implements ChunkedPartialParse {
     }
     // The input ends with the last line's text, not an empty line after it.
     ranges.at(-1)!.to -= 1
+    if (complete) ranges.splice(0, ranges.length, { from, to })
     this.pos = from
     this.work = {
       kind: 'window',
@@ -2020,8 +2026,12 @@ class ChunkedParse implements ChunkedPartialParse {
       reach,
       window: {
         head: point.head,
-        from: block.opaque ? point.at : start - from,
-        to: block.opaque ? point.at : Math.min(to, stop + 1) - from,
+        from: complete ? 0 : block.opaque ? point.at : start - from,
+        to: complete
+          ? to - from
+          : block.opaque
+            ? point.at
+            : Math.min(to, stop + 1) - from,
       },
       point,
       base: ranges[0]!.from,

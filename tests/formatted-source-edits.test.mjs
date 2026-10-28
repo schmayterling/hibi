@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
-import { TreeCursor } from '@lezer/common'
+import { TreeCursor, TreeFragment } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { formattedLiteralEdits } from '../src/renderer/src/formatted-source-edits.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { BoundaryTree } from '../src/shared/chunked-markdown.ts'
 import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { sourceParserInput } from '../src/shared/source-parser.ts'
 
 const markdown = parser.configure(GFM)
 
@@ -111,8 +112,9 @@ test('leaf proofs retain multiline quote and list context', () => {
   )
 })
 
-test('cold list proofs use worker context without reading the whole container', () => {
-  const doc = '- some teh words\n'.repeat(2000)
+test('cold and released list proofs retain worker context without reading the container', () => {
+  const list = '- some teh words\n'.repeat(2000)
+  const doc = list + '\n' + 'paragraph words\n\n'.repeat(20000)
   const source = new SourceStore(doc, { tabId: 'list', revision: 0 }).snapshot()
   const index = new MarkdownBoundaryIndex(source, {
     schema: 1,
@@ -128,8 +130,24 @@ test('cold list proofs use worker context without reading the whole container', 
   while (!index.advance()) {}
   const builder = new BoundaryTree(index.parser, index.length)
   for (const page of index.pages()) builder.append(page.records)
+  const trees = [builder.finish()]
+  let revealed = trees[0]
+  for (const demand of [
+    { from: list.length / 2, to: list.length / 2 + 20 },
+    { from: doc.length - 20, to: doc.length },
+  ]) {
+    const parse = index.parser.startChunkedParse(
+      sourceParserInput(source),
+      TreeFragment.addTree(revealed),
+      demand,
+    )
+    let next = parse.advance()
+    while (!next) next = parse.advance()
+    revealed = next
+  }
+  trees.push(revealed)
   const state = EditorState.create({ doc })
-  const from = doc.indexOf('teh', doc.length / 2)
+  const from = doc.indexOf('teh', list.length / 2)
   const transaction = state.update({
     changes: { from, to: from + 3, insert: 'the' },
   })
@@ -139,11 +157,11 @@ test('cold list proofs use worker context without reading the whole container', 
     units += to - from
     return read(from, to)
   }
-  assert.equal(
-    formattedLiteralEdits(transaction, markdown, builder.finish()),
-    true,
-  )
-  assert.ok(units < 16384, String(units))
+  for (const tree of trees) {
+    units = 0
+    assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+    assert.ok(units < 16384, String(units))
+  }
 })
 
 test('cold container context preserves nested prose and fences', () => {

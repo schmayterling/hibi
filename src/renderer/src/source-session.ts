@@ -610,6 +610,8 @@ export function createSourceSession(
       top: number,
       margin: number,
     ) {
+      // A hidden view's top line maps through the echoes it has not shown.
+      if (pending) top = pending.mapPos(top, 1)
       flush()
       if (failed) return
       try {

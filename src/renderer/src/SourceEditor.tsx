@@ -260,6 +260,7 @@ function isolateFeatures(
 export function SourceEditor({
   document,
   viewId = 'default',
+  sessionViewId = viewId,
   focused = true,
   editTarget,
   sourceVisible = editTarget,
@@ -292,6 +293,7 @@ export function SourceEditor({
 }: {
   document: DocumentState
   viewId?: string
+  sessionViewId?: string
   focused?: boolean
   editTarget: boolean
   sourceVisible?: boolean
@@ -393,8 +395,8 @@ export function SourceEditor({
   const session = documentRuntime.session(document.tabId)!
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
   const bridge = useMemo(
-    () => createSourceSession(session, viewId),
-    [session, viewId, bridgeRetry, document.tabId, document.revision],
+    () => createSourceSession(session, sessionViewId),
+    [session, sessionViewId, bridgeRetry, document.tabId, document.revision],
   )
   // An echo this bridge's view could not show; Retry rebuilds the view.
   const [failedEcho, setFailedEcho] = useState<{
@@ -827,7 +829,8 @@ export function SourceEditor({
         }),
       ]
     }
-    const place = keepingPlace.current ? bridge.place() : null
+    // A note that shrank since its view left still gets the place it kept.
+    const place = bridge.place()
     const selection = place?.selection ?? bridge.selection()
     type PendingCompletion = {
       request: CompletionRequest

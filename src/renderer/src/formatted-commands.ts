@@ -12,6 +12,7 @@ import {
   type TransactionSpec,
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import { uncovered } from './chunked-markdown.ts'
 import { formattedFormatting } from './formatted-contributions.ts'
 import { codeIndentLines, detectIndentUnit, tabIndent } from './indentation.ts'
 import { escapeLineStarts, literal } from './markdown-literal.ts'
@@ -160,11 +161,12 @@ function renumbered(
   end: number,
 ) {
   const changes: { from: number; to?: number; insert?: string }[] = []
-  let number = Number(/^\s*(\d+)/.exec(marker)?.[1])
+  // The marker may follow quote markers and end with a task box.
+  let number = Number(/(\d+)[.)][^\d]*$/.exec(marker)?.[1])
   for (
-    let next = item.nextSibling;
-    Number.isFinite(number) && next?.name === 'ListItem';
-    next = next.nextSibling
+    let next = nextItem(item);
+    Number.isFinite(number) && next;
+    next = nextItem(next)
   ) {
     const mark = next.getChild('ListMark')
     if (mark && mark.from < end) continue
@@ -385,6 +387,16 @@ function containerAt(tree: Tree, pos: number) {
   return null
 }
 
+/** How many spaces (and tabs, with `tabs`) start the text from `from` to `to`, read in growing slices. */
+function blankRun(state: EditorState, from: number, to: number, tabs = true) {
+  const pattern = tabs ? /^[ \t]*/ : /^ */
+  for (let size = 64; ; size *= 2) {
+    const end = Math.min(to, from + size)
+    const count = pattern.exec(state.sliceDoc(from, end))![0].length
+    if (count < end - from || end === to) return count
+  }
+}
+
 /** Where the text of a paragraph, task or ATX heading starts; null for other blocks. */
 function textStart(state: EditorState, leaf: SyntaxNode) {
   if (leaf.name === 'Paragraph') return leaf.from
@@ -392,7 +404,7 @@ function textStart(state: EditorState, leaf: SyntaxNode) {
   const mark = leaf.firstChild
   if (mark?.name !== (leaf.name === 'Task' ? 'TaskMarker' : 'HeaderMark'))
     return null
-  return mark.to + /^[ \t]*/.exec(state.sliceDoc(mark.to, leaf.to))![0].length
+  return mark.to + blankRun(state, mark.to, leaf.to)
 }
 
 /** The first or last leaf block in `node`. */
@@ -426,7 +438,7 @@ function itemMarker(state: EditorState, item: SyntaxNode) {
   const mark = item.getChild('ListMark')
   if (!mark) return null
   const line = state.doc.lineAt(mark.from)
-  const spaces = /^ */.exec(state.sliceDoc(mark.to, line.to))![0].length
+  const spaces = blankRun(state, mark.to, line.to, false)
   const width =
     mark.to -
     mark.from +
@@ -455,11 +467,37 @@ function prefixOf(state: EditorState, node: SyntaxNode | null) {
 
 /** A typed line as literal Markdown; at a block's start, its indentation stays text. */
 function literalLine(text: string, verbatim: boolean, start: boolean) {
-  if (verbatim) return text
-  const value = escapeLineStarts(literal(text))
+  const value = verbatim ? text : escapeLineStarts(literal(text))
   return start && /^(?: {4}| {0,3}\t)/.test(value)
     ? (value[0] === ' ' ? '&#32;' : '&#9;') + value.slice(1)
     : value
+}
+
+/** Whether the text from `from` to `to` is only spaces and line breaks, read in growing slices. */
+function blankText(state: EditorState, from: number, to: number) {
+  for (let size = 64; from < to; from += size, size *= 2)
+    if (/\S/.test(state.sliceDoc(from, Math.min(to, from + size)))) return false
+  return true
+}
+
+/** How many spaces and tabs end the text from `from` to `to`, read in growing slices. */
+function blankBefore(state: EditorState, to: number, from: number) {
+  for (let size = 64; ; size *= 2) {
+    const start = Math.max(from, to - size)
+    const count = /[ \t]*$/.exec(state.sliceDoc(start, to))![0].length
+    if (count < to - start || start === from) return count
+  }
+}
+
+/** Literal text split into its leading spaces, the rest, and its trailing spaces. */
+function spaced(text: string): [string, string, string] {
+  const lead = /^(?:&#(?:32|9);)?[ \t]*/.exec(text)![0].length
+  const trail = lead === text.length ? 0 : /[ \t]*$/.exec(text)![0].length
+  return [
+    text.slice(0, lead),
+    text.slice(lead, text.length - trail),
+    text.slice(text.length - trail),
+  ]
 }
 
 /** The number in an ordered list marker. */
@@ -497,17 +535,28 @@ export function lineInput(
     return null
   const { doc } = state
   const last = lines.length - 1
-  // Select-all replaces the text from the first block's start to the last
-  // block's end, in a change of the whole note.
+  // Input with no visible text that the browser turns into exactly one new
+  // block is read back as a single line break, as the rich editor reads it.
+  const single = () => lineInput(state, tree, main.from, main.to, '\n')
+  // Select-all keeps the first block's kind and replaces everything from its
+  // text on, whatever the parser has reached; the note's first line keeps the
+  // first block's markers. Elsewhere, unparsed text is left to the default.
   const all = from === 0 && to === doc.length && to > 0
+  let lineStart = 0
   if (all) {
-    const first = edgeLeaf(tree.topNode, false),
-      end = edgeLeaf(tree.topNode, true)
+    const first = edgeLeaf(tree.topNode, false)
     const start = first && textStart(state, first)
-    if (start == null || !end || tree.length < to) return null
+    if (start == null) return null
+    lineStart = doc.lineAt(first!.from).from
+    if (
+      !blankText(state, 0, lineStart) ||
+      !/^(?:[ \t>]|(?:[-+*]|\d{1,9}[.)])(?=[ \t]))*$/.test(
+        state.sliceDoc(lineStart, first!.from),
+      )
+    )
+      return null
     from = start
-    to = end.to
-  }
+  } else if (uncovered(tree, from, to)) return null
   // A format waiting at the caret (Bold with nothing selected writes `****`)
   // is not one the browser types with.
   let waiting = false
@@ -532,17 +581,28 @@ export function lineInput(
   const startText = start && textStart(state, start)
   if (start && (startText == null || from < startText)) return null
   let end = start
-  if (to > from && !waiting) {
+  if (to > from && !waiting && !all) {
     end = leafAt(tree, to)
     const endText = end && textStart(state, end)
     if (!start || !end || endText == null || to < endText) return null
   }
   const across = !!start && !!end && start.from !== end.from
-  if (across && state.sliceDoc(to, end!.to).includes('\n')) return null
+  // A tail of several lines keeps its line prefixes, so the blocks must
+  // share their container.
+  if (
+    across &&
+    doc.lineAt(to).number !== doc.lineAt(end!.to).number &&
+    start!.parent?.from !== end!.parent?.from
+  )
+    return null
 
-  // Formatting around the selection, innermost first. Across blocks the
-  // selection may not cut through any; within one, it may not cut one open.
+  // Formatting around the selection, innermost first: around all of it
+  // (`spans`), cut by its start (`ended`: the text before the selection keeps
+  // it, up to the caret) or cut by its end (`started`: the text after keeps
+  // it). A selection end inside formatting markers is not modelled.
   let spans: Formatting[] = []
+  let ended: Formatting[] = []
+  const started: Formatting[] = []
   const seen = new Set<string>()
   for (const found of [
     ...formatting(state, tree, from),
@@ -554,16 +614,18 @@ export function lineInput(
     seen.add(key)
     if (node.to <= from || node.from >= to) continue
     if (from <= node.from && node.to <= to) continue
-    if (
-      across ||
-      node.from >= from ||
-      node.to <= to ||
-      !spanNames.includes(node.name) ||
-      from < first.to ||
-      to > close.from
-    )
-      return null
-    spans.push(found)
+    if (!spanNames.includes(node.name)) return null
+    if (node.from < from && to < node.to) {
+      if (from < first.to || to > close.from) return null
+      spans.push(found)
+    } else if (node.from < from) {
+      if (from < first.to || from > close.from || node.name === 'Link')
+        return null
+      ended.push(found)
+    } else {
+      if (to < first.to || to > close.from) return null
+      started.push(found)
+    }
   }
   // Inline syntax that is not formatting, such as an escape, takes no text.
   for (const pos of [from, to])
@@ -574,6 +636,15 @@ export function lineInput(
     )
       if (!spanNames.includes(node.name)) return null
   let at = from
+  // Formatting that loses all its text before the caret loses its opening
+  // marker too; formatting that loses all its text after it, its closing one.
+  ended = ended.filter(({ node, first }) => {
+    if (from > first.to) return true
+    at = Math.min(at, node.from)
+    return false
+  })
+  const gone = started.filter(({ last: close }) => to === close.from),
+    opened = started.filter((span) => !gone.includes(span))
   // A link takes text only inside it: at its edge, the text goes beside it.
   for (let index = 0; index < spans.length; index++) {
     const { node, first, last: close } = spans[index]!
@@ -585,27 +656,46 @@ export function lineInput(
   }
   const inside = spans.filter(({ last: close }) => to < close.from),
     edge = spans.filter(({ last: close }) => to === close.from)
-  const kept = spans.filter(
-    (span) =>
-      span.node.name !== 'Link' &&
-      (inside.includes(span) || styles.includes(span.node.name)),
-  )
-  const keptEdge = edge.filter((span) => kept.includes(span)),
-    keptInside = inside.filter((span) => kept.includes(span)),
-    dropped = inside.filter((span) => !kept.includes(span))
-  // Later lines open kept formatting outside formatting that only the text
-  // after the caret keeps (a link), so the dropped must nest inside it.
-  const firstKept = inside.findIndex((span) => kept.includes(span))
+  if (gone.length && edge.length) return null
+  const skip =
+    edge.at(-1)?.node.to ?? Math.max(to, ...gone.map(({ node }) => node.to))
+  const replaceEnd = all ? doc.length : end ? end.to : to
+  // The text after the caret stays in place: only whether there is any is read.
+  const after = skip < replaceEnd
+  // As the browser types, later lines take the formatting of the text after
+  // the caret (but no link) once the first line has text, and otherwise the
+  // formatting around the caret and the styles it ends: bold, italic and
+  // strikethrough.
+  const following = after ? [...opened, ...inside] : []
+  const kept =
+    after && lines[0]
+      ? following.filter(({ node }) => node.name !== 'Link')
+      : [...ended, ...edge, ...inside].filter(
+          (span) =>
+            styles.includes(span.node.name) ||
+            (inside.includes(span) && span.node.name !== 'Link'),
+        )
+  // The last line closes kept formatting the text after does not have, and
+  // opens what that text has but the line does not, which must nest inside
+  // the kept formatting.
+  const closed = kept.filter((span) => !following.includes(span)),
+    dropped = following.filter((span) => !kept.includes(span))
   if (
-    firstKept >= 0 &&
-    inside.slice(firstKept).some((span) => !kept.includes(span))
+    dropped.some(({ node }) =>
+      kept.some(
+        (span) =>
+          following.includes(span) &&
+          (node.from < span.node.from || node.to > span.node.to),
+      ),
+    )
   )
     return null
   const code = (list: Formatting[]) =>
     list.some(({ node }) => node.name === 'InlineCode')
-  const verbatim = code(kept)
+  const verbatim = code(kept),
+    verbatimFirst = code([...spans, ...ended])
   if (
-    (code(spans) && lines[0]!.includes('`')) ||
+    (verbatimFirst && lines[0]!.includes('`')) ||
     (verbatim && lines.slice(1).some((line) => line.includes('`')))
   )
     return null
@@ -616,43 +706,55 @@ export function lineInput(
       .join('')
   const close = (list: Formatting[]) =>
     list.map((span) => closer(state, span)).join('')
-  const skip = edge.at(-1)?.node.to ?? to
-  const replaceEnd = end ? end.to : to
-  let after = state.sliceDoc(skip, replaceEnd)
   const heading = start && /^ATXHeading(\d)$/.exec(start.name)
-  // At a heading's end, later lines are paragraphs and its closing sequence stays.
-  const headingEnd =
-    !!heading && !/\S/.test(after.replace(/[ \t]+#+[ \t]*$/, ''))
-  let first =
-    literalLine(lines[0]!, code(spans), at === startText) +
-    state.sliceDoc(to, skip) +
-    close(inside)
-  if (headingEnd) {
-    first += after
-    after = ''
+  // At a heading's end, later lines are paragraphs after its closing sequence.
+  let headingEnd = false
+  if (heading) {
+    const block = end ?? start!
+    const closing = block.lastChild
+    const textEnd =
+      closing?.name === 'HeaderMark' && closing.from > textStart(state, block)!
+        ? closing.from
+        : block.to
+    headingEnd =
+      skip >= textEnd || blankRun(state, skip, textEnd) === textEnd - skip
   }
-  /** Line `index` (from 1), with the caret's offset in it; the last line ends with the text after. */
-  const line = (index: number, rest = after) => {
-    const value = lines[index]!
-    if (index < last)
-      return {
-        text: value
-          ? open(kept) + literalLine(value, verbatim, true) + close(kept)
-          : '',
-        caret: 0,
-      }
-    const typed = value
-      ? open(keptEdge) + literalLine(value, verbatim, true)
-      : ''
-    return {
-      text:
-        open(keptInside) +
-        typed +
-        (value ? close(keptEdge) : '') +
-        open(dropped) +
-        rest,
-      caret: open(keptInside).length + typed.length,
+  // The first line closes formatting the caret ends; spaces it ends with,
+  // or the text before it when it has none, go after the closing markers.
+  const closing =
+    close(ended) + (edge.length ? state.sliceDoc(to, skip) : '') + close(inside)
+  let [lead, core, trail] = spaced(
+    literalLine(lines[0]!, verbatimFirst, at === startText),
+  )
+  if (closing && !core) {
+    const innermost = [...ended, ...edge, ...inside][0]!
+    const spaces = blankBefore(state, at, innermost.first.to)
+    if (spaces < at - innermost.first.to) {
+      trail = state.sliceDoc(at - spaces, at) + lead + trail
+      lead = ''
+      at -= spaces
     }
+  }
+  const first = lead + core + closing + trail
+  /** Line `index` (from 1) with the caret's offset in it; the last line ends with `rest`. */
+  const line = (index: number, rest = '') => {
+    const value = literalLine(lines[index]!, verbatim, true)
+    const [lead, core, trail] = spaced(value)
+    if (index === last && after) {
+      const typed = lead + open(kept) + core
+      const text = core
+        ? typed + close(closed) + trail
+        : lead + open(kept.filter((span) => following.includes(span)))
+      return {
+        text: text + open(dropped) + rest,
+        caret: core && !trail ? typed.length : text.length,
+      }
+    }
+    if (!core) return { text: value, caret: value.length }
+    // With nothing typed after them, the caret stays inside the styles.
+    const typed = lead + open(kept) + core
+    const text = typed + close(kept) + trail
+    return { text, caret: trail ? text.length : typed.length }
   }
   const changes: { from: number; to?: number; insert?: string }[] = []
 
@@ -684,27 +786,40 @@ export function lineInput(
   if (container?.name !== 'ListItem') {
     // Paragraphs and headings, quoted or not.
     if (start && !heading && start.name !== 'Paragraph') return null
-    if (!/\S/.test(text) && last === 1) return blockBreak(state, tree)
+    if (!/\S/.test(text) && last === 1 && text !== '\n') return single()
     const prefix = prefixOf(state, container)
     if (prefix == null) return null
     const blank = prefix.trimEnd(),
       lead = heading && !headingEnd ? `${'#'.repeat(Number(heading[1]))} ` : ''
-    insert = first
+    let added = ''
     offset = 0
     for (let index = 1; index <= last; index++) {
       const { text, caret } = line(index)
-      insert += `\n${blank}\n${text ? prefix + lead : blank}`
-      offset = insert.length + caret
-      insert += text
+      // The last line holds the text after the caret, which stays in place.
+      added += `\n${blank}\n${text || (index === last && after) ? prefix + lead : blank}`
+      offset = added.length + caret
+      added += text
+    }
+    if (headingEnd && after) {
+      // The heading keeps its closing sequence; the paragraphs follow it.
+      changes.push({ from: at, to: skip, insert: first })
+      replaceFrom = replaceTo = replaceEnd
+      insert = added
+    } else {
+      replaceTo = skip
+      insert = first + added
+      offset += first.length
     }
     // On a blank line beside a block, the text is a paragraph of its own.
     if (!start && !container) {
       const { number } = doc.lineAt(at)
-      if (number > 1 && doc.line(number - 1).text.trim()) {
+      const shows = (line: Line) =>
+        blankRun(state, line.from, line.to) < line.length
+      if (number > 1 && shows(doc.line(number - 1))) {
         insert = `\n${insert}`
         offset++
       }
-      if (number < doc.lines && doc.line(number + 1).text.trim()) insert += '\n'
+      if (number < doc.lines && shows(doc.line(number + 1))) insert += '\n'
     }
   } else {
     const item = container
@@ -714,7 +829,9 @@ export function lineInput(
       !marker ||
       (start && start.name !== 'Paragraph' && start.name !== 'Task') ||
       (!start &&
-        (marker.line.number !== doc.lineAt(at).number || blocks.length))
+        (marker.line.number !== doc.lineAt(at).number ||
+          at < Math.min(marker.line.to, marker.mark.from + marker.width) ||
+          blocks.length))
     )
       return null
     // The item, and the items its list is nested in.
@@ -727,32 +844,41 @@ export function lineInput(
       levels.push(up)
     // Across blocks, the selection ends after this item: in a later item of
     // its list, whose next items follow, or after the list.
-    let restAfter: SyntaxNode | null = item
+    let restAfter: SyntaxNode | null = all ? null : item
     if (across) {
       restAfter = null
       for (let node = end!.parent; node; node = node.parent)
         if (node.name === 'ListItem' && node.parent?.from === item.parent?.from)
           restAfter = node
+      // Or it ends in a block nested in this item, when nothing follows it there.
+      const nested = restAfter?.from === item.from
       if (
         levels.length > 1 ||
-        end!.from < item.to ||
+        (nested ? item.to > end!.to : end!.from < item.to) ||
         (!restAfter && end!.from < item.parent!.to)
       )
         return null
     }
     const others = blocks.filter(
-      (block) => block.from !== start?.from && (!across || block.to <= from),
+      (block) =>
+        block.from !== start?.from && (!(across || all) || block.to <= from),
     )
     const headEmpty = startText == null || startText === at
     if (headEmpty && !lines[0] && after) {
       // At an item's start, the new items come before its text.
-      if (spans.length || across || (start && blocks[0]!.from !== start.from))
+      if (
+        spans.length ||
+        ended.length ||
+        started.length ||
+        across ||
+        (start && blocks[0]!.from !== start.from)
+      )
         return null
       const markers = markersOf(state, levels)
       insert = first
       offset = 0
       for (let index = 1; index <= last; index++) {
-        const { text, caret } = line(index, '')
+        const { text, caret } = line(index)
         insert += `\n${markers[0]!.next()}`
         offset = insert.length + caret
         insert += text
@@ -791,7 +917,8 @@ export function lineInput(
         } else current.paragraph = true
         current.index = index
       }
-      if (!/\S/.test(text) && made.length === 1) return blockBreak(state, tree)
+      if (!/\S/.test(text) && made.length === 1 && text !== '\n')
+        return single()
       const moved = original.index > 0
       if (moved && first) return null
       const top = levels.at(-1)!.parent!
@@ -810,15 +937,19 @@ export function lineInput(
         out += text
       }
       const final = made.at(-1) ?? original
-      const insertAt = across ? replaceEnd : Math.max(item.to, at)
+      const insertAt = across || all ? replaceEnd : Math.max(item.to, at)
       if (final.paragraph) {
-        const outer = levels.length > 1 ? levels.at(-1)! : restAfter
+        const outer = all
+          ? null
+          : levels.length > 1
+            ? levels.at(-1)!
+            : restAfter
         const rest = outer && nextItem(outer)
         if (rest) {
           out += `\n${blank}`
           changes.push(...restartList(state, top, rest))
         }
-      } else if (restAfter || final.level)
+      } else if (!all && (restAfter || final.level))
         changes.push(
           ...markers[final.level]!.renumber(
             final.level ? levels[final.level]! : restAfter!,
@@ -829,7 +960,7 @@ export function lineInput(
         // The empty item itself becomes the first block.
         replaceFrom = marker.line.from
         replaceTo = insertAt
-        if (replaceFrom > 0) replaceFrom--
+        if (replaceFrom > lineStart) replaceFrom--
         else {
           const separator = /^\n(?:[^\n]*\n)?/.exec(out)![0]
           out = out.slice(original.paragraph ? separator.length : 1)
@@ -837,24 +968,26 @@ export function lineInput(
         }
         insert = out
         offset = caretAt
-      } else if (!across && start && start.to < insertAt) {
-        // The item's other blocks stay in it, before the new items.
+      } else if (!across && !all && start && start.to < insertAt) {
+        // The item's other blocks stay in it, before the new items, which
+        // take the text after the caret.
         changes.push({ from: at, to: start.to, insert: first })
         replaceFrom = replaceTo = insertAt
-        insert = out
+        insert = out + state.sliceDoc(skip, start.to)
         offset = caretAt
       } else {
-        replaceTo = insertAt
+        replaceTo = skip
         insert = first + out
         offset = first.length + caretAt
       }
     }
   }
   if (all) {
-    if (changes.length) return null
-    insert =
-      doc.sliceString(0, replaceFrom) + insert + doc.sliceString(replaceTo)
-    offset += replaceFrom
+    // One change of the whole note, its leading blank lines included.
+    if (changes.length || replaceFrom < lineStart) return null
+    const kept = doc.sliceString(lineStart, replaceFrom)
+    insert = kept + insert
+    offset += kept.length
     replaceFrom = 0
     replaceTo = doc.length
   }

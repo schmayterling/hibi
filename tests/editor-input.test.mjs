@@ -2117,6 +2117,10 @@ function inputOutcome(source) {
               item.task ? Boolean(item.checked) : null,
               blocks(item.tokens),
             ]),
+            // Every item's number, not only the start the list renders from.
+            token.ordered
+              ? token.items.map((item) => Number(/\d+/.exec(item.raw)[0]))
+              : null,
           ],
         ]
       if (token.type === 'table')
@@ -2148,6 +2152,7 @@ test('cm outcome projection keeps task state, prose breaks and literal text', ()
     inputOutcome('one\n\ntwo'),
     inputOutcome('one\n\n\n\ntwo'),
   )
+  assert.notDeepEqual(inputOutcome('9. a\n10. b'), inputOutcome('9. a\n9. b'))
   assert.deepEqual(inputOutcome('~~~\none\ntwo\n~~~'), [
     ['code-block', '', 'one\ntwo'],
   ])
@@ -2916,6 +2921,23 @@ for (const all of [false, true]) {
     assert.equal(large.changes, small.changes)
   })
 }
+
+test('codemirror: multi-line input over select-all replaces all of a large note', {
+  timeout: 60000,
+}, async (t) => {
+  // The formatted view parses a large note in steps; input before the parser
+  // reaches its end must still replace the whole selection.
+  const source = 'first\n\n' + 'old tail paragraph\n\n'.repeat(120000)
+  const { page, rich } = await launchInputFixture(t, source)
+  await rich.focus()
+  await rich.press('ControlOrMeta+a')
+  await page.keyboard.insertText('x\ny')
+  const { markdown } = await acceptedInput(page)
+  assert.ok(
+    markdown === 'x\n\ny' || markdown === 'x\ny',
+    JSON.stringify(markdown.slice(0, 80)),
+  )
+})
 
 test('codemirror: blank paragraphs and a typed trailing space survive tab switches and exact disk save', {
   timeout: 30000,

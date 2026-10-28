@@ -232,23 +232,17 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     else pre.scrollIntoView({ block: 'end' })
   }, box)
   if (cm)
-    await t.test(
-      'wide code can scroll horizontally',
-      {
-        todo: 'formatted gap syntax-004: code blocks must retain horizontal scrolling',
-      },
-      async () => {
-        assert.ok(
-          await block.evaluate(
-            (pre, box) =>
-              (pre.isConnected ? pre : document.querySelector(box)).scrollLeft >
-              0,
-            box,
-          ),
-          'wide code retains horizontal scrolling',
-        )
-      },
-    )
+    await t.test('wide code can scroll horizontally', async () => {
+      assert.ok(
+        await block.evaluate(
+          (pre, box) =>
+            (pre.isConnected ? pre : document.querySelector(box)).scrollLeft >
+            0,
+          box,
+        ),
+        'wide code retains horizontal scrolling',
+      )
+    })
   await block.evaluate(
     (pre, selector) =>
       new Promise((resolve, reject) => {
@@ -282,13 +276,7 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
 
 test(
   'rich highlighting waits while source mode hides it, and long lines stay windowed',
-  (engine) => ({
-    timeout: 45000,
-    todo:
-      engine === 'codemirror'
-        ? 'formatted gap syntax-002: formatted code highlighting must appear before source-mode lifecycle checks'
-        : undefined,
-  }),
+  () => ({ timeout: 45000 }),
   async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-code-hidden-'))
     const app = await electron.launch({
@@ -451,13 +439,7 @@ test(
 
 test(
   'scrolled tab-indented, wide-character, and wrapped long lines keep visible highlighting',
-  (engine) => ({
-    timeout: 45000,
-    todo:
-      engine === 'codemirror'
-        ? 'formatted gap syntax-003: formatted code must retain visible tokens on scrolled and wrapped long lines'
-        : undefined,
-  }),
+  () => ({ timeout: 45000 }),
   async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-code-columns-'))
     const app = await electron.launch({
@@ -507,7 +489,14 @@ test(
             const started = performance.now()
             const check = () => {
               if (selector && !pre.isConnected)
-                pre = document.querySelector(selector)
+                pre = document.querySelector(selector) ?? pre
+              // A redraw replaces the box; wait a frame for the new one.
+              if (!pre.isConnected) {
+                if (performance.now() - started > 8000)
+                  reject(new Error('no code box is drawn'))
+                else requestAnimationFrame(check)
+                return
+              }
               const box = pre.getBoundingClientRect()
               const pane = pre.closest('.rich-pane').getBoundingClientRect()
               const shown = [

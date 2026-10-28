@@ -14,9 +14,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | reload-003 | [addon-reload.test.mjs:969](addon-reload.test.mjs#L969) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
 | api-001 | [addon-toolbar-command.test.mjs:149](addon-toolbar-command.test.mjs#L149) | api 2 rich selection must report rendered text | 6: verbatim projections and selection contracts |
 | completion-001 | [autocomplete-addon.test.mjs:369](autocomplete-addon.test.mjs#L369) | a fresh rich completion list must accept the word with tab | 8a: native input, structure and toolbar state |
-| syntax-004 | [code-syntax-settings.test.mjs:238](code-syntax-settings.test.mjs#L238) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
-| syntax-002 | [code-syntax-settings.test.mjs:289](code-syntax-settings.test.mjs#L289) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
-| syntax-003 | [code-syntax-settings.test.mjs:458](code-syntax-settings.test.mjs#L458) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
 | input-001 | [editor-input.test.mjs:2280](editor-input.test.mjs#L2280) | native multiline markdown preserves literal text and block structure | 8a: native input, structure and toolbar state |
 | input-002 | [editor-input.test.mjs:2284](editor-input.test.mjs#L2284) | native multiline paragraph preserves literal text and block structure | 8a: native input, structure and toolbar state |
 | input-003 | [editor-input.test.mjs:2286](editor-input.test.mjs#L2286) | native multiline paragraph keeps inserted caret and following text | 8a: native input, structure and toolbar state |

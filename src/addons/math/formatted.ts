@@ -5,6 +5,7 @@ import {
   type FormattedNodeView,
   showMarkdownMarkers,
 } from '../../renderer/src/formatted-contributions'
+import { formattedMathBlock } from '../../shared/formatted-text-rules.ts'
 import { blockMathSyntax, inlineMathSyntax } from './formatted-syntax'
 import type { formulaScheduler } from './rendering'
 
@@ -336,7 +337,7 @@ export function mathContributions(host: MathHost) {
   }
   /** A display block's formula, when it is closed. */
   const display = (node: SyntaxNodeRef, source: string) => {
-    if (node.node.getChildren('MathMark').length < 2) return null
+    if (!formattedMathBlock(node.node)) return null
     const texts = node.node.getChildren('MathText')
     const first = texts[0],
       last = texts.at(-1)

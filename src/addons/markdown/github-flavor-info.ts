@@ -1,7 +1,7 @@
 import { Marked } from 'marked'
 import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
 import type { MarkdownFlavor } from '../api'
-import { alertMarker } from './alerts.ts'
+import { alertMarker } from './alert-marker.ts'
 
 const parser = new Marked({ gfm: true })
 export const flavorInfo: MarkdownFlavor = {

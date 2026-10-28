@@ -6,6 +6,10 @@
  */
 
 import DOMPurify from 'dompurify'
+import {
+  markdownLineStarts as escapeLineStarts,
+  markdownLiteral as literal,
+} from '../../shared/markdown-literal.ts'
 import { renderedHtmlOptions } from '../../shared/rendered-html.ts'
 
 const blocks = new Set([
@@ -47,29 +51,6 @@ const skipped = new Set(['HEAD', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT'])
 const isBlock = (node: Node) =>
   node.nodeType === Node.ELEMENT_NODE && blocks.has(node.nodeName)
 const hasBlocks = (node: Node) => [...node.childNodes].some(isBlock)
-
-/**
- * Text that reads as itself in Markdown, whichever flavors the note uses now
- * or later: delimiters (strikethrough and subscript `~`, math `$`, highlight
- * `==`) and entity references are escaped too.
- */
-function literal(text: string) {
-  return (
-    text
-      .replace(/[\\`*_[\]<~$]/g, '\\$&')
-      .replace(/&(?=#?\w+;)/g, '\\&')
-      .replace(/=(?==)/g, '\\=')
-      // Character references preserve Unicode spaces through Markdown trimming.
-      .replace(/[^\S \t\r\n\f]/gu, (space) => `&#${space.codePointAt(0)};`)
-  )
-}
-
-/** Line starts that would begin a block. */
-function escapeLineStarts(text: string) {
-  return text
-    .replace(/^( {0,3})(\d{1,9})([.)])/gm, '$1$2\\$3')
-    .replace(/^( {0,3})([#>+=-])/gm, '$1\\$2')
-}
 
 /** Wrap inline content in a delimiter, keeping its outer spaces outside. */
 function wrap(content: string, mark: string) {

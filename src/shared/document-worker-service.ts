@@ -64,10 +64,17 @@ export class DocumentWorkerService {
   #epoch = ''
   #index: SourceSearchIndex | null = null
   #query = ''
+  #findKey = ''
+  #rendered: import('./rendered-text.ts').RenderedTextIndex | null = null
+  #renderedModule: typeof import('./rendered-text.ts') | null = null
+  #renderedLoading = false
+  #renderedKey = ''
+  #location: import('./source-search-index.ts').SearchLocation | null = null
   #findId = 0
   #request: FindRequest | null = null
   #work: Generator<unknown, unknown> | null = null
-  #stage: 'build' | 'locate' = 'build'
+  #stage: 'build' | 'locate' | 'highlights' | 'replacement' = 'build'
+  #highlights: import('./source-search-index.ts').SearchHighlights | undefined
   #findChannel: MessageChannel | null = null
   #findScheduled = false
   #disposed = false
@@ -200,6 +207,7 @@ export class DocumentWorkerService {
     this.#work?.return(undefined)
     this.#work = null
     this.#request = null
+    this.#location = null
   }
   #cancelMetadata(release = false) {
     clearTimeout(this.#metadataTimer)
@@ -242,6 +250,7 @@ export class DocumentWorkerService {
     }
     this.#cancel()
     this.#index = null
+    this.#rendered = null
     if (stage === 'replica') {
       this.#stopBoundaries(true)
       this.#cancelMetadata(true)
@@ -255,6 +264,10 @@ export class DocumentWorkerService {
       epoch: this.#epoch,
       stage,
       ...(id === undefined ? {} : { id }),
+      ...(this.#renderedModule &&
+      error instanceof this.#renderedModule.UnsupportedRenderedFind
+        ? { reason: 'unsupported' as const }
+        : {}),
       message: error instanceof Error ? error.message : String(error),
     })
   }
@@ -266,6 +279,7 @@ export class DocumentWorkerService {
     this.#maintenance?.dispose()
     this.#maintenance = null
     this.#index = null
+    this.#rendered = null
     this.#store = null
     this.#bootstrap = null
     this.#epoch = epoch
@@ -278,6 +292,7 @@ export class DocumentWorkerService {
       (change) => {
         store.commitCompaction(change)
         this.#index?.adoptStorage(change)
+        this.#rendered?.adoptSource(change.after)
         this.#model?.adoptStorage(change)
       },
       (error) => this.#fail('replica', error),
@@ -344,6 +359,7 @@ export class DocumentWorkerService {
         this.#cancel()
         this.#cancelMetadata()
         this.#index = null
+        this.#rendered = null
         this.#store.commit(prepared)
         this.#model?.apply(prepared)
         this.#stopBoundaries()
@@ -488,24 +504,50 @@ export class DocumentWorkerService {
           message.to > this.#store.snapshot().normalizedLength
         )
           throw new Error('Find selection is outside its source snapshot.')
+        if (
+          message.replacement !== undefined &&
+          (message.mode !== 'rendered' ||
+            typeof message.replacement !== 'string' ||
+            message.replacement.length > 65536)
+        )
+          throw new Error('Find text is too long.')
         if (typeof message.query !== 'string' || message.query.length > 65536)
           throw new Error('Find text is too long.')
-        if (!this.#index || message.query !== this.#query) {
+        const mode = message.mode ?? 'source',
+          prefix = message.prefix ?? 0
+        const viewport = message.viewport
+        const rawPrefix = this.#store.snapshot().editorToRaw(prefix)
+        if (
+          (mode !== 'source' && mode !== 'rendered') ||
+          !Number.isSafeInteger(prefix) ||
+          prefix < 0 ||
+          prefix > this.#store.snapshot().normalizedLength ||
+          rawPrefix === null ||
+          !this.#store.snapshot().isEditBoundary(rawPrefix) ||
+          (viewport !== undefined &&
+            (!viewport ||
+              typeof viewport !== 'object' ||
+              Array.isArray(viewport) ||
+              !Number.isSafeInteger(viewport.from) ||
+              !Number.isSafeInteger(viewport.to) ||
+              viewport.from < 0 ||
+              viewport.to < viewport.from ||
+              viewport.to > this.#store.snapshot().normalizedLength ||
+              !Number.isSafeInteger(viewport.limit ?? 512) ||
+              (viewport.limit ?? 512) < 1 ||
+              (viewport.limit ?? 512) > 512))
+        )
+          throw new Error('Find selection is outside its source snapshot.')
+        if (
+          mode === 'rendered' &&
+          (!message.config || message.config.prefix !== prefix)
+        )
+          throw new Error('Formatted find configuration is unsupported.')
+        if (mode === 'rendered' && !this.#renderedModule) {
           this.#cancel()
-          this.#index = new SourceSearchIndex(
-            this.#store.snapshot(),
-            message.query,
-          )
-          this.#query = message.query
-          this.#stage = 'build'
-          this.#work = this.#index.build()
-        } else if (this.#stage !== 'build' || !this.#work) {
-          this.#cancel()
-          this.#stage = 'locate'
-          this.#work = this.#index.locate(message.from, message.to)
-        }
-        this.#request = { ...message }
-        this.#schedule()
+          this.#request = { ...message }
+          this.#loadRendered()
+        } else this.#startFind(message)
       } else throw new Error('Unknown document worker request.')
     } catch (error) {
       this.#fail(
@@ -520,6 +562,71 @@ export class DocumentWorkerService {
           : undefined,
       )
     }
+  }
+  #loadRendered() {
+    if (this.#renderedLoading) return
+    this.#renderedLoading = true
+    void import('./rendered-text.ts').then(
+      (module) => {
+        this.#renderedLoading = false
+        this.#renderedModule = module
+        const request = this.#request
+        if (
+          request?.mode === 'rendered' &&
+          this.#store &&
+          request.version === this.#store.snapshot().version
+        )
+          try {
+            this.#startFind(request)
+          } catch (error) {
+            this.#fail('find', error, request.id)
+          }
+      },
+      (error) => {
+        this.#renderedLoading = false
+        if (this.#request?.mode === 'rendered') this.#fail('find', error)
+      },
+    )
+  }
+  #startFind(message: FindRequest) {
+    const mode = message.mode ?? 'source',
+      prefix = message.prefix ?? 0
+    const renderedKey = JSON.stringify(message.config)
+    const key = mode + ':' + (mode === 'rendered' ? renderedKey : 0)
+    if (
+      mode === 'rendered' &&
+      (!this.#rendered || this.#renderedKey !== renderedKey)
+    ) {
+      this.#rendered = new this.#renderedModule!.RenderedTextIndex(
+        this.#store!.snapshot(),
+        prefix,
+        message.config,
+      )
+      this.#renderedKey = renderedKey
+    }
+    if (
+      !this.#index ||
+      message.query !== this.#query ||
+      key !== this.#findKey
+    ) {
+      this.#cancel()
+      this.#index = new SourceSearchIndex(
+        this.#store!.snapshot(),
+        message.query,
+        {},
+        mode === 'rendered' ? this.#rendered! : undefined,
+      )
+      this.#query = message.query
+      this.#findKey = key
+      this.#stage = 'build'
+      this.#work = this.#index.build()
+    } else if (this.#stage !== 'build' || !this.#work) {
+      this.#cancel()
+      this.#stage = 'locate'
+      this.#work = this.#index.locate(message.from, message.to)
+    }
+    this.#request = { ...message }
+    this.#schedule()
   }
   #loadMetadata() {
     if (this.#metadataLoading) return
@@ -807,18 +914,65 @@ export class DocumentWorkerService {
         if (this.#stage === 'build') {
           this.#stage = 'locate'
           this.#work = this.#index!.locate(request.from, request.to)
+        } else if (
+          this.#stage === 'locate' &&
+          (request.viewport || request.replacement !== undefined)
+        ) {
+          this.#location =
+            step.value as import('./source-search-index.ts').SearchLocation
+          this.#highlights = undefined
+          if (request.viewport) {
+            this.#stage = 'highlights'
+            this.#work = this.#index!.highlights(request.viewport)
+          } else {
+            this.#stage = 'replacement'
+            this.#work = this.#index!.replacement(
+              request.from,
+              request.to,
+              request.replacement!,
+            )
+          }
+        } else if (
+          this.#stage === 'highlights' &&
+          request.replacement !== undefined
+        ) {
+          this.#highlights =
+            step.value as import('./source-search-index.ts').SearchHighlights
+          this.#stage = 'replacement'
+          this.#work = this.#index!.replacement(
+            request.from,
+            request.to,
+            request.replacement,
+          )
         } else {
+          const replacement =
+            this.#stage === 'replacement'
+              ? (step.value as import('./rendered-replace.ts').RenderedReplacement)
+              : undefined
+          const highlights = replacement
+            ? this.#highlights
+            : this.#stage === 'highlights'
+              ? (step.value as import('./source-search-index.ts').SearchHighlights)
+              : undefined
           this.#work = null
           this.#post({
             type: 'find',
             epoch: this.#epoch,
             id: request.id,
             version: request.version,
-            location: step.value as Extract<
-              DocumentWorkerReply,
-              { type: 'find' }
-            >['location'],
-            ...(request.highlights
+            location:
+              highlights || replacement
+                ? this.#location!
+                : (step.value as Extract<
+                    DocumentWorkerReply,
+                    { type: 'find' }
+                  >['location']),
+            ...(request.mode === 'rendered'
+              ? { mode: 'rendered' as const }
+              : {}),
+            ...(highlights ? { highlights } : {}),
+            ...(replacement ? { replacement } : {}),
+            ...(request.highlights && request.mode !== 'rendered'
               ? { highlightStarts: this.#index!.highlightStarts() }
               : {}),
           })
@@ -850,6 +1004,7 @@ export class DocumentWorkerService {
     this.#maintenance?.dispose()
     this.#maintenance = null
     this.#index = null
+    this.#rendered = null
     this.#store = null
     this.#bootstrap = null
   }

@@ -479,6 +479,7 @@ test('32 mib real find build completes with progress on one worker', {
   let result,
     failure,
     scanned = 0,
+    located = 0,
     transferred = 0,
     loaded = false
   const build = SourceSearchIndex.prototype.build
@@ -488,8 +489,25 @@ test('32 mib real find build completes with progress on one worker', {
       for (;;) {
         const next = steps.next()
         if (next.done) return next.value
+        assert.ok(Number.isSafeInteger(next.value.scanned))
         assert.ok(next.value.scanned >= 0 && next.value.scanned <= length)
         scanned = Math.max(scanned, next.value.scanned)
+        yield next.value
+      }
+    } finally {
+      steps.return?.()
+    }
+  })
+  const locate = SourceSearchIndex.prototype.locate
+  t.mock.method(SourceSearchIndex.prototype, 'locate', function* (...args) {
+    const steps = locate.apply(this, args)
+    try {
+      for (;;) {
+        const next = steps.next()
+        if (next.done) return next.value
+        located++
+        // This corpus has one distant match: each batch scans 8192 source units.
+        assert.ok(located <= Math.ceil(length / 8192) + 1)
         yield next.value
       }
     } finally {
@@ -520,9 +538,10 @@ test('32 mib real find build completes with progress on one worker', {
       if (failure) throw failure
       return result
     },
-    () => transferred + Number(loaded) + scanned,
+    () => transferred + Number(loaded) + scanned + located,
     3000,
-    'Find worker made no progress',
+    () =>
+      `Find worker made no progress: ${JSON.stringify({ transferred, loaded, scanned, located })}`,
   )
   assert.equal(location.total, 1)
   assert.equal(scanned, length)
@@ -547,6 +566,7 @@ test('32 mib real find build completes with progress on one worker', {
     JSON.stringify({
       units: source.length,
       scanned,
+      located,
       workers: f.workers.length,
       progress: progress.length,
       total: location.total,

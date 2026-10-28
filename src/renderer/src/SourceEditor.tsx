@@ -1734,6 +1734,12 @@ export function SourceEditor({
             override: [sourceCompletions],
             selectOnOpen: false,
             defaultKeymap: false,
+            // Like the rich view's list, the formatted view's answers keys as
+            // soon as it opens, whatever the wall clock does. The source view
+            // keeps CodeMirror's delay.
+            ...(formatted
+              ? { interactionDelay: Number.NEGATIVE_INFINITY }
+              : {}),
           }),
           EditorState.transactionExtender.of((transaction) => {
             const state = transactionState(transaction)
@@ -2173,6 +2179,17 @@ export function SourceEditor({
         ChangeSet.of(changes, previousLength),
       )
     })
+    // The keys of a started composition are the input method's, as in the
+    // rich view. CodeMirror ignores them only once the composition changes
+    // the text; before that, its keymap and focus keys would still take them.
+    // The open list closes; nothing prevents the key's default.
+    const passComposingKey = (event: KeyboardEvent) => {
+      if (!event.isComposing && !editor.compositionStarted) return
+      cancelCompletion()
+      closeCompletion(editor)
+      event.stopPropagation()
+    }
+    editor.dom.addEventListener('keydown', passComposingKey, true)
     const onTypingCommand = (event: KeyboardEvent) => {
       if (
         completion &&
@@ -2576,6 +2593,7 @@ export function SourceEditor({
     return () => {
       restoreFocus.current ??= captureEditorFocus(editor.contentDOM)
       cancelAnimationFrame(compositionFrame)
+      editor.dom.removeEventListener('keydown', passComposingKey, true)
       editor.contentDOM.removeEventListener('keydown', onTypingCommand, true)
       editor.contentDOM.removeEventListener(
         'compositionstart',

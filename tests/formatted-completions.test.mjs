@@ -41,7 +41,7 @@ test('formatted completions keep exact source, history, composition, privacy and
         accepted: [], invalid: false, replacement: 'hello' }
       const stopTyping = context.editor.onTypingContext(event => probe.events.push(event))
       const stop = await context.editor.registerCompletionProvider(request => {
-        if (request.editor !== 'rich') return []
+        if (request.editor !== 'rich' && !probe.source) return []
         probe.requests++
         if (!request.before.endsWith('hel')) return []
         return [{ label: 'hello', insertText: probe.replacement,
@@ -96,14 +96,14 @@ test('formatted completions keep exact source, history, composition, privacy and
       await new Promise(requestAnimationFrame)
       await new Promise(requestAnimationFrame)
     })
-  const reset = async (text) => {
+  const reset = async (text, content) => {
     await page.evaluate(
       (text) =>
         window.formattedCompletion.context.editor.updateMarkdown(() => text),
       text,
     )
     await saved(text)
-    await rich.press('End')
+    await (content ? page.locator(content) : rich).press('End')
     await settle()
     await page.evaluate(() => {
       window.formattedCompletion.events = []
@@ -150,6 +150,184 @@ test('formatted completions keep exact source, history, composition, privacy and
   await page.keyboard.press('Escape')
   await menu.waitFor({ state: 'hidden' })
   await saved('hel')
+  // Inspect the dispatched event after every handler has run, before ending
+  // the composition or replacing the note. Acceptance alone misses fallback
+  // bindings that insert a tab, move the caret, or arm Escape–Tab navigation.
+  await page.evaluate(() => {
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        window.formattedCompletion.lastKey = event
+      },
+      true,
+    )
+  })
+  const accepted = () =>
+    page.evaluate(() => window.formattedCompletion.accepted.length)
+  const composingKeys = async (pane) => {
+    const content =
+      pane === 'source' ? page.locator('.source-pane .cm-content') : rich
+    const snapshot = () =>
+      content.evaluate(async (dom) => {
+        const cm = dom.matches('.cm-content')
+        const view = cm ? dom.cmTile.root.view : dom.editor.view
+        const selection = cm ? view.state.selection.main : view.state.selection
+        const event = window.formattedCompletion.lastKey
+        return {
+          markdown: (await window.hibi.getDocument()).markdown,
+          anchor: selection.anchor,
+          head: selection.head,
+          started: cm ? view.compositionStarted : view.composing,
+          changed: cm ? view.composing : false,
+          armed: cm && view.inputState.tabFocusMode > 0,
+          key: event?.key,
+          isComposing: event?.isComposing,
+          prevented: event?.defaultPrevented,
+        }
+      })
+    const prepare = async () => {
+      await reset(
+        'hel\n\nbelow',
+        pane === 'source' ? '.source-pane .cm-content' : undefined,
+      )
+      await content.evaluate((dom) => {
+        if (dom.matches('.cm-content')) {
+          dom.cmTile.root.view.dispatch({ selection: { anchor: 3 } })
+          dom.cmTile.root.view.focus()
+        } else {
+          dom.editor.commands.setTextSelection(4)
+          dom.editor.view.focus()
+        }
+      })
+      await page.waitForFunction(
+        (selector) => {
+          const dom = document.querySelector(selector)
+          const cm = dom.matches('.cm-content')
+          const view = cm ? dom.cmTile.root.view : dom.editor.view
+          return !(cm ? view.compositionStarted : view.composing)
+        },
+        pane === 'source'
+          ? '.source-pane .cm-content'
+          : '.rich-pane [contenteditable="true"]',
+      )
+      await page.keyboard.press('Control+Space')
+      await menu.getByRole('option', { name: 'hello', exact: true }).waitFor()
+    }
+    for (const key of [
+      'Tab',
+      'Enter',
+      'ArrowDown',
+      'ArrowUp',
+      'PageDown',
+      'PageUp',
+      'Escape',
+      'Control+Space',
+    ]) {
+      await t.test(
+        `${pane}: native composing ${key} belongs to the input method`,
+        async () => {
+          await prepare()
+          const beforeAccepted = await accepted()
+          await cdp.send('Input.imeSetComposition', {
+            text: 'hel',
+            selectionStart: 3,
+            selectionEnd: 3,
+            replacementStart: 0,
+            replacementEnd: 3,
+          })
+          const before = await snapshot()
+          assert.equal(before.started, true)
+          assert.equal(before.changed, false)
+          assert.equal(before.markdown, 'hel\n\nbelow')
+          try {
+            await pressPastCompletionDelay(page, key)
+            await menu.waitFor({ state: 'hidden' })
+            const after = await snapshot()
+            if (key === 'Enter') {
+              // The browser's default may add paragraph/line breaks. It must
+              // preserve the text on both sides of the composing range.
+              assert.match(after.markdown, /^hel\n{2,4}below$/)
+            } else {
+              assert.equal(after.markdown, before.markdown)
+            }
+            assert.equal(after.isComposing, true)
+            assert.equal(after.prevented, false)
+            assert.equal(after.armed, false)
+            assert.equal(await accepted(), beforeAccepted)
+            if (key === 'Tab' || key === 'Escape') {
+              assert.equal(after.anchor, before.anchor)
+              assert.equal(after.head, before.head)
+            }
+          } finally {
+            await content.focus()
+            await cdp.send('Input.insertText', { text: 'hel' })
+          }
+        },
+      )
+    }
+    const cm = await content.evaluate((dom) => dom.matches('.cm-content'))
+    for (const started of cm ? [false, true] : [true]) {
+      await t.test(
+        `${pane}: composing guard before the first paint (${started ? 'started' : 'event'})`,
+        async () => {
+          await prepare()
+          const before = await snapshot()
+          const beforeAccepted = await accepted()
+          // This is one synchronous dispatch: no paint or text change can
+          // intervene between compositionstart and the command key.
+          const result = await content.evaluate((dom, started) => {
+            const cm = dom.matches('.cm-content')
+            const view = cm ? dom.cmTile.root.view : dom.editor.view
+            if (started)
+              dom.dispatchEvent(
+                new CompositionEvent('compositionstart', { bubbles: true }),
+              )
+            const phase = {
+              started: cm ? view.compositionStarted : view.composing,
+              changed: cm ? view.composing : false,
+            }
+            const event = new KeyboardEvent('keydown', {
+              key: 'Tab',
+              code: 'Tab',
+              keyCode: 9,
+              bubbles: true,
+              cancelable: true,
+              isComposing: !started,
+            })
+            dom.dispatchEvent(event)
+            if (started)
+              dom.dispatchEvent(
+                new CompositionEvent('compositionend', { bubbles: true }),
+              )
+            return { ...phase, prevented: event.defaultPrevented }
+          }, started)
+          assert.deepEqual(result, {
+            started,
+            changed: false,
+            prevented: false,
+          })
+          await menu.waitFor({ state: 'hidden' })
+          const after = await snapshot()
+          assert.equal(after.markdown, before.markdown)
+          assert.equal(after.anchor, before.anchor)
+          assert.equal(after.head, before.head)
+          assert.equal(after.armed, false)
+          assert.equal(await accepted(), beforeAccepted)
+        },
+      )
+    }
+  }
+  await composingKeys('rich')
+  await page.evaluate(() => {
+    window.formattedCompletion.source = true
+  })
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await composingKeys('source')
+  await page.evaluate(() => {
+    window.formattedCompletion.source = false
+  })
+  await page.getByRole('button', { name: 'normal', exact: true }).click()
+  await reset('hel')
   await page.evaluate(() => {
     window.formattedCompletion.invalid = true
   })
@@ -248,6 +426,13 @@ test('formatted completions keep exact source, history, composition, privacy and
     await page.evaluate(() => window.formattedCompletion.events[0].before),
     'before 日本語',
   )
+  await pressShortcut(app, `${mod}+z`)
+  await saved('before chosen after 😀')
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+  )
+  await saved('before 日本語 after 😀')
   if (t.formattedEngine === 'codemirror') {
     await t.test('typing context counts crlf once', async () => {
       await reset('line\r\nbefore chosen after 😀')

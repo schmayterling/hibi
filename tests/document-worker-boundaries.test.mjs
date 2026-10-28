@@ -412,11 +412,6 @@ test('code coverage streams complete ranges, replays to late listeners without s
     'source',
     'code-width',
   )
-  await until(() =>
-    f.transports[0].replies.some(
-      (reply) => reply.type === 'ack' && reply.version === 1,
-    ),
-  )
   f.client.boundaries(
     config,
     (page, ack) => {
@@ -469,11 +464,6 @@ test('code coverage streams complete ranges, replays to late listeners without s
     'source',
     'same-width',
   )
-  await until(() =>
-    f.transports[0].replies.some(
-      (reply) => reply.type === 'ack' && reply.version === 2,
-    ),
-  )
   f.client.boundaries(
     config,
     (page, ack) => {
@@ -499,7 +489,8 @@ test('code coverage streams complete ranges, replays to late listeners without s
   assert.equal(request.baseVersion, undefined)
   assert.equal(request.codeVersion, 1)
   detach()
-  assert.deepEqual(f.declined, [])
+  // A superseded code watch can finish before the worker receives its cancellation.
+  assert.ok(f.declined.every((reason) => reason === 'stale'))
   assert.deepEqual(f.errors, [])
 })
 

@@ -13,6 +13,7 @@ import {
 import {
   type FormattedTextInput,
   formattedMarkerRanges,
+  formattedReferenceLink,
   textFeatures,
 } from './formatted-text-rules.ts'
 import { FormattedTextMask } from './formatted-text-runs.ts'
@@ -68,6 +69,11 @@ const page = 4096,
   batch = 1024
 type Frame = ReturnType<typeof parsedChunks>[number]
 type Window = { from: number; to: number; frames: Frame[]; nodes: number }
+export type RenderedReferenceResolver = (
+  source: SourceSnapshot,
+  config: BoundaryConfig,
+  labels: ReadonlySet<string>,
+) => Generator<void, ReadonlySet<string>>
 type ProofStyle = RenderedRange & { key: string }
 type PositionMap = (position: number, side?: -1 | 1) => number
 const markNames = new Set([
@@ -96,6 +102,8 @@ class Reader {
   units = 0
   maximum = 0
   requestMaximum = 0
+  lineSeeks = 0
+  #line: RenderedRange | null = null
   constructor(source: SourceSnapshot) {
     this.source = source
   }
@@ -118,6 +126,34 @@ class Reader {
       this.maximum = Math.max(this.maximum, rawTo - rawFrom)
     }
     return found.text.slice(at - from)
+  }
+  lineAt(at: number) {
+    if (this.#line && this.#line.from <= at && at <= this.#line.to)
+      return this.#line
+    const length = this.source.normalizedLength
+    const from = Math.floor(Math.min(at, Math.max(0, length - 1)) / page) * page
+    const text = this.chunk(from)
+    const local = at - from
+    const previous = local > 0 ? text.lastIndexOf('\n', local - 1) : -1
+    const next = text.indexOf('\n', local)
+    if (
+      (from === 0 || previous >= 0) &&
+      (next >= 0 || from + text.length === length)
+    ) {
+      this.#line = {
+        from: from + previous + 1,
+        to: next < 0 ? length : from + next,
+      }
+    } else {
+      // A line crossing a retained page keeps the source index's exact bounds.
+      this.lineSeeks++
+      const line = this.source.lineAt(this.source.editorToRaw(at)!)!
+      this.#line = {
+        from: this.source.rawToEditor(line.from)!,
+        to: this.source.rawToEditor(line.to)!,
+      }
+    }
+    return this.#line
   }
   read(from: number, to: number) {
     if (from < 0 || to < from || to > this.source.normalizedLength)
@@ -150,6 +186,7 @@ export class RenderedTextIndex {
   readonly #parser: ChunkedMarkdownParser
   readonly #inline: NonNullable<ReturnType<typeof boundaryInlineParser>>
   readonly #config: BoundaryConfig
+  readonly #referenceResolver: RenderedReferenceResolver | undefined
   readonly #input: Input & FormattedTextInput
   readonly #mask: FormattedTextMask
   #syntaxInput: Input
@@ -167,7 +204,12 @@ export class RenderedTextIndex {
   #parses = 0
   #maximumAdvanceRead = 0
   readonly prefix: number
-  constructor(source: SourceSnapshot, prefix = 0, config?: BoundaryConfig) {
+  constructor(
+    source: SourceSnapshot,
+    prefix = 0,
+    config?: BoundaryConfig,
+    references?: RenderedReferenceResolver,
+  ) {
     if (
       !config ||
       !Array.isArray(config.textFeatures) ||
@@ -184,6 +226,7 @@ export class RenderedTextIndex {
     if (!base || !inline)
       throw new Error('Formatted find configuration is unsupported.')
     this.#source = source
+    this.#referenceResolver = references
     this.prefix = prefix
     this.#config = config
     this.#reader = new Reader(source)
@@ -203,13 +246,7 @@ export class RenderedTextIndex {
       lineChunks: false,
       chunk: (at) => this.#reader.chunk(at),
       read: (from, to) => this.#reader.read(from, to),
-      lineAt: (at) => {
-        const line = this.#source.lineAt(this.#source.editorToRaw(at)!)!
-        return {
-          from: this.#source.rawToEditor(line.from)!,
-          to: this.#source.rawToEditor(line.to)!,
-        }
-      },
+      lineAt: (at) => this.#reader.lineAt(at),
     }
     this.#syntaxInput = this.#input
     this.#mask = new FormattedTextMask(this.#input, (units) =>
@@ -243,6 +280,7 @@ export class RenderedTextIndex {
         ? this.#plainTail.to - this.#plainTail.from
         : 0,
       maximumInputRequest: this.#reader.requestMaximum,
+      lineSeeks: this.#reader.lineSeeks,
       maximumAdvanceRead: this.#maximumAdvanceRead,
       parses: this.#parses,
       maskBytes: this.#mask.counters().maskBytes,
@@ -322,6 +360,11 @@ export class RenderedTextIndex {
     return node
   }
 
+  *#resolveReferences(labels: ReadonlySet<string>) {
+    if (!this.#referenceResolver) throw new UnsupportedRenderedFind()
+    return yield* this.#referenceResolver(this.#source, this.#config, labels)
+  }
+
   *#projectFrames(
     frames: readonly Frame[],
     requested: RenderedRange,
@@ -329,6 +372,7 @@ export class RenderedTextIndex {
     definitions = this.#definitions,
     apply = true,
   ) {
+    const references = new Set<string>()
     for (const frame of frames) {
       const range = {
         from: Math.max(requested.from, frame.from),
@@ -349,14 +393,18 @@ export class RenderedTextIndex {
         definitions,
         resolveFootnotes,
         false,
-        () => {
-          throw new UnsupportedRenderedFind()
+        (label) => {
+          if (!this.#referenceResolver) throw new UnsupportedRenderedFind()
+          references.add(label)
+          return false
         },
       )) {
         if (effect && apply) yield* this.#mask.effect(effect, range)
         if (this.#tick()) yield
       }
     }
+    if (references.size && (yield* this.#resolveReferences(references)).size)
+      throw new UnsupportedRenderedFind()
   }
 
   *#project(resolveFootnotes: boolean) {
@@ -840,9 +888,18 @@ export class RenderedTextIndex {
     map: PositionMap,
     edits: readonly RenderedEdit[] = [],
     match?: SourceMatch,
-  ): Generator<void, ProofStyle[] | null> {
+  ): Generator<
+    void,
+    {
+      styles: ProofStyle[]
+      definitions: string[]
+      referenceLabels: RenderedRange[]
+    } | null
+  > {
     const styles: ProofStyle[] = [],
-      seen = new Set<string>()
+      seen = new Set<string>(),
+      definitions = new Set<string>(),
+      referenceLabels: RenderedRange[] = []
     for (const frame of this.#details(window, range.from, range.to)) {
       if (!frame) {
         yield
@@ -869,8 +926,30 @@ export class RenderedTextIndex {
           !this.#config.literal.includes(node.name) &&
           node.name !== 'Table'
         if (!descend) continue
+        if (node.name === 'LinkReference') {
+          if (edits.some((edit) => edit.from < to && edit.to > from))
+            return null
+          definitions.add(map(from, -1) + ':' + map(to, 1))
+          descend = false
+          continue
+        }
+        const reference =
+          node.name === 'Link' ? formattedReferenceLink(node, read) : null
+        if (reference) {
+          if (
+            /^[\p{L}\p{N}\p{M} ]+$/u.test(
+              read(reference.open.to, reference.close.from),
+            )
+          )
+            referenceLabels.push({
+              from: frame.end(reference.open.to),
+              to: frame.start(reference.close.from),
+            })
+          continue
+        }
         const code = node.name === 'FencedCode' || node.name === 'CodeBlock'
-        if (!markNames.has(node.name) && !code) continue
+        const leaf = node.type.is('LeafBlock')
+        if (!markNames.has(node.name) && !code && !leaf) continue
         const link = ['Link', 'WikiLink', 'Autolink'].includes(node.name)
         const hidden = formattedMarkerRanges(node, read)
         const container = match?.containers?.find(
@@ -895,7 +974,7 @@ export class RenderedTextIndex {
           match.to >= visible.to
         )
           continue
-        let key = code ? 'CodeBlock' : node.name
+        let key = leaf ? 'block:' + node.name : code ? 'CodeBlock' : node.name
         const target = link
           ? (node.getChild('URL') ?? node.getChild('WikiTarget'))
           : code
@@ -916,7 +995,7 @@ export class RenderedTextIndex {
         if (this.#tick()) yield
       } while (cursor.next(descend))
     }
-    return styles
+    return { styles, definitions: [...definitions].sort(), referenceLabels }
   }
 
   *#tokens(
@@ -974,6 +1053,7 @@ export class RenderedTextIndex {
     match: SourceMatch,
     replacement: string,
     edits: readonly RenderedEdit[],
+    references: RenderedReferenceResolver | undefined,
   ): Generator<void, boolean | null> {
     const tail = this.#plainTail!
     let from = Math.max(tail.from, edits[0]!.from - page),
@@ -990,10 +1070,15 @@ export class RenderedTextIndex {
       tabId: 'rendered-proof',
       revision: 0,
     })
-    const local = new RenderedTextIndex(source.snapshot(), 0, {
-      ...this.#config,
-      prefix: 0,
-    })
+    const local = new RenderedTextIndex(
+      source.snapshot(),
+      0,
+      {
+        ...this.#config,
+        prefix: 0,
+      },
+      references,
+    )
     local.#definitions = this.#definitions
     yield* local.#partial({ from: 0, to: text.length }, [])
     const moved = (range: RenderedRange) => ({
@@ -1018,14 +1103,6 @@ export class RenderedTextIndex {
     replacement: string,
     edits: readonly RenderedEdit[],
   ): Generator<void, boolean | null> {
-    if (
-      this.#plainTail &&
-      edits.every(
-        (edit) =>
-          edit.from >= this.#plainTail!.from && edit.to <= this.#plainTail!.to,
-      )
-    )
-      return yield* this.#plainProof(match, replacement, edits)
     const fork = SourceStore.fromSnapshot(this.#source)
     const changes = sourceChangesFromEditor(fork.snapshot(), edits)
     let snapshot = fork.snapshot()
@@ -1043,6 +1120,20 @@ export class RenderedTextIndex {
         contentVersion: snapshot.version + 1,
         changes,
       }).after
+    if (
+      this.#plainTail &&
+      edits.every(
+        (edit) =>
+          edit.from >= this.#plainTail!.from && edit.to <= this.#plainTail!.to,
+      )
+    ) {
+      const references: RenderedReferenceResolver | undefined = this
+        .#referenceResolver
+        ? (_source, _config, labels) =>
+            this.#referenceResolver!(snapshot, this.#config, labels)
+        : undefined
+      return yield* this.#plainProof(match, replacement, edits, references)
+    }
     let shift = 0
     const mapped = edits.map((edit) => {
       const fromB = edit.from + shift,
@@ -1065,7 +1156,25 @@ export class RenderedTextIndex {
     const old = yield* this.#proofWindow(range)
     const local = new Set<string>()
     yield* this.#projectFrames(old.frames, range, false, local, false)
-    const next = new RenderedTextIndex(snapshot, this.prefix, this.#config)
+    const proof = yield* this.#styles(old, range, map, edits, match)
+    if (!proof) return false
+    // Word edits inside an unresolved label cannot create or edit a definition.
+    const labelsOnly = edits.every(
+      (edit) =>
+        /^[\p{L}\p{N}\p{M} ]*$/u.test(edit.insert) &&
+        proof.referenceLabels.some(
+          (label) => label.from <= edit.from && edit.to <= label.to,
+        ),
+    )
+    const references: RenderedReferenceResolver | undefined = labelsOnly
+      ? (_source, _config, labels) => this.#resolveReferences(labels)
+      : this.#referenceResolver
+    const next = new RenderedTextIndex(
+      snapshot,
+      this.prefix,
+      this.#config,
+      references,
+    )
     next.#definitions = this.#definitions
     if (this.#plainTail) {
       if (
@@ -1103,13 +1212,19 @@ export class RenderedTextIndex {
         next.#boundary(partial.window, nextRange.to, 1)
     )
       return false
-    const styles = yield* this.#styles(old, range, map, edits, match)
-    const actualStyles = yield* next.#styles(
+    const actualProof = yield* next.#styles(
       partial.window,
       nextRange,
       (position) => position,
     )
-    if (!styles || !actualStyles) return false
+    if (
+      !actualProof ||
+      JSON.stringify(proof.definitions) !==
+        JSON.stringify(actualProof.definitions)
+    )
+      return false
+    const styles = proof.styles,
+      actualStyles = actualProof.styles
     const inherited = [
       ...new Set(
         styles

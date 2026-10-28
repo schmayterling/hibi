@@ -48,6 +48,11 @@ for (const [shape, line] of [
         counters.maskBytes <= Math.ceil(length / 4096) * 2048,
         JSON.stringify(counters),
       )
+      if (shape === 'list')
+        assert.ok(
+          counters.lineSeeks <= Math.ceil(length / 4096) * 10,
+          JSON.stringify(counters),
+        )
       assert.equal(counters.retainedWindows, 0)
       assert.equal(counters.retainedNodes, 0)
       for (let at = 0; at < length - line.length; at += 65536) {

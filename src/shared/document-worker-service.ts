@@ -6,11 +6,13 @@ import {
   type MarkdownSemanticResult,
   type MarkdownSemanticRow,
 } from './document-worker-protocol.ts'
+import type { BoundaryConfig } from './markdown-boundary-syntax.ts'
 import type { MarkdownSemanticCache } from './markdown-semantic-cache.ts'
 import type { MarkdownSourceModel } from './markdown-source-model.ts'
 import type { MarkdownSourceReferences } from './markdown-source-references.ts'
-import { SourceStore } from './source-buffer.ts'
+import { type SourceSnapshot, SourceStore } from './source-buffer.ts'
 import { SourceMaintenance } from './source-maintenance.ts'
+import type { SourceOwners } from './source-owners.ts'
 import type { ReferenceValue } from './source-references.ts'
 import { SourceSearchIndex } from './source-search-index.ts'
 import {
@@ -69,6 +71,16 @@ export class DocumentWorkerService {
   #rendered: import('./rendered-text.ts').RenderedTextIndex | null = null
   #renderedModule: typeof import('./rendered-text.ts') | null = null
   #renderedLoading = false
+  #renderedReferenceModule:
+    | typeof import('./rendered-reference-resolver.ts')
+    | null = null
+  #renderedReferenceLoading = false
+  #renderedReferenceError: unknown = null
+  #renderedReferenceIndex: {
+    source: SourceSnapshot
+    key: string
+    references: MarkdownSourceReferences
+  } | null = null
   #renderedKey = ''
   #location: import('./source-search-index.ts').SearchLocation | null = null
   #findId = 0
@@ -91,6 +103,7 @@ export class DocumentWorkerService {
   #referenceSyntax = ''
   #referenceWork: Generator<void> | null = null
   #referencesReady = false
+  #referenceOwners: SourceOwners | null = null
   #semantics: MarkdownSemanticCache | null = null
   #semanticWork: Generator<void, MarkdownSemanticResult | undefined> | null =
     null
@@ -236,6 +249,7 @@ export class DocumentWorkerService {
       this.#semantics = null
       this.#references?.dispose()
       this.#references = null
+      this.#referenceOwners = null
       this.#referenceSyntax = ''
       this.#model?.dispose()
       this.#model = null
@@ -260,6 +274,7 @@ export class DocumentWorkerService {
     this.#cancel()
     this.#index = null
     this.#rendered = null
+    this.#clearRenderedReferences()
     if (stage === 'replica') {
       this.#stopBoundaries(true)
       this.#cancelMetadata(true)
@@ -289,6 +304,7 @@ export class DocumentWorkerService {
     this.#maintenance = null
     this.#index = null
     this.#rendered = null
+    this.#clearRenderedReferences()
     this.#store = null
     this.#bootstrap = null
     this.#epoch = epoch
@@ -302,6 +318,8 @@ export class DocumentWorkerService {
         store.commitCompaction(change)
         this.#index?.adoptStorage(change)
         this.#rendered?.adoptSource(change.after)
+        if (this.#renderedReferenceIndex?.source === change.before)
+          this.#renderedReferenceIndex.source = change.after
         this.#model?.adoptStorage(change)
       },
       (error) => this.#fail('replica', error),
@@ -369,6 +387,7 @@ export class DocumentWorkerService {
         this.#cancelMetadata()
         this.#index = null
         this.#rendered = null
+        this.#clearRenderedReferences()
         this.#store.commit(prepared)
         this.#model?.apply(prepared)
         this.#stopBoundaries()
@@ -613,6 +632,92 @@ export class DocumentWorkerService {
       },
     )
   }
+  #clearRenderedReferences() {
+    this.#renderedReferenceIndex?.references.dispose()
+    this.#renderedReferenceIndex = null
+  }
+  *#resolveRenderedReferences(
+    source: SourceSnapshot,
+    config: BoundaryConfig,
+    labels: ReadonlySet<string>,
+  ): Generator<void, ReadonlySet<string>> {
+    if (!this.#renderedReferenceModule && !this.#renderedReferenceLoading) {
+      this.#renderedReferenceLoading = true
+      void import('./rendered-reference-resolver.ts').then(
+        (module) => {
+          this.#renderedReferenceModule = module
+          this.#renderedReferenceLoading = false
+        },
+        (error) => {
+          this.#renderedReferenceError = error
+          this.#renderedReferenceLoading = false
+        },
+      )
+    }
+    while (!this.#renderedReferenceModule) {
+      if (this.#renderedReferenceError) throw this.#renderedReferenceError
+      yield
+    }
+    const module = this.#renderedReferenceModule
+    const collect = function* (references: MarkdownSourceReferences) {
+      const found = new Set<string>()
+      let work = 0
+      for (const label of labels) {
+        if (references.lookup(label)) found.add(label)
+        if (++work === 1024) {
+          work = 0
+          yield
+        }
+      }
+      return found
+    }
+    const syntax = module.renderedReferenceSyntax(config)
+    const key = JSON.stringify([
+      syntax.gfm,
+      syntax.alerts,
+      syntax.textExtras,
+      syntax.math,
+    ])
+    const state = this.#model?.state()
+    const owners = state?.owners
+    const first = owners?.get(0)
+    const prefix =
+      first?.owner.kind === 'markdown:Frontmatter'
+        ? source.rawToEditor(first.to)
+        : 0
+    const available = this.#references
+    const current = () =>
+      !!state?.complete &&
+      !!owners &&
+      !!available &&
+      this.#references === available &&
+      this.#referenceOwners === owners &&
+      this.#model?.state().source === source &&
+      this.#model?.state().owners === owners &&
+      this.#referenceSyntax === key &&
+      prefix === config.prefix
+    if (current()) {
+      const found = yield* collect(available!)
+      if (current()) return found
+    }
+    if (source !== this.#store?.snapshot()) {
+      const references = yield* module.prepareRenderedReferences(source, config)
+      try {
+        return yield* collect(references)
+      } finally {
+        references.dispose()
+      }
+    }
+    const configKey = JSON.stringify(config)
+    let cached = this.#renderedReferenceIndex
+    if (!cached || cached.source !== source || cached.key !== configKey) {
+      this.#clearRenderedReferences()
+      const references = yield* module.prepareRenderedReferences(source, config)
+      cached = { source, key: configKey, references }
+      this.#renderedReferenceIndex = cached
+    }
+    return yield* collect(cached.references)
+  }
   #startFind(message: FindRequest) {
     const mode = message.mode ?? 'source',
       prefix = message.prefix ?? 0
@@ -626,6 +731,8 @@ export class DocumentWorkerService {
         this.#store!.snapshot(),
         prefix,
         message.config,
+        (source, config, labels) =>
+          this.#resolveRenderedReferences(source, config, labels),
       )
       this.#renderedKey = renderedKey
     }
@@ -698,6 +805,7 @@ export class DocumentWorkerService {
             this.#semantics = null
             this.#references?.dispose()
             this.#references = null
+            this.#referenceOwners = null
             this.#model?.dispose()
             const Model = request.frontmatter
               ? FrontmatterSourceModel!
@@ -716,6 +824,7 @@ export class DocumentWorkerService {
               this.#semantics?.clear()
               this.#semantics = null
               this.#references?.dispose()
+              this.#referenceOwners = null
               this.#references = new MarkdownSourceReferences!({
                 gfm,
                 alerts,
@@ -879,6 +988,7 @@ export class DocumentWorkerService {
             if (!this.#referenceWork.next().done) continue
             this.#referenceWork = null
             this.#referencesReady = true
+            this.#referenceOwners = state.owners
           }
           if (request.reference)
             reference = this.#references!.lookup(request.reference.label)
@@ -1030,6 +1140,7 @@ export class DocumentWorkerService {
     this.#maintenance = null
     this.#index = null
     this.#rendered = null
+    this.#clearRenderedReferences()
     this.#store = null
     this.#bootstrap = null
   }

@@ -989,6 +989,226 @@ test('rendered find reuses one replica, projection and scheduler for navigation 
   assert.equal(projections.length, 2)
 })
 
+test('rendered find checks bracket labels against the worker reference index', async (t) => {
+  const { MarkdownSourceReferences } = await import(
+    '../src/shared/markdown-source-references.ts'
+  )
+  const lookup = t.mock.method(MarkdownSourceReferences.prototype, 'lookup')
+  const source =
+    'a [sic] b\n\narray[0] value\n\nsee [1] here\n\n[elsewhere]: /url'
+  const f = fixture(t, source)
+  let id = 0
+  for (const query of ['[sic]', 'array[0]', '[1]']) {
+    const request = ++id
+    f.find(request, 0, query, 0, 0, { mode: 'rendered' })
+    const reply = await f.next(
+      (message) =>
+        message.id === request &&
+        (message.type === 'find' || message.type === 'error'),
+    )
+    assert.equal(reply.type, 'find', JSON.stringify(reply))
+    assert.equal(reply.location.total, 1)
+    assert.equal(reply.location.next.match.from, source.indexOf(query))
+  }
+  assert.ok(lookup.mock.calls.some((call) => call.arguments[0] === 'sic'))
+  assert.ok(lookup.mock.calls.some((call) => call.arguments[0] === '0'))
+  assert.ok(lookup.mock.calls.some((call) => call.arguments[0] === '1'))
+  const from = source.indexOf('sic')
+  f.find(++id, 0, 'sic', from, from + 3, {
+    mode: 'rendered',
+    replacement: 'new',
+  })
+  const prepared = await f.next(
+    (message) =>
+      message.id === id &&
+      (message.type === 'find' || message.type === 'error'),
+  )
+  assert.ok(prepared.replacement?.edits, JSON.stringify(prepared))
+  let replaced = source
+  for (const edit of [...prepared.replacement.edits].reverse())
+    replaced =
+      replaced.slice(0, edit.from) + edit.insert + replaced.slice(edit.to)
+  assert.equal(replaced, source.replace('[sic]', '[new]'))
+})
+
+test('rendered bracket-label decisions are invalidated when definitions change', async (t) => {
+  const source = 'a [sic] b'
+  const f = fixture(t, source)
+  const query = async (id, version) => {
+    f.find(id, version, '[sic]', 0, 0, { mode: 'rendered' })
+    return f.next(
+      (message) =>
+        message.id === id &&
+        (message.type === 'find' || message.type === 'error'),
+    )
+  }
+  assert.equal((await query(1, 0)).location?.total, 1)
+  const definition = '\n\n[sic]: /defined'
+  f.worker.receive({
+    type: 'edit',
+    epoch: 'first',
+    operation: {
+      document: { tabId: 'a', revision: 0 },
+      operationId: 'define-label',
+      historyGroup: 'typing',
+      origin: 'source',
+      baseVersion: 0,
+      contentVersion: 1,
+      changes: [{ from: source.length, to: source.length, insert: definition }],
+    },
+  })
+  assert.equal((await query(2, 1)).reason, 'unsupported')
+  f.worker.receive({
+    type: 'edit',
+    epoch: 'first',
+    operation: {
+      document: { tabId: 'a', revision: 0 },
+      operationId: 'undefine-label',
+      historyGroup: 'typing',
+      origin: 'source',
+      baseVersion: 1,
+      contentVersion: 2,
+      changes: [
+        {
+          from: source.length,
+          to: source.length + definition.length,
+          insert: '',
+        },
+      ],
+    },
+  })
+  assert.equal((await query(3, 2)).location?.total, 1)
+  f.find(4, 2, '[sic]')
+  assert.equal(
+    (await f.next((message) => message.type === 'find' && message.id === 4))
+      .location.total,
+    1,
+  )
+})
+
+test('rendered bracket lookup reuses ready metadata references and survives their release', async (t) => {
+  const { MarkdownSourceReferences } = await import(
+    '../src/shared/markdown-source-references.ts'
+  )
+  const update = t.mock.method(MarkdownSourceReferences.prototype, 'update')
+  const source = 'a [sic] b\n\n[other]: /url'
+  const f = fixture(t, source)
+  f.worker.receive({
+    type: 'metadata',
+    epoch: 'first',
+    id: 1,
+    version: 0,
+    dialect: 'gfm',
+    from: 0,
+    to: 0,
+    limit: 1,
+    reference: {
+      label: 'other',
+      gfm: true,
+      alerts: true,
+      textExtras: false,
+      math: false,
+    },
+  })
+  assert.equal(
+    (await f.next((message) => message.type === 'metadata' && message.id === 1))
+      .reference.href,
+    '/url',
+  )
+  const before = update.mock.calls.length
+  f.find(1, 0, '[sic]', 0, 0, { mode: 'rendered' })
+  assert.equal(
+    (await f.next((message) => message.type === 'find' && message.id === 1))
+      .location.total,
+    1,
+  )
+  assert.equal(
+    update.mock.calls.length,
+    before,
+    'reuse the complete reference index',
+  )
+  f.worker.receive({
+    type: 'cancel-metadata',
+    epoch: 'first',
+    id: 1,
+    release: true,
+  })
+  const from = source.indexOf('sic')
+  f.find(2, 0, 'sic', from, from + 3, { mode: 'rendered', replacement: 'new' })
+  const reply = await f.next(
+    (message) =>
+      message.id === 2 && (message.type === 'find' || message.type === 'error'),
+  )
+  assert.ok(reply.replacement?.edits, JSON.stringify(reply))
+})
+
+test('rendered reference lookup respects the opaque prefix and math grammar changes', async (t) => {
+  const source = '---\nvalue: |\n  [sic]: /metadata\n---\n\na [sic] b'
+  const f = fixture(t, source)
+  f.find(1, 0, '[sic]', 0, 0, {
+    mode: 'rendered',
+    prefix: source.indexOf('a [sic]'),
+  })
+  assert.equal(
+    (
+      await f.next(
+        (message) =>
+          message.id === 1 &&
+          (message.type === 'find' || message.type === 'error'),
+      )
+    ).location?.total,
+    1,
+  )
+  f.messages.length = 0
+  f.load('first', '$$\n\n[sic]: /math\n\n$$\n\n[sic]')
+  const math = {
+    ...renderedConfig,
+    syntax: [...renderedConfig.syntax, 'math-block@1'],
+    flavors: [...renderedConfig.flavors, 'math.latex'],
+    textFeatures: [...renderedConfig.textFeatures, 'math.block'],
+  }
+  f.find(1, 0, '[sic]', 0, 0, { mode: 'rendered', config: math })
+  assert.equal(
+    (
+      await f.next(
+        (message) =>
+          message.id === 1 &&
+          (message.type === 'find' || message.type === 'error'),
+      )
+    ).location?.total,
+    1,
+  )
+  f.find(2, 0, '[sic]', 0, 0, {
+    mode: 'rendered',
+    config: {
+      ...renderedConfig,
+      flavors: [...renderedConfig.flavors, 'math.latex'],
+    },
+  })
+  assert.equal(
+    (
+      await f.next(
+        (message) =>
+          message.id === 2 &&
+          (message.type === 'find' || message.type === 'error'),
+      )
+    ).location?.total,
+    1,
+    'reference semantics follow the selected flavor even when its renderer is off',
+  )
+  f.find(3, 0, '[sic]', 0, 0, { mode: 'rendered' })
+  assert.equal(
+    (
+      await f.next(
+        (message) =>
+          message.id === 3 &&
+          (message.type === 'find' || message.type === 'error'),
+      )
+    ).reason,
+    'unsupported',
+  )
+})
+
 test('reference links return unsupported without hiding source find on the same replica', async (t) => {
   const f = fixture(t, 'hello [label][hidden]\n\n[hidden]: /url')
   f.find(1, 0, 'hidden', 0, 0, { mode: 'rendered' })

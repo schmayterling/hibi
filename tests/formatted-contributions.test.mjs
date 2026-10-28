@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
+import { keymap } from '@codemirror/view'
 import { TreeFragment } from '@lezer/common'
 import { GFM, parser, Table } from '@lezer/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
@@ -13,6 +14,7 @@ import {
   formattedOpaque,
   formattedPrefix,
   formattedSyntaxTree,
+  formattedTextFeatures,
   formattedTree,
   formattedViews,
 } from '../src/renderer/src/formatted-contributions.ts'
@@ -25,12 +27,14 @@ import {
 } from '../src/shared/chunked-markdown.ts'
 import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import { boundarySyntaxIds } from '../src/shared/markdown-boundary-syntax.ts'
+import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { sourceParserInput } from '../src/shared/source-parser.ts'
 import {
   editorChangesFromSource,
   normalizedSource,
 } from '../src/shared/source-projection.ts'
+import { renderedConfig } from './rendered-config.mjs'
 
 // Feature modules import their styles; these tests need only the code.
 registerHooks({
@@ -75,6 +79,66 @@ const stateWith = (doc, extensions) => {
   })
   return { state, syntax }
 }
+
+test('keys-only addon contributions keep rendered find available', () => {
+  const run = () => true
+  const project = (contribution) => {
+    const state = EditorState.create({
+      doc: 'hello **world**',
+      extensions: contributionExtension(contribution),
+    })
+    const configs = state.facet(formattedMarkdown)
+    const config = {
+      ...renderedConfig,
+      syntax: boundarySyntaxIds(configs),
+      textSyntax: boundarySyntaxIds(configs, true),
+      textFeatures: state.facet(formattedTextFeatures),
+      literal: state.facet(formattedLiteral),
+      opaque: state.facet(formattedOpaque),
+    }
+    const store = new SourceStore(state.doc.toString(), {
+      tabId: 'keys-find',
+      revision: 0,
+    })
+    const index = new RenderedTextIndex(store.snapshot(), 0, config)
+    for (const _ of index.build()) {
+    }
+    return {
+      state,
+      text: [...index.range(0, index.length)]
+        .map((chunk) => chunk.text)
+        .join(''),
+    }
+  }
+  for (const contribution of [
+    { id: 'example.keys', keys: [{ key: 'F8', run }] },
+    {
+      id: 'example.empty-syntax',
+      syntax: [],
+      views: [],
+      keys: [{ key: 'F8', run }],
+    },
+  ]) {
+    const { state, text } = project(contribution)
+    assert.equal(text, 'hello world')
+    assert.equal(
+      state
+        .facet(keymap)
+        .flat()
+        .find((binding) => binding.key === 'F8')?.run,
+      run,
+    )
+  }
+  assert.throws(
+    () =>
+      project({
+        id: 'example.renderer',
+        views: [{ nodes: ['Paragraph'], decorate() {} }],
+        keys: [{ key: 'F8', run }],
+      }),
+    /unsupported/,
+  )
+})
 
 test('contributions add syntax to the formatted language and follow their syntax setting', () => {
   const removeFeature = markdownSyntax.register('test', {

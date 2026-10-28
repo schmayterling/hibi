@@ -13,6 +13,7 @@ import {
 import { obsidianSyntax } from '../src/addons/markdown/formatted-syntax.ts'
 import { inlineMathSyntax } from '../src/addons/math/formatted-syntax.ts'
 import { subscriptSyntax } from '../src/addons/text-extras/formatted-syntax.ts'
+import { ChunkedMarkdownParser } from '../src/shared/chunked-markdown.ts'
 import { FrontmatterParser } from '../src/shared/frontmatter-parser.ts'
 import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
 import { createPlainTextRunExtension } from '../src/shared/markdown-plain-text-runs.ts'
@@ -41,6 +42,36 @@ const sameTree = (baseline, optimized, source) => {
     JSON.stringify(source),
   )
 }
+
+test('disabling read tracking retains the approved plain text shortcut', () => {
+  const runs = createPlainTextRunExtension()
+  let calls = 0
+  const full = parser.configure([
+    runs.extension,
+    {
+      parseInline: [
+        {
+          name: 'ProbePlainText',
+          after: 'Escape',
+          parse() {
+            calls++
+            return -1
+          },
+        },
+      ],
+    },
+  ])
+  runs.allow(full)
+  const chunks = new ChunkedMarkdownParser(full, parser, {
+    trackReadAhead: false,
+  })
+  const source = 'ordinary words '.repeat(20000)
+  assert.deepEqual(
+    shape(chunks.full.parse(source)),
+    shape(parser.parse(source)),
+  )
+  assert.ok(calls < source.length / 100, String(calls))
+})
 
 const inlineCases = [
   '',

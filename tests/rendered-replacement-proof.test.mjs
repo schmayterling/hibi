@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { boundaryParser } from '../src/shared/markdown-boundary-syntax.ts'
 import { renderedReplaceEdits } from '../src/shared/rendered-replace.ts'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
@@ -90,6 +91,35 @@ test('replacement reparse rejects changed structure and preserves literal spelli
     }
   }
 })
+test('replacement proof preserves the leaf block kind of surrounding text', () => {
+  const parser = boundaryParser(renderedConfig)
+  const leafAt = (source, position) => {
+    let node = parser.parse(source).resolveInner(position, 1)
+    while (node && !node.type.is('LeafBlock')) node = node.parent
+    return node?.name
+  }
+  for (const source of ['before TARGET after', 'TARGET tail']) {
+    const tail = source.endsWith('after') ? 'after' : 'tail'
+    for (const value of ['\n<div>\n', '\n<section>\n']) {
+      const index = build(source)
+      const [match] = [...searchRenderedLiteral(index, 'TARGET')].flatMap(
+        (batch) => batch.matches,
+      )
+      const plan = finish(index.prepareReplacement(match, value))
+      if (!plan.edits) continue
+      let result = source
+      for (const edit of [...plan.edits].reverse())
+        result =
+          result.slice(0, edit.from) + edit.insert + result.slice(edit.to)
+      assert.equal(
+        leafAt(result, result.lastIndexOf(tail)),
+        leafAt(source, source.lastIndexOf(tail)),
+        JSON.stringify({ source, value, result }),
+      )
+    }
+  }
+})
+
 test('seeded replacement corpus either proves intended rendered text or refuses', (t) => {
   let seed = 1,
     checked = 0,

@@ -1,4 +1,4 @@
-import type { SyntaxNode } from '@lezer/common'
+import { IterMode, type SyntaxNode } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import { alertMarker, alertType } from '../addons/markdown/alerts.ts'
 import { referenceLabel } from './markdown-reference-label.ts'
@@ -231,12 +231,14 @@ export function formattedDefinitionRange(
 
 /** Conditions shared with the views that replace these nodes with widgets. */
 export function formattedClosedFence(node: SyntaxNode) {
-  const open = node.firstChild,
-    close = node.lastChild
+  const cursor = node.cursor(IterMode.IgnoreMounts)
+  if (!cursor.firstChild() || cursor.name !== 'CodeMark') return false
+  const openEnd = cursor.to
   return (
-    open?.name === 'CodeMark' &&
-    close?.name === 'CodeMark' &&
-    close.from > open.to
+    cursor.parent() &&
+    cursor.lastChild() &&
+    cursor.name === 'CodeMark' &&
+    cursor.from > openEnd
   )
 }
 export function formattedMathBlock(node: SyntaxNode) {
@@ -261,7 +263,9 @@ export function formattedAtomic(
     return features.has('math.block') && formattedMathBlock(node)
   if (node.name === 'WikiEmbed') return features.has('markdown.obsidian')
   if (node.name !== 'FencedCode' || !formattedClosedFence(node)) return false
-  const info = node.getChild('CodeInfo')
-  const name = info && read(info.from, info.to).trim().toLowerCase()
+  const info = node.cursor(IterMode.IgnoreMounts)
+  if (!info.firstChild() || !info.nextSibling() || info.name !== 'CodeInfo')
+    return false
+  const name = read(info.from, info.to).trim().toLowerCase()
   return !!name && features.has(name + '.blocks')
 }

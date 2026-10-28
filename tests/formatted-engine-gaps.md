@@ -8,10 +8,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 
 | gap id | test file:line | behavior | owning slice |
 | --- | --- | --- | --- |
-| reload-001 | [addon-reload.test.mjs:783](addon-reload.test.mjs#L783) | addon reload must retain selection and document focus | 3b: addon reload selection and focus |
-| reload-004 | [addon-reload.test.mjs:929](addon-reload.test.mjs#L929) | unlocked formatted editor must expose aria-readonly false | 3b: addon reload selection and focus |
-| reload-002 | [addon-reload.test.mjs:956](addon-reload.test.mjs#L956) | addon reload must retain selection moved while read-only | 3b: addon reload selection and focus |
-| reload-003 | [addon-reload.test.mjs:974](addon-reload.test.mjs#L974) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
 | api-001 | [addon-toolbar-command.test.mjs:149](addon-toolbar-command.test.mjs#L149) | api 2 rich selection must report rendered text | 6: verbatim projections and selection contracts |
 | completion-001 | [autocomplete-addon.test.mjs:369](autocomplete-addon.test.mjs#L369) | a fresh rich completion list must accept the word with tab | 8a: native input, structure and toolbar state |
 | syntax-004 | [code-syntax-settings.test.mjs:238](code-syntax-settings.test.mjs#L238) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
@@ -88,27 +84,24 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | input-071 | [editor-input.test.mjs:2473](editor-input.test.mjs#L2473) | toolbar states match live table cell selection | 8a: native input, structure and toolbar state |
 | input-072 | [editor-input.test.mjs:2475](editor-input.test.mjs#L2475) | toolbar states match live whole document selection | 8a: native input, structure and toolbar state |
 | input-051 | [editor-input.test.mjs:2761](editor-input.test.mjs#L2761) | native multiline input exits empty list and preserves following paragraph | 8a: native input, structure and toolbar state |
-| input-056 | [editor-input.test.mjs:3067](editor-input.test.mjs#L3067) | native enter preserves four line feeds between paragraphs | 8a: native input, structure and toolbar state |
-| input-073 | [editor-input.test.mjs:3440](editor-input.test.mjs#L3440) | native bold typing keeps bold action pressed | 8a: native input, structure and toolbar state |
-| input-074 | [editor-input.test.mjs:3454](editor-input.test.mjs#L3454) | native bold typing renders strong text in canonical source | 8a: native input, structure and toolbar state |
+| input-056 | [editor-input.test.mjs:3100](editor-input.test.mjs#L3100) | native enter preserves four line feeds between paragraphs | 8a: native input, structure and toolbar state |
+| input-073 | [editor-input.test.mjs:3473](editor-input.test.mjs#L3473) | native bold typing keeps bold action pressed | 8a: native input, structure and toolbar state |
+| input-074 | [editor-input.test.mjs:3487](editor-input.test.mjs#L3487) | native bold typing renders strong text in canonical source | 8a: native input, structure and toolbar state |
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
 | find-001 | [formatted-find.test.mjs:401](formatted-find.test.mjs#L401) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
 | find-003 | [formatted-find.test.mjs:664](formatted-find.test.mjs#L664) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
 | find-005 | [formatted-find.test.mjs:916](formatted-find.test.mjs#L916) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
-| release-001 | [formatted-hidden-source.test.mjs:167](formatted-hidden-source.test.mjs#L167) | reopening source must restore its saved scroll position | 2c: hidden source release and mapped bookmarks |
-| release-002 | [formatted-hidden-source.test.mjs:188](formatted-hidden-source.test.mjs#L188) | formatted edits must map the saved source scroll position | 2c: hidden source release and mapped bookmarks |
 | corpus-011 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
 | corpus-012 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
-| export-002 | [marked-large-paragraph.test.mjs:793](marked-large-paragraph.test.mjs#L793) | an indented failed reference title must remain paragraph text instead of code | 10a: shared reference definition parsing |
-| export-003 | [marked-large-paragraph.test.mjs:282](marked-large-paragraph.test.mjs#L282) | a block math interruption must end a reference title | 10a: shared reference definition parsing |
-| export-004 | [marked-large-paragraph.test.mjs:848](marked-large-paragraph.test.mjs#L848) | a gfm table at the first title line must leave a destination-only definition | 10a: shared reference definition parsing |
-| export-005 | [marked-large-paragraph.test.mjs:859](marked-large-paragraph.test.mjs#L859) | a gfm table at the last title line must reject the definition | 10a: shared reference definition parsing |
+| export-002 | [marked-large-paragraph.test.mjs:856](marked-large-paragraph.test.mjs#L856) | an indented failed reference title must remain paragraph text instead of code | 10a: shared reference definition parsing |
+| export-003 | [marked-large-paragraph.test.mjs:287](marked-large-paragraph.test.mjs#L287) | a block math interruption must end a reference title | 10a: shared reference definition parsing |
+| export-004 | [marked-large-paragraph.test.mjs:911](marked-large-paragraph.test.mjs#L911) | a gfm table at the first title line must leave a destination-only definition | 10a: shared reference definition parsing |
+| export-005 | [marked-large-paragraph.test.mjs:922](marked-large-paragraph.test.mjs#L922) | a gfm table at the last title line must reject the definition | 10a: shared reference definition parsing |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | contracts-003 | [raw-html-editor.test.mjs:1225](raw-html-editor.test.mjs#L1225) | modified inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-004 | [raw-html-editor.test.mjs:1227](raw-html-editor.test.mjs#L1227) | superseded inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-005 | [raw-html-editor.test.mjs:1231](raw-html-editor.test.mjs#L1231) | modified block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-006 | [raw-html-editor.test.mjs:1233](raw-html-editor.test.mjs#L1233) | superseded block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
-| api-005 | [rich-edit-api.test.mjs:295](rich-edit-api.test.mjs#L295) | rich source edits must reject structural markup changes | 6: verbatim projections and selection contracts |
 | semantics-002 | [source-reference-navigation.test.mjs:160](source-reference-navigation.test.mjs#L160) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | addon-001 | [source-reference-navigation.test.mjs:185](source-reference-navigation.test.mjs#L185) | rich-only addon syntax must retain native editing and source reference isolation | 2b: legacy feature notices and literal fallback |
 

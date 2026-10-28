@@ -23,14 +23,12 @@ export function renderedBoundary(input: RenderedInput, at: number) {
   )
 }
 
-/** Assemble retained syntax runs with validated source bounds and explicit block separators. */
-export function* renderedRange(
-  runs: Iterable<RenderedRun>,
+/** Validate a normalized source range before reading or assembling its runs. */
+export function assertRenderedRange(
+  input: RenderedInput,
   from: number,
   to: number,
-  input: RenderedInput,
-  options: Readonly<{ blockSeparator?: string }> = {},
-): Generator<RenderedChunk> {
+) {
   if (
     !Number.isSafeInteger(input.length) ||
     input.length < 0 ||
@@ -39,6 +37,17 @@ export function* renderedRange(
     !renderedBoundary(input, to)
   )
     throw new Error('Find selection is outside its source snapshot.')
+}
+
+/** Assemble retained syntax runs with validated source bounds and explicit block separators. */
+export function* renderedRange(
+  runs: Iterable<RenderedRun>,
+  from: number,
+  to: number,
+  input: RenderedInput,
+  options: Readonly<{ blockSeparator?: string }> = {},
+): Generator<RenderedChunk> {
+  assertRenderedRange(input, from, to)
   if (from === to) return
   let previous = 0
   for (const run of runs) {

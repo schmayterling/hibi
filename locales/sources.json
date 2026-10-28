@@ -2481,6 +2481,7 @@
   ],
   "15182c44f611": [
     "src/shared/document-worker-service.ts",
+    "src/shared/formatted-text-runs.ts",
     "src/shared/rendered-range.ts",
     "src/shared/rendered-text.ts",
     "src/shared/source-search-index.ts"
@@ -4742,6 +4743,9 @@
   "2591fcfd6dcd": [
     "src/addons/_shared/format-worker.ts"
   ],
+  "d2e29bb001d1": [
+    "src/shared/formatted-text-runs.ts"
+  ],
   "6073c625266c": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -5897,6 +5901,9 @@
   ],
   "364e042318da": [
     "src/main/media.ts"
+  ],
+  "8a9c263a360f": [
+    "src/renderer/src/SourceEditor.tsx"
   ],
   "a5aedb8a518f": [
     "src/addons/mcp-server/index.ts",

@@ -22,10 +22,15 @@ for (const [shape, line] of [
         index = new RenderedTextIndex(store.snapshot(), 0, renderedConfig)
       console.error(JSON.stringify({ shape, phase: 'baseline', ...before }))
       let yields = 0,
-        peakRss = before.rss
+        peakRss = before.rss,
+        retainedBuildWindows = 0
       for (const _ of index.build()) {
         if (++yields % 32 === 0) {
           peakRss = Math.max(peakRss, process.memoryUsage().rss)
+          retainedBuildWindows = Math.max(
+            retainedBuildWindows,
+            index.counters().retainedWindows,
+          )
           await new Promise((resolve) => setImmediate(resolve))
         }
         if (yields % 8192 === 0)
@@ -48,6 +53,17 @@ for (const [shape, line] of [
         counters.maskBytes <= Math.ceil(length / 4096) * 2048,
         JSON.stringify(counters),
       )
+      if (shape === 'list') {
+        assert.ok(
+          counters.lineSeeks <= Math.ceil(length / 4096) * 10,
+          JSON.stringify(counters),
+        )
+        assert.ok(
+          counters.maximumWindowNodes <= 65536,
+          JSON.stringify(counters),
+        )
+      }
+      assert.equal(retainedBuildWindows, 0)
       assert.equal(counters.retainedWindows, 0)
       assert.equal(counters.retainedNodes, 0)
       for (let at = 0; at < length - line.length; at += 65536) {

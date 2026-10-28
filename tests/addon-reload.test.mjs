@@ -775,29 +775,20 @@ test('reloading an editor extension restores the selection and focus once it set
   await page
     .locator('style[data-addon-style="markdown.alerts"]:not([data-stale])')
     .waitFor({ state: 'attached' })
-  await t.test(
-    'reload retains chosen text and document focus',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap reload-001: addon reload must retain selection and document focus'
-          : undefined,
-    },
-    async () => {
-      await page
-        .waitForFunction(
-          () =>
-            getSelection().toString() === 'ad me' &&
-            document.activeElement?.matches(
-              '.rich-pane :is(.ProseMirror, .cm-content)[contenteditable="true"]',
-            ),
-        )
-        .catch(async (error) => {
-          await reportSelection(t, editor)
-          throw error
-        })
-    },
-  )
+  await t.test('reload retains chosen text and document focus', async () => {
+    await page
+      .waitForFunction(
+        () =>
+          getSelection().toString() === 'ad me' &&
+          document.activeElement?.matches(
+            '.rich-pane :is(.ProseMirror, .cm-content)[contenteditable="true"]',
+          ),
+      )
+      .catch(async (error) => {
+        await reportSelection(t, editor)
+        throw error
+      })
+  })
   assert.match(await editor.innerText(), /Hello world, reload me/)
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).dirty,
@@ -921,18 +912,9 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
       ? editor?.isContentEditable === true
       : editor?.getAttribute('aria-readonly') === 'false'
   }, t.formattedEngine === 'codemirror')
-  await t.test(
-    'unlocked editor exposes aria-readonly',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap reload-004: unlocked formatted editor must expose aria-readonly false'
-          : undefined,
-    },
-    async () => {
-      assert.equal(await editor.getAttribute('aria-readonly'), 'false')
-    },
-  )
+  await t.test('unlocked editor exposes aria-readonly', async () => {
+    assert.equal(await editor.getAttribute('aria-readonly'), 'false')
+  })
   if (t.formattedEngine === 'codemirror') {
     // The selection, read-only gate and subsequent native input are checked on both engines below.
     assert.equal(
@@ -950,12 +932,6 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   }
   await t.test(
     'reload keeps the selection moved while input was read-only',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap reload-002: addon reload must retain selection moved while read-only'
-          : undefined,
-    },
     async () => {
       await page
         .waitForFunction((moved) => getSelection().toString() === moved, moved)
@@ -968,12 +944,6 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   assert.equal(await markdown(), before)
   await t.test(
     'typing resumes at the retained selection after reload',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap reload-003: typing must resume at retained selection after addon reload'
-          : undefined,
-    },
     async () => {
       await page.keyboard.press('End')
       await page.keyboard.type('!')

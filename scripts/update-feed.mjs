@@ -1,35 +1,38 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { readdir, readFile, rename, writeFile } from 'node:fs/promises'
+import {
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { classifyRelease, releaseChannels } from './nightly.mjs'
+import { classifyRelease, installerFiles, releaseChannels } from './nightly.mjs'
 
 export async function updateFeed(release, directory) {
   classifyRelease(release, release.reports)
-  // Older updaters reject underscores in any platform's filename. Debian and
-  // Flatpak packages use the same architecture labels as AppImages.
-  const prefix = `hibi-${release.version}-linux-`
-  const renames = (await readdir(directory)).map((source) => {
-    const alias =
-      source.startsWith(prefix) &&
-      /^(x86_64|amd64|aarch64)(\.(?:AppImage|deb|flatpak))$/.exec(
-        source.slice(prefix.length),
-      )
-    return [
-      source,
-      alias
-        ? `${prefix}${alias[1] === 'aarch64' ? 'arm64' : 'x64'}${alias[2]}`
-        : source,
-    ]
-  })
-  const names = renames.map(([, name]) => name)
-  if (new Set(names).size !== names.length)
-    throw new Error('Ambiguous Linux packages')
-  for (const [source, name] of renames)
+  const entries = await readdir(directory, { withFileTypes: true })
+  const namesWithSizes = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile())
+      .map(async (entry) => ({
+        name: entry.name,
+        size: (await stat(resolve(directory, entry.name))).size,
+      })),
+  )
+  const selected = installerFiles(
+    release,
+    namesWithSizes.filter((entry) => entry.size > 0).map((entry) => entry.name),
+  )
+  // Older updaters reject underscores; normalize only verified complete sets.
+  for (const { source, name } of selected)
     if (source !== name)
       await rename(resolve(directory, source), resolve(directory, name))
+  const names = selected.map(({ name }) => name)
   const assets = {}
   const hashAsset = async (name) => {
     const hash = createHash('sha512')
@@ -52,13 +55,18 @@ export async function updateFeed(release, directory) {
       (name) =>
         name.startsWith(`hibi-${release.version}-`) && name.endsWith(suffix),
     )
-    if (matches.length !== 1)
-      throw new Error(`Missing or ambiguous updater package: ${platform}`)
+    if (matches.length === 0) continue
+    // Existing macOS readers require both architectures in latest-mac.yml.
+    if (
+      platform.startsWith('darwin-') &&
+      !['x64', 'arm64'].every((arch) =>
+        names.includes(`hibi-${release.version}-mac-${arch}.zip`),
+      )
+    )
+      continue
     assets[platform] = await hashAsset(matches[0])
     if (platform.startsWith('darwin-')) {
       const zipName = `hibi-${release.version}-mac-${platform.slice(7)}.zip`
-      if (!names.includes(zipName))
-        throw new Error(`Missing updater ZIP: ${platform}`)
       assets[platform].zip = await hashAsset(zipName)
     }
   }
@@ -78,6 +86,10 @@ export async function updateFeed(release, directory) {
     ['linux-arm64', 'latest-linux-arm64.yml'],
   ]) {
     const asset = assets[platform]
+    if (!asset) {
+      await rm(resolve(directory, name), { force: true })
+      continue
+    }
     await writeFile(
       resolve(directory, name),
       JSON.stringify(
@@ -92,22 +104,24 @@ export async function updateFeed(release, directory) {
       ),
     )
   }
-  const macFiles = [assets['darwin-x64'].zip, assets['darwin-arm64'].zip].map(
-    (asset) => ({ url: asset.name, sha512: asset.sha512, size: asset.size }),
-  )
-  await writeFile(
-    resolve(directory, 'latest-mac.yml'),
-    JSON.stringify(
-      {
-        version: release.version,
-        files: macFiles,
-        path: macFiles[0].url,
-        sha512: macFiles[0].sha512,
-      },
-      null,
-      2,
-    ),
-  )
+  if (assets['darwin-x64'] && assets['darwin-arm64']) {
+    const macFiles = [assets['darwin-x64'].zip, assets['darwin-arm64'].zip].map(
+      (asset) => ({ url: asset.name, sha512: asset.sha512, size: asset.size }),
+    )
+    await writeFile(
+      resolve(directory, 'latest-mac.yml'),
+      JSON.stringify(
+        {
+          version: release.version,
+          files: macFiles,
+          path: macFiles[0].url,
+          sha512: macFiles[0].sha512,
+        },
+        null,
+        2,
+      ),
+    )
+  } else await rm(resolve(directory, 'latest-mac.yml'), { force: true })
   return manifest
 }
 
@@ -133,6 +147,19 @@ export async function promoteFeeds(
   )
   if (feed.tag !== release.tag || feed.version !== release.version)
     throw new Error('Channel feed must pin the published release')
+  // Shipped clients pin every asset to one tag/version. Listings can advance
+  // independently, while partial builds preserve the last complete feed.
+  const complete = [
+    'win32-x64',
+    'linux-x64',
+    'linux-arm64',
+    'darwin-x64',
+    'darwin-arm64',
+  ].every((platform) => feed.assets[platform])
+  const downloads = installerFiles(release, await readdir(directory)).map(
+    ({ name }) =>
+      `[${name}](https://github.com/${repository}/releases/download/${encodeURIComponent(release.tag)}/${encodeURIComponent(name)})`,
+  )
   for (const channel of releaseChannels(release)) {
     const endpoint = `repos/${repository}/git/refs/tags/${channel}`
     let previous
@@ -171,10 +198,29 @@ export async function promoteFeeds(
       )
     const title =
       channel === 'beta' ? 'Beta (stable)' : 'Nightly (bleeding edge)'
-    const notes =
+    const policy =
       channel === 'beta'
-        ? 'This channel follows betas that passed all checks on every platform. Downloads are pinned to the versioned release.'
+        ? release.forceRelease === true
+          ? 'This channel includes a forced beta. Check eligibility was overridden; see the versioned release for recorded results. Downloads are pinned to verified installers.'
+          : 'This channel follows betas that passed all checks on every platform. Downloads are pinned to the versioned release.'
         : 'This channel follows the latest published build. Nightlies are bleeding edge. Back up your notes before installing.'
+    const notes = [
+      policy,
+      ...(release.forceRelease === true
+        ? [
+            'This publication was explicitly forced; check eligibility was overridden.',
+          ]
+        : []),
+      `Latest publication: [${release.tag}](https://github.com/${repository}/releases/tag/${encodeURIComponent(release.tag)}).`,
+      ...(!complete
+        ? [
+            'Automatic updates remain on the last complete verified release, if one exists. This partial publication does not replace feed.json.',
+          ]
+        : []),
+      ...(downloads.length
+        ? ['Available verified installers:', ...downloads]
+        : ['No verified installers are available for this publication.']),
+    ].join('\n\n')
     const run = (...args) => gh('release', ...args, '--repo', repository)
     let exists = false
     try {
@@ -196,7 +242,8 @@ export async function promoteFeeds(
         '--prerelease',
         '--latest=false',
       )
-    run('upload', channel, resolve(directory, 'feed.json'), '--clobber')
+    if (complete)
+      run('upload', channel, resolve(directory, 'feed.json'), '--clobber')
     run(
       'edit',
       channel,

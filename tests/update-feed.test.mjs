@@ -41,6 +41,8 @@ function release(beta = true) {
       ...report,
       build: 'success',
       package: 'success',
+      verification: 'success',
+      result: 'success',
       version: decided.version,
       tag: decided.tag,
       channel: decided.channel,
@@ -70,6 +72,8 @@ async function installers(root, version) {
     'mac-x64.zip',
     'mac-arm64.zip',
     'linux-amd64.deb',
+    'linux-x64.flatpak',
+    'linux-arm64.deb',
     'linux-aarch64.flatpak',
   ])
     await writeFile(join(root, `hibi-${version}-${suffix}`), bytes)
@@ -133,10 +137,11 @@ test('beta and nightly feeds hash real installers and retain immutable electron-
       assert.equal(entry.size, bytes.length)
       if (entry.zip) assert.equal(entry.zip.sha512, sha512)
     }
-    await assert.rejects(
-      updateFeed({ ...published, reports: published.reports.slice(1) }, root),
-      /Every release platform/,
+    const partial = await updateFeed(
+      { ...published, reports: published.reports.slice(1) },
+      root,
     )
+    assert.equal(partial.assets['linux-x64'], undefined)
     await assert.rejects(
       updateFeed({ ...published, version: '0.2.1' }, root),
       /checked release decision/,
@@ -167,13 +172,12 @@ test('normalization refuses ambiguous aliases and incomplete installers', async 
     )
   }
   const root = await directory(t)
-  await assert.rejects(
-    updateFeed(published, root),
-    /Missing or ambiguous updater package/,
-  )
+  assert.deepEqual((await updateFeed(published, root)).assets, {})
   await installers(root, published.version)
   await rm(join(root, 'hibi-0.2.0-mac-x64.zip'))
-  await assert.rejects(updateFeed(published, root), /Missing updater ZIP/)
+  const partial = await updateFeed(published, root)
+  assert.equal(partial.assets['darwin-x64'], undefined)
+  assert.equal(partial.assets['darwin-arm64'], undefined)
 })
 
 function github() {
@@ -298,4 +302,141 @@ test('beta ancestor guard preserves newer feed; first promotion creates rolling 
     promoteFeeds(published, root, 'owner/repo', first.gh),
     /must pin the published release/,
   )
+})
+
+test('partial and unsigned platform outputs never enter feeds, and zero builds preserve rolling feeds', async (t) => {
+  const root = await directory(t)
+  const published = release()
+  await installers(root, published.version)
+  const failed = {
+    ...published,
+    reports: published.reports.map((report) => ({
+      ...report,
+      result: 'success',
+      verification: report.platform === 'macos-x64' ? 'failure' : 'success',
+    })),
+  }
+  const feed = await updateFeed(failed, root)
+  assert.equal(feed.assets['darwin-x64'], undefined)
+  assert.equal(
+    feed.assets['darwin-arm64'],
+    undefined,
+    'mac updater requires both signed ZIPs',
+  )
+  const mock = github()
+  await promoteFeeds(failed, root, 'owner/repo', mock.gh)
+  assert.ok(
+    !mock.calls.some((args) => args[1] === 'upload'),
+    'partial releases preserve all last-good platform feeds',
+  )
+  assert.ok(
+    mock.calls.some((args) => args[1] === 'edit' && args[2] === 'nightly'),
+  )
+  const empty = { ...published, reports: [] }
+  const zero = await updateFeed(empty, root)
+  assert.deepEqual(zero.assets, {})
+  const none = github()
+  await promoteFeeds(empty, root, 'owner/repo', none.gh)
+  assert.ok(!none.calls.some((args) => args[1] === 'upload'))
+})
+
+test('forced partial listings advance both channels without overwriting an existing feed or inventing a first feed', async (t) => {
+  for (const initial of [false, true]) {
+    const root = await directory(t)
+    const baseline = release(false)
+    const decided = decideRelease(
+      { ...baseline, forceRelease: true },
+      baseline.shards,
+    )
+    const published = classifyRelease(decided, [
+      {
+        ...decided.checks.find((report) => report.platform === 'windows-x64'),
+        result: 'success',
+        build: 'success',
+        package: 'success',
+        verification: 'success',
+        tag: decided.tag,
+        version: decided.version,
+        channel: decided.channel,
+      },
+    ])
+    await installers(root, published.version)
+    const feed = await updateFeed(published, root)
+    assert.deepEqual(Object.keys(feed.assets), ['win32-x64'])
+    assert.deepEqual(updateRelease(feed, 'nightly'), feed)
+    const mock = github()
+    if (initial) {
+      mock.refs.clear()
+      mock.assets.clear()
+    }
+    await promoteFeeds(
+      published,
+      root,
+      'owner/repo',
+      (...args) => {
+        if (initial && args[0] === 'release' && args[1] === 'view')
+          throw new Error('not found')
+        return mock.gh(...args)
+      },
+      () => true,
+    )
+    assert.ok(!mock.calls.some((args) => args[1] === 'upload'))
+    assert.deepEqual(
+      mock.calls.filter((args) => args[1] === 'edit').map((args) => args[2]),
+      ['beta', 'nightly'],
+    )
+    if (initial) {
+      assert.deepEqual(
+        mock.calls
+          .filter((args) => args[1] === 'create')
+          .map((args) => args[2]),
+        ['beta', 'nightly'],
+      )
+      assert.equal(mock.assets.has('nightly/feed.json'), false)
+    } else {
+      assert.equal(mock.assets.get('beta/feed.json'), 'previous beta')
+      assert.equal(mock.assets.get('nightly/feed.json'), 'previous nightly')
+    }
+    for (const args of mock.calls.filter((args) => args[1] === 'edit')) {
+      const notes = args[args.indexOf('--notes') + 1]
+      assert.match(notes, /forced/)
+      assert.match(notes, /last complete verified release/)
+      assert.match(notes, /hibi-.*-win-x64\.exe/)
+      assert.doesNotMatch(notes, /hibi-.*-(?:linux|mac)-/)
+    }
+  }
+})
+
+test('complete forced release preserves both channel promotions and truthful notes', async (t) => {
+  const root = await directory(t)
+  const baseline = release(false)
+  const decided = decideRelease(
+    { ...baseline, forceRelease: true },
+    baseline.shards,
+  )
+  const published = classifyRelease(
+    decided,
+    baseline.reports.map((report) => ({
+      ...report,
+      tag: decided.tag,
+      version: decided.version,
+      channel: decided.channel,
+    })),
+  )
+  await installers(root, published.version)
+  await updateFeed(published, root)
+  const mock = github()
+  await promoteFeeds(published, root, 'owner/repo', mock.gh, () => true)
+  assert.deepEqual(
+    mock.calls.filter((args) => args[1] === 'upload').map((args) => args[2]),
+    ['beta', 'nightly'],
+  )
+  const beta = mock.calls.find(
+    (args) => args[1] === 'edit' && args[2] === 'beta',
+  )
+  assert.match(
+    beta[beta.indexOf('--notes') + 1],
+    /check eligibility was overridden/i,
+  )
+  assert.doesNotMatch(beta[beta.indexOf('--notes') + 1], /passed all checks/)
 })

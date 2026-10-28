@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -18,9 +19,11 @@ import {
   nightly,
   nightlyWebhook,
   platforms,
+  publishRelease,
   releaseChannels,
   releaseNotes,
   sendNightlyWebhook,
+  stageInstallers,
 } from '../scripts/nightly.mjs'
 
 const sha = 'a'.repeat(40)
@@ -43,6 +46,8 @@ const packages = (release) =>
     ...report,
     build: 'success',
     package: 'success',
+    verification: 'success',
+    result: 'success',
     channel: release.channel,
     tag: release.tag,
     version: release.version,
@@ -151,7 +156,7 @@ test('every shard must pass for beta; other complete runs publish nightlies with
   assert.equal(checkedRelease(shards(sha), false).channel, 'nightly')
 })
 
-test('decide and publish fail closed on missing, duplicate, mismatched or changed reports', () => {
+test('check provenance fails closed while missing build reports remain visible', () => {
   const reports = shards(sha)
   for (const invalid of [
     reports.slice(1),
@@ -171,24 +176,22 @@ test('decide and publish fail closed on missing, duplicate, mismatched or change
       () => classifyRelease({ ...beta, [key]: 'mismatch' }, built),
       /checked release decision/,
     )
-  assert.throws(
-    () => classifyRelease(beta, built.slice(1)),
-    /Every release platform/,
+  assert.equal(
+    classifyRelease(beta, built.slice(1)).reports[0].result,
+    'missing',
   )
   assert.throws(
     () => classifyRelease(beta, [built[1], ...built.slice(1)]),
-    /Every release platform/,
+    /release platform/,
   )
-  for (const stage of ['build', 'package']) {
-    for (const outcome of ['failure', 'cancelled', 'skipped', undefined])
-      assert.throws(
-        () =>
-          classifyRelease(beta, [
-            { ...built[0], [stage]: outcome },
-            ...built.slice(1),
-          ]),
-        /Cannot publish/,
-      )
+  for (const stage of ['build', 'package', 'verification', 'result']) {
+    for (const outcome of ['failure', 'cancelled', 'skipped', undefined]) {
+      const classified = classifyRelease(beta, [
+        { ...built[0], [stage]: outcome },
+        ...built.slice(1),
+      ])
+      assert.equal(classified.reports[0][stage], outcome)
+    }
   }
   for (const [key, value] of [
     ['sha', 'b'.repeat(40)],
@@ -302,14 +305,22 @@ test('release notes and webhook announce both channels with check results, logs 
       () => releaseNotes(release, 'owner/repo', 'invalid'),
       /checksum/,
     )
+    assert.doesNotMatch(
+      releaseNotes(
+        release,
+        'owner/repo',
+        checksums(release).split('\n').slice(1).join('\n'),
+      ),
+      /-win-x64\.exe/,
+    )
     assert.throws(
       () =>
         releaseNotes(
           release,
           'owner/repo',
-          checksums(release).split('\n').slice(1).join('\n'),
+          `${checksums(release)}\n${checksums(release)}`,
         ),
-      /Missing nightly download/,
+      /Duplicate nightly checksum/,
     )
   }
 })
@@ -334,7 +345,7 @@ test('prepare, decide and classify CLI preserve the packaged identity and schedu
         ...env,
       },
     })
-  cli('prepare')
+  cli('prepare', { RELEASE_VERSION: '0.8.0^', FORCE_RELEASE: 'true' })
   const readRelease = () =>
     JSON.parse(readFileSync(join(cwd, 'release.json'), 'utf8'))
   assert.equal(
@@ -342,6 +353,22 @@ test('prepare, decide and classify CLI preserve the packaged identity and schedu
     '0.2.5',
     'scheduled runs ignore minor input',
   )
+  assert.equal(
+    readRelease().forceRelease,
+    false,
+    'scheduled runs ignore force and version inputs',
+  )
+  cli('prepare', {
+    GITHUB_EVENT_NAME: 'workflow_dispatch',
+    RELEASE_VERSION: '0.8.0',
+    FORCE_RELEASE: 'false',
+  })
+  assert.equal(
+    readRelease().forceRelease,
+    false,
+    'false boolean string never enables forcing',
+  )
+  assert.equal(readRelease().betaVersion, '0.8.0')
   cli('prepare', { GITHUB_EVENT_NAME: 'workflow_dispatch' })
   assert.equal(readRelease().betaVersion, '0.3.0')
   const revision = readRelease().sha
@@ -356,10 +383,13 @@ test('prepare, decide and classify CLI preserve the packaged identity and schedu
   assert.equal(decided.version, '0.3.0')
   for (const entry of ['channel=beta', 'version=0.3.0', 'tag=v0.3.0'])
     assert.ok(readFileSync(output, 'utf8').includes(entry))
-  mkdirSync(join(cwd, 'installers'))
+  mkdirSync(join(cwd, 'build-results'))
+  mkdirSync(join(cwd, 'packages'))
+  for (const name of downloads(decided.version))
+    writeFileSync(join(cwd, 'packages', name), 'verified installer')
   for (const report of packages(decided))
     writeFileSync(
-      join(cwd, 'installers', `checks-${report.platform}.json`),
+      join(cwd, 'build-results', `checks-${report.platform}.json`),
       JSON.stringify(report),
     )
   cli('classify')
@@ -419,11 +449,14 @@ test('workflow decides before signing, verifies before publishing and preserves 
   assert.deepEqual(workflow.jobs.publish.needs, ['prepare', 'decide', 'build'])
   assert.equal(
     workflow.jobs.publish.if,
-    undefined,
-    'failed package jobs block publication',
+    expression(
+      "!cancelled() && needs.prepare.result == 'success' && needs.decide.result == 'success'",
+    ),
   )
+  assert.equal(workflow.jobs.build['continue-on-error'], true)
   assert.deepEqual(Object.keys(workflow.jobs.decide.outputs).sort(), [
     'channel',
+    'checks',
     'tag',
     'version',
   ])
@@ -438,6 +471,15 @@ test('workflow decides before signing, verifies before publishing and preserves 
     [...platforms].sort(),
   )
   const checks = checkJob.steps.find((step) => step.id === 'ci')
+  assert.equal(workflow.on.workflow_dispatch.inputs.version.type, 'string')
+  assert.equal(
+    workflow.on.workflow_dispatch.inputs.force_release.type,
+    'boolean',
+  )
+  assert.equal(
+    workflow.on.workflow_dispatch.inputs.force_release.default,
+    false,
+  )
   assert.equal(checks['continue-on-error'], true)
   assert.ok(checks['timeout-minutes'] < checkJob['timeout-minutes'])
   assert.equal(checks.with.clean, true)
@@ -499,18 +541,8 @@ test('workflow decides before signing, verifies before publishing and preserves 
       publish.findIndex((step) => step.id === 'publish'),
   )
   const immutable = publish.find((step) => step.id === 'publish')
-  assert.match(
-    immutable.run,
-    /if \[ "\$CHANNEL" = beta \]; then\n\s+prerelease=false\n\s+latest=true/,
-  )
-  assert.match(immutable.run, /published=false/)
-  assert.match(immutable.run, /published=true/)
-  // A rerun repairs feeds for an existing release without announcing it again.
-  assert.match(
-    immutable.run,
-    /already published; preserving its assets\."\n\s+echo "published=true"/,
-  )
-  assert.match(immutable.run, /announce=true/)
+  assert.equal(immutable.run, 'node scripts/nightly.mjs publish')
+  assert.doesNotMatch(source, /sha256sum|gh release upload/)
   const feeds = publish.find((step) => step.id === 'feeds')
   assert.equal(feeds.if, "steps.publish.outputs.published == 'true'")
   assert.equal(feeds.run, 'node scripts/update-feed.mjs publish')
@@ -526,4 +558,333 @@ test('workflow decides before signing, verifies before publishing and preserves 
     expression('secrets.NIGHTLIES_WEBHOOK_URL'),
   )
   assert.ok(publish.indexOf(feeds) < publish.indexOf(announcement))
+})
+
+test('manual versions and force override check eligibility without putting carets in tags', (t) => {
+  const { cwd, git } = repository(t)
+  const failed = shards(git('rev-parse', 'HEAD'))
+  failed[0].checks = 'failure'
+  for (const options of [
+    { version: '0.8.0^' },
+    { version: '0.8.0', forceRelease: true },
+    { forceRelease: true },
+  ]) {
+    const release = nightly(cwd, date, 'patch', '12.1', options)
+    const decided = decideRelease(release, failed)
+    assert.equal(decided.channel, 'beta')
+    assert.equal(decided.forceRelease, true)
+    assert.equal(decided.checks[0].checks, 'failure')
+    assert.equal(decided.tag, options.version ? 'v0.8.0' : 'v0.2.0')
+    assert.ok(!decided.tag.includes('^'))
+    assert.deepEqual(releaseChannels(decided), ['beta', 'nightly'])
+  }
+  const requested = nightly(cwd, date, 'patch', '12.1', { version: '0.8.0' })
+  assert.equal(decideRelease(requested, failed).channel, 'nightly')
+  assert.equal(decideRelease(requested, shards(requested.sha)).tag, 'v0.8.0')
+  for (const version of [
+    '0.8.0^^',
+    'v0.8.0',
+    '0.08.0',
+    '0.8.0-beta.1',
+    '0.8.0^/bad',
+    '0.8.0\n^',
+  ])
+    assert.throws(
+      () => nightly(cwd, date, 'patch', '12.1', { version }),
+      /version/,
+    )
+  git('tag', 'v0.8.0')
+  assert.throws(
+    () => nightly(cwd, date, 'patch', '12.1', { version: '0.8.0^' }),
+    /already exists/,
+  )
+})
+
+test('missing and failed builds remain reportable while provenance and duplicates stay strict', () => {
+  const decided = decideRelease(
+    { ...prepared, forceRelease: true },
+    shards(sha),
+  )
+  const built = packages(decided).map((report) => ({
+    ...report,
+    result: 'success',
+    verification: 'success',
+  }))
+  for (const field of ['build', 'package', 'verification', 'result']) {
+    const reports = [{ ...built[0], [field]: 'failure' }, ...built.slice(1)]
+    const classified = classifyRelease(decided, reports)
+    assert.equal(classified.reports[0][field], 'failure')
+  }
+  const missing = classifyRelease(decided, built.slice(1))
+  assert.equal(missing.reports[0].result, 'missing')
+  assert.equal(classifyRelease(decided, []).reports.length, platforms.length)
+  assert.throws(
+    () => classifyRelease(decided, [built[0], built[0]]),
+    /platform/,
+  )
+  assert.throws(
+    () =>
+      classifyRelease(decided, [
+        { ...built[0], sha: 'b'.repeat(40), build: 'failure' },
+      ]),
+    /mismatched/,
+  )
+})
+
+test('forced notes and butterfly footer disclose failed checks and zero available installers', () => {
+  const reports = shards(sha)
+  reports[0].checks = 'failure'
+  const decided = decideRelease({ ...prepared, forceRelease: true }, reports)
+  const release = classifyRelease(decided, [])
+  const notes = releaseNotes(release, 'owner/repo', '')
+  assert.match(notes, /forced/i)
+  assert.match(notes, /checks failure/)
+  assert.match(notes, /no verified installers/i)
+  const [embed] = nightlyWebhook(release, 'owner/repo', '').embeds
+  assert.equal(embed.title, '🦋')
+  assert.equal(embed.color, 9568176)
+  assert.match(embed.footer.text, /forced/i)
+  assert.doesNotMatch(embed.footer.text, /passed all checks/)
+  assert.doesNotMatch(embed.description, /releases\/download/)
+})
+
+test('one shared asset filter excludes failed verification, partial sets and unrelated files', (t) => {
+  const { cwd } = repository(t)
+  const released = checkedRelease()
+  const source = join(cwd, 'packages')
+  const destination = join(cwd, 'verified')
+  mkdirSync(source)
+  for (const name of downloads(released.version))
+    writeFileSync(join(source, name), 'installer')
+  writeFileSync(join(source, 'unverified.exe'), 'untrusted')
+  released.reports.find(
+    (report) => report.platform === 'macos-x64',
+  ).verification = 'failure'
+  released.reports.find((report) => report.platform === 'linux-arm64').build =
+    'failure'
+  rmSync(join(source, 'hibi-0.2.0-linux-x64.deb'))
+  const selected = stageInstallers(released, source, destination)
+  assert.deepEqual(selected.map((asset) => asset.platform).sort(), [
+    'macos-arm64',
+    'macos-arm64',
+    'windows-x64',
+  ])
+  assert.deepEqual(
+    readdirSync(destination).sort(),
+    selected.map((asset) => asset.name).sort(),
+  )
+  const sums = selected
+    .map((asset) => `${'a'.repeat(64)}  ./${asset.name}`)
+    .join('\n')
+  for (const text of [
+    releaseNotes(released, 'owner/repo', sums),
+    nightlyWebhook(released, 'owner/repo', sums).embeds[0].description,
+  ]) {
+    assert.doesNotMatch(text, /hibi-0\.2\.0-(mac-x64|linux-)|unverified\.exe/)
+    assert.match(text, /hibi-0\.2\.0-win-x64\.exe/)
+  }
+})
+
+test('failed-step reports and zero-build CLI publish metadata without glob errors', (t) => {
+  const { cwd } = repository(t)
+  const workflow = parse(readFileSync('.github/workflows/nightly.yml', 'utf8'))
+  const record = workflow.jobs.build.steps.find((step) => step.id === 'results')
+  const reportUpload = workflow.jobs.build.steps.find((step) =>
+    step.with?.name?.startsWith('build-result-'),
+  )
+  assert.equal(record.if, 'always()')
+  assert.match(reportUpload.if, /always\(\)/)
+  const finalReport = workflow.jobs.build.steps.find(
+    (step) => step.name === 'Record final platform outcome',
+  )
+  const installerUpload = workflow.jobs.build.steps.find(
+    (step) => step.with?.path === 'verified-installers/*',
+  )
+  assert.ok(
+    workflow.jobs.build.steps.indexOf(finalReport) >
+      workflow.jobs.build.steps.indexOf(installerUpload),
+  )
+  assert.match(finalReport.if, /always\(\)/)
+  const reports = shards(sha)
+  reports[0].checks = 'failure'
+  const released = decideRelease({ ...prepared, forceRelease: true }, reports)
+  writeFileSync(join(cwd, 'release.json'), JSON.stringify(released))
+  mkdirSync(join(cwd, 'check-shards'))
+  for (const report of reports)
+    writeFileSync(
+      join(cwd, 'check-shards', `${report.platform}-${report.shard}.json`),
+      JSON.stringify(report),
+    )
+  execFileSync('bash', ['-e', '-o', 'pipefail', '-c', record.run], {
+    cwd,
+    env: {
+      ...process.env,
+      PLATFORM: 'linux-x64',
+      SHA: sha,
+      BUILD_RESULT: 'failure',
+      CHECKS_RESULT: '',
+      EXPECTED_CHECKS: JSON.stringify(released.checks),
+      PACKAGE_RESULT: 'skipped',
+      VERSION: released.version,
+      TAG: released.tag,
+      CHANNEL: released.channel,
+      RESULT: 'failure',
+      INSPECT_LINUX: 'skipped',
+      LAUNCH_LINUX: 'skipped',
+      VERIFY_MAC: 'skipped',
+    },
+  })
+  const report = JSON.parse(
+    readFileSync(join(cwd, 'build-results/checks-linux-x64.json'), 'utf8'),
+  )
+  assert.equal(report.build, 'failure')
+  assert.equal(report.checks, 'failure')
+  assert.equal(report.verification, 'failure')
+  const env = {
+    ...process.env,
+    GITHUB_OUTPUT: join(cwd, 'output'),
+    GITHUB_REPOSITORY: 'owner/repo',
+  }
+  const script = resolve('scripts/nightly.mjs')
+  const cli = (command) =>
+    execFileSync(process.execPath, [script, command], { cwd, env })
+  cli('stage')
+  assert.deepEqual(readdirSync(join(cwd, 'verified-installers')), [])
+  cli('classify')
+  rmSync(join(cwd, 'build-results'), { recursive: true })
+  cli('classify')
+  const classified = JSON.parse(readFileSync(join(cwd, 'release.json'), 'utf8'))
+  assert.ok(classified.reports.every((report) => report.result === 'missing'))
+  execFileSync(process.execPath, [resolve('scripts/update-feed.mjs')], {
+    cwd,
+    env,
+  })
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(cwd, 'installers/feed.json'), 'utf8')).assets,
+    {},
+  )
+  assert.equal(readFileSync(join(cwd, 'installers/SHA256SUMS.txt'), 'utf8'), '')
+  const notes = cli('notes').toString()
+  assert.match(notes, /forced release/)
+  assert.doesNotMatch(notes, /releases\/download/)
+  const bin = join(cwd, 'bin')
+  mkdirSync(bin)
+  writeFileSync(
+    join(bin, 'gh'),
+    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\nif [ "$2" = view ]; then exit 1; fi\n',
+    { mode: 0o755 },
+  )
+  execFileSync(process.execPath, [script, 'publish'], {
+    cwd,
+    env: {
+      ...env,
+      PATH: `${bin}:${process.env.PATH}`,
+      GH_CALLS: join(cwd, 'gh-calls'),
+    },
+  })
+  const calls = readFileSync(join(cwd, 'gh-calls'), 'utf8')
+  assert.match(calls, /installers\/SHA256SUMS.txt/)
+  assert.doesNotMatch(calls, /\*|\.exe|\.dmg|latest=true/)
+  assert.ok(
+    readFileSync(join(cwd, 'output'), 'utf8').includes('published=true'),
+  )
+})
+
+test('same-SHA drafts recover interrupted uploads and publishing without retaining stale installers', (t) => {
+  for (const failure of ['upload', 'edit']) {
+    const { cwd } = repository(t)
+    const decided = decideRelease(
+      { ...prepared, forceRelease: true },
+      shards(sha),
+    )
+    const released = classifyRelease(
+      decided,
+      packages(decided).filter((report) => report.platform === 'windows-x64'),
+    )
+    const directory = join(cwd, 'installers')
+    mkdirSync(directory)
+    const installer = `hibi-${released.version}-win-x64.exe`
+    writeFileSync(join(directory, installer), 'verified windows')
+    writeFileSync(
+      join(directory, 'SHA256SUMS.txt'),
+      `${'a'.repeat(64)}  ./${installer}\n`,
+    )
+    writeFileSync(
+      join(directory, 'feed.json'),
+      JSON.stringify({
+        tag: released.tag,
+        version: released.version,
+        assets: {},
+      }),
+    )
+    writeFileSync(join(directory, 'latest-mac.yml'), 'stale metadata')
+    writeFileSync(join(cwd, 'release.json'), JSON.stringify(released))
+    let fail = true
+    const state = {
+      isDraft: true,
+      targetCommitish: sha,
+      assets: [
+        { name: 'stale-mac.dmg' },
+        { name: 'latest-mac.yml' },
+        { name: installer },
+      ],
+    }
+    const calls = []
+    const gh = (...args) => {
+      calls.push(args)
+      if (args[1] === 'view') return JSON.stringify(state)
+      if (args[1] === 'delete-asset')
+        state.assets = state.assets.filter(
+          (asset) => asset.name !== args.at(-1),
+        )
+      if (args[1] === 'upload') {
+        assert.ok(
+          args.includes('--clobber'),
+          'only a verified same-SHA draft is overwritten',
+        )
+        for (const path of args.slice(3).filter((arg) => arg !== '--clobber')) {
+          const name = path.split('/').at(-1)
+          assert.ok(readFileSync(path).length || name === 'SHA256SUMS.txt')
+          state.assets = [
+            ...state.assets.filter((asset) => asset.name !== name),
+            { name },
+          ]
+        }
+      }
+      if (args[1] === failure && fail) {
+        fail = false
+        throw new Error('interrupted')
+      }
+      if (args[1] === 'edit') state.isDraft = false
+      return ''
+    }
+    assert.throws(
+      () => publishRelease(released, directory, 'owner/repo', gh),
+      /interrupted/,
+    )
+    assert.equal(state.isDraft, true)
+    assert.deepEqual(publishRelease(released, directory, 'owner/repo', gh), {
+      published: true,
+      announce: true,
+    })
+    assert.ok(!state.assets.some((asset) => asset.name === 'stale-mac.dmg'))
+    assert.ok(!state.assets.some((asset) => asset.name === 'latest-mac.yml'))
+    assert.equal(state.isDraft, false)
+    const before = calls.length
+    assert.deepEqual(publishRelease(released, directory, 'owner/repo', gh), {
+      published: false,
+      announce: false,
+    })
+    assert.equal(
+      calls.length,
+      before + 1,
+      'published release is only read, never overwritten',
+    )
+    state.isDraft = true
+    state.targetCommitish = 'b'.repeat(40)
+    assert.throws(
+      () => publishRelease(released, directory, 'owner/repo', gh),
+      /checked revision/,
+    )
+  }
 })

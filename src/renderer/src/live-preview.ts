@@ -55,6 +55,7 @@ import {
   formattedLinkAttributes,
   formattedLiteral,
   formattedNodeViews,
+  formattedPrefix,
   formattedRefresh,
   formattedRenderInputs,
   formattedTree,
@@ -1648,8 +1649,19 @@ export function livePreview(
       const { doc } = transaction.startState
       const before = transaction.startState.selection.ranges
       const lines = transaction.startState.field(layout)
+      // Where the note's text starts after metadata the view keeps hidden.
+      let body = 0
+      for (const measure of transaction.startState.facet(formattedPrefix))
+        body = Math.max(body, measure(transaction.startState))
       let moved = false
       const ranges = transaction.selection.ranges.map((range, index) => {
+        // Selecting the whole note, or all its text after its metadata,
+        // includes the hidden lines at its ends.
+        if (
+          range.to === doc.length &&
+          (range.from === 0 || range.from === body)
+        )
+          return range
         let head = range.head
         lines.between(head, head, (from, to, value) => {
           if (value !== hiddenLine || head < from || head > to) return

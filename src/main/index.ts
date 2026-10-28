@@ -11,7 +11,6 @@ import {
   globalShortcut,
   ipcMain,
   Menu,
-  nativeImage,
   nativeTheme,
   net,
   protocol,
@@ -124,6 +123,7 @@ import {
   windowAddonName,
 } from './addons'
 import { analysisService } from './analysis'
+import { appIconPath, applyAppIcon } from './app-icon'
 import {
   appearanceColors,
   loadAppearance,
@@ -277,10 +277,6 @@ app.setName('hibi')
 // Let held Vim motions repeat instead of opening macOS's accent picker.
 if (process.platform === 'darwin')
   systemPreferences.setUserDefault('ApplePressAndHoldEnabled', 'boolean', false)
-const iconName = `icon-${process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : 'linux'}.png`
-const appIcon = app.isPackaged
-  ? join(process.resourcesPath, 'icons', iconName)
-  : join(app.getAppPath(), 'build', iconName)
 app.enableSandbox()
 const testing = !app.isPackaged && app.commandLine.hasSwitch('hibi-test')
 const foundationsIpcBenchmark =
@@ -916,7 +912,7 @@ function createWindow(): void {
     // Linux cannot change focusability after creation; CI shows test windows.
     focusable: !testing || process.platform === 'linux',
     title: 'Hibi',
-    ...(process.platform === 'darwin' ? {} : { icon: appIcon }),
+    ...(process.platform === 'darwin' ? {} : { icon: appIconPath() }),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin'
       ? { trafficLightPosition: { x: 12, y: 11 } }
@@ -1411,14 +1407,6 @@ if (!app.requestSingleInstanceLock()) {
     .then(async () => {
       startupMark('app-ready')
       void sweepSiteScratch(app.getPath('userData')).catch(console.error)
-      // Installed macOS apps already carry their full-resolution bundle icon.
-      // A dock-sized development icon avoids re-encoding 1024px images at launch.
-      if (process.platform === 'darwin' && !app.isPackaged)
-        app.dock?.setIcon(
-          nativeImage
-            .createFromPath(appIcon)
-            .resize({ width: 256, height: 256 }),
-        )
       const hotkeysReady = startupSpan('hotkeys', loadHotkeys)
       const addonsReady = startupSpan('addons', loadAddons)
       const documentReady = startupSpan(
@@ -1441,6 +1429,7 @@ if (!app.requestSingleInstanceLock()) {
       // Handle rejection immediately while appearance and renderer loading overlap it.
       void preferences.catch(() => {})
       await startupSpan('appearance', loadAppearance)
+      applyAppIcon()
       const handle = (
         channel: string,
         listener: Parameters<typeof ipcMain.handle>[1],
@@ -2676,6 +2665,7 @@ if (!app.requestSingleInstanceLock()) {
         }),
       )
       nativeTheme.on('updated', () => {
+        applyAppIcon()
         mainWindow?.setBackgroundColor(appearanceColors().background)
         if (process.platform !== 'darwin')
           mainWindow?.setTitleBarOverlay(titleBarColors())

@@ -149,6 +149,53 @@ test('formatted slash excludes code, metadata, paths and paragraph continuations
   assert.equal(await read(), '/h2literal')
 })
 
+test('dismissing a closed slash menu leaves the editor untouched', {
+  timeout: 30000,
+}, async () => {
+  const names = [
+    'aria-controls',
+    'aria-activedescendant',
+    'aria-autocomplete',
+    'aria-haspopup',
+  ]
+  const attributes = () =>
+    editor().evaluate(
+      (element, names) => names.map((name) => element.getAttribute(name)),
+      names,
+    )
+  await set('plain words')
+  const before = await attributes()
+  // Caret moves, a press elsewhere and a blur dismiss the closed menu,
+  // which writes nothing: a hidden editor's DOM stays as it is.
+  const writes = await editor().evaluate(async (element, names) => {
+    const writes = []
+    for (const method of ['setAttribute', 'removeAttribute'])
+      element[method] = (name, ...rest) => {
+        if (names.includes(name)) writes.push(`${method} ${name}`)
+        return Element.prototype[method].call(element, name, ...rest)
+      }
+    const view = element.cmTile.root.view
+    view.dispatch({ selection: { anchor: 0 } })
+    view.dispatch({ selection: { anchor: view.state.doc.length } })
+    document.body.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true }),
+    )
+    element.dispatchEvent(new FocusEvent('blur'))
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+    delete element.setAttribute
+    delete element.removeAttribute
+    return writes
+  }, names)
+  assert.deepEqual(writes, [])
+  // An open menu still gives the editor its attributes back.
+  await set('/h2')
+  await menu().waitFor()
+  await editor().press('Escape')
+  await menu().waitFor({ state: 'hidden' })
+  assert.deepEqual(await attributes(), before)
+})
+
 test('formatted slash offers transform commands and preserves crlf outside its edit', {
   timeout: 30000,
 }, async () => {

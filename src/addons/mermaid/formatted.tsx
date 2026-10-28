@@ -11,7 +11,7 @@ import {
   RenderedBlocks,
 } from '../_shared/formatted-fence'
 import type { AddonContext } from '../api'
-import type { editMermaidSource, MermaidBlockContent } from './Block'
+import type { editMermaidSource, MermaidBlockContent } from './BlockContent'
 
 /**
  * Mermaid fences in the formatted view: the diagram replaces the fence, drawn

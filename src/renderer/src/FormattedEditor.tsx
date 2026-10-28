@@ -32,13 +32,8 @@ import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import type { OutlineHeading } from './OutlineSidebar'
-import { SourceEditor } from './SourceEditor'
-import {
-  editorPosition,
-  revealSourcePosition,
-  sourceAfter,
-  sourceView,
-} from './source-view'
+import { SourceEditor, sourceAfter } from './SourceEditor'
+import { editorPosition, revealSourcePosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
 import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
 

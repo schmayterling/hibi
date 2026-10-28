@@ -8,7 +8,7 @@ import {
 import { BlockTokenizer } from '../../shared/marked-blocks.ts'
 import type { SourceStore } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
-import type { SourceOwner, SourceOwners } from '../../shared/source-owners.ts'
+import { type SourceOwner, SourceOwners } from '../../shared/source-owners.ts'
 import { SourceReferences } from '../../shared/source-references.ts'
 import { blockMathSyntax } from '../math/formatted-syntax.ts'
 import { countText } from './count.ts'
@@ -25,6 +25,7 @@ import { localCount, plainParagraph, plainSource } from './local-count.ts'
 type Count = ReturnType<typeof countText>
 type Entry = {
   count: Count
+  carriage: boolean
   members: readonly number[]
   current: () => boolean
   plain: ReturnType<typeof plainParagraph>
@@ -48,6 +49,8 @@ export class FormattedCounter {
   #plainOwners: SourceOwners | null = null
   readonly #plainCounts = new Map<Entry, Count>()
   #total: Count = { words: 0, characters: 0 }
+  #visible: SourceOwners | null = null
+  #carriages = 0
   #work = { countedRegions: 0, countedUnits: 0, referenceUnits: 0 }
   constructor(store: SourceStore, syntax: CountSyntax) {
     this.store = store
@@ -138,6 +141,7 @@ export class FormattedCounter {
     this.#entries.delete(slot)
     this.#total.words -= entry.count.words
     this.#total.characters -= entry.count.characters
+    this.#carriages -= Number(entry.carriage)
     for (const member of entry.members) {
       const readers = this.#members.get(member)
       readers?.delete(slot)
@@ -148,6 +152,7 @@ export class FormattedCounter {
     this.#entries.set(slot, entry)
     this.#total.words += entry.count.words
     this.#total.characters += entry.count.characters
+    this.#carriages += Number(entry.carriage)
     for (const member of entry.members) {
       let readers = this.#members.get(member)
       if (!readers) {
@@ -155,6 +160,27 @@ export class FormattedCounter {
         this.#members.set(member, readers)
       }
       readers.add(slot)
+    }
+  }
+  #result(): Count {
+    // Every nonempty region starts with a block separator. A trailing carriage
+    // return joins the next separator into one grapheme, except at document end.
+    const visible = this.#visible
+    let from = 0,
+      to = visible?.count ?? 0
+    while (visible && from < to) {
+      const middle = Math.floor((from + to) / 2)
+      if (visible.invalid(middle, visible.count)) from = middle + 1
+      else to = middle
+    }
+    const terminalCarriage =
+      from > 0 && visible?.get(from - 1)?.owner.kind === 'carriage'
+    return {
+      words: this.#total.words,
+      characters: Math.max(
+        0,
+        this.#total.characters - 1 - this.#carriages + Number(terminalCarriage),
+      ),
     }
   }
   *read(): Generator<void, Count> {
@@ -165,10 +191,7 @@ export class FormattedCounter {
         entry.count = count
       }
       this.#plainCounts.clear()
-      return {
-        words: this.#total.words,
-        characters: Math.max(0, this.#total.characters - 1),
-      }
+      return this.#result()
     }
     while (!this.#model.state().complete) {
       this.#model.advance()
@@ -187,6 +210,8 @@ export class FormattedCounter {
       this.#owners = null
       this.#referencesDirty = false
       this.#total = { words: 0, characters: 0 }
+      this.#visible = null
+      this.#carriages = 0
       this.#epoch = owners.epoch
     }
     const previous = this.#owners
@@ -294,6 +319,7 @@ export class FormattedCounter {
             words: literal.count.words,
             characters: literal.count.characters + count.characters - 1,
           },
+          carriage: false,
           members: members(region),
           current: () => true,
           plain: literal.owner.length,
@@ -316,6 +342,7 @@ export class FormattedCounter {
         this.#work.countedUnits += region.to - region.from
         staged.set(slot, {
           count: countText(text),
+          carriage: text.endsWith('\r'),
           members: members(region),
           current: value.scope.current,
           plain: plainParagraph(value.tokens, region),
@@ -329,13 +356,45 @@ export class FormattedCounter {
       this.#remove(slot)
       this.#add(slot, entry)
     }
+    const summary = (slot: number) => {
+      const entry = this.#entries.get(slot)
+      return {
+        kind: entry?.carriage ? 'carriage' : 'text',
+        length: 1,
+        parsed: !entry?.count.characters,
+      }
+    }
+    if (!this.#visible || !previous || !delta)
+      this.#visible = new SourceOwners(
+        [...owners.records()].map(({ owner }) => summary(owner.slot)),
+      )
+    else {
+      const removed = delta.removed
+        .flatMap((owner) => previous.bySlot(owner.slot)?.index ?? [])
+        .sort((a, b) => b - a)
+      for (const index of removed)
+        this.#visible = this.#visible.splice(index, index + 1, [])
+      const changed = delta.changed
+        .flatMap((owner) => owners.bySlot(owner.slot) ?? [])
+        .sort((a, b) => a.index - b.index)
+      for (const { owner, index } of changed)
+        if (!previous.bySlot(owner.slot))
+          this.#visible = this.#visible.splice(index, index, [
+            summary(owner.slot),
+          ])
+      for (const slot of dirty) {
+        const row = owners.bySlot(slot)
+        if (!row) continue
+        const value = summary(slot)
+        const current = this.#visible.get(row.index)?.owner
+        if (current?.kind !== value.kind || current.parsed !== value.parsed)
+          this.#visible = this.#visible.update(row.index, value)
+      }
+    }
     this.#owners = owners
     this.#referencesDirty = false
     this.#plainOwners = owners
-    return {
-      words: this.#total.words,
-      characters: Math.max(0, this.#total.characters - 1),
-    }
+    return this.#result()
   }
   counters(reset = false) {
     const result = {
@@ -344,6 +403,7 @@ export class FormattedCounter {
       brackets: this.#brackets.counters(reset),
       parser: this.#model.counters(reset),
       cache: this.#cache.counters(reset),
+      visible: this.#visible?.counters(reset),
     }
     if (reset)
       this.#work = { countedRegions: 0, countedUnits: 0, referenceUnits: 0 }
@@ -358,6 +418,7 @@ export class FormattedCounter {
     this.#members.clear()
     this.#plainCounts.clear()
     this.#plainOwners = null
+    this.#visible = null
     this.#literal.clear()
   }
 }

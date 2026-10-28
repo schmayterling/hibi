@@ -96,8 +96,6 @@ const cases = [
 const formattedGaps = {
   '0/lazy definition/0':
     'formatted gap corpus-001: lazy reference definitions must render only native paragraph text',
-  '0/gfm/0':
-    'formatted gap corpus-002: gfm tables and alerts must report native formatted character counts',
   '0/references/0':
     'formatted gap corpus-003: reference definitions must hide while resolved labels remain visible',
   '0/forward references/0':
@@ -106,8 +104,6 @@ const formattedGaps = {
     'formatted gap corpus-005: formatted references must render labels before a destination edit',
   '0/reference edits/1':
     'formatted gap corpus-006: formatted references must retain labels after a destination edit',
-  '0/grapheme seams/0':
-    'formatted gap corpus-007: formatted grapheme character counts must match native counts',
   '0/multiline title/0':
     'formatted gap corpus-008: multiline reference titles must hide and avoid false headings',
   '0/quoted title/0':
@@ -126,8 +122,6 @@ const formattedGaps = {
     'formatted gap corpus-015: disabled heading syntax must hide definitions before reference edits',
   '1/reference edits/1':
     'formatted gap corpus-016: disabled heading syntax must hide definitions after reference edits',
-  '1/grapheme seams/0':
-    'formatted gap corpus-017: disabled heading syntax must preserve native grapheme character counts',
   '1/multiline title/0':
     'formatted gap corpus-018: disabled heading syntax must hide multiline reference titles',
   '1/quoted title/0':

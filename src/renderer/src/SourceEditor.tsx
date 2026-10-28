@@ -2182,6 +2182,7 @@ export function SourceEditor({
       viewId as ViewId,
       kind,
       {
+        surface: () => editor.contentDOM,
         read: () => {
           const source = bridge.snapshot()
           if (

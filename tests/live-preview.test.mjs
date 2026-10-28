@@ -784,7 +784,13 @@ test('scrolling up through known code blocks keeps the scroll position as withou
     )
   const plain = await scrollUp(false)
   const known = await scrollUp(true)
+  // The browser's own scroll anchoring would move the text a second time
+  // when it lays out heights the editor has not measured yet.
+  const anchoring = await harness.evaluate(
+    () => getComputedStyle(window.livePreview.view().dom).overflowAnchor,
+  )
   await session.detach()
+  assert.equal(anchoring, 'none')
   assert.ok(plain.length > 15, JSON.stringify(plain))
   // Before, each placeholder turned into lines in an update the editor had
   // not measured when the next update came, so it kept the text at the top

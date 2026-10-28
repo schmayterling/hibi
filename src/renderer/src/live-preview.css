@@ -4,6 +4,9 @@
 .cm-editor.hibi-formatted {
   height: auto;
   min-height: 100%;
+  /* The pane scrolls the editor, which keeps the text in place as heights
+     change; the browser's own scroll anchoring would move it a second time. */
+  overflow-anchor: none;
 }
 .cm-editor.hibi-formatted.cm-focused {
   outline: none;

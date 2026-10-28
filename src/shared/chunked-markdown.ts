@@ -296,6 +296,8 @@ export type ChunkedMarkdownProbe = {
   reusedNodes: number
   /** Group nodes created for the new tree. */
   builtGroups: number
+  /** UTF-16 units of fence info strings read for their language. */
+  codeInfoUnits?: number
   /** Worker adoption diagnostics; absent until a worker is attached. */
   adoptionDeclined?: number
   adoptedRecords?: number

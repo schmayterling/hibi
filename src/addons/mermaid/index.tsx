@@ -3,12 +3,8 @@ import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import css from '../_shared/format-style.css?inline'
 import { localPreview, localRender } from '../_shared/local-preview'
 import { defineAddon } from '../api'
-import {
-  Diagram,
-  editMermaidSource,
-  MermaidBlockContent,
-  mermaidNode,
-} from './Block'
+import { mermaidNode } from './Block'
+import { Diagram, editMermaidSource, MermaidBlockContent } from './BlockContent'
 import manifest from './manifest'
 import { getPreferences, settingsEvent } from './preferences'
 import { diagramTheme, renderDiagram } from './render'

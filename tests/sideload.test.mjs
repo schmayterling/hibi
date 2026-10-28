@@ -277,12 +277,6 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
   assert.equal(await page.locator('.app').getAttribute('data-sidebar'), 'true')
   await t.test(
     'disabling an addon removes syntax colors from both panes',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap syntax-005: disabling an addon must remove its formatted syntax colors'
-          : undefined,
-    },
     async () => {
       await page.waitForFunction(
         () =>

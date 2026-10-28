@@ -21,6 +21,10 @@ import {
   formattedDocument,
   formattedRefresh,
 } from '../../src/renderer/src/formatted-contributions'
+import {
+  formattedReferences,
+  referenceWork,
+} from '../../src/renderer/src/formatted-references'
 import { formattedRegistry } from '../../src/renderer/src/formatted-registry'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
@@ -81,6 +85,12 @@ class RevisionWidget extends WidgetType {
   }
 }
 let syntax = formattedSyntax({ probe })
+/** Labels the note defines, as a reference service would answer, and the labels asked about. */
+const references = {
+  defined: new Set<string>(),
+  titles: {} as Record<string, string>,
+  asked: [] as string[],
+}
 
 document.body.innerHTML =
   '<main class="editor-panes mode-normal"><div class="editor-content"><section class="rich-pane" aria-label="Formatted document"><div class="rich-editor-host"></div></section></div></main>'
@@ -92,6 +102,8 @@ Object.assign(window, {
     probe,
     workerState,
     footnoteScan,
+    references,
+    referenceWork,
     definitionIndex: () => view?.state.field(footnoteDefinitions, false),
     definitionsReady: () => {
       const state = view?.state
@@ -107,6 +119,7 @@ Object.assign(window, {
         worker = false,
         frontmatter: withFrontmatter = false,
         history: withHistory = false,
+        references: withReferences = false,
         ...options
       }: {
         slice?: number
@@ -114,6 +127,7 @@ Object.assign(window, {
         worker?: boolean
         frontmatter?: boolean
         history?: boolean
+        references?: boolean
       } = {},
     ) {
       if (size)
@@ -204,6 +218,23 @@ Object.assign(window, {
             livePreview(syntax),
             frontmatterSlot.of(withFrontmatter ? frontmatter.extension : []),
             withHistory ? history() : [],
+            withReferences
+              ? formattedReferences.of({
+                  syntax: () => 'test',
+                  resolve: async (label) => {
+                    references.asked.push(label)
+                    return {
+                      status: 'resolved',
+                      value: references.defined.has(label)
+                        ? {
+                            href: '/target',
+                            title: references.titles[label] ?? null,
+                          }
+                        : null,
+                    }
+                  },
+                })
+              : [],
             documentRevision.of(revisionOf(0)),
             editable
               ? []
@@ -302,6 +333,14 @@ Object.assign(window, {
       view?.dispatch({
         effects: EditorView.scrollIntoView(pos, { y: 'start' }),
       })
+    },
+    /** Turn a code language's highlighting on or off. */
+    setCodeLanguage: (id: string, enabled: boolean) =>
+      codeLanguages.setEnabled(id, enabled),
+    /** Hide the panes the way source mode hides the formatted pane. */
+    hide(hidden: boolean) {
+      panes.classList.toggle('mode-markdown', hidden)
+      panes.classList.toggle('mode-normal', !hidden)
     },
     /** The formatted view's syntax tree. */
     tree: () => (view ? syntax.tree(view.state) : null),

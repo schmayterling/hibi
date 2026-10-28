@@ -1,4 +1,5 @@
 import type { Addon, AddonCapability } from './api'
+import { legacySdk } from './sdk-host'
 
 /** Optional fields are loaded only when requested by a new package's manifest. */
 export type CapabilitySdk = {
@@ -22,27 +23,36 @@ export async function loadAddonSdk(
   capabilities: readonly AddonCapability[] | undefined,
   formatted = false,
 ) {
-  if (capabilities === undefined) return (await import('./sdk')).sdk
+  if (capabilities === undefined && !formatted && legacySdk.all)
+    return (await legacySdk.all()).sdk
+  const requested: readonly AddonCapability[] = capabilities ?? [
+    'ui',
+    'rich',
+    'source',
+    'markdown',
+  ]
   const sdk: CapabilitySdk = {
     documents: await import('../shared/document-projection'),
   }
   await Promise.all(
-    capabilities.map(async (capability) => {
+    requested.map(async (capability) => {
       if (capability === 'ui')
         [sdk.React, sdk.ui] = await Promise.all([
           import('react'),
           import('./ui'),
         ])
       else if (capability === 'rich') {
-        if (formatted) (await import('./sdk-legacy-rich')).withoutRichSdk(sdk)
-        else sdk.tiptap = await import('@tiptap/core')
+        if (!formatted && legacySdk.rich) sdk.tiptap = await legacySdk.rich()
+        else (await import('./sdk-legacy-rich')).withoutRichSdk(sdk)
       } else if (capability === 'source' || capability === 'formatted')
-        sdk.codeMirror = capabilities.includes('formatted')
+        sdk.codeMirror = requested.includes('formatted')
           ? await import('./sdk-formatted')
           : await import('./sdk-source')
       else if (capability === 'markdown')
         sdk.markdown = { Marked: (await import('marked')).Marked }
     }),
   )
+  if (capabilities === undefined && sdk.codeMirror)
+    sdk.codeMirror = { ...sdk.codeMirror }
   return sdk
 }

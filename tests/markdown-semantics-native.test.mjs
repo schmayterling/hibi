@@ -114,14 +114,8 @@ const formattedGaps = {
     'formatted gap corpus-011: disabled heading syntax must preserve bold formatting inside alerts',
   '1/extras/0':
     'formatted gap corpus-012: disabled heading syntax must preserve bold formatting inside subtext',
-  '1/references/0':
-    'formatted gap corpus-013: disabled heading syntax must still hide reference definitions',
   '1/forward references/0':
     'formatted gap corpus-014: disabled heading syntax must hide forward reference definitions',
-  '1/reference edits/0':
-    'formatted gap corpus-015: disabled heading syntax must hide definitions before reference edits',
-  '1/reference edits/1':
-    'formatted gap corpus-016: disabled heading syntax must hide definitions after reference edits',
   '1/multiline title/0':
     'formatted gap corpus-018: disabled heading syntax must hide multiline reference titles',
   '1/quoted title/0':

@@ -7,7 +7,12 @@ import {
   undo,
   undoDepth,
 } from '@codemirror/commands'
-import { EditorSelection, Facet, Transaction } from '@codemirror/state'
+import {
+  EditorSelection,
+  type EditorState,
+  Facet,
+  Transaction,
+} from '@codemirror/state'
 import type { EditorView, KeyBinding } from '@codemirror/view'
 import type {
   DocumentEdit,
@@ -15,6 +20,12 @@ import type {
   DocumentSelection,
 } from '../../addons/api'
 import type { MediaAttachment } from '../../shared/media'
+import { formattedSyntaxTree } from './formatted-contributions.ts'
+import {
+  formattedStates,
+  unfenceChanges,
+  unlinkChanges,
+} from './formatted-toolbar-state.ts'
 
 /** Same format actions as the toolbar; addon keymaps (including vim) run first. */
 const formatBindings: [string, string][] = [
@@ -63,7 +74,6 @@ const blockIds = [
   'quote',
   'code-block',
   'divider',
-  'hard-break',
   'table',
   'indent',
   'outdent',
@@ -86,6 +96,18 @@ const prefixes: Record<string, string> = {
   quote: '> ',
   subtext: '-# ',
 }
+/** Delimiters the toolbar opened at the caret, with no text between them yet. */
+function opened(state: EditorState, pos: number, token: string) {
+  const before = state.sliceDoc(Math.max(0, pos - token.length - 1), pos)
+  const after = state.sliceDoc(pos, pos + token.length + 1)
+  return (
+    before.endsWith(token) &&
+    after.startsWith(token) &&
+    before.at(-token.length - 1) !== token[0] &&
+    after[token.length] !== token[0]
+  )
+}
+
 const fenceLength = (text: string, minimum = 0) =>
   Array.from(text.matchAll(/`+/g)).reduce(
     (longest, match) => Math.max(longest, match[0].length),
@@ -201,12 +223,40 @@ export function sourceFormatting(
       return done
     }
     if (view.state.selection.ranges.length !== 1) return false
-    if (tableIds.includes(id))
+    // A table writes a cell's line break as `<br>`.
+    if (tableIds.includes(id) || (id === 'hard-break' && inTable(view)))
       return view.state
         .facet(tableActions)
         .some((actions) => actions.run(view, id))
     const range = view.state.selection.main
     const doc = view.state.doc
+    const tree = format === 'markdown' ? formattedSyntaxTree(view.state) : null
+    // The formatted view removes links and code fences by their syntax, as the rich editor does.
+    const structural =
+      tree && id === 'unlink'
+        ? unlinkChanges(view.state, tree, range)
+        : tree &&
+            id === 'code-block' &&
+            formattedStates(view.state, tree, range).pressed(id)
+          ? unfenceChanges(tree, range)
+          : null
+    if (structural) {
+      // An action with nothing to change still returns focus to the note, like any action.
+      if (!structural.length) {
+        view.focus()
+        return false
+      }
+      view.dispatch({
+        changes: structural,
+        annotations: [
+          Transaction.userEvent.of('input.format'),
+          isolateHistory.of('full'),
+        ],
+        scrollIntoView: true,
+      })
+      view.focus()
+      return true
+    }
     let from = range.from,
       to = range.to
     const selected = doc.sliceString(from, to)
@@ -349,13 +399,23 @@ export function sourceFormatting(
         end = id === 'code-block' ? start + selected.length : start
       } else return false
     }
+    // An action that changes no Markdown leaves the note unedited.
+    if (format === 'markdown' && insert === doc.sliceString(from, to)) {
+      view.focus()
+      return false
+    }
     return applyEdit({ from, to, insert, selection: { from: start, to: end } })
   }
   const inspect = () => {
     const state = view.state
     const range = state.selection.main
+    const tree = format === 'markdown' ? formattedSyntaxTree(state) : null
+    // The formatted view reads its syntax tree; a source pane reads the selection's line.
+    const formatted = tree && formattedStates(state, tree, range)
     const line =
-      format === 'markdown' ? state.doc.lineAt(range.from).text.trimStart() : ''
+      format === 'markdown' && !formatted
+        ? state.doc.lineAt(range.from).text.trimStart()
+        : ''
     let activeSelection: DocumentSelection | undefined
     const selected = () => {
       if (!activeSelection) activeSelection = selection()
@@ -390,9 +450,16 @@ export function sourceFormatting(
           supported: true,
           pressed:
             checkPressed &&
-            (format === 'markdown'
-              ? marked(id) || blockActive
-              : (format?.isActive?.(id, { ...selected() }) ?? false)),
+            (formatted
+              ? formatted.pressed(id) ||
+                // Delimiters typed in code are its text, not an open mark.
+                (range.empty &&
+                  !!marks[id] &&
+                  !formatted.disabled(id) &&
+                  opened(state, range.from, marks[id]))
+              : format === 'markdown'
+                ? marked(id) || blockActive
+                : (format?.isActive?.(id, { ...selected() }) ?? false)),
           disabled:
             state.readOnly ||
             (table && blockIds.includes(id)) ||
@@ -402,9 +469,10 @@ export function sourceFormatting(
               ? !(history ? history.state().canUndo : undoDepth(state))
               : id === 'redo'
                 ? !(history ? history.state().canRedo : redoDepth(state))
-                : id === 'unlink'
-                  ? !/\[[^\]]+\]\(/.test(state.sliceDoc(range.from, range.to))
-                  : false),
+                : formatted
+                  ? formatted.disabled(id)
+                  : id === 'unlink' &&
+                    !/\[[^\]]+\]\(/.test(state.sliceDoc(range.from, range.to))),
         }
       },
     }

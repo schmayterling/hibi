@@ -388,6 +388,28 @@ test('markdown toolbar formats both panes without dragging and reorders only in 
   await more.click()
   await rich.click()
   await overflow.waitFor({ state: 'hidden' })
+  // A keyboard action that changes nothing still returns focus to the note.
+  await more.click()
+  await overflow.waitFor()
+  await action('unlink').focus()
+  await page.keyboard.press('Enter')
+  await page
+    .waitForFunction(
+      () =>
+        !!document.activeElement?.closest(
+          '[role="textbox"][aria-label="Document editor"]',
+        ),
+    )
+    .catch(() => {})
+  assert.equal(
+    await rich.evaluate(
+      (element) =>
+        element === document.activeElement ||
+        element.contains(document.activeElement),
+    ),
+    true,
+  )
+  assert.equal(await read(), 'hello')
   await page.setViewportSize({ width: 1000, height: 720 })
   await rich.press('ControlOrMeta+a')
   await run('bold')

@@ -41,6 +41,7 @@ import {
   type CellHost,
   type CellMove,
   cellInput,
+  cellLineBreak,
   markStarts,
   padding,
   renderInline,
@@ -1294,6 +1295,15 @@ class TableView {
     const cell =
       this.editing ?? this.locate(this.view.state.selection.main.head)
     if (!cell) return false
+    if (id === 'hard-break') {
+      // A cell's line break is `<br>`, typed in the cell's editor.
+      const { anchor, head } = this.view.state.selection.main
+      if (!this.editing && !this.editAt(anchor, head)) return false
+      const editor = this.editing?.editor
+      if (!editor) return false
+      editor.focus()
+      return cellLineBreak(editor.view)
+    }
     const source = this.source()
     let result: TableEdit
     switch (id) {

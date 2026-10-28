@@ -420,6 +420,12 @@ export const writable = (state: EditorState) =>
 const access = (state: EditorState) => EditorState.readOnly.of(!writable(state))
 
 /** Where a cell editor moves: to another cell, or out of the table. */
+/** A line break in a cell's editor, which Enter, Shift-Enter and Mod-Enter all make in the rich editor's cells. */
+export function cellLineBreak(view: EditorView) {
+  view.dispatch(view.state.replaceSelection('<br>'), { userEvent: 'input' })
+  return true
+}
+
 export type CellMove = 'next' | 'previous' | 'up' | 'down' | 'left' | 'right'
 
 /** The table around a cell editor. */
@@ -558,11 +564,6 @@ export class CellEditor {
       return true
     }
     const move = (to: CellMove) => () => host.move(to)
-    /** A line break in the cell, which Enter, Shift-Enter and Mod-Enter all make in the rich editor's cells. */
-    const lineBreak = (view: EditorView) => {
-      view.dispatch(view.state.replaceSelection('<br>'), { userEvent: 'input' })
-      return true
-    }
     // Inline formatting shortcuts format the cell's source; block ones do nothing in a cell.
     let formatting: SourceFormatting | null = null
     const inline = ['bold', 'italic', 'strike', 'inline-code']
@@ -645,8 +646,8 @@ export class CellEditor {
                 shift: edge(false, true),
               },
               { key: 'End', run: edge(true, false), shift: edge(true, true) },
-              { key: 'Enter', run: lineBreak, shift: lineBreak },
-              { key: 'Mod-Enter', run: lineBreak },
+              { key: 'Enter', run: cellLineBreak, shift: cellLineBreak },
+              { key: 'Mod-Enter', run: cellLineBreak },
               {
                 key: 'Escape',
                 run: () => {

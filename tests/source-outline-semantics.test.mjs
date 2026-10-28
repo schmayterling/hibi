@@ -199,6 +199,9 @@ test('source outline labels ignore declarations inside fences and frontmatter', 
 
 test('source outline labels match native entities, nested formatting, and text extras', () => {
   for (const source of [
+    '# <https://example.test/a&amp;b> and https://example.test/a&amp;amp;b',
+    '# <https://example.test/a&lt;b&amp;amp;> and <a&amp;b@example.test>',
+    '# **<https://example.test/a&amp;b>** and [label &amp;](/target)',
     '# &amp; &#65; &#x1F600; \\*literal\\* **bold *soft*** `&amp;`',
     '# ~~strike~~ H~2~O and **nested ~sub~ text**',
     '> ## quote [*soft*](https://example.test)\n\n- ### list **bold**',
@@ -214,6 +217,9 @@ test('source outline labels preserve disabled inline syntax exactly like native 
   try {
     for (const id of ids) markdownSyntax.setEnabled(id, false)
     check('# **bold** [link](/target) `code` ![image](image.png)')
+    check(
+      '# <https://example.test/a&amp;b> and https://example.test/a&amp;amp;b',
+    )
     check(
       '# [**bold**][ref] ![image][picture]\n\n[ref]: /target\n[picture]: image.png',
     )

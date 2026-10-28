@@ -52,6 +52,13 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
         (obsidian && token.type === 'obsidianEmbed')
       )
         continue
+      if (token.type === 'link' && 'autolink' in token && token.autolink) {
+        const value = String(token.text ?? '')
+        text.push(
+          token.raw.startsWith('<') ? value : decodeMarkdownEntities(value),
+        )
+        continue
+      }
       if ('tokens' in token && token.tokens) {
         frames.push({
           tokens: preserveInlineHtml([...token.tokens])[Symbol.iterator](),

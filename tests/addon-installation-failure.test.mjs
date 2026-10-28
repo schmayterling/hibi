@@ -9,7 +9,7 @@ import {
 } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
-test('failed editor attachments stay read-only and disabling the addon restores editing', {
+test('failed rich attachments stay read-only, a failed source feature is reported, and disabling the addon restores editing', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-addon-failure-'))
@@ -102,13 +102,20 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     )
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
   }
+  // A failing rich attachment holds rich input; a failing source feature is
+  // reported and left out.
+  const failure = cm
+    ? page
+        .locator('.toast')
+        .filter({
+          hasText: 'Broken editor could not start its source editor feature.',
+        })
+        .first()
+    : page
+        .locator('.rich-pane .document-notice')
+        .filter({ hasText: /editor addon unavailable/i })
   try {
-    await page
-      .locator(
-        cm ? '.source-pane .document-notice' : '.rich-pane .document-notice',
-      )
-      .filter({ hasText: /editor addon unavailable/i })
-      .waitFor()
+    await failure.waitFor()
   } catch (error) {
     let diagnosticTimer
     const snapshot = page
@@ -151,44 +158,44 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     console.error('addon failure state:', JSON.stringify({ state, pageErrors }))
     throw error
   }
-  assert.equal(
-    await page
-      .locator(cm ? '.source-pane .cm-content' : '.tiptap')
-      .evaluate((el) => el.isContentEditable),
-    false,
-  )
   if (cm) {
     // API 1 rich hooks are inert. Their PM attachment/cleanup
-    // signal is TipTap-only; the failing source extension still blocks source input.
+    // signal is TipTap-only.
     assert.equal(
       await page.evaluate(
         () => document.documentElement.dataset.partialDetached,
       ),
       undefined,
     )
-  } else
+  } else {
+    assert.equal(
+      await page.locator('.tiptap').evaluate((el) => el.isContentEditable),
+      false,
+    )
     assert.equal(
       await page.evaluate(
         () => document.documentElement.dataset.partialDetached,
       ),
       'true',
     )
+  }
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
+  // Only modal editing holds source input for its feature.
   await page
-    .locator('.source-pane .document-notice')
-    .waitFor({ state: 'visible' })
-  assert.equal(
-    await page
-      .locator('.source-pane .cm-content')
-      .evaluate((el) => el.isContentEditable),
-    false,
-  )
-  assert.equal(
-    await page.locator('.editor-panes').getAttribute('data-source-ready'),
-    'false',
-  )
+    .locator('.toast')
+    .filter({
+      hasText: 'Broken editor could not start its source editor feature.',
+    })
+    .first()
+    .waitFor()
+  await page
+    .locator(
+      '.editor-panes[data-source-ready="true"] .source-pane .cm-content[contenteditable="true"]',
+    )
+    .waitFor()
+  assert.equal(await page.locator('.source-pane .document-notice').count(), 0)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-broken-editor').click()

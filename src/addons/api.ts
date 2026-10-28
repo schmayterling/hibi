@@ -467,6 +467,8 @@ export type AddonState = {
   savedEnabled?: boolean
   /** Missing or disabled required addon IDs. Blocked addons cannot run. */
   blockedBy?: readonly string[]
+  /** While the addon can run: a number that grows each time it stops. */
+  activation?: number
 }
 
 /** A renderer API object with a positive integer contract version chosen by its provider. */

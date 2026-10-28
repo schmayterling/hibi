@@ -50,23 +50,35 @@ async function denseHighlights(page, rich) {
       first: positions[0],
       last: positions.at(-1),
     })
-    const highlighted = starts(
-      [...element.querySelectorAll('.cm-searchMatch')].map((match) =>
-        view.posAtDOM(match, 0),
-      ),
+    const overlaps = (start, range) =>
+      start < range.to && start + 'needle'.length > range.from
+    // The selected match stays highlighted outside the window.
+    const [selected, near] = [true, false].map((selected) =>
+      [...element.querySelectorAll('.cm-searchMatch')]
+        .filter(
+          (match) =>
+            match.classList.contains('cm-searchMatch-selected') === selected,
+        )
+        .map((match) => view.posAtDOM(match, 0)),
+    )
+    const positions = [
+      ...near,
+      ...selected.filter((start) => overlaps(start, window)),
+    ].sort((a, b) => a - b)
+    const highlighted = starts(positions)
+    const matches = [...view.state.doc.toString().matchAll(/needle/g)].map(
+      (match) => match.index,
     )
     return {
       count: highlighted.count,
       units: highlighted.last + 'needle'.length - highlighted.first,
       highlighted,
-      expected: starts(
-        [...view.state.doc.toString().matchAll(/needle/g)]
-          .map((match) => match.index)
-          .filter(
-            (start) =>
-              start < window.to && start + 'needle'.length > window.from,
-          ),
-      ),
+      expected: starts(matches.filter((start) => overlaps(start, window))),
+      selected: selected.length,
+      // Every match on screen is highlighted.
+      covered: matches
+        .filter((start) => overlaps(start, { from, to }))
+        .every((start) => positions.includes(start)),
       screen: to - from,
       rendered: view.visibleRanges.reduce(
         (sum, range) => sum + range.to - range.from,
@@ -74,6 +86,28 @@ async function denseHighlights(page, rich) {
       ),
     }
   })
+}
+
+// Scrolls the pane to a fraction of its height, then waits until CodeMirror
+// stops correcting the position and what it renders.
+async function scrollFormatted(rich, fraction) {
+  await rich.evaluate((element, fraction) => {
+    const pane = element.closest('.rich-pane')
+    pane.scrollTop = fraction * (pane.scrollHeight - pane.clientHeight)
+  }, fraction)
+  let previous = null
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await measureFindLayout(rich)
+    const current = await rich.evaluate((element) =>
+      JSON.stringify([
+        element.closest('.rich-pane').scrollTop,
+        element.cmTile.root.view.visibleRanges,
+      ]),
+    )
+    if (current === previous) return
+    previous = current
+  }
+  throw new Error('the formatted view kept moving after scrolling')
 }
 
 async function installFindWorkProbe(page) {
@@ -404,6 +438,9 @@ test('formatted find keeps highlights bounded when match count grows from ten th
     nearby.expected,
     'highlights cover the rich editor window around the screen',
   )
+  await scrollFormatted(rich, 0.75)
+  const nearbyScrolled = await denseHighlights(page, rich)
+  await scrollFormatted(rich, 0)
   await input.press('Escape')
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -421,7 +458,9 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await input.fill('needle')
   await count('1/100000')
   const more = await denseHighlights(page, rich)
-  t.diagnostic(JSON.stringify({ nearby, more }))
+  await scrollFormatted(rich, 0.75)
+  const moreScrolled = await denseHighlights(page, rich)
+  t.diagnostic(JSON.stringify({ nearby, more, nearbyScrolled, moreScrolled }))
   assert.deepEqual(more.highlighted, more.expected)
   assert.equal(more.count, nearby.count)
   assert.equal(
@@ -431,8 +470,21 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   )
   // CodeMirror draws a wrapped line's visible part and a fixed margin of text
   // around it, so what it renders does not grow with the note.
-  for (const { rendered, screen } of [nearby, more])
-    assert.ok(rendered <= 8 * screen, JSON.stringify({ rendered, screen }))
+  // The window stays put while the screen is inside it, so after scrolling
+  // the highlights cover the screen and keep the selected match.
+  for (const scrolled of [nearbyScrolled, moreScrolled]) {
+    assert.equal(scrolled.covered, true, JSON.stringify(scrolled))
+    assert.equal(scrolled.selected, 1)
+  }
+  // Away from the note's start CodeMirror also renders its wrapped-line margin
+  // of about 10,000 characters above the screen, not only below it.
+  for (const { rendered, screen } of [
+    nearby,
+    more,
+    nearbyScrolled,
+    moreScrolled,
+  ])
+    assert.ok(rendered <= 12 * screen, JSON.stringify({ rendered, screen }))
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     larger,

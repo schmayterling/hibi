@@ -48,15 +48,20 @@ let anchor = 0
 
 Object.assign(window, {
   formulaReading: {
-    /** A note of formulas, its reading line `anchor <index>` 180px below the pane's top. */
-    async mount(type: 'display' | 'inline', focused = false, index = 60) {
+    /** A note of formulas, its reading line `anchor <index>` 180px below the pane's top; display matrices have `rows` rows. */
+    async mount(
+      type: 'display' | 'inline',
+      focused = false,
+      rows = 8,
+      index = 60,
+    ) {
       view?.destroy()
       pending.clear()
       let doc = ''
       for (let i = 0; i < 120; i++)
         doc +=
           type === 'display'
-            ? `anchor ${i} text\n\n$$\n\\begin{pmatrix} ${i}\\\\b\\\\c\\\\d\\\\e\\\\f\\\\g\\\\h \\end{pmatrix}\n$$\n\n`
+            ? `anchor ${i} text\n\n$$\n\\begin{pmatrix} ${[i, ...Array(rows - 1).fill('b')].join('\\\\')} \\end{pmatrix}\n$$\n\n`
             : `anchor ${i} text $\\dfrac{${i}}{\\dfrac{1}{2}}$ suffix\n\n`
       anchor = doc.indexOf(`anchor ${index} text`)
       view = new EditorView({
@@ -99,21 +104,31 @@ Object.assign(window, {
       throw new Error('the reading line did not settle')
     },
     /**
-     * Renders the pending formulas `where` the reading line is, in one slice,
-     * optionally scrolling by `scroll` in the next frame, and reports how far
-     * the reading line moved and where the pane ended up.
+     * Renders the pending formulas `where` the reading line is, in one slice:
+     * above the pane, on the reading line, or the one just before it.
+     * Optionally scrolls by `scroll` in the next frame. Reports how far the
+     * reading line moved after `frames` frames and where the pane ended up.
      */
-    async fill(where: 'above' | 'line', scroll = 0) {
+    async fill(where: 'above' | 'line' | 'previous', scroll = 0, frames = 2) {
       const paneTop = pane.getBoundingClientRect().top
       const before = view!.coordsAtPos(anchor, 1)!.top
       const line = view!.state.doc.lineAt(anchor)
-      const chosen = [...pending].filter(([dom]) => {
+      let chosen = [...pending].filter(([dom]) => {
         if (!dom.isConnected) return false
         const at = view!.posAtDOM(dom)
-        return where === 'line'
-          ? at > anchor && at <= line.to
-          : dom.getBoundingClientRect().bottom <= paneTop
+        if (where === 'line') return at > anchor && at <= line.to
+        if (where === 'previous')
+          return at < anchor && dom.getBoundingClientRect().bottom <= before
+        return dom.getBoundingClientRect().bottom <= paneTop
       })
+      if (where === 'previous')
+        chosen = chosen
+          .sort(
+            ([a], [b]) =>
+              b.getBoundingClientRect().bottom -
+              a.getBoundingClientRect().bottom,
+          )
+          .slice(0, 1)
       let target: number | null = null
       if (scroll)
         requestAnimationFrame(() => {
@@ -124,8 +139,7 @@ Object.assign(window, {
         pending.delete(dom)
         done(katex.renderToString(latex, { displayMode: display }))
       }
-      await frame()
-      await frame()
+      for (let count = 0; count < frames; count++) await frame()
       return {
         filled: chosen.length,
         moved: view!.coordsAtPos(anchor, 1)!.top - before,

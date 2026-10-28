@@ -89,12 +89,51 @@ function keepReading(view: EditorView, dom: HTMLElement) {
     queueMicrotask(() => {
       reading.delete(view)
       if (!position?.moved || !view.dom.isConnected || view.composing) return
-      const now = view.coordsAtPos(position.pos, 1)
-      if (now) position.pane.scrollTop += now.top - position.top
+      restore(view, position)
+      kept.set(view, { ...position, scroll: position.pane.scrollTop, left: 8 })
     })
   }
   if (position && at <= position.line) position.moved = true
 }
+
+/** Scrolls the reading position back to where it was on screen. */
+function restore(view: EditorView, position: Reading) {
+  const now = view.coordsAtPos(position.pos, 1)
+  if (now && Math.abs(now.top - position.top) >= 0.5)
+    position.pane.scrollTop += now.top - position.top
+}
+
+/**
+ * The reading position after formulas grew, kept through the editor's next
+ * geometry updates: a very tall formula changes the drawn lines and their
+ * measured heights again after the first correction. Edits, selection
+ * changes and any other scrolling, such as the reader's, end it.
+ */
+const kept = new WeakMap<
+  EditorView,
+  Reading & { scroll: number; left: number }
+>()
+const keepRead = EditorView.updateListener.of((update) => {
+  const keep = kept.get(update.view)
+  if (!keep) return
+  if (
+    update.docChanged ||
+    update.selectionSet ||
+    Math.abs(keep.pane.scrollTop - keep.scroll) > 1
+  ) {
+    kept.delete(update.view)
+    return
+  }
+  if (
+    !update.geometryChanged &&
+    !update.heightChanged &&
+    !update.viewportChanged
+  )
+    return
+  if (--keep.left <= 0) kept.delete(update.view)
+  restore(update.view, keep)
+  keep.scroll = keep.pane.scrollTop
+})
 const widgets = new WeakMap<HTMLElement, FormulaWidget>()
 const editControl = {
   type: 'button',
@@ -346,6 +385,7 @@ export function mathContributions(host: MathHost) {
         { key: 'ArrowLeft', run: (view) => enterFormula(view, false) },
       ],
       extension: [
+        keepRead,
         EditorView.editorAttributes.compute([showMarkdownMarkers], (state) =>
           state.facet(showMarkdownMarkers)
             ? {}

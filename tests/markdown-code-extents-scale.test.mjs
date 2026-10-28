@@ -47,8 +47,8 @@ function drain(index, store) {
     if (done) return maximumAdvance
   }
 }
-function transferred(index, from = 0, base) {
-  const pages = [...index.pages(from, base)]
+function transferred(index, from = 0, base, codeOnly = false) {
+  const pages = [...index.pages(from, base, base, codeOnly)]
   const code = pages.flatMap((page) => page.code?.records ?? [])
   const result = {
     pages: pages.length,
@@ -138,11 +138,12 @@ test('a 50 mib code index retains giant width summaries and pushes only repaired
   work.scannedUnits = 0
   store.counters(true)
   const repairAdvance = drain(index, store)
-  const repair = transferred(index, peak, 0)
+  const repair = transferred(index, peak, 0, true)
   const repaired = repair.code.find((record) => record.from === prefix.length)
   assert.equal(repaired.contentColumns, 900)
   assert.equal(repaired.contentLines, lines + 2)
-  assert.ok(repair.code.length <= 32, JSON.stringify(repair.result))
+  assert.equal(repair.code.length, 1)
+  assert.equal(repair.result.records, 1)
   assert.ok(
     index.codeWork.readUnits < 256 * 1024,
     JSON.stringify(index.codeWork),
@@ -163,12 +164,13 @@ test('a 50 mib code index retains giant width summaries and pushes only repaired
   work.scannedUnits = 0
   store.counters(true)
   drain(index, store)
-  const pending = transferred(index, at, 1)
+  const pending = transferred(index, at, 1, true)
   const joined = pending.code.find((record) => record.from === prefix.length)
   assert.equal(joined.contentLines, lines + 3)
   assert.equal(joined.contentColumns, 900)
   assert.equal(index.length, text.length - 1095)
-  assert.ok(pending.code.length <= 32, JSON.stringify(pending.result))
+  assert.equal(pending.code.length, 1)
+  assert.equal(pending.result.records, 1)
   assert.ok(
     index.codeWork.readUnits < 256 * 1024,
     JSON.stringify(index.codeWork),
@@ -218,7 +220,7 @@ test('giant container code reuses unchanged widths when the scanner replays its 
   index.codeWork.readUnits = 0
   work.scannedUnits = 0
   drain(index, store)
-  const repair = transferred(index, peak, 0)
+  const repair = transferred(index, peak, 0, true)
   assert.equal(repair.code.length, 1)
   assert.equal(repair.code[0].contentColumns, 900)
   assert.equal(repair.code[0].contentLines, 4002)

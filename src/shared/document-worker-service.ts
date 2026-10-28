@@ -172,6 +172,7 @@ export class DocumentWorkerService {
           request.from ?? 0,
           request.baseVersion,
           request.codeVersion,
+          request.codeOnly,
         )
       }
       const page = this.#boundaryPages.next()
@@ -387,11 +388,17 @@ export class DocumentWorkerService {
         )
           throw new Error('Could not read a document worker reply.')
         if (
+          message.codeOnly !== undefined &&
+          typeof message.codeOnly !== 'boolean'
+        )
+          throw new Error('Could not read a document worker reply.')
+        if (
           this.#boundaryRequest?.id === message.id &&
           this.#boundaryRequest.version === message.version &&
           this.#boundaryRequest.from === message.from &&
           this.#boundaryRequest.baseVersion === message.baseVersion &&
           this.#boundaryRequest.codeVersion === message.codeVersion &&
+          this.#boundaryRequest.codeOnly === message.codeOnly &&
           JSON.stringify(this.#boundaryRequest.config) ===
             JSON.stringify(message.config)
         )

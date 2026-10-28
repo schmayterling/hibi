@@ -580,7 +580,7 @@ test('a code listener can edit without delivering an old page to another listene
   f.client.subscribeCodeExtents((page) => second.push(page))
   f.request()
   await until(() => edited)
-  assert.equal(second.length, 0)
+  assert.ok(second.every((page) => page.version === 1))
   assert.equal(f.pages.length, 0)
   f.client.releaseBoundaries(true)
   await until(() =>
@@ -594,6 +594,159 @@ test('a code listener can edit without delivering an old page to another listene
   assert.ok(second.every((page) => page.version === 1))
   assert.ok(f.pages.every((page) => page.version === 1))
   assert.deepEqual(f.errors, [])
+})
+
+test('retained code coverage repairs after syntax release and stops work with the last listener', async (t) => {
+  const original = MarkdownBoundaryIndex.prototype.advance
+  let advances = 0
+  MarkdownBoundaryIndex.prototype.advance = function () {
+    advances++
+    return original.call(this)
+  }
+  t.after(() => {
+    MarkdownBoundaryIndex.prototype.advance = original
+  })
+  const unit = '~~~\nbody\n~~~\n\n'
+  const f = fixture(t, unit.repeat(200)),
+    code = []
+  const detach = f.client.subscribeCodeExtents((page) => code.push(page))
+  f.request()
+  await until(() => f.pages.at(-1)?.done)
+  const initial = code.flatMap((page) => page.records)
+  f.client.releaseBoundaries(true)
+  const watch = f.transports[0].messages
+    .filter((message) => message.type === 'boundaries')
+    .at(-1)
+  assert.equal(watch.codeOnly, true)
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) =>
+        reply.type === 'boundaries' && reply.id === watch.id && reply.done,
+    ),
+  )
+  const before = code.length
+  const from = unit.length * 100 + 4
+  f.session.counters(true)
+  f.session.edit(
+    [{ from, to: from + 4, insert: 'wide\tbody' }],
+    'source',
+    'retained-code',
+  )
+  await until(() => code.some((page) => page.version === 1))
+  const request = f.transports[0].messages
+    .filter((message) => message.type === 'boundaries' && message.version === 1)
+    .at(-1)
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) =>
+        reply.type === 'boundaries' && reply.id === request.id && reply.done,
+    ),
+  )
+  const repair = code.slice(before)
+  assert.equal(repair.length, 1)
+  assert.equal(repair[0].records.length, 1)
+  assert.equal(repair[0].from, initial[100].from)
+  assert.equal(repair[0].to, initial[100].to + 5)
+  assert.equal(repair[0].records[0].contentColumns, 12)
+  assert.equal(request.codeOnly, true)
+  const replies = f.transports[0].replies.filter(
+    (reply) => reply.type === 'boundaries' && reply.id === request.id,
+  )
+  assert.ok(replies.every((reply) => reply.records.length === 0))
+  assert.ok(f.session.counters().sourceUnitsRead < 256)
+  assert.equal(f.session.counters().materializations, 0)
+  detach()
+  assert.equal(f.transports[0].messages.at(-1).type, 'cancel-boundaries')
+  assert.equal(f.transports[0].messages.at(-1).retain, undefined)
+  await new Promise(setImmediate)
+  const stopped = advances,
+    count = code.length
+  f.session.edit([{ from: 4, to: 5, insert: 'z' }], 'source', 'stopped-code')
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) => reply.type === 'ack' && reply.version === 2,
+    ),
+  )
+  await new Promise(setImmediate)
+  assert.equal(advances, stopped)
+  assert.equal(code.length, count)
+  assert.deepEqual(f.declined, [])
+  assert.deepEqual(f.errors, [])
+  t.diagnostic(
+    JSON.stringify({
+      retainedWatch: {
+        messages: repair.length,
+        codeRecords: repair[0].records.length,
+        syntaxRecords: 0,
+        advancesAfterStop: advances - stopped,
+      },
+    }),
+  )
+})
+
+test('a late code-only watch replays cached extents and maps a crlf frontmatter prefix', async (t) => {
+  const prefix = '---\r\ntitle: a\r\n---\r\n\r\n',
+    unit = '~~~\r\nbody\r\n~~~\r\n\r\n'
+  const f = fixture(t, prefix + unit.repeat(100)),
+    code = []
+  const configWithPrefix = {
+    ...config,
+    prefix: prefix.replaceAll('\r\n', '\n').length,
+  }
+  f.request(configWithPrefix)
+  await until(() => f.pages.at(-1)?.done)
+  f.client.releaseBoundaries(true)
+  const originalPages = f.pages.length
+  f.session.counters(true)
+  const detach = f.client.subscribeCodeExtents((page) => code.push(page))
+  await until(() => code.flatMap((page) => page.records).length === 100)
+  const watch = f.transports[0].messages
+    .filter((message) => message.type === 'boundaries')
+    .at(-1)
+  await until(() =>
+    f.transports[0].messages.some(
+      (message) =>
+        message.type === 'boundary-ack' &&
+        message.id === watch.id &&
+        message.version === 0,
+    ),
+  )
+  assert.equal(watch.codeOnly, true)
+  assert.equal(f.pages.length, originalPages)
+  assert.equal(f.session.counters().sourceUnitsRead, 0)
+  assert.equal(f.session.counters().materializations, 0)
+  f.session.edit(
+    [
+      {
+        from: prefix.indexOf('a\r'),
+        to: prefix.indexOf('a\r') + 1,
+        insert: 'longword',
+      },
+    ],
+    'source',
+    'watch-prefix',
+  )
+  await until(() =>
+    f.transports[0].messages.some(
+      (message) => message.type === 'boundary-ack' && message.version === 1,
+    ),
+  )
+  const mapped = f.transports[0].messages
+    .filter((message) => message.type === 'boundaries' && message.version === 1)
+    .at(-1)
+  assert.equal(mapped.config.prefix, configWithPrefix.prefix + 7)
+  const before = code.length,
+    from = prefix.length + 7 + 5
+  f.session.edit(
+    [{ from, to: from + 4, insert: 'wide\tbody' }],
+    'source',
+    'watch-body',
+  )
+  await until(() => code.some((page) => page.version === 2))
+  assert.equal(code.slice(before).flatMap((page) => page.records).length, 1)
+  assert.equal(code.at(-1).records[0].contentColumns, 12)
+  assert.deepEqual(f.errors, [])
+  detach()
 })
 
 test('a suffix syntax request still pushes code coverage for the whole note', async (t) => {

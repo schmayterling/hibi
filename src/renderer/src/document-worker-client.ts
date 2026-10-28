@@ -16,6 +16,10 @@ import type { BoundaryConfig } from '../../shared/markdown-boundary-syntax.ts'
 import type { SourceOwnerPage } from '../../shared/markdown-source-model.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
+import {
+  editorChangesFromSource,
+  mappedPrefix,
+} from '../../shared/source-projection.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
 import type { SearchLocation } from '../../shared/source-search-index.ts'
 import {
@@ -148,6 +152,7 @@ export class DocumentWorkerClient {
     key: string
     from: number
     baseVersion?: number
+    codeOnly: boolean
     receive: BoundaryReceive
     declined: (reason: 'stale' | 'mismatch') => void
   } | null = null
@@ -157,6 +162,7 @@ export class DocumentWorkerClient {
   #boundaryTo: number | null = null
   #codeDelivered = false
   #codeVersion = -1
+  #codeConfig: BoundaryConfig | null = null
   readonly #codeReceivers = new Set<(page: CodeExtentPage) => void>()
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
@@ -166,6 +172,25 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
+        if (this.#codeConfig?.prefix) {
+          let offset = 0
+          const changes = editorChangesFromSource(
+            prepared.before,
+            operation.changes,
+          ).map((change) => {
+            const range = {
+              fromA: change.from,
+              toA: change.to,
+              fromB: change.from + offset,
+              toB: change.from + offset + change.insert.length,
+            }
+            offset += change.insert.length - (change.to - change.from)
+            return range
+          })
+          const prefix = mappedPrefix(this.#codeConfig.prefix, changes)
+          if (prefix !== null)
+            this.#codeConfig = { ...this.#codeConfig, prefix }
+        }
         if (this.#boundaries) {
           // The receiver still belongs to its view's old document until it requests again.
           this.#sentBoundaries = ''
@@ -197,6 +222,7 @@ export class DocumentWorkerClient {
             else this.#sendOperation(operation)
           }
         }
+        this.#watchCode()
         options.changed()
       }),
       session.subscribe(() => {
@@ -213,6 +239,7 @@ export class DocumentWorkerClient {
           this.#findQuietUntil = 0
           this.#metadata = null
           this.#boundaries = null
+          this.#codeConfig = null
           this.#restart()
           options.changed()
         }
@@ -233,11 +260,33 @@ export class DocumentWorkerClient {
     ) {
       // A late listener needs the retained prefix too; replay metadata, never source.
       this.#boundaries = null
-      this.boundaries(request.config, request.receive, request.declined)
+      this.#requestBoundaries(
+        request.config,
+        request.receive,
+        request.declined,
+        0,
+        undefined,
+        request.codeOnly,
+      )
     }
+    if (!request || request.version !== this.#session.snapshot().version)
+      this.#watchCode()
     return () => {
       this.#codeReceivers.delete(receive)
+      if (!this.#codeReceivers.size && this.#boundaries?.codeOnly)
+        this.releaseBoundaries()
     }
+  }
+  #watchCode() {
+    if (this.#codeReceivers.size && this.#codeConfig)
+      this.#requestBoundaries(
+        this.#codeConfig,
+        (_page, acknowledge) => acknowledge(),
+        () => {},
+        0,
+        undefined,
+        true,
+      )
   }
   boundaries(
     config: BoundaryConfig,
@@ -246,7 +295,18 @@ export class DocumentWorkerClient {
     from = 0,
     baseVersion?: number,
   ) {
+    this.#requestBoundaries(config, receive, declined, from, baseVersion, false)
+  }
+  #requestBoundaries(
+    config: BoundaryConfig,
+    receive: BoundaryReceive,
+    declined: (reason: 'stale' | 'mismatch') => void,
+    from: number,
+    baseVersion: number | undefined,
+    codeOnly: boolean,
+  ) {
     if (this.#disposed || this.#failed) return
+    this.#codeConfig = config
     const key = boundaryKey(config),
       version = this.#session.snapshot().version
     if (
@@ -254,7 +314,8 @@ export class DocumentWorkerClient {
       this.#boundaries.config.prefix === config.prefix &&
       this.#boundaries.version === version &&
       this.#boundaries.from === from &&
-      this.#boundaries.baseVersion === baseVersion
+      this.#boundaries.baseVersion === baseVersion &&
+      this.#boundaries.codeOnly === codeOnly
     ) {
       this.#boundaries.receive = receive
       return
@@ -265,6 +326,7 @@ export class DocumentWorkerClient {
       version,
       id: ++this.#requestId,
       from,
+      codeOnly,
       ...(baseVersion === undefined ? {} : { baseVersion }),
       receive,
       declined,
@@ -278,7 +340,14 @@ export class DocumentWorkerClient {
     this.#flushBoundaries()
   }
   releaseBoundaries(retain = false) {
-    if (!retain) this.#codeVersion = -1
+    if (retain && this.#codeReceivers.size && this.#codeConfig) {
+      this.#watchCode()
+      return
+    }
+    if (!retain) {
+      this.#codeVersion = -1
+      this.#codeConfig = null
+    }
     this.#boundaries = null
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
@@ -310,6 +379,7 @@ export class DocumentWorkerClient {
       version: request.version,
       config: request.config,
       codeVersion: this.#codeVersion < 0 ? null : this.#codeVersion,
+      ...(request.codeOnly ? { codeOnly: true } : {}),
       ...(request.from ? { from: request.from } : {}),
       ...(request.baseVersion === undefined
         ? {}

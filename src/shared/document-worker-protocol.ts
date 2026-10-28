@@ -91,6 +91,8 @@ export type DocumentWorkerRequest =
       baseVersion?: number
       /** Last acknowledged code coverage; null requests whole-note code coverage. */
       codeVersion?: number | null
+      /** A retained code watch does not replay syntax boundary records. */
+      codeOnly?: boolean
     }
   | {
       type: 'boundary-ack'

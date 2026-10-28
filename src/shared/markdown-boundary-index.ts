@@ -174,18 +174,21 @@ export class MarkdownBoundaryIndex {
     from = 0,
     baseVersion?: number,
     codeVersion: number | null | undefined = baseVersion,
+    codeOnly = false,
   ) {
     if (!this.tree) throw new Error('Could not read a document worker reply.')
-    const start = boundaryStart(this.tree, from)
+    const start = codeOnly ? 0 : boundaryStart(this.tree, from)
     const retained =
-      baseVersion === this.retained?.version
+      !codeOnly && baseVersion === this.retained?.version
         ? this.retained?.fragments.at(-1)
         : undefined
     const to = retained
       ? Math.max(start, boundaryRejoin(this.tree, retained))
       : this.length
     const end = to < this.length ? { to } : {}
-    const records = boundaryRecords(this.tree, from, to)
+    const records = codeOnly
+      ? [].values()
+      : boundaryRecords(this.tree, from, to)
     // Geometry coverage is independent of the syntax repair suffix.
     const code = this.code.pages(
       0,

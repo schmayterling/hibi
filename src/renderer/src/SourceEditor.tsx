@@ -185,20 +185,33 @@ function placeOf(view: EditorView) {
   return { top: line.from, margin: line.top - height }
 }
 
+/** CSS transitions on an element and its ancestors, as when a pane slides in and widens. */
+function transitionsAround(element: Element) {
+  const transitions: Animation[] = []
+  for (let node: Element | null = element; node; node = node.parentElement)
+    for (const animation of node.getAnimations())
+      if (animation instanceof CSSTransition) transitions.push(animation)
+  return transitions
+}
+
+/** Input in the scroller, its gutters included, is the user's own scrolling. */
+const scrollInput = ['keydown', 'pointerdown', 'touchstart', 'wheel'] as const
+
 /**
  * A view built off screen scrolls to its kept place with estimated line
  * heights, and CodeMirror then anchors whichever line those put at the top.
- * Once it has measured on screen, the kept line goes back to its kept offset,
- * in a measure that changes no heights: when heights change, CodeMirror moves
- * the view to hold the line it anchored before them. Input or any other
- * scroll ends this.
+ * Once it is on screen and its pane has stopped moving and resizing, the kept
+ * line goes back to its kept offset, in a measure that changes no heights:
+ * when heights change, CodeMirror moves the view to hold the line it anchored
+ * before them. Input or any other scroll ends this.
  */
 function keptPlaceScroll(top: number, margin: number): Extension {
   let state: 'waiting' | 'aligning' | 'done' = 'waiting',
     moved = false,
     // The view's own scroll there, first from its construction.
     scrolling = true,
-    scrolled = false
+    scrolled = false,
+    settling = false
   const stop = () => {
     state = 'done'
   }
@@ -238,7 +251,19 @@ function keptPlaceScroll(top: number, margin: number): Extension {
     },
   }
   const begin = (view: EditorView) => {
-    if (state !== 'waiting' || scrolling) return
+    if (state !== 'waiting' || scrolling || settling) return
+    // Its lines wrap again when the pane reaches its last width.
+    const transitions = transitionsAround(view.dom)
+    if (transitions.length) {
+      settling = true
+      void Promise.all(
+        transitions.map((transition) => transition.finished.catch(() => {})),
+      ).then(() => {
+        settling = false
+        begin(view)
+      })
+      return
+    }
     state = 'aligning'
     moved = false
     view.requestMeasure(align)
@@ -253,28 +278,31 @@ function keptPlaceScroll(top: number, margin: number): Extension {
       }
       return false
     }),
-    EditorView.domEventHandlers({
-      keydown: stop,
-      pointerdown: stop,
-      touchstart: stop,
-      wheel: stop,
+    ViewPlugin.define((view) => {
+      const options = { capture: true, passive: true }
+      for (const type of scrollInput)
+        view.scrollDOM.addEventListener(type, stop, options)
+      return {
+        destroy() {
+          stop()
+          for (const type of scrollInput)
+            view.scrollDOM.removeEventListener(type, stop, options)
+        },
+        update(update) {
+          if (update.docChanged) top = update.changes.mapPos(top, 1)
+          if (update.heightChanged || update.geometryChanged) moved = true
+          // A measure on screen; its own height changes still move the view.
+          if (
+            !update.transactions.length &&
+            update.view.inView &&
+            (update.geometryChanged || update.viewportChanged)
+          ) {
+            const { view } = update
+            queueMicrotask(() => begin(view))
+          }
+        },
+      }
     }),
-    ViewPlugin.define(() => ({
-      destroy: stop,
-      update(update) {
-        if (update.docChanged) top = update.changes.mapPos(top, 1)
-        if (update.heightChanged || update.geometryChanged) moved = true
-        // A measure on screen; its own height changes still move the view.
-        if (
-          !update.transactions.length &&
-          update.view.inView &&
-          (update.geometryChanged || update.viewportChanged)
-        ) {
-          const { view } = update
-          queueMicrotask(() => begin(view))
-        }
-      },
-    })),
   ]
 }
 

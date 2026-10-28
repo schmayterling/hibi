@@ -10,9 +10,12 @@ import { waitForAsync } from './poll.mjs'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
 /** A note of `size` KiB: a heading, `lead`, then paragraphs of ordinary words. */
-const makeSource = (size, lead = '') => {
-  const unit = `${'ordinary words '.repeat(16)}\n\n`,
-    length = size * 1024
+const makeSource = (
+  size,
+  lead = '',
+  unit = `${'ordinary words '.repeat(16)}\n\n`,
+) => {
+  const length = size * 1024
   return `# Large note\n\n${lead}${unit.repeat(Math.ceil(length / unit.length))}`.slice(
     0,
     length,
@@ -20,10 +23,10 @@ const makeSource = (size, lead = '') => {
 }
 
 /** Open a note of `size` KiB with the CodeMirror formatted view switched on. */
-async function open(t, size, lead) {
+async function open(t, size, lead, { lineNumbers = false, unit } = {}) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-hidden-source-'))
   const file = join(folder, 'note.md')
-  await writeFile(file, makeSource(size, lead))
+  await writeFile(file, makeSource(size, lead, unit))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })
@@ -37,9 +40,10 @@ async function open(t, size, lead) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
+  await page.evaluate((lineNumbers) => {
+    localStorage.setItem('hibi:formatted-engine', 'codemirror')
+    localStorage.setItem('line-numbers', String(lineNumbers))
+  }, lineNumbers)
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -260,6 +264,93 @@ test("a large note's source view returns to the same line and pixel every time",
   assert.ok(before.top > 0 && before.offset > 0, JSON.stringify(before))
   const places = await returns(page, view, 1024 * 1024, 4)
   samePlace(places, before)
+})
+
+test("a large note's source view returns to the same line and pixel at another zoom and line height", {
+  timeout: 240000,
+}, async (t) => {
+  // Lines that wrap to one or two short rows, so the pane widening after the
+  // view is built moves many of them.
+  const { app, page, view } = await open(t, 2 * 1024, '', {
+    unit: `${'ordinary words in a wrapped paragraph '.repeat(3)}\n`,
+  })
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.setSize(1100, 900)
+    window.webContents.setZoomFactor(0.8)
+  })
+  await page.addStyleTag({
+    content:
+      '.source-pane .cm-content { font-size: 11px !important; line-height: 1.25 !important; }',
+  })
+  await view('Source view')
+  await sourceShown(page)
+  await scrollInto(page, 20000)
+  const before = await scrolled(page)
+  assert.ok(before.top > 0 && before.offset > 0, JSON.stringify(before))
+  const places = await returns(page, view, 1024 * 1024, 4)
+  samePlace(places, before)
+})
+
+test("scrolling over a returning source view's gutter keeps the user's place", {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await open(t, 2 * 1024, '', { lineNumbers: true })
+  await view('Source view')
+  await sourceShown(page)
+  await scrollInto(page, 20000)
+  const before = await scrolled(page)
+  await view('normal')
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  )
+  // A transition around the pane that has not finished keeps the view's
+  // place pending while the wheel turns over the line numbers.
+  await page.addStyleTag({
+    content:
+      '.editor-panes { outline: 1px solid transparent; transition: outline-color 600s !important; } .editor-panes.mode-markdown { outline-color: rgb(1, 2, 3); }',
+  })
+  await view('Source view')
+  await sourceShown(page)
+  const point = await page.evaluate(() => {
+    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+      .view
+    const gutter = view.dom.querySelector('.cm-gutters').getBoundingClientRect()
+    const x = gutter.left + gutter.width / 2,
+      y = view.scrollDOM.getBoundingClientRect().top + 100
+    return {
+      x,
+      y,
+      gutter: !view.contentDOM.contains(document.elementFromPoint(x, y)),
+    }
+  })
+  assert.ok(point.gutter, JSON.stringify(point))
+  const start = await page.evaluate(
+    () =>
+      document.querySelector('.source-pane .cm-content').cmTile.root.view
+        .scrollDOM.scrollTop,
+  )
+  await page.mouse.move(point.x, point.y)
+  await page.mouse.wheel(0, 300)
+  await waitForAsync(
+    page,
+    (start) =>
+      document.querySelector('.source-pane .cm-content').cmTile.root.view
+        .scrollDOM.scrollTop > start,
+    start,
+  )
+  const user = await scrolled(page)
+  assert.notEqual(user.top, before.top, JSON.stringify({ before, user }))
+  await page.evaluate(async () => {
+    for (const transition of document
+      .querySelector('.editor-panes')
+      .getAnimations())
+      transition.finish()
+    for (let frame = 0; frame < 4; frame++)
+      await new Promise(requestAnimationFrame)
+  })
+  samePlace([await scrolled(page)], user)
 })
 
 test('a source view released as its note grows returns to the same line and pixel every time', {

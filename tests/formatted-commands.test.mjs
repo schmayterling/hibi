@@ -1099,3 +1099,35 @@ test('multi-line input in a 50 MiB block reads and rewrites only around the care
   // The heading's text start and end are read from its first characters.
   assert.ok(reads[1] > 0, 'positive read control')
 })
+
+test('select-all code input keeps matching fences as literal code', () => {
+  const { parser: marked, options, core, addons } = markdownConfiguration([])
+  const manager = new MarkdownManager({
+    extensions: [...core, ...addons],
+    marked,
+    markedOptions: options,
+  })
+  for (const [opening, input, closing] of [
+    ['```', '```\nX', '````'],
+    ['```js', '  `````\nX', '``````'],
+    ['~~~js', '~~~\r\nX', '~~~~'],
+    ['`````js', '```\nX', '`````'],
+    ['```', '~~~\nX', '```'],
+  ]) {
+    const source = `${opening}\nabcd\n${opening.match(/`+|~+/)[0]}\n\nend`
+    const normalized = input.replace(/\r\n?/g, '\n')
+    const next = run(`^${source}|`, typing(input))
+    assert.equal(
+      next,
+      `${closing}${opening.replace(/`+|~+/, '')}\n${normalized}|\n${closing}`,
+    )
+    const doc = manager.parse(next.replace('|', ''))
+    assert.equal(doc.content.length, 1)
+    assert.equal(doc.content[0].type, 'codeBlock')
+    assert.equal(
+      doc.content[0].attrs.language,
+      opening.replace(/`+|~+/, '') || null,
+    )
+    assert.equal(doc.content[0].content[0].text, normalized)
+  }
+})

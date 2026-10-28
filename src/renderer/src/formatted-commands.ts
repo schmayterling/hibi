@@ -594,15 +594,21 @@ export function lineInput(
       )
     )
       return null
-    // A first code block keeps its opening fence and takes the text as code.
+    // A first code block takes literal text; a typed fence must not close it.
     const fence =
       first.name === 'FencedCode' &&
       /^ {0,3}(`{3,}|~{3,})/.exec(doc.lineAt(first.from).text)
     if (fence) {
-      const open = doc.lineAt(first.from)
-      const code = `${open.text}\n${lines.join('\n')}`
+      let marker = fence[1]!
+      for (const line of lines) {
+        const run = /^ {0,3}(`+|~+)/.exec(line)?.[1]
+        if (run && run[0] === marker[0] && run.length >= marker.length)
+          marker = marker[0]!.repeat(run.length + 1)
+      }
+      const open = doc.lineAt(first.from).text.replace(fence[1]!, marker)
+      const code = `${open}\n${lines.join('\n')}`
       return {
-        changes: { from: 0, to: doc.length, insert: `${code}\n${fence[1]}` },
+        changes: { from: 0, to: doc.length, insert: `${code}\n${marker}` },
         selection: EditorSelection.cursor(code.length),
         userEvent: 'input.type',
       }

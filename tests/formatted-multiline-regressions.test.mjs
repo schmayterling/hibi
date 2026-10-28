@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { MarkdownManager } from '@tiptap/markdown'
+import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { electron } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
@@ -253,4 +255,91 @@ test('native multiline input after a long formatted space run keeps paragraph bo
     input: '\ny',
   })
   assert.equal(actual, `**a**${spaces}\n\n**yb**`)
+})
+
+test('select-all code input matches the native model with exact formatted undo and redo', {
+  timeout: 60000,
+}, async (t) => {
+  const source = '```\nabcd\n```\n\nend'
+  const input = '```\nX'
+  let nativeModel
+  for (const engine of ['tiptap', 'codemirror'])
+    await t.test(engine, async (t) => {
+      const { app, page, folder } = await launch(t, engine)
+      const editor = await openFixture(
+        app,
+        page,
+        folder,
+        'code-fence',
+        source,
+        engine,
+      )
+      const snapshot = () =>
+        page.evaluate(async () => {
+          await window.hibi.flushDocumentChanges()
+          const element = document.querySelector(
+            '[aria-label="Document editor"]',
+          )
+          return {
+            source: (await window.hibi.getDocument()).markdown,
+            model: element.editor?.getJSON() ?? null,
+          }
+        })
+      await editor.focus()
+      if (engine === 'tiptap')
+        await editor.evaluate((element) => {
+          element.editor.commands.selectAll()
+          element.editor.view.focus()
+        })
+      const before = await snapshot()
+      assert.equal(before.source, source)
+      await editor.press('ControlOrMeta+a')
+      await page.keyboard.insertText(input)
+      const typed = await snapshot()
+      if (engine === 'tiptap') {
+        nativeModel = typed.model
+        assert.equal(nativeModel.content.length, 1)
+        assert.equal(nativeModel.content[0].type, 'codeBlock')
+        assert.equal(nativeModel.content[0].content[0].text, input)
+        return
+      }
+      const {
+        parser: marked,
+        options,
+        core,
+        addons,
+      } = markdownConfiguration([])
+      const manager = new MarkdownManager({
+        extensions: [...core, ...addons],
+        marked,
+        markedOptions: options,
+      })
+      assert.deepEqual(
+        JSON.parse(JSON.stringify(manager.parse(typed.source))),
+        nativeModel,
+      )
+      assert.equal(typed.source, '````\n```\nX\n````')
+      for (const [shortcut, expected] of [
+        [`${mod}+z`, before],
+        [process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y', typed],
+      ]) {
+        await pressShortcut(app, shortcut)
+        await waitForAsync(
+          page,
+          async (expected) => {
+            await window.hibi.flushDocumentChanges()
+            const element = document.querySelector(
+              '[aria-label="Document editor"]',
+            )
+            return (
+              (await window.hibi.getDocument()).markdown === expected.source &&
+              JSON.stringify(element.editor?.getJSON() ?? null) ===
+                JSON.stringify(expected.model)
+            )
+          },
+          expected,
+        )
+        assert.deepEqual(await snapshot(), expected)
+      }
+    })
 })

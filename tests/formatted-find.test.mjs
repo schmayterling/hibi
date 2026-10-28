@@ -81,10 +81,12 @@ async function denseHighlights(page, rich) {
         .filter((start) => overlaps(start, { from, to }))
         .every((start) => positions.includes(start)),
       screen: to - from,
-      rendered: view.visibleRanges.reduce(
-        (sum, range) => sum + range.to - range.from,
-        0,
-      ),
+      // What CodeMirror renders around the screen, without what it keeps
+      // around an off-screen selection.
+      rendered: view.visibleRanges
+        .filter((range) => range.from < to && range.to > from)
+        .reduce((sum, range) => sum + range.to - range.from, 0),
+      ranges: view.visibleRanges.map((range) => [range.from, range.to]),
     }
   })
 }
@@ -556,8 +558,11 @@ test('formatted find keeps highlights bounded when match count grows from ten th
     nearby.expected,
     'highlights cover the rich editor window around the screen',
   )
-  await scrollFormatted(rich, 0.75)
-  const nearbyScrolled = await denseHighlights(page, rich)
+  const scrolled = []
+  for (const fraction of [0.2, 0.7]) {
+    await scrollFormatted(rich, fraction)
+    scrolled.push(await denseHighlights(page, rich))
+  }
   await scrollFormatted(rich, 0)
   await input.press('Escape')
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
@@ -576,9 +581,11 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await input.fill('needle')
   await count('1/100000')
   const more = await denseHighlights(page, rich)
-  await scrollFormatted(rich, 0.75)
-  const moreScrolled = await denseHighlights(page, rich)
-  t.diagnostic(JSON.stringify({ nearby, more, nearbyScrolled, moreScrolled }))
+  for (const fraction of [0.2, 0.7]) {
+    await scrollFormatted(rich, fraction)
+    scrolled.push(await denseHighlights(page, rich))
+  }
+  t.diagnostic(JSON.stringify({ nearby, more, scrolled }))
   assert.deepEqual(more.highlighted, more.expected)
   assert.equal(more.count, nearby.count)
   assert.equal(
@@ -590,18 +597,14 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   // around it, so what it renders does not grow with the note.
   // The window stays put while the screen is inside it, so after scrolling
   // the highlights cover the screen and keep the selected match.
-  for (const scrolled of [nearbyScrolled, moreScrolled]) {
-    assert.equal(scrolled.covered, true, JSON.stringify(scrolled))
-    assert.equal(scrolled.selected, 1)
+  for (const position of scrolled) {
+    assert.equal(position.covered, true, JSON.stringify(position))
+    assert.equal(position.selected, 1)
   }
-  // Away from the note's start CodeMirror also renders its wrapped-line margin
-  // of about 10,000 characters above the screen, not only below it.
-  for (const { rendered, screen } of [
-    nearby,
-    more,
-    nearbyScrolled,
-    moreScrolled,
-  ])
+  // Away from the note's start CodeMirror renders about 10,000 estimated
+  // characters on both sides of the screen; its estimate runs up to a quarter
+  // denser than this text, so that stays under ten screens of it.
+  for (const { rendered, screen } of [nearby, more, ...scrolled])
     assert.ok(rendered <= 12 * screen, JSON.stringify({ rendered, screen }))
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,

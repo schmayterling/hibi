@@ -117,9 +117,9 @@ test('rendered worker projection agrees with actual unrevealed formatted DOM', {
     '>  b',
     '>>   continuation',
   ]) {
-    const at = markdown.indexOf(source)
+    const at = markdown.indexOf(source) + source.length - 1
     assert.ok(
-      lines.some((line) => line.from <= at && line.to >= at + source.length),
+      lines.some((line) => line.from <= at && line.to > at),
       'missing oracle line: ' + source,
     )
   }

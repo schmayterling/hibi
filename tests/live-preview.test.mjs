@@ -1808,7 +1808,7 @@ test('ordered list numbers in a 20,000-item list come from cached item offsets',
 
 test('code language changes reparse only the code on screen of a 50 MiB note', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
   await harness.evaluate(async () => {
     const unit =
       '## Section\n\nWords between blocks.\n\n```js\nconst value = 1\n```\n\n```rust\nfn main() {}\n```\n\n'
@@ -1831,11 +1831,39 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
         ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
       ].filter((token) => token.textContent === text).length
   })
-  // As in the app, index the note off-thread before measuring language changes.
-  await harness.waitForFunction(() => {
-    const { probe, workerState } = window.livePreview
-    return workerState.ready && probe.adoptionSlices === workerState.pages
-  })
+  // Use the boundary-worker setup deadline before the 10 s lifecycle checks.
+  const started = Date.now()
+  await harness
+    .waitForFunction(
+      () => {
+        const { probe, workerState } = window.livePreview
+        return (
+          workerState.errors.length ||
+          (workerState.ready && probe.adoptionSlices === workerState.pages)
+        )
+      },
+      undefined,
+      { timeout: 120000 },
+    )
+    .catch(async (error) => {
+      t.diagnostic(
+        JSON.stringify(
+          await harness.evaluate(() => ({
+            ...window.livePreview.workerState,
+            ...window.livePreview.probe,
+          })),
+        ),
+      )
+      throw error
+    })
+  const bootstrap = await harness.evaluate(() => ({
+    ...window.livePreview.workerState,
+    adopted: window.livePreview.probe.adoptionSlices,
+  }))
+  t.diagnostic(
+    JSON.stringify({ bootstrapMs: Date.now() - started, ...bootstrap }),
+  )
+  assert.deepEqual(bootstrap.errors, [])
   const keywords = (text, shown) =>
     harness.waitForFunction(
       ({ text, shown }) => window.codeKeywords(text) > 0 === shown,

@@ -810,14 +810,16 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
     }),
     {
       // The restarted consumer adds a syntax flavor, so the editor rebuilds after the user's choice
-      // with a widget that renders text before it.
-      'index.js': `export default ({ tiptap }) => ({
+      // with a widget that renders text before it. The formatted view offers no rich editor SDK.
+      'index.js': `export default (sdk) => ({
         async start(context) {
           window.consumerStarts = (window.consumerStarts || 0) + 1;
           if (window.holdConsumer) {
             window.holdConsumer = false;
             await new Promise((resolve) => { window.releaseConsumer = resolve; });
-            const widget = tiptap.Extension.create({
+            let tiptap;
+            try { tiptap = sdk.tiptap; } catch {}
+            const widget = tiptap?.Extension.create({
               name: 'lateWidget',
               addDecorations: () => ({
                 create: () => [tiptap.Decoration.Widget(0, () => {
@@ -827,7 +829,7 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
                 }, { key: 'late-widget' })],
               }),
             });
-            context.editor.registerFlavor({ id: 'late', name: 'Late', kind: 'syntax', description: 'Rebuilds the editor', detect: () => false, richExtensions: [widget] });
+            context.editor.registerFlavor({ id: 'late', name: 'Late', kind: 'syntax', description: 'Rebuilds the editor', detect: () => false, richExtensions: widget ? [widget] : [] });
           }
         },
       });`,

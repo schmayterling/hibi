@@ -1,4 +1,4 @@
-import { ArrowUpRight, File, Heart } from 'lucide-react'
+import { ArrowUpRight, Heart } from 'lucide-react'
 import { type MouseEvent, useEffect, useState } from 'react'
 import type { AppInfo } from '../../shared/desktop'
 import { errorMessage } from '../../shared/errors'
@@ -7,6 +7,9 @@ import { Modal } from '../../ui/Modal'
 import { RecoveryScreen } from './RecoveryScreen'
 import { UpdateSettings } from './UpdateSettings'
 import './hibi-settings.css'
+
+const appIcon = new URL('./assets/app-icon.png', import.meta.url).href
+const appIconDark = new URL('./assets/app-icon-dark.png', import.meta.url).href
 
 export function HibiSettings({
   info,
@@ -53,9 +56,10 @@ export function HibiSettings({
       <h1>About</h1>
       <div className="settings-group hibi-about">
         <div className="hibi-identity">
-          <span className="hibi-mark" aria-hidden="true">
-            <File size={28} strokeWidth={1.25} />
-          </span>
+          <picture className="hibi-mark">
+            <source srcSet={appIconDark} media="(prefers-color-scheme: dark)" />
+            <img src={appIcon} alt="" width={44} height={44} />
+          </picture>
           <div>
             <div className="hibi-name">Hibi</div>
             <p>Version {info?.version ?? '…'}</p>

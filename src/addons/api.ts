@@ -256,7 +256,9 @@ export type FormattedRenderContext = {
   visible: { from: number; to: number } | null
   /**
    * The selection touches the node while Markdown markers are shown: show
-   * its source and keep any rendering beside it.
+   * its source and keep any rendering beside it. Only a selection inside one
+   * block reveals; emphasis, strong, code and strikethrough are revealed
+   * while it touches their block.
    */
   revealed: boolean
 }

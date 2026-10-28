@@ -43,6 +43,7 @@ import {
   lineBreak,
 } from './formatted-commands'
 import {
+  blockMarkedNodes,
   claimFormattedReplacement,
   type FormattedContainer,
   type FormattedDecorations,
@@ -377,6 +378,14 @@ function inline(
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
     reveal.some((range) => range.from <= to && range.to >= from)
+  /** Whether a node shows its source: the delimiters of emphasis, code and strikethrough show for their whole block. */
+  const revealedAt = (node: SyntaxNodeRef) => {
+    let block: SyntaxNode | null = blockMarkedNodes.has(node.name)
+      ? node.node.parent
+      : null
+    while (block && !block.type.is('LeafBlock')) block = block.parent
+    return block ? touched(block.from, block.to) : touched(node.from, node.to)
+  }
   /** Contributed container layouts, once per container node and render. */
   const shapeCache = new Map<string, FormattedContainer | undefined>()
   const shapes = (node: SyntaxNode) => {
@@ -583,13 +592,10 @@ function inline(
         if (!skip) {
           const contributed = views(ref.type)
           if (contributed.views.length) {
-            const out = sink(touched(ref.from, ref.to))
-            const grouped = sink(touched(ref.from, ref.to), groupMarks)
-            const context = {
-              state,
-              revealed: touched(ref.from, ref.to),
-              visible: range,
-            }
+            const revealed = revealedAt(ref)
+            const out = sink(revealed)
+            const grouped = sink(revealed, groupMarks)
+            const context = { state, revealed, visible: range }
             for (const nodeView of contributed.views)
               if (
                 nodeView.decorate?.(
@@ -713,7 +719,7 @@ function inline(
         return
       case 'EmphasisMark': {
         const parent = ref.node.parent
-        syntax(ref.from, ref.to, !!parent && touched(parent.from, parent.to))
+        syntax(ref.from, ref.to, !!parent && revealedAt(parent))
         return
       }
       case 'InlineCode': {
@@ -725,7 +731,7 @@ function inline(
           open.from === close.from
         )
           return false
-        const revealed = touched(ref.from, ref.to)
+        const revealed = revealedAt(ref)
         syntax(open.from, open.to, revealed)
         syntax(close.from, close.to, revealed)
         mark('hibi-lp-code', open.to, close.from)
@@ -1459,6 +1465,20 @@ const focused = StateField.define<boolean>({
 })
 
 /**
+ * Selection ranges inside one block. As in the rich editor, a selection
+ * across blocks, such as select all, shows no markers.
+ */
+function inBlocks(state: EditorState, tree: Tree): readonly Revealed[] {
+  const ranges: Revealed[] = []
+  for (const { from, to } of state.selection.ranges) {
+    let block: SyntaxNode | null = from < to ? tree.resolve(from, 1) : null
+    while (block && !block.type.is('LeafBlock')) block = block.parent
+    if (from === to || (block && block.to >= to)) ranges.push({ from, to })
+  }
+  return ranges
+}
+
+/**
  * Whether the selection was placed since the editor last lost focus, so a
  * definition it is in shows. Placing it before focusing keeps it there:
  * focusing draws it in the shown text rather than beside a hidden line.
@@ -1473,10 +1493,10 @@ const placed = StateField.define<boolean>({
 })
 
 /** The selection while the focused editor shows markers. */
-function revealedIn(state: EditorState): readonly Revealed[] {
+function revealedIn(state: EditorState, tree: Tree): readonly Revealed[] {
   if (!state.field(focused, false) || !state.facet(showMarkdownMarkers))
     return []
-  return state.selection.ranges.map(({ from, to }) => ({ from, to }))
+  return inBlocks(state, tree)
 }
 
 const sameRanges = (a: readonly Revealed[], b: readonly Revealed[]) =>
@@ -1487,9 +1507,9 @@ const sameRanges = (a: readonly Revealed[], b: readonly Revealed[]) =>
   )
 
 /** Ranges whose markers show: the selection while the focused editor shows markers. */
-function revealed(view: EditorView): readonly Revealed[] {
+function revealed(view: EditorView, tree: Tree): readonly Revealed[] {
   if (!view.hasFocus || !view.state.facet(showMarkdownMarkers)) return []
-  return view.state.selection.ranges.map(({ from, to }) => ({ from, to }))
+  return inBlocks(view.state, tree)
 }
 
 /**
@@ -1539,11 +1559,15 @@ export function livePreview(
 ): Extension {
   const layout = StateField.define<DecorationSet>({
     create: (state) =>
-      layoutDecorations(state, syntax.tree(state), revealedIn(state)),
+      layoutDecorations(
+        state,
+        syntax.tree(state),
+        revealedIn(state, syntax.tree(state)),
+      ),
     update(value, transaction) {
       const { state, startState } = transaction
       const tree = syntax.tree(state),
-        reveal = revealedIn(state)
+        reveal = revealedIn(state, tree)
       // An edit's unfinished reparse keeps the layout it replaces, mapped.
       if (
         syntax.settling(state) ||
@@ -1557,9 +1581,9 @@ export function livePreview(
             startState.facet(formattedDocument) &&
           state.facet(formattedRenderInputs) ===
             startState.facet(formattedRenderInputs) &&
-          (sameRanges(reveal, revealedIn(startState)) ||
+          (sameRanges(reveal, revealedIn(startState, tree)) ||
             (!revealMatters(state, tree, reveal) &&
-              !revealMatters(state, tree, revealedIn(startState)))))
+              !revealMatters(state, tree, revealedIn(startState, tree)))))
       )
         return value.map(transaction.changes)
       return layoutDecorations(state, tree, reveal)
@@ -1576,7 +1600,7 @@ export function livePreview(
       end: number
       reveal: readonly Revealed[]
       constructor(view: EditorView) {
-        this.reveal = revealed(view)
+        this.reveal = revealed(view, syntax.tree(view.state))
         ;({
           decorations: this.decorations,
           groupMarks: this.groupMarks,
@@ -1602,7 +1626,7 @@ export function livePreview(
               from: update.changes.mapPos(range.from, -1),
               to: update.changes.mapPos(range.to, 1),
             }))
-          : revealed(update.view)
+          : revealed(update.view, tree)
         const changedReveal =
           reveal.length !== this.reveal.length ||
           reveal.some(

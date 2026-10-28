@@ -13,6 +13,7 @@ import {
   frontmatterBounds,
   frontmatterProbe,
 } from '../../renderer/src/formatted-frontmatter.ts'
+import { transactionState } from '../../renderer/src/source-session.ts'
 
 /*
  * The formatted view hides frontmatter: the properties editor above the note
@@ -112,9 +113,12 @@ const protect = EditorState.transactionFilter.of((transaction) => {
   })
   if (inside) return []
   // Selections end at the note's text, also when an edit just closed the frontmatter.
-  const end = transaction.docChanged
-    ? (transaction.state.field(frontmatterField, false)?.end ?? 0)
-    : start
+  let end = start
+  if (transaction.docChanged) {
+    const state = transactionState(transaction)
+    if (!state) return transaction
+    end = state.field(frontmatterField, false)?.end ?? 0
+  }
   const selection =
     transaction.selection ??
     (end !== start ? transaction.state.selection : undefined)

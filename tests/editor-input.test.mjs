@@ -2933,10 +2933,8 @@ test('codemirror: multi-line input over select-all replaces all of a large note'
   await rich.press('ControlOrMeta+a')
   await page.keyboard.insertText('x\ny')
   const { markdown } = await acceptedInput(page)
-  assert.ok(
-    markdown === 'x\n\ny' || markdown === 'x\ny',
-    JSON.stringify(markdown.slice(0, 80)),
-  )
+  // Only the rich editor's result; a raw insertion fails too.
+  assert.ok(markdown === 'x\n\ny', JSON.stringify(markdown.slice(0, 80)))
 })
 
 test('codemirror: blank paragraphs and a typed trailing space survive tab switches and exact disk save', {

@@ -838,6 +838,8 @@ test('multi-line text input repairs formatting it cuts, as the browser types', (
     '**ab\tx**\n\n&#32;   **y|cd**',
   )
   assert.equal(run('**ab |cd**', typing('\ny')), '**ab** \n\n**y|cd**')
+  // Only the closing markers move before spaces the caret follows.
+  assert.equal(run('**a   |b**', typing('\ny')), '**a**   \n\n**y|b**')
   // A line break alone is the browser's input, not Enter: a heading continues.
   assert.equal(run('## ab|cd', typing('\n')), '## ab\n\n## |cd')
   assert.equal(run('## a^b\n\nc|d', typing('\n')), '## a\n\n## |d')
@@ -849,6 +851,15 @@ test('multi-line text input repairs formatting it cuts, as the browser types', (
   assert.equal(
     run('> 9. ab|\n> 10. tail', blockBreak),
     '> 9. ab\n> 10. |\n> 11. tail',
+  )
+  // A wider number moves the item's later lines inside the quote markers.
+  assert.equal(
+    run('> 8. ab|cd\n> 9. tail\n>\n>    more', typing('x\ny')),
+    '> 8. abx\n> 9. y|cd\n> 10. tail\n>\n>     more',
+  )
+  assert.equal(
+    run('> 9. ab|\n> 9. tail\n>\n>    more', blockBreak),
+    '> 9. ab\n> 10. |\n> 11. tail\n>\n>     more',
   )
   // Each line in a task list is a task, as Enter makes it (an accepted
   // difference: the rich editor nests later lines as bullets).
@@ -897,6 +908,58 @@ test('multi-line input over select-all replaces all of a partly parsed note', ()
     })
     const spec = lineInput(state, tree, 0, source.length, 'x\ny')
     assert.equal(state.update(spec).state.doc.toString(), 'x\n\ny')
+  }
+})
+
+test('multi-line input after a long run of spaces reads a bounded part of it', () => {
+  // Before, the spaces before the caret were read and moved: 4,194,245 units for 1 MiB.
+  const sample = markdown.parse('**ab**')
+  const strong = sample.topNode.firstChild.firstChild
+  const mark = strong.firstChild.type
+  for (const size of [2 ** 20, 50 * 2 ** 20]) {
+    const doc = `**a${' '.repeat(size)}b**`
+    const tree = new Tree(
+      sample.type,
+      [
+        new Tree(
+          sample.topNode.firstChild.type,
+          [
+            new Tree(
+              strong.type,
+              [new Tree(mark, [], [], 2), new Tree(mark, [], [], 2)],
+              [0, doc.length - 2],
+              doc.length,
+            ),
+          ],
+          [0],
+          doc.length,
+        ),
+      ],
+      [0],
+      doc.length,
+    )
+    const caret = doc.length - 3
+    const state = EditorState.create({ doc, selection: { anchor: caret } })
+    const prototype = Object.getPrototypeOf(state.doc)
+    const originals = Object.fromEntries(
+      ['sliceString', 'lineAt', 'line'].map((name) => [name, prototype[name]]),
+    )
+    let units = 0
+    for (const name of Object.keys(originals))
+      prototype[name] = function (...args) {
+        const value = originals[name].apply(this, args)
+        units += value.length
+        return value
+      }
+    let spec
+    try {
+      spec = lineInput(state, tree, caret, caret, '\ny')
+    } finally {
+      Object.assign(prototype, originals)
+    }
+    // Past the limit the input is left to the default insertion.
+    assert.equal(spec, null)
+    assert.ok(units > 0 && units <= 1024, `${units} units read`)
   }
 })
 

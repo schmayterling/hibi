@@ -190,10 +190,22 @@ function renumbered(
   return changes
 }
 
-/** The content column of a list item's first line, as its marker sets it. */
+/** The markers that start a line of `item` for the quotes it is in. */
+function quoteMarkers(item: SyntaxNode, text: string) {
+  let quotes = 0
+  for (let node = item.parent; node; node = node.parent)
+    if (node.name === 'Blockquote') quotes++
+  return quotes
+    ? (new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`).exec(text)?.[0] ?? '')
+    : ''
+}
+
+/** The content column of a list item's first line after its quote markers, as its marker sets it. */
 function itemWidth(state: EditorState, item: SyntaxNode) {
-  const line = state.doc.lineAt(item.from)
-  const match = /^([ \t]*(?:\d+[.)]|[-+*]))( *)(.?)/.exec(line.text)
+  const { text } = state.doc.lineAt(item.from)
+  const match = /^([ \t]*(?:\d+[.)]|[-+*]))( *)(.?)/.exec(
+    text.slice(quoteMarkers(item, text).length),
+  )
   if (!match) return 0
   const spaces = match[2]!.length
   return match[1]!.length + (!match[3] || spaces > 4 ? 1 : spaces)
@@ -215,10 +227,13 @@ function shiftContent(
   const end = state.doc.lineAt(item.to).number
   for (let number = after + 1; number <= end; number++) {
     const line = state.doc.line(number)
-    const leading = /^ */.exec(line.text)![0].length
-    if (blank(line.text) || leading < width) continue
-    if (by > 0) changes.push({ from: line.from, insert: ' '.repeat(by) })
-    else changes.push({ from: line.from, to: line.from - by })
+    // Inside quotes, the indentation follows their markers.
+    const from = line.from + quoteMarkers(item, line.text).length
+    const text = state.sliceDoc(from, line.to)
+    const leading = /^ */.exec(text)![0].length
+    if (blank(text) || leading < width) continue
+    if (by > 0) changes.push({ from, insert: ' '.repeat(by) })
+    else changes.push({ from, to: from - by })
   }
   return changes
 }
@@ -387,14 +402,24 @@ function containerAt(tree: Tree, pos: number) {
   return null
 }
 
-/** How many spaces (and tabs, with `tabs`) start the text from `from` to `to`, read in growing slices. */
-function blankRun(state: EditorState, from: number, to: number, tabs = true) {
-  const pattern = tabs ? /^[ \t]*/ : /^ */
-  for (let size = 64; ; size *= 2) {
-    const end = Math.min(to, from + size)
-    const count = pattern.exec(state.sliceDoc(from, end))![0].length
-    if (count < end - from || end === to) return count
-  }
+/** Longest run of spaces read around the caret; past it, input is left to the default. */
+const spaceLimit = 256
+
+/**
+ * How many spaces (and tabs, with `tabs`) start the text from `from` to
+ * `to`, or -1 past `limit`.
+ */
+function blankRun(
+  state: EditorState,
+  from: number,
+  to: number,
+  tabs = true,
+  limit = spaceLimit,
+) {
+  const end = Math.min(to, from + limit + 1)
+  const count = (tabs ? /^[ \t]*/ : /^ */).exec(state.sliceDoc(from, end))![0]
+    .length
+  return count > limit ? -1 : count
 }
 
 /** Where the text of a paragraph, task or ATX heading starts; null for other blocks. */
@@ -404,7 +429,8 @@ function textStart(state: EditorState, leaf: SyntaxNode) {
   const mark = leaf.firstChild
   if (mark?.name !== (leaf.name === 'Task' ? 'TaskMarker' : 'HeaderMark'))
     return null
-  return mark.to + blankRun(state, mark.to, leaf.to)
+  const spaces = blankRun(state, mark.to, leaf.to)
+  return spaces < 0 ? null : mark.to + spaces
 }
 
 /** The first or last leaf block in `node`. */
@@ -438,11 +464,14 @@ function itemMarker(state: EditorState, item: SyntaxNode) {
   const mark = item.getChild('ListMark')
   if (!mark) return null
   const line = state.doc.lineAt(mark.from)
-  const spaces = blankRun(state, mark.to, line.to, false)
+  // Only up to five spaces after the marker count.
+  const spaces = blankRun(state, mark.to, line.to, false, 5)
   const width =
     mark.to -
     mark.from +
-    (!spaces || spaces > 4 || mark.to + spaces === line.to ? 1 : spaces)
+    (!spaces || spaces < 0 || spaces > 4 || mark.to + spaces === line.to
+      ? 1
+      : spaces)
   return { mark, line, width }
 }
 
@@ -480,13 +509,11 @@ function blankText(state: EditorState, from: number, to: number) {
   return true
 }
 
-/** How many spaces and tabs end the text from `from` to `to`, read in growing slices. */
+/** How many spaces and tabs end the text from `from` to `to`, or -1 past the limit. */
 function blankBefore(state: EditorState, to: number, from: number) {
-  for (let size = 64; ; size *= 2) {
-    const start = Math.max(from, to - size)
-    const count = /[ \t]*$/.exec(state.sliceDoc(start, to))![0].length
-    if (count < to - start || start === from) return count
-  }
+  const start = Math.max(from, to - spaceLimit - 1)
+  const count = /[ \t]*$/.exec(state.sliceDoc(start, to))![0].length
+  return count > spaceLimit ? -1 : count
 }
 
 /** Literal text split into its leading spaces, the rest, and its trailing spaces. */
@@ -723,19 +750,19 @@ export function lineInput(
   // or the text before it when it has none, go after the closing markers.
   const closing =
     close(ended) + (edge.length ? state.sliceDoc(to, skip) : '') + close(inside)
-  let [lead, core, trail] = spaced(
+  const [lead, core, trail] = spaced(
     literalLine(lines[0]!, verbatimFirst, at === startText),
   )
+  let closeAt = -1
   if (closing && !core) {
+    // The closing markers move before the spaces; the spaces stay.
     const innermost = [...ended, ...edge, ...inside][0]!
     const spaces = blankBefore(state, at, innermost.first.to)
-    if (spaces < at - innermost.first.to) {
-      trail = state.sliceDoc(at - spaces, at) + lead + trail
-      lead = ''
-      at -= spaces
-    }
+    if (spaces < 0) return null
+    if (spaces && spaces < at - innermost.first.to) closeAt = at - spaces
   }
-  const first = lead + core + closing + trail
+  const first =
+    closeAt < 0 ? lead + core + closing + trail : lead + core + trail
   /** Line `index` (from 1) with the caret's offset in it; the last line ends with `rest`. */
   const line = (index: number, rest = '') => {
     const value = literalLine(lines[index]!, verbatim, true)
@@ -756,7 +783,8 @@ export function lineInput(
     const text = typed + close(kept) + trail
     return { text, caret: trail ? text.length : typed.length }
   }
-  const changes: { from: number; to?: number; insert?: string }[] = []
+  const changes: { from: number; to?: number; insert?: string }[] =
+    closeAt < 0 ? [] : [{ from: closeAt, insert: closing }]
 
   // A list item the selection ends in keeps its other blocks as an item.
   if (across)
@@ -814,7 +842,7 @@ export function lineInput(
     if (!start && !container) {
       const { number } = doc.lineAt(at)
       const shows = (line: Line) =>
-        blankRun(state, line.from, line.to) < line.length
+        blankRun(state, line.from, line.to) !== line.length
       if (number > 1 && shows(doc.line(number - 1))) {
         insert = `\n${insert}`
         offset++

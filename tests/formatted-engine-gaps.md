@@ -18,7 +18,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | syntax-004 | [code-syntax-settings.test.mjs:250](code-syntax-settings.test.mjs#L250) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
 | syntax-002 | [code-syntax-settings.test.mjs:293](code-syntax-settings.test.mjs#L293) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
 | syntax-003 | [code-syntax-settings.test.mjs:442](code-syntax-settings.test.mjs#L442) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
-| history-001 | [edit-menu-history.test.mjs:341](edit-menu-history.test.mjs#L341) | keyboard redo must preserve read-only formatted source and history | 3: read-only access and shared history guards |
 | api-002 | [editor-extension-context.test.mjs:251](editor-extension-context.test.mjs#L251) | source and formatted editors must preserve hosting view identities | 6: verbatim projections and selection contracts |
 | input-001 | [editor-input.test.mjs:2280](editor-input.test.mjs#L2280) | native multiline markdown preserves literal text and block structure | 8a: native input, structure and toolbar state |
 | input-002 | [editor-input.test.mjs:2284](editor-input.test.mjs#L2284) | native multiline paragraph preserves literal text and block structure | 8a: native input, structure and toolbar state |
@@ -109,29 +108,25 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | release-004 | [formatted-hidden-source.test.mjs:336](formatted-hidden-source.test.mjs#L336) | releasing a grown huge source must destroy its editor | 2c: hidden source release and mapped bookmarks |
 | marker-001 | [markdown-markers.test.mjs:515](markdown-markers.test.mjs#L515) | left arrow must reenter nested final formatting before typing | 8b: hidden markers and math caret placement |
 | marker-002 | [markdown-markers.test.mjs:574](markdown-markers.test.mjs#L574) | one right arrow must leave final formatting for the next paragraph | 8b: hidden markers and math caret placement |
-| marker-003 | [markdown-markers.test.mjs:700](markdown-markers.test.mjs#L700) | the caret beside tall math must remain text sized | 8b: hidden markers and math caret placement |
-| marker-004 | [markdown-markers.test.mjs:729](markdown-markers.test.mjs#L729) | focused paragraphs must reveal all their formatting markers | 8b: hidden markers and math caret placement |
-| marker-005 | [markdown-markers.test.mjs:757](markdown-markers.test.mjs#L757) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
-| marker-006 | [markdown-markers.test.mjs:785](markdown-markers.test.mjs#L785) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
+| marker-004 | [markdown-markers.test.mjs:721](markdown-markers.test.mjs#L721) | focused paragraphs must reveal all their formatting markers | 8b: hidden markers and math caret placement |
+| marker-005 | [markdown-markers.test.mjs:749](markdown-markers.test.mjs#L749) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
+| marker-006 | [markdown-markers.test.mjs:777](markdown-markers.test.mjs#L777) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
 | corpus-001 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | lazy reference definitions must render only native paragraph text | 9: outline semantics and diagram lifecycle |
-| corpus-002 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | gfm tables and alerts must report native formatted character counts | 9: outline semantics and diagram lifecycle |
-| corpus-003 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | reference definitions must hide while resolved labels remain visible | 9: outline semantics and diagram lifecycle |
-| corpus-004 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | forward definitions must resolve formatted labels without showing definitions | 9: outline semantics and diagram lifecycle |
-| corpus-005 | [markdown-semantics-native.test.mjs:106](markdown-semantics-native.test.mjs#L106) | formatted references must render labels before a destination edit | 9: outline semantics and diagram lifecycle |
-| corpus-006 | [markdown-semantics-native.test.mjs:108](markdown-semantics-native.test.mjs#L108) | formatted references must retain labels after a destination edit | 9: outline semantics and diagram lifecycle |
-| corpus-007 | [markdown-semantics-native.test.mjs:110](markdown-semantics-native.test.mjs#L110) | formatted grapheme character counts must match native counts | 9: outline semantics and diagram lifecycle |
-| corpus-008 | [markdown-semantics-native.test.mjs:112](markdown-semantics-native.test.mjs#L112) | multiline reference titles must hide and avoid false headings | 9: outline semantics and diagram lifecycle |
-| corpus-009 | [markdown-semantics-native.test.mjs:114](markdown-semantics-native.test.mjs#L114) | quoted reference titles must hide definitions and resolve labels | 9: outline semantics and diagram lifecycle |
-| corpus-010 | [markdown-semantics-native.test.mjs:116](markdown-semantics-native.test.mjs#L116) | disabled syntax must preserve native lazy reference rendering | 9: outline semantics and diagram lifecycle |
-| corpus-011 | [markdown-semantics-native.test.mjs:118](markdown-semantics-native.test.mjs#L118) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
-| corpus-012 | [markdown-semantics-native.test.mjs:120](markdown-semantics-native.test.mjs#L120) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
-| corpus-013 | [markdown-semantics-native.test.mjs:122](markdown-semantics-native.test.mjs#L122) | disabled heading syntax must still hide reference definitions | 9: outline semantics and diagram lifecycle |
-| corpus-014 | [markdown-semantics-native.test.mjs:124](markdown-semantics-native.test.mjs#L124) | disabled heading syntax must hide forward reference definitions | 9: outline semantics and diagram lifecycle |
-| corpus-015 | [markdown-semantics-native.test.mjs:126](markdown-semantics-native.test.mjs#L126) | disabled heading syntax must hide definitions before reference edits | 9: outline semantics and diagram lifecycle |
-| corpus-016 | [markdown-semantics-native.test.mjs:128](markdown-semantics-native.test.mjs#L128) | disabled heading syntax must hide definitions after reference edits | 9: outline semantics and diagram lifecycle |
-| corpus-017 | [markdown-semantics-native.test.mjs:130](markdown-semantics-native.test.mjs#L130) | disabled heading syntax must preserve native grapheme character counts | 9: outline semantics and diagram lifecycle |
-| corpus-018 | [markdown-semantics-native.test.mjs:132](markdown-semantics-native.test.mjs#L132) | disabled heading syntax must hide multiline reference titles | 9: outline semantics and diagram lifecycle |
-| corpus-019 | [markdown-semantics-native.test.mjs:134](markdown-semantics-native.test.mjs#L134) | disabled heading syntax must hide quoted reference titles | 9: outline semantics and diagram lifecycle |
+| corpus-003 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | reference definitions must hide while resolved labels remain visible | 9: outline semantics and diagram lifecycle |
+| corpus-004 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | forward definitions must resolve formatted labels without showing definitions | 9: outline semantics and diagram lifecycle |
+| corpus-005 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | formatted references must render labels before a destination edit | 9: outline semantics and diagram lifecycle |
+| corpus-006 | [markdown-semantics-native.test.mjs:106](markdown-semantics-native.test.mjs#L106) | formatted references must retain labels after a destination edit | 9: outline semantics and diagram lifecycle |
+| corpus-008 | [markdown-semantics-native.test.mjs:108](markdown-semantics-native.test.mjs#L108) | multiline reference titles must hide and avoid false headings | 9: outline semantics and diagram lifecycle |
+| corpus-009 | [markdown-semantics-native.test.mjs:110](markdown-semantics-native.test.mjs#L110) | quoted reference titles must hide definitions and resolve labels | 9: outline semantics and diagram lifecycle |
+| corpus-010 | [markdown-semantics-native.test.mjs:112](markdown-semantics-native.test.mjs#L112) | disabled syntax must preserve native lazy reference rendering | 9: outline semantics and diagram lifecycle |
+| corpus-011 | [markdown-semantics-native.test.mjs:114](markdown-semantics-native.test.mjs#L114) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
+| corpus-012 | [markdown-semantics-native.test.mjs:116](markdown-semantics-native.test.mjs#L116) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
+| corpus-013 | [markdown-semantics-native.test.mjs:118](markdown-semantics-native.test.mjs#L118) | disabled heading syntax must still hide reference definitions | 9: outline semantics and diagram lifecycle |
+| corpus-014 | [markdown-semantics-native.test.mjs:120](markdown-semantics-native.test.mjs#L120) | disabled heading syntax must hide forward reference definitions | 9: outline semantics and diagram lifecycle |
+| corpus-015 | [markdown-semantics-native.test.mjs:122](markdown-semantics-native.test.mjs#L122) | disabled heading syntax must hide definitions before reference edits | 9: outline semantics and diagram lifecycle |
+| corpus-016 | [markdown-semantics-native.test.mjs:124](markdown-semantics-native.test.mjs#L124) | disabled heading syntax must hide definitions after reference edits | 9: outline semantics and diagram lifecycle |
+| corpus-018 | [markdown-semantics-native.test.mjs:126](markdown-semantics-native.test.mjs#L126) | disabled heading syntax must hide multiline reference titles | 9: outline semantics and diagram lifecycle |
+| corpus-019 | [markdown-semantics-native.test.mjs:128](markdown-semantics-native.test.mjs#L128) | disabled heading syntax must hide quoted reference titles | 9: outline semantics and diagram lifecycle |
 | math-001 | [math-rendering.test.mjs:626](math-rendering.test.mjs#L626) | tall formula rendering must preserve the reading position | 8b: hidden markers and math caret placement |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | link-001 | [outline-navigation.test.mjs:365](outline-navigation.test.mjs#L365) | formatted heading references must render resolved link labels | 5a: reference labels and destinations |
@@ -143,7 +138,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | contracts-006 | [raw-html-editor.test.mjs:1249](raw-html-editor.test.mjs#L1249) | superseded block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | marker-007 | [sidebar-views.test.mjs:105](sidebar-views.test.mjs#L105) | outline navigation must expose rendered heading text | 8b: hidden markers and math caret placement |
 | syntax-005 | [sideload.test.mjs:283](sideload.test.mjs#L283) | disabling an addon must remove its formatted syntax colors | 8c: highlighting and grammar lifecycle |
-| link-003 | [site.test.mjs:518](site.test.mjs#L518) | heading links must navigate to canonical and legacy destinations | 5a: reference labels and destinations |
 | projection-002 | [source-preservation.test.mjs:105](source-preservation.test.mjs#L105) | formatted body edits must preserve custom source prefixes and line endings | 6: verbatim projections and selection contracts |
 | semantics-002 | [source-reference-navigation.test.mjs:160](source-reference-navigation.test.mjs#L160) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | addon-001 | [source-reference-navigation.test.mjs:185](source-reference-navigation.test.mjs#L185) | rich-only addon syntax must retain native editing and source reference isolation | 2b: legacy feature notices and literal fallback |

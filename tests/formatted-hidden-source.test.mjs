@@ -22,8 +22,16 @@ const makeSource = (
   )
 }
 
-/** Open a note of `size` KiB with the CodeMirror formatted view switched on. */
-async function open(t, size, lead, { lineNumbers = false, unit } = {}) {
+/**
+ * Open a note of `size` KiB with the CodeMirror formatted view switched on.
+ * `before` runs on the page first; with `stay`, its source view stays shown.
+ */
+async function open(
+  t,
+  size,
+  lead,
+  { lineNumbers = false, unit, before = async () => {}, stay = false } = {},
+) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-hidden-source-'))
   const file = join(folder, 'note.md')
   await writeFile(file, makeSource(size, lead, unit))
@@ -46,6 +54,7 @@ async function open(t, size, lead, { lineNumbers = false, unit } = {}) {
   }, lineNumbers)
   await page.reload()
   await waitForDocumentEditor(app, page)
+  await before(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
@@ -60,6 +69,7 @@ async function open(t, size, lead, { lineNumbers = false, unit } = {}) {
   await page
     .locator('.source-pane .cm-line', { hasText: 'Large note' })
     .waitFor()
+  if (stay) return { app, page, view }
   await view('normal')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Large note' })
@@ -121,15 +131,15 @@ const place = (page) =>
     return { anchor, head, top: view.lineBlockAtHeight(height).from }
   })
 
-/** Wait for a shown source view of `units` or more, two frames after its pane stops moving. */
+/** Wait for a shown, editable source view of `units` or more, four frames after its pane stops moving. */
 async function sourceShown(page, units = 1024 * 1024) {
   await waitForAsync(
     page,
     (units) => {
       const pane = document.querySelector('.source-pane')
       return (
-        pane?.querySelector('.cm-content')?.cmTile?.root?.view?.state.doc
-          .length > units &&
+        pane?.querySelector('.cm-content[contenteditable="true"]')?.cmTile?.root
+          ?.view?.state.doc.length > units &&
         pane.closest('.mode-markdown') !== null &&
         !pane.getAnimations().length
       )
@@ -137,8 +147,8 @@ async function sourceShown(page, units = 1024 * 1024) {
     units,
   )
   await page.evaluate(async () => {
-    await new Promise(requestAnimationFrame)
-    await new Promise(requestAnimationFrame)
+    for (let frame = 0; frame < 4; frame++)
+      await new Promise(requestAnimationFrame)
   })
 }
 
@@ -243,6 +253,27 @@ function samePlace(places, before) {
   }
 }
 
+/** A 600 second move of the panes when the source view opens. */
+const slowPaneMotion =
+  '.editor-panes { transition: transform 600s linear !important; } .editor-panes.mode-markdown { transform: translateX(0.01px); }'
+
+/** A 2 MiB note of short wrapping lines, at 80% zoom and an 11px font. */
+async function openWrapped(t) {
+  const state = await open(t, 2 * 1024, '', {
+    unit: `${'ordinary words in a wrapped paragraph '.repeat(3)}\n`,
+  })
+  await state.app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.setSize(1100, 900)
+    window.webContents.setZoomFactor(0.8)
+  })
+  await state.page.addStyleTag({
+    content:
+      '.source-pane .cm-content { font-size: 11px !important; line-height: 1.25 !important; }',
+  })
+  return state
+}
+
 /** Scroll the shown source view 13 pixels into the line at `at`. */
 const scrollInto = (page, at) =>
   page.evaluate(async (at) => {
@@ -271,18 +302,7 @@ test("a large note's source view returns to the same line and pixel at another z
 }, async (t) => {
   // Lines that wrap to one or two short rows, so the pane widening after the
   // view is built moves many of them.
-  const { app, page, view } = await open(t, 2 * 1024, '', {
-    unit: `${'ordinary words in a wrapped paragraph '.repeat(3)}\n`,
-  })
-  await app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0]
-    window.setSize(1100, 900)
-    window.webContents.setZoomFactor(0.8)
-  })
-  await page.addStyleTag({
-    content:
-      '.source-pane .cm-content { font-size: 11px !important; line-height: 1.25 !important; }',
-  })
+  const { page, view } = await openWrapped(t)
   await view('Source view')
   await sourceShown(page)
   await scrollInto(page, 20000)
@@ -290,6 +310,112 @@ test("a large note's source view returns to the same line and pixel at another z
   assert.ok(before.top > 0 && before.offset > 0, JSON.stringify(before))
   const places = await returns(page, view, 1024 * 1024, 4)
   samePlace(places, before)
+})
+
+test("with reduced motion, a large note's source view returns to the same line and pixel", {
+  timeout: 240000,
+}, async (t) => {
+  // The pane moves and widens at once, before the hidden view's effects run,
+  // in a focused window, so the shown source view takes focus.
+  const { page, view } = await open(t, 360, '', {
+    unit: `${'ordinary words in a wrapped paragraph '.repeat(3)}\n`,
+    stay: true,
+    before: async (app, page) => {
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].setSize(1000, 760),
+      )
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      const session = await page.context().newCDPSession(page)
+      await session.send('Emulation.setFocusEmulationEnabled', {
+        enabled: true,
+      })
+    },
+  })
+  await sourceShown(page, 256 * 1024)
+  await page.evaluate(() =>
+    document
+      .querySelector('.source-pane .cm-content')
+      .cmTile.root.view.dispatch({
+        selection: { anchor: 20000 },
+        scrollIntoView: true,
+      }),
+  )
+  await scrollInto(page, 20000)
+  const before = await scrolled(page)
+  const places = await returns(page, view, 256 * 1024, 4)
+  samePlace(places, before)
+})
+
+test("an unrelated paused transition does not hold a returning source view's place", {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await openWrapped(t)
+  await page.evaluate(async () => {
+    document.body.style.outline = '1px solid rgb(0, 0, 0)'
+    document.body.style.setProperty(
+      'transition',
+      'outline-color 600s linear',
+      'important',
+    )
+    getComputedStyle(document.body).outlineColor
+    document.body.style.outlineColor = 'rgb(120, 80, 40)'
+    await new Promise(requestAnimationFrame)
+    const [transition] = document.body.getAnimations()
+    transition.pause()
+  })
+  await view('Source view')
+  await sourceShown(page)
+  await scrollInto(page, 20000)
+  const before = await scrolled(page)
+  const places = await returns(page, view, 1024 * 1024, 2)
+  samePlace(places, before)
+})
+
+test('a source view left while its place waits for pane motion is released', {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await open(t, 2 * 1024)
+  await view('Source view')
+  await sourceShown(page)
+  await scrollInto(page, 20000)
+  await view('normal')
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  )
+  // The panes start a long move that leaving the source view does not end.
+  await page.evaluate(async () => {
+    const panes = document.querySelector('.editor-panes')
+    panes.style.setProperty('transition', 'transform 600s linear', 'important')
+    panes.style.transform = 'translateX(0)'
+    getComputedStyle(panes).transform
+    panes.style.transform = 'translateX(0.01px)'
+    await new Promise(requestAnimationFrame)
+  })
+  await view('Source view')
+  await sourceShown(page)
+  await page.evaluate(async () => {
+    window.waitingSource = new WeakRef(
+      document.querySelector('.source-pane .cm-content').cmTile.root.view,
+    )
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+    // Paused, the move would never end the wait.
+    for (const transition of document
+      .querySelector('.editor-panes')
+      .getAnimations())
+      transition.pause()
+  })
+  await view('normal')
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  )
+  await heap(page)
+  assert.equal(
+    await page.evaluate(() => window.waitingSource.deref() === undefined),
+    true,
+  )
 })
 
 test("scrolling over a returning source view's gutter keeps the user's place", {
@@ -305,12 +431,9 @@ test("scrolling over a returning source view's gutter keeps the user's place", {
     page,
     () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
   )
-  // A transition around the pane that has not finished keeps the view's
-  // place pending while the wheel turns over the line numbers.
-  await page.addStyleTag({
-    content:
-      '.editor-panes { outline: 1px solid transparent; transition: outline-color 600s !important; } .editor-panes.mode-markdown { outline-color: rgb(1, 2, 3); }',
-  })
+  // Pane motion that has not finished keeps the view's place pending while
+  // the wheel turns over the line numbers.
+  await page.addStyleTag({ content: slowPaneMotion })
   await view('Source view')
   await sourceShown(page)
   const point = await page.evaluate(() => {

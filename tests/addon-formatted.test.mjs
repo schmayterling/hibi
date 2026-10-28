@@ -10,7 +10,7 @@ import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const notice =
-  'Legacy proof was made for the previous formatted editor. Its formatted-view features are off until it is updated; source view is unaffected.'
+  'Legacy proof has features made for the previous formatted editor. Those features are off until it is updated; source view is unaffected.'
 
 test('installed api 3 formatted contributions coexist with legacy api 1 and 2 packages', {
   timeout: 90000,

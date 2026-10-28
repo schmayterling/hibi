@@ -1016,11 +1016,15 @@ export function useAddons(
         cleanups.add(() => {
           void compatibility.then((scope) => scope?.dispose())
         })
-      const registerCompatibility = (kind: 'rich' | 'formatted') => {
+      const registerCompatibility = (
+        register: (
+          scope: NonNullable<Awaited<typeof compatibility>>,
+        ) => () => void,
+      ) => {
         let removed = false
         let remove: (() => void) | undefined
         void compatibility?.then((scope) => {
-          if (!removed) remove = scope?.register(kind)
+          if (!removed && scope) remove = register(scope)
         })
         return () => {
           removed = true
@@ -1187,7 +1191,9 @@ export function useAddons(
           sources.set(`${presentation}:${key}`, entry)
           const removeCompatibility =
             presentation === 'formatted'
-              ? registerCompatibility('formatted')
+              ? registerCompatibility((scope) =>
+                  scope.register('formatted', extension.id),
+                )
               : () => {}
           if (mounted.current) publishSources()
           return () => {
@@ -1829,12 +1835,9 @@ export function useAddons(
                     (error) => latest.current.error(error),
                     addonRegistry.origin(id) !== 'built-in',
                   )
-                  const removeCompatibility =
-                    flavor.syntax || flavor.render
-                      ? registerCompatibility('formatted')
-                      : flavor.richExtensions?.length
-                        ? registerCompatibility('rich')
-                        : () => {}
+                  const removeCompatibility = registerCompatibility((scope) =>
+                    scope.registerFlavor(flavor),
+                  )
                   return () => {
                     removeFlavor()
                     removeCompatibility()
@@ -1986,7 +1989,9 @@ export function useAddons(
                 }
                 return batch.register(`rich:${extension.id}`, () => {
                   rich.set(key, entry)
-                  const removeCompatibility = registerCompatibility('rich')
+                  const removeCompatibility = registerCompatibility((scope) =>
+                    scope.register('rich', extension.id),
+                  )
                   if (mounted.current) publishRich()
                   return () => {
                     removeCompatibility()

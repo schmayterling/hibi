@@ -6,6 +6,7 @@ import { keymap } from '@codemirror/view'
 import { TreeFragment } from '@lezer/common'
 import { GFM, parser, Table } from '@lezer/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
+import { formattedCompatibility } from '../src/renderer/src/formatted-compatibility.ts'
 import {
   contributionExtension,
   formattedContributions,
@@ -208,6 +209,50 @@ test('contributions apply only to documents with their flavor, and core syntax t
     assert.ok(!literal.includes('Emphasis'))
   } finally {
     markdownSyntax.setEnabled('core.bold', true)
+  }
+})
+
+test('partial migration keeps only the unmigrated feature literal and refreshes within the same addon', () => {
+  const removals = []
+  for (const [id, node] of [
+    ['one', 'StrongEmphasis'],
+    ['two', 'Emphasis'],
+  ]) {
+    removals.push(
+      markdownSyntax.register('mixed', {
+        id,
+        label: id,
+        group: 'Mixed',
+        level: 'inline',
+        nodes: [node],
+        matches: () => false,
+      }),
+    )
+    removals.push(formattedCompatibility.register('mixed', 'rich', id))
+  }
+  const literal = () =>
+    EditorState.create({
+      extensions: formattedContributions.extension(),
+    }).facet(formattedLiteral)
+  try {
+    const remove = formattedCompatibility.register('mixed', 'formatted', 'one')
+    removals.push(remove)
+    assert.ok(!literal().includes('StrongEmphasis'))
+    assert.ok(
+      literal().includes('Emphasis'),
+      'the other legacy feature stays literal',
+    )
+    const before = formattedContributions.version()
+    remove()
+    assert.notEqual(
+      formattedContributions.version(),
+      before,
+      'fallback changes even when the addon still needs an update',
+    )
+    assert.ok(literal().includes('StrongEmphasis'))
+    assert.ok(literal().includes('Emphasis'))
+  } finally {
+    for (const remove of removals.reverse()) remove()
   }
 })
 

@@ -1,42 +1,67 @@
-/** Compatibility follows live addon registrations while source editing remains available. */
-const entries = new Map<string, { rich: number; formatted: number }>()
+/** Compatibility follows live addon features while source editing remains available. */
+type Features = { rich: readonly string[]; formatted: readonly string[] }
+const entries = new Set<{ id: string; features: () => Features }>()
 const listeners = new Set<() => void>()
 let snapshot: readonly string[] = []
+let missing: readonly string[] = []
 
 function publish() {
-  const next = [...entries]
-    .filter(([, value]) => value.rich > 0 && value.formatted === 0)
-    .map(([id]) => id)
+  const active = [...entries].map(({ id, features }) => ({ id, ...features() }))
+  const formatted = new Set(
+    active.flatMap(({ id, formatted }) =>
+      formatted.map((feature) => `${id}.${feature}`),
+    ),
+  )
+  const next = [
+    ...new Set(
+      active.flatMap(({ id, rich }) =>
+        rich.map((feature) => `${id}.${feature}`),
+      ),
+    ),
+  ]
+    .filter((feature) => !formatted.has(feature))
     .sort()
   if (
-    next.length === snapshot.length &&
-    next.every((id, index) => id === snapshot[index])
+    next.length === missing.length &&
+    next.every((feature, index) => feature === missing[index])
   )
     return
-  snapshot = next
+  missing = next
+  const owners = [
+    ...new Set(next.map((feature) => feature.slice(0, feature.indexOf('.')))),
+  ]
+  if (
+    owners.length !== snapshot.length ||
+    owners.some((id, index) => id !== snapshot[index])
+  )
+    snapshot = owners
   for (const listener of listeners) listener()
+}
+
+function registerFeatures(id: string, features: () => Features) {
+  const entry = { id, features }
+  entries.add(entry)
+  publish()
+  return () => {
+    if (entries.delete(entry)) publish()
+  }
 }
 
 export const formattedCompatibility = {
   snapshot: () => snapshot,
+  features: () => missing,
+  refresh: publish,
   subscribe(listener: () => void) {
     listeners.add(listener)
     return () => {
       listeners.delete(listener)
     }
   },
-  register(id: string, kind: 'rich' | 'formatted') {
-    const entry = entries.get(id) ?? { rich: 0, formatted: 0 }
-    entries.set(id, entry)
-    entry[kind]++
-    publish()
-    let active = true
-    return () => {
-      if (!active) return
-      active = false
-      entry[kind]--
-      if (!entry.rich && !entry.formatted) entries.delete(id)
-      publish()
-    }
+  register(id: string, kind: 'rich' | 'formatted', feature: string) {
+    return registerFeatures(id, () => ({
+      rich: kind === 'rich' ? [feature] : [],
+      formatted: kind === 'formatted' ? [feature] : [],
+    }))
   },
+  registerFeatures,
 }

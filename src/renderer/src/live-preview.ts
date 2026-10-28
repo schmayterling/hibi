@@ -60,6 +60,7 @@ import {
   formattedBlockEdges,
   formattedContributions,
   formattedDocument,
+  formattedLegacyLiteral,
   formattedLinkAttributes,
   formattedLiteral,
   formattedNodeViews,
@@ -376,6 +377,7 @@ function inline(
   const doc = state.doc
   const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
+  const legacy = state.facet(formattedLegacyLiteral)
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
     reveal.some((range) => range.from <= to && range.to >= from)
@@ -595,15 +597,29 @@ function inline(
   })
 
   for (const range of view.visibleRanges) {
+    let legacyParent:
+      | { to: number; views: ReadonlySet<FormattedNodeView> }
+      | undefined
     tree.iterate({
       from: range.from,
       to: range.to,
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
-        let skip = literal.has(name)
+        if (legacyParent && legacyParent.to <= ref.from)
+          legacyParent = undefined
+        const owned = legacyParent?.views ?? legacy.get(name)
+        if (!legacyParent && owned?.size)
+          legacyParent = { to: ref.to, views: owned }
+        let skip = literal.has(name) && (!legacy.has(name) || !owned?.size)
         if (!skip) {
-          const contributed = views(ref.type)
+          const matched = views(ref.type)
+          const contributed = owned
+            ? {
+                ...matched,
+                views: matched.views.filter((view) => owned.has(view)),
+              }
+            : matched
           if (contributed.views.length) {
             const revealed = revealedAt(ref)
             const out = sink(revealed)
@@ -631,7 +647,7 @@ function inline(
             }
           }
 
-          skip = builtIn(ref, range) === false || skip
+          if (!owned) skip = builtIn(ref, range) === false || skip
         }
         if (!skip) return
         // Container syntax stays independent of skipped inline or literal nodes.
@@ -1190,6 +1206,7 @@ function chunkLayout(
   const doc = state.doc
   const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
+  const legacy = state.facet(formattedLegacyLiteral)
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
   let sensitive = false
@@ -1216,6 +1233,9 @@ function chunkLayout(
   /** Where definitions hidden from a list marker end. */
   let itemDefinitions = -1
   for (const range of covered) {
+    let legacyParent:
+      | { to: number; views: ReadonlySet<FormattedNodeView> }
+      | undefined
     /** The leaf block whose line breaks flow as spaces, except hard breaks and hidden link destinations. */
     let leaf: {
       from: number
@@ -1230,8 +1250,17 @@ function chunkLayout(
       mode: IterMode.IgnoreMounts,
       enter(ref) {
         if (ref.to <= range.from || ref.from >= range.to) return false
-        if (literal.has(ref.name)) return false
-        const contributed = views(ref.type).views
+        if (legacyParent && legacyParent.to <= ref.from)
+          legacyParent = undefined
+        const owned = legacyParent?.views ?? legacy.get(ref.name)
+        if (!legacyParent && owned?.size)
+          legacyParent = { to: ref.to, views: owned }
+        if (literal.has(ref.name) && (!legacy.has(ref.name) || !owned?.size))
+          return false
+        const matched = views(ref.type).views
+        const contributed = owned
+          ? matched.filter((view) => owned.has(view))
+          : matched
         if (contributed.some((view) => view.layout)) {
           sensitive = true
           // A node spanning covered ranges is laid out once, where it starts.
@@ -1249,6 +1278,7 @@ function chunkLayout(
             if (view.layout?.(ref, sink, context) === false) skip = true
           if (skip) return false
         }
+        if (owned) return
         switch (ref.name) {
           case 'FencedCode': {
             const first = doc.lineAt(ref.from)

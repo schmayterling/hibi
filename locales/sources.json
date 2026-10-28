@@ -7605,11 +7605,11 @@
   "acf7f505b27e": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "52f2acdcb418": [
+    "src/renderer/src/formatted-addon-compatibility.ts"
+  ],
   "9121a9ed1cc9": [
     "src/renderer/src/window-desktop.ts"
-  ],
-  "f199dfdaaddd": [
-    "src/renderer/src/formatted-addon-compatibility.ts"
   ],
   "3a06dca7eb1b": [
     "src/addons/dictionary/SideView.tsx"

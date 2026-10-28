@@ -1647,6 +1647,179 @@ test('ordered list numbers in a 20,000-item list come from cached item offsets',
   assert.ok(result.edited < 10000, JSON.stringify(result.edited))
 })
 
+test('code language changes reparse only the code on screen of a 50 MiB note', {
+  timeout: 120000,
+}, async () => {
+  await harness.evaluate(async () => {
+    const unit =
+      '## Section\n\nWords between blocks.\n\n```js\nconst value = 1\n```\n\n```rust\nfn main() {}\n```\n\n'
+    // A parse finishes in the transaction that starts it.
+    await window.livePreview.mount(
+      unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
+      { width: 800, height: 600 },
+      { slice: Number.POSITIVE_INFINITY },
+    )
+    // Idle time parses ahead of the screen; held, it counts in no change.
+    window.holdIdle = () => {
+      const idle = window.requestIdleCallback
+      window.requestIdleCallback = () => 0
+      return () => {
+        window.requestIdleCallback = idle
+      }
+    }
+    window.codeKeywords = (text) =>
+      [
+        ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
+      ].filter((token) => token.textContent === text).length
+  })
+  const keywords = (text, shown) =>
+    harness.waitForFunction(
+      ({ text, shown }) => window.codeKeywords(text) > 0 === shown,
+      { text, shown },
+    )
+  // Work of one change: the parse it starts, without idle parsing ahead.
+  const measure = (change) =>
+    harness.evaluate(async (change) => {
+      const preview = window.livePreview
+      await preview.settle()
+      const release = window.holdIdle()
+      try {
+        preview.reset()
+        if (change === 'disable') preview.setCodeLanguage('javascript', false)
+        else preview.hide(false)
+        await preview.settle()
+        return {
+          ...preview.probe,
+          keywords: window.codeKeywords('const'),
+          blocks: document.querySelectorAll('.hibi-lp-codeblock').length,
+        }
+      } finally {
+        release()
+      }
+    }, change)
+  try {
+    // A grammar that loads after the first parse reaches the parsed blocks.
+    await keywords('fn', true)
+    await keywords('const', true)
+    const disabled = await measure('disable')
+    // A hidden view waits: no parse and no change until it is shown.
+    await harness.evaluate(() => window.livePreview.hide(true))
+    await harness.waitForFunction(
+      () =>
+        getComputedStyle(document.querySelector('.rich-pane')).visibility ===
+        'hidden',
+    )
+    const hidden = await harness.evaluate(async () => {
+      const preview = window.livePreview
+      await preview.settle()
+      const release = window.holdIdle()
+      try {
+        preview.reset()
+        preview.setCodeLanguage('javascript', true)
+        await preview.settle()
+        await preview.settle()
+        return { ...preview.probe, keywords: window.codeKeywords('const') }
+      } finally {
+        release()
+      }
+    })
+    const shown = await measure('show')
+    // Code parsed before its language changed parses again when it returns to the screen.
+    await harness.evaluate(() => {
+      const preview = window.livePreview
+      const { doc } = preview.view().state
+      preview.scrollTo(doc.lineAt(Math.floor(doc.length / 2)).from)
+    })
+    await harness.waitForFunction(
+      () =>
+        window.livePreview.view().viewport.from > 1024 * 1024 &&
+        window.codeKeywords('const') > 0,
+    )
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', false),
+    )
+    await keywords('const', false)
+    await harness.evaluate(() => window.livePreview.scrollTo(0))
+    await harness.waitForFunction(
+      () =>
+        window.livePreview.view().viewport.from === 0 &&
+        window.codeKeywords('fn') > 0 &&
+        window.codeKeywords('const') === 0,
+    )
+    console.log(JSON.stringify({ disabled, hidden, shown }))
+    assert.equal(hidden.parsedUnits, 0, JSON.stringify(hidden))
+    assert.equal(hidden.keywords, 0)
+    assert.equal(disabled.keywords, 0)
+    assert.ok(shown.keywords > 0, JSON.stringify(shown))
+    // The code on screen and the chunks it straddles parse again, not the note.
+    for (const result of [disabled, shown]) {
+      assert.ok(result.blocks > 4, JSON.stringify(result))
+      assert.ok(result.parsedChunks <= 4, JSON.stringify(result))
+      assert.ok(result.parsedUnits <= 4 * 4096, JSON.stringify(result))
+    }
+  } finally {
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', true),
+    )
+  }
+})
+
+test('a code language change inside one 50 MiB fence parses only the code on screen', {
+  timeout: 240000,
+}, async () => {
+  // A worker indexing the note is covered in formatted-boundary-worker.
+  await harness.evaluate(async () => {
+    const line = 'const value = 1\n'
+    await window.livePreview.mount(
+      `\`\`\`js\n${line.repeat(Math.ceil((50 * 1024 * 1024) / line.length))}\`\`\`\n\nend\n`,
+      { width: 800, height: 600 },
+      { editable: true },
+    )
+    window.codeKeywords = () =>
+      [
+        ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
+      ].filter((token) => token.textContent === 'const').length
+    const preview = window.livePreview
+    preview.scrollTo(preview.view().state.doc.length - 2048)
+  })
+  await harness.waitForFunction(
+    () =>
+      window.livePreview.view().viewport.from > 40 * 1024 * 1024 &&
+      window.codeKeywords() > 0 &&
+      !window.livePreview.settling(),
+    undefined,
+    { timeout: 90000 },
+  )
+  try {
+    // Turning the language off and on again near the fence's far end keeps
+    // the fence's known bounds: a scan of the lines on screen rather than of
+    // the fence, and at most its window around the screen parses again.
+    for (const enabled of [false, true]) {
+      await harness.evaluate(async (enabled) => {
+        const preview = window.livePreview
+        await preview.settle()
+        preview.reset()
+        preview.setCodeLanguage('javascript', enabled)
+      }, enabled)
+      await harness.waitForFunction(
+        (enabled) =>
+          window.codeKeywords() > 0 === enabled &&
+          !window.livePreview.settling(),
+        enabled,
+      )
+      const result = await harness.evaluate(() => window.livePreview.probe)
+      const label = JSON.stringify({ enabled, ...result })
+      console.log(label)
+      assert.ok(result.scannedUnits <= 16 * 1024, label)
+      assert.ok(result.parsedUnits <= 2 * 64 * 1024, label)
+    }
+  } finally {
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', true),
+    )
+  }
+})
+
 test('selecting the whole note includes the hidden fences at its ends', {
   timeout: 30000,
 }, async () => {

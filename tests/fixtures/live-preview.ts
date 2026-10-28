@@ -334,6 +334,14 @@ Object.assign(window, {
         effects: EditorView.scrollIntoView(pos, { y: 'start' }),
       })
     },
+    /** Turn a code language's highlighting on or off. */
+    setCodeLanguage: (id: string, enabled: boolean) =>
+      codeLanguages.setEnabled(id, enabled),
+    /** Hide the panes the way source mode hides the formatted pane. */
+    hide(hidden: boolean) {
+      panes.classList.toggle('mode-markdown', hidden)
+      panes.classList.toggle('mode-normal', !hidden)
+    },
     /** The formatted view's syntax tree. */
     tree: () => (view ? syntax.tree(view.state) : null),
     /** The shown syntax tree has parsed text from `from` to `to`. */

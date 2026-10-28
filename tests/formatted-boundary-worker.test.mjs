@@ -7,8 +7,9 @@ import test from 'node:test'
 import { build } from 'vite'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 
+// Its cases mount several 50 MiB notes, among them one fenced code block.
 test('a real worker formats a never-visited 50 mib far jump without main-thread scanning and declines unknown blocks', {
-  timeout: 180000,
+  timeout: 240000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-boundary-worker-'))
   let app, server
@@ -727,6 +728,78 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
         )
       }
       t.diagnostic(JSON.stringify({ structuralRepairs: repairs }))
+    },
+  )
+
+  await t.test(
+    'a code language change inside one 50 mib fence keeps the worker index',
+    async () => {
+      await page.evaluate(async () => {
+        const line = 'const value = 1\n'
+        await window.livePreview.mount(
+          `\`\`\`js\n${line.repeat(Math.ceil((50 * 1024 * 1024) / line.length))}\`\`\`\n\nend\n`,
+          { width: 800, height: 600 },
+          { worker: true, editable: true },
+        )
+        window.codeKeywords = () =>
+          [
+            ...document.querySelectorAll(
+              '.hibi-lp-codeblock .hibi-token-keyword',
+            ),
+          ].filter((token) => token.textContent === 'const').length
+      })
+      await page.waitForFunction(
+        () => window.livePreview.workerState.ready,
+        undefined,
+        { timeout: 120000 },
+      )
+      await page.evaluate(() => {
+        const preview = window.livePreview
+        preview.scrollTo(preview.view().state.doc.length - 2048)
+      })
+      await page.waitForFunction(
+        () =>
+          window.livePreview.view().viewport.from > 40 * 1024 * 1024 &&
+          window.codeKeywords() > 0 &&
+          !window.livePreview.settling(),
+        undefined,
+        { timeout: 120000 },
+      )
+      try {
+        // The fence's bounds stay known: no new boundary request, a scan of
+        // the lines on screen rather than of the fence, and at most its
+        // window around the screen parses again.
+        for (const enabled of [false, true]) {
+          await page.evaluate(async (enabled) => {
+            const preview = window.livePreview
+            await preview.settle()
+            preview.reset()
+            window.requestsBefore = preview.workerState.requests
+            preview.setCodeLanguage('javascript', enabled)
+          }, enabled)
+          await page.waitForFunction(
+            (enabled) =>
+              window.codeKeywords() > 0 === enabled &&
+              !window.livePreview.settling(),
+            enabled,
+          )
+          const result = await page.evaluate(() => ({
+            ...window.livePreview.probe,
+            requests:
+              window.livePreview.workerState.requests - window.requestsBefore,
+            errors: window.livePreview.workerState.errors,
+          }))
+          t.diagnostic(JSON.stringify({ enabled, ...result }))
+          assert.equal(result.requests, 0, JSON.stringify(result))
+          assert.ok(result.scannedUnits <= 16 * 1024, JSON.stringify(result))
+          assert.ok(result.parsedUnits <= 2 * 64 * 1024, JSON.stringify(result))
+          assert.deepEqual(result.errors, [])
+        }
+      } finally {
+        await page.evaluate(() =>
+          window.livePreview.setCodeLanguage('javascript', true),
+        )
+      }
     },
   )
 

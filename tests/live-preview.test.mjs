@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { extname, join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
 import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
@@ -104,7 +105,7 @@ const markers = `# Marker lines
 closing paragraph.
 `
 
-let app, folder, page, harness
+let app, folder, page, harness, server
 
 const palette = (id) => {
   const scheme = bundledColorschemes.find((entry) => entry.id === id)
@@ -153,6 +154,29 @@ before(
       html,
       '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
+    // Module workers need an HTTP origin, as in the boundary-worker fixture.
+    server = createServer(async (request, response) => {
+      try {
+        const path = new URL(request.url, 'http://fixture').pathname
+        const file = join(bundle, path.replace(/^\/bundle\//, ''))
+        const type = {
+          '.js': 'text/javascript',
+          '.css': 'text/css',
+          '.html': 'text/html',
+        }[extname(file)]
+        const content = await readFile(file)
+        response.writeHead(200, {
+          'Content-Type': type
+            ? `${type}; charset=utf-8`
+            : 'application/octet-stream',
+        })
+        response.end(content)
+      } catch {
+        response.writeHead(404)
+        response.end()
+      }
+    })
+    await new Promise((ready) => server.listen(0, '127.0.0.1', ready))
     const file = join(folder, 'notes', 'parity.md')
     await mkdir(join(folder, 'notes'))
     await writeFile(file, note)
@@ -188,9 +212,12 @@ before(
             backgroundThrottling: false,
           },
         })
-        void window.loadFile(path)
+        void window.loadURL(path)
       },
-      { path: html, size },
+      {
+        path: `http://127.0.0.1:${server.address().port}/bundle/index.html`,
+        size,
+      },
     )
     harness = await next
     harness.setDefaultTimeout(10000)
@@ -229,8 +256,12 @@ async function open(file, title) {
 
 after(
   async () => {
-    await app?.close()
-    if (folder) await rm(folder, { recursive: true, force: true })
+    try {
+      await app?.close()
+    } finally {
+      if (server) await new Promise((done) => server.close(done))
+      if (folder) await rm(folder, { recursive: true, force: true })
+    }
   },
   { timeout: 30000 },
 )
@@ -722,6 +753,129 @@ test('blank lines after the last block are laid out only where the view shows th
       .map((line) => line.getBoundingClientRect().height)
   })
   assert.deepEqual(heights, [16, 28, 16, 28])
+})
+
+test('scrolling up through known code blocks keeps the scroll position as without them', {
+  timeout: 120000,
+}, async () => {
+  const code = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = '# Long code lines\n\n'
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${code.repeat(5)}\`\`\`\n\n`
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  /** How far the scroll position moves by itself after each step up the note. */
+  const scrollUp = (known) =>
+    harness.evaluate(
+      async ({ doc, known }) => {
+        await window.livePreview.mount(
+          doc,
+          { width: 900, height: 600 },
+          { editable: true },
+        )
+        const view = window.livePreview.view()
+        // A focused editor keeps the text at the top in place as heights change.
+        view.focus()
+        if (known) window.livePreview.knowCode()
+        await window.livePreview.settle()
+        const pane = document.querySelector('.rich-pane')
+        const frame = () => new Promise(requestAnimationFrame)
+        const scroll = async (target) => {
+          pane.scrollTop = target
+          const wanted = pane.scrollTop
+          // Until nothing moves for a few frames.
+          let still = 0
+          let last = ''
+          for (let i = 0; i < 60 && still < 4; i++) {
+            await frame()
+            const now = `${pane.scrollTop} ${view.viewport.from} ${view.viewport.to} ${view.contentDOM.offsetHeight}`
+            still = now === last ? still + 1 : 0
+            last = now
+          }
+          return Math.round(pane.scrollTop - wanted)
+        }
+        const step = Math.round(pane.clientHeight * 0.8)
+        // Down first, so the editor has drawn and measured every line.
+        for (
+          let target = 0;
+          target < pane.scrollHeight - pane.clientHeight;
+          target += step
+        )
+          await scroll(target)
+        // Draw the tail too: the last step can stop before its empty paragraph.
+        await scroll(pane.scrollHeight - pane.clientHeight)
+        if (pane.scrollTop !== pane.scrollHeight - pane.clientHeight)
+          throw new Error('the downward pass must reach the bottom')
+        const moved = []
+        for (
+          let target = pane.scrollHeight - pane.clientHeight;
+          target > 0;
+          target -= step
+        )
+          moved.push(await scroll(target))
+        return moved
+      },
+      { doc, known },
+    )
+  const plain = await scrollUp(false)
+  const known = await scrollUp(true)
+  await session.detach()
+  assert.ok(plain.length > 15, JSON.stringify(plain))
+  // Before, each placeholder turned into lines in an update the editor had
+  // not measured when the next update came, so it kept the text at the top
+  // by estimated heights and scrolled up the note a few hundred pixels.
+  assert.deepEqual(known, plain)
+})
+
+test('stepping up after a jump to the end, known code blocks never draw as plain text', {
+  timeout: 120000,
+}, async () => {
+  const code = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = '# Long code lines\n\n'
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${code.repeat(5)}\`\`\`\n\n`
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const plain = await harness.evaluate(async (doc) => {
+    await window.livePreview.mount(
+      doc,
+      { width: 900, height: 600 },
+      { editable: true },
+    )
+    const view = window.livePreview.view()
+    view.focus()
+    window.livePreview.knowCode()
+    await window.livePreview.settle()
+    const pane = document.querySelector('.rich-pane')
+    const frame = () => new Promise(requestAnimationFrame)
+    // Code lines drawn outside a code block's box, as unparsed text.
+    let most = 0
+    const count = () => {
+      most = Math.max(
+        most,
+        [...view.contentDOM.querySelectorAll('.cm-line')].filter(
+          (line) =>
+            line.textContent.startsWith('const value') &&
+            !line.closest('.hibi-lp-codescroll'),
+        ).length,
+      )
+    }
+    pane.scrollTop = pane.scrollHeight
+    for (let i = 0; i < 20; i++) await frame()
+    const step = Math.round(pane.clientHeight * 0.8)
+    for (let k = 0; k < 5; k++) {
+      pane.scrollTop -= step
+      for (let i = 0; i < 20; i++) {
+        await frame()
+        count()
+      }
+    }
+    return most
+  }, doc)
+  await session.detach()
+  // Before, a block the parser started over on showed its long lines as
+  // wrapped text, thousands of pixels tall, and the view jumped away.
+  assert.equal(plain, 0)
 })
 
 test('typing beside a multi-line link destination edits the text', {
@@ -1654,7 +1808,7 @@ test('ordered list numbers in a 20,000-item list come from cached item offsets',
 
 test('code language changes reparse only the code on screen of a 50 MiB note', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
   await harness.evaluate(async () => {
     const unit =
       '## Section\n\nWords between blocks.\n\n```js\nconst value = 1\n```\n\n```rust\nfn main() {}\n```\n\n'
@@ -1662,7 +1816,7 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
     await window.livePreview.mount(
       unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
       { width: 800, height: 600 },
-      { slice: Number.POSITIVE_INFINITY },
+      { slice: Number.POSITIVE_INFINITY, worker: true },
     )
     // Idle time parses ahead of the screen; held, it counts in no change.
     window.holdIdle = () => {
@@ -1677,6 +1831,39 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
         ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
       ].filter((token) => token.textContent === text).length
   })
+  // Use the boundary-worker setup deadline before the 10 s lifecycle checks.
+  const started = Date.now()
+  await harness
+    .waitForFunction(
+      () => {
+        const { probe, workerState } = window.livePreview
+        return (
+          workerState.errors.length ||
+          (workerState.ready && probe.adoptionSlices === workerState.pages)
+        )
+      },
+      undefined,
+      { timeout: 120000 },
+    )
+    .catch(async (error) => {
+      t.diagnostic(
+        JSON.stringify(
+          await harness.evaluate(() => ({
+            ...window.livePreview.workerState,
+            ...window.livePreview.probe,
+          })),
+        ),
+      )
+      throw error
+    })
+  const bootstrap = await harness.evaluate(() => ({
+    ...window.livePreview.workerState,
+    adopted: window.livePreview.probe.adoptionSlices,
+  }))
+  t.diagnostic(
+    JSON.stringify({ bootstrapMs: Date.now() - started, ...bootstrap }),
+  )
+  assert.deepEqual(bootstrap.errors, [])
   const keywords = (text, shown) =>
     harness.waitForFunction(
       ({ text, shown }) => window.codeKeywords(text) > 0 === shown,
@@ -1730,15 +1917,26 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
     })
     const shown = await measure('show')
     // Code parsed before its language changed parses again when it returns to the screen.
-    await harness.evaluate(() => {
+    const scanned = await harness.evaluate(() => {
       const preview = window.livePreview
       const { doc } = preview.view().state
+      const before = preview.probe.scannedUnits
       preview.scrollTo(doc.lineAt(Math.floor(doc.length / 2)).from)
+      return before
     })
     await harness.waitForFunction(
       () =>
         window.livePreview.view().viewport.from > 1024 * 1024 &&
         window.codeKeywords('const') > 0,
+    )
+    assert.equal(
+      await harness.evaluate(() => window.livePreview.probe.scannedUnits),
+      scanned,
+      'the indexed jump must not scan the note on the main thread',
+    )
+    assert.deepEqual(
+      await harness.evaluate(() => window.livePreview.workerState.errors),
+      [],
     )
     await harness.evaluate(() =>
       window.livePreview.setCodeLanguage('javascript', false),

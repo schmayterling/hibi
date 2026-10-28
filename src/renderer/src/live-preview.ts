@@ -38,6 +38,7 @@ import {
 } from '../../shared/formatted-text-rules.ts'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
+import { codePlaceholders } from './code-placeholders'
 import {
   blockBreak,
   codeIndent,
@@ -90,6 +91,12 @@ import './live-preview.css'
  */
 
 const hide = Decoration.replace({})
+/** Measure key of the sideways scroll to the caret. */
+const revealCaret = {}
+const codeScroll = BlockWrapper.create({
+  tagName: 'div',
+  attributes: { class: 'hibi-lp-codescroll' },
+})
 
 /** Whether Tab indents formatted text and code; list items always take Tab. */
 export const formattedTabIndents = Facet.define<boolean, boolean>({
@@ -305,6 +312,77 @@ function eachLine(
   }
 }
 
+/** A code line longer than `shortLine`: its start, where its code starts, and its end. */
+type LongLine = { from: number; start: number; to: number }
+/** Code lines up to this length are decorated whole instead of measured. */
+const shortLine = 256
+/** Refreshes code tokens after measuring the columns of long code lines. */
+const measuredColumns = StateEffect.define<null>()
+
+/** The first position from `from` to `to` where `test` holds, or `to`. */
+function firstWhere(from: number, to: number, test: (pos: number) => boolean) {
+  while (from < to) {
+    const middle = (from + to) >> 1
+    if (test(middle)) to = middle
+    else from = middle + 1
+  }
+  return from
+}
+
+/**
+ * Columns of long code lines within a screen width of the visible ones,
+ * found on each line's caret positions so tabs and wide characters count,
+ * or null for lines that wrap. `changed` when decorated columns no longer
+ * cover what shows.
+ */
+function measureColumns(
+  view: EditorView,
+  long: readonly LongLine[],
+  columns: ReadonlyMap<number, Revealed | null>,
+) {
+  const next = new Map<number, Revealed | null>()
+  let changed = false
+  for (const line of long) {
+    const { node } = view.domAtPos(line.start)
+    const element = (
+      node instanceof Element ? node : node.parentElement
+    )?.closest('.cm-line')
+    const scroller = element?.closest('.hibi-lp-codescroll')
+    if (!element || !scroller) continue
+    const known = columns.has(line.from)
+      ? (columns.get(line.from) ?? null)
+      : { from: line.start, to: Math.min(line.to, line.start + 2 * shortLine) }
+    if (!/^(pre|nowrap)$/.test(getComputedStyle(element).whiteSpace)) {
+      next.set(line.from, null)
+      changed ||= known !== null
+      continue
+    }
+    const left = scroller.getBoundingClientRect().left
+    const right = left + scroller.clientWidth
+    const width = right - left
+    const x = (pos: number) =>
+      view.coordsAtPos(pos, pos < line.to ? 1 : -1)?.left ?? left
+    if (
+      known &&
+      (known.from <= line.start || x(known.from) <= left) &&
+      (known.to >= line.to || x(known.to) >= right)
+    ) {
+      next.set(line.from, known)
+      continue
+    }
+    const from = Math.max(
+      line.start,
+      firstWhere(line.start, line.to, (pos) => x(pos) > left - width) - 1,
+    )
+    next.set(line.from, {
+      from,
+      to: firstWhere(from, line.to, (pos) => x(pos) >= right + width),
+    })
+    changed = true
+  }
+  return { next, changed }
+}
+
 type LineInfo = {
   classes: string[]
   style: string[]
@@ -363,6 +441,8 @@ function inline(
   tree: Tree,
   reveal: readonly Revealed[],
   layout: DecorationSet,
+  /** Decorated columns of long code lines by line start; null where a line wraps. */
+  columns: ReadonlyMap<number, Revealed | null>,
 ): {
   decorations: DecorationSet
   groupMarks: DecorationSet
@@ -373,6 +453,7 @@ function inline(
   outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
+  long: LongLine[]
 } {
   const { state } = view
   const doc = state.doc
@@ -420,6 +501,12 @@ function inline(
   const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
   const headings = new Map<number, Heading>()
+  /** Code blocks drawn: their code lines' extent and first drawn line. */
+  const codeBlocks = new Map<
+    number,
+    { from: number; to: number; shown: number }
+  >()
+  const long: LongLine[] = []
   const line = (pos: number) => {
     let info = lines.get(pos)
     if (!info) {
@@ -527,6 +614,12 @@ function inline(
     const to = closed ? last.number - 1 : last.number
     const visibleFrom = doc.lineAt(range.from).number,
       visibleTo = doc.lineAt(range.to).number
+    if (from > to) return
+    let block = codeBlocks.get(node.from)
+    if (!block) {
+      block = { from: doc.line(from).from, to: doc.line(to).to, shown: -1 }
+      codeBlocks.set(node.from, block)
+    }
     const texts = node.getChildren('CodeText')
     let text = 0
     for (
@@ -536,31 +629,46 @@ function inline(
     ) {
       const current = doc.line(number)
       const info = line(current.from)
-      info.classes.push('hibi-lp-codeblock')
-      if (number === from) info.classes.push('hibi-lp-codeblock-first')
-      if (number === to) info.classes.push('hibi-lp-codeblock-last')
-      // The line's text starts at its code text: quote markers, list
-      // indentation and the four columns of indented code before it are hidden.
-      while (text < texts.length && texts[text]!.to <= current.from) text++
-      const next = texts[text]
-      const start =
-        next && next.from <= current.to
-          ? Math.max(next.from, current.from)
-          : current.to
-      info.code = start
-      // Code text is smaller than the block's line box, as in a pre element.
-      mark('hibi-lp-codetext', start, current.to)
-    }
-    // Nested code languages use the shared token classes.
-    for (const piece of texts)
-      if (piece.to > range.from && piece.from < range.to)
+      // A line that line gaps split into two visible ranges is set up once.
+      if (info.code === null) {
+        if (block.shown < 0) block.shown = current.from
+        info.classes.push('hibi-lp-codeblock')
+        if (number === from) info.classes.push('hibi-lp-codeblock-first')
+        if (number === to) info.classes.push('hibi-lp-codeblock-last')
+        // The line's text starts at its code text: quote markers, list
+        // indentation and the four columns of indented code before it are hidden.
+        while (text < texts.length && texts[text]!.to <= current.from) text++
+        const next = texts[text]
+        info.code =
+          next && next.from <= current.to
+            ? Math.max(next.from, current.from)
+            : current.to
+        // Code text is smaller than the block's line box, as in a pre element.
+        mark('hibi-lp-codetext', info.code, current.to)
+        if (current.to - info.code > shortLine)
+          long.push({ from: current.from, start: info.code, to: current.to })
+      }
+      const start = info.code
+      // Nested code languages use the shared token classes. Long lines that
+      // do not wrap decorate the columns the view measured near the visible
+      // ones, or their first columns until it has.
+      const shown =
+        current.to - start > shortLine
+          ? columns.has(current.from)
+            ? columns.get(current.from)
+            : { from: start, to: Math.min(current.to, start + 2 * shortLine) }
+          : null
+      const a = Math.max(start, range.from, shown?.from ?? start),
+        b = Math.min(current.to, range.to, shown?.to ?? current.to)
+      if (b > a)
         highlightTree(
           tree,
           codeHighlighter,
           (from, to, classes) => mark(classes, from, to),
-          Math.max(piece.from, range.from),
-          Math.min(piece.to, range.to),
+          a,
+          b,
         )
+    }
   }
 
   /** Decorations from a contributed view for one node, revealed while the selection touches it. */
@@ -855,6 +963,28 @@ function inline(
   }
   blocks = noBlocks
   const wrappers: Range<BlockWrapper>[] = []
+  // A code block scrolls sideways as one box, inside the indentation and
+  // paint of the quotes and lists around it, which a box around it keeps.
+  for (const { from, to, shown } of codeBlocks.values()) {
+    const end = Math.min(doc.length, to + 1)
+    if (end <= from || shown < 0) continue
+    wrappers.push(codeScroll.range(from, end))
+    const style = lines
+      .get(shown)
+      ?.style.filter(
+        (entry) =>
+          entry.startsWith('--hibi-indent:') ||
+          entry.startsWith('--hibi-paint:'),
+      )
+    if (style?.length)
+      wrappers.push(
+        BlockWrapper.create({
+          tagName: 'div',
+          attributes: { class: 'hibi-lp-codenest', style: style.join('; ') },
+          rank: 60,
+        }).range(from, end),
+      )
+  }
   for (const { from, to, level } of headings.values()) {
     wrappers.push(
       BlockWrapper.create({
@@ -877,6 +1007,7 @@ function inline(
     outer: Decoration.set(outer, true),
     wrappers: BlockWrapper.set(wrappers, true),
     end,
+    long,
   }
 }
 
@@ -1638,7 +1769,77 @@ export function livePreview(
       /** Space below the last line, in px. */
       end: number
       reveal: readonly Revealed[]
-      constructor(view: EditorView) {
+      /** Decorated columns of long code lines by line start; null where a line wraps. */
+      columns = new Map<number, Revealed | null>()
+      long: readonly LongLine[] = []
+      destroyed = false
+      readonly measure = {
+        key: this,
+        read: (view: EditorView) =>
+          measureColumns(view, this.long, this.columns),
+        write: (
+          measured: ReturnType<typeof measureColumns>,
+          view: EditorView,
+        ) => {
+          this.columns = measured.next
+          if (measured.changed)
+            queueMicrotask(() => {
+              if (!this.destroyed)
+                view.dispatch({ effects: measuredColumns.of(null) })
+            })
+        },
+      }
+      /**
+       * How far code blocks are scrolled sideways, by block start: the
+       * editor may draw a block's box again, which starts unscrolled.
+       */
+      readonly scrolls = new Map<number, number>()
+      /** The block each drawn box showed when its scroll was last set. */
+      boxes = new WeakMap<Element, number | null>()
+      /** The start of the code block around `pos`. */
+      blockAt(pos: number) {
+        for (
+          let node: SyntaxNode | null = syntax
+            .tree(this.view.state)
+            .resolve(pos, 1);
+          node;
+          node = node.parent
+        )
+          if (node.name === 'FencedCode' || node.name === 'CodeBlock')
+            return node.from
+        return null
+      }
+      /** Code blocks scrolled sideways show other columns. */
+      readonly scrolled = (event: Event) => {
+        const box = event.target
+        if (
+          !(box instanceof HTMLElement) ||
+          !box.classList.contains('hibi-lp-codescroll')
+        )
+          return
+        const at = this.blockAt(this.view.posAtDOM(box))
+        if (at !== null)
+          if (box.scrollLeft) this.scrolls.set(at, box.scrollLeft)
+          else this.scrolls.delete(at)
+        if (this.long.length) this.view.requestMeasure(this.measure)
+      }
+      /**
+       * A scrolled box the coming redraw replaces fires no scroll event
+       * when the editor measures on the note's own scroll first: read the
+       * boxes before the redraw. Unscrolled boxes may be new ones.
+       */
+      keepScrolls(update: ViewUpdate) {
+        for (const box of update.view.contentDOM.querySelectorAll(
+          '.hibi-lp-codescroll',
+        )) {
+          if (!box.scrollLeft) continue
+          const at = this.blockAt(
+            update.changes.mapPos(update.view.posAtDOM(box)),
+          )
+          if (at !== null) this.scrolls.set(at, box.scrollLeft)
+        }
+      }
+      constructor(readonly view: EditorView) {
         this.reveal = revealed(view, syntax.tree(view.state))
         ;({
           decorations: this.decorations,
@@ -1649,15 +1850,40 @@ export function livePreview(
           outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
+          long: this.long,
         } = inline(
           view,
           syntax.tree(view.state),
           this.reveal,
           view.state.field(layout),
+          this.columns,
         ))
+        if (this.long.length) view.requestMeasure(this.measure)
+        // Scroll events do not bubble; capturing sees the code blocks'.
+        view.contentDOM.addEventListener('scroll', this.scrolled, {
+          capture: true,
+          passive: true,
+        })
+      }
+      destroy() {
+        this.destroyed = true
+        this.view.contentDOM.removeEventListener('scroll', this.scrolled, {
+          capture: true,
+        })
       }
       docViewUpdate(view: EditorView) {
         nameHeadings(view)
+        // A new box, or one the editor reused for another block, gets its
+        // block's scroll before the next paint.
+        if (this.scrolls.size)
+          for (const box of view.contentDOM.querySelectorAll(
+            '.hibi-lp-codescroll',
+          )) {
+            const at = this.blockAt(view.posAtDOM(box))
+            if (this.boxes.get(box) === at) continue
+            this.boxes.set(box, at)
+            box.scrollLeft = this.scrolls.get(at ?? -1) ?? 0
+          }
       }
       update(update: ViewUpdate) {
         const tree = syntax.tree(update.state)
@@ -1676,6 +1902,23 @@ export function livePreview(
               range.to !== this.reveal[index]?.to,
           )
         this.reveal = reveal
+        if (update.docChanged && this.scrolls.size) {
+          const scrolls = [...this.scrolls]
+          this.scrolls.clear()
+          for (const [at, left] of scrolls)
+            this.scrolls.set(update.changes.mapPos(at), left)
+        }
+        if (update.viewportChanged) this.keepScrolls(update)
+        if (update.docChanged && this.columns.size)
+          this.columns = new Map(
+            [...this.columns].map(([at, shown]): [number, Revealed | null] => [
+              update.changes.mapPos(at),
+              shown && {
+                from: update.changes.mapPos(shown.from, -1),
+                to: update.changes.mapPos(shown.to, 1),
+              },
+            ]),
+          )
         // An edit's unfinished reparse keeps what was drawn, mapped through it.
         if (syntax.settling(update.state)) {
           this.decorations = mapLines(this.decorations, update)
@@ -1700,10 +1943,13 @@ export function livePreview(
           update.state.facet(formattedDocument) !==
             update.startState.facet(formattedDocument) ||
           update.transactions.some((transaction) =>
-            transaction.effects.some((effect) => effect.is(formattedRefresh)),
+            transaction.effects.some(
+              (effect) =>
+                effect.is(formattedRefresh) || effect.is(measuredColumns),
+            ),
           )
-        )
-          ({
+        ) {
+          ;({
             decorations: this.decorations,
             groupMarks: this.groupMarks,
             atomic: this.atomic,
@@ -1712,7 +1958,17 @@ export function livePreview(
             outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
-          } = inline(update.view, tree, reveal, update.state.field(layout)))
+            long: this.long,
+          } = inline(
+            update.view,
+            tree,
+            reveal,
+            update.state.field(layout),
+            this.columns,
+          ))
+          if (this.long.length) update.view.requestMeasure(this.measure)
+        } else if (update.geometryChanged && this.long.length)
+          update.view.requestMeasure(this.measure)
       }
     },
     { decorations: (plugin) => plugin.decorations },
@@ -2042,6 +2298,48 @@ export function livePreview(
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))
       return true
     }),
+    // A caret or selection in a code block scrolls the block sideways to
+    // show it, all of a selection on one line where it fits and its head
+    // otherwise, once the editor may read its layout.
+    EditorView.scrollHandler.of((view, range, { xMargin }) => {
+      view.requestMeasure({
+        key: revealCaret,
+        read() {
+          const { doc } = view.state
+          if (Math.max(range.anchor, range.head) > doc.length) return null
+          const { node } = view.domAtPos(range.head)
+          const box = (
+            node instanceof Element ? node : node.parentElement
+          )?.closest('.hibi-lp-codescroll')
+          const caret = box && view.coordsAtPos(range.head)
+          if (!box || !caret) return null
+          const left = box.getBoundingClientRect().left + xMargin
+          const right = left + box.clientWidth - 2 * xMargin
+          const other =
+            !range.empty &&
+            doc.lineAt(range.anchor).from === doc.lineAt(range.head).from
+              ? view.coordsAtPos(range.anchor)
+              : null
+          let start = caret.left
+          let end = caret.right
+          if (
+            other &&
+            Math.max(end, other.right) - Math.min(start, other.left) <=
+              right - left
+          ) {
+            start = Math.min(start, other.left)
+            end = Math.max(end, other.right)
+          }
+          const by = start < left ? start - left : end > right ? end - right : 0
+          return by ? { box, by } : null
+        },
+        write(move) {
+          if (move) move.box.scrollLeft += move.by
+        },
+      })
+      return false
+    }),
+    codePlaceholders,
     EditorView.lineWrapping,
     EditorView.editorAttributes.of({ class: 'hibi-formatted' }),
   ]

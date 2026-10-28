@@ -4,13 +4,10 @@ these todos execute their assertions. each row identifies a reproduced parity ga
 
 owner numbers follow the ordered formatted engine readiness plan. the default flip requires `HIBI_EXPECT_FORMATTED_GAPS=0 node --test tests/formatted-engine-gaps.test.mjs` to pass. the count is annotation count; a shared annotation can execute in more than one fixture. locations identify the todo option or literal map entry to remove.
 
-accepted differences are not gaps; their tests assert each engine. the codemirror side-by-side formatted pane stays editable, with its caret and the markers under it, while the rich editor previews read-only.
+accepted differences are not gaps; their tests assert each engine. the codemirror side-by-side formatted pane stays editable, with its caret and the markers under it, while the rich editor previews read-only. after a code language is turned off and on while source mode hides the formatted view, the rich editor refreshes its highlighting once when shown; codemirror leaves the unchanged view as it is, and its shown highlighting follows the language.
 
 | gap id | test file:line | behavior | owning slice |
 | --- | --- | --- | --- |
-| syntax-004 | [code-syntax-settings.test.mjs:238](code-syntax-settings.test.mjs#L238) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
-| syntax-002 | [code-syntax-settings.test.mjs:281](code-syntax-settings.test.mjs#L281) | formatted code highlighting must appear before source-mode lifecycle checks | 8c: highlighting and grammar lifecycle |
-| syntax-003 | [code-syntax-settings.test.mjs:430](code-syntax-settings.test.mjs#L430) | formatted code must retain visible tokens on scrolled and wrapped long lines | 8c: highlighting and grammar lifecycle |
 | input-015 | [editor-input.test.mjs:2285](editor-input.test.mjs#L2285) | native table cell input emits one signal with inserted text | 8a: native input, structure and toolbar state |
 | input-026 | [editor-input.test.mjs:2289](editor-input.test.mjs#L2289) | native table cells selection preserves both source endpoints | 8a: native input, structure and toolbar state |
 | input-027 | [editor-input.test.mjs:2291](editor-input.test.mjs#L2291) | native multiline cells preserves literal text and block structure | 8a: native input, structure and toolbar state |
@@ -36,7 +33,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
 | find-001 | [formatted-find.test.mjs:401](formatted-find.test.mjs#L401) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
 | find-003 | [formatted-find.test.mjs:664](formatted-find.test.mjs#L664) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
-| find-005 | [formatted-find.test.mjs:916](formatted-find.test.mjs#L916) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
 | corpus-011 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
 | corpus-012 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
 | export-002 | [marked-large-paragraph.test.mjs:856](marked-large-paragraph.test.mjs#L856) | an indented failed reference title must remain paragraph text instead of code | 10a: shared reference definition parsing |

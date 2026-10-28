@@ -794,9 +794,11 @@ async function visibleFindRange(
       })
       if (!rectangles.length) return false
       const pane = selected[0].closest('.rich-pane').getBoundingClientRect()
-      const code = selected[0]
-        .closest('.hibi-lp-codeblock')
-        ?.getBoundingClientRect()
+      // Code lines scroll sideways inside their block's box.
+      const code = (
+        selected[0].closest('.hibi-lp-codescroll') ??
+        selected[0].closest('.hibi-lp-codeblock')
+      )?.getBoundingClientRect()
       const left = Math.max(pane.left, code?.left ?? pane.left)
       const right = Math.min(pane.right, code?.right ?? pane.right)
       const first = rectangles[0],
@@ -912,14 +914,13 @@ for (const kind of ['code', 'wrapped', 'wide code start']) {
       )
       await t.test(
         'wide code scrolls horizontally with its start visible',
-        {
-          todo: 'formatted gap find-005: wide code matches must scroll horizontally with their start visible',
-        },
         async () => {
           assert.ok(
             await rich.evaluate((element) => {
               const match = element.querySelector('.cm-searchMatch-selected')
-              const line = match.closest('.hibi-lp-codeblock')
+              const line =
+                match.closest('.hibi-lp-codescroll') ??
+                match.closest('.hibi-lp-codeblock')
               const pane = element.closest('.rich-pane')
               return [
                 line,

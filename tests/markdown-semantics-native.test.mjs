@@ -206,7 +206,7 @@ const formattedOutcomes = {
     counts: { words: 5, characters: 27 },
   },
   '0/multiline title/0': {
-    text: '[ref]: /target "first title last" [ref]',
+    text: '[ref]: /target "first\ntitle\nlast"\n[ref]',
     headings: ['title'],
     counts: { words: 6, characters: 39 },
   },
@@ -322,7 +322,7 @@ const formattedOutcomes = {
     counts: { words: 5, characters: 29 },
   },
   '1/multiline title/0': {
-    text: '[ref]: /target "first # title last" [ref]',
+    text: '[ref]: /target "first\n# title\nlast"\n[ref]',
     headings: [],
     counts: { words: 6, characters: 41 },
   },

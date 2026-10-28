@@ -241,7 +241,7 @@ function decorateCell(
           referenceLink(state.doc, node.node)
         if (reference === null) return false
         const answer = reference
-          ? drawReference(state, reference.label, true)
+          ? drawReference(state, reference.label, node.from)
           : null
         if (reference && !answer) return
         out.syntax(node.from, open.to)

@@ -62,8 +62,11 @@ class Answers {
   readonly entries = new Map<string, Entry>()
   /** Drawn since the view last asked. */
   readonly drawn = new Set<string>()
-  /** Drawn in table cells, which draw again only when answers change. */
-  readonly cells = new Set<string>()
+  /**
+   * Drawn in table cells, which draw again only when answers change, with
+   * where each cell is, so cells scrolled away stop asking.
+   */
+  readonly cells = new Map<string, number>()
 }
 const answered = StateEffect.define<null>()
 
@@ -128,7 +131,7 @@ export function referenceLink(doc: Text, node: SyntaxNode) {
 export function drawReference(
   state: EditorState,
   label: string,
-  cell = false,
+  cell?: number,
 ): ReferenceAnswer | undefined {
   const answers = answersOf(state)
   if (!answers) return undefined
@@ -143,7 +146,7 @@ export function drawReference(
     answers.cells.delete(oldest)
   }
   answers.drawn.add(label)
-  if (cell) answers.cells.add(label)
+  if (cell !== undefined) answers.cells.set(label, cell)
   return entry.answer
 }
 
@@ -195,8 +198,11 @@ const requests = ViewPlugin.fromClass(
               })
           })
         }
-      } else if (update.docChanged) this.generation++
-      else if (update.viewportChanged) this.scrolled = true
+      } else if (update.docChanged) {
+        this.generation++
+        for (const [label, at] of answers.cells)
+          answers.cells.set(label, update.changes.mapPos(at))
+      } else if (update.viewportChanged) this.scrolled = true
       this.later()
     }
     /** Look at drawn labels once this update and the cells it draws are done. */
@@ -222,6 +228,9 @@ const requests = ViewPlugin.fromClass(
       // Lookups for labels scrolled away make room for those in view.
       if (this.scrolled) {
         this.scrolled = false
+        const { from, to } = this.view.viewport
+        for (const [label, at] of cells)
+          if (at < from || at > to) cells.delete(label)
         this.abort((label) => !drawn.has(label) && !cells.has(label))
       }
       this.flush()

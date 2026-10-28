@@ -37,6 +37,7 @@ test('reference labels normalize as link following and definitions do', () => {
 /** A view of the reference state and requests, without a DOM. */
 function referenceView(resolve) {
   const view = {
+    viewport: { from: 0, to: 4 },
     state: EditorState.create({
       doc: 'text',
       extensions: [
@@ -103,32 +104,38 @@ test('reference answers stay bounded by recently drawn labels and restart with a
   plugin.destroy()
 })
 
-test('lookups for labels scrolled out of view are dropped for those in view', async () => {
-  const jobs = [],
-    aborted = []
-  const { view, plugin } = referenceView(
-    (label, signal) =>
-      new Promise((resolve) => {
-        jobs.push({ label, resolve })
-        signal.addEventListener('abort', () => aborted.push(label))
-      }),
-  )
-  for (let i = 0; i < 32; i++) drawReference(view.state, `old-${i}`)
-  plugin.later()
-  await settle()
-  assert.equal(jobs.length, 32)
-  for (let i = 0; i < 32; i++) drawReference(view.state, `visible-${i}`)
-  plugin.update({
-    state: view.state,
-    startState: view.state,
-    docChanged: false,
-    viewportChanged: true,
+for (const cell of [undefined, 100])
+  test(`lookups for ${cell === undefined ? 'paragraph' : 'table cell'} labels scrolled out of view are dropped for those in view`, async () => {
+    const jobs = [],
+      aborted = []
+    const { view, plugin } = referenceView(
+      (label, signal) =>
+        new Promise((resolve) => {
+          jobs.push({ label, resolve })
+          signal.addEventListener('abort', () => aborted.push(label))
+        }),
+    )
+    // A table cell still in view keeps its lookup.
+    drawReference(view.state, 'kept', 2)
+    for (let i = 0; i < 31; i++) drawReference(view.state, `old-${i}`, cell)
+    plugin.later()
+    await settle()
+    assert.equal(jobs.length, 32)
+    for (let i = 0; i < 32; i++) drawReference(view.state, `visible-${i}`)
+    plugin.update({
+      state: view.state,
+      startState: view.state,
+      docChanged: false,
+      viewportChanged: true,
+    })
+    await settle()
+    assert.deepEqual(
+      aborted.sort(),
+      Array.from({ length: 31 }, (_, i) => `old-${i}`).sort(),
+    )
+    assert.equal(
+      jobs.filter(({ label }) => label.startsWith('visible')).length,
+      31,
+    )
+    plugin.destroy()
   })
-  await settle()
-  assert.equal(aborted.length, 32)
-  assert.equal(
-    jobs.filter(({ label }) => label.startsWith('visible')).length,
-    32,
-  )
-  plugin.destroy()
-})

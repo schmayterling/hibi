@@ -1146,6 +1146,8 @@ test('reference labels follow definition changes after an edit and ask only abou
     )
     preview.references.asked = []
     const doc = unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length))
+    // Earlier cases leave the pane scrolled; this note opens at its start.
+    document.querySelector('.rich-pane').scrollTop = 0
     await preview.mount(doc, { width: 800, height: 600 }, { references: true })
     while (!document.querySelector('.hibi-lp-link')) await preview.settle()
     const opened = {
@@ -1192,6 +1194,8 @@ test('reference labels follow definition changes after an edit and ask only abou
       { length: count },
       (_, i) => `Paragraph [link ${i}][label\n${i}] words.`,
     ).join('\n\n')
+    // The case before leaves the pane scrolled to the middle of its note.
+    document.querySelector('.rich-pane').scrollTop = 0
     await preview.mount(doc, { width: 800, height: 600 }, { references: true })
     while (!document.querySelector('.hibi-lp-link')) await preview.settle()
     await preview.settle()

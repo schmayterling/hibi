@@ -98,13 +98,7 @@ test('inert syntax ownership is validated and protects never-loaded addons', () 
 
 testFormattedEngines(
   'custom source stays locked while its addon enables and survives rich editing, saving, and reload',
-  (engine) => ({
-    timeout: 30000,
-    todo:
-      engine === 'codemirror'
-        ? 'formatted gap projection-002: formatted body edits must preserve custom source prefixes and line endings'
-        : undefined,
-  }),
+  { timeout: 30000 },
   async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-preservation-'))
     const folder = join(profile, 'installed-addons', 'citations')
@@ -138,7 +132,7 @@ testFormattedEngines(
     await writeFile(
       join(folder, 'index.js'),
       `window.citationsLoaded = true; export default () => ({ start(context) { context.editor.registerMarkdown({ id: 'header', preservation: { level: 'verbatim', version: '1' }, parse(source) {
-    if (!source.startsWith('[@sources:')) return null;
+    if (!/^\\uFEFF?\\[@sources:/.test(source)) return null;
     const end = source.indexOf(String.fromCharCode(13, 10, 13, 10)) + 4;
     if (end < 4) return null;
     return { content: source.slice(end), sourceOffset: end, serialize() { throw new Error('The host must preserve the prefix'); } };
@@ -152,7 +146,8 @@ testFormattedEngines(
         source: 'local',
       }),
     )
-    const prefix = '[@sources: é 😀 exact spacing  ]\r\n\r\n'
+    const prefix =
+      '\uFEFF---\r\ntitle: exact\r\n---\r\n[@sources: é 😀 exact spacing  ]\r\n\r\n'
     const file = join(profile, 'citations.md')
     await writeFile(file, `${prefix}Original body`)
     const app = await electron.launch({
@@ -191,7 +186,11 @@ testFormattedEngines(
       })
       ipcMain.removeHandler('addons:enable')
       ipcMain.handle('addons:enable', async (...args) => {
-        if (args[1] === 'citations' && args[2] === true) {
+        if (
+          args[1] === 'citations' &&
+          args[2] === true &&
+          !globalThis.releaseCitationsEnable
+        ) {
           await new Promise((resolve) => {
             globalThis.releaseCitationsEnable = resolve
             started()
@@ -280,10 +279,46 @@ testFormattedEngines(
         `${prefix}Unsaved body`,
       )
     }
-    await replaceRichText(
+    assert.equal(
+      (await projectionState()).rendered.includes('[@sources:'),
+      false,
+    )
+    const bodyEditor = page.getByRole('textbox', {
+      name: 'Document editor',
+      exact: true,
+    })
+    await bodyEditor.focus()
+    await bodyEditor.press('ControlOrMeta+a')
+    assert.equal(
+      await page.evaluate(() => getSelection().toString()),
+      'Unsaved body',
+    )
+    if (t.formattedEngine === 'codemirror') {
+      const from = prefix.replaceAll('\r\n', '\n').length
+      assert.deepEqual(
+        await bodyEditor.evaluate((element) => {
+          const { from, to } = element.cmTile.root.view.state.selection.main
+          return { from, to }
+        }),
+        { from, to: from + 'Unsaved body'.length },
+      )
+    }
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).dirty,
+      true,
+    )
+    await replaceRichText(page, bodyEditor, 'Changed body')
+    await bodyEditor.press('ControlOrMeta+z')
+    await waitForAsync(
       page,
-      page.getByRole('textbox', { name: 'Document editor', exact: true }),
-      'Changed body',
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      `${prefix}Unsaved body`,
+    )
+    await bodyEditor.press('ControlOrMeta+Shift+z')
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      `${prefix}Changed body`,
     )
     t.diagnostic(
       JSON.stringify({
@@ -296,7 +331,28 @@ testFormattedEngines(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
       `${prefix}Changed body`,
     )
+    await page.evaluate(() => window.hibi.saveDocument(false))
+    assert.equal(await readFile(file, 'utf8'), `${prefix}Changed body`)
+    await page.reload()
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Document editor"]')
+          ?.isContentEditable,
+    )
+    assert.equal(
+      (await projectionState()).rendered.includes('[@sources:'),
+      false,
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      `${prefix}Changed body`,
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).dirty,
+      false,
+    )
     await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
     await page.locator('#addon-citations').click()
     await clickMenu(app, 'Settings')
     await page.waitForFunction(
@@ -320,7 +376,53 @@ testFormattedEngines(
     )
     assert.equal(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      'Editable without the addon',
+      '\uFEFF---\r\ntitle: exact\r\n---\r\nEditable without the addon',
+    )
+
+    await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+    await page.locator('#addon-citations').click()
+    await clickMenu(app, 'Settings')
+    await page.waitForFunction(() => window.citationsLoaded === true)
+    const plain = join(profile, 'created.md')
+    await writeFile(plain, 'Plain body\r\n')
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, plain)
+    await clickMenu(app, 'Open…')
+    await page.waitForFunction(
+      async () => (await window.hibi.getDocument()).name === 'created.md',
+    )
+    await waitForDocumentEditor(app, page, { name: 'Document editor' })
+    if (t.formattedEngine === 'codemirror')
+      await bodyEditor.evaluate((element) =>
+        element.cmTile.root.view.dispatch({ selection: { anchor: 0 } }),
+      )
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await replaceSourceText(
+      page,
+      page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
+      `${prefix}New body`,
+    )
+    await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+    await waitForDocumentEditor(app, page, { name: 'Document editor' })
+    await bodyEditor.focus()
+    if (t.formattedEngine === 'codemirror')
+      assert.ok(
+        await bodyEditor.evaluate(
+          (element, from) =>
+            element.cmTile.root.view.state.selection.main.from >= from,
+          prefix.replaceAll('\r\n', '\n').length,
+        ),
+      )
+    await replaceRichText(page, bodyEditor, 'Protected body')
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      `${prefix}Protected body`,
     )
   },
 )

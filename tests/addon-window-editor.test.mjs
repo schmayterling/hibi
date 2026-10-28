@@ -140,6 +140,37 @@ async function hostEditor(t, engine) {
     1,
   )
   if (engine === 'codemirror') await formattedWindowProof(page, preview)
+  else {
+    const chunks = JSON.parse(
+      await readFile('out/renderer/startup-bundle.json', 'utf8'),
+    )
+    const definition = chunks.find((chunk) =>
+      chunk.modules.includes('src/renderer/src/addon-definition.ts'),
+    )
+    assert.ok(definition)
+    // The real window bootstrap supplies the SDK to this omitted-capability factory.
+    const name = await preview.evaluate(async (file) => {
+      const { normalizeDefinition } = await import(`app://hibi/${file}`)
+      let name
+      await normalizeDefinition(
+        (sdk) => {
+          name = sdk.tiptap.Extension.create({ name: 'legacyWindowProof' }).name
+          return { start() {} }
+        },
+        {
+          id: 'legacy-window-proof',
+          name: 'Legacy window proof',
+          description: 'Legacy SDK fixture',
+          apiVersion: 2,
+          version: '1.0.0',
+          kind: 'extension',
+          authors: [{ displayName: 'Test' }],
+        },
+      )
+      return name
+    }, definition.file)
+    assert.equal(name, 'legacyWindowProof')
+  }
 
   await editor.click()
   await preview.keyboard.type('# Title')

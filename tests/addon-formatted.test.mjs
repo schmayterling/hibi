@@ -122,7 +122,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     'legacy-flavor-proof',
     2,
     undefined,
-    "export default sdk => ({ start(context) { context.editor.registerFlavor({ id: 'legacy', name: 'Legacy flavor', kind: 'syntax', description: 'Legacy', detect: () => false, richExtensions: [sdk.tiptap.Extension.create({ name: 'legacyProof' })] }) } })",
+    "export default sdk => ({ start(context) { context.editor.registerSource({ id: 'failed', create: () => sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-failed-sdk': 'yes' }) }); const extension = sdk.tiptap.Extension.create({ name: 'legacyProof' }); window.legacyFullSdkAvailable = extension.name; context.editor.registerFlavor({ id: 'legacy', name: 'Legacy flavor', kind: 'syntax', description: 'Legacy', detect: () => false, richExtensions: [extension] }) }, stop() { window.legacySdkStops = (window.legacySdkStops || 0) + 1 } })",
   )
   await install(
     profile,
@@ -130,6 +130,21 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     2,
     ['rich'],
     'export default sdk => ({ start() { window.richSdkAvailable = !!sdk.tiptap.Extension } })',
+  )
+  await install(
+    profile,
+    'legacy-source-proof',
+    2,
+    undefined,
+    `export default sdk => ({
+      Settings: () => sdk.React.createElement(sdk.ui.Button, { onClick() { window.legacyUiClicks = (window.legacyUiClicks || 0) + 1 }, children: 'Legacy SDK button' }),
+      start(context) {
+        window.legacySourceStarts = (window.legacySourceStarts || 0) + 1
+        window.legacyMarkdown = new sdk.markdown.Marked().parse('**source**')
+        context.editor.registerSource({ id: 'source', create: () => sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-legacy-source': 'yes' }) })
+      },
+      stop() { window.legacySourceStops = (window.legacySourceStops || 0) + 1 }
+    })`,
   )
   await writeFile(
     join(profile, 'addons.json'),
@@ -141,6 +156,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       'rich-sdk-proof': true,
       'formatted-slash-proof': true,
       'legacy-flavor-proof': true,
+      'legacy-source-proof': true,
     }),
   )
   const app = await electron.launch({
@@ -154,6 +170,9 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
+  await page.waitForFunction(
+    () => window.legacyFullSdkAvailable === 'legacyProof',
+  )
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(
     () =>
@@ -184,13 +203,16 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     .waitFor()
   await page
     .getByText(
-      'This addon uses the previous formatted editor SDK. Update it to addon API 3 before using its formatted-view features.',
+      'This addon uses the previous formatted editor SDK. Update its formatted-view features for the current editor before using them here.',
       { exact: true },
     )
+    .first()
     .waitFor()
+  await page.waitForFunction(() => window.legacySdkStops === 1)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-rich-sdk-proof').click()
+  await page.locator('#addon-legacy-flavor-proof').click()
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   await page
     .locator('.rich-pane .fixture-formatted', { hasText: 'formatted proof' })
@@ -250,6 +272,25 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   }, source.length)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.locator('.source-pane [data-source-proof]').waitFor()
+  await page.locator('.source-pane [data-legacy-source="yes"]').waitFor()
+  assert.equal(await page.locator('[data-failed-sdk]').count(), 0)
+  assert.match(
+    await page.evaluate(() => window.legacyMarkdown),
+    /<strong>source<\/strong>/,
+  )
+  await page.locator('.source-pane .cm-content').type('x')
+  await waitForAsync(
+    page,
+    async (length) =>
+      (await window.hibi.getDocument()).markdown.length === length,
+    source.length + 1,
+  )
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    source,
+  )
   await page.waitForFunction(() => window.formattedStops === 1)
   assert.equal(
     await page.locator('.source-pane [data-formatted-proof]').count(),
@@ -258,9 +299,34 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('[data-formatted-compatibility="legacy-proof"]').waitFor()
+  // failed sdk activation publishes no flavor or source registrations.
+  assert.equal(
+    await page
+      .locator('[data-formatted-compatibility="legacy-flavor-proof"]')
+      .count(),
+    0,
+  )
+  await page.locator('#addon-legacy-flavor-proof').click()
+  await page.waitForFunction(() => window.legacySdkStops === 2)
+  assert.equal(await page.locator('[data-failed-sdk]').count(), 0)
+  await page.locator('#addon-legacy-flavor-proof').click()
   await page
-    .locator('[data-formatted-compatibility="legacy-flavor-proof"]')
-    .waitFor()
+    .getByRole('tab', { name: 'legacy-source-proof', exact: true })
+    .click()
+  await page
+    .getByRole('button', { name: 'Legacy SDK button', exact: true })
+    .click()
+  assert.equal(await page.evaluate(() => window.legacyUiClicks), 1)
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.locator('#addon-legacy-source-proof').click()
+  await page.waitForFunction(() => window.legacySourceStops === 1)
+  await waitForAsync(
+    page,
+    () => !document.querySelector('[data-legacy-source]'),
+  )
+  await page.locator('#addon-legacy-source-proof').click()
+  await page.waitForFunction(() => window.legacySourceStarts === 2)
+  await page.locator('.source-pane [data-legacy-source="yes"]').waitFor()
   assert.equal(
     await page
       .locator('[data-formatted-compatibility="formatted-proof"]')

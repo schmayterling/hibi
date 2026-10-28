@@ -795,17 +795,31 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
     }
   })
   assert.ok(math.formula.height > math.fontSize * 2, JSON.stringify(math))
-  await t.test(
-    'caret beside tall math stays text sized',
-    {
-      todo: 'formatted gap marker-003: the caret beside tall math must remain text sized',
-    },
-    () => {
-      assert.ok(math.caret.height < math.fontSize * 1.5, JSON.stringify(math))
-    },
-  )
+  assert.ok(math.caret.height < math.fontSize * 1.5, JSON.stringify(math))
   assert.ok(math.caret.top >= math.formula.top - 1, JSON.stringify(math))
   assert.ok(math.caret.bottom <= math.formula.bottom + 1, JSON.stringify(math))
+})
+
+test('codemirror: a focused table cell reveals all its formatting markers', {
+  timeout: 60000,
+}, async (t) => {
+  const cell = 'some **bold** and *italic* with `code` and ~~strike~~'
+  const { page, rich } = await openCMMarkers(
+    t,
+    `| head | other |\n| --- | --- |\n| ${cell} | plain |`,
+  )
+  await rich.locator('.hibi-lp-table td').first().click()
+  const editor = page.locator('.hibi-lp-cell-editor .cm-content')
+  await editor.waitFor()
+  await editor.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('bold') + 1 },
+    })
+    view.focus()
+  })
+  await editor.locator('.hibi-lp-marker').first().waitFor()
+  assert.equal(await editor.locator('.hibi-lp-marker').count(), 8)
 })
 
 test('codemirror: focused markers preserve copying, source, undo, preferences and split editing', {
@@ -824,19 +838,13 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
   await paragraph.click()
   const from = source.indexOf('Some '),
     to = source.indexOf('\n\nAnother')
-  await t.test(
-    'focused paragraph reveals its formatting markers',
-    {
-      todo: 'formatted gap marker-004: focused paragraphs must reveal all their formatting markers',
-    },
-    async () => {
-      await rich.locator('.hibi-lp-strong').first().click()
-      assert.equal(await heading.locator('.hibi-lp-marker').count(), 0)
-      assert.equal(await rich.locator('.hibi-lp-marker').count(), 8)
-      await markerSelection(rich, from, to)
-      assert.equal(await paragraph.locator('.hibi-lp-marker').count(), 8)
-    },
-  )
+  await t.test('focused paragraph reveals its formatting markers', async () => {
+    await rich.locator('.hibi-lp-strong').first().click()
+    assert.equal(await heading.locator('.hibi-lp-marker').count(), 0)
+    assert.equal(await rich.locator('.hibi-lp-marker').count(), 8)
+    await markerSelection(rich, from, to)
+    assert.equal(await paragraph.locator('.hibi-lp-marker').count(), 8)
+  })
   await markerSelection(rich, from, to)
   const copied = await rich.evaluate((element) => {
     const clipboardData = new DataTransfer()
@@ -880,19 +888,13 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
     source,
   )
   await rich.press('ControlOrMeta+a')
-  await t.test(
-    'select all hides formatting markers',
-    {
-      todo: 'formatted gap marker-006: select all must hide formatting markers',
-    },
-    async () => {
-      assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
-      assert.equal(
-        (await page.evaluate(() => window.hibi.getDocument())).markdown,
-        source,
-      )
-    },
-  )
+  await t.test('select all hides formatting markers', async () => {
+    assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      source,
+    )
+  })
   await rich
     .locator('.cm-line')
     .filter({ hasText: /^Another/ })

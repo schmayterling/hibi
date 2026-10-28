@@ -3,11 +3,12 @@ import {
   type ChangeDesc,
   type EditorState,
   type Extension,
+  MapMode,
   StateEffect,
   StateField,
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
-import { type Tree, TreeFragment } from '@lezer/common'
+import { IterMode, NodeProp, type Tree, TreeFragment } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
@@ -80,6 +81,8 @@ const parseAhead = StateEffect.define<{
   window: Demand
   deadline: IdleDeadline
 }>()
+/** Fenced code to parse again because its language changed. */
+const refreshCode = StateEffect.define<readonly Demand[]>()
 const adoptBoundaries = StateEffect.define<{
   doc: EditorState['doc']
   key: string
@@ -304,7 +307,8 @@ function syntaxField(options: FormattedSyntaxOptions) {
         resumed = false,
         moved = false,
         oneStep = false,
-        near: { window: Demand; deadline: IdleDeadline } | null = null
+        near: { window: Demand; deadline: IdleDeadline } | null = null,
+        code: readonly Demand[] | null = null
       for (const effect of transaction.effects) {
         if (effect.is(setDemand)) {
           demand = effect.value
@@ -313,6 +317,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
           resumed = true
           oneStep = effect.value
         } else if (effect.is(parseAhead)) near = effect.value
+        else if (effect.is(refreshCode)) code = effect.value
         else if (effect.is(adoptBoundaries)) {
           const adopted = effect.value
           const config = boundaryConfig(
@@ -370,7 +375,11 @@ function syntaxField(options: FormattedSyntaxOptions) {
             : demand,
           false,
         )
-      if (transaction.docChanged) {
+      // Code whose language changed parses again, like edited text.
+      if (code && !transaction.docChanged)
+        for (const { from, to } of code)
+          ranges.push({ fromA: from, toA: to, fromB: from, toB: to })
+      if (transaction.docChanged || code) {
         demand = mapDemand(demand, transaction.changes)
         // The unfinished parse belongs to the old text; its verified chunks are in the tree.
         const fragments = TreeFragment.applyChanges(
@@ -415,6 +424,79 @@ function syntaxField(options: FormattedSyntaxOptions) {
   return { field, chunkedFor, prefixOf }
 }
 
+/**
+ * The first word of a fence's info string, as `codeLanguageKey` reads it,
+ * read in short slices: the info line of a fence above the screen can be
+ * most of the note.
+ */
+function infoWord(
+  state: EditorState,
+  from: number,
+  to: number,
+  probe?: ChunkedMarkdownProbe,
+) {
+  let word = ''
+  for (let at = from; at < to; at += 64) {
+    const text = state.sliceDoc(at, Math.min(to, at + 64))
+    if (probe) probe.codeInfoUnits = (probe.codeInfoUnits ?? 0) + text.length
+    let end = 0
+    if (!word) while (end < text.length && /\s/.test(text[end]!)) end++
+    const start = end
+    while (end < text.length && !/\s/.test(text[end]!)) end++
+    word += text.slice(start, end)
+    if (end < text.length) break
+  }
+  return word
+}
+
+/**
+ * Fenced code with text in `ranges`, by start, and the part of each in
+ * `ranges` whose nested parse is not its language's current parser. A fence
+ * without text has nothing to parse, so no parser is mounted on it.
+ */
+function visibleCode(
+  state: EditorState,
+  tree: Tree,
+  ranges: readonly Demand[],
+  probe?: ChunkedMarkdownProbe,
+) {
+  const starts = new Set<number>()
+  const stale: (Demand & { start: number })[] = []
+  for (const range of ranges)
+    tree.iterate({
+      from: range.from,
+      to: range.to,
+      mode: IterMode.IgnoreMounts,
+      enter(node) {
+        if (node.name !== 'FencedCode') return !node.type.is('LeafBlock')
+        if (!node.node.getChild('CodeText')) return false
+        starts.add(node.from)
+        const info = node.node.getChild('CodeInfo')
+        const parser =
+          codeLanguages.resolve(
+            info ? infoWord(state, info.from, info.to, probe) : '',
+          )?.parser ?? null
+        // Only the part on screen parses again: a giant fence keeps its known bounds.
+        if ((node.tree?.prop(NodeProp.mounted)?.parser ?? null) !== parser)
+          stale.push({
+            start: node.from,
+            from: Math.max(node.from, range.from),
+            to: Math.min(node.to, range.to),
+          })
+        return false
+      },
+    })
+  return { starts, stale }
+}
+
+/** Hidden panes keep their layout, so their visibility comes from the style. */
+function hidden(element: HTMLElement) {
+  const box = element.getBoundingClientRect()
+  return (
+    box.bottom <= box.top || getComputedStyle(element).visibility === 'hidden'
+  )
+}
+
 /** Keeps the parsed region on the viewport, one idle slice at a time. */
 function driver(
   { field, chunkedFor, prefixOf }: ReturnType<typeof syntaxField>,
@@ -440,6 +522,12 @@ function driver(
       private boundaryFrom: number | null = null
       private boundaryTree: BoundaryTree | null = null
       private destroyed = false
+      /** Starts of fences on screen refreshed for this code language version. */
+      private refreshed: number[] = []
+      private languages = codeLanguages.version()
+      private codeQueued = false
+      private reveal: MutationObserver | null = null
+      private unsubscribe = codeLanguages.subscribe(() => this.queueCode())
       constructor(view: EditorView) {
         this.view = view
         this.schedule(true)
@@ -447,6 +535,17 @@ function driver(
       }
       update(update: ViewUpdate) {
         this.followBoundaries(update.changes)
+        // A refreshed fence whose text after its start changed may refresh again.
+        if (update.docChanged)
+          this.refreshed = this.refreshed.flatMap((at) => {
+            const mapped = update.changes.mapPos(at, 1, MapMode.TrackAfter)
+            return mapped === null ? [] : [mapped]
+          })
+        if (
+          update.viewportChanged ||
+          update.state.field(field).tree !== update.startState.field(field).tree
+        )
+          this.queueCode()
         if (update.viewportChanged) this.schedule(true)
         else if (!update.state.field(field).complete) this.schedule(false)
         else this.scheduleNear()
@@ -664,8 +763,66 @@ function driver(
         const parsed = view.state.field(field)
         if (!parsed.ahead) this.nearFor = { tree: parsed.tree, from, to }
       }
+      private queueCode() {
+        if (this.codeQueued) return
+        this.codeQueued = true
+        queueMicrotask(() => {
+          this.codeQueued = false
+          this.refreshCode()
+        })
+      }
+      /**
+       * Visible code whose language was loaded, turned on or off, or removed
+       * parses again, once per code language version. A hidden view waits
+       * until a change to it or its ancestors may show it.
+       */
+      private refreshCode() {
+        const { view } = this
+        const syntax = view.state.field(field)
+        if (this.destroyed || syntax.parse || syntax.settling) return
+        const version = codeLanguages.version()
+        if (version !== this.languages) {
+          this.languages = version
+          this.refreshed = []
+        }
+        const code = visibleCode(
+          view.state,
+          syntax.tree,
+          view.visibleRanges,
+          options.probe,
+        )
+        // Only fences on screen keep their attempt; one that returns may try again.
+        this.refreshed = this.refreshed.filter((at) => code.starts.has(at))
+        const stale = code.stale.filter(
+          ({ start }) => !this.refreshed.includes(start),
+        )
+        if (stale.length && hidden(view.dom)) {
+          if (this.reveal) return
+          this.reveal = new MutationObserver(() => this.queueCode())
+          for (
+            let element = view.dom.parentElement;
+            element;
+            element = element.parentElement
+          )
+            this.reveal.observe(element, {
+              attributes: true,
+              attributeFilter: ['class', 'style', 'hidden', 'inert'],
+            })
+          return
+        }
+        this.reveal?.disconnect()
+        this.reveal = null
+        if (!stale.length) return
+        for (const { start } of stale)
+          if (!this.refreshed.includes(start)) this.refreshed.push(start)
+        view.dispatch({
+          effects: refreshCode.of(stale.map(({ from, to }) => ({ from, to }))),
+        })
+      }
       destroy() {
         this.destroyed = true
+        this.unsubscribe()
+        this.reveal?.disconnect()
         if (this.boundaryIdle) cancelIdleCallback(this.boundaryIdle)
         this.boundaryTree = null
         options.boundaries?.release()

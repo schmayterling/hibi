@@ -866,6 +866,27 @@ dialog.showMessageBox = (...args) => {
       name: 'Document editor',
       exact: true,
     })
+    // The addon reloaded in place, so the draft's native history remains.
+    await t.test('native history survives an addon code reload', async () => {
+      await editorDuringReload.focus()
+      await editorDuringReload.press('ControlOrMeta+z')
+      await waitForAsync(
+        page,
+        async () => (await window.hibi.getDocument()).markdown === '',
+      )
+      await editorDuringReload.press('ControlOrMeta+Shift+z')
+      await waitForAsync(
+        page,
+        async () =>
+          (await window.hibi.getDocument()).markdown === 'unsaved watch draft',
+      )
+    })
+    // Later steps need the draft, whatever history did.
+    if (
+      (await page.evaluate(() => window.hibi.getDocument())).markdown !==
+      'unsaved watch draft'
+    )
+      await replaceRichText(page, editorDuringReload, 'unsaved watch draft')
     await editorDuringReload.focus()
     await editorDuringReload.press('End')
     for (let index = 0; index < 5; index++)
@@ -1447,6 +1468,38 @@ dialog.showMessageBox = (...args) => {
           `draft did not clear: ${error.message}\n${JSON.stringify({ before, afterInput, afterFlush, state })}`,
         )
       }
+      // Clearing is one native history step, also on a draft recovered after a restart.
+      await t.test(
+        `clearing ${JSON.stringify(expected)} undoes and redoes as one step`,
+        async () => {
+          await editor.press('ControlOrMeta+z')
+          await waitForAsync(
+            page,
+            async (expected) =>
+              (await window.hibi.getDocument()).markdown === expected,
+            expected,
+          )
+          await editor.press('ControlOrMeta+Shift+z')
+          await waitForAsync(
+            page,
+            async () => (await window.hibi.getDocument()).markdown === '',
+          )
+        },
+      )
+      // The restart that follows must not meet a draft, whatever history did.
+      if ((await page.evaluate(() => window.hibi.getDocument())).markdown) {
+        await editor.press('ControlOrMeta+A')
+        await editor.press('Backspace')
+      }
+      await page.evaluate(() => window.hibi.flushDocumentChanges())
+      await waitForAsync(page, async () => {
+        const document = await window.hibi.getDocument()
+        return (
+          document.markdown === '' &&
+          !document.dirty &&
+          document.tabs.every((tab) => !tab.dirty)
+        )
+      })
     }
     // Main rebuild restarts Electron; close the draft without a discard prompt.
     await clearDraft('unsaved watch draft')

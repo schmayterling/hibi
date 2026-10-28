@@ -144,7 +144,7 @@ import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
 } from './source-annotations'
-import { sourceFindHighlights } from './source-find'
+import { formattedFindWindow, sourceFindHighlights } from './source-find'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -585,13 +585,14 @@ export function SourceEditor({
                     }
                   : {}),
                 effects: highlightStarts
-                  ? findHighlights.current.reconfigure(
+                  ? findHighlights.current.reconfigure([
                       sourceFindHighlights(
                         find.current.query,
                         current.state.doc,
                         highlightStarts,
                       ),
-                    )
+                      formatted ? formattedFindWindow : [],
+                    ])
                   : [],
               })
             } finally {
@@ -612,7 +613,7 @@ export function SourceEditor({
       })
       return sourceFind.current
     },
-    [session, clearReferences, referenceCurrent],
+    [session, clearReferences, referenceCurrent, formatted],
   )
   const requestReference = useCallback(() => {
     if (activeReference.current) return

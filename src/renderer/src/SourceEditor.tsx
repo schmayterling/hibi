@@ -52,6 +52,7 @@ import {
   keymap,
   lineNumbers,
   placeholder,
+  ViewPlugin,
 } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { tags } from '@lezer/highlight'
@@ -135,6 +136,7 @@ import {
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedReferences } from './formatted-references'
+import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
@@ -143,7 +145,7 @@ import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
 } from './source-annotations'
-import { sourceFindHighlights } from './source-find'
+import { formattedFindWindow, sourceFindHighlights } from './source-find'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -176,6 +178,203 @@ const bridges = new WeakMap<
 /** The whole source after editor changes, exactly as the mounted view commits them. */
 export const sourceAfter = (view: EditorView, changes: readonly RawEdit[]) =>
   bridges.get(view)?.sourceAfter(changes) ?? null
+
+/** The line at a view's top, and where its block starts relative to the top. */
+function placeOf(view: EditorView) {
+  const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
+  const line = view.lineBlockAtHeight(height)
+  return { top: line.from, margin: line.top - height }
+}
+
+/** Properties whose transitions move or resize a pane, as when it slides in and widens. */
+const paneMotion = new Set([
+  'width',
+  'min-width',
+  'max-width',
+  'flex-basis',
+  'inset',
+  'left',
+  'right',
+  'transform',
+  'translate',
+])
+
+/** Running pane motion around an element, and how long the longest still lasts. */
+function paneMotionAround(element: Element) {
+  const transitions: Animation[] = []
+  let left = 0
+  for (let node: Element | null = element; node; node = node.parentElement)
+    for (const animation of node.getAnimations()) {
+      if (
+        !(animation instanceof CSSTransition) ||
+        animation.playState !== 'running' ||
+        !paneMotion.has(animation.transitionProperty)
+      )
+        continue
+      const end = animation.effect?.getComputedTiming().endTime,
+        now = animation.currentTime
+      if (typeof end !== 'number' || typeof now !== 'number') continue
+      // In real time; a stopped one never ends.
+      const remaining = (end - now) / animation.playbackRate
+      if (!Number.isFinite(remaining) || remaining <= 0) continue
+      transitions.push(animation)
+      left = Math.max(left, remaining)
+    }
+  return { transitions, left }
+}
+
+/** Input in the scroller, its gutters included, is the user's own scrolling. */
+const scrollInput = ['keydown', 'pointerdown', 'touchstart', 'wheel'] as const
+
+/**
+ * A view built off screen scrolls to its kept place with estimated line
+ * heights, and CodeMirror then anchors whichever line those put at the top.
+ * Once it is on screen and its pane has stopped moving and resizing, the kept
+ * line goes back to its kept offset, in a measure that changes no heights:
+ * when heights change, CodeMirror moves the view to hold the line it anchored
+ * before them. Input or any other scroll ends this.
+ */
+function keptPlaceScroll(top: number, margin: number) {
+  let state: 'waiting' | 'aligning' | 'holding' | 'done' = 'waiting',
+    moved = false,
+    // The scroll position the view was aligned at, while it holds the place.
+    held = 0,
+    // The view's own scroll there, first from its construction.
+    scrolling = true,
+    scrolled = false,
+    settling: ReturnType<typeof setTimeout> | null = null,
+    // The first wait sets when waiting ends, whatever moves after it.
+    deadline: number | null = null
+  const stop = () => {
+    state = 'done'
+    if (settling) clearTimeout(settling)
+    settling = null
+  }
+  const align = {
+    // Only a line CodeMirror has laid out has a measured position.
+    read: (view: EditorView) =>
+      top < view.viewport.from || top > view.viewport.to
+        ? null
+        : view.documentTop +
+          view.lineBlockAt(top).top -
+          view.scrollDOM.getBoundingClientRect().top,
+    write: (offset: number | null, view: EditorView) => {
+      if (state !== 'aligning') return
+      if (offset === null) {
+        // Scroll there once, which lays it out; the measure after aligns it.
+        if (scrolled) return stop()
+        scrolled = scrolling = true
+        state = 'waiting'
+        queueMicrotask(() => {
+          if (state !== 'done')
+            view.dispatch({
+              effects: EditorView.scrollIntoView(top, {
+                y: 'start',
+                yMargin: margin,
+              }),
+            })
+        })
+        return
+      }
+      if (moved) {
+        moved = false
+        queueMicrotask(() => view.requestMeasure(align))
+        return
+      }
+      state = 'holding'
+      if (Math.abs(offset - margin) >= 0.5)
+        view.scrollDOM.scrollTop += offset - margin
+      held = view.scrollDOM.scrollTop
+    },
+  }
+  const begin = (view: EditorView) => {
+    if (state !== 'waiting' || scrolling || settling) return
+    // Its lines wrap again when the pane reaches its last width. The wait
+    // ends with that motion, or at the latest when it was due to end, and
+    // holds the view only weakly.
+    const { transitions, left } = paneMotionAround(view.dom)
+    const now = performance.now()
+    if (left > 0) deadline ??= now + left
+    const wait = deadline === null ? 0 : Math.min(left, deadline - now)
+    if (wait > 0) {
+      const owner = new WeakRef(view)
+      const wake = () => {
+        if (!settling) return
+        clearTimeout(settling)
+        settling = null
+        const view = owner.deref()
+        if (view) begin(view)
+      }
+      settling = setTimeout(wake, wait)
+      for (const transition of transitions) transition.finished.then(wake, wake)
+      return
+    }
+    state = 'aligning'
+    moved = false
+    view.requestMeasure(align)
+  }
+  const extension: Extension = [
+    EditorView.scrollHandler.of((view, range, options) => {
+      if (range.head !== top || options.yMargin !== margin) stop()
+      else {
+        scrolling = false
+        // On screen, this scroll lays the line out; the next measure aligns it.
+        if (view.inView) queueMicrotask(() => begin(view))
+      }
+      return false
+    }),
+    // A held view scrolled anywhere else, as by its scrollbar or a script,
+    // is the user's again; this runs before the place is recorded.
+    EditorView.domEventHandlers({
+      scroll: (_event, view) => {
+        if (
+          state === 'holding' &&
+          Math.abs(view.scrollDOM.scrollTop - held) > 1
+        )
+          stop()
+      },
+    }),
+    ViewPlugin.define((view) => {
+      const options = { capture: true, passive: true }
+      for (const type of scrollInput)
+        view.scrollDOM.addEventListener(type, stop, options)
+      return {
+        destroy() {
+          stop()
+          for (const type of scrollInput)
+            view.scrollDOM.removeEventListener(type, stop, options)
+        },
+        update(update) {
+          if (update.docChanged) top = update.changes.mapPos(top, 1)
+          if (update.heightChanged || update.geometryChanged) moved = true
+          // A measure on screen; its own height changes still move the view.
+          if (
+            update.transactions.length ||
+            !update.view.inView ||
+            !(
+              update.geometryChanged ||
+              update.viewportChanged ||
+              update.heightChanged
+            )
+          )
+            return
+          const { view } = update
+          if (state === 'holding') {
+            // Anything that scrolled the view ends the hold. CodeMirror can
+            // also move the kept line without scrolling, when it estimates
+            // the lines above it again, and the line goes back.
+            if (Math.abs(view.scrollDOM.scrollTop - held) > 1) return stop()
+            state = 'aligning'
+            moved = false
+            queueMicrotask(() => view.requestMeasure(align))
+          } else queueMicrotask(() => begin(view))
+        },
+      }
+    }),
+  ]
+  /** Whether the view is on its way to, or holding, the kept place. */
+  return { extension, pending: () => state !== 'done' }
+}
 
 const highlighting = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--syntax-heading)', fontWeight: '600' },
@@ -390,6 +589,10 @@ export function SourceEditor({
   const restoreFocus = useRef<(() => void) | null>(null)
   const keepingPlace = useRef(keepPlace)
   keepingPlace.current = keepPlace
+  // A hidden view's layout goes stale, and a pane that hides can already be
+  // relaid out when its effects run, so a view keeps the place it last showed.
+  const shown = useRef(false)
+  const shownPlace = useRef<ReturnType<typeof placeOf> | null>(null)
   // Effects follow the actual view, which mounts after source preparation.
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
@@ -584,13 +787,14 @@ export function SourceEditor({
                     }
                   : {}),
                 effects: highlightStarts
-                  ? findHighlights.current.reconfigure(
+                  ? findHighlights.current.reconfigure([
                       sourceFindHighlights(
                         find.current.query,
                         current.state.doc,
                         highlightStarts,
                       ),
-                    )
+                      formatted ? formattedFindWindow : [],
+                    ])
                   : [],
               })
             } finally {
@@ -611,7 +815,7 @@ export function SourceEditor({
       })
       return sourceFind.current
     },
-    [session, clearReferences, referenceCurrent],
+    [session, clearReferences, referenceCurrent, formatted],
   )
   const requestReference = useCallback(() => {
     if (activeReference.current) return
@@ -810,6 +1014,10 @@ export function SourceEditor({
             'aria-label': 'Document editor',
             'aria-description': 'Press Escape, then Tab, to leave the editor.',
           }),
+          // CodeMirror only marks read-only views; like the rich editor, also say when editing resumes.
+          EditorView.contentAttributes.of((view) => ({
+            'aria-readonly': String(view.state.readOnly),
+          })),
         ]
       parsedFlavors = flavorConfigs()
       const support =
@@ -841,6 +1049,13 @@ export function SourceEditor({
     // A note that shrank since its view left still gets the place it kept.
     const place = bridge.place()
     const selection = place?.selection ?? bridge.selection()
+    const restore = place && keptPlaceScroll(place.top, place.margin)
+    // Until it gets there, a restored view's place is the one it kept.
+    shownPlace.current = place && { top: place.top, margin: place.margin }
+    const record = (editor: EditorView) => {
+      if (shown.current && editor.inView && !restore?.pending())
+        shownPlace.current = placeOf(editor)
+    }
     type PendingCompletion = {
       request: CompletionRequest
       items: readonly CompletionItem[]
@@ -1478,6 +1693,10 @@ export function SourceEditor({
         ...(selection ? { selection } : {}),
         extensions: [
           firstStateRead,
+          restore ? restore.extension : [],
+          EditorView.domEventHandlers({
+            scroll: (_event, editor) => record(editor),
+          }),
           // The first transaction typing makes, as CodeMirror made it, before
           // anything else can fail on it.
           Prec.highest(
@@ -1740,6 +1959,16 @@ export function SourceEditor({
               : EditorView.contentAttributes.of({ spellcheck: 'false' }),
           ),
           EditorView.updateListener.of((update) => {
+            if (update.docChanged && shownPlace.current)
+              shownPlace.current.top = update.changes.mapPos(
+                shownPlace.current.top,
+                1,
+              )
+            if (
+              !update.transactions.length &&
+              (update.geometryChanged || update.viewportChanged)
+            )
+              record(update.view)
             const newline = update.docChanged && newlineInput
             if (update.docChanged) newlineInput = false
             if (update.docChanged && completionBroker.hasTypingListeners()) {
@@ -2102,6 +2331,24 @@ export function SourceEditor({
       } catch (error) {
         return { status: 'invalid', message: String(error) }
       }
+      if (formatted) {
+        const proof = formattedLiteralEdits(
+          transaction,
+          syntax.parser(editor.state),
+          tree(editor.state),
+        )
+        if (proof === null)
+          return {
+            status: 'busy',
+            message:
+              'The document index is still building. Try the edits again in a moment.',
+          }
+        if (!proof)
+          return {
+            status: 'unsupported-view',
+            message: 'Open source view to apply these edits.',
+          }
+      }
       exactChanges.current = request.changes
       try {
         editor.dispatch(transaction)
@@ -2239,6 +2486,7 @@ export function SourceEditor({
       viewId as ViewId,
       kind,
       {
+        surface: () => editor.contentDOM,
         read: () => {
           const source = bridge.snapshot()
           if (
@@ -2405,7 +2653,8 @@ export function SourceEditor({
 
   // Before paint and before focus moves here, a shown or targeted view catches up.
   useLayoutEffect(() => {
-    bridge.setVisible(sourceVisible || editTarget)
+    shown.current = sourceVisible || editTarget
+    bridge.setVisible(shown.current)
   }, [bridge, sourceVisible, editTarget])
 
   // A view keeps its place while its pane still lays out: the cleanup that
@@ -2414,10 +2663,8 @@ export function SourceEditor({
     () => () => {
       const editor = view.current
       if (!keepingPlace.current || !editor) return
-      const height =
-        editor.scrollDOM.getBoundingClientRect().top - editor.documentTop
-      const line = editor.lineBlockAtHeight(height)
-      bridge.keepPlace(editor, line.from, line.top - height)
+      const { top, margin } = shownPlace.current ?? placeOf(editor)
+      bridge.keepPlace(editor, top, margin)
     },
     [bridge],
   )

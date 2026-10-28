@@ -4,6 +4,12 @@ import type {
   MarkdownParser,
 } from '@lezer/markdown'
 
+const inlineSyntax = /[\\\x60&*_![\]<>\r\n~^$:=]/
+
+/** No supported inline parser can hide text in this source. Include a three-unit overlap for www. */
+export const plainInlineText = (text: string) =>
+  !inlineSyntax.test(text) && !/@|www\./i.test(text)
+
 type Stops = {
   syntax: number
   url: number
@@ -23,7 +29,7 @@ const emailCharacter = (code: number) =>
 export function createPlainTextRunExtension() {
   const approved = new WeakSet<MarkdownParser>(),
     contexts = new WeakMap<InlineContext, Stops>(),
-    syntax = /[\\`&*_![\]<>\r\n~^$:=]/g,
+    syntax = new RegExp(inlineSyntax.source, 'g'),
     urls = /www\.|https?:\/\/|mailto:|xmpp:/g
   const extension: MarkdownConfig = {
     parseInline: [

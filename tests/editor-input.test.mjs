@@ -2807,6 +2807,34 @@ for (const hiddenSource of [false, true]) {
     const expectedChecks = await page.evaluate((hiddenSource) => {
       window.countedFormatChecks = []
       window.hiddenInputUpdates = 0
+      // Each toolbar refresh inspects every action in one task. A refresh
+      // after an update that changes no text, such as completion results that
+      // arrive once typing pauses, is that update's, not the typing's.
+      window.formatRounds = []
+      let round = null,
+        other = false
+      const checks = window.countedFormatChecks
+      checks.push = (...ids) => {
+        if (!round) {
+          round = { ids: [], other }
+          other = false
+          window.formatRounds.push(round)
+          queueMicrotask(() => {
+            round = null
+          })
+        }
+        round.ids.push(...ids)
+        return Array.prototype.push.apply(checks, ids)
+      }
+      for (const content of document.querySelectorAll('.cm-content')) {
+        const view = content.cmTile.root.view
+        const update = view.update.bind(view)
+        view.update = (transactions) => {
+          if (transactions.every((transaction) => !transaction.docChanged))
+            other = true
+          return update(transactions)
+        }
+      }
       if (hiddenSource) {
         const view = document.querySelector('.source-pane .cm-content').cmTile
           .root.view
@@ -2884,14 +2912,19 @@ for (const hiddenSource of [false, true]) {
       async () => {
         const result = await page.evaluate(() => ({
           inFrame: window.firstInputFrameChecks,
-          checks: window.countedFormatChecks.length,
-          ids: window.countedFormatChecks,
+          rounds: window.formatRounds,
           hidden: window.hiddenInputUpdates,
         }))
         // API 2's counted Markdown format measures CM inspection work; PM can()/mapping counters remain above.
         assert.equal(result.inFrame, 0)
-        assert.equal(result.checks, expectedChecks)
-        assert.equal(new Set(result.ids).size, expectedChecks)
+        const [typing, ...later] = result.rounds
+        assert.equal(typing.ids.length, expectedChecks)
+        assert.equal(new Set(typing.ids).size, expectedChecks)
+        // The typing scheduled no other refresh.
+        assert.ok(
+          later.every((round) => round.other),
+          JSON.stringify(later),
+        )
         assert.equal(result.hidden, 0)
       },
     )

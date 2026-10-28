@@ -12,17 +12,16 @@ import { IterMode, NodeProp, type Tree, TreeFragment } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
+  type MarkdownParser,
   parseCode,
-  parser,
 } from '@lezer/markdown'
 import type { BoundaryReceive } from '../../shared/document-worker-protocol.ts'
+import { formattedMarkdownParser } from '../../shared/formatted-markdown.ts'
 import {
   type BoundaryConfig,
   boundaryKey,
   boundarySyntaxIds,
 } from '../../shared/markdown-boundary-syntax.ts'
-import { protectMarkdownParser } from '../../shared/markdown-flavor-guard.ts'
-import { ContainerHTML } from '../../shared/markdown-html-syntax.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
 import { mappedPrefix } from '../../shared/source-projection.ts'
 import {
@@ -43,6 +42,7 @@ import {
   formattedMarkdown,
   formattedOpaque,
   formattedPrefix,
+  formattedTextFeatures,
   inlineStops,
 } from './formatted-contributions.ts'
 
@@ -117,12 +117,7 @@ function markdownParser(
   contributed: readonly MarkdownConfig[],
   opaque: readonly string[],
 ) {
-  const base = protectMarkdownParser(parser, [
-    { defineNodes: [{ name: 'Frontmatter', block: true }] },
-    ContainerHTML,
-    ...contributed,
-    options.extensions ?? [],
-  ])
+  const base = formattedMarkdownParser(contributed, options.extensions)
   const runs = createPlainTextRunExtension()
   const full = base.configure([
     runs.extension,
@@ -130,6 +125,10 @@ function markdownParser(
       codeParser: (info) => codeLanguages.resolve(info)?.parser ?? null,
     }),
   ])
+  const chunked = new ChunkedMarkdownParser(full, base, {
+    opaque: new Set(opaque),
+    ...(options.probe ? { probe: options.probe } : {}),
+  })
   // The plain-text shortcut stops only at the characters core inline syntax
   // starts with; contributed inline syntax that starts elsewhere turns it off.
   if (
@@ -137,11 +136,8 @@ function markdownParser(
       (config) => !config.parseInline?.length || inlineStops(config),
     )
   )
-    runs.allow(full)
-  return new ChunkedMarkdownParser(full, base, {
-    opaque: new Set(opaque),
-    ...(options.probe ? { probe: options.probe } : {}),
-  })
+    runs.allow(chunked.full)
+  return chunked
 }
 
 const mapDemand = (demand: Demand, changes: ChangeDesc) => ({
@@ -165,6 +161,11 @@ function boundaryConfig(
         flavors: state.facet(formattedFlavors),
         literal: state.facet(formattedLiteral),
         opaque: state.facet(formattedOpaque),
+        textFeatures: state.facet(formattedTextFeatures),
+        textSyntax: boundarySyntaxIds(
+          [...state.facet(formattedMarkdown), options.extensions ?? []],
+          true,
+        ),
         prefix,
         chunkSize: 4096,
         groupSize: 64,
@@ -838,6 +839,8 @@ export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
   tree: (state: EditorState) => Tree
+  /** The same configured grammar for a bounded source-block proof. */
+  parser: (state: EditorState) => MarkdownParser
   /**
    * An edit's reparse has not finished, so renderers keep what they drew,
    * mapped through the edit, instead of rendering the edited chunks bare.
@@ -862,6 +865,7 @@ export function formattedSyntax(
       driver(syntax, options),
     ],
     tree: (state) => state.field(field).tree,
+    parser: (state) => syntax.chunkedFor(state).full,
     settling: (state) => state.field(field).settling,
   }
 }

@@ -93,6 +93,9 @@ export type FormattedContribution = {
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
+/** Renderer identities paired with the shared worker text rules. */
+export const formattedTextFeatures = Facet.define<string>()
+
 /** The view's block grammar without inline scans, for validating source transforms. */
 export const formattedBlockParser = Facet.define<
   (state: EditorState) => MarkdownParser,
@@ -376,13 +379,18 @@ export function contributionExtension(
     Array.isArray(syntax) ? syntax : [syntax]
   ) as MarkdownConfig[]
   if (contribution.inlineStops) for (const config of configs) stops.add(config)
+  const views = (contribution.views ?? []).filter(
+    (view) => !view.feature || markdownSyntax.enabled(view.feature),
+  )
+  const affectsText =
+    configs.length ||
+    views.length ||
+    contribution.opaque?.length ||
+    contribution.extension
   return [
+    affectsText ? formattedTextFeatures.of(contribution.id) : [],
     configs.map((config) => formattedMarkdown.of(config)),
-    (contribution.views ?? []).flatMap((view) =>
-      !view.feature || markdownSyntax.enabled(view.feature)
-        ? [formattedViews.of(view)]
-        : [],
-    ),
+    views.map((view) => formattedViews.of(view)),
     (contribution.opaque ?? []).map((name) => formattedOpaque.of(name)),
     contribution.keys ? Prec.high(keymap.of([...contribution.keys])) : [],
     contribution.extension ?? [],

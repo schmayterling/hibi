@@ -31,6 +31,11 @@ import {
   type Tree,
 } from '@lezer/common'
 import { highlightTree } from '@lezer/highlight'
+import {
+  formattedDefinitionRange,
+  formattedListStart,
+  formattedMarkerRanges,
+} from '../../shared/formatted-text-rules.ts'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
@@ -208,32 +213,11 @@ function loneMarker(doc: Text, item: SyntaxNode) {
  * shows beside the marker, or up to the last definition before other blocks.
  */
 function definitionLines(doc: Text, node: SyntaxNode) {
-  const first = doc.lineAt(node.from)
-  const after = (block: SyntaxNode) => {
-    let next = block.nextSibling
-    while (next && !next.type.is('Block')) next = next.nextSibling
-    return next
-  }
-  let next = after(node)
-  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) {
-    let last = node
-    while (next?.name === 'LinkReference') {
-      last = next
-      next = after(next)
-    }
-    return {
-      from: node.from,
-      to: next?.name === 'Paragraph' ? next.from : last.to,
-      item: true,
-    }
-  }
-  if (next) return { from: first.from, to: doc.lineAt(next.from).from - 1 }
-  let previous = node.prevSibling
-  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
-  return {
-    from: previous ? doc.lineAt(previous.to).to + 1 : first.from,
-    to: doc.lineAt(node.to).to,
-  }
+  return formattedDefinitionRange(
+    node,
+    (from, to) => doc.sliceString(from, to),
+    (at) => doc.lineAt(at),
+  )
 }
 
 /** The first line a block shows: a lone list marker's line collapses into the next. */
@@ -507,10 +491,17 @@ function inline(
     const answer = reference ? drawReference(state, reference.label) : null
     if (reference && !answer) return undefined
     const revealed = touched(node.from, node.to)
-    syntax(node.from, open.to, revealed)
-    // A destination or label on later lines is hidden with its line breaks by the layout field.
-    if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
-      syntax(close.from, node.to, revealed)
+    // A destination or label on later lines is hidden by the layout field.
+    for (const range of formattedMarkerRanges(
+      node,
+      (from, to) => doc.sliceString(from, to),
+      !!answer,
+    ))
+      if (
+        range.from === node.from ||
+        doc.lineAt(close.from).number === doc.lineAt(node.to).number
+      )
+        syntax(range.from, range.to, revealed)
     linkText(
       open.to,
       close.from,
@@ -708,29 +699,12 @@ function inline(
     }
     switch (name) {
       case 'HeaderMark': {
-        const parent = ref.node.parent
-        if (!parent?.name.startsWith('ATX')) return
         const current = doc.lineAt(ref.from)
         const revealed = touched(current.from, current.to)
-        // The opening mark hides with its space, a closing mark with the space before it.
-        if (ref.from === parent.from) {
-          const after = doc.sliceString(ref.to, Math.min(parent.to, ref.to + 1))
-          syntax(
-            ref.from,
-            ref.to + (after === ' ' || after === '\t' ? 1 : 0),
-            revealed,
-          )
-        } else {
-          const before = doc.sliceString(
-            Math.max(parent.from, ref.from - 1),
-            ref.from,
-          )
-          syntax(
-            ref.from - (before === ' ' || before === '\t' ? 1 : 0),
-            ref.to,
-            revealed,
-          )
-        }
+        for (const range of formattedMarkerRanges(ref.node, (from, to) =>
+          doc.sliceString(from, to),
+        ))
+          syntax(range.from, range.to, revealed)
         return
       }
       case 'Emphasis':
@@ -754,8 +728,10 @@ function inline(
         )
           return false
         const revealed = revealedAt(ref)
-        syntax(open.from, open.to, revealed)
-        syntax(close.from, close.to, revealed)
+        for (const range of formattedMarkerRanges(ref.node, (from, to) =>
+          doc.sliceString(from, to),
+        ))
+          syntax(range.from, range.to, revealed)
         mark('hibi-lp-code', open.to, close.from)
         return false
       }
@@ -765,8 +741,10 @@ function inline(
         const url = ref.node.getChild('URL')
         if (!url) return false
         const revealed = touched(ref.from, ref.to)
-        syntax(ref.from, url.from, revealed)
-        syntax(url.to, ref.to, revealed)
+        for (const range of formattedMarkerRanges(ref.node, (from, to) =>
+          doc.sliceString(from, to),
+        ))
+          syntax(range.from, range.to, revealed)
         linkText(url.from, url.to)
         return false
       }
@@ -1055,11 +1033,11 @@ function itemLine(
   if (lone) content = continuation()
   else {
     // The marker and up to four following spaces are hidden.
-    const after = doc.sliceString(marker.to, current.to)
-    const gap = /^[ \t]{0,4}/.exec(after)![0].length
-    content = Math.max(
+    content = formattedListStart(
+      (from, to) => doc.sliceString(from, to),
+      marker,
+      current.to,
       info.leaf ?? 0,
-      marker.to + (gap === after.length ? after.length : gap),
     )
   }
   if (!info.marker) return content

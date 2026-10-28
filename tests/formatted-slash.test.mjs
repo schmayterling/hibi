@@ -425,3 +425,73 @@ test('formatted slash in a table cell offers inline commands and runs them in th
   await matches(table.replace('beta', '/frontmatterbeta'))
   assert.deepEqual(errors, [])
 })
+
+test('formatted slash menu stays inside a small window near its bottom edge', {
+  timeout: 30000,
+}, async () => {
+  // The table cell test can leave its cell editor and menu open.
+  const cell = page.locator('.hibi-lp-cell-editor .cm-content')
+  if (await menu().count()) await cell.press('Escape')
+  if (await cell.count()) await cell.press('Escape')
+  await cell.waitFor({ state: 'detached' })
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(720, 520),
+  )
+  await page.waitForFunction(() => innerWidth === 720 && innerHeight === 520)
+  const source = `${'paragraph\n\n'.repeat(24)}/`
+  await set(source, source.length - 1)
+  // Bring the query's line to the bottom of the pane before the menu opens.
+  await page.evaluate(
+    (head) =>
+      new Promise((resolve) => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile
+          .root.view
+        view.dispatch({ selection: { anchor: head }, scrollIntoView: true })
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      }),
+    source.length - 1,
+  )
+  await page.evaluate((head) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ selection: { anchor: head } })
+  }, source.length)
+  await menu().waitFor()
+  const bounds = await page
+    .locator('.slash-menu:popover-open')
+    .evaluate((element) => {
+      const rect = element.getBoundingClientRect()
+      const caret = document
+        .querySelector('.rich-pane .cm-content')
+        .cmTile.root.view.coordsAtPos(
+          document.querySelector('.rich-pane .cm-content').cmTile.root.view
+            .state.selection.main.head,
+        )
+      return {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        width: innerWidth,
+        height: innerHeight,
+        caret: caret && { top: caret.top, bottom: caret.bottom },
+      }
+    })
+  // The query sits low enough that a menu below it would leave the window.
+  assert.ok(bounds.caret, JSON.stringify(bounds))
+  assert.ok(
+    bounds.caret.bottom + (bounds.bottom - bounds.top) > bounds.height,
+    JSON.stringify(bounds),
+  )
+  assert.ok(
+    bounds.left >= 0 && bounds.right <= bounds.width,
+    JSON.stringify(bounds),
+  )
+  assert.ok(
+    bounds.top >= 0 && bounds.bottom <= bounds.height,
+    JSON.stringify(bounds),
+  )
+  await editor().press('Escape')
+  await menu().waitFor({ state: 'hidden' })
+  assert.equal(await read(), source)
+})

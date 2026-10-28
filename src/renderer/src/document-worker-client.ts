@@ -3,8 +3,11 @@ import type { DocumentSession } from '../../shared/document-session.ts'
 import {
   type BoundaryReceive,
   boundaryKey,
+  type CodeExtentPage,
   type DocumentWorkerReply,
   type DocumentWorkerRequest,
+  type FindMode,
+  type FindOptions,
   type MarkdownReferenceRequest,
   type MarkdownReferenceSyntax,
   type MarkdownSemanticResult,
@@ -15,8 +18,15 @@ import type { BoundaryConfig } from '../../shared/markdown-boundary-syntax.ts'
 import type { SourceOwnerPage } from '../../shared/markdown-source-model.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
+import {
+  editorChangesFromSource,
+  mappedPrefix,
+} from '../../shared/source-projection.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
-import type { SearchLocation } from '../../shared/source-search-index.ts'
+import type {
+  SearchHighlights,
+  SearchLocation,
+} from '../../shared/source-search-index.ts'
 import {
   type SourceTransferRequest,
   SourceTransferSender,
@@ -38,8 +48,11 @@ type ClientOptions = {
     action: FindAction,
     highlightStarts: readonly number[] | undefined,
     query: string,
+    highlights?: SearchHighlights,
+    mode?: FindMode,
+    replacement?: import('../../shared/rendered-replace.ts').RenderedReplacement,
   ) => void
-  error: (message: string) => void
+  error: (message: string, reason?: 'unsupported') => void
   metadataPending?: () => void
   metadataResult?: (
     page: SourceOwnerPage,
@@ -50,6 +63,53 @@ type ClientOptions = {
   worker?: () => Transport
   maximumPendingBytes?: number
   timeoutMs?: number
+}
+
+function validCodeCoverage(value: unknown, length: number, slots: number) {
+  if (!value || typeof value !== 'object') return false
+  const page = value as Omit<CodeExtentPage, 'version'>
+  if (
+    !Number.isSafeInteger(page.from) ||
+    !Number.isSafeInteger(page.to) ||
+    page.from < 0 ||
+    page.to < page.from ||
+    page.to > length ||
+    !Array.isArray(page.records) ||
+    page.records.length + slots > 128
+  )
+    return false
+  let end = -1
+  return page.records.every((record) => {
+    if (
+      !record ||
+      typeof record !== 'object' ||
+      ![
+        record.from,
+        record.to,
+        record.contentFrom,
+        record.contentTo,
+        record.contentLines,
+        record.contentColumns,
+      ].every(Number.isSafeInteger) ||
+      record.from < 0 ||
+      record.from >= record.to ||
+      record.from < end ||
+      record.to > length ||
+      record.to <= page.from ||
+      record.from >= page.to ||
+      record.contentFrom < record.from ||
+      record.contentTo < record.contentFrom ||
+      record.contentTo > record.to ||
+      record.contentLines < 0 ||
+      record.contentColumns < 0 ||
+      (record.contentLines === 0 && record.contentColumns !== 0) ||
+      !['fenced', 'indented'].includes(record.kind) ||
+      typeof record.closed !== 'boolean'
+    )
+      return false
+    end = record.to
+    return true
+  })
 }
 
 /** One cancelable derived replica, with bounded bootstrap/operation/query ownership. */
@@ -100,6 +160,9 @@ export class DocumentWorkerClient {
     key: string
     from: number
     baseVersion?: number
+    codeOnly: boolean
+    coverage: boolean
+    complete: boolean
     receive: BoundaryReceive
     declined: (reason: 'stale' | 'mismatch') => void
   } | null = null
@@ -107,6 +170,10 @@ export class DocumentWorkerClient {
   #boundarySequence = 0
   #boundaryFrom: number | null = null
   #boundaryTo: number | null = null
+  #codeDelivered = false
+  #codeVersion = -1
+  #codeConfig: { config: BoundaryConfig; version: number } | null = null
+  readonly #codeReceivers = new Set<(page: CodeExtentPage) => void>()
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
     this.#options = options
@@ -115,10 +182,33 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
+        if (this.#codeConfig?.version === prepared.before.version) {
+          this.#codeConfig.version = prepared.after.version
+          const config = this.#codeConfig.config
+          if (config.prefix) {
+            let offset = 0
+            const changes = editorChangesFromSource(
+              prepared.before,
+              operation.changes,
+            ).map((change) => {
+              const range = {
+                fromA: change.from,
+                toA: change.to,
+                fromB: change.from + offset,
+                toB: change.from + offset + change.insert.length,
+              }
+              offset += change.insert.length - (change.to - change.from)
+              return range
+            })
+            const prefix = mappedPrefix(config.prefix, changes)
+            if (prefix !== null) this.#codeConfig.config = { ...config, prefix }
+          }
+        }
         if (this.#boundaries) {
           // The receiver still belongs to its view's old document until it requests again.
           this.#sentBoundaries = ''
           this.#boundarySequence = 0
+          this.#codeDelivered = false
           this.#boundaryFrom = null
           this.#boundaryTo = null
         }
@@ -145,6 +235,7 @@ export class DocumentWorkerClient {
             else this.#sendOperation(operation)
           }
         }
+        this.#watchCode()
         options.changed()
       }),
       session.subscribe(() => {
@@ -161,11 +252,90 @@ export class DocumentWorkerClient {
           this.#findQuietUntil = 0
           this.#metadata = null
           this.#boundaries = null
+          this.#codeConfig = null
           this.#restart()
           options.changed()
         }
       }),
     ]
+  }
+  /** Code coverage shares the boundary stream's version checks and backpressure. */
+  subscribeCodeExtents(receive: (page: CodeExtentPage) => void): () => void {
+    if (this.#disposed) return () => {}
+    this.#codeReceivers.add(receive)
+    const request = this.#boundaries
+    const replay = this.#codeDelivered || this.#codeVersion >= 0
+    this.#codeVersion = -1
+    if (
+      request?.codeOnly &&
+      request.version === this.#session.snapshot().version &&
+      replay
+    ) {
+      // A late listener needs the retained prefix too; replay metadata, never source.
+      this.#boundaries = null
+      this.#requestBoundaries(
+        request.config,
+        request.receive,
+        request.declined,
+        0,
+        undefined,
+        request.codeOnly,
+      )
+    }
+    this.#watchCode()
+    return () => {
+      this.#codeReceivers.delete(receive)
+      if (!this.#codeReceivers.size) {
+        const request = this.#boundaries
+        if (
+          request &&
+          (request.codeOnly ||
+            request.version !== this.#session.snapshot().version)
+        )
+          this.releaseBoundaries(true)
+        else if (request?.coverage && !request.complete) {
+          this.#boundaries = null
+          this.#requestBoundaries(
+            request.config,
+            request.receive,
+            request.declined,
+            request.from,
+            request.baseVersion,
+            false,
+          )
+        }
+      }
+    }
+  }
+  #watchCode() {
+    const version = this.#session.snapshot().version,
+      request = this.#boundaries
+    if (
+      request &&
+      !request.codeOnly &&
+      !request.complete &&
+      request.version === version
+    ) {
+      if (this.#codeReceivers.size && !request.coverage)
+        this.#requestBoundaries(
+          request.config,
+          request.receive,
+          request.declined,
+          request.from,
+          request.baseVersion,
+          false,
+        )
+      return
+    }
+    if (this.#codeReceivers.size && this.#codeConfig?.version === version)
+      this.#requestBoundaries(
+        this.#codeConfig.config,
+        (_page, acknowledge) => acknowledge(),
+        () => {},
+        0,
+        undefined,
+        true,
+      )
   }
   boundaries(
     config: BoundaryConfig,
@@ -174,15 +344,28 @@ export class DocumentWorkerClient {
     from = 0,
     baseVersion?: number,
   ) {
+    this.#requestBoundaries(config, receive, declined, from, baseVersion, false)
+  }
+  #requestBoundaries(
+    config: BoundaryConfig,
+    receive: BoundaryReceive,
+    declined: (reason: 'stale' | 'mismatch') => void,
+    from: number,
+    baseVersion: number | undefined,
+    codeOnly: boolean,
+  ) {
     if (this.#disposed || this.#failed) return
     const key = boundaryKey(config),
       version = this.#session.snapshot().version
+    this.#codeConfig = { config, version }
     if (
       this.#boundaries?.key === key &&
       this.#boundaries.config.prefix === config.prefix &&
       this.#boundaries.version === version &&
       this.#boundaries.from === from &&
-      this.#boundaries.baseVersion === baseVersion
+      this.#boundaries.baseVersion === baseVersion &&
+      this.#boundaries.codeOnly === codeOnly &&
+      this.#boundaries.coverage === !!this.#codeReceivers.size
     ) {
       this.#boundaries.receive = receive
       return
@@ -193,23 +376,38 @@ export class DocumentWorkerClient {
       version,
       id: ++this.#requestId,
       from,
+      codeOnly,
+      coverage: !!this.#codeReceivers.size,
+      complete: false,
       ...(baseVersion === undefined ? {} : { baseVersion }),
       receive,
       declined,
     }
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#codeDelivered = false
     this.#boundaryFrom = null
     this.#boundaryTo = null
     if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
     this.#flushBoundaries()
   }
   releaseBoundaries(retain = false) {
+    if (retain && this.#codeReceivers.size && this.#codeConfig) {
+      if (!this.#boundaries?.codeOnly) this.#boundaries = null
+      this.#watchCode()
+      return
+    }
+    if (!retain) {
+      this.#codeVersion = -1
+      this.#codeConfig = null
+    }
     this.#boundaries = null
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#codeDelivered = false
     this.#boundaryFrom = null
     this.#boundaryTo = null
+    if (!this.#loaded) return
     this.#post({
       type: 'cancel-boundaries',
       epoch: this.#epoch,
@@ -234,15 +432,28 @@ export class DocumentWorkerClient {
       id: request.id,
       version: request.version,
       config: request.config,
+      ...(request.coverage
+        ? { codeVersion: this.#codeVersion < 0 ? null : this.#codeVersion }
+        : {}),
+      ...(request.codeOnly ? { codeOnly: true } : {}),
       ...(request.from ? { from: request.from } : {}),
       ...(request.baseVersion === undefined
         ? {}
         : { baseVersion: request.baseVersion }),
     })
   }
-  find(query: string, from: number, to: number, action: FindAction = null) {
+  find(
+    query: string,
+    from: number,
+    to: number,
+    action: FindAction = null,
+    options: FindOptions = {},
+  ) {
     if (this.#disposed || this.#failed) return
     if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
+    const config =
+      options.config ??
+      (options.mode === 'rendered' ? this.#boundaries?.config : undefined)
     this.#latest = {
       type: 'find',
       epoch: this.#epoch,
@@ -252,6 +463,17 @@ export class DocumentWorkerClient {
       from,
       to,
       action,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(config ? { config } : {}),
+      ...(options.replacement === undefined
+        ? {}
+        : { replacement: options.replacement }),
+      ...(options.prefix === undefined
+        ? config
+          ? { prefix: config.prefix }
+          : {}
+        : { prefix: options.prefix }),
+      ...(options.viewport ? { viewport: { ...options.viewport } } : {}),
     }
     this.#options.pending()
     this.#flushQuery()
@@ -412,7 +634,16 @@ export class DocumentWorkerClient {
       query: request.query,
       highlights:
         this.#highlightRequest?.query !== request.query ||
-        this.#highlightRequest?.version !== request.version,
+        this.#highlightRequest?.version !== request.version ||
+        this.#highlightRequest?.mode !== request.mode ||
+        this.#highlightRequest?.prefix !== request.prefix,
+      ...(request.mode ? { mode: request.mode } : {}),
+      ...(request.config ? { config: request.config } : {}),
+      ...(request.replacement === undefined
+        ? {}
+        : { replacement: request.replacement }),
+      ...(request.prefix === undefined ? {} : { prefix: request.prefix }),
+      ...(request.viewport ? { viewport: request.viewport } : {}),
       from: request.from,
       to: request.to,
     })
@@ -440,6 +671,12 @@ export class DocumentWorkerClient {
   }
   #reply(reply: DocumentWorkerReply) {
     if (this.#disposed) return
+    if (
+      (reply.type === 'boundaries' || reply.type === 'boundary-declined') &&
+      this.#boundaries &&
+      reply.id < this.#boundaries.id
+    )
+      return
     if (reply.epoch !== this.#epoch) {
       if (reply.type === 'boundaries') this.#boundaries?.declined('stale')
       return
@@ -474,6 +711,8 @@ export class DocumentWorkerClient {
         reply.sequence !== this.#boundarySequence++ ||
         !Array.isArray(reply.records) ||
         reply.records.length > 128 ||
+        (reply.code !== undefined &&
+          !validCodeCoverage(reply.code, reply.length, reply.records.length)) ||
         reply.length !== this.#session.snapshot().normalizedLength
       ) {
         request.declined('mismatch')
@@ -482,6 +721,22 @@ export class DocumentWorkerClient {
       }
       this.#boundaryFrom = from
       this.#boundaryTo = to
+      if (reply.code) {
+        this.#codeDelivered = true
+        for (const receive of [...this.#codeReceivers]) {
+          if (
+            this.#boundaries !== request ||
+            reply.version !== this.#session.snapshot().version
+          )
+            break
+          receive({ version: reply.version, ...reply.code })
+        }
+      }
+      if (
+        this.#boundaries !== request ||
+        reply.version !== this.#session.snapshot().version
+      )
+        return
       let acknowledged = false
       request.receive(reply, () => {
         if (
@@ -492,6 +747,10 @@ export class DocumentWorkerClient {
         )
           return
         acknowledged = true
+        if (reply.done) {
+          request.complete = true
+          if (request.codeOnly) this.#codeVersion = reply.version
+        }
         this.#post({
           type: 'boundary-ack',
           epoch: this.#epoch,
@@ -500,6 +759,7 @@ export class DocumentWorkerClient {
           key: request.key,
           sequence: reply.sequence,
         })
+        if (reply.done && !request.codeOnly) this.#watchCode()
       })
       return
     }
@@ -611,13 +871,29 @@ export class DocumentWorkerClient {
         request.version === reply.version &&
         reply.version === this.#session.snapshot().version
       ) {
-        if (reply.highlightStarts) this.#highlightRequest = request
-        this.#options.result(
-          reply.location,
-          request.action,
-          reply.highlightStarts,
-          request.query,
+        if (
+          reply.highlightStarts ||
+          reply.highlights ||
+          reply.mode === 'rendered'
         )
+          this.#highlightRequest = request
+        if (reply.mode === 'rendered' || reply.highlights)
+          this.#options.result(
+            reply.location,
+            request.action,
+            reply.highlightStarts,
+            request.query,
+            reply.highlights,
+            reply.mode ?? 'source',
+            reply.replacement,
+          )
+        else
+          this.#options.result(
+            reply.location,
+            request.action,
+            reply.highlightStarts,
+            request.query,
+          )
       }
     } else if (reply.type === 'metadata-progress') {
       const request = this.#metadata
@@ -680,7 +956,10 @@ export class DocumentWorkerClient {
           this.#findDeadline = undefined
         }
       }
-      if (reply.id === this.#latest?.id) this.#options.error(reply.message)
+      if (reply.id === this.#latest?.id) {
+        if (reply.reason) this.#options.error(reply.message, reply.reason)
+        else this.#options.error(reply.message)
+      }
     }
     this.#flushQuery()
     this.#flushMetadata()
@@ -688,6 +967,7 @@ export class DocumentWorkerClient {
     this.#watch()
   }
   #stop() {
+    this.#codeVersion = -1
     this.#highlightRequest = null
     clearTimeout(this.#findTimer)
     this.#findTimer = undefined
@@ -713,6 +993,7 @@ export class DocumentWorkerClient {
     this.#sentRequest = 0
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#codeDelivered = false
     this.#boundaryFrom = null
     this.#boundaryTo = null
   }
@@ -818,5 +1099,6 @@ export class DocumentWorkerClient {
     this.#latest = null
     this.#metadata = null
     this.#boundaries = null
+    this.#codeReceivers.clear()
   }
 }

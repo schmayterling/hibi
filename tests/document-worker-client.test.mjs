@@ -5,6 +5,8 @@ import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceSearchIndex } from '../src/shared/source-search-index.ts'
+import { renderedConfig } from './rendered-config.mjs'
+import { WORKER_HANG_TIMEOUT, waitForProgress } from './worker-progress.mjs'
 
 const wait = async (predicate) => {
   const end = Date.now() + 3000
@@ -21,8 +23,10 @@ class TestWorker {
   onerror = null
   onmessageerror = null
   replies = []
+  observeReply = null
   service = new DocumentWorkerService((reply) => {
     this.replies.push(reply)
+    this.observeReply?.(reply)
     setImmediate(() => {
       if (!this.terminated) this.onmessage?.({ data: structuredClone(reply) })
     })
@@ -50,9 +54,10 @@ function fixture(t, source = 'one two one', extra = {}) {
   })
   let query = 'one',
     from = 0,
-    to = 0
+    to = 0,
+    options = {}
   const client = new DocumentWorkerClient(session, {
-    changed: () => client.find(query, from, to),
+    changed: () => client.find(query, from, to, null, options),
     pending: () => {},
     result: (location, action) => results.push({ location, action }),
     error: (error) => errors.push(error),
@@ -67,11 +72,12 @@ function fixture(t, source = 'one two one', extra = {}) {
     client.dispose()
     session.dispose()
   })
-  const find = (text, start = 0, end = 0, action = null) => {
+  const find = (text, start = 0, end = 0, action = null, settings = {}) => {
     query = text
     from = start
     to = end
-    client.find(query, from, to, action)
+    options = settings
+    client.find(query, from, to, action, options)
   }
   const append = (text) => {
     const length = session.snapshot().utf16Length
@@ -138,6 +144,67 @@ function queuedFixture(t, source = 'one two one', extra = {}) {
   }
   return { ...f, tasks, channels, builds, drain, step }
 }
+
+test('rendered client forwards verified replacement replies for the current snapshot', async (t) => {
+  const replies = []
+  const f = fixture(t, 'TARGET tail', {
+    result: (location, action, starts, query, highlights, mode, replacement) =>
+      replies.push({ location, action, query, mode, replacement }),
+  })
+  f.find('TARGET', 0, 6, null, {
+    mode: 'rendered',
+    config: renderedConfig,
+    replacement: '#tag',
+  })
+  await wait(() => replies.length === 1)
+  assert.deepEqual(replies[0].replacement, {
+    from: 0,
+    to: 6,
+    text: '#tag',
+    edits: [{ from: 0, to: 6, insert: '#tag' }],
+  })
+  assert.equal(replies[0].mode, 'rendered')
+  assert.equal(replies[0].location.current, 1)
+  assert.equal(
+    f.workers[0].messages.find((message) => message.type === 'find')
+      .replacement,
+    '#tag',
+  )
+})
+
+test('rendered client options, provenance and viewport pages survive selection and edit requests', async (t) => {
+  const results = []
+  const f = fixture(t, 'hello **world**\n\nhello world', {
+    result: (location, action, starts, query, highlights, mode) =>
+      results.push({ location, action, starts, query, highlights, mode }),
+  })
+  const options = {
+    mode: 'rendered',
+    config: renderedConfig,
+    viewport: { from: 0, to: 28, limit: 1 },
+  }
+  f.find('hello world', 0, 0, 'first', options)
+  await wait(() => results.length === 1)
+  assert.equal(results[0].location.total, 2)
+  assert.equal(results[0].mode, 'rendered')
+  assert.equal(results[0].highlights.matches.length, 1)
+  assert.equal(results[0].starts, undefined)
+  const match = results[0].highlights.matches[0]
+  f.find('hello world', match.from, match.to, 'next', options)
+  await wait(() => results.length === 2)
+  assert.equal(results[1].location.current, 1)
+  assert.equal(f.workers.length, 1)
+  assert.ok(
+    f.workers[0].messages
+      .filter((message) => message.type === 'find')
+      .every((message) => message.mode === 'rendered'),
+  )
+  f.append('\n\nhello **world**')
+  await wait(() => results.length === 3)
+  assert.equal(results[2].location.total, 3)
+  assert.equal(results[2].mode, 'rendered')
+  assert.deepEqual(f.errors, [])
+})
 
 test('highlight checkpoints transfer once per query version and refresh after cancel or edit', async (t) => {
   const starts = []
@@ -386,23 +453,98 @@ test('operation overflow restart preserves quiet time before rebuilding the late
   assert.deepEqual(f.errors, [])
 })
 
+test('reference-link unsupported reason reaches the client and source mode remains available', async (t) => {
+  const errors = []
+  const f = fixture(t, 'hello [label][hidden]\n\n[hidden]: /url', {
+    error: (message, reason) => errors.push({ message, reason }),
+  })
+  f.find('hidden', 0, 0, null, { mode: 'rendered', config: renderedConfig })
+  await wait(() => errors.length > 0)
+  assert.equal(errors[0].reason, 'unsupported')
+  f.find('hidden')
+  await wait(() => f.results.length > 0)
+  assert.equal(f.results.at(-1).location.total, 2)
+  assert.equal(f.workers.length, 1)
+})
+
 test('32 mib real find build completes with progress on one worker', {
-  timeout: 60000,
+  timeout: WORKER_HANG_TIMEOUT,
 }, async (t) => {
   // Same ordinary-word corpus as the review probe, with one distant match.
   const unit = `${'ordinary words '.repeat(16)}\n\n`,
     length = 32 * 1024 * 1024,
     source =
       unit.repeat(Math.ceil(length / unit.length)).slice(0, length - 11) +
-      'scale-start',
-    done = Promise.withResolvers(),
-    f = fixture(t, source, {
-      result: (location) => done.resolve(location),
-      error: (message) => done.reject(new Error(message)),
-    })
+      'scale-start'
+  let result,
+    failure,
+    scanned = 0,
+    located = 0,
+    transferred = 0,
+    loaded = false
+  const build = SourceSearchIndex.prototype.build
+  t.mock.method(SourceSearchIndex.prototype, 'build', function* (...args) {
+    const steps = build.apply(this, args)
+    try {
+      for (;;) {
+        const next = steps.next()
+        if (next.done) return next.value
+        assert.ok(Number.isSafeInteger(next.value.scanned))
+        assert.ok(next.value.scanned >= 0 && next.value.scanned <= length)
+        scanned = Math.max(scanned, next.value.scanned)
+        yield next.value
+      }
+    } finally {
+      steps.return?.()
+    }
+  })
+  const locate = SourceSearchIndex.prototype.locate
+  t.mock.method(SourceSearchIndex.prototype, 'locate', function* (...args) {
+    const steps = locate.apply(this, args)
+    try {
+      for (;;) {
+        const next = steps.next()
+        if (next.done) return next.value
+        located++
+        // This corpus has one distant match: each batch scans 8192 source units.
+        assert.ok(located <= Math.ceil(length / 8192) + 1)
+        yield next.value
+      }
+    } finally {
+      steps.return?.()
+    }
+  })
+  const f = fixture(t, source, {
+    worker: () => {
+      const worker = new TestWorker()
+      worker.observeReply = (reply) => {
+        if (reply.type === 'load-ack')
+          transferred = Math.max(transferred, reply.request.sequence)
+        if (reply.type === 'ack') loaded = true
+      }
+      f.workers.push(worker)
+      return worker
+    },
+    result: (location) => {
+      result = location
+    },
+    error: (message) => {
+      failure = new Error(message)
+    },
+  })
   f.find('scale-start')
-  const location = await done.promise
+  const location = await waitForProgress(
+    () => {
+      if (failure) throw failure
+      return result
+    },
+    () => transferred + Number(loaded) + scanned + located,
+    3000,
+    () =>
+      `Find worker made no progress: ${JSON.stringify({ transferred, loaded, scanned, located })}`,
+  )
   assert.equal(location.total, 1)
+  assert.equal(scanned, length)
   assert.equal(location.next.match.from, source.length - 11)
   assert.equal(f.workers.length, 1)
   const worker = f.workers[0],
@@ -423,6 +565,8 @@ test('32 mib real find build completes with progress on one worker', {
   t.diagnostic(
     JSON.stringify({
       units: source.length,
+      scanned,
+      located,
       workers: f.workers.length,
       progress: progress.length,
       total: location.total,
@@ -820,7 +964,9 @@ test('client streams 50 mib and nonascii above 20 mib with bounded append work a
     })
     f.session.counters(true)
     published = undefined
-    f.find('')
+    const options =
+      pattern === 'a' ? { mode: 'rendered', config: renderedConfig } : {}
+    f.find('', 0, 0, null, options)
     await wait(() => f.workers.length)
     const worker = f.workers[0]
     assert.equal(worker.messages[0].type, 'load-start')
@@ -895,6 +1041,23 @@ test('client streams 50 mib and nonascii above 20 mib with bounded append work a
     }
     assert.equal(offset, source.length)
     assert.equal(published.snapshot().utf8Bytes, Buffer.byteLength(source))
+    if (options.mode === 'rendered') {
+      f.session.counters(true)
+      f.find('rendered request', 0, 0, null, options)
+      const request = worker.messages.findLast(
+        (message) => message.type === 'find',
+      )
+      assert.equal(request.mode, 'rendered')
+      f.client.cancelFind()
+      await wait(() =>
+        worker.replies.some(
+          (reply) => reply.type === 'canceled' && reply.id === request.id,
+        ),
+      )
+      assert.equal(f.session.counters().materializations, 0)
+      assert.equal(f.session.counters().sourceUnitsRead, 0)
+      f.find('', 0, 0, null, options)
+    }
     f.append('é')
     await wait(() => published.snapshot().version === 1)
     assert.equal(
@@ -1092,42 +1255,25 @@ test('worker restarts are finite and disposal cancels bootstrap, listeners and p
   assert.equal(immediate.workers.length, 0)
 })
 
-test('a new document identity gets a fresh worker after a failed generation', async (t) => {
-  const workers = []
-  let blocked = true
-  let findSent
-  const freshFind = new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Fresh worker did not receive find')),
-      3000,
-    )
-    findSent = (worker) => {
-      clearTimeout(timer)
-      resolve(worker)
-    }
-  })
-  const f = fixture(t, 'one', {
-    timeoutMs: 5,
-    worker: () => {
-      const worker = new TestWorker()
-      worker.blocked = blocked
-      if (!blocked) {
-        const postMessage = worker.postMessage.bind(worker)
-        worker.postMessage = (message) => {
-          postMessage(message)
-          if (message.type === 'find') findSent(worker)
-        }
-      }
-      workers.push(worker)
-      return worker
-    },
-  })
+test('a new document identity gets a fresh worker after a failed generation', (t) => {
+  const f = queuedFixture(t, 'one', { timeoutMs: 5 })
   f.find('one')
-  await wait(() => f.errors.length === 1)
-  blocked = false
+  t.mock.timers.tick(0)
+  // Hold both bootstrap handshakes until the two generations time out.
+  t.mock.timers.tick(5)
+  t.mock.timers.tick(5)
+  assert.equal(f.errors.length, 1)
+  assert.equal(f.workers.length, 2)
+  assert.ok(f.workers.every((worker) => worker.terminated))
   f.session.reidentify({ tabId: 'a', revision: 1 })
-  const freshWorker = await freshFind
-  assert.equal(workers.length, 3)
-  assert.equal(freshWorker, workers[2])
+  t.mock.timers.tick(0)
+  f.drain()
+  const freshWorker = f.workers.find((worker) =>
+    worker.messages.some((message) => message.type === 'find'),
+  )
+  assert.equal(f.workers.length, 3)
+  assert.equal(freshWorker, f.workers[2])
   assert.equal(freshWorker.messages[0].head.revision, 1)
+  assert.equal(f.results.length, 1, 'fresh worker must reply to find')
+  assert.equal(f.results.at(-1).location.total, 1)
 })

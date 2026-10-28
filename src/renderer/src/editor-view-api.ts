@@ -20,6 +20,8 @@ type AdapterSelection = {
   length: number
 }
 export type EditorViewAdapter = {
+  /** The element that takes this editor's focus and input. */
+  surface: () => HTMLElement
   read: () => AdapterSelection | null
   setSelection: (anchor: number, head: number) => boolean
   reveal: (position: number) => boolean
@@ -196,6 +198,16 @@ export class EditorViewRegistry {
         : unavailable()
     } catch {
       return unavailable()
+    }
+  }
+  /** The current editor's surface, whatever engine draws it. */
+  surface(view: ViewTarget): HTMLElement | null {
+    const current = this.#current(view)
+    if ('ok' in current) return null
+    try {
+      return current.entry.adapter.surface()
+    } catch {
+      return null
     }
   }
   reveal(value: EditorViewPosition): OperationResult<void> {

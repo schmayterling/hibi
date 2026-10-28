@@ -29,6 +29,11 @@ import { SourceOwners } from '../src/shared/source-owners.ts'
 import { SourceReferences } from '../src/shared/source-references.ts'
 import { pageTitle } from '../src/site/title.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
+import {
+  WORKER_HANG_TIMEOUT,
+  waitForProgress,
+  workerBusyProgress,
+} from './worker-progress.mjs'
 
 const bundle = await build({
   stdin: {
@@ -510,25 +515,72 @@ test('wrapped 50 mib paragraphs avoid the recursive paragraph rule', (t) => {
   assert.equal(renderMarkdown(wrapped).html, `<p>${wrapped}</p>\n`)
 })
 
-test('metadata worker keeps 50 mib note metadata complete and stays alive for the next note', async (t) => {
-  const parser = new WorkspaceMetadataParser(() => ({
-    entry: new URL('../src/main/workspace-metadata-worker.ts', import.meta.url),
-  }))
+test('metadata worker keeps 50 mib note metadata complete and stays alive for the next note', {
+  timeout: WORKER_HANG_TIMEOUT,
+}, async (t) => {
+  const timers = { setTimeout, clearTimeout },
+    advances = new Int32Array(new SharedArrayBuffer(4)),
+    parser = new WorkspaceMetadataParser(() => ({
+      entry: new URL(
+        '../src/main/workspace-metadata-worker.ts',
+        import.meta.url,
+      ),
+    }))
+  let replies = 0
+  const start = parser.start
+  t.mock.method(parser, 'start', function (options, ...args) {
+    const worker = start.call(
+      this,
+      {
+        ...options,
+        entry: new URL(
+          './workspace-metadata-progress-worker.mjs',
+          import.meta.url,
+        ),
+      },
+      ...args,
+    )
+    worker.on('message', () => {
+      replies++
+    })
+    worker.postMessage({ progress: advances.buffer })
+    return worker
+  })
+  // Keep the production watchdog on a controlled clock. Worker busy time covers
+  // synchronous parser stretches; the real silence guard rejects an idle worker.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   t.after(async () => {
     parser.close()
     await parser.stopping
   })
-  const parse = (markdown, version) =>
-    parser.request(
-      {
-        kind: 'parse',
-        page: { id: 'a'.repeat(64), path: 'note.md', markdown },
-        syntax,
-        version,
-        fingerprint: 'giant-paragraph',
-      },
-      () => true,
+  const parse = async (markdown, version) => {
+    let settled = false
+    const pending = parser
+      .request(
+        {
+          kind: 'parse',
+          page: { id: 'a'.repeat(64), path: 'note.md', markdown },
+          syntax,
+          version,
+          fingerprint: 'giant-paragraph',
+        },
+        () => true,
+      )
+      .finally(() => {
+        settled = true
+      })
+    void pending.catch(() => {})
+    await waitForProgress(
+      () => settled,
+      () =>
+        replies + Atomics.load(advances, 0) + workerBusyProgress(parser.worker),
+      30000,
+      () =>
+        `Metadata worker remained idle: ${JSON.stringify({ replies, advances: Atomics.load(advances, 0), active: workerBusyProgress(parser.worker) })}`,
+      { timers },
     )
+    return pending
+  }
   const page = await parse(paragraph, 'draft:1')
   const worker = parser.worker
   assert.equal(page.syntax.complete, true)
@@ -540,6 +592,17 @@ test('metadata worker keeps 50 mib note metadata complete and stays alive for th
   assert.equal(parser.worker, worker)
   assert.equal(next.metadata.headings.count, 1)
   assert.deepEqual(next.metadata.references.links, ['target.md'])
+  assert.ok(
+    Atomics.load(advances, 0) > 0,
+    'the worker must advance the real tokenizer',
+  )
+  t.diagnostic(
+    JSON.stringify({
+      replies,
+      advances: Atomics.load(advances, 0),
+      active: workerBusyProgress(parser.worker),
+    }),
+  )
 })
 
 test('renderer worker resolves references across a giant paragraph and keeps find available', async (t) => {

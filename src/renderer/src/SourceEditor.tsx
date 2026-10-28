@@ -315,6 +315,17 @@ function keptPlaceScroll(top: number, margin: number) {
       }
       return false
     }),
+    // A held view scrolled anywhere else, as by its scrollbar or a script,
+    // is the user's again; this runs before the place is recorded.
+    EditorView.domEventHandlers({
+      scroll: (_event, view) => {
+        if (
+          state === 'holding' &&
+          Math.abs(view.scrollDOM.scrollTop - held) > 1
+        )
+          stop()
+      },
+    }),
     ViewPlugin.define((view) => {
       const options = { capture: true, passive: true }
       for (const type of scrollInput)

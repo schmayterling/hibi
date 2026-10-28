@@ -418,6 +418,36 @@ test('a source view left while its place waits for pane motion is released', {
   )
 })
 
+test('a returned source view scrolled by script keeps the new place', {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await open(t, 2 * 1024)
+  await view('Source view')
+  await sourceShown(page)
+  await scrollInto(page, 20000)
+  // The view comes back to its place and holds it.
+  const [held] = await returns(page, view, 1024 * 1024, 1)
+  t.diagnostic(
+    JSON.stringify(
+      await page.evaluate(() => {
+        const scroller = document.querySelector('.source-pane .cm-scroller')
+        return { scrollbar: scroller.offsetWidth - scroller.clientWidth }
+      }),
+    ),
+  )
+  // As a scrollbar drag does, the scroll comes with no input event.
+  await page.evaluate(async () => {
+    document.querySelector(
+      '.source-pane .cm-content',
+    ).cmTile.root.view.scrollDOM.scrollTop += 240
+    for (let frame = 0; frame < 4; frame++)
+      await new Promise(requestAnimationFrame)
+  })
+  const user = await scrolled(page)
+  assert.notEqual(user.top, held.top, JSON.stringify({ held, user }))
+  samePlace(await returns(page, view, 1024 * 1024, 2), user)
+})
+
 test("scrolling over a returning source view's gutter keeps the user's place", {
   timeout: 240000,
 }, async (t) => {

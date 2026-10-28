@@ -102,6 +102,41 @@ function references(source, gfm = false) {
   }
 }
 
+test('CommonMark reference titles reject blank lines in shared parsing and export', () => {
+  for (const [open, close, encodedOpen, encodedClose] of [
+    ['"', '"', '&quot;', '&quot;'],
+    ["'", "'", '&#39;', '&#39;'],
+    ['(', ')', '(', ')'],
+  ])
+    for (const eol of ['\n', '\r\n'])
+      for (const separator of [' ', '\n']) {
+        const source =
+          `[ref]: /x${separator}${open}first\n\nlast${close}\n\n[ref]`.replaceAll(
+            '\n',
+            eol,
+          )
+        const href = separator === ' ' ? null : '/x'
+        const expected =
+          separator === ' '
+            ? `<p>[ref]: /x ${encodedOpen}first</p>\n<p>last${encodedClose}</p>\n<p>[ref]</p>\n`
+            : `<p>${encodedOpen}first</p>\n<p>last${encodedClose}</p>\n<p><a href="/x">ref</a></p>\n`
+        for (const gfm of [false, true]) {
+          const markdown = new Marked({ gfm }, blockMarkdown)
+          assert.equal(markdown.lexer(source).links.ref?.href ?? null, href)
+          assert.equal(
+            new Lexer({ gfm, tokenizer: new BlockTokenizer() }).lex(source)
+              .links.ref?.href ?? null,
+            href,
+          )
+          assert.equal(references(source, gfm)?.href ?? null, href)
+          assert.equal(markdown.parse(source), expected)
+        }
+        assert.equal(lexMarkdown(source).links.ref?.href ?? null, href)
+        assert.equal(parseMarkdown(source), expected)
+        assert.equal(renderMarkdown(source).html, expected)
+      }
+})
+
 test('html interruptions keep newline searches linear across paragraph starts', (t) => {
   for (const gfm of [false, true]) {
     for (const count of [32, 64, 128]) {

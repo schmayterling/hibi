@@ -58,10 +58,7 @@ function fixture(t, text, frontmatter = false) {
           ? text.slice(first.to)
           : text
     const markdown = markdownSourceParser(syntax)
-    return new markdown.Lexer({
-      ...markdown.defaults,
-      tokenizer: null,
-    }).lex(body).links
+    return markdown.lexer(body).links
   }
   const check = (expected) => {
     assert.equal(oracle().ref?.href ?? null, expected, 'full Markdown oracle')
@@ -317,6 +314,40 @@ test('multiline title lookup preserves proven list and quote continuation cases'
   ]
   for (const text of cases)
     fixture(t, text).checkDefinitions(['ref', 'other', 'missing'])
+})
+
+for (const [open, close] of [
+  ['"', '"'],
+  ["'", "'"],
+  ['(', ')'],
+])
+  test(`blank lines inside ${open}${close} reference titles follow CommonMark`, (t) => {
+    for (const eol of ['\n', '\r\n'])
+      for (const blank of ['', ' ', '\t', ' \t'])
+        for (const separator of [' ', '\n', '\n\t']) {
+          const text = `[ref]: /x${separator}${open}first\n${blank}\nlast${close}\n\n[ref]\n\n[other]: /visible`
+          const f = fixture(t, text.replaceAll('\n', eol))
+          // A title on a following line leaves the destination-only definition.
+          f.check(separator === ' ' ? null : '/x')
+          assert.equal(f.references.lookup('ref')?.title ?? null, null)
+          assert.equal(f.references.lookup('other')?.href, '/visible')
+        }
+  })
+
+test('inserting and undoing a blank title line refreshes reference answers', (t) => {
+  for (const separator of [' ', '\n\t']) {
+    const text = `[ref]: /x${separator}"first\nlast"\n\n[ref]`
+    const f = fixture(t, text)
+    const at = text.indexOf('last')
+    f.check('/x')
+    assert.equal(f.references.lookup('ref').title, 'first\nlast')
+    f.edit(at, at, '\n')
+    f.check(separator === ' ' ? null : '/x')
+    assert.equal(f.references.lookup('ref')?.title ?? null, null)
+    f.edit(at, at + 1, '')
+    f.check('/x')
+    assert.equal(f.references.lookup('ref').title, 'first\nlast')
+  }
 })
 
 test('reference lookup follows edits to multiline title closing delimiters', (t) => {

@@ -4,6 +4,7 @@ import { type MarkedExtension, marked, Tokenizer } from 'marked'
 // per character or continuation line. Equivalence tests guard the rule delimiters.
 const setextRules = new WeakMap<RegExp, { start: RegExp; candidate: RegExp }>()
 const paragraphRules = new WeakMap<RegExp, RegExp>()
+const blankLine = /\r?\n[ \t]*\r?\n/
 
 // Candidate calls and source spans, including validation of a matched prefix.
 export const blockScanCounters = { calls: 0, units: 0 }
@@ -24,6 +25,13 @@ export function parseMarkdown(source: string) {
 
 export const blockMarkdown: MarkedExtension = {
   tokenizer: {
+    def(source) {
+      return BlockTokenizer.prototype.def.call(
+        this,
+        source,
+        Object.getPrototypeOf(this).def,
+      )
+    },
     lheading(source) {
       return BlockTokenizer.prototype.lheading.call(
         this,
@@ -65,6 +73,14 @@ function blockToken<Result>(
 }
 
 export class BlockTokenizer extends Tokenizer {
+  override def(source: string, read = Tokenizer.prototype.def) {
+    const token = read.call(this, source)
+    if (!token?.title || !blankLine.test(token.title)) return token
+    // CommonMark forbids blank title lines. A title on the next line can fail
+    // while leaving a destination-only definition, so retry before the blank.
+    return read.call(this, source.slice(0, source.search(blankLine)))
+  }
+
   override lheading(source: string, read = Tokenizer.prototype.lheading) {
     const pattern = this.rules.block.lheading
     let rule = setextRules.get(pattern)

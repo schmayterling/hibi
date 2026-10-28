@@ -4,10 +4,32 @@ import { type MarkedExtension, marked, Tokenizer } from 'marked'
 // per character or continuation line. Equivalence tests guard the rule delimiters.
 const setextRules = new WeakMap<RegExp, { start: RegExp; candidate: RegExp }>()
 const paragraphRules = new WeakMap<RegExp, RegExp>()
-const blankLine = /\r?\n[ \t]*\r?\n/
 
 // Candidate calls and source spans, including validation of a matched prefix.
 export const blockScanCounters = { calls: 0, units: 0 }
+
+function paragraphRule(pattern: RegExp) {
+  let interrupt = paragraphRules.get(pattern)
+  if (!interrupt) {
+    const start = '^([^\\n]+(?:\\n(?!'
+    const tail = ')[^\\n]+)*)'
+    if (!pattern.source.startsWith(start) || !pattern.source.endsWith(tail))
+      return
+    interrupt = new RegExp(
+      `^(?:${pattern.source.slice(start.length, -tail.length)})`,
+    )
+    paragraphRules.set(pattern, interrupt)
+  }
+  return interrupt
+}
+
+/** Reference titles cannot cross CommonMark paragraph boundaries. */
+export function endsReferenceTitle(source: string) {
+  return (
+    /^[ \t]*(?:\r?\n|$)/.test(source) ||
+    !!paragraphRule(marked.Lexer.rules.block.normal.paragraph)?.test(source)
+  )
+}
 
 export function lexMarkdown(source: string) {
   return marked.lexer(source, {
@@ -75,10 +97,19 @@ function blockToken<Result>(
 export class BlockTokenizer extends Tokenizer {
   override def(source: string, read = Tokenizer.prototype.def) {
     const token = read.call(this, source)
-    if (!token?.title || !blankLine.test(token.title)) return token
-    // CommonMark forbids blank title lines. A title on the next line can fail
-    // while leaving a destination-only definition, so retry before the blank.
-    return read.call(this, source.slice(0, source.search(blankLine)))
+    if (!token?.title) return token
+    const title = this.rules.block.def.exec(token.raw)?.[3]
+    if (!title) return token
+    const from = token.raw.lastIndexOf(title)
+    for (
+      let end = title.indexOf('\n');
+      end >= 0;
+      end = title.indexOf('\n', end + 1)
+    )
+      if (endsReferenceTitle(title.slice(end + 1)))
+        // A failed next-line title can leave a destination-only definition.
+        return read.call(this, source.slice(0, from + end))
+    return token
   }
 
   override lheading(source: string, read = Tokenizer.prototype.lheading) {
@@ -124,18 +155,8 @@ export class BlockTokenizer extends Tokenizer {
     if (end < 0) return read.call(this, source)
     if (!end) return
     const firstLine = end
-    const pattern = this.rules.block.paragraph
-    let interrupt = paragraphRules.get(pattern)
-    if (!interrupt) {
-      const start = '^([^\\n]+(?:\\n(?!'
-      const tail = ')[^\\n]+)*)'
-      if (!pattern.source.startsWith(start) || !pattern.source.endsWith(tail))
-        return read.call(this, source)
-      interrupt = new RegExp(
-        `^(?:${pattern.source.slice(start.length, -tail.length)})`,
-      )
-      paragraphRules.set(pattern, interrupt)
-    }
+    const interrupt = paragraphRule(this.rules.block.paragraph)
+    if (!interrupt) return read.call(this, source)
     while (end < source.length) {
       const from = end + 1
       if (

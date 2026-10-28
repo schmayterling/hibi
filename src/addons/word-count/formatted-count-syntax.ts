@@ -1,10 +1,14 @@
 import type { MarkdownConfig } from '@lezer/markdown'
-import { Lexer, Tokenizer, type TokenizerExtension } from 'marked'
+import { Lexer, type TokenizerExtension } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
+import {
+  BlockTokenizer,
+  endsReferenceTitle,
+} from '../../shared/marked-blocks.ts'
 import { typstBlock } from '../typst/syntax.ts'
 import type { CountSyntax } from './formatted-text.ts'
 
-const definitionTokenizer = new Tokenizer()
+const definitionTokenizer = new BlockTokenizer()
 new Lexer({ gfm: false, tokenizer: definitionTokenizer })
 
 /** use the native destination validation as well as its definition rule. */
@@ -183,16 +187,13 @@ export function countMarkdownSyntax(
               if (title && canTitle) {
                 while (titleTo != null && end < titleTo) if (!take()) break
               } else if (title) {
-                let blank = line.text.length === 0
                 for (;;) {
-                  // at line boundaries a title only retains its delimiter, plus
-                  // an empty final line for the single-quoted title grammar.
-                  const prefix = `[ref]: /x ${title}x${title === "'" && blank ? '\n' : ''}`
+                  if (endsReferenceTitle(cx.peekLine())) break
+                  const prefix = `[ref]: /x ${title}x`
                   const probe = `${prefix}\n${cx.peekLine()}`
                   const continues = openTitle(probe)
                   if (!continues && !rule.exec(`${probe}\n`)?.[3]) break
                   if (!take()) break
-                  blank = line.text.length === 0
                   if (!continues) break
                 }
               }

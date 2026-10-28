@@ -11,6 +11,8 @@ import {
   textExtrasMarkdown,
 } from '../src/addons/text-extras/syntax.ts'
 import { typstFlavor, typstTokens } from '../src/addons/typst/syntax.ts'
+import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
+import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 
 const detect = (parser, matches) => (source) => {
   let found = false
@@ -23,7 +25,7 @@ const pairs = [
   [
     github.detect,
     detect(
-      new Marked({ gfm: true }),
+      new Marked({ gfm: true }, blockMarkdown),
       (token) =>
         token.type === 'table' ||
         token.type === 'del' ||
@@ -34,19 +36,22 @@ const pairs = [
   ],
   [
     mathFlavor.detect,
-    detect(new Marked(mathTokens), (token) =>
+    detect(new Marked(mathTokens, blockMarkdown), (token) =>
       ['inlineMath', 'blockMath'].includes(token.type),
     ),
   ],
   [
     detectTextExtras,
-    detect(new Marked(textExtrasMarkdown), (token) =>
+    detect(new Marked(textExtrasMarkdown, blockMarkdown), (token) =>
       ['subscript', 'subtext'].includes(token.type),
     ),
   ],
   [
     typstFlavor.detect,
-    detect(new Marked(typstTokens), (token) => token.type === 'typstBlock'),
+    detect(
+      new Marked(typstTokens, blockMarkdown),
+      (token) => token.type === 'typstBlock',
+    ),
   ],
 ]
 
@@ -91,6 +96,23 @@ test('block extension starts find line starts in the paragraph and retain native
   assert.equal(alertStart(prose), -1)
   assert.equal(subtextStart(prose), -1)
   assert.equal(blockStartCounters.units, 2 * 'ordinary words\n\n'.length)
+})
+
+test('invalid reference titles leave footnotes and flavor syntax visible to detection', async (t) => {
+  for (const [name, body, detect] of [
+    ['footnote', '[^1]: note\n\ntext[^1]', hasFootnoteDefinitions],
+    ['github footnote', '[^1]: note\n\ntext[^1]', github.detect],
+    ['github strike', '~~strike~~', github.detect],
+    ['block math', '$$\nx^2\n$$', mathFlavor.detect],
+    ['inline math', '$x^2$', mathFlavor.detect],
+    ['typst', '```typst\n$x$\n```', typstFlavor.detect],
+    ['text extras', 'H~2~O\n\n-# small', detectTextExtras],
+  ])
+    await t.test(name, () => {
+      const source = `[ref]: /x "a\n\n${body}\n"\n`
+      assert.equal(detect(source), true, source)
+      assert.equal(detect('````md\n' + source + '\n````'), false)
+    })
 })
 
 test('flavor detector guards preserve contextual parsing and delimiter edge cases', () => {

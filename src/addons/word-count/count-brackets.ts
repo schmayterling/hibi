@@ -1,4 +1,5 @@
 import { Lexer } from 'marked'
+import { endsReferenceTitle } from '../../shared/marked-blocks.ts'
 import type {
   PreparedSourceOperation,
   SourceSnapshot,
@@ -99,7 +100,6 @@ export class CountBrackets {
     const first = from < this.#markers.length ? this.#markers.at(from) : null,
       rule = Lexer.rules.block.normal.def
     let number = this.#source.lineAt(from)!.number + 1,
-      blank = false,
       actual = initial
     for (const row of this.#markers.records(
       first?.index ?? this.#markers.count,
@@ -112,15 +112,18 @@ export class CountBrackets {
         const start = this.#source.lineStart(number)!,
           end = this.#source.lineAt(start)!.to,
           text = this.#read(start, end),
-          prefix = `[count]: /x ${title}x${title === "'" && blank ? '\n' : ''}`,
+          prefix = `[count]: /x ${title}x`,
           probe = `${prefix}\n${text}`,
           match = rule.exec(`${probe}\n`)
+        if (endsReferenceTitle(text)) {
+          this.#read(start, end, headers, lines, baseLine)
+          return actual
+        }
         if (match?.[3] && countDefinition(`${probe}\n`)) actual = end
         const pending = pendingDefinitionTitle(rule, probe)
-        if (number === last || !pending || (title === "'" && !text.length))
+        if (number === last || !pending)
           this.#read(start, end, headers, lines, baseLine)
         if (!pending) return actual
-        blank = !text.length
       }
     }
     // an escaped closer can finish now and remain body if a later closer appears.

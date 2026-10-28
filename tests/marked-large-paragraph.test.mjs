@@ -137,6 +137,69 @@ test('CommonMark reference titles reject blank lines in shared parsing and expor
       }
 })
 
+test('reference title continuations stop at CommonMark paragraph interruptions', async (t) => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const line of ['# two', '> two', '- two', '1. two', '```', '<div>'])
+        await t.test(JSON.stringify({ open, separator, line }), () => {
+          for (const eol of ['\n', '\r\n']) {
+            const source =
+              `[ref]: /x${separator}${open}one\n${line}${close}\n\n[ref]\n`.replaceAll(
+                '\n',
+                eol,
+              )
+            const href = separator === ' ' ? null : '/x'
+            for (const gfm of [false, true]) {
+              const markdown = new Marked({ gfm }, blockMarkdown)
+              const definition = markdown.lexer(source).links.ref
+              assert.equal(definition?.href ?? null, href)
+              assert.equal(definition?.title ?? null, null)
+              assert.equal(references(source, gfm)?.href ?? null, href)
+              assert.equal(
+                new Lexer({ gfm, tokenizer: new BlockTokenizer() }).lex(source)
+                  .links.ref?.href ?? null,
+                href,
+              )
+            }
+            assert.equal(lexMarkdown(source).links.ref?.href ?? null, href)
+            assert.equal(
+              /<a href="\/x"/.test(renderMarkdown(source).html),
+              href !== null && line !== '```',
+            )
+          }
+        })
+})
+
+test('reference titles keep ordinary and escaped continuation lines', () => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const line of [
+      'two',
+      '2. two',
+      '-',
+      '===',
+      '\\# two',
+      'a|b\n---|---\nlast',
+    ])
+      for (const gfm of [false, true]) {
+        const source = `[ref]: /x ${open}one\n${line}${close}\n\n[ref]`
+        const markdown = new Marked({ gfm }, blockMarkdown)
+        assert.equal(markdown.lexer(source).links.ref?.href, '/x', source)
+        assert.equal(
+          markdown.lexer(source).links.ref?.title,
+          `one\n${line.replace('\\#', '#')}`,
+          source,
+        )
+      }
+})
+
 test('html interruptions keep newline searches linear across paragraph starts', (t) => {
   for (const gfm of [false, true]) {
     for (const count of [32, 64, 128]) {
@@ -626,6 +689,18 @@ test('renderer worker resolves references across a giant paragraph and keeps fin
     replies.some((reply) => reply.type === 'error'),
     false,
   )
+})
+
+test('export keeps an indented failed title in a paragraph, as CommonMark does', {
+  todo: 'formatted gap export-002: an indented failed reference title must remain paragraph text instead of code',
+}, () => {
+  for (const indent of ['\t', '    ']) {
+    const source = `[ref]: /x\n${indent}"first\n\nlast"\n\n[ref]\n`
+    const { html } = renderMarkdown(source)
+    assert.match(html, /<p>(?:&quot;|")first<\/p>/, source)
+    assert.doesNotMatch(html, /<pre>/, source)
+    assert.match(html, /<a href="\/x">ref<\/a>/, source)
+  }
 })
 
 test('export keeps a quoted title with a blank line as text, as CommonMark does', () => {

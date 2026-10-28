@@ -129,6 +129,19 @@ test('blank reference title lines retain frozen CommonMark visible counts', (t) 
       }
 })
 
+test('definition ownership without title lookahead stops before following blocks', (t) => {
+  for (const [source, words, characters] of [
+    ['[ref]: /x\n"one\n\n```"\ncode\n\n[ref]', 3, 16],
+    ['[ref]: /x "one\n\n<!-- "\n\n[ref]\n\n-->', 4, 33],
+    ['[ref]: /x\n"note\n\n~~~ "\nmore\n\n[ref]', 3, 17],
+    ['[ref]: /x (one\n\ntwo)\n---\n\n[ref]', 5, 25],
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const f = fixture(t, source.replaceAll('\n', eol))
+      assert.deepEqual(f.read(), { words, characters }, source)
+    }
+})
+
 test('multiline reference labels and titles retain complete semantic ownership', (t) => {
   for (const gfm of [false, true])
     for (const eol of ['\n', '\r\n'])

@@ -1,9 +1,10 @@
 import { Marked } from 'marked'
 import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
+import { blockMarkdown } from '../../shared/marked-blocks.ts'
 import type { MarkdownFlavor } from '../api'
 import { alertMarker } from './alerts.ts'
 
-const parser = new Marked({ gfm: true })
+const parser = new Marked({ gfm: true }, blockMarkdown)
 export const flavorInfo: MarkdownFlavor = {
   id: 'github',
   name: 'GitHub Markdown',

@@ -343,6 +343,47 @@ test('cut removes the selection in one undoable edit', {
   await settled(note)
 })
 
+test('typing over the whole selected note replaces its hidden fences too', {
+  timeout: 60000,
+}, async () => {
+  const content = page.locator('.rich-pane .cm-content')
+  const fenced = '```js\nconst answer = 42\n```\n\nend'
+  const metadata = '---\ntitle: test\n---\n\n'
+  try {
+    for (const [text, typed] of [
+      [fenced, 'x'],
+      [metadata + fenced, `${metadata}x`],
+    ]) {
+      await setFixture(text)
+      if (!text.startsWith(metadata)) {
+        // As after copying the note, cutting it and undoing the cut.
+        assert.equal((await clipboardEvent('copy', 0, null)).text, text)
+        await clipboardEvent('cut', 0, null)
+        await settled('')
+        await undo()
+        await settled(text)
+      }
+      await content.focus()
+      await page.keyboard.press(`${mod}+a`)
+      // A key as a keyboard sends it, not inserted text.
+      await page.keyboard.press('x')
+      await settled(typed)
+      await undo()
+      await settled(text)
+    }
+  } finally {
+    // Frontmatter keeps edits out of itself unless an addon makes them.
+    await content.evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length },
+        userEvent: 'input.addon',
+      })
+    })
+    await setFixture(note)
+  }
+})
+
 test('pasted html becomes markdown in one edit; plain text and own copies paste as they are', {
   timeout: 30000,
 }, async () => {

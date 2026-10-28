@@ -514,7 +514,11 @@ test('production builds need no benchmark harness and tolerate source edits duri
       },
     }),
   )
-  await writeFile(join(root, 'scripts/docs.mjs'), '')
+  await writeFile(join(root, 'out/benchmark-build.json'), 'old receipt')
+  await writeFile(
+    join(root, 'scripts/docs.mjs'),
+    "import assert from 'node:assert/strict'; import { existsSync } from 'node:fs'; assert.equal(existsSync('out/benchmark-build.json'), false, 'old benchmark receipt must be cleared before docs or compilation')",
+  )
   await writeFile(
     join(root, 'build'),
     "import { writeFileSync } from 'node:fs'; writeFileSync('src/example.ts', 'mid-build edit')",

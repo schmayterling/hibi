@@ -25,6 +25,7 @@ import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import type { FormattedHeadingList } from './formatted-headings'
+import { formattedProjectionSource } from './formatted-projection'
 import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
@@ -97,12 +98,34 @@ export function MarkdownEditor({
     markdownExtensions.some(
       ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
     )
+  const projectionExtensions = useMemo<readonly FormattedExtension[]>(() => {
+    if (
+      !markdownExtensions.some(
+        ({ id, preservation }) =>
+          id !== 'frontmatter.metadata' && preservation?.level === 'verbatim',
+      )
+    )
+      return []
+    const adapters = markdownExtensions
+    return [
+      {
+        id: 'formatted.projection',
+        create: () =>
+          import('./formatted-projection').then(({ formattedProjection }) =>
+            formattedProjection(adapters, () =>
+              documentRuntime.session(documentState.tabId)?.snapshot(),
+            ),
+          ),
+      },
+    ]
+  }, [markdownExtensions, documentState.tabId])
   const editorExtensions = useMemo(
-    () =>
-      showProperties
-        ? [...propertiesExtensions, ...formattedExtensions]
-        : formattedExtensions,
-    [showProperties, formattedExtensions],
+    () => [
+      ...(showProperties ? propertiesExtensions : []),
+      ...projectionExtensions,
+      ...formattedExtensions,
+    ],
+    [showProperties, projectionExtensions, formattedExtensions],
   )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
@@ -479,7 +502,10 @@ export function MarkdownEditor({
     view.dispatch({
       changes: { from, to, insert: normalizedSource(change.insert) },
       userEvent: 'input.addon',
-      annotations: isolateHistory.of('full'),
+      annotations: [
+        isolateHistory.of('full'),
+        formattedProjectionSource.of(markdown),
+      ],
     })
   }
   const ready =

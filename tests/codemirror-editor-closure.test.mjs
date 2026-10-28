@@ -11,10 +11,9 @@ const provided = new Set([
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/renderer',
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/details',
 ])
-// Outline labels and the addon SDK still load the rich editor's schema, from these imports only.
+// outline labels still load the rich editor's schema, from this import only.
 const retained = new Set([
   'src/renderer/src/use-source-outline.ts -> ./markdown-semantics',
-  'src/renderer/src/addon-definition.ts -> ../../addons/sdk-loader',
 ])
 const local = (file) => relative('', file).replaceAll('\\', '/')
 
@@ -83,7 +82,7 @@ test('the rich schema stays allowed only through its retained imports', async ()
     },
     {
       file: 'src/renderer/src/SourceEditor.tsx',
-      code: "void import('../../addons/sdk-loader')",
+      code: "void import('../../addons/sdk')",
     },
     {
       file: 'src/renderer/src/use-source-outline.ts',
@@ -91,7 +90,7 @@ test('the rich schema stays allowed only through its retained imports', async ()
     },
     {
       file: 'src/renderer/src/addon-definition.ts',
-      code: "void import('../../addons/sdk-loader?sdk')",
+      code: "void import('../../addons/sdk?sdk')",
     },
     {
       file: 'src/renderer/src/addon-registry.ts',

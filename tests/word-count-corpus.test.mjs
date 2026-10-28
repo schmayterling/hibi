@@ -425,19 +425,25 @@ test('schema corpus: paragraph boundary edits retain markdown ownership', () => 
   markdownSyntax.reset()
 })
 
-test('schema corpus: escaped title alternatives retain native definition spans', () => {
+test('schema corpus: escaped blank-line titles stay visible as CommonMark text', () => {
   const syntax = countSyntax(corpus.configs[0])
   const rich = richOracle(syntax)
-  for (const source of [
-    '[a]: /url "one\n\ntwo\\\\" three\n\nfour"\n\nafter',
-    '[a]: /url "one\n\ntwo\\"\n\nafter',
-    '[a\n\nb]: /url "one\n\ntwo\\"\n\nafter',
-    '[a]:\n/url "one\n\ntwo\\"\n\nafter',
+  for (const [source, visible] of [
+    [
+      '[a]: /url "one\n\ntwo\\\\" three\n\nfour"\n\nafter',
+      '[a]: /url "one\ntwo\\" three\nfour"\nafter',
+    ],
+    ['[a]: /url "one\n\ntwo\\"\n\nafter', '[a]: /url "one\ntwo"\nafter'],
+    [
+      '[a\n\nb]: /url "one\n\ntwo\\"\n\nafter',
+      '[a\nb]: /url "one\ntwo"\nafter',
+    ],
+    ['[a]:\n/url "one\n\ntwo\\"\n\nafter', '[a]: /url "one\ntwo"\nafter'],
   ])
     for (const eol of ['\n', '\r\n']) {
       const text = source.replaceAll('\n', eol)
-      const want = countText(rich(text).text)
-      assert.deepEqual(want, { words: 1, characters: 5 }, JSON.stringify(text))
+      assert.equal(rich(text).text, visible, JSON.stringify(text))
+      const want = countText(visible)
       const counter = new FormattedCounter(
         new SourceStore(text, { tabId: 'escaped-titles', revision: 0 }),
         syntax,

@@ -96,39 +96,18 @@ const cases = [
 const formattedGaps = {
   '1/gfm/0':
     'formatted gap corpus-011: disabled heading syntax must preserve bold formatting inside alerts',
-  '0/multiline title/0':
-    'formatted gap corpus-008: a quoted title with a blank line must not define a reference',
-  '0/multiline title/0/counts':
-    'formatted gap corpus-020: counts must include a definition whose quoted title holds a blank line',
   '1/extras/0':
     'formatted gap corpus-012: disabled heading syntax must preserve bold formatting inside subtext',
-  '1/multiline title/0':
-    'formatted gap corpus-018: disabled heading syntax must keep a blank-line title definition literal',
-  '1/multiline title/0/counts':
-    'formatted gap corpus-021: disabled heading syntax counts must include a blank-line title definition',
 }
 
-// The codemirror view's outcomes where the native schema's differ: the
-// tiptap control keeps the frozen native outcomes below. A reference in a
-// subtext line resolves against later definitions too, an accepted
-// difference: the native schema reads subtext before them. A quoted title
-// cannot hold a blank line (CommonMark example 197), so there is no
-// definition: its text and heading show and both references stay literal.
+// A reference in a subtext line resolves against later definitions too, an
+// accepted difference: the native schema reads subtext before them.
 const formattedDifferences = {
   '0/forward references/0': { text: 'ref ref' },
   '1/forward references/0': { text: 'ref # [ref]' },
-  '0/multiline title/0': {
-    text: '[ref]: /target "first title last" [ref]',
-    headings: ['title'],
-    counts: { words: 6, characters: 39 },
-  },
-  '1/multiline title/0': {
-    text: '[ref]: /target "first # title last" [ref]',
-    counts: { words: 6, characters: 41 },
-  },
 }
 
-// frozen native outcomes; the tiptap control verifies every fixture.
+// Frozen outcomes are shared by both engines and checked by the native control.
 const formattedOutcomes = {
   '0/empty/0': { text: '', headings: [], counts: { words: 0, characters: 0 } },
   '0/whitespace/0': {
@@ -227,9 +206,9 @@ const formattedOutcomes = {
     counts: { words: 5, characters: 27 },
   },
   '0/multiline title/0': {
-    text: 'ref',
-    headings: [],
-    counts: { words: 1, characters: 3 },
+    text: '[ref]: /target "first\ntitle\nlast"\n[ref]',
+    headings: ['title'],
+    counts: { words: 6, characters: 39 },
   },
   '0/quoted title/0': {
     text: 'ref',
@@ -343,9 +322,9 @@ const formattedOutcomes = {
     counts: { words: 5, characters: 29 },
   },
   '1/multiline title/0': {
-    text: 'ref',
+    text: '[ref]: /target "first\n# title\nlast"\n[ref]',
     headings: [],
-    counts: { words: 1, characters: 3 },
+    counts: { words: 6, characters: 41 },
   },
   '1/quoted title/0': {
     text: 'ref',

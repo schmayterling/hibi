@@ -23,9 +23,9 @@ function operation(store, changes, origin = 'source') {
     changes,
   }
 }
-function fixture(t, source) {
+function fixture(t, source, gfm = false) {
   const store = new SourceStore(source, { tabId: 'brackets', revision: 0 })
-  const brackets = new CountBrackets(store.snapshot())
+  const brackets = new CountBrackets(store.snapshot(), gfm)
   t.after(() => brackets.dispose())
   const edit = (changes, origin = 'source') => {
     const prepared = store.prepare(operation(store, changes, origin))
@@ -42,20 +42,21 @@ function read(counter) {
     if (step.done) return step.value
   }
 }
-const expected = (source) => countText(richText(source, syntax).slice(1))
-function counterFixture(t, source) {
+const expected = (source, config = syntax) =>
+  countText(richText(source, config).slice(1))
+function counterFixture(t, source, config = syntax) {
   const counter = new FormattedCounter(
     new SourceStore(source, { tabId: 'bracket-counts', revision: 0 }),
-    syntax,
+    config,
   )
   t.after(() => counter.dispose())
   const edit = (changes, origin = 'source') => {
     counter.apply(operation(counter.store, changes, origin))
     const snapshot = counter.store.snapshot()
     const text = snapshot.sliceRaw(0, snapshot.utf16Length)
-    assert.deepEqual(read(counter), expected(text), text)
+    assert.deepEqual(read(counter), expected(text, config), text)
   }
-  assert.deepEqual(read(counter), expected(source))
+  assert.deepEqual(read(counter), expected(source, config))
   return { counter, edit }
 }
 
@@ -272,7 +273,7 @@ test('warm body edits after stray openers keep work bounded at 1000 and 4000 par
     }
 })
 
-test('native title closers after backslashes remain valid across blank lines', (t) => {
+test('title closers after backslashes reject blank title lines', (t) => {
   const parser = countParser(syntax)
   for (const eol of ['\n', '\r\n'])
     for (const [open, gap, close] of [
@@ -282,14 +283,156 @@ test('native title closers after backslashes remain valid across blank lines', (
     ]) {
       const source =
         `[ref]: /target ${open}first${gap}last\\${close}`.replaceAll('\n', eol)
-      const tokens = new parser.Lexer({
-        ...parser.defaults,
-        tokenizer: null,
-      }).lex(source)
-      assert.equal(tokens[0]?.type, 'def', JSON.stringify(source))
+      const tokens = parser.lexer(source)
+      const valid = gap === '\n'
+      assert.equal(tokens[0]?.type === 'def', valid, JSON.stringify(source))
       const f = fixture(t, source)
-      assert.equal(f.brackets.canClose(0), true, JSON.stringify(source))
+      assert.equal(f.brackets.canClose(0), valid, JSON.stringify(source))
     }
+})
+
+test('blank title lines do not consume following block state in regional counts', async (t) => {
+  for (const [source, words, characters] of [
+    ['[ref]: /x\n"one\n\n```"\ncode\n\n[ref]', 3, 16],
+    ['[ref]: /x "one\n\n<!-- "\n\n[ref]\n\n-->', 4, 33],
+    ['[ref]: /x\n"note\n\n~~~ "\nmore\n\n[ref]', 3, 17],
+    ['[ref]: /x (one\n\ntwo)\n---\n\n[ref]', 5, 25],
+  ])
+    await t.test(JSON.stringify(source), (t) => {
+      for (const eol of ['\n', '\r\n']) {
+        const text = source.replaceAll('\n', eol)
+        assert.deepEqual(expected(text), { words, characters })
+        const { counter } = counterFixture(t, text)
+        assert.deepEqual(read(counter), { words, characters })
+      }
+    })
+})
+
+test('regional title ownership follows CommonMark paragraph interruptions', async (t) => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const line of ['# two', '> two', '- two', '1. two', '```', '<div>'])
+        await t.test(JSON.stringify({ open, separator, line }), (t) => {
+          for (const eol of ['\n', '\r\n']) {
+            const source =
+              `[ref]: /x${separator}${open}one\n${line}${close}\n\n[ref]\n`.replaceAll(
+                '\n',
+                eol,
+              )
+            const href = separator === ' ' ? null : '/x'
+            const definition = countParser(syntax).lexer(source).links.ref
+            assert.equal(definition?.href ?? null, href)
+            assert.equal(definition?.title ?? null, null)
+            const f = fixture(t, source)
+            assert.equal(f.brackets.canClose(0), href !== null)
+            counterFixture(t, source)
+          }
+        })
+})
+
+test('regional title probes agree across 450 paragraph boundary cases', (t) => {
+  assert.deepEqual(expected('[ref]: /x "one\n- \nlast"\n\n[ref]'), {
+    words: 5,
+    characters: 26,
+  })
+  let cases = 0
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const eol of ['\n', '\r\n', '\r'])
+        for (const line of [
+          '',
+          ' ',
+          '\t',
+          '# two',
+          '#',
+          '> two',
+          '- two',
+          '- ',
+          '-',
+          '* two',
+          '1. two',
+          '1) two',
+          '2. two',
+          '```',
+          '~~~',
+          '***',
+          '---',
+          '- - -',
+          '___',
+          '<div>',
+          '<!-- x',
+          '<script>',
+          '===',
+          '   ===',
+          'plain',
+        ]) {
+          const source =
+            `[ref]: /x${separator}${open}one\n${line}\nlast${close}\n\n[ref]`.replaceAll(
+              '\n',
+              eol,
+            )
+          counterFixture(t, source)
+          cases++
+        }
+  assert.equal(cases, 450)
+})
+
+test('regional title lookahead follows gfm tables through delimiter edits and undo', (t) => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const gfm of [false, true]) {
+        const config = { ...syntax, gfm }
+        const source = `[ref]: /x${separator}${open}one\na | b\n--|--\nlast${close}\n\n[ref]`
+        const { edit } = counterFixture(t, source, config)
+        const from = source.indexOf('--|--')
+        edit([{ from, to: from + 5, insert: 'plain' }])
+        edit([{ from, to: from + 5, insert: '--|--' }], 'undo')
+        const header = source.indexOf('a | b')
+        edit([{ from: header, to: header + 5, insert: 'a b' }])
+        edit([{ from: header, to: header + 3, insert: 'a | b' }], 'undo')
+      }
+})
+
+test('regional title lookahead invalidates gfm headers and delimiters', (t) => {
+  const source = '[ref]: /x "one\na | b\n--|--\nlast"\n\n[ref]'
+  const f = fixture(t, source, true)
+  assert.equal(f.brackets.canClose(0), false)
+  const header = source.indexOf('a | b')
+  assert.deepEqual(
+    f.edit([{ from: header, to: header + 5, insert: 'a b' }]),
+    [0],
+  )
+  assert.equal(f.brackets.canClose(0), true)
+  assert.notEqual(f.brackets.canTitle(0, source.indexOf('\n'), '"'), null)
+  assert.deepEqual(
+    f.edit([{ from: header, to: header + 3, insert: 'a | b' }], 'undo'),
+    [0],
+  )
+  assert.equal(f.brackets.canClose(0), false)
+  const delimiter = source.indexOf('--|--')
+  assert.deepEqual(
+    f.edit([{ from: delimiter, to: delimiter + 5, insert: 'plain' }]),
+    [0],
+  )
+  assert.equal(f.brackets.canClose(0), true)
+  assert.notEqual(f.brackets.canTitle(0, source.indexOf('\n'), '"'), null)
+  assert.deepEqual(
+    f.edit([{ from: delimiter, to: delimiter + 5, insert: '--|--' }], 'undo'),
+    [0],
+  )
+  assert.equal(f.brackets.canClose(0), false)
 })
 
 test('native escaped title completion updates distant counts through undo', (t) => {

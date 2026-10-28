@@ -1,7 +1,8 @@
-import { Lexer, type Token } from 'marked'
+import type { Token } from 'marked'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import { readFrontmatter } from '../../shared/frontmatter'
+import { lexMarkdown } from '../../shared/marked-blocks'
 import type { AddonWindowProps } from '../api'
 import { Button, ShortcutKeys } from '../ui'
 import { type QuickNoteSettings, readSettings, settingsKey } from './settings'
@@ -60,7 +61,7 @@ const plain = (tokens: readonly Token[] = []): string =>
 function noteTitle(markdown: string, fallback: string) {
   // Frontmatter is metadata; its closing `---` would otherwise read as a setext underline.
   const body = readFrontmatter(markdown)?.content ?? markdown
-  const heading = Lexer.lex(body).find((token) => token.type === 'heading')
+  const heading = lexMarkdown(body).find((token) => token.type === 'heading')
   const title = plain(heading && 'tokens' in heading ? heading.tokens : [])
     .replace(/[\\/:*?"<>|#\p{Cc}]/gu, '')
     .replace(/\s+/g, ' ')

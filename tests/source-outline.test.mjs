@@ -57,10 +57,11 @@ test('outline structure skips pathological inline parsing outside the viewport',
   const bodyBlocks = 1000
   const prefix = 'ordinary body\n\n'.repeat(bodyBlocks)
   const source = `${prefix}# ${'['.repeat(32768)}x${']'.repeat(32768)}\n\n## tail\n`
-  const { model } = setup(source, { frontmatter: false })
+  const { store, model } = setup(source, { frontmatter: false })
   const char = InlineContext.prototype.char
   let inlineReads = 0
   try {
+    // Visits exclude scans over context.text within a single parser call.
     InlineContext.prototype.char = function (position) {
       assert.ok(
         ++inlineReads <= bodyBlocks + 2,
@@ -74,7 +75,14 @@ test('outline structure skips pathological inline parsing outside the viewport',
     assert.equal(value[1].label, 'tail')
     assert.equal(inlineReads, bodyBlocks + 2)
     assert.ok(work.readUnits <= source.length, JSON.stringify(work))
-    t.diagnostic(JSON.stringify({ inlineReads, readUnits: work.readUnits }))
+    assert.ok(store.counters().sourceUnitsRead <= 3 * source.length)
+    t.diagnostic(
+      JSON.stringify({
+        inlineReads,
+        readUnits: work.readUnits,
+        sourceUnitsRead: store.counters().sourceUnitsRead,
+      }),
+    )
   } finally {
     InlineContext.prototype.char = char
     model.dispose()

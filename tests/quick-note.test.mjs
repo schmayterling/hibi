@@ -1107,7 +1107,8 @@ test('the file name comes from the first markdown heading', {
   timeout: 45000,
 }, async (t) => {
   const h = await harness(t, {
-    draft: '```\n# not a heading\n```\n\nintro\n\nMeeting notes\n===\n',
+    draft:
+      '[ref]: /x "first\n\n```\n# not a heading\n```\n\nintro\n\nMeeting notes\n===\nlast"\n\n[ref]',
   })
   const { app, page } = await h.launch()
   const capture = await openCapture(app, page)

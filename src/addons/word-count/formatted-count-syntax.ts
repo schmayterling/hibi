@@ -1,26 +1,36 @@
 import type { MarkdownConfig } from '@lezer/markdown'
-import { Lexer, Tokenizer, type TokenizerExtension } from 'marked'
+import { Lexer, type TokenizerExtension } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
+import {
+  BlockTokenizer,
+  endsReferenceTitle,
+} from '../../shared/marked-blocks.ts'
 import { typstBlock } from '../typst/syntax.ts'
 import type { CountSyntax } from './formatted-text.ts'
 
-const definitionTokenizer = new Tokenizer()
+const definitionTokenizer = new BlockTokenizer()
 new Lexer({ gfm: false, tokenizer: definitionTokenizer })
+const gfmDefinitionTokenizer = new BlockTokenizer()
+new Lexer({ gfm: true, tokenizer: gfmDefinitionTokenizer })
 
 /** use the native destination validation as well as its definition rule. */
-export function countDefinition(text: string) {
-  return definitionTokenizer.def(text)
+export function countDefinition(text: string, gfm = false) {
+  return (gfm ? gfmDefinitionTokenizer : definitionTokenizer).def(text)
 }
 
 /** ask the actual definition rule whether a title closer can finish it. */
-export function pendingDefinitionTitle(rule: RegExp, text: string) {
+export function pendingDefinitionTitle(
+  rule: RegExp,
+  text: string,
+  gfm = false,
+) {
   for (const close of ['"', "'", ')']) {
     const probe = `${text}${close}\n`
     const match = rule.exec(probe)
     if (
       match?.[3] &&
       match[0].length === probe.length &&
-      countDefinition(probe)
+      countDefinition(probe, gfm)
     )
       return match[3].charAt(0)
   }
@@ -38,7 +48,8 @@ export function countMarkdownSyntax(
     complete: boolean,
   ) => number | null,
 ): MarkdownConfig {
-  const rule = Lexer.rules.block[syntax.gfm ? 'gfm' : 'normal'].def
+  const rules = Lexer.rules.block[syntax.gfm ? 'gfm' : 'normal']
+  const rule = rules.def
   const footnotes = markedGithubFootnote()
   const definition = footnotes.extensions?.find(
     (extension) => extension.name === 'footnoteDef',
@@ -53,7 +64,8 @@ export function countMarkdownSyntax(
     if (reset) Reflect.apply(reset, undefined, [text])
     return token
   }
-  const openTitle = (text: string) => pendingDefinitionTitle(rule, text)
+  const openTitle = (text: string) =>
+    pendingDefinitionTitle(rule, text, syntax.gfm)
   return {
     defineNodes: [{ name: 'CountDefinition', block: true }],
     parseBlock: [
@@ -183,16 +195,27 @@ export function countMarkdownSyntax(
               if (title && canTitle) {
                 while (titleTo != null && end < titleTo) if (!take()) break
               } else if (title) {
-                let blank = line.text.length === 0
                 for (;;) {
-                  // at line boundaries a title only retains its delimiter, plus
-                  // an empty final line for the single-quoted title grammar.
-                  const prefix = `[ref]: /x ${title}x${title === "'" && blank ? '\n' : ''}`
+                  if (endsReferenceTitle(cx.peekLine(), rules.paragraph)) break
+                  const prefix = `[ref]: /x ${title}x`
                   const probe = `${prefix}\n${cx.peekLine()}`
                   const continues = openTitle(probe)
                   if (!continues && !rule.exec(`${probe}\n`)?.[3]) break
+                  const previousEnd = end
                   if (!take()) break
-                  blank = line.text.length === 0
+                  if (
+                    syntax.gfm &&
+                    continues &&
+                    endsReferenceTitle(
+                      `${line.text}\n${cx.peekLine()}`,
+                      rules.paragraph,
+                    )
+                  ) {
+                    // Leave a table header for the next block parser.
+                    end = previousEnd
+                    ended = true
+                    break
+                  }
                   if (!continues) break
                 }
               }

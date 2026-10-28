@@ -5,8 +5,51 @@ import { type MarkedExtension, marked, Tokenizer } from 'marked'
 const setextRules = new WeakMap<RegExp, { start: RegExp; candidate: RegExp }>()
 const paragraphRules = new WeakMap<RegExp, RegExp>()
 
-// Candidate calls and source spans, including validation of a matched prefix.
+// Candidate calls and source spans, including title interruption windows.
 export const blockScanCounters = { calls: 0, units: 0 }
+
+const tableTokenizer = new Tokenizer()
+const tableLexer = new marked.Lexer({ gfm: true, tokenizer: tableTokenizer })
+// Boundary validation only needs cell counts, so retain no pending inline work.
+tableLexer.inline = () => []
+
+function paragraphRule(pattern: RegExp) {
+  let interrupt = paragraphRules.get(pattern)
+  if (!interrupt) {
+    const start = '^([^\\n]+(?:\\n(?!'
+    const tail = ')[^\\n]+)*)'
+    if (!pattern.source.startsWith(start) || !pattern.source.endsWith(tail))
+      return
+    interrupt = new RegExp(
+      `^(?:${pattern.source.slice(start.length, -tail.length)})`,
+    )
+    paragraphRules.set(pattern, interrupt)
+  }
+  return interrupt
+}
+
+/** Reference titles cannot cross CommonMark paragraph boundaries. */
+export function endsReferenceTitle(
+  source: string,
+  paragraph = marked.Lexer.rules.block.normal.paragraph,
+) {
+  blockScanCounters.calls++
+  blockScanCounters.units += source.length
+  if (
+    /^[ \t]*(?:\r?\n|$)/.test(source) ||
+    /^ {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)/.test(source)
+  )
+    return true
+  if (!paragraphRule(paragraph)?.test(source)) return false
+  if (
+    paragraph !== marked.Lexer.rules.block.gfm.paragraph ||
+    paragraphRule(marked.Lexer.rules.block.normal.paragraph)?.test(source)
+  )
+    return true
+  // The GFM paragraph rule only finds table candidates; cell counts must agree.
+  const end = source.indexOf('\n', source.indexOf('\n') + 1)
+  return !!tableTokenizer.table(end < 0 ? source : source.slice(0, end))
+}
 
 export function lexMarkdown(source: string) {
   return marked.lexer(source, {
@@ -24,6 +67,13 @@ export function parseMarkdown(source: string) {
 
 export const blockMarkdown: MarkedExtension = {
   tokenizer: {
+    def(source) {
+      return BlockTokenizer.prototype.def.call(
+        this,
+        source,
+        Object.getPrototypeOf(this).def,
+      )
+    },
     lheading(source) {
       return BlockTokenizer.prototype.lheading.call(
         this,
@@ -65,6 +115,33 @@ function blockToken<Result>(
 }
 
 export class BlockTokenizer extends Tokenizer {
+  override def(source: string, read = Tokenizer.prototype.def) {
+    const token = read.call(this, source)
+    if (!token?.title) return token
+    const title = this.rules.block.def.exec(token.raw)?.[3]
+    if (!title) return token
+    const from = token.raw.lastIndexOf(title)
+    for (
+      let end = title.indexOf('\n');
+      end >= 0;
+      end = title.indexOf('\n', end + 1)
+    ) {
+      // Interruptions need at most this line and the next (a table header and
+      // its delimiter row); a longer window rescans the rest of the title.
+      const next = title.indexOf('\n', end + 1)
+      const window = next < 0 ? -1 : title.indexOf('\n', next + 1)
+      if (
+        endsReferenceTitle(
+          title.slice(end + 1, window < 0 ? undefined : window),
+          this.rules.block.paragraph,
+        )
+      )
+        // A failed next-line title can leave a destination-only definition.
+        return read.call(this, source.slice(0, from + end))
+    }
+    return token
+  }
+
   override lheading(source: string, read = Tokenizer.prototype.lheading) {
     const pattern = this.rules.block.lheading
     let rule = setextRules.get(pattern)
@@ -108,18 +185,8 @@ export class BlockTokenizer extends Tokenizer {
     if (end < 0) return read.call(this, source)
     if (!end) return
     const firstLine = end
-    const pattern = this.rules.block.paragraph
-    let interrupt = paragraphRules.get(pattern)
-    if (!interrupt) {
-      const start = '^([^\\n]+(?:\\n(?!'
-      const tail = ')[^\\n]+)*)'
-      if (!pattern.source.startsWith(start) || !pattern.source.endsWith(tail))
-        return read.call(this, source)
-      interrupt = new RegExp(
-        `^(?:${pattern.source.slice(start.length, -tail.length)})`,
-      )
-      paragraphRules.set(pattern, interrupt)
-    }
+    const interrupt = paragraphRule(this.rules.block.paragraph)
+    if (!interrupt) return read.call(this, source)
     while (end < source.length) {
       const from = end + 1
       if (

@@ -1,4 +1,5 @@
 import { Lexer } from 'marked'
+import { endsReferenceTitle } from '../../shared/marked-blocks.ts'
 import type {
   PreparedSourceOperation,
   SourceSnapshot,
@@ -31,9 +32,11 @@ export class CountBrackets {
   readonly #readers = new Map<number, Set<number>>()
   readonly #headerReaders = new Map<number, Set<number>>()
   #work = { readUnits: 0, markerVisits: 0, candidateQueries: 0 }
+  readonly #gfm: boolean
 
-  constructor(source: SourceSnapshot) {
+  constructor(source: SourceSnapshot, gfm = false) {
     this.#source = source
+    this.#gfm = gfm
     const rows: Row[] = []
     let pending = 0
     for (const chunk of source.chunks()) {
@@ -97,9 +100,8 @@ export class CountBrackets {
     initial: number | null = null,
   ): number | null {
     const first = from < this.#markers.length ? this.#markers.at(from) : null,
-      rule = Lexer.rules.block.normal.def
+      rule = Lexer.rules.block[this.#gfm ? 'gfm' : 'normal'].def
     let number = this.#source.lineAt(from)!.number + 1,
-      blank = false,
       actual = initial
     for (const row of this.#markers.records(
       first?.index ?? this.#markers.count,
@@ -111,16 +113,36 @@ export class CountBrackets {
       for (; number <= last; number++) {
         const start = this.#source.lineStart(number)!,
           end = this.#source.lineAt(start)!.to,
-          text = this.#read(start, end),
-          prefix = `[count]: /x ${title}x${title === "'" && blank ? '\n' : ''}`,
+          text = this.#read(
+            start,
+            end,
+            this.#gfm ? headers : undefined,
+            this.#gfm ? lines : undefined,
+            baseLine,
+          ),
+          prefix = `[count]: /x ${title}x`,
           probe = `${prefix}\n${text}`,
           match = rule.exec(`${probe}\n`)
-        if (match?.[3] && countDefinition(`${probe}\n`)) actual = end
-        const pending = pendingDefinitionTitle(rule, probe)
-        if (number === last || !pending || (title === "'" && !text.length))
+        const next =
+          this.#gfm && !match?.[3] ? this.#source.lineStart(number + 1) : null
+        const continuation =
+          next === null
+            ? text
+            : `${text}\n${this.#read(next, this.#source.lineAt(next)!.to, headers, lines, baseLine)}`
+        if (
+          endsReferenceTitle(
+            continuation,
+            Lexer.rules.block[this.#gfm ? 'gfm' : 'normal'].paragraph,
+          )
+        ) {
+          this.#read(start, end, headers, lines, baseLine)
+          return actual
+        }
+        if (match?.[3] && countDefinition(`${probe}\n`, this.#gfm)) actual = end
+        const pending = pendingDefinitionTitle(rule, probe, this.#gfm)
+        if (number === last || !pending)
           this.#read(start, end, headers, lines, baseLine)
         if (!pending) return actual
-        blank = !text.length
       }
     }
     // an escaped closer can finish now and remain body if a later closer appears.
@@ -134,7 +156,7 @@ export class CountBrackets {
     lines: Set<number>,
     baseLine: number,
   ) {
-    const rule = Lexer.rules.block.normal.def
+    const rule = Lexer.rules.block[this.#gfm ? 'gfm' : 'normal'].def
     const line = this.#source.lineAt(closing.to - 1)!
     const read = (from: number, to: number) => {
       this.#work.readUnits += to - from
@@ -148,10 +170,10 @@ export class CountBrackets {
       return this.#source.sliceRaw(from, to)
     }
     const prefix = `[count${read(closing.to - 1, line.to)}`
-    const match = countDefinition(`${prefix}\n`)
+    const match = countDefinition(`${prefix}\n`, this.#gfm)
         ? rule.exec(`${prefix}\n`)
         : null,
-      title = pendingDefinitionTitle(rule, prefix)
+      title = pendingDefinitionTitle(rule, prefix, this.#gfm)
     if (title)
       return (
         this.#title(
@@ -166,15 +188,15 @@ export class CountBrackets {
       )
     if (match) return true
     // only inspect another destination line if the exact rule can accept one.
-    if (!countDefinition(`${prefix}\n/x\n`)) return false
+    if (!countDefinition(`${prefix}\n/x\n`, this.#gfm)) return false
     const next = this.#source.lineStart(line.number + 1)
     if (next === null) return false
     const end = this.#source.lineAt(next)!.to
     const probe = `${prefix}\n${read(next, end)}`
-    const nextMatch = countDefinition(`${probe}\n`)
+    const nextMatch = countDefinition(`${probe}\n`, this.#gfm)
         ? rule.exec(`${probe}\n`)
         : null,
-      nextTitle = pendingDefinitionTitle(rule, probe)
+      nextTitle = pendingDefinitionTitle(rule, probe, this.#gfm)
     if (nextTitle)
       return (
         this.#title(

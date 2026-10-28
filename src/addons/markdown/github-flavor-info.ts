@@ -3,7 +3,7 @@ import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
 import type { MarkdownFlavor } from '../api'
 import { alertMarker } from './alert-marker.ts'
 
-const parser = new Marked({ gfm: true })
+export const parser = new Marked({ gfm: true })
 export const flavorInfo: MarkdownFlavor = {
   id: 'github',
   name: 'GitHub Markdown',
@@ -17,15 +17,13 @@ export const flavorInfo: MarkdownFlavor = {
     if (!/(?:[|:~@<]|\[|www\.)/i.test(source)) return false
     let found = false
     parser.walkTokens(parser.lexer(source), (token) => {
-      if (
+      found ||=
+        token.type === 'footnoteDef' ||
         token.type === 'table' ||
         token.type === 'del' ||
-        (token.type === 'blockquote' && alertMarker(token.text)) ||
+        (token.type === 'blockquote' && !!alertMarker(token.text)) ||
         (token.type === 'list_item' && token.task) ||
         (token.type === 'link' && !token.raw.startsWith('['))
-      )
-        found = true
-      return []
     })
     return found
   },

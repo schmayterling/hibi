@@ -9,8 +9,7 @@ export function hasFootnoteDefinitions(source: string) {
   const parser = new Marked({ gfm: true }, markedGithubFootnote())
   let found = false
   parser.walkTokens(parser.lexer(source), (token) => {
-    if (token.type === 'footnoteDef') found = true
-    return []
+    found ||= token.type === 'footnoteDef'
   })
   return found
 }

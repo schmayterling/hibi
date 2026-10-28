@@ -1,16 +1,33 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
+import { markedGithubFootnote } from 'marked-github-footnote'
 import { blockStartCounters } from '../src/addons/_shared/block-start.ts'
 import { alertMarker, alertStart } from '../src/addons/markdown/alerts.ts'
-import { flavorInfo as github } from '../src/addons/markdown/github-flavor-info.ts'
-import { mathFlavor, mathTokens } from '../src/addons/math/syntax.ts'
+import {
+  flavorInfo as github,
+  parser as githubParser,
+} from '../src/addons/markdown/github-flavor-info.ts'
+import {
+  detector as mathDetector,
+  mathFlavor,
+  mathTokens,
+} from '../src/addons/math/syntax.ts'
 import {
   detectTextExtras,
   subtextStart,
+  detector as textExtrasDetector,
   textExtrasMarkdown,
 } from '../src/addons/text-extras/syntax.ts'
-import { typstFlavor, typstTokens } from '../src/addons/typst/syntax.ts'
+import {
+  detector as typstDetector,
+  typstFlavor,
+  typstTokens,
+} from '../src/addons/typst/syntax.ts'
+import { blockMarkdown } from '../src/shared/marked-blocks.ts'
+
+const startupGithub = { ...github }
+await import('../src/renderer/src/addon-checks.ts')
 
 const detect = (parser, matches) => (source) => {
   let found = false
@@ -23,8 +40,9 @@ const pairs = [
   [
     github.detect,
     detect(
-      new Marked({ gfm: true }),
+      new Marked({ gfm: true }, markedGithubFootnote(), blockMarkdown),
       (token) =>
+        token.type === 'footnoteDef' ||
         token.type === 'table' ||
         token.type === 'del' ||
         (token.type === 'blockquote' && alertMarker(token.text)) ||
@@ -34,19 +52,22 @@ const pairs = [
   ],
   [
     mathFlavor.detect,
-    detect(new Marked(mathTokens), (token) =>
+    detect(new Marked(mathTokens, blockMarkdown), (token) =>
       ['inlineMath', 'blockMath'].includes(token.type),
     ),
   ],
   [
     detectTextExtras,
-    detect(new Marked(textExtrasMarkdown), (token) =>
+    detect(new Marked(textExtrasMarkdown, blockMarkdown), (token) =>
       ['subscript', 'subtext'].includes(token.type),
     ),
   ],
   [
     typstFlavor.detect,
-    detect(new Marked(typstTokens), (token) => token.type === 'typstBlock'),
+    detect(
+      new Marked(typstTokens, blockMarkdown),
+      (token) => token.type === 'typstBlock',
+    ),
   ],
 ]
 
@@ -91,6 +112,42 @@ test('block extension starts find line starts in the paragraph and retain native
   assert.equal(alertStart(prose), -1)
   assert.equal(subtextStart(prose), -1)
   assert.equal(blockStartCounters.units, 2 * 'ordinary words\n\n'.length)
+})
+
+test('invalid reference titles leave footnotes and flavor syntax visible to detection', async (t) => {
+  for (const [name, body, detect] of [
+    ['github footnote', '[^1]: note\n\ntext[^1]', github.detect],
+    ['github strike', '~~strike~~', github.detect],
+    ['block math', '$$\nx^2\n$$', mathFlavor.detect],
+    ['inline math', '$x^2$', mathFlavor.detect],
+    ['typst', '```typst\n$x$\n```', typstFlavor.detect],
+    ['text extras', 'H~2~O\n\n-# small', detectTextExtras],
+  ])
+    await t.test(name, () => {
+      const source = `[ref]: /x "a\n\n${body}\n"\n`
+      assert.equal(detect(source), true, source)
+      assert.equal(detect('````md\n' + source + '\n````'), false)
+    })
+})
+
+test('lazy grammar updates existing startup metadata snapshots', () => {
+  const source = '[ref]: /x "a\n\n[^1]: note\n"\n\ntext[^1]'
+  assert.equal(github.detect(source), true)
+  assert.equal(startupGithub.detect(source), true)
+})
+
+test('lazy flavor grammar does not retain readers in shared parser options', () => {
+  for (const [detector, reference] of pairs) {
+    const source = '[ref]: /x "a\n\n$x$ ~~strike~~ H~2~O\n"'
+    assert.equal(detector(source), reference(source))
+  }
+  for (const parser of [
+    githubParser,
+    mathDetector,
+    textExtrasDetector,
+    typstDetector,
+  ])
+    assert.equal(parser.defaults.tokenizer?.lexer, undefined)
 })
 
 test('flavor detector guards preserve contextual parsing and delimiter edge cases', () => {

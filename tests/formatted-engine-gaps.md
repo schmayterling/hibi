@@ -84,13 +84,12 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | find-001 | [formatted-find.test.mjs:401](formatted-find.test.mjs#L401) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
 | find-003 | [formatted-find.test.mjs:664](formatted-find.test.mjs#L664) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
 | find-005 | [formatted-find.test.mjs:916](formatted-find.test.mjs#L916) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
-| corpus-008 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | a quoted title with a blank line must not define a reference | 5a: shared reference definition parsing |
 | corpus-011 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
-| corpus-012 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
-| corpus-020 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | counts must include a definition whose quoted title holds a blank line | 5a: shared reference definition parsing |
-| corpus-021 | [markdown-semantics-native.test.mjs:108](markdown-semantics-native.test.mjs#L108) | disabled heading syntax counts must include a blank-line title definition | 5a: shared reference definition parsing |
-| export-001 | [marked-large-paragraph.test.mjs:660](marked-large-paragraph.test.mjs#L660) | export must keep a blank-line title definition and its heading as visible text | 5a: shared reference definition parsing |
-| corpus-018 | [markdown-semantics-native.test.mjs:106](markdown-semantics-native.test.mjs#L106) | disabled heading syntax must keep a blank-line title definition literal | 5a: shared reference definition parsing |
+| corpus-012 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
+| export-002 | [marked-large-paragraph.test.mjs:856](marked-large-paragraph.test.mjs#L856) | an indented failed reference title must remain paragraph text instead of code | 10a: shared reference definition parsing |
+| export-003 | [marked-large-paragraph.test.mjs:287](marked-large-paragraph.test.mjs#L287) | a block math interruption must end a reference title | 10a: shared reference definition parsing |
+| export-004 | [marked-large-paragraph.test.mjs:911](marked-large-paragraph.test.mjs#L911) | a gfm table at the first title line must leave a destination-only definition | 10a: shared reference definition parsing |
+| export-005 | [marked-large-paragraph.test.mjs:922](marked-large-paragraph.test.mjs#L922) | a gfm table at the last title line must reject the definition | 10a: shared reference definition parsing |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | contracts-003 | [raw-html-editor.test.mjs:1225](raw-html-editor.test.mjs#L1225) | modified inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-004 | [raw-html-editor.test.mjs:1227](raw-html-editor.test.mjs#L1227) | superseded inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |

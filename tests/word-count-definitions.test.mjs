@@ -12,6 +12,7 @@ import {
   MarkdownSourceModel,
   metadataParsers,
 } from '../src/shared/markdown-worker-parser.ts'
+import { BlockTokenizer } from '../src/shared/marked-blocks.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceReferences } from '../src/shared/source-references.ts'
@@ -45,9 +46,10 @@ function fixture(t, text, config = syntax) {
     references ??= new SourceReferences(owners)
     finish(
       references.updateWork(owners, (region) => {
-        return new parser.Lexer({ ...parser.defaults, tokenizer: null }).lex(
-          source.sliceRaw(region.from, region.to),
-        ).links
+        return new parser.Lexer({
+          ...parser.defaults,
+          tokenizer: new BlockTokenizer(),
+        }).lex(source.sliceRaw(region.from, region.to)).links
       }),
     )
     const total = { words: 0, characters: 0 }
@@ -91,6 +93,25 @@ function fixture(t, text, config = syntax) {
   return { store, model, read, edit, expected }
 }
 
+test('regional definitions without bracket lookahead respect gfm table boundaries', (t) => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const gfm of [false, true]) {
+        const source = `[ref]: /x${separator}${open}one\na | b\n--|--\nlast${close}\n\n[ref]`
+        const f = fixture(t, source, { ...syntax, gfm })
+        assert.deepEqual(f.read(), f.expected(), source)
+        const from = source.indexOf('--|--')
+        f.edit(from, from + 5, 'plain')
+        assert.deepEqual(f.read(), f.expected())
+        f.edit(from, from + 5, '--|--', 'undo')
+        assert.deepEqual(f.read(), f.expected())
+      }
+})
+
 const references = [
   '[ref\n\n]: ht',
   '[re\n\nf]: https://example.test',
@@ -109,6 +130,36 @@ const footnotes = [
   '[^a]: note\n\n    second😀H~2~Oword1. one\n2. two',
   '[^a]: note\n\n    cond**<div>\ntext\n</di',
 ]
+
+test('blank reference title lines retain frozen CommonMark visible counts', (t) => {
+  for (const gfm of [false, true])
+    for (const eol of ['\n', '\r\n'])
+      for (const separator of [' ', '\n']) {
+        const source =
+          `[ref]: /x${separator}"first\n\nlast"\n\n[ref]`.replaceAll('\n', eol)
+        const visible =
+          separator === ' '
+            ? '[ref]: /x "first\nlast"\n[ref]'
+            : '"first\nlast"\nref'
+        const config = { ...syntax, gfm }
+        const f = fixture(t, source, config)
+        assert.equal(richText(source, config).slice(1), visible)
+        assert.deepEqual(f.read(), countText(visible))
+      }
+})
+
+test('definition ownership without title lookahead stops before following blocks', (t) => {
+  for (const [source, words, characters] of [
+    ['[ref]: /x\n"one\n\n```"\ncode\n\n[ref]', 3, 16],
+    ['[ref]: /x "one\n\n<!-- "\n\n[ref]\n\n-->', 4, 33],
+    ['[ref]: /x\n"note\n\n~~~ "\nmore\n\n[ref]', 3, 17],
+    ['[ref]: /x (one\n\ntwo)\n---\n\n[ref]', 5, 25],
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const f = fixture(t, source.replaceAll('\n', eol))
+      assert.deepEqual(f.read(), { words, characters }, source)
+    }
+})
 
 test('multiline reference labels and titles retain complete semantic ownership', (t) => {
   for (const gfm of [false, true])

@@ -1530,44 +1530,29 @@ export function SourceEditor({
               : null
           }),
           Prec.highest(
-            keymap.of(
-              [
-                ...completionKeymap.filter(
-                  (binding) => binding.key !== 'Enter',
-                ),
-                ...(['Enter', 'Tab'] as const).map((key) => ({
-                  key,
-                  run: (view: EditorView) => {
-                    const options = currentCompletions(view.state)
-                    const selected = selectedCompletionIndex(view.state) ?? -1
-                    const option =
-                      options[selected < 0 && key === 'Tab' ? 0 : selected]
-                    const item = option && completionItems.get(option)
-                    if (
-                      !item ||
-                      !completionForKey([item], selected < 0 ? -1 : 0, key)
-                    ) {
-                      closeCompletion(view)
-                      return false
-                    }
-                    if (selected < 0)
-                      view.dispatch({ effects: setSelectedCompletion(0) })
-                    return acceptCompletion(view)
-                  },
-                })),
-              ].map((binding) => ({
-                ...binding,
-                // As in the rich view, the keys of a composition are the input
-                // method's, also before it first changes the text: the list
-                // closes and takes none.
+            keymap.of([
+              ...completionKeymap.filter((binding) => binding.key !== 'Enter'),
+              ...(['Enter', 'Tab'] as const).map((key) => ({
+                key,
                 run: (view: EditorView) => {
-                  if (!view.compositionStarted)
-                    return binding.run?.(view) ?? false
-                  closeCompletion(view)
-                  return false
+                  const options = currentCompletions(view.state)
+                  const selected = selectedCompletionIndex(view.state) ?? -1
+                  const option =
+                    options[selected < 0 && key === 'Tab' ? 0 : selected]
+                  const item = option && completionItems.get(option)
+                  if (
+                    !item ||
+                    !completionForKey([item], selected < 0 ? -1 : 0, key)
+                  ) {
+                    closeCompletion(view)
+                    return false
+                  }
+                  if (selected < 0)
+                    view.dispatch({ effects: setSelectedCompletion(0) })
+                  return acceptCompletion(view)
                 },
               })),
-            ),
+            ]),
           ),
           indentation.current.of(
             formatted
@@ -1956,6 +1941,17 @@ export function SourceEditor({
         ChangeSet.of(changes, previousLength),
       )
     })
+    // The keys of a started composition are the input method's, as in the
+    // rich view. CodeMirror ignores them only once the composition changes
+    // the text; before that, its keymap and focus keys would still take them.
+    // The open list closes; nothing prevents the key's default.
+    const passComposingKey = (event: KeyboardEvent) => {
+      if (!event.isComposing && !editor.compositionStarted) return
+      cancelCompletion()
+      closeCompletion(editor)
+      event.stopPropagation()
+    }
+    editor.dom.addEventListener('keydown', passComposingKey, true)
     const onTypingCommand = (event: KeyboardEvent) => {
       if (
         completion &&
@@ -2340,6 +2336,7 @@ export function SourceEditor({
     return () => {
       restoreFocus.current ??= captureEditorFocus(editor.contentDOM)
       cancelAnimationFrame(compositionFrame)
+      editor.dom.removeEventListener('keydown', passComposingKey, true)
       editor.contentDOM.removeEventListener('keydown', onTypingCommand, true)
       editor.contentDOM.removeEventListener(
         'compositionstart',

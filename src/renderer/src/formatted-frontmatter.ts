@@ -1,4 +1,9 @@
-import { StateEffect, StateField, type Text } from '@codemirror/state'
+import {
+  type EditorState,
+  StateEffect,
+  StateField,
+  type Text,
+} from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin } from '@codemirror/view'
 import {
   frontmatterProbe,
@@ -170,6 +175,30 @@ export const frontmatterBounds = StateField.define<Bounds>({
   },
   provide: () => searcher,
 })
+
+/** The frontmatter and the blank lines after it, once the formatted view hides it. */
+export function frontmatterSource(state: EditorState) {
+  const { end, read } = state.field(frontmatterBounds)
+  return end && read?.bounds ? state.sliceDoc(0, read.bounds.contentFrom) : ''
+}
+
+/**
+ * Report the frontmatter to a properties editor that does not read the whole
+ * note, again only when its read changes: body edits keep the read.
+ */
+export const reportFrontmatter = (report: (source: string) => void) =>
+  ViewPlugin.define((view) => {
+    let bounds = view.state.field(frontmatterBounds)
+    report(frontmatterSource(view.state))
+    return {
+      update(update) {
+        const next = update.state.field(frontmatterBounds)
+        if (next === bounds) return
+        bounds = next
+        report(frontmatterSource(update.state))
+      },
+    }
+  })
 
 const hidden = Decoration.replace({ block: true })
 

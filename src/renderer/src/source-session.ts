@@ -405,6 +405,9 @@ export function createSourceSession(
     redo: () => writable() && !!session.redo(),
   }
   const { undo, redo } = history
+  /** Editor changes as this view commits them, in its opening's line breaks. */
+  const sourceChanges = (changes: readonly RawEdit[]) =>
+    sourceChangesFromEditor(snapshot, changes, lineBreak)
   const dispatch = (
     transactions: readonly Transaction[],
     view: Pick<EditorView, 'state' | 'update' | 'setState'> & {
@@ -485,7 +488,7 @@ export function createSourceSession(
       viewId,
     )
     session.edit(
-      exactChanges ?? sourceChangesFromEditor(snapshot, changes, lineBreak),
+      exactChanges ?? sourceChanges(changes),
       event.includes('compose')
         ? 'composition'
         : event === 'input.addon'
@@ -513,6 +516,20 @@ export function createSourceSession(
     selection: () => editorSelection(snapshot, session.selection(viewId)),
     /** Whether the view has echoed canonical edits, without flushing a hidden view. */
     isCurrent: () => !failed && !pending && snapshot === session.snapshot(),
+    /**
+     * The whole source after editor changes, as this view would commit them;
+     * null while the view is behind the session.
+     */
+    sourceAfter: (changes: readonly RawEdit[]) =>
+      failed || pending || snapshot !== session.snapshot()
+        ? null
+        : sourceChanges(changes).reduceRight(
+            (source, change) =>
+              source.slice(0, change.from) +
+              change.insert +
+              source.slice(change.to),
+            snapshot.materialize(),
+          ),
     dispatch,
     setVisible(next: boolean) {
       visible = next
@@ -610,6 +627,8 @@ export function createSourceSession(
       top: number,
       margin: number,
     ) {
+      // A hidden view's top line maps through the echoes it has not shown.
+      if (pending) top = pending.mapPos(top, 1)
       flush()
       if (failed) return
       try {

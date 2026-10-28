@@ -97,27 +97,33 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
       ),
     t.formattedEngine,
   )
-  await t.test(
-    'outline navigation exposes rendered heading text',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap marker-007: outline navigation must expose rendered heading text'
-          : undefined,
-    },
-    async () => {
-      assert.equal(
-        await page.evaluate(
-          () =>
-            window
-              .getSelection()
-              ?.anchorNode?.parentElement?.closest('h1, [role="heading"]')
-              ?.textContent,
-        ),
-        'alpha',
+  // Accepted difference: the formatted view reveals the heading's `# ` as
+  // editable text under the caret, so the heading's rendered text is the
+  // name in its accessibility tree rather than its text content.
+  await t.test('outline navigation exposes rendered heading text', async () => {
+    const heading =
+      'window.getSelection()?.anchorNode?.parentElement?.closest(\'h1, [role="heading"]\')'
+    if (t.formattedEngine !== 'codemirror') {
+      assert.equal(await page.evaluate(`${heading}?.textContent`), 'alpha')
+      return
+    }
+    const cdp = await page.context().newCDPSession(page)
+    try {
+      const { result } = await cdp.send('Runtime.evaluate', {
+        expression: heading,
+      })
+      const { nodes } = await cdp.send('Accessibility.queryAXTree', {
+        objectId: result.objectId,
+        role: 'heading',
+      })
+      assert.deepEqual(
+        nodes.filter((node) => !node.ignored).map((node) => node.name?.value),
+        ['alpha'],
       )
-    },
-  )
+    } finally {
+      await cdp.detach()
+    }
+  })
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+/' : 'Control+/',

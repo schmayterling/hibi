@@ -17,7 +17,7 @@ import { headingAnchors } from '../../shared/heading-anchor'
 import { isMediaFile } from '../../shared/media'
 import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
-import { largeOpening } from './document-shell'
+import { largeOpening, largeSource } from './document-shell'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
@@ -30,9 +30,8 @@ import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
-import { mountedDocumentEdits } from './mounted-document-edits'
 import type { OutlineHeading } from './OutlineSidebar'
-import { SourceEditor } from './SourceEditor'
+import { SourceEditor, sourceAfter } from './SourceEditor'
 import { editorPosition, revealSourcePosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
 import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
@@ -91,13 +90,28 @@ export function MarkdownEditor({
   outlineActive,
 }: Parameters<typeof RichMarkdownEditor>[0]) {
   const markdownDocument = format?.editing === 'markdown'
-  // Large notes keep frontmatter in the text while properties are unavailable.
   const showProperties =
-    !largeOpening(documentRuntime, documentState) &&
     markdownDocument &&
     markdownExtensions.some(
       ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
     )
+  // A large note's properties get its frontmatter from the formatted view's
+  // bounded read, not the whole note.
+  const largeProperties = largeOpening(documentRuntime, documentState)
+  const [frontmatter, setFrontmatter] = useState('')
+  const reportedProperties = useMemo<readonly FormattedExtension[]>(
+    () => [
+      {
+        id: 'formatted.frontmatter',
+        create: () =>
+          import('./formatted-frontmatter').then((module) => [
+            module.formattedFrontmatter,
+            module.reportFrontmatter(setFrontmatter),
+          ]),
+      },
+    ],
+    [],
+  )
   const projectionExtensions = useMemo<readonly FormattedExtension[]>(() => {
     if (
       !markdownExtensions.some(
@@ -121,11 +135,21 @@ export function MarkdownEditor({
   }, [markdownExtensions, documentState.tabId])
   const editorExtensions = useMemo(
     () => [
-      ...(showProperties ? propertiesExtensions : []),
+      ...(showProperties
+        ? largeProperties
+          ? reportedProperties
+          : propertiesExtensions
+        : []),
       ...projectionExtensions,
       ...formattedExtensions,
     ],
-    [showProperties, projectionExtensions, formattedExtensions],
+    [
+      showProperties,
+      largeProperties,
+      reportedProperties,
+      projectionExtensions,
+      formattedExtensions,
+    ],
   )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
@@ -173,7 +197,13 @@ export function MarkdownEditor({
     direction: 'next',
   })
   // A large note's source view unmounts when it is left, keeping its place.
-  const releaseSource = largeOpening(documentRuntime, documentState)
+  // A note that grows large releases a hidden one as it crosses the size.
+  const grownLarge = useSyncExternalStore(
+    documentRuntime.subscribeDocument,
+    () => largeSource(documentRuntime, documentState.tabId),
+  )
+  const releaseSource =
+    largeOpening(documentRuntime, documentState) || grownLarge
   const {
     content,
     paneMode,
@@ -185,38 +215,21 @@ export function MarkdownEditor({
     setSourceSettled,
     focusOwnedByEditor,
   } = useEditorPanes(mode, markdownDocument, false, releaseSource)
-  // Each pane owns its session bookmark and addon view target.
+  // The source bookmark stays independent of the hosting view identity.
   const sourceViewId = `${viewId}:source` as ViewId
   const documentTarget = documentRuntime.captureDocument(documentState.tabId)
   const findTarget =
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane
-  const activeViewId =
-    findTarget === 'source' ? sourceViewId : (viewId as ViewId)
   useEffect(() => {
-    editorViewRegistry.setActive(viewId as ViewId, 'rich')
-    return () => editorViewRegistry.clearActive(viewId as ViewId)
-  }, [viewId])
+    editorViewRegistry.setActive(viewId as ViewId, findTarget)
+  }, [viewId, findTarget])
+  useEffect(
+    () => () => editorViewRegistry.clearActive(viewId as ViewId),
+    [viewId],
+  )
   useEffect(() => {
-    if (
-      !sourceMounted ||
-      !documentTarget ||
-      documentRuntime.captureDocument(documentState.tabId) !== documentTarget
-    )
-      return
-    const unregister = documentRuntime.registerView(
-      documentState.tabId,
-      sourceViewId,
-      mountedDocumentEdits.bindView,
-    )
-    editorViewRegistry.setActive(sourceViewId, 'source')
-    return () => {
-      editorViewRegistry.clearActive(sourceViewId)
-      unregister()
-    }
-  }, [sourceMounted, documentTarget, documentState.tabId, sourceViewId])
-  useEffect(() => {
-    if (focused && documentTarget) documentRuntime.focusView(activeViewId)
-  }, [focused, documentTarget, activeViewId])
+    if (focused && documentTarget) documentRuntime.focusView(viewId as ViewId)
+  }, [focused, documentTarget, viewId])
   useEffect(() => {
     onOutline([])
     onActiveOutline(null)
@@ -508,6 +521,39 @@ export function MarkdownEditor({
       ],
     })
   }
+  /** A large note's properties return only the frontmatter they were given. */
+  const editFrontmatter = (markdown: string) => {
+    const element = content.current?.querySelector<HTMLElement>(
+      '.rich-pane .cm-content',
+    )
+    const view = element && sourceView(element)
+    const change = sourceChange(frontmatter, markdown)
+    // A change to frontmatter edited since the properties rendered is dropped.
+    if (
+      !view ||
+      !change ||
+      view.state.sliceDoc(0, frontmatter.length) !== frontmatter
+    )
+      return
+    const edit = { ...change, insert: normalizedSource(change.insert) }
+    // Verbatim projections, which read the whole note, accept frontmatter
+    // edits with the whole new source, as from small notes' properties: the
+    // one this view commits.
+    const replacement = projectionExtensions.length
+      ? sourceAfter(view, [edit])
+      : undefined
+    if (replacement === null) return
+    view.dispatch({
+      changes: edit,
+      userEvent: 'input.addon',
+      annotations: [
+        isolateHistory.of('full'),
+        ...(replacement === undefined
+          ? []
+          : [formattedProjectionSource.of(replacement)]),
+      ],
+    })
+  }
   const ready =
     (paneMode === 'markdown' || formattedReady) &&
     (paneMode === 'normal' || sourceReady)
@@ -534,7 +580,7 @@ export function MarkdownEditor({
       />
       <main
         className={`editor-panes mode-${paneMode}`}
-        data-editor-view={activeViewId}
+        data-editor-view={viewId}
         data-source-ready={ready}
         onDropCapture={(event) => {
           const files = Array.from(event.dataTransfer.files)
@@ -577,16 +623,19 @@ export function MarkdownEditor({
             inert={paneMode === 'markdown'}
           >
             {markdownDocument &&
-              markdownExtensions.map(({ id, Editor }) =>
-                Editor ? (
+              markdownExtensions.map(({ id, Editor }) => {
+                if (!Editor) return null
+                const frontmatterOnly =
+                  largeProperties && id === 'frontmatter.metadata'
+                return (
                   <Editor
                     key={id}
-                    value={value}
+                    value={frontmatterOnly ? frontmatter : value}
                     disabled={disabled}
-                    onChange={editSource}
+                    onChange={frontmatterOnly ? editFrontmatter : editSource}
                   />
-                ) : null,
-              )}
+                )
+              })}
             <div className="rich-editor-host">
               <SourceEditor
                 presentation="formatted"
@@ -629,8 +678,8 @@ export function MarkdownEditor({
             className="source-pane"
             onFocusCapture={() => {
               setFocusedPane('source')
-              editorViewRegistry.setActive(sourceViewId, 'source')
-              documentRuntime.focusView(sourceViewId)
+              editorViewRegistry.setActive(viewId as ViewId, 'source')
+              documentRuntime.focusView(viewId as ViewId)
             }}
             aria-label="Document source"
             aria-hidden={paneMode === 'normal'}
@@ -644,7 +693,8 @@ export function MarkdownEditor({
               >
                 <MarkdownSourceEditor
                   document={documentState}
-                  viewId={sourceViewId}
+                  viewId={viewId}
+                  sessionViewId={sourceViewId}
                   focused={focused}
                   editTarget={findTarget === 'source'}
                   sourceVisible={paneMode !== 'normal'}

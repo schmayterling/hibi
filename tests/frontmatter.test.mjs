@@ -15,10 +15,17 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  replaceRichText,
+  replaceSourceText,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
+
+const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
 unit(
   'frontmatter preserves raw metadata, spacing, and delimiter boundaries',
@@ -406,6 +413,83 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
   await properties.waitFor()
   assert.equal(await read(), '---\n{}\n---\n\n')
 })
+
+unit(
+  'the formatted view shows and edits the properties of a note opened over 256 KiB',
+  {
+    timeout: 60000,
+  },
+  async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-large-properties-'))
+    const fixture = join(folder, 'large.md')
+    const original = `﻿---\r\ntitle: original\r\npublic: false\r\n...\r\n\r\n${'A paragraph of the large note.\r\n\r\n'.repeat(9300)}`
+    assert.ok(original.length > 300 * 1024)
+    await writeFile(fixture, original)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.evaluate(({ dialog }, fixture) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [fixture],
+      })
+    }, fixture)
+    const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, 'codemirror')
+    await clickMenu(app, 'Open…')
+    await waitForDocumentEditor(app, page)
+    const properties = page.getByRole('region', {
+      name: /frontmatter properties/i,
+    })
+    const title = properties.getByRole('textbox', {
+      name: /^title$/i,
+      exact: true,
+    })
+    assert.equal(await title.inputValue(), 'original')
+    assert.equal(
+      await page.locator('.rich-pane .cm-line', { hasText: 'title:' }).count(),
+      0,
+    )
+    const source = (expected) =>
+      waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        expected,
+      )
+    await title.fill('changed')
+    const titled = original.replace('title: original', 'title: changed')
+    await source(titled)
+    const visible = properties.getByRole('checkbox', {
+      name: /^public$/i,
+      exact: true,
+    })
+    await visible.check()
+    await source(titled.replace('public: false', 'public: true'))
+    // Undo takes back the last properties edit alone.
+    await page.locator('.rich-pane .cm-content').focus()
+    await pressShortcut(app, `${mod}+z`)
+    await source(titled)
+    await waitForAsync(
+      page,
+      () =>
+        document.querySelector('.frontmatter input[type="checkbox"]')
+          ?.checked === false,
+    )
+    await clickMenu(app, 'Save')
+    await page
+      .getByRole('status', { name: /unsaved changes/i })
+      .waitFor({ state: 'hidden' })
+    assert.equal(await readFile(fixture, 'utf8'), titled)
+  },
+)
 
 test('typing a leading divider never activates frontmatter or disables editing', {
   timeout: 30000,

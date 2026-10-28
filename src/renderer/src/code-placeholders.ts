@@ -292,7 +292,10 @@ function measure(view: EditorView): Metrics | null {
 /**
  * Code turns into lines where the editor draws, its viewport, which reaches
  * past the screen: lines it has not drawn would count as estimates again, and
- * drawn ones it has measured keep their height as placeholders.
+ * drawn ones it has measured keep their height as placeholders. The window
+ * follows the viewport once the editor has measured it, at most once a
+ * measure: an update the editor has not measured yet keeps the text at the
+ * top by estimated heights.
  */
 const follow = ViewPlugin.fromClass(
   class {
@@ -312,14 +315,18 @@ const follow = ViewPlugin.fromClass(
         this.check()
     }
     check() {
-      if (!this.measured)
-        this.view.requestMeasure({
-          key: this,
-          read: (view) => measure(view),
-          write: (metrics, view) => {
-            if (!metrics) return
+      // Measure requests run once the viewport no longer changes.
+      this.view.requestMeasure({
+        key: this,
+        read: (view) => ({
+          metrics: this.measured ? null : measure(view),
+          viewport: view.viewport,
+        }),
+        write: ({ metrics, viewport }, view) => {
+          const { metrics: known, live } = view.state.field(placeholders)
+          const effects: StateEffect<unknown>[] = []
+          if (metrics) {
             this.measured = true
-            const known = view.state.field(placeholders).metrics
             if (
               !known ||
               Object.entries(metrics).some(
@@ -327,18 +334,21 @@ const follow = ViewPlugin.fromClass(
                   Math.abs(value - known[key as keyof Metrics]) > 0.5,
               )
             )
-              this.dispatch(setMetrics.of(metrics))
-          },
-        })
-      const { from, to } = this.view.viewport
-      const live = this.view.state.field(placeholders).live
-      if (live?.from !== from || live.to !== to)
-        this.dispatch(setLive.of({ from, to }))
-    }
-    /** After the update or measure that asked, before the frame is painted. */
-    dispatch(effect: StateEffect<unknown>) {
-      queueMicrotask(() => {
-        if (!this.destroyed) this.view.dispatch({ effects: effect })
+              effects.push(setMetrics.of(metrics))
+          }
+          if (live?.from !== viewport.from || live.to !== viewport.to)
+            effects.push(setLive.of({ from: viewport.from, to: viewport.to }))
+          // After the measure, before the frame is painted.
+          if (effects.length)
+            queueMicrotask(() => {
+              if (this.destroyed) return
+              this.view.dispatch({ effects })
+              // Reading the layout measures the lines that turned back now,
+              // before another update takes the text at the top from their
+              // estimated heights.
+              this.view.lineBlockAtHeight(0)
+            })
+        },
       })
     }
     destroy() {

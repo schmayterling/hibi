@@ -422,7 +422,7 @@ unit(
   async (t) => {
     const folder = await mkdtemp(join(tmpdir(), 'hibi-large-properties-'))
     const fixture = join(folder, 'large.md')
-    const original = `﻿---\r\ntitle: original\r\npublic: false\r\n...\r\n\r\n${'A paragraph of the large note.\r\n\r\n'.repeat(9300)}`
+    const original = `\uFEFF---\r\ntitle: original\r\npublic: false\r\n...\r\n\r\n${'A paragraph of the large note.\r\n\r\n'.repeat(9300)}`
     assert.ok(original.length > 300 * 1024)
     await writeFile(fixture, original)
     const app = await electron.launch({
@@ -488,6 +488,23 @@ unit(
       .getByRole('status', { name: /unsaved changes/i })
       .waitFor({ state: 'hidden' })
     assert.equal(await readFile(fixture, 'utf8'), titled)
+    // Frontmatter edited in the source pane reaches the properties.
+    await page
+      .getByRole('button', { name: /^side-by-side$/i, exact: true })
+      .click()
+    await page.locator('.source-pane .cm-content').evaluate((element) => {
+      const view = element.cmTile.root.view
+      const from = view.state.sliceDoc(0, 100).indexOf('changed')
+      view.dispatch({
+        changes: { from, to: from + 'changed'.length, insert: 'from source' },
+      })
+    })
+    await source(titled.replace('title: changed', 'title: from source'))
+    await waitForAsync(page, () =>
+      [...document.querySelectorAll('.frontmatter textarea')].some(
+        (field) => field.value === 'from source',
+      ),
+    )
   },
 )
 

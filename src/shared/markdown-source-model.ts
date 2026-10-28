@@ -181,6 +181,32 @@ export class MarkdownSourceModel {
     if (owners) {
       for (let at = prepared.operation.changes.length - 1; at >= 0; at--)
         owners = this.#edit(owners, prepared.operation.changes[at]!)
+      // edits can join cr + lf across retained rows; keep the pair in its left owner.
+      let shift = 0
+      for (const change of prepared.operation.changes) {
+        const from = change.from + shift
+        shift += change.insert.length - (change.to - change.from)
+        for (const position of [from, from + change.insert.length]) {
+          if (prepared.after.rawToEditor(position) !== null) continue
+          const right = owners.at(position)
+          if (!right || right.from !== position) continue
+          const left = owners.get(right.index - 1)!
+          owners = owners.update(left.index, {
+            ...left.owner,
+            length: left.owner.length + 1,
+            parsed: false,
+          })
+          if (right.owner.length === 1) {
+            this.#trees.delete(right.owner.slot)
+            owners = owners.splice(right.index, right.index + 1, [])
+          } else
+            owners = owners.update(right.index, {
+              ...right.owner,
+              length: right.owner.length - 1,
+              parsed: false,
+            })
+        }
+      }
       if (owners.length !== prepared.after.utf16Length)
         throw new Error('Source and owner lengths disagree.')
     }

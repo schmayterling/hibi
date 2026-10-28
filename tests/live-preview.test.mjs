@@ -1287,3 +1287,37 @@ test('ordered list numbers in a 20,000-item list come from cached item offsets',
   assert.ok(result.scrolled < 1000, JSON.stringify(result.scrolled))
   assert.ok(result.edited < 10000, JSON.stringify(result.edited))
 })
+
+test('selecting the whole note includes the hidden fences at its ends', {
+  timeout: 30000,
+}, async () => {
+  const code = '```js\nconst answer = 42\n```'
+  // Select-all covers the text after hidden metadata, as the frontmatter view's Mod-a does.
+  for (const metadata of ['', '---\ntitle: test\n---\n\n']) {
+    const doc = metadata + code
+    const result = await harness.evaluate(
+      async ({ doc, metadata }) => {
+        const preview = window.livePreview
+        await preview.mount(
+          doc,
+          { width: 800, height: 600 },
+          { editable: true, frontmatter: !!metadata },
+        )
+        const view = preview.view()
+        view.dispatch({
+          selection: { anchor: metadata.length, head: doc.length },
+        })
+        const all = view.state.selection.main
+        // A caret left on the hidden closing fence still moves beside it.
+        view.dispatch({ selection: { anchor: doc.length } })
+        return {
+          all: [all.anchor, all.head],
+          caret: view.state.selection.main.head,
+        }
+      },
+      { doc, metadata },
+    )
+    assert.deepEqual(result.all, [metadata.length, doc.length], metadata)
+    assert.equal(result.caret, doc.indexOf('\n```', metadata.length), metadata)
+  }
+})

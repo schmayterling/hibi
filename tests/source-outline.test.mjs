@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { InlineContext } from '@lezer/markdown'
 import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
@@ -52,20 +53,29 @@ const edit = (store, model, changes) => {
 }
 
 test('outline structure skips pathological inline parsing outside the viewport', (t) => {
-  const prefix = 'ordinary body\n\n'.repeat(1000)
+  const bodyBlocks = 1000
+  const prefix = 'ordinary body\n\n'.repeat(bodyBlocks)
   const source = `${prefix}# ${'['.repeat(32768)}x${']'.repeat(32768)}\n\n## tail\n`
   const { model } = setup(source, { frontmatter: false })
+  const char = InlineContext.prototype.char
+  let inlineReads = 0
   try {
+    InlineContext.prototype.char = function (position) {
+      assert.ok(
+        ++inlineReads <= bodyBlocks + 2,
+        'outline scanned inline syntax',
+      )
+      return char.call(this, position)
+    }
     const { value } = finish(model.read())
     const work = model.counters()
     assert.equal(value.length, 2)
     assert.equal(value[1].label, 'tail')
-    t.diagnostic(JSON.stringify(work))
-    assert.ok(
-      work.longestAdvanceMs < 100,
-      `outline parser blocked for ${work.longestAdvanceMs}ms`,
-    )
+    assert.equal(inlineReads, bodyBlocks + 2)
+    assert.ok(work.readUnits <= source.length, JSON.stringify(work))
+    t.diagnostic(JSON.stringify({ inlineReads, readUnits: work.readUnits }))
   } finally {
+    InlineContext.prototype.char = char
     model.dispose()
   }
 })

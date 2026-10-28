@@ -81,7 +81,6 @@ function containerRanges(
   ranges: Range[],
 ) {
   const heads: {
-    from: number
     to: number
     line: number
     newline: number | null
@@ -125,7 +124,7 @@ function containerRanges(
     if (newline === state.doc.length) return null
     const start = Math.max(line.from, prefix)
     remember(start, to)
-    heads.push({ from, to, line: start, newline })
+    heads.push({ to, line: start, newline })
   }
   if (!heads.length) return { head: [], ranges }
   const line = state.doc.lineAt(ranges[0]!.from)

@@ -528,6 +528,61 @@ test('incidental copy-marker text does not bypass html conversion', {
   await settled(note)
 })
 
+test('html in a native clipboard envelope pastes only its fragment, in its context', {
+  timeout: 30000,
+}, async () => {
+  const at = note.length
+  const start = '<!--StartFragment-->',
+    end = '<!--EndFragment-->'
+  const wrap = (body) =>
+    `<html>\r\n<head><meta charset="utf-8"></head>\r\n<body>\r\n${body}\r\n</body>\r\n</html>`
+  for (const [html, expected] of [
+    // Multibyte text before and inside the fragment markers.
+    [
+      wrap(
+        `<p>outside é</p><ul><li>outside 😀</li>${start}<li>in é</li><li>中 😀</li>${end}<li>after</li></ul><p>after 😀</p>`,
+      ),
+      '- in é\n- 中 😀',
+    ],
+    [
+      wrap(`<p>before é ${start}<strong>bold</strong> 中 😀${end} after</p>`),
+      '**bold** 中 😀',
+    ],
+    // Ordered items keep their numbers.
+    [
+      wrap(
+        `<ol start="3"><li>before</li>${start}<li>in</li>${end}<li>after</li></ol>`,
+      ),
+      '4. in',
+    ],
+    // As in Chromium, the first start and the last end mark it.
+    [
+      wrap(
+        `${start}<p>one</p>${start}<p>two</p>${end}<p>three</p>${end}<p>after</p>`,
+      ),
+      'one\n\ntwo\n\nthree',
+    ],
+    // Look-alike declarations parse to the same comments but mark nothing.
+    [
+      wrap(
+        `<p>before</p><!StartFragment><p>between</p>${start}<p>in</p><!EndFragment><p>still in</p>${end}<p>after</p>`,
+      ),
+      'in\n\nstill in',
+    ],
+    // Markers before the body still mark it.
+    [`${start}<p>in</p>${end}<p>after</p>`, 'in'],
+    [`<meta charset="utf-8">${start}<p>in</p>${end}<p>after</p>`, 'in'],
+  ]) {
+    await clipboardEvent('paste', at, at, {
+      'text/html': html,
+      'text/plain': 'ignored',
+    })
+    await settled(note + expected)
+    await undo()
+    await settled(note)
+  }
+})
+
 test('large html pastes convert without losing their text', {
   timeout: 60000,
 }, async () => {

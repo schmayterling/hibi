@@ -218,8 +218,15 @@ function reachOf(chunks: readonly Tree[], positions: readonly number[]) {
   })
 }
 
-/** Lines whose parsing decision read across `pos`, or null when only boundaries are known. */
-export function readAheadFrom(tree: Tree, pos: number): number[] | null {
+/**
+ * Lines whose parsing decision read across `pos`, or null when only boundaries are known.
+ * A caller may supply proved decision lines for boundary-only chunks.
+ */
+export function readAheadFrom(
+  tree: Tree,
+  pos: number,
+  resolve?: (from: number, to: number) => readonly number[] | null,
+): number[] | null {
   const found = new Set<number>()
   let unknown = false
   const visit = (node: Tree, from: number) => {
@@ -228,7 +235,9 @@ export function readAheadFrom(tree: Tree, pos: number): number[] | null {
     if (!meta || meta.reach === undefined || from + meta.reach < pos) return
     const { reads, index } = meta
     if (!index || (!reads && info?.kind !== 'root' && info?.kind !== 'group')) {
-      unknown = true
+      const decisions = resolve?.(from, from + node.length)
+      if (decisions) for (const at of decisions) found.add(at)
+      else unknown = true
       return
     }
     const length = reads ? reads.length / 2 : node.children.length
@@ -314,6 +323,14 @@ export type ChunkedMarkdownOptions = {
   /** Node names whose blocks longer than two chunks need inner nodes only for their opening and last lines. */
   opaque?: ReadonlySet<string>
   probe?: ChunkedMarkdownProbe
+  /** Worker-only metadata follows verified scans and reused giant leaf extents. */
+  codeBlocks?: {
+    scan(tree: Tree, base: number, from: number, to: number): void
+    leaf(key: string, start: number, end: number): void
+    clear(from: number, to: number): void
+    /** A changed physical line may extend past the grammar's reuse point. */
+    canReuse?(from: number, to: number): boolean
+  }
   /** Immutable derived indexes invalidate on edits and need no per-line edit dependencies. */
   trackReadAhead?: boolean
 }
@@ -523,7 +540,7 @@ function stateKey(input: Input, name: string, from: number) {
     case 'CodeBlock':
       return name
     case 'FencedCode':
-      return `${name} ${/^[`~]+/.exec(first)?.[0]}`
+      return `${name} ${/^(`+|~+)/.exec(first)?.[0]}`
     default:
       return `${name} ${first}`
   }
@@ -1094,7 +1111,7 @@ class ChunkedParse implements ChunkedPartialParse {
         demand?.to ?? end,
       )
     ) {
-      this.startWindow(from, end, block, info)
+      this.startWindow(from, end, block, info, !info.window)
       return true
     }
     this.addChunk(
@@ -1129,10 +1146,15 @@ class ChunkedParse implements ChunkedPartialParse {
       this.addTail()
       return false
     }
-    // Far from the viewport, wider windows split into several pending chunks.
+    // Boundary scans keep replay points for later leaf proofs. A finite
+    // viewport can scan farther ahead, splitting its window into pending chunks.
     const size = this.parser.chunkSize
     this.startScan(
-      demand && demand.from - this.pos > 32 * size ? 16 * size : 2 * size,
+      demand &&
+        Number.isFinite(demand.from) &&
+        demand.from - this.pos > 32 * size
+        ? 16 * size
+        : 2 * size,
     )
     return true
   }
@@ -1242,6 +1264,7 @@ class ChunkedParse implements ChunkedPartialParse {
         }
         return
       }
+      this.parser.options.codeBlocks?.scan(tree, from, from, found.frontier)
       const top = tree.topNode.firstChild!
       const block: Continuation = {
         from,
@@ -1272,6 +1295,7 @@ class ChunkedParse implements ChunkedPartialParse {
         this.startParse(chunkFrom, start)
         return
       }
+      this.parser.options.codeBlocks?.scan(tree, from, chunkFrom, start)
       this.pos = chunkFrom
       this.addChunk(this.leaf('pending', start - chunkFrom))
       if (demand && chunkFrom >= demand.to) this.resynced += start - chunkFrom
@@ -1584,7 +1608,9 @@ class ChunkedParse implements ChunkedPartialParse {
       return null
     const end =
       found.start + (info.block.end ?? found.chunk.length) - old.fragment.offset
-    return end > pos && end <= old.safe
+    return end > pos &&
+      end <= old.safe &&
+      (this.parser.options.codeBlocks?.canReuse?.(pos, end) ?? true)
       ? {
           at: end,
           closed: info.block.end !== null,
@@ -1687,6 +1713,7 @@ class ChunkedParse implements ChunkedPartialParse {
     const end = base + (top?.to ?? 0)
     const limit = this.limit(to, block.frontier)
     if (to >= this.input.length || end < limit) {
+      this.parser.options.codeBlocks?.scan(tree, base, block.frontier, end)
       if (!block.leaf) this.noteEnds(block, tree, base, end)
       this.endGiant(block, end)
       return
@@ -1709,6 +1736,7 @@ class ChunkedParse implements ChunkedPartialParse {
       }
     }
     if (frontier > block.frontier) {
+      this.parser.options.codeBlocks?.scan(tree, base, block.frontier, frontier)
       if (!block.leaf) this.noteEnds(block, tree, base, frontier)
       block.frontier = frontier
       block.span = Math.min(this.parser.giantBlock, block.span * 2)
@@ -1952,6 +1980,8 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** A continued block ends at `end`: one chunk, windowed when it is giant. */
   private endGiant(block: Continuation, end: number) {
+    if (block.leaf && block.key !== null)
+      this.parser.options.codeBlocks?.leaf(block.key, block.start, end)
     const { from } = block
     const to = end < this.input.length ? end + 1 : end
     const demand = this.demand()
@@ -1967,7 +1997,16 @@ class ChunkedParse implements ChunkedPartialParse {
         return
       }
       this.pos = from
-      this.addChunk(this.leaf('pending', to - from, block.reach))
+      // Keep replay context for unseen containers and opaque blocks too.
+      // A later leaf proof must not read the entire container to recover it.
+      this.addChunk(
+        !block.leaf ||
+          block.opaque ||
+          block.key === 'Table' ||
+          /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(block.key ?? '')
+          ? this.giantLeaf(this.giant(block, end), to - from, block.reach)
+          : this.leaf('pending', to - from, block.reach),
+      )
       this.pos = to
       return
     }
@@ -1991,9 +2030,16 @@ class ChunkedParse implements ChunkedPartialParse {
     to: number,
     block: Giant,
     reach: Reach = {},
+    reveal = false,
   ) {
     const input = this.input,
       demand = this.demand()
+    // Reveal short boundary chunks in full; edits keep opaque blocks windowed.
+    const complete =
+      reveal &&
+      block.end !== null &&
+      to - from <= this.parser.giantBlock &&
+      (!demand || (demand.from <= from && demand.to >= to))
     // The last line end inside the chunk that belongs to the block.
     const last = block.end === null ? to - 1 : from + block.end
     // Room to scroll before the window is rebuilt.
@@ -2041,6 +2087,7 @@ class ChunkedParse implements ChunkedPartialParse {
     }
     // The input ends with the last line's text, not an empty line after it.
     ranges.at(-1)!.to -= 1
+    if (complete) ranges.splice(0, ranges.length, { from, to })
     this.pos = from
     this.work = {
       kind: 'window',
@@ -2050,8 +2097,12 @@ class ChunkedParse implements ChunkedPartialParse {
       reach,
       window: {
         head: point.head,
-        from: block.opaque ? point.at : start - from,
-        to: block.opaque ? point.at : Math.min(to, stop + 1) - from,
+        from: complete ? 0 : block.opaque ? point.at : start - from,
+        to: complete
+          ? to - from
+          : block.opaque
+            ? point.at
+            : Math.min(to, stop + 1) - from,
       },
       point,
       base: ranges[0]!.from,
@@ -2200,6 +2251,11 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** Append a chunk starting at the current position. */
   private addChunk(chunk: Tree) {
+    if (
+      this.parser.options.codeBlocks &&
+      chunk.prop(chunkInfo)?.kind === 'plain'
+    )
+      this.parser.options.codeBlocks.clear(this.pos, this.pos + chunk.length)
     // Read-ahead decisions made inside the chunk travel with it.
     if (this.reads.size) {
       const from = this.pos,
@@ -2363,7 +2419,10 @@ export class ChunkedMarkdownParser extends Parser {
     options: ChunkedMarkdownOptions = {},
   ) {
     super()
-    this.full = full
+    this.full =
+      options.trackReadAhead === false
+        ? full
+        : full.configure({ wrap: trackReadAhead })
     this.options = options
     this.document = full.nodeSet.types.find((type) => type.name === 'Document')!
     // Inline parsers never change block structure, so boundary scans skip them.
@@ -2562,6 +2621,72 @@ export function boundaryStart(tree: Tree, from: number) {
   const groupFrom = tree.positions[groupIndex]!
   const index = Math.max(0, childBefore(group, from - groupFrom))
   return groupFrom + group.positions[index]!
+}
+
+/** A verified scan window containing a source edit, including opaque block context. */
+export function boundaryWindow(tree: Tree, from: number, to: number) {
+  if (tree.prop(chunkInfo)?.kind !== 'root') return null
+  const groupIndex = Math.max(0, childBefore(tree, from))
+  const group = tree.children[groupIndex] as Tree | undefined
+  if (!group) return null
+  const groupFrom = tree.positions[groupIndex]!
+  const index = Math.max(0, childBefore(group, from - groupFrom))
+  const chunk = group.children[index] as Tree | undefined
+  const info = chunk?.prop(chunkInfo)
+  if (info?.kind === 'tail') return 'building' as const
+  if (!chunk || !info) return null
+  const start = groupFrom + group.positions[index]!
+  if (to > start + chunk.length) return null
+  const block = info.kind === 'giant' ? info.block : null
+  const opaque =
+    !!block?.leaf &&
+    (block.opaque ||
+      /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(block.key ?? '')) &&
+    block.key !== 'Table'
+  if (!block || block.leaf)
+    return {
+      from: start,
+      to: start + chunk.length,
+      opaque,
+      table: block?.key === 'Table',
+      ranges: [{ from: start, to: start + chunk.length }],
+    }
+  // Replay points prove container state without reading the intervening items.
+  // A point inside a paragraph/table is not an inline proof boundary.
+  const points = block.points
+  let low = 0,
+    high = points.length - 1,
+    first = 0
+  while (low <= high) {
+    const middle = (low + high) >> 1
+    if (start + points[middle]!.at <= from) {
+      first = middle
+      low = middle + 1
+    } else high = middle - 1
+  }
+  while (first && points[first]!.retype) first--
+  let last = first + 1
+  while (
+    last < points.length &&
+    (start + points[last]!.at <= to || points[last]!.retype)
+  )
+    last++
+  const point = points[first]!
+  const end = start + (points[last]?.at ?? chunk.length)
+  const ranges: Lines[] = []
+  for (const range of [
+    ...point.head.map((range) => ({
+      from: start + range.from,
+      to: start + range.to,
+    })),
+    { from: start + point.at, to: end },
+  ]) {
+    const previous = ranges.at(-1)
+    if (previous && previous.to >= range.from)
+      previous.to = Math.max(previous.to, range.to)
+    else ranges.push(range)
+  }
+  return { from: ranges[0]!.from, to: end, opaque, table: false, ranges }
 }
 
 /** Only the final tail lacks verified boundaries; find it without walking the index. */

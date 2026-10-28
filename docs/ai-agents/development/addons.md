@@ -213,3 +213,9 @@ Desktop and exported sidebars default to 256 px while respecting saved widths. D
 The public API is version 3. New plugins include `version` and `apiVersion: 3`; API v1 and v2 packages remain loadable and are normalized on installation. For the CodeMirror formatted view, flavors contribute `syntax` and `render`, and `context.editor.registerFormatted` installs per-view extensions. The `formatted` SDK capability adds Lezer Markdown as `sdk.codeMirror.markdown`. See [formatted view contributions](architecture.md#formatted-view-contributions) for rendering and legacy compatibility. Both processes reject empty/missing versions and unsupported API versions.
 
 Preserve signatures when adding capabilities. Breaking changes require an API version bump, addon migrations, and documentation updates. `npm start` regenerates references when declarations change. Otherwise run `npm run docs`; `npm run docs:check`, included in `npm run check`, rejects stale references. Update the addon README with behavior changes.
+
+## Selection previews
+
+Formatted toolbar, hover and context-menu requests expose at most 256 rendered UTF-16 units, ending at a scalar boundary. Capture parses and projects one source page near the selection's start, with a shared bounded context cache. It declines if that page cannot prove the complete preview or if context exceeds the read budget. Selection coordinates and replacement targets still describe the full selection.
+
+Capture declines while a selected footnote's definition scan or a reference-label answer is unknown. A label confirmed absent renders literally. It also declines when the shared 64-step syntax seek cannot prove adjacent visible blocks, including long runs of hidden reference definitions. These cases never substitute raw Markdown for rendered text.

@@ -73,7 +73,9 @@ function snapshot(value: EditorInteractionRequest | null) {
     selection: Object.freeze({ ...selection }),
     before: value.before.slice(-256),
     after: value.after.slice(0, 256),
-    selectedText: value.selectedText.slice(0, 256),
+    selectedText: value.selectedText
+      .slice(0, 256)
+      .replace(/[\uD800-\uDBFF]$/, ''),
   })
 }
 

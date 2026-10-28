@@ -373,3 +373,29 @@ test('changed selection and version discard late results', async () => {
   assert.deepEqual(await result.final, [])
   remove()
 })
+
+test('provider previews preserve scalar boundaries and full selection coordinates', async (t) => {
+  for (const [selectedText, expected] of [
+    ['a'.repeat(255) + '😀', 'a'.repeat(255)],
+    ['a'.repeat(254) + '😀b', 'a'.repeat(254) + '😀'],
+    ['x\uD800', 'x'],
+  ]) {
+    const broker = new EditorInteractionBroker((value) => value, 3)
+    t.after(() => broker.dispose())
+    const captured = request({
+      selectedText,
+      documentLength: 400,
+      position: 400,
+      selection: { anchor: 0, head: 400 },
+    })
+    let received
+    broker.register(owner(), (input) => {
+      received = input
+      return []
+    })
+    await collect(broker, captured).final
+    assert.equal(received.selectedText, expected)
+    assert.deepEqual(received.selection, { anchor: 0, head: 400 })
+    assert.equal(received.position, 400)
+  }
+})

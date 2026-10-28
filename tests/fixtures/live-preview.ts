@@ -26,6 +26,7 @@ import {
   referenceWork,
 } from '../../src/renderer/src/formatted-references'
 import { formattedRegistry } from '../../src/renderer/src/formatted-registry'
+import { formattedSelectionPreview } from '../../src/renderer/src/formatted-selection-text'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 
@@ -344,6 +345,17 @@ Object.assign(window, {
     },
     /** The formatted view's syntax tree. */
     tree: () => (view ? syntax.tree(view.state) : null),
+    /** The addon capture path, using the view's retained syntax and grammar. */
+    selectedText(from: number, to: number, blockSeparator = '') {
+      if (!view) return null
+      return formattedSelectionPreview(
+        view.state,
+        syntax,
+        from,
+        to,
+        blockSeparator,
+      )
+    },
     /** The shown syntax tree has parsed text from `from` to `to`. */
     covered: (from: number, to: number) =>
       !!view && !uncovered(syntax.tree(view.state), from, to),

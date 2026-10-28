@@ -54,7 +54,11 @@ export const retainedLabels = 1024
 
 /** A defined label's title, or null for one the note does not define. */
 export type ReferenceAnswer = { readonly title: string | null } | null
-type Entry = { answer: ReferenceAnswer | undefined; checked: number }
+type Entry = {
+  answer: ReferenceAnswer | undefined
+  checked: number
+  definitive: boolean
+}
 
 /** The answers of one view, shared by its states as a cache rather than document state. */
 class Answers {
@@ -81,6 +85,8 @@ const labels = StateField.define<{ readonly answers: Answers }>({
         whole ||= from === 0 && to === transaction.startState.doc.length
       })
       if (whole) return { answers: new Answers() }
+      for (const entry of value.answers.entries.values())
+        entry.definitive = false
     }
     for (const effect of transaction.effects)
       if (effect.is(answered)) return { answers: value.answers }
@@ -120,7 +126,7 @@ export function drawReference(
   const { entries } = answers
   let entry = entries.get(label)
   if (entry) entries.delete(label)
-  else entry = { answer: undefined, checked: -1 }
+  else entry = { answer: undefined, checked: -1, definitive: false }
   entries.set(label, entry)
   for (const oldest of entries.keys()) {
     if (entries.size <= retainedLabels) break
@@ -136,9 +142,11 @@ export function drawReference(
   return entry.answer
 }
 
-/** The last answer about a label, without asking: for layout outside the viewport. */
-export const knownReference = (state: EditorState, label: string) =>
-  answersOf(state)?.entries.get(label)?.answer
+/** A host answer, without asking; unavailable or never-requested labels stay unknown. */
+export const knownReference = (state: EditorState, label: string) => {
+  const entry = answersOf(state)?.entries.get(label)
+  return entry?.definitive ? entry.answer : undefined
+}
 
 /** Labels kept for a view, for scale tests. */
 export const retainedReferences = (state: EditorState) =>
@@ -289,6 +297,8 @@ const requests = ViewPlugin.fromClass(
         entry.checked = generation
         if (generation !== this.generation) answers.drawn.add(label)
         if (result.status !== 'stale') {
+          entry.definitive =
+            result.status === 'resolved' && generation === this.generation
           referenceWork.resolved++
           const answer =
             result.status === 'resolved' && result.value

@@ -8,6 +8,7 @@ import {
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 async function install(profile, id, source) {
   const directory = join(profile, 'installed-addons', id)
@@ -141,18 +142,9 @@ test('installed toolbar command captures rich and source selection and stays own
   const richInvocation = await page.evaluate(() => window.toolbarProbe.runs[0])
   assert.equal(richInvocation.source, 'toolbar')
   assert.equal(richInvocation.selection.editor, 'rich')
-  await t.test(
-    'api 2 rich selection reports rendered text',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap api-001: api 2 rich selection must report rendered text'
-          : undefined,
-    },
-    () => {
-      assert.equal(richInvocation.selection.selectedText, 'hello\nworld')
-    },
-  )
+  await t.test('api 2 rich selection reports rendered text', () => {
+    assert.equal(richInvocation.selection.selectedText, 'hello\nworld')
+  })
   assert.equal(
     richInvocation.document.documentId,
     richInvocation.view.documentId,
@@ -193,6 +185,36 @@ test('installed toolbar command captures rich and source selection and stays own
   assert.equal(
     sourceInvocation.document.documentId,
     sourceInvocation.view.documentId,
+  )
+
+  const sampleSource = 'a'.repeat(255) + '&#x1f600;' + 'b'.repeat(300)
+  await source.focus()
+  await source.press('ControlOrMeta+a')
+  await page.keyboard.insertText(sampleSource)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    sampleSource,
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.click()
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) =>
+      element.editor.commands.setTextSelection({
+        from: 1,
+        to: element.editor.state.doc.content.size - 1,
+      }),
+    )
+  else await rich.press('ControlOrMeta+a')
+  await clickToolbar(page, 'toolbar-probe.inspect')
+  await page.waitForFunction(() => window.toolbarProbe.runs.length === 4)
+  const sampleInvocation = await page.evaluate(
+    () => window.toolbarProbe.runs[3],
+  )
+  assert.equal(sampleInvocation.selection.selectedText, 'a'.repeat(255))
+  assert.ok(
+    sampleInvocation.selection.head - sampleInvocation.selection.anchor > 256,
   )
 
   await clickToolbar(page, 'toolbar-probe.legacy')

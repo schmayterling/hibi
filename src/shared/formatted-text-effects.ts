@@ -138,9 +138,9 @@ export function* formattedTextEffects(
   offset: number,
   input: FormattedTextInput,
   range: RenderedRange & Readonly<{ selection?: RenderedRange }>,
-  config: BoundaryConfig,
+  config: Pick<BoundaryConfig, 'literal' | 'textFeatures'>,
   inline: MarkdownParser,
-  definitions: Set<string>,
+  definitions: { has(label: string): boolean; add?(label: string): unknown },
   resolveFootnotes: boolean,
   inlineOnly = false,
   referenceResolved?: (label: string) => boolean,
@@ -352,7 +352,7 @@ export function* formattedTextEffects(
     if (name === 'FootnoteDefinition') {
       const label = node.getChild('FootnoteLabel')
       if (label && !resolveFootnotes)
-        definitions.add(read(label.from, label.to))
+        definitions.add?.(read(label.from, label.to))
     }
     if (name === 'FootnoteReference') {
       const label = node.getChild('FootnoteLabel')

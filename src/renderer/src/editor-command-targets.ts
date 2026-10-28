@@ -62,7 +62,9 @@ export function captureEditorCommandTarget(
       position: request.position,
       anchor: request.selection.anchor,
       head: request.selection.head,
-      selectedText: request.selectedText.slice(0, 256),
+      selectedText: request.selectedText
+        .slice(0, 256)
+        .replace(/[\uD800-\uDBFF]$/, ''),
     },
   }
   targets.set(targetId, {

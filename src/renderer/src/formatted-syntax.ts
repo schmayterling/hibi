@@ -8,7 +8,13 @@ import {
   StateField,
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
-import { IterMode, NodeProp, type Tree, TreeFragment } from '@lezer/common'
+import {
+  type Input,
+  IterMode,
+  NodeProp,
+  type Tree,
+  TreeFragment,
+} from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
@@ -119,25 +125,29 @@ function markdownParser(
 ) {
   const base = formattedMarkdownParser(contributed, options.extensions)
   const runs = createPlainTextRunExtension()
-  const full = base.configure([
-    runs.extension,
+  const text = base.configure(runs.extension)
+  const full = text.configure(
     parseCode({
       codeParser: (info) => codeLanguages.resolve(info)?.parser ?? null,
     }),
-  ])
+  )
   const chunked = new ChunkedMarkdownParser(full, base, {
     opaque: new Set(opaque),
     ...(options.probe ? { probe: options.probe } : {}),
   })
+  // Text capture needs the same Markdown nodes, without code-language nesting.
+  const selection = new ChunkedMarkdownParser(text, base, chunked.options)
   // The plain-text shortcut stops only at the characters core inline syntax
   // starts with; contributed inline syntax that starts elsewhere turns it off.
   if (
     contributed.every(
       (config) => !config.parseInline?.length || inlineStops(config),
     )
-  )
+  ) {
     runs.allow(chunked.full)
-  return chunked
+    runs.allow(selection.full)
+  }
+  return { view: chunked, selection }
 }
 
 const mapDemand = (demand: Demand, changes: ChangeDesc) => ({
@@ -178,9 +188,9 @@ function syntaxField(options: FormattedSyntaxOptions) {
   // Contributions change the node set, so each set of extensions gets its own parser.
   const parsers = new WeakMap<
     readonly MarkdownConfig[],
-    WeakMap<readonly string[], ChunkedMarkdownParser>
+    WeakMap<readonly string[], ReturnType<typeof markdownParser>>
   >()
-  const chunkedFor = (state: EditorState) => {
+  const grammarFor = (state: EditorState) => {
     const contributed = state.facet(formattedMarkdown),
       opaque = state.facet(formattedOpaque)
     let byOpaque = parsers.get(contributed)
@@ -188,13 +198,15 @@ function syntaxField(options: FormattedSyntaxOptions) {
       byOpaque = new WeakMap()
       parsers.set(contributed, byOpaque)
     }
-    let chunked = byOpaque.get(opaque)
-    if (!chunked) {
-      chunked = markdownParser(options, contributed, opaque)
-      byOpaque.set(opaque, chunked)
+    let grammar = byOpaque.get(opaque)
+    if (!grammar) {
+      grammar = markdownParser(options, contributed, opaque)
+      byOpaque.set(opaque, grammar)
     }
-    return chunked
+    return grammar
   }
+  const chunkedFor = (state: EditorState) => grammarFor(state).view
+  const textFor = (state: EditorState) => grammarFor(state).selection
   const prefixOf = (state: EditorState) => {
     let prefix = 0
     for (const measure of state.facet(formattedPrefix))
@@ -422,7 +434,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
       )
     },
   })
-  return { field, chunkedFor, prefixOf }
+  return { field, chunkedFor, textFor, prefixOf }
 }
 
 /**
@@ -835,12 +847,26 @@ function driver(
   )
 }
 
+/** Source work still available to one synchronous interaction preview. */
+export type SelectionBudget = {
+  input: Input
+  exhausted: symbol
+  steps: number
+}
+
 export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
   tree: (state: EditorState) => Tree
   /** The same configured grammar for a bounded source-block proof. */
   parser: (state: EditorState) => MarkdownParser
+  /** Complete only missing syntax for the selected range. */
+  selectionTree: (
+    state: EditorState,
+    from: number,
+    to: number,
+    budget?: SelectionBudget,
+  ) => Tree | null
   /**
    * An edit's reparse has not finished, so renderers keep what they drew,
    * mapped through the edit, instead of rendering the edited chunks bare.
@@ -866,6 +892,30 @@ export function formattedSyntax(
     ],
     tree: (state) => state.field(field).tree,
     parser: (state) => syntax.chunkedFor(state).full,
+    selectionTree: (state, from, to, budget) => {
+      const value = state.field(field)
+      if (from === to || !uncovered(value.tree, from, to)) return value.tree
+      const input = budget?.input ?? new DocInput(state.doc)
+      const steps = budget?.steps ?? Number.POSITIVE_INFINITY
+      try {
+        const parse = syntax
+          .textFor(state)
+          .startChunkedParse(
+            input,
+            TreeFragment.addTree(value.tree),
+            { from, to },
+            value.prefix,
+          )
+        for (let step = 0; step < steps; step++) {
+          const tree = parse.advance()
+          if (tree) return tree
+        }
+        return null
+      } catch (error) {
+        if (budget && error === budget.exhausted) return null
+        throw error
+      }
+    },
     settling: (state) => state.field(field).settling,
   }
 }

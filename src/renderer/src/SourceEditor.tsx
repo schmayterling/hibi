@@ -136,6 +136,7 @@ import {
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedReferences } from './formatted-references'
+import { formattedSelectionPreview } from './formatted-selection-text'
 import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
@@ -1247,6 +1248,19 @@ export function SourceEditor({
         return null
       const snapshot = bridge.snapshot()
       if (snapshot.version !== active.contentVersion) return null
+      const from = selected.main.from
+      const selectedText = formatted
+        ? formattedSelectionPreview(
+            editor.state,
+            syntax,
+            from,
+            selected.main.to,
+            toolbarSelection ? '\n' : '',
+          )
+        : editor.state
+            .sliceDoc(from, Math.min(selected.main.to, from + 256))
+            .replace(/[\uD800-\uDBFF]$/, '')
+      if (selectedText === null) return null
       return {
         view: target,
         contentVersion: snapshot.version,
@@ -1262,12 +1276,7 @@ export function SourceEditor({
           position,
           Math.min(editor.state.doc.length, position + 256),
         ),
-        selectedText: editor.state.sliceDoc(
-          selected.main.from,
-          toolbarSelection
-            ? Math.min(selected.main.to, selected.main.from + 256)
-            : selected.main.to,
-        ),
+        selectedText,
       }
     }
     const cancelCompletion = () => {

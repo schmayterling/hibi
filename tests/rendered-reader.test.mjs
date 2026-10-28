@@ -31,8 +31,13 @@ test('list projection derives line bounds without per-item source tree seeks', (
     return original.call(this, position)
   }
   const index = new RenderedTextIndex(store.snapshot(), 0, renderedConfig)
+  let retainedDuringBuild = 0
   try {
-    finish(index.build())
+    for (const _ of index.build())
+      retainedDuringBuild = Math.max(
+        retainedDuringBuild,
+        index.counters().retainedWindows,
+      )
   } finally {
     SourceSnapshot.prototype.lineAt = original
   }
@@ -40,6 +45,15 @@ test('list projection derives line bounds without per-item source tree seeks', (
     JSON.stringify({ length: text.length, seeks, counters: index.counters() }),
   )
   assert.ok(seeks <= Math.ceil(text.length / 4096) * 10, String(seeks))
+  assert.ok(
+    index.counters().maximumWindowNodes <= 49152,
+    JSON.stringify(index.counters()),
+  )
+  assert.equal(
+    retainedDuringBuild,
+    0,
+    'a build must release each syntax window after projecting it',
+  )
   for (const from of [0, 70000, 139993])
     assert.equal(render(index, from, from + 6), 'item')
   assert.equal(store.counters().materializations, 0)

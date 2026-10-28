@@ -184,8 +184,10 @@ export class RenderedTextIndex {
   #source: SourceSnapshot
   readonly #reader: Reader
   readonly #parser: ChunkedMarkdownParser
+  #maximumWindowNodes = 0
   readonly #inline: NonNullable<ReturnType<typeof boundaryInlineParser>>
   readonly #config: BoundaryConfig
+  readonly #windowSize: number
   readonly #referenceResolver: RenderedReferenceResolver | undefined
   readonly #input: Input & FormattedTextInput
   readonly #mask: FormattedTextMask
@@ -229,6 +231,8 @@ export class RenderedTextIndex {
     this.#referenceResolver = references
     this.prefix = prefix
     this.#config = config
+    // Grouping the boundary tree must not size a transient inline parse.
+    this.#windowSize = config.chunkSize * Math.min(config.groupSize, 8)
     this.#reader = new Reader(source)
     this.#inline = inline
     const runs = createPlainTextRunExtension()
@@ -283,6 +287,7 @@ export class RenderedTextIndex {
       lineSeeks: this.#reader.lineSeeks,
       maximumAdvanceRead: this.#maximumAdvanceRead,
       parses: this.#parses,
+      maximumWindowNodes: this.#maximumWindowNodes,
       maskBytes: this.#mask.counters().maskBytes,
       retainedWindows: this.#windows.length,
       retainedNodes: this.#windows.reduce(
@@ -314,10 +319,10 @@ export class RenderedTextIndex {
       if (tree) return tree
     }
   }
-  *#window(at: number): Generator<void, Window> {
+  *#window(at: number, retain = true): Generator<void, Window> {
     if (at >= this.#syntaxInput.length)
       return { from: at, to: this.length, frames: [], nodes: 0 }
-    const width = this.#config.chunkSize * this.#config.groupSize
+    const width = this.#windowSize
     const from = Math.floor(at / width) * width,
       to = Math.min(this.#syntaxInput.length, from + width)
     const found = this.#windows.find(
@@ -345,9 +350,12 @@ export class RenderedTextIndex {
         if (this.#tick()) yield
       } while (cursor.next())
     }
+    this.#maximumWindowNodes = Math.max(this.#maximumWindowNodes, nodes)
     const result = { from, to: coveredTo, frames, nodes }
-    this.#windows.push(result)
-    if (this.#windows.length > 2) this.#windows.shift()
+    if (retain) {
+      this.#windows.push(result)
+      if (this.#windows.length > 2) this.#windows.shift()
+    }
     return result
   }
   #scope(tree: Tree, from: number, to: number) {
@@ -409,9 +417,9 @@ export class RenderedTextIndex {
 
   *#project(resolveFootnotes: boolean) {
     this.#mask.resetLeaves()
-    const width = this.#config.chunkSize * this.#config.groupSize
+    const width = this.#windowSize
     for (let from = 0; from < this.#syntaxInput.length; from += width) {
-      const window = yield* this.#window(from)
+      const window = yield* this.#window(from, false)
       yield* this.#projectFrames(
         window.frames,
         {

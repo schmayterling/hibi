@@ -6,7 +6,7 @@ import {
   Prec,
   StateEffect,
   StateField,
-  type Transaction,
+  Transaction,
 } from '@codemirror/state'
 import { Decoration, EditorView, keymap } from '@codemirror/view'
 import type { MarkdownExtension } from '../../addons/api'
@@ -164,7 +164,12 @@ export function formattedProjection(
       for (const effect of transaction.effects)
         if (effect.is(refreshProjection)) refreshed = effect.value
       const refresh =
-        previous.stale && !refreshed ? read(transaction.startState) : undefined
+        previous.stale &&
+        !refreshed &&
+        (transaction.docChanged ||
+          transaction.annotation(Transaction.userEvent) !== undefined)
+          ? read(transaction.startState)
+          : undefined
       const current = refresh ?? refreshed ?? previous
       const effects = refresh ? [refreshProjection.of(refresh)] : []
       let outside = current.readOnly && transaction.docChanged

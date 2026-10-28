@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorSelection, EditorState, Transaction } from '@codemirror/state'
+import {
+  EditorSelection,
+  EditorState,
+  StateEffect,
+  Transaction,
+} from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { parseFrontmatter } from '../src/addons/frontmatter/markdown.ts'
 import {
@@ -129,14 +134,19 @@ test('50 mib unmatched notes defer one proof to input and map interior echoes an
   const f = fixture('x'.repeat(50 * 1024 * 1024), adapter)
   const count = parses
   f.session.counters(true)
-  for (let i = 0; i < 5; i++)
+  const background = StateEffect.define()
+  for (let i = 0; i < 5; i++) {
     f.session.edit(
       [{ from: 10 + i, to: 10 + i, insert: 'y' }],
       'source',
       `s${i}`,
     )
-  assert.equal(parses, count)
-  assert.equal(f.session.counters().materializations, 0)
+    f.dispatch({ effects: background.of(i) })
+  }
+  assert.equal(parses, count, JSON.stringify(f.session.counters()))
+  const afterEffects = f.session.counters()
+  assert.equal(afterEffects.materializations, 0)
+  assert.ok(afterEffects.sourceUnitsRead < 4096, JSON.stringify(afterEffects))
   for (let i = 0; i < 5; i++)
     f.dispatch({ changes: { from: 100, insert: 'z' } })
   assert.equal(parses, count + 1)
@@ -198,7 +208,10 @@ test('a stale canonical echo rechecks before the next local selection and input'
     },
   })
   f.session.edit([{ from: 2, to: 3, insert: '!' }], 'source', 'interior')
-  f.dispatch({ selection: { anchor: 0 } })
+  f.dispatch({
+    selection: { anchor: 0 },
+    annotations: Transaction.userEvent.of('select'),
+  })
   assert.equal(f.view.state.selection.main.head, 4)
   f.dispatch(f.view.state.replaceSelection('typed'))
   assert.equal(f.session.snapshot().materialize(), 'AB! typedbody')

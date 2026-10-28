@@ -23,7 +23,13 @@ function textReadUnits(run) {
     Object.getPrototypeOf(Text.of(Array(128).fill('x'))),
   ]
   for (const prototype of prototypes)
-    for (const method of ['sliceString', 'iterRange', 'toString']) {
+    for (const method of [
+      'sliceString',
+      'iterRange',
+      'iter',
+      'toString',
+      'toJSON',
+    ]) {
       if (!Object.hasOwn(prototype, method)) continue
       const original = prototype[method]
       prototype[method] = function (...args) {
@@ -34,14 +40,20 @@ function textReadUnits(run) {
         } finally {
           depth--
         }
-        if (method === 'iterRange') {
+        if (method === 'iterRange' || method === 'iter') {
           const next = result.next
           result.next = function (...args) {
             const value = next.apply(this, args)
             if (!depth) units += this.value.length
             return value
           }
-        } else if (outer) units += result.length
+        } else if (outer)
+          units += Array.isArray(result)
+            ? result.reduce(
+                (size, line) => size + line.length,
+                result.length - 1,
+              )
+            : result.length
         return result
       }
       restores.push(() => {
@@ -59,13 +71,23 @@ function textReadUnits(run) {
 
 test('native text counters cover leaf and node accessors without double counting', () => {
   for (const doc of [Text.of(['abc']), Text.of(Array(128).fill('abc'))])
-    for (const method of ['sliceString', 'iterRange', 'toString']) {
+    for (const method of [
+      'sliceString',
+      'iterRange',
+      'iter',
+      'iterLines',
+      'toString',
+      'toJSON',
+    ]) {
       const units = textReadUnits(() => {
-        if (method === 'iterRange') {
-          const cursor = doc.iterRange(0, doc.length)
+        if (method.startsWith('iter')) {
+          const cursor =
+            method === 'iterRange'
+              ? doc.iterRange(0, doc.length)
+              : doc[method]()
           while (!cursor.next().done) {}
         } else if (method === 'sliceString') doc.sliceString(0, doc.length)
-        else doc.toString()
+        else doc[method]()
       })
       assert.equal(units, doc.length, method)
     }
@@ -559,46 +581,98 @@ test('cold table headers after blank lines retain structural pipe protection', (
   }
 })
 
-test('a leaf correction cannot invalidate an earlier block read-ahead decision', () => {
-  const doc = '>1. $$\n>   x^2\n>   $$'
-  const source = new SourceStore(doc, {
-    tabId: 'lookahead',
-    revision: 0,
-  }).snapshot()
-  const index = new MarkdownBoundaryIndex(source, {
-    schema: 1,
-    syntax: ['math-block@1'],
-    flavors: ['math.latex'],
-    literal: [],
-    opaque: [],
-    prefix: 0,
-    chunkSize: 64,
-    groupSize: 4,
-    giantBlock: 1024,
-  })
-  while (!index.advance()) {}
-  const builder = new BoundaryTree(index.parser, index.length)
-  for (const page of index.pages()) builder.append(page.records)
-  const parser = index.parser.full
-  const from = doc.lastIndexOf('   ')
-  const transaction = EditorState.create({ doc }).update({
-    changes: { from, to: from + 3, insert: 'e' },
-  })
-  assert.match(parser.parse(doc).toString(), /BlockMath/)
-  assert.doesNotMatch(
-    parser.parse(transaction.newDoc.toString()).toString(),
-    /BlockMath/,
-  )
-  for (const tree of [parser.parse(doc), builder.finish()])
-    assert.equal(formattedLiteralEdits(transaction, parser, tree), false)
-  for (const text of ['teh\n\n' + doc, '$$\nx^2\n$$\n\nteh']) {
-    const at = text.indexOf('teh')
-    const correction = EditorState.create({ doc: text }).update({
-      changes: { from: at, to: at + 3, insert: 'the' },
+test('cold math-dense notes accept off-viewport corrections with bounded reads', (t) => {
+  const work = []
+  for (const count of [50, 210]) {
+    const section =
+      'para teh words here and more text\n\n'.repeat(30) + '$$\nx^2\n$$\n\n'
+    const doc = section.repeat(count)
+    const source = new SourceStore(doc, {
+      tabId: 'math',
+      revision: 0,
+    }).snapshot()
+    const index = new MarkdownBoundaryIndex(source, {
+      schema: 1,
+      syntax: ['math-block@1'],
+      flavors: ['math.latex'],
+      literal: [],
+      opaque: [],
+      prefix: 0,
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
     })
-    assert.equal(
-      formattedLiteralEdits(correction, parser, parser.parse(text)),
-      true,
+    while (!index.advance()) {}
+    const builder = new BoundaryTree(index.parser, index.length)
+    for (const page of index.pages()) builder.append(page.records)
+    const tree = builder.finish()
+    const state = EditorState.create({ doc })
+    let maximum = 0
+    for (let n = count - 1; n >= count - 30; n--) {
+      const from = section.length * n + section.indexOf('teh', 500)
+      const transaction = state.update({
+        changes: { from, to: from + 3, insert: 'the' },
+      })
+      const units = textReadUnits(() =>
+        assert.equal(
+          formattedLiteralEdits(transaction, index.parser.full, tree),
+          true,
+          String(from),
+        ),
+      )
+      maximum = Math.max(maximum, units)
+    }
+    work.push(maximum)
+  }
+  t.diagnostic(JSON.stringify({ coldMathUnits: work }))
+  assert.ok(
+    work.every((units) => units < 32768),
+    String(work),
+  )
+})
+
+test('a leaf correction cannot invalidate an earlier block read-ahead decision', () => {
+  for (const prefix of ['', 'paragraph words\n\n'.repeat(3000)]) {
+    const doc = prefix + '>1. $$\n>   x^2\n>   $$'
+    const source = new SourceStore(doc, {
+      tabId: 'lookahead',
+      revision: 0,
+    }).snapshot()
+    const index = new MarkdownBoundaryIndex(source, {
+      schema: 1,
+      syntax: ['math-block@1'],
+      flavors: ['math.latex'],
+      literal: [],
+      opaque: [],
+      prefix: 0,
+      chunkSize: 64,
+      groupSize: 4,
+      giantBlock: 1024,
+    })
+    while (!index.advance()) {}
+    const builder = new BoundaryTree(index.parser, index.length)
+    for (const page of index.pages()) builder.append(page.records)
+    const parser = index.parser.full
+    const from = doc.lastIndexOf('   ')
+    const transaction = EditorState.create({ doc }).update({
+      changes: { from, to: from + 3, insert: 'e' },
+    })
+    assert.match(parser.parse(doc).toString(), /BlockMath/)
+    assert.doesNotMatch(
+      parser.parse(transaction.newDoc.toString()).toString(),
+      /BlockMath/,
     )
+    for (const tree of [parser.parse(doc), builder.finish()])
+      assert.equal(formattedLiteralEdits(transaction, parser, tree), false)
+    for (const text of ['teh\n\n' + doc, '$$\nx^2\n$$\n\nteh']) {
+      const at = text.indexOf('teh')
+      const correction = EditorState.create({ doc: text }).update({
+        changes: { from: at, to: at + 3, insert: 'the' },
+      })
+      assert.equal(
+        formattedLiteralEdits(correction, parser, parser.parse(text)),
+        true,
+      )
+    }
   }
 })

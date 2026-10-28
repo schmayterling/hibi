@@ -200,7 +200,7 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
   )
   await writeFile(
     join(profile, 'addons.json'),
-    JSON.stringify({ 'review-fixture': true }),
+    JSON.stringify({ 'review-fixture': true, math: true }),
   )
   const source =
     '---\ntitle: review\n---\n\n# A note\n\nvery very **teh** 😀 é and [teh](https://example.com/teh).\n'
@@ -405,7 +405,7 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
     window.sourceReview.getDocument()?.markdown.startsWith('para words here'),
   )
   await waitForDocumentEditor(app, page)
-  const applyTableEdit = async (changes) => {
+  const applyCorrection = async (changes) => {
     await waitForAsync(
       page,
       async (changes) => {
@@ -418,14 +418,14 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
           contentVersion: current.contentVersion,
           changes,
         })
-        window.coldTableEditResult = result
+        window.correctionResult = result
         return result.status !== 'busy'
       },
       changes,
     )
-    return page.evaluate(() => window.coldTableEditResult)
+    return page.evaluate(() => window.correctionResult)
   }
-  const pipe = await applyTableEdit([
+  const pipe = await applyCorrection([
     {
       from: prefix.length + 4,
       to: prefix.length + 5,
@@ -435,12 +435,38 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
   ])
   assert.equal(pipe.status, 'unsupported-view')
   const row = tableSource.indexOf('teh', prefix.length + 2000)
-  const literal = await applyTableEdit([
+  const literal = await applyCorrection([
     { from: row, to: row + 3, insert: 'the', expectedText: 'teh' },
   ])
   assert.equal(literal.status, 'applied')
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     tableSource.slice(0, row) + 'the' + tableSource.slice(row + 3),
+  )
+
+  const section =
+    'para teh words here and more text\n\n'.repeat(30) + '$$\nx^2\n$$\n\n'
+  let mathSource = section.repeat(210)
+  const mathFile = join(profile, 'cold-math.md')
+  await writeFile(mathFile, mathSource)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, mathFile)
+  await clickMenu(app, 'Open…')
+  await page.waitForFunction(() =>
+    window.sourceReview.getDocument()?.markdown.startsWith('para teh words'),
+  )
+  await waitForDocumentEditor(app, page)
+  for (let index = 209; index >= 120; index -= 3) {
+    const from = index * section.length + section.indexOf('teh', 500)
+    const result = await applyCorrection([
+      { from, to: from + 3, insert: 'the', expectedText: 'teh' },
+    ])
+    assert.equal(result.status, 'applied', JSON.stringify(result))
+    mathSource = mathSource.slice(0, from) + 'the' + mathSource.slice(from + 3)
+  }
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    mathSource,
   )
 })

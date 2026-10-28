@@ -218,8 +218,15 @@ function reachOf(chunks: readonly Tree[], positions: readonly number[]) {
   })
 }
 
-/** Lines whose parsing decision read across `pos`, or null when only boundaries are known. */
-export function readAheadFrom(tree: Tree, pos: number): number[] | null {
+/**
+ * Lines whose parsing decision read across `pos`, or null when only boundaries are known.
+ * A caller may supply proved decision lines for boundary-only chunks.
+ */
+export function readAheadFrom(
+  tree: Tree,
+  pos: number,
+  resolve?: (from: number, to: number) => readonly number[] | null,
+): number[] | null {
   const found = new Set<number>()
   let unknown = false
   const visit = (node: Tree, from: number) => {
@@ -228,7 +235,9 @@ export function readAheadFrom(tree: Tree, pos: number): number[] | null {
     if (!meta || meta.reach === undefined || from + meta.reach < pos) return
     const { reads, index } = meta
     if (!index || (!reads && info?.kind !== 'root' && info?.kind !== 'group')) {
-      unknown = true
+      const decisions = resolve?.(from, from + node.length)
+      if (decisions) for (const at of decisions) found.add(at)
+      else unknown = true
       return
     }
     const length = reads ? reads.length / 2 : node.children.length

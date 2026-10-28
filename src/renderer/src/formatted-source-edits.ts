@@ -259,7 +259,28 @@ export function formattedLiteralEdits(
       return
     }
     const start = offset + node.from
-    const reads = readAheadFrom(tree, from)
+    const reads = readAheadFrom(tree, from, (left, right) => {
+      // Boundary chunks retain reach, but their local parse has decision lines.
+      const indexed = boundaryWindow(tree, left, left)
+      if (
+        !indexed ||
+        indexed === 'building' ||
+        indexed.opaque ||
+        indexed.from !== left ||
+        indexed.to !== right ||
+        indexed.ranges.length !== 1
+      )
+        return null
+      const scan = Object.assign(parser.configure({}), {
+        parseInline: () => [],
+      })
+      const parsed =
+        offset === left && context !== tree && node?.name !== 'Table'
+          ? context
+          : scan.parse(oldInput, [], indexed.ranges)
+      // The parser records read decisions in the original input's coordinates.
+      return readAheadFrom(parsed, from)
+    })
     if (reads === null || reads.some((at) => at < start)) {
       valid = false
       return

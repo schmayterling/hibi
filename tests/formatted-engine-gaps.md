@@ -106,9 +106,7 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | release-004 | [formatted-hidden-source.test.mjs:336](formatted-hidden-source.test.mjs#L336) | releasing a grown huge source must destroy its editor | 2c: hidden source release and mapped bookmarks |
 | marker-001 | [markdown-markers.test.mjs:515](markdown-markers.test.mjs#L515) | left arrow must reenter nested final formatting before typing | 8b: hidden markers and math caret placement |
 | marker-002 | [markdown-markers.test.mjs:574](markdown-markers.test.mjs#L574) | one right arrow must leave final formatting for the next paragraph | 8b: hidden markers and math caret placement |
-| marker-004 | [markdown-markers.test.mjs:721](markdown-markers.test.mjs#L721) | focused paragraphs must reveal all their formatting markers | 8b: hidden markers and math caret placement |
-| marker-005 | [markdown-markers.test.mjs:749](markdown-markers.test.mjs#L749) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
-| marker-006 | [markdown-markers.test.mjs:777](markdown-markers.test.mjs#L777) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
+| marker-005 | [markdown-markers.test.mjs:765](markdown-markers.test.mjs#L765) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
 | corpus-004 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | forward definitions must resolve formatted labels without showing definitions | 9: outline semantics and diagram lifecycle |
 | corpus-008 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | multiline reference titles must hide and avoid false headings | 9: outline semantics and diagram lifecycle |
 | corpus-011 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |

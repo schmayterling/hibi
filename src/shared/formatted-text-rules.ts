@@ -1,6 +1,6 @@
 import type { SyntaxNode } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
-import { alertMarker, alertType } from '../addons/markdown/flavor-info.ts'
+import { alertMarker, alertType } from '../addons/markdown/alerts.ts'
 import { referenceLabel } from './markdown-reference-label.ts'
 import type { RenderedInput, RenderedRange } from './rendered-range.ts'
 

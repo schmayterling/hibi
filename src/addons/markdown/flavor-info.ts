@@ -1,7 +1,5 @@
 import type { MarkdownFlavor } from '../api'
-import { flavorInfo as github } from './github-flavor-info.ts'
-
-export { alertMarker, alertType } from './alerts.ts'
+import { flavorInfo as github } from './github-flavor-info'
 
 export const obsidianInfo: MarkdownFlavor = {
   id: 'obsidian',

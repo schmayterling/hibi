@@ -1721,8 +1721,9 @@ export function livePreview(
       ]),
     ),
     // The page cannot select hidden lines at the note's ends, so a key typed
-    // over the whole note would replace only what shows: replace it all.
-    // Text with line breaks keeps the native multi-line input path.
+    // over the whole note would replace only what shows: replace it all, with
+    // input handlers seeing the whole range as for any typed text. Text with
+    // line breaks keeps the native multi-line input path.
     EditorView.domEventHandlers({
       beforeinput(event, view) {
         const { selection, readOnly } = view.state
@@ -1746,15 +1747,29 @@ export function livePreview(
           return false
         event.preventDefault()
         const { from, to } = selection.main
-        view.dispatch(
+        const text = event.data
+        const insert = () =>
           view.state.update(
             {
-              changes: { from, to, insert: event.data },
-              selection: { anchor: from + event.data.length },
+              changes: { from, to, insert: text },
+              selection: { anchor: from + text.length },
               userEvent: 'input.type',
             },
             { scrollIntoView: true },
-          ),
+          )
+        if (
+          !view.state
+            .facet(EditorView.inputHandler)
+            .some((handler) => handler(view, from, to, text, insert))
+        )
+          view.dispatch(insert())
+        // Listeners such as typing state get the input the browser would have sent.
+        view.contentDOM.dispatchEvent(
+          new InputEvent('input', {
+            inputType: 'insertText',
+            data: text,
+            bubbles: true,
+          }),
         )
         return true
       },

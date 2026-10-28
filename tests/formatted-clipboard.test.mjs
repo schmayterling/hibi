@@ -386,6 +386,56 @@ test('typing over the whole selected note replaces its hidden fence too', {
   }
 })
 
+test('input handlers see typing over the whole selected note', {
+  timeout: 60000,
+}, async () => {
+  const content = page.locator('.rich-pane .cm-content')
+  // An input handler that types in capitals, as an addon's can.
+  await content.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const EditorView = view.constructor
+    const StateEffect = EditorView.scrollIntoView(0).constructor
+    window.upperCalls = []
+    window.upperActive = true
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.inputHandler.of((view, from, to, text) => {
+          if (!window.upperActive) return false
+          window.upperCalls.push([from, to, text])
+          view.dispatch({
+            changes: { from, to, insert: text.toUpperCase() },
+            selection: { anchor: from + text.length },
+            userEvent: 'input.type',
+          })
+          return true
+        }),
+      ),
+    })
+  })
+  try {
+    for (const text of ['plain', '```js\nconst answer = 42\n```\n\nend']) {
+      await setFixture(text)
+      await page.evaluate(() => {
+        window.upperCalls = []
+      })
+      await content.focus()
+      await page.keyboard.press(`${mod}+a`)
+      await page.keyboard.press('x')
+      await settled('X')
+      assert.deepEqual(await page.evaluate(() => window.upperCalls), [
+        [0, text.length, 'x'],
+      ])
+      await undo()
+      await settled(text)
+    }
+  } finally {
+    await page.evaluate(() => {
+      window.upperActive = false
+    })
+    await setFixture(note)
+  }
+})
+
 test('pasted html becomes markdown in one edit; plain text and own copies paste as they are', {
   timeout: 30000,
 }, async () => {

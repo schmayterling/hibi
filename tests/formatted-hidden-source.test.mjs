@@ -237,11 +237,77 @@ test("find shows its matches in a large note's source view that mounts again", {
   }
 })
 
+test('a source view released as its note grows keeps its place after the note shrinks', {
+  timeout: 120000,
+}, async (t) => {
+  const { page, view } = await open(t, 16)
+  await view('Source view')
+  await page.evaluate(() => {
+    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: 9000, head: 9010 },
+      scrollIntoView: true,
+    })
+  })
+  await page.evaluate(async () => {
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+  const before = await place(page)
+  assert.deepEqual([before.anchor, before.head], [9000, 9010])
+  assert.ok(before.top > 0, JSON.stringify(before))
+  await view('normal')
+  assert.equal(await mounted(page), 1)
+  // Text above the hidden view's place grows the note past the large size.
+  const edit = (changes) =>
+    page.evaluate(async (changes) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({
+        changes: { ...changes, insert: changes.insert?.repeat(20000) },
+        userEvent: 'input',
+      })
+      await window.hibi.flushDocumentChanges()
+    }, changes)
+  const grown = 'ordinary growth words\n\n'
+  await edit({ from: 0, insert: grown })
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  )
+  await edit({ from: 0, to: grown.length * 20000 })
+  await view('Source view')
+  await waitForAsync(page, () => {
+    const content = document.querySelector('.source-pane .cm-content')
+    return content?.cmTile?.root?.view?.state.doc.length === 16 * 1024
+  })
+  await page.evaluate(async () => {
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+  // It comes back scrolled to the place it kept, not to the start.
+  const after = await place(page)
+  assert.deepEqual([after.anchor, after.head], [9000, 9010])
+  assert.ok(after.top > 0, JSON.stringify(after))
+})
+
 test('a note that grows to 50 mib releases its source view after a visit', {
   timeout: 240000,
 }, async (t) => {
   const { app, page, view } = await open(t, 16)
   assert.equal(await mounted(page), 1)
+  // The small note's hidden source view must go once the note grows large.
+  await page.locator('.source-pane .cm-content').evaluate((element) => {
+    const editor = element.cmTile.root.view
+    window.hiddenSource = new WeakRef(editor)
+    window.hiddenSourceDestroyed = 0
+    const destroy = editor.destroy.bind(editor)
+    editor.destroy = () => {
+      window.hiddenSourceDestroyed++
+      destroy()
+    }
+  })
   const before = await page.evaluate(async () => {
     const document = await window.hibi.getDocument()
     return {
@@ -293,6 +359,25 @@ test('a note that grows to 50 mib releases its source view after a visit', {
   assert.equal(after.tabId, before.tabId)
   assert.equal(after.units, target)
   assert.equal(after.contentVersion, before.contentVersion + lengths.length)
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  ).catch(() => {})
+  const hidden = {
+    sourceMounted: await mounted(page),
+    sourceDestroyed: await page.evaluate(() => window.hiddenSourceDestroyed),
+  }
+  const heapMiB = Math.round((await heap(page)) / 1024 / 1024)
+  // After a full collection nothing holds the released view.
+  hidden.sourceCollected = await page.evaluate(
+    () => window.hiddenSource.deref() === undefined,
+  )
+  t.diagnostic(JSON.stringify({ grown: true, heapMiB, ...hidden }))
+  assert.deepEqual(hidden, {
+    sourceMounted: 0,
+    sourceDestroyed: 1,
+    sourceCollected: true,
+  })
   await view('Source view')
   await sourceShown(page)
   assert.equal(
@@ -323,22 +408,13 @@ test('a note that grows to 50 mib releases its source view after a visit', {
   )
   await t.test(
     'the huge source view is unmounted after normal view returns',
-    {
-      todo: 'formatted gap release-003: a note that grows huge must release its hidden source view',
-    },
     () => {
       assert.equal(state.sourceMounted, 0)
     },
   )
-  await t.test(
-    'the source editor holding the huge rope is destroyed',
-    {
-      todo: 'formatted gap release-004: releasing a grown huge source must destroy its editor',
-    },
-    () => {
-      assert.ok(state.sourceDestroyed > 0)
-    },
-  )
+  await t.test('the source editor holding the huge rope is destroyed', () => {
+    assert.ok(state.sourceDestroyed > 0)
+  })
   await t.test(
     'normal view still owns the exact accepted document length',
     async () => {

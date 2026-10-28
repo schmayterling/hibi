@@ -12,6 +12,7 @@ import { IterMode, NodeProp, type Tree, TreeFragment } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
+  type MarkdownParser,
   parseCode,
 } from '@lezer/markdown'
 import type { BoundaryReceive } from '../../shared/document-worker-protocol.ts'
@@ -837,6 +838,10 @@ export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
   tree: (state: EditorState) => Tree
+  /** The existing configured grammar, including its inline syntax. */
+  parser: (state: EditorState) => MarkdownParser
+  /** Complete only missing syntax for the selected range. */
+  selectionTree: (state: EditorState, from: number, to: number) => Tree
   /**
    * An edit's reparse has not finished, so renderers keep what they drew,
    * mapped through the edit, instead of rendering the edited chunks bare.
@@ -861,6 +866,23 @@ export function formattedSyntax(
       driver(syntax, options),
     ],
     tree: (state) => state.field(field).tree,
+    parser: (state) => syntax.chunkedFor(state).full,
+    selectionTree: (state, from, to) => {
+      const value = state.field(field)
+      if (from === to || !uncovered(value.tree, from, to)) return value.tree
+      const parse = syntax
+        .chunkedFor(state)
+        .startChunkedParse(
+          new DocInput(state.doc),
+          TreeFragment.addTree(value.tree),
+          { from, to },
+          value.prefix,
+        )
+      let tree: Tree | null
+      do tree = parse.advance()
+      while (!tree)
+      return tree
+    },
     settling: (state) => state.field(field).settling,
   }
 }

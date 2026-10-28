@@ -22,6 +22,7 @@ import {
   selectAll,
 } from '@codemirror/commands'
 import {
+  DocInput,
   ensureSyntaxTree,
   HighlightStyle,
   indentUnit,
@@ -94,6 +95,7 @@ import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { protectMarkdownParser } from '../../shared/markdown-flavor-guard'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
+import { renderedBoundary } from '../../shared/rendered-range'
 import type { RawEdit } from '../../shared/source-operations'
 import { editorChangesFromSource } from '../../shared/source-projection'
 import { Button } from '../../ui/Controls'
@@ -135,6 +137,7 @@ import {
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedReferences } from './formatted-references'
+import { formattedSelectionText } from './formatted-selection-text'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
@@ -1032,6 +1035,33 @@ export function SourceEditor({
         return null
       const snapshot = bridge.snapshot()
       if (snapshot.version !== active.contentVersion) return null
+      const from = selected.main.from
+      let to = toolbarSelection
+        ? Math.min(selected.main.to, from + 256)
+        : selected.main.to
+      if (
+        toolbarSelection &&
+        to < selected.main.to &&
+        !renderedBoundary(new DocInput(editor.state.doc), to)
+      )
+        to--
+      if (
+        formatted &&
+        (!renderedBoundary(new DocInput(editor.state.doc), from) ||
+          !renderedBoundary(new DocInput(editor.state.doc), to))
+      )
+        return null
+      const selectedText = formatted
+        ? formattedSelectionText(
+            editor.state,
+            syntax.selectionTree(editor.state, from, to),
+            syntax.parser(editor.state),
+            from,
+            to,
+            toolbarSelection ? '\n' : '',
+          )
+        : editor.state.sliceDoc(from, to)
+      if (selectedText === null) return null
       return {
         view: target,
         contentVersion: snapshot.version,
@@ -1047,12 +1077,7 @@ export function SourceEditor({
           position,
           Math.min(editor.state.doc.length, position + 256),
         ),
-        selectedText: editor.state.sliceDoc(
-          selected.main.from,
-          toolbarSelection
-            ? Math.min(selected.main.to, selected.main.from + 256)
-            : selected.main.to,
-        ),
+        selectedText,
       }
     }
     const cancelCompletion = () => {

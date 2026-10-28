@@ -1089,18 +1089,23 @@ test('link reference definitions take no space and show only while the caret edi
   // Arrow keys move inside a shown definition without hiding it.
   await harness.keyboard.press('ArrowLeft')
   assert.equal(await shownLine(), true)
-  const after = await harness.evaluate(async () => {
-    const preview = window.livePreview
-    const view = preview.view()
-    view.contentDOM.blur()
-    await preview.settle()
-    return {
-      doc: view.state.doc.toString(),
-      hidden: ![...document.querySelectorAll('.cm-line')].some((line) =>
-        line.textContent.includes('[ref]'),
-      ),
-    }
+  /** Whether no line shows the definition. */
+  const hidden = () =>
+    ![...document.querySelectorAll('.cm-line')].some((line) =>
+      line.textContent.includes('[ref]'),
+    )
+  await harness.evaluate(() => window.livePreview.view().contentDOM.blur())
+  // Blur reaches the view after its focus handling settles, which can take
+  // more than a frame under load: wait for the definition to hide.
+  await harness.waitForFunction(hidden).catch((error) => {
+    if (error.name !== 'TimeoutError') throw error
   })
+  const after = {
+    doc: await harness.evaluate(() =>
+      window.livePreview.view().state.doc.toString(),
+    ),
+    hidden: await harness.evaluate(hidden),
+  }
   assert.deepEqual(after, { doc: 'one\n\n[ref]: /xyz\n\ntwo', hidden: true })
 })
 

@@ -724,6 +724,125 @@ test('blank lines after the last block are laid out only where the view shows th
   assert.deepEqual(heights, [16, 28, 16, 28])
 })
 
+test('scrolling up through known code blocks keeps the scroll position as without them', {
+  timeout: 120000,
+}, async () => {
+  const code = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = '# Long code lines\n\n'
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${code.repeat(5)}\`\`\`\n\n`
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  /** How far the scroll position moves by itself after each step up the note. */
+  const scrollUp = (known) =>
+    harness.evaluate(
+      async ({ doc, known }) => {
+        await window.livePreview.mount(
+          doc,
+          { width: 900, height: 600 },
+          { editable: true },
+        )
+        const view = window.livePreview.view()
+        // A focused editor keeps the text at the top in place as heights change.
+        view.focus()
+        if (known) window.livePreview.knowCode()
+        await window.livePreview.settle()
+        const pane = document.querySelector('.rich-pane')
+        const frame = () => new Promise(requestAnimationFrame)
+        const scroll = async (target) => {
+          pane.scrollTop = target
+          const wanted = pane.scrollTop
+          // Until nothing moves for a few frames.
+          let still = 0
+          let last = ''
+          for (let i = 0; i < 60 && still < 4; i++) {
+            await frame()
+            const now = `${pane.scrollTop} ${view.viewport.from} ${view.viewport.to} ${view.contentDOM.offsetHeight}`
+            still = now === last ? still + 1 : 0
+            last = now
+          }
+          return Math.round(pane.scrollTop - wanted)
+        }
+        const step = Math.round(pane.clientHeight * 0.8)
+        // Down first, so the editor has drawn and measured every line.
+        for (
+          let target = 0;
+          target < pane.scrollHeight - pane.clientHeight;
+          target += step
+        )
+          await scroll(target)
+        const moved = []
+        for (
+          let target = pane.scrollHeight - pane.clientHeight;
+          target > 0;
+          target -= step
+        )
+          moved.push(await scroll(target))
+        return moved
+      },
+      { doc, known },
+    )
+  const plain = await scrollUp(false)
+  const known = await scrollUp(true)
+  await session.detach()
+  assert.ok(plain.length > 15, JSON.stringify(plain))
+  // Before, each placeholder turned into lines in an update the editor had
+  // not measured when the next update came, so it kept the text at the top
+  // by estimated heights and scrolled up the note a few hundred pixels.
+  assert.deepEqual(known, plain)
+})
+
+test('stepping up after a jump to the end, known code blocks never draw as plain text', {
+  timeout: 120000,
+}, async () => {
+  const code = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = '# Long code lines\n\n'
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${code.repeat(5)}\`\`\`\n\n`
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const plain = await harness.evaluate(async (doc) => {
+    await window.livePreview.mount(
+      doc,
+      { width: 900, height: 600 },
+      { editable: true },
+    )
+    const view = window.livePreview.view()
+    view.focus()
+    window.livePreview.knowCode()
+    await window.livePreview.settle()
+    const pane = document.querySelector('.rich-pane')
+    const frame = () => new Promise(requestAnimationFrame)
+    // Code lines drawn outside a code block's box, as unparsed text.
+    let most = 0
+    const count = () => {
+      most = Math.max(
+        most,
+        [...view.contentDOM.querySelectorAll('.cm-line')].filter(
+          (line) =>
+            line.textContent.startsWith('const value') &&
+            !line.closest('.hibi-lp-codescroll'),
+        ).length,
+      )
+    }
+    pane.scrollTop = pane.scrollHeight
+    for (let i = 0; i < 20; i++) await frame()
+    const step = Math.round(pane.clientHeight * 0.8)
+    for (let k = 0; k < 5; k++) {
+      pane.scrollTop -= step
+      for (let i = 0; i < 20; i++) {
+        await frame()
+        count()
+      }
+    }
+    return most
+  }, doc)
+  await session.detach()
+  // Before, a block the parser started over on showed its long lines as
+  // wrapped text, thousands of pixels tall, and the view jumped away.
+  assert.equal(plain, 0)
+})
+
 test('typing beside a multi-line link destination edits the text', {
   timeout: 60000,
 }, async () => {

@@ -17,6 +17,7 @@ import {
   uncovered,
 } from '../../src/renderer/src/chunked-markdown'
 import { codeLanguages } from '../../src/renderer/src/code-languages'
+import { setCodeExtents } from '../../src/renderer/src/code-placeholders'
 import {
   formattedDocument,
   formattedRefresh,
@@ -334,6 +335,37 @@ Object.assign(window, {
       view?.dispatch({
         effects: EditorView.scrollIntoView(pos, { y: 'start' }),
       })
+    },
+    /**
+     * Tell the view the note's top-level backtick fences, as the document's
+     * index will: each block's range, code line count and longest line.
+     */
+    knowCode() {
+      if (!view) return 0
+      const { doc } = view.state
+      const extents: {
+        from: number
+        to: number
+        lines: number
+        columns: number
+      }[] = []
+      let open: { from: number; lines: number; columns: number } | null = null
+      for (let number = 1; number <= doc.lines; number++) {
+        const line = doc.line(number)
+        if (line.text.startsWith('```')) {
+          if (open) {
+            extents.push({ ...open, to: line.to })
+            open = null
+          } else open = { from: line.from, lines: 0, columns: 0 }
+        } else if (open) {
+          open.lines++
+          open.columns = Math.max(open.columns, line.length)
+        }
+      }
+      view.dispatch({
+        effects: setCodeExtents.of({ from: 0, to: doc.length, extents }),
+      })
+      return extents.length
     },
     /** Turn a code language's highlighting on or off. */
     setCodeLanguage: (id: string, enabled: boolean) =>

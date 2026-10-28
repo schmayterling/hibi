@@ -9,9 +9,9 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | gap id | test file:line | behavior | owning slice |
 | --- | --- | --- | --- |
 | reload-001 | [addon-reload.test.mjs:783](addon-reload.test.mjs#L783) | addon reload must retain selection and document focus | 3b: addon reload selection and focus |
-| reload-004 | [addon-reload.test.mjs:924](addon-reload.test.mjs#L924) | unlocked formatted editor must expose aria-readonly false | 3b: addon reload selection and focus |
-| reload-002 | [addon-reload.test.mjs:951](addon-reload.test.mjs#L951) | addon reload must retain selection moved while read-only | 3b: addon reload selection and focus |
-| reload-003 | [addon-reload.test.mjs:969](addon-reload.test.mjs#L969) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
+| reload-004 | [addon-reload.test.mjs:929](addon-reload.test.mjs#L929) | unlocked formatted editor must expose aria-readonly false | 3b: addon reload selection and focus |
+| reload-002 | [addon-reload.test.mjs:956](addon-reload.test.mjs#L956) | addon reload must retain selection moved while read-only | 3b: addon reload selection and focus |
+| reload-003 | [addon-reload.test.mjs:974](addon-reload.test.mjs#L974) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
 | api-001 | [addon-toolbar-command.test.mjs:149](addon-toolbar-command.test.mjs#L149) | api 2 rich selection must report rendered text | 6: verbatim projections and selection contracts |
 | completion-001 | [autocomplete-addon.test.mjs:369](autocomplete-addon.test.mjs#L369) | a fresh rich completion list must accept the word with tab | 8a: native input, structure and toolbar state |
 | syntax-004 | [code-syntax-settings.test.mjs:238](code-syntax-settings.test.mjs#L238) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |
@@ -92,11 +92,9 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | input-073 | [editor-input.test.mjs:3440](editor-input.test.mjs#L3440) | native bold typing keeps bold action pressed | 8a: native input, structure and toolbar state |
 | input-074 | [editor-input.test.mjs:3454](editor-input.test.mjs#L3454) | native bold typing renders strong text in canonical source | 8a: native input, structure and toolbar state |
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
-| find-001 | [formatted-find.test.mjs:328](formatted-find.test.mjs#L328) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
-| find-002 | [formatted-find.test.mjs:457](formatted-find.test.mjs#L457) | undo must restore matches without a current find result | 4b: find wiring and navigation |
-| find-006 | [formatted-find.test.mjs:502](formatted-find.test.mjs#L502) | increasing total matches must preserve the viewport highlight budget | 4b: find wiring and navigation |
-| find-003 | [formatted-find.test.mjs:569](formatted-find.test.mjs#L569) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
-| find-005 | [formatted-find.test.mjs:821](formatted-find.test.mjs#L821) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
+| find-001 | [formatted-find.test.mjs:401](formatted-find.test.mjs#L401) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
+| find-003 | [formatted-find.test.mjs:664](formatted-find.test.mjs#L664) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
+| find-005 | [formatted-find.test.mjs:916](formatted-find.test.mjs#L916) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
 | release-001 | [formatted-hidden-source.test.mjs:167](formatted-hidden-source.test.mjs#L167) | reopening source must restore its saved scroll position | 2c: hidden source release and mapped bookmarks |
 | release-002 | [formatted-hidden-source.test.mjs:188](formatted-hidden-source.test.mjs#L188) | formatted edits must map the saved source scroll position | 2c: hidden source release and mapped bookmarks |
 | corpus-008 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | a quoted title with a blank line must not define a reference | 5a: shared reference definition parsing |
@@ -128,3 +126,5 @@ corpus-004, corpus-014: a reference in a `-# ` subtext line resolves against a d
 marker-005: copying from the formatted view puts the selection's exact Markdown on the clipboard as text, as a Markdown editor does, and its rendered HTML as HTML ([markdown-markers.test.mjs:867](markdown-markers.test.mjs#L867)). The rich editor copies rendered text. A formatted-view copy pastes back as the same Markdown; formatted-clipboard.test.mjs covers that contract.
 
 marker-007: with markers shown, the formatted view reveals a focused heading's `# ` as editable text, so the heading's text content includes it; the heading's name in the accessibility tree is the rendered heading text ([sidebar-views.test.mjs:103](sidebar-views.test.mjs#L103)). The rich editor draws the marker as generated content outside the text. Each engine asserts its own outcome.
+
+find-002: with the find bar open, undoing an edit that replaced the selected match restores that selection in the formatted view, so the restored match is the current one (1/10000), as in source view; the find count reflects the selection it is given ([formatted-find.test.mjs:531](formatted-find.test.mjs#L531)). The rich editor leaves a caret after the restored text, so it shows 0/10000. After closing the bar, typing and undoing, reopening it searches again from the selection, and both engines show the first match as current (1/10000).

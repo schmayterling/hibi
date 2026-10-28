@@ -190,10 +190,10 @@ export const contribution: FormattedContribution = {
         if (!parts) return false
         // The label reads as a link; brackets, and the target behind an alias, are syntax.
         const { from, to } = parts.label
-        for (const range of formattedMarkerRanges(node.node, (a, b) =>
+        const [open, close] = formattedMarkerRanges(node.node, (a, b) =>
           context.state.sliceDoc(a, b),
-        ))
-          out.syntax(range.from, range.to)
+        )
+        if (open) out.syntax(open.from, open.to)
         wrapDecoded(
           out,
           context,
@@ -205,6 +205,7 @@ export const contribution: FormattedContribution = {
           },
           true,
         )
+        if (close) out.syntax(close.from, close.to)
         return false
       },
     },
@@ -237,13 +238,14 @@ export const contribution: FormattedContribution = {
     {
       nodes: ['Highlight'],
       decorate(node, out, context) {
-        for (const range of formattedMarkerRanges(node.node, (a, b) =>
+        const [open, close] = formattedMarkerRanges(node.node, (a, b) =>
           context.state.sliceDoc(a, b),
-        ))
-          out.syntax(range.from, range.to)
+        )
+        if (open) out.syntax(open.from, open.to)
         wrapDecoded(out, context, node.from + 2, node.to - 2, {
           class: 'hibi-lp-highlight',
         })
+        if (close) out.syntax(close.from, close.to)
         return false
       },
     },

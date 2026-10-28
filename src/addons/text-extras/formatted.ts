@@ -23,10 +23,10 @@ const subscript: FormattedContribution = {
     {
       nodes: ['Subscript'],
       decorate(node, out, context) {
-        for (const range of formattedMarkerRanges(node.node, (a, b) =>
+        const [open, close] = formattedMarkerRanges(node.node, (a, b) =>
           context.state.sliceDoc(a, b),
-        ))
-          out.syntax(range.from, range.to)
+        )
+        if (open) out.syntax(open.from, open.to)
         markDecoded(
           out,
           context,
@@ -35,6 +35,7 @@ const subscript: FormattedContribution = {
           { class: 'hibi-lp-subscript' },
           entityNodes(node.node, context.visible, 'Subscript'),
         )
+        if (close) out.syntax(close.from, close.to)
         return undefined
       },
     },

@@ -110,6 +110,19 @@ test('rendered worker projection agrees with actual unrevealed formatted DOM', {
       .filter((line) => line.text && line.from < line.to)
   })
   assert.ok(lines.length >= 15, JSON.stringify(lines))
+  for (const source of [
+    '>   cont',
+    '>   b',
+    '>    b',
+    '>  b',
+    '>>   continuation',
+  ]) {
+    const at = markdown.indexOf(source)
+    assert.ok(
+      lines.some((line) => line.from <= at && line.to >= at + source.length),
+      'missing oracle line: ' + source,
+    )
+  }
   for (const line of lines) {
     const projected = [...index.range(line.from, line.to)]
       .map((chunk) => chunk.text)

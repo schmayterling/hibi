@@ -191,6 +191,7 @@ async function openFind(
           const find = {
             ...request,
             mode: 'rendered',
+            replacement: 'X',
             config,
             prefix: config?.prefix ?? 0,
             viewport: {
@@ -281,7 +282,14 @@ test('rendered backend returns source provenance and replacement edits make one 
     { from: 3, to: 6 },
     { from: 8, to: 10 },
   ])
-  const edits = renderedReplaceEdits(match, 'X')
+  await waitForAsync(page, () => {
+    const plan = window.renderedFindReplies.at(-1)?.replacement
+    return plan?.from === 3 && plan?.to === 10 && !!plan.edits
+  })
+  const prepared = await page.evaluate(
+    () => window.renderedFindReplies.at(-1).replacement,
+  )
+  const edits = renderedReplaceEdits(match, 'X', prepared)
   assert.ok(edits)
   await input.press('Escape')
   await rich.evaluate(

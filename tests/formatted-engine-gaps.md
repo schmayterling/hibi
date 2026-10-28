@@ -96,11 +96,11 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
 | api-003 | [editor-view-bridge.test.mjs:189](editor-view-bridge.test.mjs#L189) | switching source view must retain the hosting view identity | 6: verbatim projections and selection contracts |
 | api-006 | [editor-view-bridge.test.mjs:201](editor-view-bridge.test.mjs#L201) | switching to source must stale the previous formatted selection | 6: verbatim projections and selection contracts |
-| find-001 | [formatted-find.test.mjs:305](formatted-find.test.mjs#L305) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
-| find-002 | [formatted-find.test.mjs:434](formatted-find.test.mjs#L434) | undo must restore matches without a current find result | 4b: find wiring and navigation |
-| find-006 | [formatted-find.test.mjs:479](formatted-find.test.mjs#L479) | increasing total matches must preserve the viewport highlight budget | 4b: find wiring and navigation |
-| find-003 | [formatted-find.test.mjs:546](formatted-find.test.mjs#L546) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
-| find-005 | [formatted-find.test.mjs:798](formatted-find.test.mjs#L798) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
+| find-001 | [formatted-find.test.mjs:313](formatted-find.test.mjs#L313) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
+| find-002 | [formatted-find.test.mjs:442](formatted-find.test.mjs#L442) | undo must restore matches without a current find result | 4b: find wiring and navigation |
+| find-006 | [formatted-find.test.mjs:487](formatted-find.test.mjs#L487) | increasing total matches must preserve the viewport highlight budget | 4b: find wiring and navigation |
+| find-003 | [formatted-find.test.mjs:554](formatted-find.test.mjs#L554) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
+| find-005 | [formatted-find.test.mjs:806](formatted-find.test.mjs#L806) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
 | release-001 | [formatted-hidden-source.test.mjs:167](formatted-hidden-source.test.mjs#L167) | reopening source must restore its saved scroll position | 2c: hidden source release and mapped bookmarks |
 | release-002 | [formatted-hidden-source.test.mjs:188](formatted-hidden-source.test.mjs#L188) | formatted edits must map the saved source scroll position | 2c: hidden source release and mapped bookmarks |
 | release-003 | [formatted-hidden-source.test.mjs:327](formatted-hidden-source.test.mjs#L327) | a note that grows huge must release its hidden source view | 2c: hidden source release and mapped bookmarks |

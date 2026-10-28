@@ -362,7 +362,9 @@ function parseSelection(html: string) {
     }
   return parse(
     context +
-      html.slice(start.marker.index + start.marker[0].length, end.marker.index),
+      // The start comment stays first, so a `<pre>` around it cannot take the
+      // selection's leading line break for its own.
+      html.slice(start.marker.index, end.marker.index),
   )
 }
 

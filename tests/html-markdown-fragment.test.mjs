@@ -206,6 +206,11 @@ for (const [name, html, expected] of [
     ),
     '5. selected',
   ],
+  ...['\n', '\r\n', '&#10;'].map((lineBreak) => [
+    `preformatted text after a ${JSON.stringify(lineBreak)} line break`,
+    envelope(`<pre>OUTSIDE BEFORE${start}${lineBreak}  selected\n${end}</pre>`),
+    '```\n\n  selected\n```',
+  ]),
   [
     'preformatted text',
     envelope(
@@ -451,7 +456,7 @@ test('a selection among 20,000 siblings parses on its own after one read of the 
         return {
           pasted,
           parses: parsed.length,
-          selection: parsed[1] === selection.length,
+          selection: parsed[1] === start.length + selection.length,
           removed,
           visited,
         }

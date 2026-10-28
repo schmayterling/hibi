@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
+import { formattedMarkdownParser } from '../src/shared/formatted-markdown.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 import {
   electron,
@@ -91,9 +92,19 @@ const cases = [
     source: '- [ ] todo\n- [x] done\n\n# after',
     compatibility: true,
   },
+  { name: 'intraword non-bmp symbol', source: 'ab**😀cd**ef' },
+  { name: 'intraword non-bmp punctuation', source: 'ab**𐩐cd**ef' },
+  {
+    name: 'non-bmp emphasis controls',
+    source: 'ab**cd**ef **😀cd** ab**€cd**ef',
+  },
 ]
 
 const formattedGaps = {
+  'syntax/intraword non-bmp symbol':
+    'formatted gap corpus-029: intraword strong delimiters before non-bmp symbols must stay literal',
+  'syntax/intraword non-bmp punctuation':
+    'formatted gap corpus-030: intraword strong delimiters before non-bmp punctuation must stay literal',
   '1/gfm/0':
     'formatted gap corpus-011: disabled heading syntax must preserve bold formatting inside alerts',
   '0/multiline title/0':
@@ -107,6 +118,24 @@ const formattedGaps = {
   '1/multiline title/0/counts':
     'formatted gap corpus-021: disabled heading syntax counts must include a blank-line title definition',
 }
+
+for (const fixture of cases.filter((item) =>
+  item.name.startsWith('intraword non-bmp'),
+))
+  test(`formatted syntax keeps ${fixture.name} delimiters literal`, {
+    todo: formattedGaps[`syntax/${fixture.name}`],
+  }, () => {
+    const tokens = markdownSourceParser({ gfm: true }).lexer(fixture.source)
+    assert.equal(
+      tokens[0].tokens.some((token) => token.type === 'strong'),
+      false,
+    )
+    assert.equal(
+      formattedMarkdownParser([]).parse(fixture.source).toString(),
+      'Document(Paragraph)',
+      'CommonMark punctuation includes Unicode P and S code points',
+    )
+  })
 
 // The codemirror view's outcomes where the native schema's differ: the
 // tiptap control keeps the frozen native outcomes below. A reference in a
@@ -130,6 +159,21 @@ const formattedDifferences = {
 
 // frozen native outcomes; the tiptap control verifies every fixture.
 const formattedOutcomes = {
+  '0/intraword non-bmp symbol/0': {
+    text: 'ab**😀cd**ef',
+    headings: [],
+    counts: { words: 3, characters: 11 },
+  },
+  '0/intraword non-bmp punctuation/0': {
+    text: 'ab**𐩐cd**ef',
+    headings: [],
+    counts: { words: 3, characters: 11 },
+  },
+  '0/non-bmp emphasis controls/0': {
+    text: 'abcdef 😀cd ab**€cd**ef',
+    headings: [],
+    counts: { words: 5, characters: 22 },
+  },
   '0/empty/0': { text: '', headings: [], counts: { words: 0, characters: 0 } },
   '0/whitespace/0': {
     text: '\n',
@@ -245,6 +289,21 @@ const formattedOutcomes = {
     text: '\n\ntodo\n\ndone\nafter',
     headings: ['after'],
     counts: { words: 3, characters: 18 },
+  },
+  '1/intraword non-bmp symbol/0': {
+    text: 'ab**😀cd**ef',
+    headings: [],
+    counts: { words: 3, characters: 11 },
+  },
+  '1/intraword non-bmp punctuation/0': {
+    text: 'ab**𐩐cd**ef',
+    headings: [],
+    counts: { words: 3, characters: 11 },
+  },
+  '1/non-bmp emphasis controls/0': {
+    text: 'ab**cd**ef **😀cd** ab**€cd**ef',
+    headings: [],
+    counts: { words: 7, characters: 30 },
   },
   '1/empty/0': { text: '', headings: [], counts: { words: 0, characters: 0 } },
   '1/whitespace/0': {
@@ -669,7 +728,7 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
     join(profile, 'addons.json'),
     JSON.stringify({ 'word-count': true }),
   )
-  assert.equal(Object.keys(formattedOutcomes).length, 48)
+  assert.equal(Object.keys(formattedOutcomes).length, 54)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })

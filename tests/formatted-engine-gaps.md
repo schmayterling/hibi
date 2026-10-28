@@ -95,13 +95,13 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | find-001 | [formatted-find.test.mjs:401](formatted-find.test.mjs#L401) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
 | find-003 | [formatted-find.test.mjs:664](formatted-find.test.mjs#L664) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
 | find-005 | [formatted-find.test.mjs:916](formatted-find.test.mjs#L916) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
-| corpus-008 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | a quoted title with a blank line must not define a reference | 5a: shared reference definition parsing |
-| corpus-011 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
-| corpus-012 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
-| corpus-020 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | counts must include a definition whose quoted title holds a blank line | 5a: shared reference definition parsing |
-| corpus-021 | [markdown-semantics-native.test.mjs:108](markdown-semantics-native.test.mjs#L108) | disabled heading syntax counts must include a blank-line title definition | 5a: shared reference definition parsing |
+| corpus-008 | [markdown-semantics-native.test.mjs:111](markdown-semantics-native.test.mjs#L111) | a quoted title with a blank line must not define a reference | 5a: shared reference definition parsing |
+| corpus-011 | [markdown-semantics-native.test.mjs:109](markdown-semantics-native.test.mjs#L109) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
+| corpus-012 | [markdown-semantics-native.test.mjs:115](markdown-semantics-native.test.mjs#L115) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
+| corpus-020 | [markdown-semantics-native.test.mjs:113](markdown-semantics-native.test.mjs#L113) | counts must include a definition whose quoted title holds a blank line | 5a: shared reference definition parsing |
+| corpus-021 | [markdown-semantics-native.test.mjs:119](markdown-semantics-native.test.mjs#L119) | disabled heading syntax counts must include a blank-line title definition | 5a: shared reference definition parsing |
 | export-001 | [marked-large-paragraph.test.mjs:597](marked-large-paragraph.test.mjs#L597) | export must keep a blank-line title definition and its heading as visible text | 5a: shared reference definition parsing |
-| corpus-018 | [markdown-semantics-native.test.mjs:106](markdown-semantics-native.test.mjs#L106) | disabled heading syntax must keep a blank-line title definition literal | 5a: shared reference definition parsing |
+| corpus-018 | [markdown-semantics-native.test.mjs:117](markdown-semantics-native.test.mjs#L117) | disabled heading syntax must keep a blank-line title definition literal | 5a: shared reference definition parsing |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | contracts-003 | [raw-html-editor.test.mjs:1225](raw-html-editor.test.mjs#L1225) | modified inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-004 | [raw-html-editor.test.mjs:1227](raw-html-editor.test.mjs#L1227) | superseded inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
@@ -109,6 +109,11 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | contracts-006 | [raw-html-editor.test.mjs:1233](raw-html-editor.test.mjs#L1233) | superseded block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | semantics-002 | [source-reference-navigation.test.mjs:160](source-reference-navigation.test.mjs#L160) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | addon-001 | [source-reference-navigation.test.mjs:185](source-reference-navigation.test.mjs#L185) | rich-only addon syntax must retain native editing and source reference isolation | 2b: legacy feature notices and literal fallback |
+
+| corpus-029 | [markdown-semantics-native.test.mjs:105](markdown-semantics-native.test.mjs#L105) | intraword strong delimiters before non-bmp symbols must stay literal | 9: outline semantics and diagram lifecycle |
+| corpus-030 | [markdown-semantics-native.test.mjs:107](markdown-semantics-native.test.mjs#L107) | intraword strong delimiters before non-bmp punctuation must stay literal | 9: outline semantics and diagram lifecycle |
+
+corpus-029, corpus-030: [commonmark 0.31.2](https://spec.commonmark.org/0.31.2/#unicode-punctuation-character) includes unicode punctuation (P) and symbols (S) in its flanking rules. in `ab**😀cd**ef` and `ab**𐩐cd**ef`, the opening stars follow a letter and precede punctuation, so they cannot open strong emphasis. marked and the native schema keep the stars literal. the formatted parser creates `StrongEmphasis` because its upstream emphasis rule reads one utf-16 unit on either side of the delimiter run. the native text/count controls pass; these remain open grammar gaps.
 
 ## accepted differences
 

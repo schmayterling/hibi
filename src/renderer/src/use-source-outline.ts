@@ -125,6 +125,7 @@ export function useSourceOutline({
   const latest = useRef({ tabId, currentView })
   latest.current = { tabId, currentView }
   const reportActive = useRef(() => {})
+  // biome-ignore lint/correctness/useExhaustiveDependencies: document revisions restart outline work after reloads.
   useEffect(() => {
     if (!active) return
     const session = documentRuntime.session(tabId)
@@ -138,10 +139,11 @@ export function useSourceOutline({
     // with the editor.
     void Promise.all([
       import('./source-outline'),
-      import('./markdown-semantics'),
+      import('./source-outline-label'),
     ]).then(
-      ([{ SourceOutlineModel }, { createMarkdownSemantics }]) => {
-        if (!stopped) stop = start(SourceOutlineModel, createMarkdownSemantics)
+      ([{ SourceOutlineModel }, { createOutlineLabelRenderer }]) => {
+        if (!stopped)
+          stop = start(SourceOutlineModel, createOutlineLabelRenderer)
       },
       (error) => {
         if (stopped) return
@@ -153,11 +155,12 @@ export function useSourceOutline({
     )
     const start = (
       SourceOutlineModel: typeof import('./source-outline').SourceOutlineModel,
-      createMarkdownSemantics: typeof import('./markdown-semantics').createMarkdownSemantics,
+      createOutlineLabelRenderer: typeof import('./source-outline-label').createOutlineLabelRenderer,
     ) => {
-      const semantics =
-        outlineSyntax && createMarkdownSemantics(flavors, revision)
-      if (!outlineSyntax || !semantics) {
+      const renderLabel =
+        outlineSyntax &&
+        createOutlineLabelRenderer(flavors.map((flavor) => flavor.id))
+      if (!outlineSyntax || !renderLabel) {
         sourceOutline.current = null
         onOutline([])
         onActiveOutline(null)
@@ -179,19 +182,7 @@ export function useSourceOutline({
       const model = new SourceOutlineModel(session.snapshot(), {
         ...outlineSyntax,
         deferLabels: true,
-        renderLabel: (tokens, level) =>
-          semantics.read(
-            [
-              {
-                type: 'heading',
-                raw: '',
-                text: '',
-                depth: level,
-                tokens: [...tokens],
-              },
-            ],
-            { before: false, after: false },
-          )?.headings[0]?.label ?? null,
+        renderLabel,
         disabled,
       })
       let disposed = false,

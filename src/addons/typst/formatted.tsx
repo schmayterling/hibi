@@ -11,7 +11,7 @@ import {
   RenderedBlocks,
 } from '../_shared/formatted-fence'
 import type { AddonContext } from '../api'
-import type { editTypstSource, TypstBlockContent } from './Block'
+import type { editTypstSource, TypstBlockContent } from './BlockContent'
 
 /**
  * Typst fences in the formatted view: the rich view's block heading and

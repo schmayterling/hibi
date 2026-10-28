@@ -17,9 +17,9 @@ import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { documentImage } from '../src/renderer/src/DocumentImage.ts'
 import { editorExtensions } from '../src/renderer/src/markdown.ts'
-import { createMarkdownSemantics } from '../src/renderer/src/markdown-semantics.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
+import { createOutlineLabelRenderer } from '../src/renderer/src/source-outline-label.ts'
 import { createOutlineLabelReader } from '../src/renderer/src/source-outline-label.worker.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
@@ -111,7 +111,9 @@ function finish(work, resolve, readLabel) {
 
 function setup(source, { math = false, deferLabels = false } = {}) {
   const activeFlavors = math ? [...flavors, mathFlavor] : flavors
-  const consumer = createMarkdownSemantics(activeFlavors, 0)
+  const consumer = createOutlineLabelRenderer(
+    activeFlavors.map((flavor) => flavor.id),
+  )
   assert.ok(consumer)
   const store = new SourceStore(source, {
     tabId: 'outline-semantics',
@@ -124,19 +126,7 @@ function setup(source, { math = false, deferLabels = false } = {}) {
     textExtras: true,
     math,
     deferLabels,
-    renderLabel: (tokens, level) =>
-      consumer.read(
-        [
-          {
-            type: 'heading',
-            raw: '',
-            text: '',
-            depth: level,
-            tokens: [...tokens],
-          },
-        ],
-        { before: false, after: false },
-      )?.headings[0]?.label ?? null,
+    renderLabel: consumer,
   })
   return { store, model, activeFlavors }
 }
@@ -209,6 +199,9 @@ test('source outline labels ignore declarations inside fences and frontmatter', 
 
 test('source outline labels match native entities, nested formatting, and text extras', () => {
   for (const source of [
+    '# <https://example.test/a&amp;b> and https://example.test/a&amp;amp;b',
+    '# <https://example.test/a&lt;b&amp;amp;> and <a&amp;b@example.test>',
+    '# **<https://example.test/a&amp;b>** and [label &amp;](/target)',
     '# &amp; &#65; &#x1F600; \\*literal\\* **bold *soft*** `&amp;`',
     '# ~~strike~~ H~2~O and **nested ~sub~ text**',
     '> ## quote [*soft*](https://example.test)\n\n- ### list **bold**',
@@ -225,12 +218,56 @@ test('source outline labels preserve disabled inline syntax exactly like native 
     for (const id of ids) markdownSyntax.setEnabled(id, false)
     check('# **bold** [link](/target) `code` ![image](image.png)')
     check(
+      '# <https://example.test/a&amp;b> and https://example.test/a&amp;amp;b',
+    )
+    check(
       '# [**bold**][ref] ![image][picture]\n\n[ref]: /target\n[picture]: image.png',
     )
   } finally {
     for (const id of ids) markdownSyntax.setEnabled(id, true)
   }
 })
+
+for (const [disabled, text, label] of [
+  ['core.italic', 'H~*i*~O', 'HiO'],
+  ['core.italic', '~x *y* z~', 'x y z'],
+  ['core.bold', 'H~**b *i***~O', 'Hb iO'],
+  ['core.links', 'H~[**b**](/target)~O', 'HbO'],
+  ['core.links', 'H~<https://e.test/a&amp;b>~O', 'Hhttps://e.test/a&bO'],
+  ['core.images', 'H~![alt](image.png)~O', 'HaltO'],
+  ['core.escapes', 'H~\\*~O', 'H*O'],
+  ['core.inline-code', 'H~`c`~O', 'HO'],
+  ['math.inline', 'H~$x$~O', 'HO'],
+])
+  test(`source outline subscript matches frozen native labels with ${disabled} disabled: ${text}`, () => {
+    const activeFlavors = [...flavors, mathFlavor]
+    const reader = createOutlineLabelReader({
+      syntax: { gfm: true, alerts: true, textExtras: true, math: true },
+      flavors: activeFlavors.map((flavor) => flavor.id),
+      disabled: [disabled],
+    })
+    try {
+      for (const padding of ['', 'heading '.repeat(90)]) {
+        const source = `# ${padding}${text}`
+        const expected = [{ label: padding + label, level: 1 }]
+        assert.deepEqual(nativeHeadings(source, activeFlavors), expected)
+        for (const deferLabels of [false, true]) {
+          const { model } = setup(source, { math: true, deferLabels })
+          try {
+            const actual = finish(model.read(), referenceOracle(source), reader)
+            assert.deepEqual(
+              actual.map(({ label, level }) => ({ label, level })),
+              expected,
+            )
+          } finally {
+            model.dispose()
+          }
+        }
+      }
+    } finally {
+      markdownSyntax.reset()
+    }
+  })
 
 test('source outline refuses source changes while a reference response is pending', () => {
   const source = '# [visible][ref]\n\n[ref]: /target'

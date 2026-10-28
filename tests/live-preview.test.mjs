@@ -952,6 +952,163 @@ test('after an idle moment, scrolling near the viewport parses nothing in its fr
   assert.equal(result.scroll.scannedUnits, 0, JSON.stringify(result))
 })
 
+test('link reference definitions take no space and show only while the caret edits them', {
+  timeout: 60000,
+}, async () => {
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const layout = (doc) =>
+    harness.evaluate(async (doc) => {
+      await window.livePreview.mount(
+        doc,
+        { width: 800, height: 600 },
+        {
+          editable: true,
+        },
+      )
+      const lines = [...document.querySelectorAll('.cm-line')]
+      return {
+        text: lines
+          .map((line) => line.textContent.trim())
+          .filter(Boolean)
+          .join('|'),
+        tops: lines
+          .filter((line) => line.textContent.trim())
+          .map((line) => Math.round(line.getBoundingClientRect().top)),
+      }
+    }, doc)
+  // Each note lays out as the one without its definitions.
+  for (const [doc, plain] of [
+    ['one\n\n[ref]: /x "t"\n\ntwo', 'one\n\ntwo'],
+    ['# one\n[a]: /x\n[b]:\n  /y\n\ntwo', '# one\ntwo'],
+    ['[ref]: /x\n\none\n\n> [q]: /y\n>\n> two', 'one\n\n> two'],
+    ['one\n\ntwo\n\n[ref]: /x\n', 'one\n\ntwo\n'],
+    // After a list marker, the item's text shows beside the marker.
+    ['- [r]: /x\n\n  two', '- two'],
+    ['1. [r]: /x\n\n   two', '1. two'],
+    // Definitions after the first one in the item hide with it.
+    ['- [a]: /x\n  [b]: /y\n\n  two', '- two'],
+    ['- [a]: /x\n\n  [b]: /y\n\n  two', '- two'],
+    ['1. [a]: /x\n   [a]: /y\n\n   two', '1. two'],
+    ['> - [a]: /x\n>   [b]: /y\n>\n>   two', '> - two'],
+  ]) {
+    const shown = await layout(doc)
+    const expected = await layout(plain)
+    assert.equal(shown.text, expected.text, doc)
+    assert.deepEqual(shown.tops, expected.tops, doc)
+  }
+  // Arrow keys stay on the last shown block before a trailing definition,
+  // and a note of definitions alone keeps them hidden.
+  for (const doc of ['body\n\n[r]: /x', '[r]: /x', '- [r]: /x\n\n  two']) {
+    await harness.evaluate(async (doc) => {
+      const preview = window.livePreview
+      await preview.mount(doc, { width: 800, height: 600 }, { editable: true })
+      const view = preview.view()
+      view.focus()
+      view.dispatch({ selection: { anchor: 0 } })
+      await preview.settle()
+    }, doc)
+    const shown = []
+    for (const key of ['ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowDown']) {
+      await harness.keyboard.press(key)
+      shown.push(
+        await harness.evaluate(async () => {
+          await window.livePreview.settle()
+          return [...document.querySelectorAll('.cm-line')].some((line) =>
+            line.textContent.includes('[r]'),
+          )
+        }),
+      )
+    }
+    assert.deepEqual(shown, [false, false, false, false], doc)
+  }
+  const doc = 'one\n\n[ref]: /x\n\ntwo'
+  const definition = { from: doc.indexOf('['), to: doc.indexOf('two') - 1 }
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(doc, { width: 800, height: 600 }, { editable: true })
+    const view = preview.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: 0 } })
+    await preview.settle()
+    return {
+      lines: [...document.querySelectorAll('.cm-line')].map((line) =>
+        line.textContent.trim(),
+      ),
+    }
+  }, doc)
+  assert.ok(!result.lines.includes('[ref]: /x'), JSON.stringify(result))
+  // Arrow keys step over the hidden lines.
+  const heads = []
+  for (let step = 0; step < 4; step++) {
+    await harness.keyboard.press('ArrowDown')
+    heads.push(
+      await harness.evaluate(
+        () => window.livePreview.view().state.selection.main.head,
+      ),
+    )
+  }
+  assert.ok(
+    heads.every((head) => head < definition.from || head > definition.to),
+    JSON.stringify({ heads, definition }),
+  )
+  assert.equal(heads.at(-1), doc.length)
+  // A selection from the definition's first character shows it too.
+  assert.equal(
+    await harness.evaluate(async (from) => {
+      const preview = window.livePreview
+      preview.view().dispatch({ selection: { anchor: from, head: from + 5 } })
+      await preview.settle()
+      return [...document.querySelectorAll('.cm-line')].some(
+        (line) => line.textContent.trim() === '[ref]: /x',
+      )
+    }, definition.from),
+    true,
+  )
+  // A caret placed in the definition shows it, and typing stays in it.
+  const typed = await harness.evaluate(async (at) => {
+    const preview = window.livePreview
+    const view = preview.view()
+    view.dispatch({ selection: { anchor: at } })
+    await preview.settle()
+    const shown = [...document.querySelectorAll('.cm-line')].some(
+      (line) => line.textContent.trim() === '[ref]: /x',
+    )
+    return { shown }
+  }, doc.indexOf('/x') + 2)
+  assert.equal(typed.shown, true)
+  await harness.keyboard.type('yz')
+  const shownLine = () =>
+    harness.evaluate(async () => {
+      await window.livePreview.settle()
+      return [...document.querySelectorAll('.cm-line')].some(
+        (line) => line.textContent.trim() === '[ref]: /xyz',
+      )
+    })
+  assert.equal(await shownLine(), true)
+  // Arrow keys move inside a shown definition without hiding it.
+  await harness.keyboard.press('ArrowLeft')
+  assert.equal(await shownLine(), true)
+  /** Whether no line shows the definition. */
+  const hidden = () =>
+    ![...document.querySelectorAll('.cm-line')].some((line) =>
+      line.textContent.includes('[ref]'),
+    )
+  await harness.evaluate(() => window.livePreview.view().contentDOM.blur())
+  // Blur reaches the view after its focus handling settles, which can take
+  // more than a frame under load: wait for the definition to hide.
+  await harness.waitForFunction(hidden).catch((error) => {
+    if (error.name !== 'TimeoutError') throw error
+  })
+  const after = {
+    doc: await harness.evaluate(() =>
+      window.livePreview.view().state.doc.toString(),
+    ),
+    hidden: await harness.evaluate(hidden),
+  }
+  assert.deepEqual(after, { doc: 'one\n\n[ref]: /xyz\n\ntwo', hidden: true })
+})
+
 test('links whose destination spans lines render on one line while mounting and scrolling', {
   timeout: 90000,
 }, async () => {
@@ -1004,6 +1161,213 @@ test('links whose destination spans lines render on one line while mounting and 
     harness.off('pageerror', pageError)
     harness.off('console', consoleError)
   }
+})
+
+test('reference links render the labels the note defines and keep their brackets otherwise', {
+  timeout: 60000,
+}, async () => {
+  const doc = [
+    'full [text][REF] end',
+    'collapsed [Ref][] end',
+    'shortcut [ref] end',
+    'spaced [x][a\nb] end',
+    '[**bold** words\non two lines][ref] end',
+    'missing [nope] and [t][nope] and [**kept**][nope]',
+    'inline [site](https://example.com/) end',
+    // Labels match definitions trimmed and case folded, as navigation reads them.
+    'padded [t][ A\tB ] end',
+    'folded [ẞ] end',
+  ].join('\n\n')
+  const shown = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    preview.references.defined = new Set(['ref', 'a b', 'ss'])
+    preview.references.titles = { ref: 'Go there' }
+    preview.references.asked = []
+    await preview.mount(doc, { width: 800, height: 600 }, { references: true })
+    await preview.settle()
+    return {
+      lines: [...document.querySelectorAll('.cm-line')]
+        .map((line) => line.textContent.replace(/\s+/g, ' ').trim())
+        .filter(Boolean),
+      roles: [
+        ...new Set(
+          [...document.querySelectorAll('.hibi-lp-link')].map((link) =>
+            link.getAttribute('role'),
+          ),
+        ),
+      ],
+      // Titles of defined labels, as the rich view shows them, per line.
+      titles: [...document.querySelectorAll('.cm-line')]
+        .map((line) => line.querySelector('.hibi-lp-link'))
+        .filter(Boolean)
+        .map((link) => link.getAttribute('title')),
+      // Link text per line, which a widget inside it may split.
+      links: [...document.querySelectorAll('.cm-line')]
+        .map((line) =>
+          [...line.querySelectorAll('.hibi-lp-link')]
+            .filter((link) => !link.parentElement.closest('.hibi-lp-link'))
+            .map((link) => link.textContent)
+            .join('')
+            .replace(/\s+/g, ' '),
+        )
+        .filter(Boolean),
+      strong: [...document.querySelectorAll('.hibi-lp-strong')].map(
+        (node) => node.textContent,
+      ),
+      asked: [...preview.references.asked].sort(),
+    }
+  }, doc)
+  assert.deepEqual(shown.lines, [
+    'full text end',
+    'collapsed Ref end',
+    'shortcut ref end',
+    'spaced x end',
+    'bold words on two lines end',
+    'missing [nope] and [t][nope] and [kept][nope]',
+    'inline site end',
+    'padded t end',
+    'folded ẞ end',
+  ])
+  assert.deepEqual(shown.links, [
+    'text',
+    'Ref',
+    'ref',
+    'x',
+    'bold words on two lines',
+    'site',
+    't',
+    'ẞ',
+  ])
+  assert.deepEqual(shown.roles, ['link'])
+  assert.deepEqual(shown.titles, [
+    'Go there',
+    'Go there',
+    'Go there',
+    null,
+    'Go there',
+    null,
+    null,
+    null,
+  ])
+  // Formatting inside a reference's text renders whether or not it resolves.
+  assert.deepEqual(shown.strong, ['bold', 'kept'])
+  // Each drawn label is asked about once, normalized as definitions are.
+  assert.deepEqual(shown.asked, ['a b', 'nope', 'ref', 'ss'])
+})
+
+test('reference labels follow definition changes after an edit and ask only about drawn labels in a 50 MiB note', {
+  timeout: 120000,
+}, async () => {
+  const changed = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    preview.references.defined = new Set(['ref'])
+    preview.references.asked = []
+    await preview.mount('see [ref] here\n\nlast', undefined, {
+      references: true,
+      editable: true,
+    })
+    await preview.settle()
+    const before = document.querySelectorAll('.hibi-lp-link').length
+    // The definition goes away with an edit elsewhere in the note.
+    preview.references.defined = new Set()
+    const view = preview.view()
+    view.dispatch({ changes: { from: view.state.doc.length, insert: '!' } })
+    const until = (check) =>
+      new Promise((resolve) => {
+        const poll = () =>
+          check() ? resolve(true) : requestAnimationFrame(poll)
+        poll()
+      })
+    await until(() => !document.querySelector('.hibi-lp-link'))
+    return {
+      before,
+      after: document.querySelectorAll('.hibi-lp-link').length,
+      text: document.querySelector('.cm-line').textContent,
+      asked: preview.references.asked,
+    }
+  })
+  assert.deepEqual(changed, {
+    before: 1,
+    after: 0,
+    text: 'see [ref] here',
+    asked: ['ref', 'ref'],
+  })
+  const scale = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const unit = Array.from(
+      { length: 50 },
+      (_, i) => `Paragraph with [label ${i}][r${i}] and [r${i}] words.\n\n`,
+    ).join('')
+    preview.references.defined = new Set(
+      Array.from({ length: 50 }, (_, i) => `r${i}`),
+    )
+    preview.references.asked = []
+    const doc = unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length))
+    // Earlier cases leave the pane scrolled; this note opens at its start.
+    document.querySelector('.rich-pane').scrollTop = 0
+    await preview.mount(doc, { width: 800, height: 600 }, { references: true })
+    while (!document.querySelector('.hibi-lp-link')) await preview.settle()
+    const opened = {
+      length: preview.view().state.doc.length,
+      asked: preview.references.asked.length,
+      links: document.querySelectorAll('.hibi-lp-link').length,
+    }
+    const view = preview.view()
+    view.dispatch({
+      selection: { anchor: Math.floor(doc.length / 2) },
+      scrollIntoView: true,
+    })
+    await preview.settle()
+    await preview.settle()
+    return {
+      opened,
+      scrolled: preview.references.asked.length,
+      requested: preview.referenceWork.requested,
+    }
+  })
+  assert.ok(scale.opened.length > 50 * 1024 * 1024)
+  assert.ok(scale.opened.links > 0, JSON.stringify(scale))
+  // Labels drawn on screen, at most the 50 distinct ones, never the note's.
+  assert.ok(scale.opened.asked <= 50, JSON.stringify(scale))
+  assert.ok(scale.scrolled <= 100, JSON.stringify(scale))
+  // Layout hides labels on later lines over parsed text past the viewport
+  // too, but only labels of lines drawn are asked about.
+  const multiline = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    preview.references.defined = { has: () => true }
+    preview.references.asked = []
+    const drawn = new Set()
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          for (const [, number] of (node.textContent ?? '').matchAll(
+            /link (\d+)/g,
+          ))
+            drawn.add(number)
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    const count = Math.ceil((50 * 1024 * 1024) / 40)
+    const doc = Array.from(
+      { length: count },
+      (_, i) => `Paragraph [link ${i}][label\n${i}] words.`,
+    ).join('\n\n')
+    // The case before leaves the pane scrolled to the middle of its note.
+    document.querySelector('.rich-pane').scrollTop = 0
+    await preview.mount(doc, { width: 800, height: 600 }, { references: true })
+    while (!document.querySelector('.hibi-lp-link')) await preview.settle()
+    await preview.settle()
+    observer.disconnect()
+    const asked = preview.references.asked
+    return {
+      length: doc.length,
+      asked: asked.length,
+      drawn: drawn.size,
+      undrawn: asked.filter((label) => !drawn.has(label.split(' ')[1])).length,
+    }
+  })
+  assert.ok(multiline.length > 50 * 1024 * 1024)
+  assert.ok(multiline.asked > 0, JSON.stringify(multiline))
+  assert.equal(multiline.undrawn, 0, JSON.stringify(multiline))
 })
 
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {
@@ -1286,4 +1650,211 @@ test('ordered list numbers in a 20,000-item list come from cached item offsets',
   // Before the cache, ten visible items near the end read about 200,000 siblings.
   assert.ok(result.scrolled < 1000, JSON.stringify(result.scrolled))
   assert.ok(result.edited < 10000, JSON.stringify(result.edited))
+})
+
+test('code language changes reparse only the code on screen of a 50 MiB note', {
+  timeout: 120000,
+}, async () => {
+  await harness.evaluate(async () => {
+    const unit =
+      '## Section\n\nWords between blocks.\n\n```js\nconst value = 1\n```\n\n```rust\nfn main() {}\n```\n\n'
+    // A parse finishes in the transaction that starts it.
+    await window.livePreview.mount(
+      unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
+      { width: 800, height: 600 },
+      { slice: Number.POSITIVE_INFINITY },
+    )
+    // Idle time parses ahead of the screen; held, it counts in no change.
+    window.holdIdle = () => {
+      const idle = window.requestIdleCallback
+      window.requestIdleCallback = () => 0
+      return () => {
+        window.requestIdleCallback = idle
+      }
+    }
+    window.codeKeywords = (text) =>
+      [
+        ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
+      ].filter((token) => token.textContent === text).length
+  })
+  const keywords = (text, shown) =>
+    harness.waitForFunction(
+      ({ text, shown }) => window.codeKeywords(text) > 0 === shown,
+      { text, shown },
+    )
+  // Work of one change: the parse it starts, without idle parsing ahead.
+  const measure = (change) =>
+    harness.evaluate(async (change) => {
+      const preview = window.livePreview
+      await preview.settle()
+      const release = window.holdIdle()
+      try {
+        preview.reset()
+        if (change === 'disable') preview.setCodeLanguage('javascript', false)
+        else preview.hide(false)
+        await preview.settle()
+        return {
+          ...preview.probe,
+          keywords: window.codeKeywords('const'),
+          blocks: document.querySelectorAll('.hibi-lp-codeblock').length,
+        }
+      } finally {
+        release()
+      }
+    }, change)
+  try {
+    // A grammar that loads after the first parse reaches the parsed blocks.
+    await keywords('fn', true)
+    await keywords('const', true)
+    const disabled = await measure('disable')
+    // A hidden view waits: no parse and no change until it is shown.
+    await harness.evaluate(() => window.livePreview.hide(true))
+    await harness.waitForFunction(
+      () =>
+        getComputedStyle(document.querySelector('.rich-pane')).visibility ===
+        'hidden',
+    )
+    const hidden = await harness.evaluate(async () => {
+      const preview = window.livePreview
+      await preview.settle()
+      const release = window.holdIdle()
+      try {
+        preview.reset()
+        preview.setCodeLanguage('javascript', true)
+        await preview.settle()
+        await preview.settle()
+        return { ...preview.probe, keywords: window.codeKeywords('const') }
+      } finally {
+        release()
+      }
+    })
+    const shown = await measure('show')
+    // Code parsed before its language changed parses again when it returns to the screen.
+    await harness.evaluate(() => {
+      const preview = window.livePreview
+      const { doc } = preview.view().state
+      preview.scrollTo(doc.lineAt(Math.floor(doc.length / 2)).from)
+    })
+    await harness.waitForFunction(
+      () =>
+        window.livePreview.view().viewport.from > 1024 * 1024 &&
+        window.codeKeywords('const') > 0,
+    )
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', false),
+    )
+    await keywords('const', false)
+    await harness.evaluate(() => window.livePreview.scrollTo(0))
+    await harness.waitForFunction(
+      () =>
+        window.livePreview.view().viewport.from === 0 &&
+        window.codeKeywords('fn') > 0 &&
+        window.codeKeywords('const') === 0,
+    )
+    console.log(JSON.stringify({ disabled, hidden, shown }))
+    assert.equal(hidden.parsedUnits, 0, JSON.stringify(hidden))
+    assert.equal(hidden.keywords, 0)
+    assert.equal(disabled.keywords, 0)
+    assert.ok(shown.keywords > 0, JSON.stringify(shown))
+    // The code on screen and the chunks it straddles parse again, not the note.
+    for (const result of [disabled, shown]) {
+      assert.ok(result.blocks > 4, JSON.stringify(result))
+      assert.ok(result.parsedChunks <= 4, JSON.stringify(result))
+      assert.ok(result.parsedUnits <= 4 * 4096, JSON.stringify(result))
+    }
+  } finally {
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', true),
+    )
+  }
+})
+
+test('a code language change inside one 50 MiB fence parses only the code on screen', {
+  timeout: 240000,
+}, async () => {
+  // A worker indexing the note is covered in formatted-boundary-worker.
+  await harness.evaluate(async () => {
+    const line = 'const value = 1\n'
+    await window.livePreview.mount(
+      `\`\`\`js\n${line.repeat(Math.ceil((50 * 1024 * 1024) / line.length))}\`\`\`\n\nend\n`,
+      { width: 800, height: 600 },
+      { editable: true },
+    )
+    window.codeKeywords = () =>
+      [
+        ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
+      ].filter((token) => token.textContent === 'const').length
+    const preview = window.livePreview
+    preview.scrollTo(preview.view().state.doc.length - 2048)
+  })
+  await harness.waitForFunction(
+    () =>
+      window.livePreview.view().viewport.from > 40 * 1024 * 1024 &&
+      window.codeKeywords() > 0 &&
+      !window.livePreview.settling(),
+    undefined,
+    { timeout: 90000 },
+  )
+  try {
+    // Turning the language off and on again near the fence's far end keeps
+    // the fence's known bounds: a scan of the lines on screen rather than of
+    // the fence, and at most its window around the screen parses again.
+    for (const enabled of [false, true]) {
+      await harness.evaluate(async (enabled) => {
+        const preview = window.livePreview
+        await preview.settle()
+        preview.reset()
+        preview.setCodeLanguage('javascript', enabled)
+      }, enabled)
+      await harness.waitForFunction(
+        (enabled) =>
+          window.codeKeywords() > 0 === enabled &&
+          !window.livePreview.settling(),
+        enabled,
+      )
+      const result = await harness.evaluate(() => window.livePreview.probe)
+      const label = JSON.stringify({ enabled, ...result })
+      console.log(label)
+      assert.ok(result.scannedUnits <= 16 * 1024, label)
+      assert.ok(result.parsedUnits <= 2 * 64 * 1024, label)
+    }
+  } finally {
+    await harness.evaluate(() =>
+      window.livePreview.setCodeLanguage('javascript', true),
+    )
+  }
+})
+
+test('selecting the whole note includes the hidden fences at its ends', {
+  timeout: 30000,
+}, async () => {
+  const code = '```js\nconst answer = 42\n```'
+  // Select-all covers the text after hidden metadata, as the frontmatter view's Mod-a does.
+  for (const metadata of ['', '---\ntitle: test\n---\n\n']) {
+    const doc = metadata + code
+    const result = await harness.evaluate(
+      async ({ doc, metadata }) => {
+        const preview = window.livePreview
+        await preview.mount(
+          doc,
+          { width: 800, height: 600 },
+          { editable: true, frontmatter: !!metadata },
+        )
+        const view = preview.view()
+        view.dispatch({
+          selection: { anchor: metadata.length, head: doc.length },
+        })
+        const all = view.state.selection.main
+        // A caret left on the hidden closing fence still moves beside it.
+        view.dispatch({ selection: { anchor: doc.length } })
+        return {
+          all: [all.anchor, all.head],
+          caret: view.state.selection.main.head,
+        }
+      },
+      { doc, metadata },
+    )
+    assert.deepEqual(result.all, [metadata.length, doc.length], metadata)
+    assert.equal(result.caret, doc.indexOf('\n```', metadata.length), metadata)
+  }
 })

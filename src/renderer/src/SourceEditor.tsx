@@ -130,9 +130,11 @@ import {
   followsLink,
   formattedDocument,
   formattedFollowLink,
+  formattedRefresh,
   formattedRenderInputs,
   showMarkdownMarkers,
 } from './formatted-contributions'
+import { formattedReferences } from './formatted-references'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
@@ -165,6 +167,15 @@ import {
   type SourceReferenceSyntax,
 } from './source-view'
 import { textProjection } from './text-projection'
+
+/** Each mounted view's bridge to its document session. */
+const bridges = new WeakMap<
+  EditorView,
+  ReturnType<typeof createSourceSession>
+>()
+/** The whole source after editor changes, exactly as the mounted view commits them. */
+export const sourceAfter = (view: EditorView, changes: readonly RawEdit[]) =>
+  bridges.get(view)?.sourceAfter(changes) ?? null
 
 const highlighting = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--syntax-heading)', fontWeight: '600' },
@@ -258,6 +269,7 @@ function isolateFeatures(
 export function SourceEditor({
   document,
   viewId = 'default',
+  sessionViewId = viewId,
   focused = true,
   editTarget,
   sourceVisible = editTarget,
@@ -290,6 +302,7 @@ export function SourceEditor({
 }: {
   document: DocumentState
   viewId?: string
+  sessionViewId?: string
   focused?: boolean
   editTarget: boolean
   sourceVisible?: boolean
@@ -391,8 +404,8 @@ export function SourceEditor({
   const session = documentRuntime.session(document.tabId)!
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
   const bridge = useMemo(
-    () => createSourceSession(session, viewId),
-    [session, viewId, bridgeRetry, document.tabId, document.revision],
+    () => createSourceSession(session, sessionViewId),
+    [session, sessionViewId, bridgeRetry, document.tabId, document.revision],
   )
   // An echo this bridge's view could not show; Retry rebuilds the view.
   const [failedEcho, setFailedEcho] = useState<{
@@ -674,6 +687,12 @@ export function SourceEditor({
     )
       clearReferences('stale')
   }, [referenceSyntax, markdownMode, clearReferences])
+  // Rendered reference labels resolve again with other syntax.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the syntax the resolver reads changed.
+  useEffect(() => {
+    if (formatted)
+      view.current?.dispatch({ effects: formattedRefresh.of(null) })
+  }, [formatted, referenceSyntax, markdownMode])
   const requestFind = useCallback(
     function requestFind(action: FindAction = null) {
       const editor = view.current
@@ -819,7 +838,8 @@ export function SourceEditor({
         }),
       ]
     }
-    const place = keepingPlace.current ? bridge.place() : null
+    // A note that shrank since its view left still gets the place it kept.
+    const place = bridge.place()
     const selection = place?.selection ?? bridge.selection()
     type PendingCompletion = {
       request: CompletionRequest
@@ -1549,6 +1569,25 @@ export function SourceEditor({
               ]),
           // Table cells follow their links through the view's own resolution.
           formatted ? formattedFollowLink.of(followLink) : [],
+          // Reference links render with the labels the reference worker resolves.
+          formatted
+            ? formattedReferences.of({
+                syntax: () => {
+                  const { markdownMode, referenceSyntax } =
+                    parserOptions.current
+                  return markdownMode && referenceSyntax
+                    ? JSON.stringify(referenceSyntax)
+                    : ''
+                },
+                resolve: (label, signal) => {
+                  const { markdownMode, referenceSyntax } =
+                    parserOptions.current
+                  return markdownMode && referenceSyntax
+                    ? resolveReference(referenceSyntax, label, signal)
+                    : Promise.resolve({ status: 'unavailable' })
+                },
+              })
+            : [],
           EditorView.domEventHandlers({
             keydown(event, view) {
               // CodeMirror arms Tab focus for two seconds after an unhandled Escape;
@@ -2177,6 +2216,7 @@ export function SourceEditor({
       },
       resolveReference,
     )
+    bridges.set(editor, bridge)
     const unregisterViewApi = editorViewRegistry.register(
       document.tabId,
       viewId as ViewId,
@@ -2242,7 +2282,10 @@ export function SourceEditor({
       )
       reportFormatting.current(formatting.current)
     }
-    const unsubscribe = codeLanguages.subscribe(() => configureParser.current())
+    // The formatted view parses changed code languages again in its own syntax.
+    const unsubscribe = formatted
+      ? () => {}
+      : codeLanguages.subscribe(() => configureParser.current())
     // Flavors that bring no source syntax keep the parser and its parse.
     configureFlavors.current = () => {
       const configs = formatted ? null : flavorConfigs()
@@ -2303,6 +2346,7 @@ export function SourceEditor({
       formatting.current = null
       reportFormatting.current(null)
       unregister()
+      bridges.delete(editor)
       unregisterViewApi()
       detachInteractions()
       editor.contentDOM.removeEventListener(

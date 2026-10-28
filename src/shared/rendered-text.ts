@@ -123,8 +123,8 @@ class Reader {
 }
 
 /**
- * The formatted parser owns syntax. Only packed visibility masks and two
- * bounded syntax windows survive a build; counts never retain every match.
+ * The formatted parser owns syntax. Packed masks, shared boundary metadata
+ * and two syntax windows survive a build; counts never retain every match.
  */
 export class RenderedTextIndex {
   #source: SourceSnapshot

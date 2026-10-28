@@ -225,8 +225,12 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     .locator(box ?? '.tiptap:has(h1:text-is("Wide code")) pre')
     .first()
   await block.waitFor()
-  await block.evaluate((pre, box) => {
-    if (box && !pre.isConnected) pre = document.querySelector(box)
+  await block.evaluate(async (pre, box) => {
+    // A redraw may replace the box; wait for the new one.
+    while (box && !pre.isConnected) {
+      pre = document.querySelector(box) ?? pre
+      if (!pre.isConnected) await new Promise(requestAnimationFrame)
+    }
     pre.scrollLeft = pre.scrollWidth
     if (pre.matches('.rich-pane')) pre.scrollTop = pre.scrollHeight
     else pre.scrollIntoView({ block: 'end' })
@@ -234,12 +238,14 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   if (cm)
     await t.test('wide code can scroll horizontally', async () => {
       assert.ok(
-        await block.evaluate(
-          (pre, box) =>
-            (pre.isConnected ? pre : document.querySelector(box)).scrollLeft >
-            0,
-          box,
-        ),
+        await block.evaluate(async (pre, box) => {
+          // A redraw may replace the box; wait for the new one.
+          while (box && !pre.isConnected) {
+            pre = document.querySelector(box) ?? pre
+            if (!pre.isConnected) await new Promise(requestAnimationFrame)
+          }
+          return pre.scrollLeft > 0
+        }, box),
         'wide code retains horizontal scrolling',
       )
     })
@@ -249,7 +255,14 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
         const started = performance.now()
         const check = () => {
           if (selector && !pre.isConnected)
-            pre = document.querySelector(selector)
+            pre = document.querySelector(selector) ?? pre
+          // A redraw replaces the box; wait a frame for the new one.
+          if (!pre.isConnected) {
+            if (performance.now() - started > 8000)
+              reject(new Error('no code box is drawn'))
+            else requestAnimationFrame(check)
+            return
+          }
           const box = pre.getBoundingClientRect()
           const pane = pre.closest('.rich-pane').getBoundingClientRect()
           const shown = [
@@ -520,8 +533,12 @@ test(
         box,
       )
     }
-    const right = (pre, box) => {
-      if (box && !pre.isConnected) pre = document.querySelector(box)
+    const right = async (pre, box) => {
+      // A redraw may replace the box; wait for the new one.
+      while (box && !pre.isConnected) {
+        pre = document.querySelector(box) ?? pre
+        if (!pre.isConnected) await new Promise(requestAnimationFrame)
+      }
       pre.scrollIntoView({ block: 'start' })
       pre.scrollLeft = pre.scrollWidth
     }
@@ -542,8 +559,12 @@ test(
     })
     await show(
       `\`\`\`js\nconst header = 42;\n${'const wrapped = 42; '.repeat(5000)}\n\`\`\``,
-      (pre, box) => {
-        if (box && !pre.isConnected) pre = document.querySelector(box)
+      async (pre, box) => {
+        // A redraw may replace the box; wait for the new one.
+        while (box && !pre.isConnected) {
+          pre = document.querySelector(box) ?? pre
+          if (!pre.isConnected) await new Promise(requestAnimationFrame)
+        }
         const pane = pre.closest('.rich-pane')
         const content = pre.matches('.rich-pane')
           ? pre.querySelector('.cm-content')

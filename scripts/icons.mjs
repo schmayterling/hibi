@@ -1,29 +1,47 @@
 import { execFileSync } from 'node:child_process'
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import sharp from 'sharp'
 
-// Regenerate the committed native icons from the supplied PNG on macOS.
+// Regenerate the committed native icons from the supplied PNGs on macOS: build/icon.png for the light
+// appearance and the installers, build/icon-dark.png for the dark appearance, which the app switches to at runtime.
 const folder = await mkdtemp(join(tmpdir(), 'hibi-icon-'))
 const source = resolve('build/icon.png')
+const darkSource = resolve('build/icon-dark.png')
 try {
   const require = createRequire(import.meta.url)
-  execFileSync(
-    require('electron'),
-    [resolve('scripts/render-icons.cjs'), source, folder],
-    { stdio: 'pipe' },
-  )
+  for (const [input, output] of [
+    [source, folder],
+    [darkSource, join(folder, 'dark')],
+  ]) {
+    await mkdir(output, { recursive: true })
+    execFileSync(
+      require('electron'),
+      [resolve('scripts/render-icons.cjs'), input, output],
+      { stdio: 'pipe' },
+    )
+  }
   for (const [platform, size] of [
     ['mac', 1024],
     ['win', 256],
     ['linux', 512],
   ])
-    await cp(
-      join(folder, `${platform}-${size}.png`),
-      resolve(`build/icon-${platform}.png`),
-    )
-  const { mkdir } = await import('node:fs/promises')
+    for (const suffix of ['', '-dark'])
+      await cp(
+        join(folder, suffix ? 'dark' : '', `${platform}-${size}.png`),
+        resolve(`build/icon-${platform}${suffix}.png`),
+      )
+  // The About panel shows the icon at 44 px; 192 px covers high-density displays.
+  for (const [input, suffix] of [
+    [source, ''],
+    [darkSource, '-dark'],
+  ])
+    await sharp(input)
+      .resize(192, 192)
+      .png({ compressionLevel: 9 })
+      .toFile(resolve(`src/renderer/src/assets/app-icon${suffix}.png`))
   const iconset = join(folder, 'hibi.iconset')
   await mkdir(iconset)
   for (const size of [16, 32, 128, 256, 512]) {

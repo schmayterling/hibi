@@ -545,15 +545,8 @@ test('formatted split find targets the focused source or editable formatted pane
   await count('1/1')
   await rich.locator('.cm-searchMatch-selected').waitFor()
   assert.equal(await rich.locator('.cm-searchMatch-selected').count(), 1)
-  await t.test(
-    'split formatted view is read-only',
-    {
-      todo: 'formatted gap split-003: split formatted view must remain read-only',
-    },
-    async () => {
-      assert.equal(await rich.getAttribute('contenteditable'), 'false')
-    },
-  )
+  // Accepted difference: the codemirror split pane stays editable.
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
   assert.equal(

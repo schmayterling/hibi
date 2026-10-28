@@ -5,8 +5,13 @@ import { type MarkedExtension, marked, Tokenizer } from 'marked'
 const setextRules = new WeakMap<RegExp, { start: RegExp; candidate: RegExp }>()
 const paragraphRules = new WeakMap<RegExp, RegExp>()
 
-// Candidate calls and source spans, including validation of a matched prefix.
+// Candidate calls and source spans, including title interruption windows.
 export const blockScanCounters = { calls: 0, units: 0 }
+
+const tableTokenizer = new Tokenizer()
+const tableLexer = new marked.Lexer({ gfm: true, tokenizer: tableTokenizer })
+// Boundary validation only needs cell counts, so retain no pending inline work.
+tableLexer.inline = () => []
 
 function paragraphRule(pattern: RegExp) {
   let interrupt = paragraphRules.get(pattern)
@@ -28,6 +33,8 @@ export function endsReferenceTitle(
   source: string,
   paragraph = marked.Lexer.rules.block.normal.paragraph,
 ) {
+  blockScanCounters.calls++
+  blockScanCounters.units += source.length
   if (
     /^[ \t]*(?:\r?\n|$)/.test(source) ||
     /^ {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)/.test(source)
@@ -40,10 +47,8 @@ export function endsReferenceTitle(
   )
     return true
   // The GFM paragraph rule only finds table candidates; cell counts must agree.
-  const tokenizer = new Tokenizer()
-  new marked.Lexer({ gfm: true, tokenizer })
   const end = source.indexOf('\n', source.indexOf('\n') + 1)
-  return !!tokenizer.table(end < 0 ? source : source.slice(0, end))
+  return !!tableTokenizer.table(end < 0 ? source : source.slice(0, end))
 }
 
 export function lexMarkdown(source: string) {
@@ -120,10 +125,20 @@ export class BlockTokenizer extends Tokenizer {
       let end = title.indexOf('\n');
       end >= 0;
       end = title.indexOf('\n', end + 1)
-    )
-      if (endsReferenceTitle(title.slice(end + 1), this.rules.block.paragraph))
+    ) {
+      // Interruptions need at most this line and the next (a table header and
+      // its delimiter row); a longer window rescans the rest of the title.
+      const next = title.indexOf('\n', end + 1)
+      const window = next < 0 ? -1 : title.indexOf('\n', next + 1)
+      if (
+        endsReferenceTitle(
+          title.slice(end + 1, window < 0 ? undefined : window),
+          this.rules.block.paragraph,
+        )
+      )
         // A failed next-line title can leave a destination-only definition.
         return read.call(this, source.slice(0, from + end))
+    }
     return token
   }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
-import { parser } from '@lezer/markdown'
+import { GFM, parser } from '@lezer/markdown'
 import { build } from 'esbuild'
 import { Lexer, Marked, Tokenizer } from 'marked'
 import { outsideCode } from '../src/addons/_shared/import-markdown.ts'
@@ -811,4 +811,57 @@ test('export keeps a quoted title with a blank line as text, as CommonMark does'
   assert.match(html, /<h1[^>]*>title<\/h1>/)
   assert.doesNotMatch(html, /<a /)
   assert.ok(html.includes('[ref]: /target'), html)
+})
+
+test('reference title interruption windows stay linear through 20000 table candidates', async (t) => {
+  for (const count of [1000, 4000, 16000, 20000])
+    await t.test(String(count), () => {
+      const title = `"${'x\n-|-\n'.repeat(count)}end"`
+      const source = `[ref]: /x ${title}\n\n[ref]`
+      for (const gfm of [true, false])
+        for (const extension of [false, true]) {
+          blockScanCounters.calls = blockScanCounters.units = 0
+          const tokens = extension
+            ? new Marked({ gfm }, blockMarkdown).lexer(source)
+            : new Lexer({ gfm, tokenizer: new BlockTokenizer() }).lex(source)
+          assert.equal(tokens.links.ref?.href, '/x')
+          assert.equal(tokens.links.ref?.title, title.slice(1, -1))
+          t.diagnostic(
+            JSON.stringify({
+              gfm,
+              extension,
+              count,
+              length: title.length,
+              ...blockScanCounters,
+            }),
+          )
+          assert.ok(blockScanCounters.calls >= count * 2)
+          assert.ok(
+            blockScanCounters.units <= title.length * 2,
+            `${blockScanCounters.units} scan units / ${title.length} title units`,
+          )
+        }
+    })
+})
+
+test('a table at the first line of a next-line title leaves a destination-only definition', {
+  todo: 'formatted gap export-004: a gfm table at the first title line must leave a destination-only definition',
+}, () => {
+  const source = '[ref]: /x\n"a | b\n--|--\nc"\n\n[ref]'
+  assert.match(parser.configure(GFM).parse(source).toString(), /Table\(/)
+  const markdown = new Marked({ gfm: true }, blockMarkdown)
+  assert.equal(markdown.lexer(source).links.ref?.title ?? null, null)
+  assert.equal(references(source, true)?.title ?? null, null)
+  assert.match(markdown.parse(source), /<table>/)
+})
+
+test('a table at the last title line rejects an inline definition', {
+  todo: 'formatted gap export-005: a gfm table at the last title line must reject the definition',
+}, () => {
+  const source = '[ref]: /x "one\na | b"\n--|--\n\n[ref]'
+  assert.match(parser.configure(GFM).parse(source).toString(), /Table\(/)
+  const markdown = new Marked({ gfm: true }, blockMarkdown)
+  assert.equal(markdown.lexer(source).links.ref?.href ?? null, null)
+  assert.equal(references(source, true)?.href ?? null, null)
+  assert.match(markdown.parse(source), /<table>/)
 })

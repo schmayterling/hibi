@@ -101,6 +101,8 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | corpus-012 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
 | export-002 | [marked-large-paragraph.test.mjs:793](marked-large-paragraph.test.mjs#L793) | an indented failed reference title must remain paragraph text instead of code | 10a: shared reference definition parsing |
 | export-003 | [marked-large-paragraph.test.mjs:282](marked-large-paragraph.test.mjs#L282) | a block math interruption must end a reference title | 10a: shared reference definition parsing |
+| export-004 | [marked-large-paragraph.test.mjs:848](marked-large-paragraph.test.mjs#L848) | a gfm table at the first title line must leave a destination-only definition | 10a: shared reference definition parsing |
+| export-005 | [marked-large-paragraph.test.mjs:859](marked-large-paragraph.test.mjs#L859) | a gfm table at the last title line must reject the definition | 10a: shared reference definition parsing |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | contracts-003 | [raw-html-editor.test.mjs:1225](raw-html-editor.test.mjs#L1225) | modified inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-004 | [raw-html-editor.test.mjs:1227](raw-html-editor.test.mjs#L1227) | superseded inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |

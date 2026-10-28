@@ -1440,14 +1440,24 @@ function lineHead(text: string, from = 0) {
  * columns.
  */
 function contained(head: string, containers: readonly Container[]) {
+  let column = 0
   for (const container of containers)
-    if (!container) head = head.replace(/^ {0,3}>[ \t]?/, '')
-    else if (container.bullet) {
-      spaces.lastIndex = 0
-      spaces.test(head)
-      const columns = countColumn(head, 4, spaces.lastIndex) - container.width
-      head = ' '.repeat(Math.max(0, columns)) + head.slice(spaces.lastIndex)
-    } else head = head.slice(findColumn(head, container.width, 4))
+    if (!container) {
+      const prefix = /^ {0,3}>[ \t]?/.exec(head)?.[0]
+      if (!prefix) continue
+      column += prefix.length
+      // A quote consumes one column of its optional tab, leaving the rest.
+      const rest = prefix.endsWith('\t') ? 3 - ((column - 1) % 4) : 0
+      head = ' '.repeat(rest) + head.slice(prefix.length)
+    } else {
+      if (container.bullet) {
+        spaces.lastIndex = 0
+        spaces.test(head)
+        const columns = countColumn(head, 4, spaces.lastIndex) - container.width
+        head = ' '.repeat(Math.max(0, columns)) + head.slice(spaces.lastIndex)
+      } else head = head.slice(findColumn(head, container.width, 4))
+      column += container.width
+    }
   return head
 }
 

@@ -592,3 +592,17 @@ test('renderer worker resolves references across a giant paragraph and keeps fin
     false,
   )
 })
+
+test('export keeps a quoted title with a blank line as text, as CommonMark does', {
+  todo: 'formatted gap export-001: export must keep a blank-line title definition and its heading as visible text',
+}, () => {
+  // A quoted title cannot hold a blank line (CommonMark example 197): there
+  // is no definition, so its text and heading show and the reference stays
+  // literal, as the formatted view shows them.
+  const { html } = renderMarkdown(
+    '[ref]: /target "first\n\n# title\nlast"\n\n[ref]',
+  )
+  assert.match(html, /<h1[^>]*>title<\/h1>/)
+  assert.doesNotMatch(html, /<a /)
+  assert.ok(html.includes('[ref]: /target'), html)
+})

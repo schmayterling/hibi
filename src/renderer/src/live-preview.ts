@@ -16,6 +16,7 @@ import {
   BlockWrapper,
   Decoration,
   type DecorationSet,
+  Direction,
   EditorView,
   keymap,
   ViewPlugin,
@@ -45,6 +46,7 @@ import {
 import {
   blockMarkedNodes,
   claimFormattedReplacement,
+  delimiterRuns,
   type FormattedContainer,
   type FormattedDecorations,
   type FormattedLayout,
@@ -326,6 +328,8 @@ type LineInfo = {
   attributes: Record<string, string>
   /** Space above the line in px. */
   gap: number
+  /** The line only holds the space between two blocks. */
+  margin: boolean
 }
 
 /** Item start offsets per immutable list tree, so ordinals need no sibling walk. */
@@ -367,6 +371,9 @@ function inline(
   decorations: DecorationSet
   groupMarks: DecorationSet
   atomic: DecorationSet
+  runs: DecorationSet
+  /** Starts of the lines that only hold the space between two blocks. */
+  margins: number[]
   outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
@@ -430,6 +437,7 @@ function inline(
         marker: true,
         attributes: {},
         gap: 0,
+        margin: false,
       }
       lines.set(pos, info)
     }
@@ -460,10 +468,14 @@ function inline(
         }).range(from, to),
       )
   }
+  /** Hidden delimiters, which the caret crosses together where they touch. */
+  const delimiters: { from: number; to: number }[] = []
   /** Markers of formatting under the selection stay visible and editable. */
   const syntax = (from: number, to: number, revealed: boolean) => {
-    if (!revealed) hideRange(from, to)
-    else if (to > from) {
+    if (!revealed) {
+      hideRange(from, to)
+      if (to > from) delimiters.push({ from, to })
+    } else if (to > from) {
       mark('hibi-lp-marker hibi-lp-syntax', from, to)
     }
   }
@@ -853,6 +865,10 @@ function inline(
     decorations: Decoration.set(decorations, true),
     groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
+    runs: Decoration.set(
+      delimiterRuns(delimiters).map(({ from, to }) => hide.range(from, to)),
+    ),
+    margins: [...lines].flatMap(([at, info]) => (info.margin ? [at] : [])),
     outer: Decoration.set(outer, true),
     wrappers: BlockWrapper.set(wrappers, true),
     end,
@@ -1095,7 +1111,8 @@ function spacing(
       if (blank.from < range.from || blank.from > range.to) continue
       const info = line(blank.from)
       info.classes.push('hibi-lp-gap')
-      const height = number === first ? gap : 28
+      info.margin = number === first
+      const height = info.margin ? gap : 28
       info.style.push(`height: ${height}px`, `line-height: ${height}px`)
     }
   }
@@ -1594,6 +1611,9 @@ export function livePreview(
       decorations: DecorationSet
       groupMarks: DecorationSet
       atomic: DecorationSet
+      /** Touching hidden delimiters, each crossed in one step. */
+      runs: DecorationSet
+      margins: number[]
       outer: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
@@ -1605,6 +1625,8 @@ export function livePreview(
           decorations: this.decorations,
           groupMarks: this.groupMarks,
           atomic: this.atomic,
+          runs: this.runs,
+          margins: this.margins,
           outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
@@ -1640,6 +1662,8 @@ export function livePreview(
           this.decorations = mapLines(this.decorations, update)
           this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)
+          this.runs = mapLines(this.runs, update)
+          this.margins = this.margins.map((at) => update.changes.mapPos(at))
           this.outer = this.outer.map(update.changes)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
@@ -1664,6 +1688,8 @@ export function livePreview(
             decorations: this.decorations,
             groupMarks: this.groupMarks,
             atomic: this.atomic,
+            runs: this.runs,
+            margins: this.margins,
             outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
@@ -1674,6 +1700,70 @@ export function livePreview(
   )
   const hidden = (view: EditorView) =>
     view.plugin(preview)?.atomic ?? Decoration.none
+  const runs = (view: EditorView) =>
+    view.plugin(preview)?.runs ?? Decoration.none
+  /**
+   * Arrows move as in the rich view, one visible step at a time: over hidden
+   * delimiters, the space between blocks and the hidden syntax at the start
+   * of a line. Formatting is left without moving only at the end of the note.
+   */
+  const arrow = (right: boolean) => (view: EditorView) => {
+    const { state } = view
+    const range = state.selection.main
+    const plugin = view.plugin(preview)
+    if (!plugin || state.selection.ranges.length > 1 || !range.empty)
+      return false
+    const end = syntax.tree(state).topNode.lastChild?.to ?? 0
+    const covered = (set: DecorationSet, from: number, to: number) => {
+      let found = false
+      set.between(from, to, (a, b, value) => {
+        if (a <= from && b >= to && !value.spec.widget) found = true
+      })
+      return found
+    }
+    /** Whether the caret, moved from `from` to `to`, rests where nothing visible changed. */
+    const through = (from: number, to: number, first: boolean) => {
+      const line = state.doc.lineAt(to)
+      if (
+        first &&
+        from !== end &&
+        to !== end &&
+        covered(plugin.runs, Math.min(from, to), Math.max(from, to))
+      )
+        return true
+      if (to === line.to && to < end) {
+        let after = false
+        plugin.runs.between(to, to, (a, b) => {
+          if (a < to && b === to) after = true
+        })
+        if (after) return true
+      }
+      if (plugin.margins.includes(line.from)) return true
+      if (to !== line.from || to === line.to) return false
+      let prefix = false
+      plugin.atomic.between(to, to, (a, b, value) => {
+        if (a === to && b > to && !value.spec.widget) prefix = true
+      })
+      return prefix
+    }
+    const forward =
+      right === (view.textDirectionAt(range.head) === Direction.LTR)
+    let at = range.head
+    let next = view.moveByChar(range, forward)
+    if (next.head === at || !through(at, next.head, true)) return false
+    while (next.head !== at && through(at, next.head, at === range.head)) {
+      at = next.head
+      next = view.moveByChar(next, forward)
+    }
+    // Nothing visible is left in that direction.
+    if (next.head === at) return true
+    view.dispatch({
+      selection: next,
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    return true
+  }
   const run =
     (command: (view: EditorView) => TransactionSpec | null) =>
     (view: EditorView) => {
@@ -1765,6 +1855,7 @@ export function livePreview(
       return end ? { style: `--hibi-end: ${end}px` } : null
     }),
     EditorView.atomicRanges.of(hidden),
+    EditorView.atomicRanges.of(runs),
     // Lines the layout hides whole, with the line breaks around them, so the
     // caret never rests on one.
     EditorView.atomicRanges.of((view) => {
@@ -1872,6 +1963,8 @@ export function livePreview(
           run: run((view) => exitBlock(view.state, syntax.tree(view.state))),
         },
         { key: 'Tab', run: tab(false), shift: tab(true) },
+        { key: 'ArrowLeft', run: arrow(false) },
+        { key: 'ArrowRight', run: arrow(true) },
       ]),
     ),
     EditorView.inputHandler.of((view, from, to, text) => {

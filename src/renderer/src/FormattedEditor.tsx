@@ -30,7 +30,6 @@ import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
-import { mountedDocumentEdits } from './mounted-document-edits'
 import type { OutlineHeading } from './OutlineSidebar'
 import { SourceEditor } from './SourceEditor'
 import { editorPosition, revealSourcePosition, sourceView } from './source-view'
@@ -191,38 +190,21 @@ export function MarkdownEditor({
     setSourceSettled,
     focusOwnedByEditor,
   } = useEditorPanes(mode, markdownDocument, false, releaseSource)
-  // Each pane owns its session bookmark and addon view target.
+  // The source bookmark stays independent of the hosting view identity.
   const sourceViewId = `${viewId}:source` as ViewId
   const documentTarget = documentRuntime.captureDocument(documentState.tabId)
   const findTarget =
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane
-  const activeViewId =
-    findTarget === 'source' ? sourceViewId : (viewId as ViewId)
   useEffect(() => {
-    editorViewRegistry.setActive(viewId as ViewId, 'rich')
-    return () => editorViewRegistry.clearActive(viewId as ViewId)
-  }, [viewId])
+    editorViewRegistry.setActive(viewId as ViewId, findTarget)
+  }, [viewId, findTarget])
+  useEffect(
+    () => () => editorViewRegistry.clearActive(viewId as ViewId),
+    [viewId],
+  )
   useEffect(() => {
-    if (
-      !sourceMounted ||
-      !documentTarget ||
-      documentRuntime.captureDocument(documentState.tabId) !== documentTarget
-    )
-      return
-    const unregister = documentRuntime.registerView(
-      documentState.tabId,
-      sourceViewId,
-      mountedDocumentEdits.bindView,
-    )
-    editorViewRegistry.setActive(sourceViewId, 'source')
-    return () => {
-      editorViewRegistry.clearActive(sourceViewId)
-      unregister()
-    }
-  }, [sourceMounted, documentTarget, documentState.tabId, sourceViewId])
-  useEffect(() => {
-    if (focused && documentTarget) documentRuntime.focusView(activeViewId)
-  }, [focused, documentTarget, activeViewId])
+    if (focused && documentTarget) documentRuntime.focusView(viewId as ViewId)
+  }, [focused, documentTarget, viewId])
   useEffect(() => {
     onOutline([])
     onActiveOutline(null)
@@ -540,7 +522,7 @@ export function MarkdownEditor({
       />
       <main
         className={`editor-panes mode-${paneMode}`}
-        data-editor-view={activeViewId}
+        data-editor-view={viewId}
         data-source-ready={ready}
         onDropCapture={(event) => {
           const files = Array.from(event.dataTransfer.files)
@@ -635,8 +617,8 @@ export function MarkdownEditor({
             className="source-pane"
             onFocusCapture={() => {
               setFocusedPane('source')
-              editorViewRegistry.setActive(sourceViewId, 'source')
-              documentRuntime.focusView(sourceViewId)
+              editorViewRegistry.setActive(viewId as ViewId, 'source')
+              documentRuntime.focusView(viewId as ViewId)
             }}
             aria-label="Document source"
             aria-hidden={paneMode === 'normal'}
@@ -650,7 +632,8 @@ export function MarkdownEditor({
               >
                 <MarkdownSourceEditor
                   document={documentState}
-                  viewId={sourceViewId}
+                  viewId={viewId}
+                  sessionViewId={sourceViewId}
                   focused={focused}
                   editTarget={findTarget === 'source'}
                   sourceVisible={paneMode !== 'normal'}

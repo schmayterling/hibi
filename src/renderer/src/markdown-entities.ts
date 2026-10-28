@@ -8,8 +8,8 @@ import type {
 import type { MarkdownManager } from '@tiptap/markdown'
 import { decodeHTMLStrict, encodeHTML } from 'entities'
 import type { Marked, Token } from 'marked'
+import { preserveInlineHtml } from '../../shared/markdown-inline-html.ts'
 import { blockMarkdown } from '../../shared/marked-blocks.ts'
-import { preserveInlineHtml } from './RawHtml.ts'
 
 const richParsers = new WeakSet<object>()
 

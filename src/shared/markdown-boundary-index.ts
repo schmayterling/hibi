@@ -110,7 +110,7 @@ function boundaryInput(source: SourceSnapshot): CodeExtentInput {
 export class MarkdownBoundaryIndex {
   readonly key: string
   readonly parser: ChunkedMarkdownParser
-  private code: MarkdownCodeExtents
+  private code: MarkdownCodeExtents | null
   private codeCoverage: boolean
   private parse: ChunkedPartialParse
   private tree: Tree | null = null
@@ -134,14 +134,14 @@ export class MarkdownBoundaryIndex {
       throw new Error('Could not read a document worker reply.')
     this.key = boundaryKey(config)
     const input = boundaryInput(source)
-    this.code = new MarkdownCodeExtents(source, input)
+    this.code = codeCoverage ? new MarkdownCodeExtents(source, input) : null
     this.codeCoverage = codeCoverage
     this.parser = new ChunkedMarkdownParser(base, base, {
       chunkSize: config.chunkSize,
       groupSize: config.groupSize,
       giantBlock: config.giantBlock,
       opaque: new Set(config.opaque),
-      ...(codeCoverage ? { codeBlocks: this.code } : {}),
+      ...(this.code ? { codeBlocks: this.code } : {}),
       ...(probe ? { probe } : {}),
     })
     this.source = source
@@ -151,7 +151,10 @@ export class MarkdownBoundaryIndex {
     if (enabled === this.codeCoverage) return
     this.codeCoverage = enabled
     delete this.parser.options.codeBlocks
-    if (!enabled) return
+    if (!enabled) {
+      this.code = null
+      return
+    }
     const input = boundaryInput(this.source)
     this.code = new MarkdownCodeExtents(this.source, input)
     this.parser.options.codeBlocks = this.code
@@ -161,10 +164,19 @@ export class MarkdownBoundaryIndex {
     this.parse = this.parser.startBoundaryParse(input, [], this.config.prefix)
   }
   acknowledgeCode(version: number) {
-    if (this.tree) this.code.acknowledge(version)
+    if (this.tree) this.code?.acknowledge(version)
   }
   get codeWork() {
-    return this.code.work
+    return (
+      this.code?.work ?? {
+        readUnits: 0,
+        maximumRead: 0,
+        maximumWindow: 0,
+        recordsWritten: 0,
+        widthRuns: 0,
+        reuseMisses: 0,
+      }
+    )
   }
   get version() {
     return this.source.version
@@ -175,7 +187,7 @@ export class MarkdownBoundaryIndex {
   advance() {
     this.tree = this.parse.advance()
     this.advanced = true
-    if (this.tree && this.codeCoverage) this.code.finish()
+    if (this.tree) this.code?.finish()
     return this.tree !== null
   }
   apply(prepared: PreparedSourceOperation) {
@@ -235,7 +247,7 @@ export class MarkdownBoundaryIndex {
       }
     this.fragments = TreeFragment.applyChanges(fragments, changes)
     const input = boundaryInput(prepared.after)
-    if (this.codeCoverage) {
+    if (this.code) {
       this.code.apply(prepared.before, prepared.after, changes, input)
       if (this.config.prefix) this.code.clear(0, this.config.prefix)
     }
@@ -270,7 +282,7 @@ export class MarkdownBoundaryIndex {
       : boundaryRecords(this.tree, from, to)
     // Geometry coverage is independent of the syntax repair suffix.
     const code =
-      includeCode && this.codeCoverage
+      includeCode && this.code
         ? this.code.pages(
             0,
             this.length,

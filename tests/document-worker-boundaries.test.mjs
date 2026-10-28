@@ -645,8 +645,10 @@ test('a code listener can edit without delivering an old page to another listene
 
 test('retained code coverage repairs after syntax release and stops work with the last listener', async (t) => {
   const original = MarkdownBoundaryIndex.prototype.advance
-  let advances = 0
+  let advances = 0,
+    model
   MarkdownBoundaryIndex.prototype.advance = function () {
+    model = this
     advances++
     return original.call(this)
   }
@@ -706,6 +708,7 @@ test('retained code coverage repairs after syntax release and stops work with th
   assert.equal(f.transports[0].messages.at(-1).type, 'cancel-boundaries')
   assert.equal(f.transports[0].messages.at(-1).retain, true)
   await new Promise(setImmediate)
+  assert.equal(model.codeWork.widthRuns, 0)
   const stopped = advances,
     count = code.length
   f.session.edit([{ from: 4, to: 5, insert: 'z' }], 'source', 'stopped-code')

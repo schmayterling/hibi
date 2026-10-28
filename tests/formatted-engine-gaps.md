@@ -96,7 +96,7 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | corpus-012 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
 | corpus-020 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | counts must include a definition whose quoted title holds a blank line | 5a: shared reference definition parsing |
 | corpus-021 | [markdown-semantics-native.test.mjs:108](markdown-semantics-native.test.mjs#L108) | disabled heading syntax counts must include a blank-line title definition | 5a: shared reference definition parsing |
-| export-001 | [marked-large-paragraph.test.mjs:597](marked-large-paragraph.test.mjs#L597) | export must keep a blank-line title definition and its heading as visible text | 5a: shared reference definition parsing |
+| export-001 | [marked-large-paragraph.test.mjs:660](marked-large-paragraph.test.mjs#L660) | export must keep a blank-line title definition and its heading as visible text | 5a: shared reference definition parsing |
 | corpus-018 | [markdown-semantics-native.test.mjs:106](markdown-semantics-native.test.mjs#L106) | disabled heading syntax must keep a blank-line title definition literal | 5a: shared reference definition parsing |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | contracts-003 | [raw-html-editor.test.mjs:1225](raw-html-editor.test.mjs#L1225) | modified inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |

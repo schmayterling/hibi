@@ -112,6 +112,73 @@ test('leaf proofs retain multiline quote and list context', () => {
   )
 })
 
+test('nested container proofs preserve heading and table structure', () => {
+  for (const source of [
+    '- outer\n  - inner\n\n    teh title\n    -----\n',
+    '-\n  teh title\n  -----\n',
+    '-\n\tteh title\n\t-----\n',
+    '-    outer\n\n     teh title\n     -----\n',
+    '-     code\n\n  teh title\n  -----\n',
+    '> - outer\n>   - inner\n>\n>     teh title\n>     -----\n',
+  ]) {
+    assert.match(markdown.parse(source).toString(), /SetextHeading2/)
+    const from = source.indexOf('teh')
+    assert.equal(check(source, { from, to: from + 3, insert: 'the' }), true)
+    const underline = source.indexOf('-----')
+    assert.equal(
+      check(source, { from: underline, to: underline + 5, insert: 'words' }),
+      false,
+    )
+  }
+  const source = '- outer\n  - inner\n\n    title\n    `\n    -----\n'
+  assert.match(markdown.parse(source).toString(), /SetextHeading2/)
+  assert.equal(
+    check(source, { from: source.indexOf('`\n') + 1, insert: '``' }),
+    false,
+  )
+  const table =
+    '- outer\n  - inner\n\n    | a | b |\n    | --- | --- |\n    | x | y |\n'
+  const from = table.lastIndexOf('| y')
+  assert.equal(check(table, { from, to: from + 1, insert: '' }), false)
+})
+
+test('task text remains literal while its checkbox is structural', () => {
+  for (const source of [
+    '- [ ] teh words',
+    '> - [x] teh words',
+    '- outer\n  - [ ] teh words',
+  ]) {
+    const from = source.indexOf('teh')
+    assert.equal(check(source, { from, to: from + 3, insert: 'the' }), true)
+  }
+  const source = '- [ ] teh words'
+  const from = source.indexOf('[ ]') + 1
+  assert.equal(check(source, { from, to: from + 1, insert: 'x' }), false)
+})
+
+test('container replay never reads an unrelated huge opening paragraph', () => {
+  const source = '- ' + 'outer'.repeat(100000) + '\n\n  teh title\n  -----'
+  const state = EditorState.create({ doc: source })
+  const from = source.indexOf('teh')
+  const transaction = state.update({
+    changes: { from, to: from + 3, insert: 'the' },
+  })
+  const tree = markdown.parse(source)
+  let units = 0
+  const read = state.sliceDoc.bind(state)
+  state.sliceDoc = (from, to) => {
+    units += to - from
+    return read(from, to)
+  }
+  const readNext = transaction.newDoc.sliceString.bind(transaction.newDoc)
+  transaction.newDoc.sliceString = (from, to) => {
+    units += to - from
+    return readNext(from, to)
+  }
+  assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+  assert.ok(units < 16384, String(units))
+})
+
 test('cold and released list proofs retain worker context without reading the container', () => {
   const list = '- some teh words\n'.repeat(2000)
   const doc = list + '\n' + 'paragraph words\n\n'.repeat(20000)

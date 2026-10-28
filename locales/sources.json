@@ -2459,6 +2459,7 @@
     "src/renderer/src/DependencySettings.tsx"
   ],
   "8b42941bd586": [
+    "src/shared/rendered-text.ts",
     "src/shared/source-search-index.ts"
   ],
   "5ed5f8ce994e": [
@@ -2480,9 +2481,12 @@
   ],
   "15182c44f611": [
     "src/shared/document-worker-service.ts",
+    "src/shared/rendered-range.ts",
+    "src/shared/rendered-text.ts",
     "src/shared/source-search-index.ts"
   ],
   "5c1d80f74650": [
+    "src/shared/source-rendered-search.ts",
     "src/shared/source-search.ts"
   ],
   "996e3be92632": [
@@ -2544,6 +2548,10 @@
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/FormatEditor.tsx",
     "src/renderer/src/FormattedEditor.tsx"
+  ],
+  "4b2a8fba1fa4": [
+    "src/shared/document-worker-service.ts",
+    "src/shared/rendered-text.ts"
   ],
   "4bf40e194a49": [
     "src/renderer/src/LargeMarkdownPreview.tsx"

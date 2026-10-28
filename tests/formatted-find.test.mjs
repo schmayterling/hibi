@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { renderedReplaceEdits } from '../src/shared/rendered-replace.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
@@ -144,7 +145,12 @@ async function foldWork(workers, reset = false) {
   )
 }
 
-async function openFind(t, markdown, instrument = false) {
+async function openFind(
+  t,
+  markdown,
+  instrument = false,
+  renderedProbe = false,
+) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-find-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -161,6 +167,44 @@ async function openFind(t, markdown, instrument = false) {
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   if (instrument) await installFindWorkProbe(page)
+  if (renderedProbe)
+    await page.addInitScript((length) => {
+      window.renderedFindReplies = []
+      const observed = new WeakSet(),
+        post = Worker.prototype.postMessage
+      let config
+      Worker.prototype.postMessage = function (message, ...rest) {
+        const request = message.message ?? message
+        if (request.type === 'boundaries') config = request.config
+        if (request.type === 'find') {
+          if (!observed.has(this)) {
+            observed.add(this)
+            this.addEventListener('message', ({ data }) => {
+              const reply = data.message ?? data
+              if (reply.type === 'find' && reply.mode === 'rendered')
+                window.renderedFindReplies.push(reply)
+            })
+          }
+          const editor = document.querySelector(
+            '.rich-pane .hibi-formatted .cm-content',
+          )
+          const find = {
+            ...request,
+            ...window.renderedFindSelection,
+            mode: 'rendered',
+            replacement: 'X',
+            config,
+            prefix: config?.prefix ?? 0,
+            viewport: {
+              from: 0,
+              to: editor?.cmTile?.root.view.state.doc.length ?? length,
+            },
+          }
+          message = message.message ? { ...message, message: find } : find
+        }
+        return post.call(this, message, ...rest)
+      }
+    }, markdown.replace(/\r\n?/g, '\n').length)
   const rich = await selectFormattedEngine(app, page, 'codemirror')
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -204,6 +248,80 @@ async function openFind(t, markdown, instrument = false) {
   }
   return { app, page, rich, source, input, bar, count }
 }
+
+test('rendered backend returns source provenance and replacement edits make one native undo step', {
+  timeout: 30000,
+}, async (t) => {
+  const markdown = 'hello **world** and hello world.\n\nHELLO world.'
+  const { app, page, rich, input, count } = await openFind(
+    t,
+    markdown,
+    false,
+    true,
+  )
+  await input.fill('hello world')
+  await count('1/3')
+  await waitForAsync(page, () =>
+    window.renderedFindReplies.some((reply) => reply.location.total === 3),
+  )
+  const result = await page.evaluate(() => window.renderedFindReplies.at(-1))
+  assert.equal(result.highlights.matches.length, 3)
+  assert.deepEqual(result.highlights.matches[0].segments, [
+    { from: 0, to: 6 },
+    { from: 8, to: 13 },
+  ])
+  await input.fill('lo wo')
+  await count('1/3')
+  await waitForAsync(
+    page,
+    () => window.renderedFindReplies.at(-1)?.highlights.matches[0]?.from === 3,
+  )
+  const match = await page.evaluate(
+    () => window.renderedFindReplies.at(-1).highlights.matches[0],
+  )
+  assert.deepEqual(match.segments, [
+    { from: 3, to: 6 },
+    { from: 8, to: 10 },
+  ])
+  await page.evaluate((match) => {
+    window.renderedFindSelection = { from: match.from, to: match.to }
+  }, match)
+  await input.press('Enter')
+  await waitForAsync(page, () =>
+    window.renderedFindReplies.some(
+      (reply) =>
+        reply.replacement?.from === 3 &&
+        reply.replacement.to === 10 &&
+        !!reply.replacement.edits,
+    ),
+  )
+  const prepared = await page.evaluate(
+    () =>
+      window.renderedFindReplies.findLast(
+        (reply) =>
+          reply.replacement?.from === 3 &&
+          reply.replacement.to === 10 &&
+          !!reply.replacement.edits,
+      ).replacement,
+  )
+  const edits = renderedReplaceEdits(match, 'X', prepared)
+  assert.ok(edits)
+  await input.press('Escape')
+  await rich.evaluate(
+    (element, changes) => element.cmTile.root.view.dispatch({ changes }),
+    edits,
+  )
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.startsWith('helX**rld**'),
+  )
+  await rich.focus()
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (markdown) => (await window.hibi.getDocument()).markdown === markdown,
+    markdown,
+  )
+})
 
 test('formatted find matches rendered phrases across markdown marks and returns focus without editing', {
   timeout: 30000,

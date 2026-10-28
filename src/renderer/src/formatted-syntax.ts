@@ -13,16 +13,14 @@ import {
   type MarkdownConfig,
   type MarkdownExtension,
   parseCode,
-  parser,
 } from '@lezer/markdown'
 import type { BoundaryReceive } from '../../shared/document-worker-protocol.ts'
+import { formattedMarkdownParser } from '../../shared/formatted-markdown.ts'
 import {
   type BoundaryConfig,
   boundaryKey,
   boundarySyntaxIds,
 } from '../../shared/markdown-boundary-syntax.ts'
-import { protectMarkdownParser } from '../../shared/markdown-flavor-guard.ts'
-import { ContainerHTML } from '../../shared/markdown-html-syntax.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
 import { mappedPrefix } from '../../shared/source-projection.ts'
 import {
@@ -43,6 +41,7 @@ import {
   formattedMarkdown,
   formattedOpaque,
   formattedPrefix,
+  formattedTextFeatures,
   inlineStops,
 } from './formatted-contributions.ts'
 
@@ -117,12 +116,7 @@ function markdownParser(
   contributed: readonly MarkdownConfig[],
   opaque: readonly string[],
 ) {
-  const base = protectMarkdownParser(parser, [
-    { defineNodes: [{ name: 'Frontmatter', block: true }] },
-    ContainerHTML,
-    ...contributed,
-    options.extensions ?? [],
-  ])
+  const base = formattedMarkdownParser(contributed, options.extensions)
   const runs = createPlainTextRunExtension()
   const full = base.configure([
     runs.extension,
@@ -165,6 +159,11 @@ function boundaryConfig(
         flavors: state.facet(formattedFlavors),
         literal: state.facet(formattedLiteral),
         opaque: state.facet(formattedOpaque),
+        textFeatures: state.facet(formattedTextFeatures),
+        textSyntax: boundarySyntaxIds(
+          [...state.facet(formattedMarkdown), options.extensions ?? []],
+          true,
+        ),
         prefix,
         chunkSize: 4096,
         groupSize: 64,

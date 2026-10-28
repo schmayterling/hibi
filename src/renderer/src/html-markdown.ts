@@ -6,6 +6,10 @@
  */
 
 import DOMPurify from 'dompurify'
+import {
+  markdownLineStarts as escapeLineStarts,
+  markdownLiteral as literal,
+} from '../../shared/markdown-literal.ts'
 import { renderedHtmlOptions } from '../../shared/rendered-html.ts'
 import { escapeLineStarts, literal } from './markdown-literal.ts'
 

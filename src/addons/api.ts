@@ -634,7 +634,7 @@ export type DocumentsApi = {
     target: import('../shared/foundation-contracts').VersionedDocumentTarget,
   ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
 }
-/** Positions are UTF-16 offsets in the named editor, not Markdown source offsets. */
+/** Positions are opaque and editor-local. `editor: 'rich'` names either implementation, without an engine discriminator. Derive ranges from selection, before/after, and documentLength, never Markdown text or constants. CodeMirror uses normalized-source UTF-16 offsets; legacy rich uses ProseMirror positions, including node boundaries. */
 export type EditorViewSelection = {
   view: import('../shared/foundation-contracts').ViewTarget
   editor: 'source' | 'rich'
@@ -704,7 +704,12 @@ export type MarkdownExtension = {
   priority?: number
   /** Verbatim projections keep the exact prefix and suffix around an unchanged source body. */
   preservation?: SourcePreservation
-  /** Pure source-to-body projection; return null for unrecognized documents. */
+  /** Pure source-to-body projection; return null for unrecognized documents.
+   * In the CodeMirror formatted view, verbatim body edits map existing bounds.
+   * Bounds must not depend on body text. Canonical source echoes recheck affected
+   * boundaries or defer one check until focus or local input; local typing retains
+   * its existing proof. Use formatted contributions for live structural changes.
+   */
   parse: (source: string) => MarkdownProjection | null
   /** Optional properties UI above the rich editor. Receives the complete source. */
   Editor?: ComponentType<MarkdownEditorProps>

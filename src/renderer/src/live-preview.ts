@@ -55,6 +55,7 @@ import {
   formattedLinkAttributes,
   formattedLiteral,
   formattedNodeViews,
+  formattedPrefix,
   formattedRefresh,
   formattedRenderInputs,
   formattedTree,
@@ -62,7 +63,8 @@ import {
   showMarkdownMarkers,
 } from './formatted-contributions'
 import {
-  referenceDefined,
+  drawReference,
+  knownReference,
   referenceLink,
   referenceLinks,
 } from './formatted-references'
@@ -100,6 +102,10 @@ const space = Decoration.replace({ widget: new SpaceWidget() })
 const hiddenLine = Decoration.replace({ block: true })
 /** Lines of a link reference definition, which exports leave out too. */
 const hiddenDefinition = Decoration.replace({ block: true })
+/** A definition after a list marker, hidden up to the item's next block, which follows the marker. */
+const hiddenItemDefinition = Decoration.replace({})
+const definitionRange = (value: Decoration) =>
+  value === hiddenDefinition || value === hiddenItemDefinition
 
 /** Margins of a block in px, as in the formatted view's document styles. */
 function blockSpace(name: string): { top: number; bottom: number } {
@@ -182,15 +188,32 @@ function loneMarker(doc: Text, item: SyntaxNode) {
 }
 
 /**
- * The lines a link reference definition hides: its own and the blank lines
- * up to the next block, or after the previous block when none follows, as
- * exports drop them with it. Null when a list marker shares its first line.
+ * What a link reference definition hides, as exports drop it: its lines and
+ * the blank lines up to the next block, or after the previous block when
+ * none follows. After a list marker, it hides from its text, with the
+ * item's definitions after it, up to the item's next paragraph, which then
+ * shows beside the marker, or up to the last definition before other blocks.
  */
 function definitionLines(doc: Text, node: SyntaxNode) {
   const first = doc.lineAt(node.from)
-  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) return null
-  let next = node.nextSibling
-  while (next && !next.type.is('Block')) next = next.nextSibling
+  const after = (block: SyntaxNode) => {
+    let next = block.nextSibling
+    while (next && !next.type.is('Block')) next = next.nextSibling
+    return next
+  }
+  let next = after(node)
+  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) {
+    let last = node
+    while (next?.name === 'LinkReference') {
+      last = next
+      next = after(next)
+    }
+    return {
+      from: node.from,
+      to: next?.name === 'Paragraph' ? next.from : last.to,
+      item: true,
+    }
+  }
   if (next) return { from: first.from, to: doc.lineAt(next.from).from - 1 }
   let previous = node.prevSibling
   while (previous && !previous.type.is('Block')) previous = previous.prevSibling
@@ -450,13 +473,18 @@ function inline(
       doc.sliceString(close.to, close.to + 1) !== '(' &&
       referenceLink(doc, node)
     if (reference === null) return false
-    if (reference && !referenceDefined(state, reference.label)) return undefined
+    const answer = reference ? drawReference(state, reference.label) : null
+    if (reference && !answer) return undefined
     const revealed = touched(node.from, node.to)
     syntax(node.from, open.to, revealed)
     // A destination or label on later lines is hidden with its line breaks by the layout field.
     if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
       syntax(close.from, node.to, revealed)
-    linkText(open.to, close.from)
+    linkText(
+      open.to,
+      close.from,
+      answer?.title ? { title: answer.title } : undefined,
+    )
     return undefined
   }
 
@@ -1174,6 +1202,8 @@ function chunkLayout(
       )
     },
   }
+  /** Where definitions hidden from a list marker end. */
+  let itemDefinitions = -1
   for (const range of covered) {
     /** The leaf block whose line breaks flow as spaces, except hard breaks and hidden link destinations. */
     let leaf: {
@@ -1268,7 +1298,7 @@ function chunkLayout(
               referenceLink(doc, ref.node)
             if (
               reference === false ||
-              (reference && referenceDefined(state, reference.label))
+              (reference && knownReference(state, reference.label))
             ) {
               leaf.hidden.push({ from: close.from, to: ref.to })
               if (starts(close.from))
@@ -1277,10 +1307,16 @@ function chunkLayout(
             return
           }
           case 'LinkReference': {
+            // Definitions after one on a list marker hide with it.
+            if (ref.from < itemDefinitions) return false
             const lines = definitionLines(doc, ref.node)
-            if (lines && starts(ref.from))
+            if (lines.item) itemDefinitions = lines.to
+            if (starts(ref.from))
               out.push(
-                hiddenDefinition.range(lines.from - from, lines.to - from),
+                (lines.item ? hiddenItemDefinition : hiddenDefinition).range(
+                  lines.from - from,
+                  lines.to - from,
+                ),
               )
             return false
           }
@@ -1472,7 +1508,9 @@ function mapLines(set: DecorationSet, update: ViewUpdate) {
  * A link destination on later lines shows while the selection touches it:
  * input beside a range that hides line breaks would not map to the text.
  * A definition shows while a selection placed since the editor last lost
- * focus is inside it, so text typed into one stays in view.
+ * focus is inside it, so text typed into one stays in view: a caret past
+ * its start, before the paragraph a list item's definition hides up to, or
+ * a selection it holds whole.
  */
 function revealDestinations(set: DecorationSet, state: EditorState) {
   const shown = state.field(placed, false)
@@ -1480,10 +1518,16 @@ function revealDestinations(set: DecorationSet, state: EditorState) {
     set = set.update({
       filterFrom: from,
       filterTo: to,
-      filter: (a, b, value) =>
-        value === hiddenDefinition
-          ? !shown || from <= a || to > b
-          : value !== hide || b < from || a > to,
+      filter: (a, b, value) => {
+        if (value !== hiddenDefinition && value !== hiddenItemDefinition)
+          return value !== hide || b < from || a > to
+        const inside =
+          from === to
+            ? a < from &&
+              (from < b || (from === b && value === hiddenDefinition))
+            : a <= from && to <= b
+        return !shown || !inside
+      },
     })
   return set
 }
@@ -1719,18 +1763,41 @@ export function livePreview(
       const { doc } = transaction.startState
       const before = transaction.startState.selection.ranges
       const lines = transaction.startState.field(layout)
+      // Where the note's text starts after metadata the view keeps hidden.
+      let body = 0
+      for (const measure of transaction.startState.facet(formattedPrefix))
+        body = Math.max(body, measure(transaction.startState))
       let moved = false
       const ranges = transaction.selection.ranges.map((range, index) => {
+        // Selecting the whole note, or all its text after its metadata,
+        // includes the hidden lines at its ends.
+        if (
+          range.to === doc.length &&
+          (range.from === 0 || range.from === body)
+        )
+          return range
         let head = range.head
         lines.between(head, head, (from, to, value) => {
-          // A selection inside a definition shows it instead.
-          if (
-            value === hiddenDefinition
-              ? head !== from
-              : value !== hiddenLine || head < from || head > to
-          )
-            return
-          const back = head < (before[index]?.head ?? head)
+          const was = before[index]?.head ?? head,
+            back = head < was
+          if (definitionRange(value)) {
+            // Arrow keys and clicks step over a definition they were not in;
+            // a selection placed in one, or moving inside a shown one, stays.
+            const block = value === hiddenDefinition,
+              end = block ? to : to - 1
+            if (
+              !range.empty ||
+              !transaction.isUserEvent('select') ||
+              head < (block ? from : from + 1) ||
+              head > end ||
+              (was > from && was <= end)
+            )
+              return
+            if (value === hiddenItemDefinition) {
+              head = back ? from : to
+              return
+            }
+          } else if (value !== hiddenLine || head < from || head > to) return
           head =
             (back && from > 0) || to >= doc.length
               ? Math.max(0, from - 1)

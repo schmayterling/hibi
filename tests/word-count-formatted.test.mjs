@@ -111,6 +111,8 @@ function native(source, selected = flavors) {
 }
 
 for (const source of [
+  '> [!NOTE]\n> a\n>\n>\n>\n> b',
+  '> [!NOTE]\n>\n>\n> a\n>\n>',
   '- a\n  -\n nested',
   '1. o \n\n2. two',
   '[^a]: note\n\n- [ ] text[^a]',

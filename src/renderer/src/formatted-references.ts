@@ -7,6 +7,7 @@ import {
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
+import { referenceLabel } from '../../shared/markdown-link.ts'
 import {
   formattedOwner,
   formattedRefresh,
@@ -17,8 +18,9 @@ import type { SourceReferenceResult } from './source-view.ts'
 /*
  * Reference links, `[text][label]`, `[label][]` and `[label]`, render as
  * links when the note defines their label. The host's reference service
- * answers for one label at a time; the view asks for the labels it draws,
- * once per edit, and keeps drawing the last answers until new ones arrive.
+ * answers for one label at a time; the view asks about the labels it draws
+ * in its viewport, once per edit, and keeps drawing the last answers until
+ * new ones arrive. Answers are a cache of the labels drawn most recently.
  */
 
 /** Asks the note's definitions about a label; its host provides it. */
@@ -36,41 +38,65 @@ export const formattedReferences = Facet.define<
 >({ combine: (values) => values.at(-1) ?? null })
 
 /** Work counters for scale tests. */
-export const referenceWork = { requested: 0, resolved: 0 }
+export const referenceWork = {
+  requested: 0,
+  resolved: 0,
+  /** Answers stored because they changed. */
+  stored: 0,
+  /** Lookups dropped because their labels left the viewport. */
+  aborted: 0,
+}
 
 /** Labels in flight at once, so the shared reference queue stays open to others. */
 const inFlight = 32
+/** Labels whose answers are kept: those drawn most recently, well past a viewport's. */
+export const retainedLabels = 1024
 
-type Labels = {
-  /** Whether each label asked about is defined, as last answered. */
-  readonly defined: ReadonlyMap<string, boolean>
-  /** Labels drawn since the view last asked about them. */
-  readonly drawn: Set<string>
+/** A defined label's title, or null for one the note does not define. */
+export type ReferenceAnswer = { readonly title: string | null } | null
+type Entry = { answer: ReferenceAnswer | undefined; checked: number }
+
+/** The answers of one view, shared by its states as a cache rather than document state. */
+class Answers {
+  /** Per label, least recently drawn first. */
+  readonly entries = new Map<string, Entry>()
+  /** Drawn since the view last asked. */
+  readonly drawn = new Set<string>()
+  /**
+   * Drawn in table cells, which draw again only when answers change, with
+   * where each such cell is, so a label whose cells all scrolled away stops
+   * asking.
+   */
+  readonly cells = new Map<string, Set<number>>()
 }
-const answered = StateEffect.define<ReadonlyMap<string, boolean> | null>()
+const answered = StateEffect.define<null>()
 
-const labels = StateField.define<Labels>({
-  create: () => ({ defined: new Map(), drawn: new Set() }),
+const labels = StateField.define<{ readonly answers: Answers }>({
+  create: () => ({ answers: new Answers() }),
   update(value, transaction) {
+    // A note replaced whole starts over.
+    if (transaction.docChanged) {
+      let whole = false
+      transaction.changes.iterChangedRanges((from, to) => {
+        whole ||= from === 0 && to === transaction.startState.doc.length
+      })
+      if (whole) return { answers: new Answers() }
+    }
     for (const effect of transaction.effects)
-      if (effect.is(answered)) {
-        const defined = new Map(effect.value ? value.defined : [])
-        for (const [label, known] of effect.value ?? [])
-          defined.set(label, known)
-        value = { defined, drawn: value.drawn }
-      }
+      if (effect.is(answered)) return { answers: value.answers }
     return value
   },
   // Cached layouts and table cells draw again when answers change.
   provide: (field) =>
-    formattedRenderInputs.compute(
-      [field],
-      (state) => state.field(field).defined,
-    ),
+    formattedRenderInputs.compute([field], (state) => state.field(field)),
 })
 
-/** The label a reference link resolves, normalized as definitions are. */
-const normalize = (label: string) => label.replace(/\s+/g, ' ').toLowerCase()
+const answersOf = (state: EditorState) =>
+  // A table cell's own state reads the field of the view that draws it.
+  (
+    state.field(labels, false) ??
+    state.facet(formattedOwner)?.field(labels, false)
+  )?.answers
 
 /**
  * The parts of a `Link` node written as a reference, or null for an inline
@@ -96,59 +122,95 @@ export function referenceLink(doc: Text, node: SyntaxNode) {
       : doc.sliceString(open.to, close.from)
   // Longer labels never match a definition.
   if (text.length > 999 || !text.trim()) return null
-  return { open, close, end: node.to, label: normalize(text) }
+  return { open, close, end: node.to, label: referenceLabel(text) }
 }
 
 /**
- * Whether the note defines a reference link's label, as last answered.
- * Drawing a label asks about it again after an edit.
+ * The answer about a reference link drawn in the viewport, undefined until
+ * one arrives. Drawing a label asks about it after each edit.
  */
-export function referenceDefined(state: EditorState, label: string) {
-  // A table cell's own state reads the field of the view that draws it.
-  const value =
-    state.field(labels, false) ??
-    state.facet(formattedOwner)?.field(labels, false)
-  if (!value) return false
-  value.drawn.add(label)
-  return value.defined.get(label) === true
+export function drawReference(
+  state: EditorState,
+  label: string,
+  cell?: number,
+): ReferenceAnswer | undefined {
+  const answers = answersOf(state)
+  if (!answers) return undefined
+  const { entries } = answers
+  let entry = entries.get(label)
+  if (entry) entries.delete(label)
+  else entry = { answer: undefined, checked: -1 }
+  entries.set(label, entry)
+  for (const oldest of entries.keys()) {
+    if (entries.size <= retainedLabels) break
+    entries.delete(oldest)
+    answers.cells.delete(oldest)
+  }
+  answers.drawn.add(label)
+  if (cell !== undefined) {
+    const cells = answers.cells.get(label)
+    if (cells) cells.add(cell)
+    else answers.cells.set(label, new Set([cell]))
+  }
+  return entry.answer
 }
+
+/** The last answer about a label, without asking: for layout outside the viewport. */
+export const knownReference = (state: EditorState, label: string) =>
+  answersOf(state)?.entries.get(label)?.answer
+
+/** Labels kept for a view, for scale tests. */
+export const retainedReferences = (state: EditorState) =>
+  answersOf(state)?.entries.size ?? 0
+
+const sameAnswer = (a: ReferenceAnswer | undefined, b: ReferenceAnswer) =>
+  a === b || (!!a && !!b && a.title === b.title)
 
 /** Asks about drawn labels: new ones before the next frame, others after each edit in idle time. */
 const requests = ViewPlugin.fromClass(
   class {
     private generation = 0
-    /** The generation each label was last answered in. */
-    private readonly checked = new Map<string, number>()
-    private readonly pending = new Set<string>()
-    private answers = new Map<string, boolean>()
-    private controller = new AbortController()
+    private readonly pending = new Map<string, AbortController>()
+    private changed = false
+    private scrolled = false
     private syntax: string | null
     private idle = 0
     private queued = false
     private destroyed = false
-    constructor(private readonly view: EditorView) {
+    private readonly view: EditorView
+    constructor(view: EditorView) {
+      this.view = view
       this.syntax = view.state.facet(formattedReferences)?.syntax() ?? null
       this.later()
     }
     update(update: ViewUpdate) {
       const syntax = update.state.facet(formattedReferences)?.syntax() ?? null
-      if (syntax !== this.syntax) {
-        this.syntax = syntax
-        this.controller.abort()
-        this.controller = new AbortController()
-        this.pending.clear()
-        this.checked.clear()
-        this.answers = new Map()
+      const { answers } = update.state.field(labels)
+      if (
+        syntax !== this.syntax ||
+        answers !== update.startState.field(labels).answers
+      ) {
+        this.abort(() => true)
         this.generation++
-        queueMicrotask(() => {
-          if (!this.destroyed)
-            this.view.dispatch({
-              effects: [answered.of(null), formattedRefresh.of(null)],
-            })
-        })
-        return
-      }
-      if (update.docChanged) this.generation++
+        if (syntax !== this.syntax) {
+          this.syntax = syntax
+          answers.entries.clear()
+          answers.cells.clear()
+          queueMicrotask(() => {
+            if (!this.destroyed)
+              this.view.dispatch({
+                effects: [answered.of(null), formattedRefresh.of(null)],
+              })
+          })
+        }
+      } else if (update.docChanged) {
+        this.generation++
+        for (const [label, cells] of answers.cells)
+          answers.cells.set(
+            label,
+            new Set([...cells].map((at) => update.changes.mapPos(at))),
+          )
+      } else if (update.viewportChanged) this.scrolled = true
       this.later()
     }
     /** Look at drawn labels once this update and the cells it draws are done. */
@@ -160,18 +222,39 @@ const requests = ViewPlugin.fromClass(
         if (!this.destroyed) this.schedule()
       })
     }
+    abort(drop: (label: string) => boolean) {
+      for (const [label, controller] of this.pending)
+        if (drop(label)) {
+          controller.abort()
+          this.pending.delete(label)
+          referenceWork.aborted++
+        }
+    }
     /** Ask now when a drawn label was never answered, otherwise when idle. */
     schedule() {
-      const value = this.view.state.field(labels)
-      if (!value.drawn.size) return
+      const { drawn, cells, entries } = this.view.state.field(labels).answers
+      // Lookups for labels scrolled away make room for those in view.
+      if (this.scrolled) {
+        this.scrolled = false
+        const { from, to } = this.view.viewport
+        for (const [label, places] of cells) {
+          for (const at of places) if (at < from || at > to) places.delete(at)
+          if (!places.size) cells.delete(label)
+        }
+        this.abort((label) => !drawn.has(label) && !cells.has(label))
+      }
+      this.flush()
+      if (!drawn.size) return
       let unknown = false
-      for (const label of value.drawn)
+      for (const label of drawn) {
+        const entry = entries.get(label)
         if (
-          !value.defined.has(label) &&
-          !this.pending.has(label) &&
-          this.checked.get(label) !== this.generation
+          entry?.answer === undefined &&
+          entry?.checked !== this.generation &&
+          !this.pending.has(label)
         )
           unknown = true
+      }
       if (unknown) this.ask()
       else if (!this.idle)
         this.idle = requestIdleCallback(() => {
@@ -181,7 +264,7 @@ const requests = ViewPlugin.fromClass(
     }
     ask() {
       const resolver = this.view.state.facet(formattedReferences)
-      const { drawn } = this.view.state.field(labels)
+      const { drawn, entries } = this.view.state.field(labels).answers
       if (!resolver) {
         drawn.clear()
         return
@@ -189,58 +272,68 @@ const requests = ViewPlugin.fromClass(
       for (const label of drawn) {
         if (this.pending.size >= inFlight) return
         drawn.delete(label)
+        const entry = entries.get(label)
         if (
-          this.pending.has(label) ||
-          this.checked.get(label) === this.generation
+          entry &&
+          !this.pending.has(label) &&
+          entry.checked !== this.generation
         )
-          continue
-        this.request(resolver, label)
+          this.request(resolver, label)
       }
     }
     request(resolver: FormattedReferenceResolver, label: string) {
       const generation = this.generation,
-        { signal } = this.controller
-      this.pending.add(label)
+        controller = new AbortController()
+      this.pending.set(label, controller)
       referenceWork.requested++
-      void resolver.resolve(label, signal).then(
-        (result) => this.settle(label, generation, signal, result),
-        () => this.settle(label, generation, signal, { status: 'unavailable' }),
+      void resolver.resolve(label, controller.signal).then(
+        (result) => this.settle(label, generation, controller, result),
+        () =>
+          this.settle(label, generation, controller, { status: 'unavailable' }),
       )
     }
     settle(
       label: string,
       generation: number,
-      signal: AbortSignal,
+      controller: AbortController,
       result: SourceReferenceResult,
     ) {
-      if (this.destroyed || signal.aborted) return
+      if (this.destroyed || controller.signal.aborted) return
       this.pending.delete(label)
-      // A stale answer is asked for again after the next edit, as is any
-      // answer to an earlier text, which shows until then.
-      this.checked.set(label, generation)
-      if (generation !== this.generation)
-        this.view.state.field(labels).drawn.add(label)
-      if (result.status !== 'stale') {
-        referenceWork.resolved++
-        this.answers.set(label, result.status === 'resolved' && !!result.value)
+      const answers = this.view.state.field(labels).answers
+      const entry = answers.entries.get(label)
+      if (entry) {
+        // A stale answer is asked for again after the next edit, as is any
+        // answer to an earlier text, which shows until then.
+        entry.checked = generation
+        if (generation !== this.generation) answers.drawn.add(label)
+        if (result.status !== 'stale') {
+          referenceWork.resolved++
+          const answer =
+            result.status === 'resolved' && result.value
+              ? { title: result.value.title ?? null }
+              : null
+          if (!sameAnswer(entry.answer, answer)) {
+            entry.answer = answer
+            referenceWork.stored++
+            this.changed = true
+          }
+        }
       }
       if (this.pending.size) return
-      // One redraw for the answers to a batch of labels.
-      const current = this.view.state.field(labels).defined
-      const changed = [...this.answers].some(
-        ([key, known]) => current.get(key) !== known,
-      )
-      const answers = this.answers
-      this.answers = new Map()
-      if (changed)
-        this.view.dispatch({
-          effects: [answered.of(answers), formattedRefresh.of(null)],
-        })
       this.schedule()
+    }
+    /** One redraw for the answers to a batch of labels, once none is in flight. */
+    flush() {
+      if (!this.changed || this.pending.size) return
+      this.changed = false
+      this.view.dispatch({
+        effects: [answered.of(null), formattedRefresh.of(null)],
+      })
     }
     destroy() {
       this.destroyed = true
-      this.controller.abort()
+      this.abort(() => true)
       if (this.idle) cancelIdleCallback(this.idle)
     }
   },

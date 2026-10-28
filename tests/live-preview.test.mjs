@@ -986,6 +986,11 @@ test('link reference definitions take no space and show only while the caret edi
     // After a list marker, the item's text shows beside the marker.
     ['- [r]: /x\n\n  two', '- two'],
     ['1. [r]: /x\n\n   two', '1. two'],
+    // Definitions after the first one in the item hide with it.
+    ['- [a]: /x\n  [b]: /y\n\n  two', '- two'],
+    ['- [a]: /x\n\n  [b]: /y\n\n  two', '- two'],
+    ['1. [a]: /x\n   [a]: /y\n\n   two', '1. two'],
+    ['> - [a]: /x\n>   [b]: /y\n>\n>   two', '> - two'],
   ]) {
     const shown = await layout(doc)
     const expected = await layout(plain)

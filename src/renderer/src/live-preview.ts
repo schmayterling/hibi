@@ -183,20 +183,30 @@ function loneMarker(doc: Text, item: SyntaxNode) {
 /**
  * What a link reference definition hides, as exports drop it: its lines and
  * the blank lines up to the next block, or after the previous block when
- * none follows. After a list marker, it hides from its text up to the
- * item's next paragraph, which then shows beside the marker, or only its
- * text before other blocks.
+ * none follows. After a list marker, it hides from its text, with the
+ * item's definitions after it, up to the item's next paragraph, which then
+ * shows beside the marker, or up to the last definition before other blocks.
  */
 function definitionLines(doc: Text, node: SyntaxNode) {
   const first = doc.lineAt(node.from)
-  let next = node.nextSibling
-  while (next && !next.type.is('Block')) next = next.nextSibling
-  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from)))
+  const after = (block: SyntaxNode) => {
+    let next = block.nextSibling
+    while (next && !next.type.is('Block')) next = next.nextSibling
+    return next
+  }
+  let next = after(node)
+  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) {
+    let last = node
+    while (next?.name === 'LinkReference') {
+      last = next
+      next = after(next)
+    }
     return {
       from: node.from,
-      to: next?.name === 'Paragraph' ? next.from : node.to,
+      to: next?.name === 'Paragraph' ? next.from : last.to,
       item: true,
     }
+  }
   if (next) return { from: first.from, to: doc.lineAt(next.from).from - 1 }
   let previous = node.prevSibling
   while (previous && !previous.type.is('Block')) previous = previous.prevSibling
@@ -1180,6 +1190,8 @@ function chunkLayout(
       )
     },
   }
+  /** Where definitions hidden from a list marker end. */
+  let itemDefinitions = -1
   for (const range of covered) {
     /** The leaf block whose line breaks flow as spaces, except hard breaks and hidden link destinations. */
     let leaf: {
@@ -1275,7 +1287,10 @@ function chunkLayout(
             return
           }
           case 'LinkReference': {
+            // Definitions after one on a list marker hide with it.
+            if (ref.from < itemDefinitions) return false
             const lines = definitionLines(doc, ref.node)
+            if (lines.item) itemDefinitions = lines.to
             if (starts(ref.from))
               out.push(
                 (lines.item ? hiddenItemDefinition : hiddenDefinition).range(

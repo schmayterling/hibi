@@ -408,8 +408,8 @@
   ],
   "31e392d1c037": [
     "src/addons/math/engine.ts",
-    "src/addons/mermaid/Block.tsx",
-    "src/addons/typst/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx",
+    "src/addons/typst/BlockContent.tsx"
   ],
   "a1e57e3c2176": [
     "src/addons/frontmatter/Properties.tsx"
@@ -587,9 +587,9 @@
   "19766ed6ccb2": [
     "src/addons/dictionary/PackSettings.tsx",
     "src/addons/frontmatter/Properties.tsx",
-    "src/addons/mermaid/Block.tsx",
+    "src/addons/mermaid/BlockContent.tsx",
     "src/addons/quick-note/CaptureWindow.tsx",
-    "src/addons/typst/Block.tsx",
+    "src/addons/typst/BlockContent.tsx",
     "src/main/dependencies.ts",
     "src/main/document.ts",
     "src/main/index.ts",
@@ -1337,7 +1337,7 @@
     "src/addons/documentation/ExportDialog.tsx"
   ],
   "88ad63a0a663": [
-    "src/addons/typst/Block.tsx"
+    "src/addons/typst/BlockContent.tsx"
   ],
   "9a19e86ea92a": [
     "src/addons/_shared/local-format-native.ts"
@@ -1696,7 +1696,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "a9e237ed14c7": [
-    "src/addons/mermaid/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx"
   ],
   "f12e2c9be9b1": [
     "src/addons/dictionary/index.tsx"
@@ -1968,10 +1968,10 @@
     "src/main/index.ts"
   ],
   "ed4b5895642d": [
-    "src/addons/mermaid/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx"
   ],
   "78f982d5235c": [
-    "src/addons/typst/Block.tsx"
+    "src/addons/typst/BlockContent.tsx"
   ],
   "7588c9d702b3": [
     "src/addons/frontmatter/Properties.tsx"
@@ -2017,7 +2017,7 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "e5f4adee36ed": [
-    "src/addons/mermaid/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx"
   ],
   "c7bf14938074": [
     "src/addons/asciidoc/hibi-addon.json"
@@ -2113,7 +2113,7 @@
     "src/addons/frontmatter/Properties.tsx"
   ],
   "f23b5633a4b0": [
-    "src/addons/mermaid/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx"
   ],
   "5342e09f2729": [
     "src/renderer/src/FormatEditor.tsx"
@@ -2328,7 +2328,7 @@
     "src/addons/typst/index.tsx"
   ],
   "94b16a7c8bcf": [
-    "src/addons/typst/Block.tsx"
+    "src/addons/typst/BlockContent.tsx"
   ],
   "f7b99930dd65": [
     "src/addons/dictionary/CustomWords.tsx"
@@ -2353,7 +2353,7 @@
     "src/main/addons.ts"
   ],
   "bbb399c5f459": [
-    "src/addons/typst/Block.tsx",
+    "src/addons/typst/BlockContent.tsx",
     "src/addons/typst/index.tsx"
   ],
   "d3007be4c75c": [
@@ -3622,7 +3622,7 @@
     "src/addons/mermaid/hibi-addon.json"
   ],
   "0f082e133791": [
-    "src/addons/mermaid/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx"
   ],
   "67da360acf23": [
     "src/addons/mermaid/index.tsx"
@@ -3631,7 +3631,7 @@
     "src/addons/mermaid/index.tsx"
   ],
   "4f44551d4abb": [
-    "src/addons/mermaid/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx"
   ],
   "3bc8bd63923d": [
     "src/site/bootstrap.tsx"
@@ -4741,7 +4741,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "6344dbe04b0b": [
-    "src/addons/mermaid/Block.tsx"
+    "src/addons/mermaid/BlockContent.tsx"
   ],
   "62c003429465": [
     "src/addons/_shared/format-renderer.tsx",
@@ -6821,7 +6821,7 @@
     "src/addons/slash-commands/hibi-addon.json"
   ],
   "38c14037e93b": [
-    "src/addons/typst/Block.tsx",
+    "src/addons/typst/BlockContent.tsx",
     "src/addons/typst/hibi-addon.json",
     "src/addons/typst/index.tsx"
   ],
@@ -6892,7 +6892,7 @@
     "src/addons/typst/compiler.ts"
   ],
   "7ba8dc6d48a0": [
-    "src/addons/typst/Block.tsx"
+    "src/addons/typst/BlockContent.tsx"
   ],
   "433fa57cd74a": [
     "src/addons/typst/compiler.ts"

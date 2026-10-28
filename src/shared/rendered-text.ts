@@ -857,11 +857,21 @@ export class RenderedTextIndex {
     }
     return result(minimal)
   }
-  #proofRange(edits: readonly RenderedEdit[]): RenderedRange {
+  #proofRange(edits: readonly RenderedEdit[]): RenderedRange | null {
     const lo = edits[0]!.from,
       hi = edits.at(-1)!.to
     let from = Math.max(this.prefix, lo - page),
       to = Math.min(this.length, hi + page)
+    // Include neighboring visible content so a window retains semantic gaps.
+    const gap = (at: number) =>
+      (this.#code(at) === 1 || this.#code(at) === 4) &&
+      /^[ \t\n]$/.test(this.text(at, at + 1))
+    const left = Math.max(this.prefix, from - page),
+      right = Math.min(this.length, to + page)
+    while (from > left && gap(from)) from--
+    while (to < right && gap(to - 1)) to++
+    if ((from > this.prefix && gap(from)) || (to < this.length && gap(to - 1)))
+      return null
     if (!this.validStart(from)) from--
     if (!this.validStart(to)) to++
     const first = this.runs(from).next().value
@@ -1193,6 +1203,7 @@ export class RenderedTextIndex {
       return position + shift
     }
     const range = this.#proofRange(edits)
+    if (!range) return false
     const old = yield* this.#proofWindow(range)
     const local = new Set<string>()
     yield* this.#projectFrames(old.frames, range, false, local, false)

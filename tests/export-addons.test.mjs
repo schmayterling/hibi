@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   mkdir,
@@ -9,11 +10,11 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { parse } from '@babel/parser'
-import { exportAddons } from '../scripts/export-addons.mjs'
+import { addonDates, exportAddons } from '../scripts/export-addons.mjs'
 
 const metadata = {
   id: 'sample',
@@ -175,5 +176,100 @@ test('all 41 canonical manifests export website object literals with frozen meta
   assert.equal(
     await readFile(join(destination, 'authors.ts'), 'utf8'),
     await readFile(join(source, 'authors.ts'), 'utf8'),
+  )
+})
+
+test('addon dates come from the first-parent history of each addon folder', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-addon-dates-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const addons = join(root, 'src/addons')
+  const run = (date, ...args) =>
+    execFileSync('git', ['-C', root, ...args], {
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+        GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z',
+        GIT_COMMITTER_DATE: date,
+      },
+    })
+  const commit = async (date, ...files) => {
+    for (const file of files) {
+      await mkdir(dirname(join(addons, file)), { recursive: true })
+      await writeFile(join(addons, file), date)
+    }
+    run(date, 'add', '.')
+    run(date, 'commit', '-qm', files.join(' '))
+  }
+  assert.equal(await addonDates(root, ['first']), null)
+  run('2026-01-01T00:00:00Z', 'init', '-q', '-b', 'main')
+  await commit('2026-01-02T12:00:00Z', 'authors.ts')
+  await commit('2026-01-03T23:30:00-05:00', 'first/manifest.ts')
+  await commit('2026-02-01T00:00:00Z', 'second/hibi-addon.json')
+  run('2026-02-01T00:00:00Z', 'switch', '-qc', 'feature')
+  await commit('2026-02-05T00:00:00Z', 'first/README.md')
+  run('2026-02-01T00:00:00Z', 'switch', '-q', 'main')
+  await commit('2026-02-06T00:00:00Z', 'other.md')
+  run(
+    '2026-03-01T00:00:00Z',
+    'merge',
+    '-q',
+    '--no-ff',
+    '-m',
+    'merge',
+    'feature',
+  )
+  // Merged work counts from the day it reached main; undated folders are omitted.
+  assert.deepEqual(await addonDates(addons, ['first', 'second', 'missing']), {
+    first: { released: '2026-01-04', updated: '2026-03-01' },
+    second: { released: '2026-02-01', updated: '2026-02-01' },
+  })
+  // A bulk commit still releases the folders it creates, but a commit across
+  // more than three addons never counts as an update.
+  await commit(
+    '2026-04-01T00:00:00Z',
+    'first/a.md',
+    'second/a.md',
+    'third/manifest.ts',
+    'fourth/manifest.ts',
+  )
+  assert.deepEqual(
+    await addonDates(addons, ['first', 'second', 'third', 'fourth']),
+    {
+      first: { released: '2026-01-04', updated: '2026-03-01' },
+      second: { released: '2026-02-01', updated: '2026-02-01' },
+      third: { released: '2026-04-01', updated: '2026-04-01' },
+      fourth: { released: '2026-04-01', updated: '2026-04-01' },
+    },
+  )
+  await commit(
+    '2026-04-02T00:00:00Z',
+    'first/b.md',
+    'second/b.md',
+    'third/b.md',
+  )
+  assert.deepEqual(
+    await addonDates(addons, ['first', 'second', 'third', 'fourth']),
+    {
+      first: { released: '2026-01-04', updated: '2026-04-02' },
+      second: { released: '2026-02-01', updated: '2026-04-02' },
+      third: { released: '2026-04-01', updated: '2026-04-02' },
+      fourth: { released: '2026-04-01', updated: '2026-04-01' },
+    },
+  )
+  run(
+    '2026-03-01T00:00:00Z',
+    'clone',
+    '-q',
+    '--depth',
+    '1',
+    `file://${root}`,
+    'shallow',
+  )
+  assert.equal(
+    await addonDates(join(root, 'shallow/src/addons'), ['first']),
+    null,
   )
 })

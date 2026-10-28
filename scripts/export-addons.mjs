@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import {
   copyFile,
   mkdir,
@@ -8,8 +9,70 @@ import {
 } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { MAX_ADDON_MANIFEST_BYTES } from '../src/shared/addon-package.ts'
+
+const git = async (cwd, ...args) =>
+  (
+    await promisify(execFile)('git', ['-C', cwd, ...args], {
+      env: { ...process.env, TZ: 'UTC' },
+      maxBuffer: 64 * 1024 * 1024,
+    })
+  ).stdout
+
+/**
+ * The day (UTC) each addon folder was created on the first-parent history and
+ * the last day it changed outside sweeping commits, or null outside a full git checkout so a missing or shallow
+ * history never publishes wrong dates.
+ */
+export async function addonDates(source, ids) {
+  try {
+    if (
+      (await git(source, 'rev-parse', '--is-shallow-repository')).trim() !==
+      'false'
+    )
+      return null
+  } catch {
+    return null
+  }
+  const dates = {}
+  const log = await git(
+    source,
+    '-c',
+    'core.quotePath=false',
+    'log',
+    '--first-parent',
+    '--diff-merges=first-parent',
+    '--relative',
+    '--name-only',
+    '--date=format-local:%Y-%m-%d',
+    '--format=%x00%cd',
+    '--',
+    '.',
+  )
+  for (const commit of log.split('\0').slice(1)) {
+    const [day, ...files] = commit.split('\n')
+    const touched = new Set(
+      files.map((file) => file.split('/')[0]).filter((id) => ids.includes(id)),
+    )
+    // The commit that creates a folder releases it, even in bulk. A later
+    // commit across more than three addons is a sweeping change, not an update.
+    for (const id of touched) {
+      dates[id] ??= { released: day, updated: null }
+      dates[id].released = day
+      if (touched.size <= 3) dates[id].updated ??= day
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(dates)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([id, { released, updated }]) => [
+        id,
+        { released, updated: updated ?? released },
+      ]),
+  )
+}
 
 export async function exportAddons(source, destination) {
   const files = []
@@ -74,6 +137,20 @@ export async function exportAddons(source, destination) {
         throw new Error(`${file}: ${error.message}`, { cause: error })
       }
     }
+  }
+  const ids = [
+    ...new Set(
+      files
+        .filter((file) =>
+          ['manifest.ts', 'hibi-addon.json'].includes(basename(file)),
+        )
+        .map((file) => dirname(file)),
+    ),
+  ]
+  const dates = await addonDates(source, ids)
+  if (dates) {
+    generated.set('dates.json', `${JSON.stringify(dates, null, 2)}\n`)
+    files.push('dates.json')
   }
   await rm(destination, { recursive: true, force: true })
   for (const file of files) {

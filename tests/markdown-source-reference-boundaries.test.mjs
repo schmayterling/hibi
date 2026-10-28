@@ -376,7 +376,10 @@ test('paragraph interruptions end indented titles and expose following reference
     const title = `title\n${line}\n[other]: /hidden\nend`,
       f = fixture(t, `[ref]: /x\n\t"${title}"\n\n[other]`)
     f.checkDefinitions(['ref', 'other'])
-    assert.deepEqual(f.references.lookup('ref'), { href: '/x', title: undefined })
+    assert.deepEqual(f.references.lookup('ref'), {
+      href: '/x',
+      title: undefined,
+    })
     assert.equal(
       f.references.lookup('other')?.href ?? null,
       line === '~~~' ? null : '/hidden',

@@ -425,6 +425,31 @@ function syntaxField(options: FormattedSyntaxOptions) {
 }
 
 /**
+ * The first word of a fence's info string, as `codeLanguageKey` reads it,
+ * read in short slices: the info line of a fence above the screen can be
+ * most of the note.
+ */
+function infoWord(
+  state: EditorState,
+  from: number,
+  to: number,
+  probe?: ChunkedMarkdownProbe,
+) {
+  let word = ''
+  for (let at = from; at < to; at += 64) {
+    const text = state.sliceDoc(at, Math.min(to, at + 64))
+    if (probe) probe.codeInfoUnits = (probe.codeInfoUnits ?? 0) + text.length
+    let end = 0
+    if (!word) while (end < text.length && /\s/.test(text[end]!)) end++
+    const start = end
+    while (end < text.length && !/\s/.test(text[end]!)) end++
+    word += text.slice(start, end)
+    if (end < text.length) break
+  }
+  return word
+}
+
+/**
  * Fenced code with text in `ranges`, by start, and the part of each in
  * `ranges` whose nested parse is not its language's current parser. A fence
  * without text has nothing to parse, so no parser is mounted on it.
@@ -433,6 +458,7 @@ function visibleCode(
   state: EditorState,
   tree: Tree,
   ranges: readonly Demand[],
+  probe?: ChunkedMarkdownProbe,
 ) {
   const starts = new Set<number>()
   const stale: (Demand & { start: number })[] = []
@@ -447,8 +473,9 @@ function visibleCode(
         starts.add(node.from)
         const info = node.node.getChild('CodeInfo')
         const parser =
-          codeLanguages.resolve(info ? state.sliceDoc(info.from, info.to) : '')
-            ?.parser ?? null
+          codeLanguages.resolve(
+            info ? infoWord(state, info.from, info.to, probe) : '',
+          )?.parser ?? null
         // Only the part on screen parses again: a giant fence keeps its known bounds.
         if ((node.tree?.prop(NodeProp.mounted)?.parser ?? null) !== parser)
           stale.push({
@@ -758,7 +785,12 @@ function driver(
           this.languages = version
           this.refreshed = []
         }
-        const code = visibleCode(view.state, syntax.tree, view.visibleRanges)
+        const code = visibleCode(
+          view.state,
+          syntax.tree,
+          view.visibleRanges,
+          options.probe,
+        )
         // Only fences on screen keep their attempt; one that returns may try again.
         this.refreshed = this.refreshed.filter((at) => code.starts.has(at))
         const stale = code.stale.filter(

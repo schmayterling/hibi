@@ -792,6 +792,57 @@ test('scrolling up through known code blocks keeps the scroll position as withou
   assert.deepEqual(known, plain)
 })
 
+test('stepping up after a jump to the end, known code blocks never draw as plain text', {
+  timeout: 120000,
+}, async () => {
+  const code = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = '# Long code lines\n\n'
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${code.repeat(5)}\`\`\`\n\n`
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const plain = await harness.evaluate(async (doc) => {
+    await window.livePreview.mount(
+      doc,
+      { width: 900, height: 600 },
+      { editable: true },
+    )
+    const view = window.livePreview.view()
+    view.focus()
+    window.livePreview.knowCode()
+    await window.livePreview.settle()
+    const pane = document.querySelector('.rich-pane')
+    const frame = () => new Promise(requestAnimationFrame)
+    // Code lines drawn outside a code block's box, as unparsed text.
+    let most = 0
+    const count = () => {
+      most = Math.max(
+        most,
+        [...view.contentDOM.querySelectorAll('.cm-line')].filter(
+          (line) =>
+            line.textContent.startsWith('const value') &&
+            !line.closest('.hibi-lp-codescroll'),
+        ).length,
+      )
+    }
+    pane.scrollTop = pane.scrollHeight
+    for (let i = 0; i < 20; i++) await frame()
+    const step = Math.round(pane.clientHeight * 0.8)
+    for (let k = 0; k < 5; k++) {
+      pane.scrollTop -= step
+      for (let i = 0; i < 20; i++) {
+        await frame()
+        count()
+      }
+    }
+    return most
+  }, doc)
+  await session.detach()
+  // Before, a block the parser started over on showed its long lines as
+  // wrapped text, thousands of pixels tall, and the view jumped away.
+  assert.equal(plain, 0)
+})
+
 test('typing beside a multi-line link destination edits the text', {
   timeout: 60000,
 }, async () => {

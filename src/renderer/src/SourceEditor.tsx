@@ -1530,29 +1530,44 @@ export function SourceEditor({
               : null
           }),
           Prec.highest(
-            keymap.of([
-              ...completionKeymap.filter((binding) => binding.key !== 'Enter'),
-              ...(['Enter', 'Tab'] as const).map((key) => ({
-                key,
+            keymap.of(
+              [
+                ...completionKeymap.filter(
+                  (binding) => binding.key !== 'Enter',
+                ),
+                ...(['Enter', 'Tab'] as const).map((key) => ({
+                  key,
+                  run: (view: EditorView) => {
+                    const options = currentCompletions(view.state)
+                    const selected = selectedCompletionIndex(view.state) ?? -1
+                    const option =
+                      options[selected < 0 && key === 'Tab' ? 0 : selected]
+                    const item = option && completionItems.get(option)
+                    if (
+                      !item ||
+                      !completionForKey([item], selected < 0 ? -1 : 0, key)
+                    ) {
+                      closeCompletion(view)
+                      return false
+                    }
+                    if (selected < 0)
+                      view.dispatch({ effects: setSelectedCompletion(0) })
+                    return acceptCompletion(view)
+                  },
+                })),
+              ].map((binding) => ({
+                ...binding,
+                // As in the rich view, the keys of a composition are the input
+                // method's, also before it first changes the text: the list
+                // closes and takes none.
                 run: (view: EditorView) => {
-                  const options = currentCompletions(view.state)
-                  const selected = selectedCompletionIndex(view.state) ?? -1
-                  const option =
-                    options[selected < 0 && key === 'Tab' ? 0 : selected]
-                  const item = option && completionItems.get(option)
-                  if (
-                    !item ||
-                    !completionForKey([item], selected < 0 ? -1 : 0, key)
-                  ) {
-                    closeCompletion(view)
-                    return false
-                  }
-                  if (selected < 0)
-                    view.dispatch({ effects: setSelectedCompletion(0) })
-                  return acceptCompletion(view)
+                  if (!view.compositionStarted)
+                    return binding.run?.(view) ?? false
+                  closeCompletion(view)
+                  return false
                 },
               })),
-            ]),
+            ),
           ),
           indentation.current.of(
             formatted

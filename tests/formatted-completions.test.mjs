@@ -150,6 +150,27 @@ test('formatted completions keep exact source, history, composition, privacy and
   await page.keyboard.press('Escape')
   await menu.waitFor({ state: 'hidden' })
   await saved('hel')
+  // Keys pressed while an input method composes are its own, also before it
+  // first changes the text: an open list closes and accepts nothing.
+  const accepted = () =>
+    page.evaluate(() => window.formattedCompletion.accepted.length)
+  for (const key of ['Tab', 'Enter']) {
+    const before = await accepted()
+    await page.keyboard.press('Control+Space')
+    await menu.getByRole('option', { name: 'hello', exact: true }).waitFor()
+    await cdp.send('Input.imeSetComposition', {
+      text: 'hel',
+      selectionStart: 3,
+      selectionEnd: 3,
+      replacementStart: 0,
+      replacementEnd: 3,
+    })
+    await pressPastCompletionDelay(page, key)
+    await menu.waitFor({ state: 'hidden' })
+    await cdp.send('Input.insertText', { text: 'hel' })
+    assert.equal(await accepted(), before, key)
+    await reset('hel')
+  }
   await page.evaluate(() => {
     window.formattedCompletion.invalid = true
   })

@@ -1,11 +1,21 @@
 import type { Token } from 'marked'
 import type { BoundaryRecord } from './chunked-markdown.ts'
-import type { BoundaryConfig } from './markdown-boundary-syntax.ts'
+import type {
+  BoundaryConfig,
+  CodeBlockExtent,
+} from './markdown-boundary-syntax.ts'
 
 /** Prefix positions follow source edits; they do not select a grammar. */
 export const boundaryKey = (config: BoundaryConfig) =>
   JSON.stringify({ ...config, prefix: 0 })
 
+/** Complete code coverage for a normalized source range, including the absence of blocks. */
+export type CodeExtentPage = {
+  version: number
+  from: number
+  to: number
+  records: readonly CodeBlockExtent[]
+}
 export type BoundaryPage = {
   type: 'boundaries'
   epoch: string
@@ -18,6 +28,7 @@ export type BoundaryPage = {
   /** End of the repaired range; the suffix after it is unchanged from baseVersion. */
   to?: number
   records: BoundaryRecord[]
+  code?: Omit<CodeExtentPage, 'version'>
   done: boolean
 }
 export type BoundaryReceive = (
@@ -78,6 +89,8 @@ export type DocumentWorkerRequest =
       config: BoundaryConfig
       from?: number
       baseVersion?: number
+      /** Last acknowledged code coverage; null requests whole-note code coverage. */
+      codeVersion?: number | null
     }
   | {
       type: 'boundary-ack'

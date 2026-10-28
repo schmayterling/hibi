@@ -366,3 +366,260 @@ test('invalid suffix offsets cannot publish another boundary page', async (t) =>
     assert.deepEqual(f.errors, [])
   }
 })
+
+test('code coverage streams complete ranges, replays to late listeners without source reads, and repairs only touched ranges', async (t) => {
+  const unit = '~~~\r\none\tline\r\n~~~\r\n\r\n    indented\r\n\r\n'
+  const f = fixture(t, unit.repeat(200)),
+    first = [],
+    late = []
+  const detach = f.client.subscribeCodeExtents((page) => first.push(page))
+  f.request()
+  await until(() => f.pages.at(-1)?.done)
+  assert.ok(first.length > 1)
+  assert.equal(first[0].from, 0)
+  assert.equal(first.at(-1).to, f.session.snapshot().normalizedLength)
+  for (let i = 1; i < first.length; i++)
+    assert.equal(first[i].from, first[i - 1].to)
+  const initial = first.flatMap((page) => page.records)
+  assert.equal(initial.length, 400)
+  assert.equal(initial[0].contentColumns, 8)
+  assert.equal(initial[0].contentLines, 1)
+  assert.ok(first.every((page) => page.version === 0))
+  const before = f.pages.length
+  f.session.counters(true)
+  const stopLate = f.client.subscribeCodeExtents((page) => late.push(page))
+  await until(() => f.pages.length > before && f.pages.at(-1)?.done)
+  assert.deepEqual(
+    late.flatMap((page) => page.records),
+    initial,
+  )
+  assert.equal(f.session.counters().sourceUnitsRead, 0)
+  assert.equal(f.session.counters().materializations, 0)
+  stopLate()
+  const lateCount = late.length,
+    firstCount = first.length,
+    pageCount = f.pages.length
+  f.client.releaseBoundaries(true)
+  const from = unit.length * 100 + unit.indexOf('one')
+  const normalized = f.session.snapshot().rawToEditor(from)
+  f.session.edit(
+    [{ from, to: from + 3, insert: 'very' }],
+    'source',
+    'code-width',
+  )
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) => reply.type === 'ack' && reply.version === 1,
+    ),
+  )
+  f.client.boundaries(
+    config,
+    (page, ack) => {
+      f.pages.push(page)
+      ack()
+    },
+    (reason) => f.declined.push(reason),
+    normalized,
+    0,
+  )
+  await until(
+    () =>
+      f.pages.length > pageCount &&
+      f.pages.at(-1)?.done &&
+      f.pages.at(-1)?.version === 1,
+  )
+  const repair = first.slice(firstCount)
+  assert.ok(repair.length > 0)
+  assert.ok(
+    repair.every(
+      (page) =>
+        page.version === 1 &&
+        page.from > 0 &&
+        page.to < f.session.snapshot().normalizedLength,
+    ),
+  )
+  t.diagnostic(
+    JSON.stringify({
+      denseRepair: repair.map(({ from, to, records }) => ({
+        from,
+        to,
+        records: records.length,
+      })),
+    }),
+  )
+  assert.equal(repair.flatMap((page) => page.records).length, 1)
+  assert.ok(
+    repair.some((page) =>
+      page.records.some((record) => record.contentColumns === 12),
+    ),
+  )
+  assert.equal(late.length, lateCount)
+  const secondCount = first.length,
+    boundaryCount = f.pages.length
+  f.client.releaseBoundaries(true)
+  const other = unit.length * 150 + 1 + unit.indexOf('one')
+  const otherNormalized = f.session.snapshot().rawToEditor(other)
+  f.session.edit(
+    [{ from: other, to: other + 3, insert: 'two' }],
+    'source',
+    'same-width',
+  )
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) => reply.type === 'ack' && reply.version === 2,
+    ),
+  )
+  f.client.boundaries(
+    config,
+    (page, ack) => {
+      f.pages.push(page)
+      ack()
+    },
+    (reason) => f.declined.push(reason),
+    otherNormalized,
+  )
+  await until(
+    () =>
+      f.pages.length > boundaryCount &&
+      f.pages.at(-1)?.done &&
+      f.pages.at(-1)?.version === 2,
+  )
+  assert.equal(
+    first.slice(secondCount).flatMap((page) => page.records).length,
+    1,
+  )
+  const request = f.transports[0].messages
+    .filter((message) => message.type === 'boundaries')
+    .at(-1)
+  assert.equal(request.baseVersion, undefined)
+  assert.equal(request.codeVersion, 1)
+  detach()
+  assert.deepEqual(f.declined, [])
+  assert.deepEqual(f.errors, [])
+})
+
+test('code coverage rejects stale and malformed messages before notifying listeners', async (t) => {
+  const mutations = [
+    (page) => ({ ...page, from: -1 }),
+    (page) => ({
+      ...page,
+      from: page.records[0].to,
+      records: [page.records[0]],
+    }),
+    (page) => ({ ...page, to: Number.MAX_SAFE_INTEGER }),
+    (page) => ({ ...page, records: Array(129).fill(page.records[0]) }),
+    (page) => ({
+      ...page,
+      records: [{ ...page.records[0], contentColumns: -1 }],
+    }),
+    (page) => ({
+      ...page,
+      records: [{ ...page.records[0], contentLines: 0.5 }],
+    }),
+    (page) => ({
+      ...page,
+      records: [{ ...page.records[0], contentTo: Number.MAX_SAFE_INTEGER }],
+    }),
+    (page) => ({ ...page, records: [{ ...page.records[0], closed: 'yes' }] }),
+    (page) => ({ ...page, records: [page.records[1], page.records[0]] }),
+  ]
+  for (const mutate of mutations) {
+    const f = fixture(t, '~~~\nbody\n~~~\n\n'.repeat(100)),
+      code = []
+    f.client.subscribeCodeExtents((page) => code.push(page))
+    f.request(config, (page) => f.pages.push(page))
+    await until(() => f.pages.length === 1)
+    assert.ok(f.pages[0].code.records.length >= 2)
+    const count = code.length,
+      first = f.pages[0]
+    f.transports[0].onmessage({ data: { ...first, epoch: 'old' } })
+    assert.equal(code.length, count)
+    assert.deepEqual(f.declined, ['stale'])
+    f.transports[0].onmessage({
+      data: { ...first, sequence: 1, code: mutate(first.code) },
+    })
+    assert.equal(code.length, count)
+    assert.equal(f.pages.length, 1)
+    assert.deepEqual(f.declined, ['stale', 'mismatch'])
+    assert.deepEqual(f.errors, [])
+  }
+})
+
+test('release stops code coverage together with boundary pages', async (t) => {
+  const f = fixture(t, '~~~\nbody\n~~~\n\n'.repeat(100)),
+    code = [],
+    acks = []
+  f.client.subscribeCodeExtents((page) => code.push(page))
+  f.request(config, (page, ack) => {
+    f.pages.push(page)
+    acks.push(ack)
+  })
+  await until(() => f.pages.length === 1)
+  f.client.releaseBoundaries()
+  acks[0]()
+  await until(() =>
+    f.transports[0].messages.some(
+      (message) => message.type === 'cancel-boundaries',
+    ),
+  )
+  await new Promise(setImmediate)
+  assert.equal(f.pages.length, 1)
+  assert.equal(code.length, 1)
+  assert.deepEqual(f.errors, [])
+})
+
+test('a code listener can edit without delivering an old page to another listener or view', async (t) => {
+  const f = fixture(t, '~~~\nbody\n~~~\n'),
+    second = []
+  let edited = false
+  f.client.subscribeCodeExtents((page) => {
+    if (page.version !== 0 || edited) return
+    edited = true
+    f.session.edit([{ from: 4, to: 5, insert: 'x' }], 'source', 'reentrant')
+  })
+  f.client.subscribeCodeExtents((page) => second.push(page))
+  f.request()
+  await until(() => edited)
+  assert.equal(second.length, 0)
+  assert.equal(f.pages.length, 0)
+  f.client.releaseBoundaries(true)
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) => reply.type === 'ack' && reply.version === 1,
+    ),
+  )
+  f.request()
+  await until(() => f.pages.at(-1)?.done && f.pages.at(-1)?.version === 1)
+  assert.ok(second.length > 0)
+  assert.ok(second.every((page) => page.version === 1))
+  assert.ok(f.pages.every((page) => page.version === 1))
+  assert.deepEqual(f.errors, [])
+})
+
+test('a suffix syntax request still pushes code coverage for the whole note', async (t) => {
+  const f = fixture(t, '~~~\nbody\n~~~\n\n'.repeat(100)),
+    code = []
+  f.client.subscribeCodeExtents((page) => code.push(page))
+  const from = f.session.snapshot().normalizedLength - 20
+  f.client.boundaries(
+    config,
+    (page, ack) => {
+      f.pages.push(page)
+      ack()
+    },
+    (reason) => f.declined.push(reason),
+    from,
+  )
+  await until(() => f.pages.at(-1)?.done)
+  assert.ok(f.pages[0].from > 0)
+  assert.equal(code[0].from, 0)
+  assert.equal(code.at(-1).to, f.session.snapshot().normalizedLength)
+  assert.equal(code.flatMap((page) => page.records).length, 100)
+  assert.equal(
+    f.transports[0].messages.find((message) => message.type === 'boundaries')
+      .codeVersion,
+    null,
+  )
+  assert.deepEqual(f.declined, [])
+  assert.deepEqual(f.errors, [])
+})

@@ -53,6 +53,7 @@ export class DocumentWorkerService {
   }> | null = null
   #boundarySequence = 0
   #boundaryAwaiting: number | null = null
+  #boundaryFinal = false
 
   readonly #post: (reply: DocumentWorkerReply) => void
   #store: SourceStore | null = null
@@ -98,6 +99,7 @@ export class DocumentWorkerService {
     this.#boundaryPages = null
     this.#boundarySequence = 0
     this.#boundaryAwaiting = null
+    this.#boundaryFinal = false
     if (release) {
       this.#boundaryRequest = null
       this.#boundaryModel = null
@@ -169,6 +171,7 @@ export class DocumentWorkerService {
         this.#boundaryPages = this.#boundaryModel.pages(
           request.from ?? 0,
           request.baseVersion,
+          request.codeVersion,
         )
       }
       const page = this.#boundaryPages.next()
@@ -178,6 +181,7 @@ export class DocumentWorkerService {
       }
       const sequence = this.#boundarySequence++
       this.#boundaryAwaiting = sequence
+      this.#boundaryFinal = page.value.done
       this.#post({
         type: 'boundaries',
         epoch: this.#epoch,
@@ -374,7 +378,12 @@ export class DocumentWorkerService {
           (message.baseVersion !== undefined &&
             (!Number.isSafeInteger(message.baseVersion) ||
               message.baseVersion < 0 ||
-              message.baseVersion > message.version))
+              message.baseVersion > message.version)) ||
+          (message.codeVersion !== undefined &&
+            message.codeVersion !== null &&
+            (!Number.isSafeInteger(message.codeVersion) ||
+              message.codeVersion < 0 ||
+              message.codeVersion > message.version))
         )
           throw new Error('Could not read a document worker reply.')
         if (
@@ -382,6 +391,7 @@ export class DocumentWorkerService {
           this.#boundaryRequest.version === message.version &&
           this.#boundaryRequest.from === message.from &&
           this.#boundaryRequest.baseVersion === message.baseVersion &&
+          this.#boundaryRequest.codeVersion === message.codeVersion &&
           JSON.stringify(this.#boundaryRequest.config) ===
             JSON.stringify(message.config)
         )
@@ -404,6 +414,8 @@ export class DocumentWorkerService {
           message.sequence !== this.#boundaryAwaiting
         )
           return
+        if (this.#boundaryFinal)
+          this.#boundaryModel?.acknowledgeCode(message.version)
         this.#boundaryAwaiting = null
         this.#scheduleBoundaries()
       } else if (message.type === 'cancel-boundaries') {

@@ -13,6 +13,7 @@ import {
   boundaryKey,
   boundaryParser,
 } from './markdown-boundary-syntax.ts'
+import { MarkdownCodeExtents } from './markdown-code-extents.ts'
 import type {
   PreparedSourceOperation,
   SourceSnapshot,
@@ -48,6 +49,7 @@ function boundaryInput(source: SourceSnapshot): Input {
 export class MarkdownBoundaryIndex {
   readonly key: string
   readonly parser: ChunkedMarkdownParser
+  private readonly code: MarkdownCodeExtents
   private parse: ChunkedPartialParse
   private tree: Tree | null = null
   private fragments: readonly TreeFragment[] = []
@@ -68,11 +70,13 @@ export class MarkdownBoundaryIndex {
     if (!base || config.prefix > source.normalizedLength)
       throw new Error('Could not read a document worker reply.')
     this.key = boundaryKey(config)
+    this.code = new MarkdownCodeExtents(source)
     this.parser = new ChunkedMarkdownParser(base, base, {
       chunkSize: config.chunkSize,
       groupSize: config.groupSize,
       giantBlock: config.giantBlock,
       opaque: new Set(config.opaque),
+      codeBlocks: this.code,
       ...(probe ? { probe } : {}),
     })
     this.source = source
@@ -81,6 +85,12 @@ export class MarkdownBoundaryIndex {
       [],
       config.prefix,
     )
+  }
+  acknowledgeCode(version: number) {
+    if (this.tree) this.code.acknowledge(version)
+  }
+  get codeWork() {
+    return this.code.work
   }
   get version() {
     return this.source.version
@@ -149,6 +159,8 @@ export class MarkdownBoundaryIndex {
         fragments: TreeFragment.applyChanges(this.retained.fragments, changes),
       }
     this.fragments = TreeFragment.applyChanges(fragments, changes)
+    this.code.apply(prepared.before, prepared.after, changes)
+    if (this.config.prefix) this.code.clear(0, this.config.prefix)
     this.source = prepared.after
     this.tree = null
     this.advanced = false
@@ -158,7 +170,11 @@ export class MarkdownBoundaryIndex {
       this.config.prefix,
     )
   }
-  *pages(from = 0, baseVersion?: number) {
+  *pages(
+    from = 0,
+    baseVersion?: number,
+    codeVersion: number | null | undefined = baseVersion,
+  ) {
     if (!this.tree) throw new Error('Could not read a document worker reply.')
     const start = boundaryStart(this.tree, from)
     const retained =
@@ -170,21 +186,62 @@ export class MarkdownBoundaryIndex {
       : this.length
     const end = to < this.length ? { to } : {}
     const records = boundaryRecords(this.tree, from, to)
-    let next = records.next()
+    // Geometry coverage is independent of the syntax repair suffix.
+    const code = this.code.pages(
+      0,
+      this.length,
+      typeof codeVersion === 'number' && codeVersion === this.code.baseVersion,
+    )
+    let next = records.next(),
+      coverage = code.next()
+    if (next.done && coverage.done) {
+      yield { from: start, ...end, records: [], done: true }
+      return
+    }
     while (!next.done) {
       const page = []
+      const shared = !coverage.done && coverage.value.records.length > 0
       let units = 0
-      while (!next.done && page.length < 128) {
+      while (!next.done && page.length < (shared ? 64 : 128)) {
         const size = JSON.stringify(next.value).length
-        if (units + size > 16384 && page.length) break
+        if (units + size > (shared ? 8192 : 16384) && page.length) break
         units += size
         page.push(next.value)
         next = records.next()
       }
-      yield { from: start, ...end, records: page, done: !!next.done }
+      if (
+        !coverage.done &&
+        page.length + coverage.value.records.length <= 128 &&
+        units + JSON.stringify(coverage.value).length <= 16384
+      ) {
+        const { done: _done, ...patch } = coverage.value
+        coverage = code.next()
+        yield {
+          from: start,
+          ...end,
+          records: page,
+          code: patch,
+          done: !!next.done && !!coverage.done,
+        }
+      } else
+        yield {
+          from: start,
+          ...end,
+          records: page,
+          done: !!next.done && !!coverage.done,
+        }
     }
-    if (!this.length || start === to)
-      yield { from: start, ...end, records: [], done: true }
+    while (!coverage.done) {
+      const { done: _done, ...patch } = coverage.value
+      coverage = code.next()
+      yield {
+        from: start,
+        ...end,
+        records: [],
+        code: patch,
+        done: !!coverage.done,
+      }
+    }
   }
   records(from = 0) {
     if (!this.tree) throw new Error('Could not read a document worker reply.')

@@ -3,6 +3,7 @@ import type { DocumentSession } from '../../shared/document-session.ts'
 import {
   type BoundaryReceive,
   boundaryKey,
+  type CodeExtentPage,
   type DocumentWorkerReply,
   type DocumentWorkerRequest,
   type MarkdownReferenceRequest,
@@ -50,6 +51,53 @@ type ClientOptions = {
   worker?: () => Transport
   maximumPendingBytes?: number
   timeoutMs?: number
+}
+
+function validCodeCoverage(value: unknown, length: number, slots: number) {
+  if (!value || typeof value !== 'object') return false
+  const page = value as Omit<CodeExtentPage, 'version'>
+  if (
+    !Number.isSafeInteger(page.from) ||
+    !Number.isSafeInteger(page.to) ||
+    page.from < 0 ||
+    page.to < page.from ||
+    page.to > length ||
+    !Array.isArray(page.records) ||
+    page.records.length + slots > 128
+  )
+    return false
+  let end = -1
+  return page.records.every((record) => {
+    if (
+      !record ||
+      typeof record !== 'object' ||
+      ![
+        record.from,
+        record.to,
+        record.contentFrom,
+        record.contentTo,
+        record.contentLines,
+        record.contentColumns,
+      ].every(Number.isSafeInteger) ||
+      record.from < 0 ||
+      record.from >= record.to ||
+      record.from < end ||
+      record.to > length ||
+      record.to <= page.from ||
+      record.from >= page.to ||
+      record.contentFrom < record.from ||
+      record.contentTo < record.contentFrom ||
+      record.contentTo > record.to ||
+      record.contentLines < 0 ||
+      record.contentColumns < 0 ||
+      (record.contentLines === 0 && record.contentColumns !== 0) ||
+      !['fenced', 'indented'].includes(record.kind) ||
+      typeof record.closed !== 'boolean'
+    )
+      return false
+    end = record.to
+    return true
+  })
 }
 
 /** One cancelable derived replica, with bounded bootstrap/operation/query ownership. */
@@ -107,6 +155,9 @@ export class DocumentWorkerClient {
   #boundarySequence = 0
   #boundaryFrom: number | null = null
   #boundaryTo: number | null = null
+  #codeDelivered = false
+  #codeVersion = -1
+  readonly #codeReceivers = new Set<(page: CodeExtentPage) => void>()
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
     this.#options = options
@@ -119,6 +170,7 @@ export class DocumentWorkerClient {
           // The receiver still belongs to its view's old document until it requests again.
           this.#sentBoundaries = ''
           this.#boundarySequence = 0
+          this.#codeDelivered = false
           this.#boundaryFrom = null
           this.#boundaryTo = null
         }
@@ -167,6 +219,26 @@ export class DocumentWorkerClient {
       }),
     ]
   }
+  /** Code coverage shares the boundary stream's version checks and backpressure. */
+  subscribeCodeExtents(receive: (page: CodeExtentPage) => void): () => void {
+    if (this.#disposed) return () => {}
+    this.#codeReceivers.add(receive)
+    const request = this.#boundaries
+    const replay = this.#codeDelivered || this.#codeVersion >= 0
+    this.#codeVersion = -1
+    if (
+      request &&
+      request.version === this.#session.snapshot().version &&
+      (replay || request.from !== 0 || request.baseVersion !== undefined)
+    ) {
+      // A late listener needs the retained prefix too; replay metadata, never source.
+      this.#boundaries = null
+      this.boundaries(request.config, request.receive, request.declined)
+    }
+    return () => {
+      this.#codeReceivers.delete(receive)
+    }
+  }
   boundaries(
     config: BoundaryConfig,
     receive: BoundaryReceive,
@@ -199,15 +271,18 @@ export class DocumentWorkerClient {
     }
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#codeDelivered = false
     this.#boundaryFrom = null
     this.#boundaryTo = null
     if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
     this.#flushBoundaries()
   }
   releaseBoundaries(retain = false) {
+    if (!retain) this.#codeVersion = -1
     this.#boundaries = null
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#codeDelivered = false
     this.#boundaryFrom = null
     this.#boundaryTo = null
     this.#post({
@@ -234,6 +309,7 @@ export class DocumentWorkerClient {
       id: request.id,
       version: request.version,
       config: request.config,
+      codeVersion: this.#codeVersion < 0 ? null : this.#codeVersion,
       ...(request.from ? { from: request.from } : {}),
       ...(request.baseVersion === undefined
         ? {}
@@ -474,6 +550,8 @@ export class DocumentWorkerClient {
         reply.sequence !== this.#boundarySequence++ ||
         !Array.isArray(reply.records) ||
         reply.records.length > 128 ||
+        (reply.code !== undefined &&
+          !validCodeCoverage(reply.code, reply.length, reply.records.length)) ||
         reply.length !== this.#session.snapshot().normalizedLength
       ) {
         request.declined('mismatch')
@@ -482,6 +560,22 @@ export class DocumentWorkerClient {
       }
       this.#boundaryFrom = from
       this.#boundaryTo = to
+      if (reply.code) {
+        this.#codeDelivered = true
+        for (const receive of [...this.#codeReceivers]) {
+          if (
+            this.#boundaries !== request ||
+            reply.version !== this.#session.snapshot().version
+          )
+            break
+          receive({ version: reply.version, ...reply.code })
+        }
+      }
+      if (
+        this.#boundaries !== request ||
+        reply.version !== this.#session.snapshot().version
+      )
+        return
       let acknowledged = false
       request.receive(reply, () => {
         if (
@@ -492,6 +586,7 @@ export class DocumentWorkerClient {
         )
           return
         acknowledged = true
+        if (reply.done) this.#codeVersion = reply.version
         this.#post({
           type: 'boundary-ack',
           epoch: this.#epoch,
@@ -688,6 +783,7 @@ export class DocumentWorkerClient {
     this.#watch()
   }
   #stop() {
+    this.#codeVersion = -1
     this.#highlightRequest = null
     clearTimeout(this.#findTimer)
     this.#findTimer = undefined
@@ -713,6 +809,7 @@ export class DocumentWorkerClient {
     this.#sentRequest = 0
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#codeDelivered = false
     this.#boundaryFrom = null
     this.#boundaryTo = null
   }
@@ -818,5 +915,6 @@ export class DocumentWorkerClient {
     this.#latest = null
     this.#metadata = null
     this.#boundaries = null
+    this.#codeReceivers.clear()
   }
 }

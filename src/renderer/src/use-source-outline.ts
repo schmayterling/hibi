@@ -122,9 +122,10 @@ export function useSourceOutline({
     outline: SourceOutline
     headings: readonly OutlineHeading[]
   } | null>(null)
-  const latest = useRef({ tabId, currentView, revision })
-  latest.current = { tabId, currentView, revision }
+  const latest = useRef({ tabId, currentView })
+  latest.current = { tabId, currentView }
   const reportActive = useRef(() => {})
+  // biome-ignore lint/correctness/useExhaustiveDependencies: document revisions restart outline work after reloads.
   useEffect(() => {
     if (!active) return
     const session = documentRuntime.session(tabId)
@@ -236,7 +237,7 @@ export function useSourceOutline({
       }
       const read = () => {
         timer = idle = null
-        if (disposed || latest.current.revision !== revision) return
+        if (disposed) return
         work ??= model.read()
         const started = performance.now(),
           version = session.snapshot().version

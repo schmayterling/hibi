@@ -86,6 +86,32 @@ test('outline label workers load no tiptap or prosemirror modules', async () => 
   )
 })
 
+test('outline label workers reject injected rich runtime imports', async () => {
+  for (const load of [
+    {
+      file: 'src/renderer/src/source-outline-label.ts',
+      code: "void import('./markdown-semantics')",
+    },
+    {
+      file: 'src/renderer/src/source-outline-label.worker.ts',
+      code: "void import('../../addons/markdown/obsidian')",
+    },
+    {
+      file: 'src/renderer/src/markdown-entities.ts',
+      code: "export { Extension } from '@tiptap/core'",
+    },
+  ])
+    assert.notDeepEqual(
+      await legacyModules(
+        true,
+        load,
+        'src/renderer/src/source-outline-label.worker.ts',
+      ),
+      [],
+      load.code,
+    )
+})
+
 test('codemirror editors reject injected rich runtime imports', async () => {
   for (const load of [
     {

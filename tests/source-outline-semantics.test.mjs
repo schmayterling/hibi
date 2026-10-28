@@ -228,6 +228,47 @@ test('source outline labels preserve disabled inline syntax exactly like native 
   }
 })
 
+for (const [disabled, text, label] of [
+  ['core.italic', 'H~*i*~O', 'HiO'],
+  ['core.italic', '~x *y* z~', 'x y z'],
+  ['core.bold', 'H~**b *i***~O', 'Hb iO'],
+  ['core.links', 'H~[**b**](/target)~O', 'HbO'],
+  ['core.links', 'H~<https://e.test/a&amp;b>~O', 'Hhttps://e.test/a&bO'],
+  ['core.images', 'H~![alt](image.png)~O', 'HaltO'],
+  ['core.escapes', 'H~\\*~O', 'H*O'],
+  ['core.inline-code', 'H~`c`~O', 'HO'],
+  ['math.inline', 'H~$x$~O', 'HO'],
+])
+  test(`source outline subscript matches frozen native labels with ${disabled} disabled: ${text}`, () => {
+    const activeFlavors = [...flavors, mathFlavor]
+    const reader = createOutlineLabelReader({
+      syntax: { gfm: true, alerts: true, textExtras: true, math: true },
+      flavors: activeFlavors.map((flavor) => flavor.id),
+      disabled: [disabled],
+    })
+    try {
+      for (const padding of ['', 'heading '.repeat(90)]) {
+        const source = `# ${padding}${text}`
+        const expected = [{ label: padding + label, level: 1 }]
+        assert.deepEqual(nativeHeadings(source, activeFlavors), expected)
+        for (const deferLabels of [false, true]) {
+          const { model } = setup(source, { math: true, deferLabels })
+          try {
+            const actual = finish(model.read(), referenceOracle(source), reader)
+            assert.deepEqual(
+              actual.map(({ label, level }) => ({ label, level })),
+              expected,
+            )
+          } finally {
+            model.dispose()
+          }
+        }
+      }
+    } finally {
+      markdownSyntax.reset()
+    }
+  })
+
 test('source outline refuses source changes while a reference response is pending', () => {
   const source = '# [visible][ref]\n\n[ref]: /target'
   const { store, model } = setup(source)

@@ -10,7 +10,6 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
   const version = markdownSyntax.version()
   const github = flavors.includes('markdown.github')
   const extras = flavors.includes('text-extras.text-extras')
-  const obsidian = flavors.includes('markdown.obsidian')
   return (tokens: readonly Token[], level: number): string | null => {
     if (
       version !== markdownSyntax.version() ||
@@ -24,6 +23,7 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
         start: 0,
         marked: false,
         html: false,
+        preserveDisabled: true,
       },
     ]
     for (;;) {
@@ -39,20 +39,28 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
         continue
       }
       const token = step.value
-      if (markdownSyntax.disabledFeature(token)) {
+      if (frame.preserveDisabled && markdownSyntax.disabledFeature(token)) {
         text.push(token.raw)
         continue
       }
-      if (/^(?:html|rawHtmlInline|rawHtmlBlock)$/.test(token.type)) {
+      if (token.type === 'html' || token.type === 'rawHtmlInline') {
         frame.html = true
         continue
       }
       if (
-        /^(?:image|inlineMath|br)$/.test(token.type) ||
-        (obsidian && token.type === 'obsidianEmbed')
+        (token.type === 'image' && markdownSyntax.enabled('core.images')) ||
+        token.type === 'inlineMath' ||
+        token.type === 'br' ||
+        (token.type === 'codespan' &&
+          !markdownSyntax.enabled('core.inline-code'))
       )
         continue
-      if (token.type === 'link' && 'autolink' in token && token.autolink) {
+      if (
+        token.type === 'link' &&
+        'autolink' in token &&
+        token.autolink &&
+        markdownSyntax.enabled('core.links')
+      ) {
         const value = String(token.text ?? '')
         text.push(
           token.raw.startsWith('<') ? value : decodeMarkdownEntities(value),
@@ -66,19 +74,18 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
           marked:
             /^(?:em|strong|link)$/.test(token.type) ||
             (github && token.type === 'del') ||
-            (extras && token.type === 'subscript') ||
-            (obsidian &&
-              /^(?:obsidianHighlight|obsidianWikiLink)$/.test(token.type)),
+            (extras && token.type === 'subscript'),
           html: false,
+          // Native custom tokens hide children from disabled-syntax preservation.
+          preserveDisabled:
+            frame.preserveDisabled && !(extras && token.type === 'subscript'),
         })
-      } else if (token.type === 'text' || token.type === 'hibiText') {
+      } else if (token.type === 'text') {
         const value = (token.raw ?? token.text).replace(/[ \t]*\n[ \t]*/g, ' ')
         text.push(token.escaped ? value : decodeMarkdownEntities(value))
       } else if (
         'text' in token &&
-        /^(?:escape|codespan|hibiLiteralInline|hibiLiteralBlock)$/.test(
-          token.type,
-        )
+        (token.type === 'escape' || token.type === 'codespan')
       )
         text.push(String(token.text ?? ''))
     }

@@ -30,7 +30,7 @@ import {
 } from '../../shared/source-projection.ts'
 import type { SourceSelection } from '../../shared/source-selection.ts'
 
-const sourceOperationEcho = Annotation.define<string>()
+export const sourceOperationEcho = Annotation.define<string>()
 
 export type SourceEditorTextTask = Readonly<{
   sourceUnits: number

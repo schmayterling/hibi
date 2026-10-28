@@ -94,38 +94,38 @@ const cases = [
 ]
 
 const formattedGaps = {
-  '0/lazy definition/0':
-    'formatted gap corpus-001: lazy reference definitions must render only native paragraph text',
-  '0/references/0':
-    'formatted gap corpus-003: reference definitions must hide while resolved labels remain visible',
-  '0/forward references/0':
-    'formatted gap corpus-004: forward definitions must resolve formatted labels without showing definitions',
-  '0/reference edits/0':
-    'formatted gap corpus-005: formatted references must render labels before a destination edit',
-  '0/reference edits/1':
-    'formatted gap corpus-006: formatted references must retain labels after a destination edit',
-  '0/multiline title/0':
-    'formatted gap corpus-008: multiline reference titles must hide and avoid false headings',
-  '0/quoted title/0':
-    'formatted gap corpus-009: quoted reference titles must hide definitions and resolve labels',
-  '1/lazy definition/0':
-    'formatted gap corpus-010: disabled syntax must preserve native lazy reference rendering',
   '1/gfm/0':
     'formatted gap corpus-011: disabled heading syntax must preserve bold formatting inside alerts',
+  '0/multiline title/0':
+    'formatted gap corpus-008: a quoted title with a blank line must not define a reference',
+  '0/multiline title/0/counts':
+    'formatted gap corpus-020: counts must include a definition whose quoted title holds a blank line',
   '1/extras/0':
     'formatted gap corpus-012: disabled heading syntax must preserve bold formatting inside subtext',
-  '1/references/0':
-    'formatted gap corpus-013: disabled heading syntax must still hide reference definitions',
-  '1/forward references/0':
-    'formatted gap corpus-014: disabled heading syntax must hide forward reference definitions',
-  '1/reference edits/0':
-    'formatted gap corpus-015: disabled heading syntax must hide definitions before reference edits',
-  '1/reference edits/1':
-    'formatted gap corpus-016: disabled heading syntax must hide definitions after reference edits',
   '1/multiline title/0':
-    'formatted gap corpus-018: disabled heading syntax must hide multiline reference titles',
-  '1/quoted title/0':
-    'formatted gap corpus-019: disabled heading syntax must hide quoted reference titles',
+    'formatted gap corpus-018: disabled heading syntax must keep a blank-line title definition literal',
+  '1/multiline title/0/counts':
+    'formatted gap corpus-021: disabled heading syntax counts must include a blank-line title definition',
+}
+
+// The codemirror view's outcomes where the native schema's differ: the
+// tiptap control keeps the frozen native outcomes below. A reference in a
+// subtext line resolves against later definitions too, an accepted
+// difference: the native schema reads subtext before them. A quoted title
+// cannot hold a blank line (CommonMark example 197), so there is no
+// definition: its text and heading show and both references stay literal.
+const formattedDifferences = {
+  '0/forward references/0': { text: 'ref ref' },
+  '1/forward references/0': { text: 'ref # [ref]' },
+  '0/multiline title/0': {
+    text: '[ref]: /target "first title last" [ref]',
+    headings: ['title'],
+    counts: { words: 6, characters: 39 },
+  },
+  '1/multiline title/0': {
+    text: '[ref]: /target "first # title last" [ref]',
+    counts: { words: 6, characters: 41 },
+  },
 }
 
 // frozen native outcomes; the tiptap control verifies every fixture.
@@ -775,8 +775,11 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
             fixture.source.slice(fixture.edit.to),
         )
       for (const [pass, source] of sources.entries()) {
-        const expected =
-          formattedOutcomes[`${configuration}/${fixture.name}/${pass}`]
+        const key = `${configuration}/${fixture.name}/${pass}`
+        const expected = formattedOutcomes[key] && {
+          ...formattedOutcomes[key],
+          ...formattedDifferences[key],
+        }
         assert.ok(
           expected,
           `Missing semantic outcome for ${fixture.name}, pass ${pass}`,
@@ -915,27 +918,39 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
                   .getByRole('heading', { name: 'after', exact: true })
                   .waitFor()
             }
+            const counts = () =>
+              assert.equal(
+                actual.counts,
+                formattedCount,
+                'formatted counts exclude Markdown syntax, as in the native Tiptap oracle',
+              )
+            const countGap = formattedGaps[`${key}/counts`]
+            if (countGap) await t.test('counts', { todo: countGap }, counts)
+            else counts()
             await rich.evaluate((element) => element.blur())
-            await page.evaluate(() => new Promise(requestAnimationFrame))
-            const visibleText = await rich.evaluate((element) => {
+            /** The view's visible text, or whether it is `expected`. */
+            const visible = (expected) => {
+              const element = document.querySelector('.rich-pane .cm-content')
               let text = element.innerText
               for (const label of element.querySelectorAll(
                 '.cm-placeholder, .hibi-lp-alert-title',
               ))
                 text = text.replace(label.innerText, '')
-              return text
+              text = text.replace(/\s+/g, ' ').trim()
+              return expected === undefined ? text : text === expected
+            }
+            // Blur, focus handling and reference answers settle over several
+            // frames: wait for the expected text before reading it.
+            const expectedText = formattedText.replace(/\s+/g, ' ').trim()
+            await page.waitForFunction(visible, expectedText).catch((error) => {
+              if (error.name !== 'TimeoutError') throw error
             })
             assert.equal(
-              visibleText.replace(/\s+/g, ' ').trim(),
-              formattedText.replace(/\s+/g, ' ').trim(),
+              await page.evaluate(visible),
+              expectedText,
               'visible formatted text matches the native text oracle',
             )
             assert.deepEqual(actual.headings, expectedHeadings)
-            assert.equal(
-              actual.counts,
-              formattedCount,
-              'formatted counts exclude Markdown syntax, as in the native Tiptap oracle',
-            )
           },
         )
       }

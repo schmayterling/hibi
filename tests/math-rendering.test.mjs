@@ -510,6 +510,9 @@ test('codemirror: formulas accept input before completion, keep the reading posi
   await clickMenu(app, 'Save')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), edited)
+  // The main process reports the note clean before the window's save command
+  // ends, and the window ignores file commands until it does.
+  await page.locator('.app[aria-busy="false"]').waitFor()
 
   let tall = ''
   for (let index = 0; index < 80; index++)
@@ -620,17 +623,9 @@ test('codemirror: formulas accept input before completion, keep the reading posi
     settled.height > settled.opening.height + 100,
     JSON.stringify(settled),
   )
-  await t.test(
-    'tall formula rendering keeps the reading position',
-    {
-      todo: 'formatted gap math-001: tall formula rendering must preserve the reading position',
-    },
-    () => {
-      assert.ok(
-        Math.abs(settled.top - settled.opening.top) < 1,
-        JSON.stringify(settled),
-      )
-    },
+  assert.ok(
+    Math.abs(settled.top - settled.opening.top) < 1,
+    JSON.stringify(settled),
   )
   await rich.evaluate((element) => {
     const view = element.cmTile.root.view

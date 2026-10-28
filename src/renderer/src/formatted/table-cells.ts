@@ -12,6 +12,7 @@ import {
 import {
   Decoration,
   type DecorationSet,
+  Direction,
   EditorView,
   keymap,
   runScopeHandlers,
@@ -28,7 +29,9 @@ import {
 import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
+  blockMarkedNodes,
   claimFormattedReplacement,
+  delimiterRuns,
   type FormattedDecorations,
   type FormattedRenderContext,
   followsLink,
@@ -40,6 +43,7 @@ import {
   formattedRefresh,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
+import { drawReference, referenceLink } from '../formatted-references.ts'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -98,6 +102,8 @@ type CellDecorations = {
   hide(from: number, to: number, widget: WidgetType | null): void
   /** Syntax shown as an editable marker. */
   marker(from: number, to: number): void
+  /** Hidden syntax delimiters, which the caret crosses together where they touch. */
+  delimiter?(from: number, to: number): void
   widget(at: number, widget: WidgetType, side: number): void
 }
 
@@ -134,6 +140,12 @@ function decorateCell(
   }
   const revealedAt = (start: number, end: number) =>
     touched(local(start), local(end))
+  // A cell is one block: its formatting shows all its delimiters while the
+  // selection is in the cell.
+  const revealedFor = (node: SyntaxNodeRef) =>
+    blockMarkedNodes.has(node.name)
+      ? touched(0, text.length)
+      : revealedAt(node.from, node.to)
   // Line breaks in cells are written as <br>, as the rich editor saved them.
   const lineBreakAt = (node: SyntaxNodeRef) =>
     node.name === 'HTMLTag' &&
@@ -154,7 +166,10 @@ function decorateCell(
         to = local(end)
       if (to <= from) return
       if (revealed) out.marker(from, to)
-      else out.hide(from, to, null)
+      else {
+        out.hide(from, to, null)
+        out.delimiter?.(from, to)
+      }
     },
     line() {},
     widget(at, widget, side = 1) {
@@ -173,7 +188,7 @@ function decorateCell(
   cursor.iterate((node) => {
     // Syntax whose setting is off shows as written, its children too.
     if (literal.has(node.name)) return false
-    const revealed = revealedAt(node.from, node.to)
+    const revealed = revealedFor(node)
     const nodeOut = sink(revealed)
     let skip = false
     // A cell draws its line breaks itself, so contributed HTML renderers
@@ -206,10 +221,7 @@ function decorateCell(
         return
       case 'EmphasisMark': {
         const parent = node.node.parent
-        sink(!!parent && revealedAt(parent.from, parent.to)).syntax(
-          node.from,
-          node.to,
-        )
+        sink(!!parent && revealedFor(parent)).syntax(node.from, node.to)
         return
       }
       case 'InlineCode': {
@@ -232,17 +244,24 @@ function decorateCell(
         const close = linkMarks.find(
           (mark) => state.sliceDoc(mark.from, mark.to) === ']',
         )
-        // Reference links need the note's definitions, so they stay literal.
-        if (
-          !open ||
-          !close ||
-          state.sliceDoc(open.from, open.from + 1) !== '[' ||
-          state.sliceDoc(close.to, close.to + 1) !== '('
-        )
+        if (!open || !close || state.sliceDoc(open.from, open.from + 1) !== '[')
           return false
+        // A reference link renders when the note defines its label.
+        const reference =
+          state.sliceDoc(close.to, close.to + 1) !== '(' &&
+          referenceLink(state.doc, node.node)
+        if (reference === null) return false
+        const answer = reference
+          ? drawReference(state, reference.label, node.from)
+          : null
+        if (reference && !answer) return
         out.syntax(node.from, open.to)
         out.syntax(close.from, node.to)
-        out.link(open.to, close.from)
+        out.link(
+          open.to,
+          close.from,
+          answer?.title ? { title: answer.title } : undefined,
+        )
         return
       }
       case 'Autolink': {
@@ -350,7 +369,8 @@ function editorDecorations(main: EditorState, view: EditorView, from?: number) {
       ? view.state.selection.ranges
       : []
   const decorations: Range<Decoration>[] = [],
-    atomic: Range<Decoration>[] = []
+    atomic: Range<Decoration>[] = [],
+    delimiters: { from: number; to: number }[] = []
   const hide = (from: number, to: number, widget: WidgetType | null) => {
     if (to <= from) return
     const range = Decoration.replace(widget ? { widget } : {}).range(from, to)
@@ -380,6 +400,7 @@ function editorDecorations(main: EditorState, view: EditorView, from?: number) {
           ),
         widget: (at, widget, side) =>
           decorations.push(Decoration.widget({ widget, side }).range(at)),
+        delimiter: (from, to) => delimiters.push({ from, to }),
       },
       (from, to) =>
         reveal.some((range) => range.from <= to && range.to >= from),
@@ -388,6 +409,11 @@ function editorDecorations(main: EditorState, view: EditorView, from?: number) {
   return {
     decorations: Decoration.set(decorations, true),
     atomic: Decoration.set(atomic, true),
+    runs: Decoration.set(
+      delimiterRuns(delimiters).map(({ from, to }) =>
+        Decoration.replace({}).range(from, to),
+      ),
+    ),
   }
 }
 
@@ -448,9 +474,13 @@ export class CellEditor {
       class {
         decorations: DecorationSet
         atomic: DecorationSet
+        runs: DecorationSet
         constructor(view: EditorView) {
-          ;({ decorations: this.decorations, atomic: this.atomic } =
-            editorDecorations(host.main.state, view, host.span()?.from))
+          ;({
+            decorations: this.decorations,
+            atomic: this.atomic,
+            runs: this.runs,
+          } = editorDecorations(host.main.state, view, host.span()?.from))
         }
         update(update: ViewUpdate) {
           // Local input reaches the parent after view.update. Keep mapped
@@ -458,6 +488,7 @@ export class CellEditor {
           if (update.docChanged) {
             this.decorations = this.decorations.map(update.changes)
             this.atomic = this.atomic.map(update.changes)
+            this.runs = this.runs.map(update.changes)
           } else if (
             update.selectionSet ||
             update.focusChanged ||
@@ -465,12 +496,15 @@ export class CellEditor {
               transaction.effects.some((effect) => effect.is(formattedRefresh)),
             )
           )
-            ({ decorations: this.decorations, atomic: this.atomic } =
-              editorDecorations(
-                host.main.state,
-                update.view,
-                host.span()?.from,
-              ))
+            ({
+              decorations: this.decorations,
+              atomic: this.atomic,
+              runs: this.runs,
+            } = editorDecorations(
+              host.main.state,
+              update.view,
+              host.span()?.from,
+            ))
         }
       },
       {
@@ -489,6 +523,47 @@ export class CellEditor {
       return !at || !edge || Math.abs(at.top - edge.top) < 2
     }
     const content = (view: EditorView) => padding(view.state.doc.toString())
+    /**
+     * Arrows move one visible step, as in the formatted view: touching hidden
+     * delimiters are crossed together, and a step that crossed only them goes
+     * on to the next character.
+     */
+    const overRun = (view: EditorView, right: boolean) => {
+      const range = view.state.selection.main
+      const runs = view.plugin(preview)?.runs
+      if (!runs || !range.empty || view.state.selection.ranges.length > 1)
+        return false
+      const forward =
+        right === (view.textDirectionAt(range.head) === Direction.LTR)
+      const step = (from: number) => {
+        let at = view.moveByChar(EditorSelection.cursor(from), forward).head
+        runs.between(at, at, (a, b) => {
+          if (a < at && at < b) at = forward ? b : a
+        })
+        return at
+      }
+      const first = view.moveByChar(range, forward).head
+      let target = step(range.head)
+      const low = Math.min(range.head, target),
+        high = Math.max(range.head, target)
+      let hidden = false
+      runs.between(low, high, (a, b) => {
+        if (a <= low && b >= high && low < high) hidden = true
+      })
+      // Into or out of the ends of the cell's text, formatting is left or
+      // entered without moving, as at the end of the note.
+      const { start, end } = content(view)
+      const ends = [start, end]
+      if (hidden && !ends.includes(target) && !ends.includes(range.head))
+        target = step(target)
+      if (target === first) return false
+      view.dispatch({
+        selection: { anchor: target },
+        scrollIntoView: true,
+        userEvent: 'select',
+      })
+      return true
+    }
     const move = (to: CellMove) => () => host.move(to)
     /** A line break in the cell, which Enter, Shift-Enter and Mod-Enter all make in the rich editor's cells. */
     const lineBreak = (view: EditorView) => {
@@ -597,16 +672,18 @@ export class CellEditor {
               {
                 key: 'ArrowLeft',
                 run: (view) =>
-                  view.state.selection.main.empty &&
-                  view.state.selection.main.head <= content(view).start &&
-                  host.move('left'),
+                  (view.state.selection.main.empty &&
+                    view.state.selection.main.head <= content(view).start &&
+                    host.move('left')) ||
+                  overRun(view, false),
               },
               {
                 key: 'ArrowRight',
                 run: (view) =>
-                  view.state.selection.main.empty &&
-                  view.state.selection.main.head >= content(view).end &&
-                  host.move('right'),
+                  (view.state.selection.main.empty &&
+                    view.state.selection.main.head >= content(view).end &&
+                    host.move('right')) ||
+                  overRun(view, true),
               },
             ]),
           ),

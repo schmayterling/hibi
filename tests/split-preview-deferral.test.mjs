@@ -861,12 +861,12 @@ async function cmSplit(t, original) {
       .markdown
     const sourceMode = await page.locator('.editor-panes.mode-markdown').count()
     const editors = sourceMode ? [] : [rich]
-    if (
-      original.length > 256 * 1024 &&
-      (await page.locator('.editor-panes.mode-normal').count())
-    ) {
-      // Opening size stays cached while this fixture edits one revision.
-      // Huge-note growth needs a separate release check.
+    const released =
+      (original.length > 256 * 1024 || canonical.length > 256 * 1024) &&
+      (await page.locator('.editor-panes.mode-normal').count()) > 0
+    if (released) {
+      // A note that opened or has grown past the large size releases its
+      // hidden source view; these fixtures only grow.
       await source.waitFor({ state: 'detached' })
       assert.equal(await source.count(), 0)
     } else {
@@ -884,7 +884,8 @@ async function cmSplit(t, original) {
       const tail = canonical.match(/^omega[^\n]*$/m)?.[0]
       if (tail) assert.ok((await rich.innerText()).includes(tail), tail)
       if (
-        await source.evaluate((element) => document.activeElement === element)
+        !released &&
+        (await source.evaluate((element) => document.activeElement === element))
       ) {
         if (canonical.includes('$y^2$'))
           assert.ok(
@@ -994,6 +995,165 @@ test('codemirror: math split edits render current source, save exactly and share
   await normal()
   assert.equal((await selection()).text, 'et')
   assert.equal(await rich.getAttribute('contenteditable'), 'true')
+})
+
+test('codemirror: each split source key lays out only its own formatted line, and a hidden preview catches up once', {
+  timeout: 90000,
+}, async (t) => {
+  const paragraphs = Array.from(
+    { length: 300 },
+    (_, index) => `paragraph ${index} with **bold** text`,
+  )
+  const original = `# notes\n\nalpha $x^2$ beta\n\n${paragraphs.join('\n\n')}\n\nthe end`
+  const { app, page, rich, source, exact, normal } = await cmSplit(t, original)
+  // The formatted view's own work: document updates it applies and lines it lays out.
+  await rich.evaluate((element) => {
+    const { codeMirror } = window.deferralFixture.sdk
+    const work = { updates: 0, lines: 0 }
+    window.splitWork = work
+    element.cmTile.root.view.dispatch({
+      effects: codeMirror.state.StateEffect.appendConfig.of(
+        codeMirror.view.ViewPlugin.define(() => ({
+          update(update) {
+            if (update.docChanged) work.updates++
+          },
+        })),
+      ),
+    })
+    new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          if (node instanceof Element && node.classList.contains('cm-line'))
+            work.lines++
+    }).observe(element, { childList: true })
+  })
+  const work = () => page.evaluate(() => ({ ...window.splitWork }))
+  // Both panes show the same text, and any layout it causes is drawn.
+  const settled = async () => {
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+          .doc.length ===
+        document.querySelector('.source-pane .cm-content').cmTile.root.view
+          .state.doc.length,
+    )
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+  }
+  // Each key is its own renderer task, like native typing at the end of line 1.
+  const key = (character) =>
+    source.evaluate((element, character) => {
+      const view = element.cmTile.root.view
+      if (!view.hasFocus) throw new Error('source must own input')
+      const at = view.state.doc.line(1).to
+      view.dispatch({
+        changes: { from: at, insert: character },
+        selection: { anchor: at + character.length },
+        userEvent: 'input.type',
+      })
+    }, character)
+  const focusSource = () =>
+    source.evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({ selection: { anchor: view.state.doc.line(1).to } })
+      view.focus()
+    })
+  await focusSource()
+  await settled()
+  const visibleLines = await rich.evaluate(
+    (element) => element.querySelectorAll(':scope > .cm-line').length,
+  )
+  let before = await work()
+  const keys = []
+  for (const character of ' and $y^2$') {
+    await key(character)
+    await settled()
+    const after = await work()
+    keys.push({
+      updates: after.updates - before.updates,
+      lines: after.lines - before.lines,
+    })
+    before = after
+  }
+  t.diagnostic(JSON.stringify({ visibleLines, keys }))
+  assert.equal(await exact(), original.replace('\n', ' and $y^2$\n'))
+  // Its own line, and at most one line entering at a viewport edge as heights settle.
+  const bound = 2
+  await t.test(
+    'each source key is one formatted update that lays out only its own line',
+    () => {
+      assert.deepEqual(
+        keys.map(({ updates }) => updates),
+        keys.map(() => 1),
+      )
+      assert.ok(
+        keys.every(({ lines }) => lines <= bound),
+        JSON.stringify(keys),
+      )
+    },
+  )
+  await t.test('a pause leaves no formatted work waiting', async () => {
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestIdleCallback(() => resolve(), { timeout: 2000 }),
+        ),
+    )
+    await settled()
+    const paused = await work()
+    assert.equal(paused.updates, before.updates)
+    assert.ok(paused.lines - before.lines <= bound, JSON.stringify(paused))
+  })
+  // Control: a change across the visible text lays out every visible line again.
+  const whole = await work()
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      changes: {
+        from: 0,
+        to: view.state.doc.length,
+        insert: `!${view.state.doc}`,
+      },
+      userEvent: 'input.type',
+    })
+  })
+  await settled()
+  const redrawn = (await work()).lines - whole.lines
+  assert.ok(
+    visibleLines >= 10 && redrawn >= 10,
+    JSON.stringify({ visibleLines, redrawn }),
+  )
+
+  // While the preview is hidden, source keys leave it alone; showing it
+  // catches up in one update.
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await focusSource()
+  const hidden = await work()
+  for (const character of ' hidden') await key(character)
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  await t.test('a hidden preview does no work per source key', async () => {
+    assert.deepEqual(await work(), hidden)
+  })
+  await normal()
+  await settled()
+  await t.test('showing the preview catches up in one update', async () => {
+    assert.equal((await work()).updates - hidden.updates, 1)
+  })
+  assert.equal(
+    await exact(),
+    `!${original.replace('\n', ' and $y^2$ hidden\n')}`,
+  )
 })
 
 test('codemirror: select-all and boundary image ranges survive split edits and mode switches', {

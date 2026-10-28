@@ -98,6 +98,14 @@ export function largeOpening(
   return !!document && runtime.openingLength(document) > 256 * 1024
 }
 
+/** Notes over 262,144 units now, read from the live source length alone. */
+export function largeSource(
+  runtime: Pick<DocumentRuntime, 'session'>,
+  tabId: string,
+) {
+  return (runtime.session(tabId)?.snapshot().utf16Length ?? 0) > 256 * 1024
+}
+
 /**
  * ponytail: the ProseMirror view opens large notes in source view. The
  * CodeMirror formatted view parses them in bounded steps, so it opens them.

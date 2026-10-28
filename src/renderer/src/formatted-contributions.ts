@@ -46,6 +46,20 @@ export function claimFormattedReplacement(
   return true
 }
 
+/**
+ * Hidden delimiters that touch, such as `***` closing strong emphasis inside
+ * emphasis, as one run each: the caret crosses a run in one step.
+ */
+export function delimiterRuns(ranges: readonly { from: number; to: number }[]) {
+  const runs: { from: number; to: number }[] = []
+  for (const { from, to } of [...ranges].sort((a, b) => a.from - b.from)) {
+    const last = runs.at(-1)
+    if (last && from <= last.to) last.to = Math.max(last.to, to)
+    else runs.push({ from, to })
+  }
+  return runs
+}
+
 export type FormattedContribution = {
   id: string
   /**
@@ -78,6 +92,9 @@ export type FormattedContribution = {
 
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
+
+/** Renderer identities paired with the shared worker text rules. */
+export const formattedTextFeatures = Facet.define<string>()
 
 /** The view's block grammar without inline scans, for validating source transforms. */
 export const formattedBlockParser = Facet.define<
@@ -229,6 +246,17 @@ export const formattedFollowLink = Facet.define<
   ((view: EditorView, pos: number, wikiTarget?: string) => boolean) | null
 >({ combine: (values) => values.at(-1) ?? null })
 
+/**
+ * Formatting whose delimiters show for the whole focused block, as the rich
+ * editor's hints do, rather than only where the selection is.
+ */
+export const blockMarkedNodes: ReadonlySet<string> = new Set([
+  'Emphasis',
+  'StrongEmphasis',
+  'InlineCode',
+  'Strikethrough',
+])
+
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,
@@ -352,6 +380,7 @@ export function contributionExtension(
   ) as MarkdownConfig[]
   if (contribution.inlineStops) for (const config of configs) stops.add(config)
   return [
+    formattedTextFeatures.of(contribution.id),
     configs.map((config) => formattedMarkdown.of(config)),
     (contribution.views ?? []).flatMap((view) =>
       !view.feature || markdownSyntax.enabled(view.feature)

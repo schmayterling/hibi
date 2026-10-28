@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import unit from 'node:test'
@@ -15,10 +15,17 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  replaceRichText,
+  replaceSourceText,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
+
+const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
 unit(
   'frontmatter preserves raw metadata, spacing, and delimiter boundaries',
@@ -406,6 +413,254 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
   await properties.waitFor()
   assert.equal(await read(), '---\n{}\n---\n\n')
 })
+
+unit(
+  'the formatted view shows and edits the properties of a note opened over 256 KiB',
+  {
+    timeout: 60000,
+  },
+  async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-large-properties-'))
+    const fixture = join(folder, 'large.md')
+    const original = `\uFEFF---\r\ntitle: original\r\npublic: false\r\n...\r\n\r\n${'A paragraph of the large note.\r\n\r\n'.repeat(9300)}`
+    assert.ok(original.length > 300 * 1024)
+    await writeFile(fixture, original)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.evaluate(({ dialog }, fixture) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [fixture],
+      })
+    }, fixture)
+    const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, 'codemirror')
+    await clickMenu(app, 'Open…')
+    await waitForDocumentEditor(app, page)
+    const properties = page.getByRole('region', {
+      name: /frontmatter properties/i,
+    })
+    const title = properties.getByRole('textbox', {
+      name: /^title$/i,
+      exact: true,
+    })
+    assert.equal(await title.inputValue(), 'original')
+    assert.equal(
+      await page.locator('.rich-pane .cm-line', { hasText: 'title:' }).count(),
+      0,
+    )
+    const source = (expected) =>
+      waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        expected,
+      )
+    await title.fill('changed')
+    const titled = original.replace('title: original', 'title: changed')
+    await source(titled)
+    const visible = properties.getByRole('checkbox', {
+      name: /^public$/i,
+      exact: true,
+    })
+    await visible.check()
+    await source(titled.replace('public: false', 'public: true'))
+    // Undo takes back the last properties edit alone.
+    await page.locator('.rich-pane .cm-content').focus()
+    await pressShortcut(app, `${mod}+z`)
+    await source(titled)
+    await waitForAsync(
+      page,
+      () =>
+        document.querySelector('.frontmatter input[type="checkbox"]')
+          ?.checked === false,
+    )
+    await clickMenu(app, 'Save')
+    await page
+      .getByRole('status', { name: /unsaved changes/i })
+      .waitFor({ state: 'hidden' })
+    assert.equal(await readFile(fixture, 'utf8'), titled)
+    // Frontmatter edited in the source pane reaches the properties.
+    await page
+      .getByRole('button', { name: /^side-by-side$/i, exact: true })
+      .click()
+    await page.locator('.source-pane .cm-content').evaluate((element) => {
+      const view = element.cmTile.root.view
+      const from = view.state.sliceDoc(0, 100).indexOf('changed')
+      view.dispatch({
+        changes: { from, to: from + 'changed'.length, insert: 'from source' },
+      })
+    })
+    await source(titled.replace('title: changed', 'title: from source'))
+    await waitForAsync(page, () =>
+      [...document.querySelectorAll('.frontmatter textarea')].some(
+        (field) => field.value === 'from source',
+      ),
+    )
+  },
+)
+
+unit(
+  'large-note properties pass a verbatim projection, matched or not',
+  {
+    timeout: 90000,
+  },
+  async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-large-projection-'))
+    const profile = join(folder, 'profile')
+    const addon = join(profile, 'installed-addons', 'sources')
+    await mkdir(addon, { recursive: true })
+    await writeFile(
+      join(addon, 'hibi-addon.json'),
+      JSON.stringify({
+        id: 'sources',
+        name: 'Sources',
+        description: 'Projection fixture',
+        kind: 'extension',
+        version: '1.0.0',
+        apiVersion: 2,
+        capabilities: [],
+        authors: [{ displayName: 'Test' }],
+        entry: 'index.js',
+        syntax: [
+          {
+            id: 'header',
+            kind: 'projection',
+            markers: ['[@sources:'],
+            preservation: {
+              level: 'verbatim',
+              version: '1',
+              fallback: 'source',
+            },
+          },
+        ],
+      }),
+    )
+    await writeFile(
+      join(addon, 'index.js'),
+      `export default () => ({ start(context) { context.editor.registerMarkdown({ id: 'header', preservation: { level: 'verbatim', version: '1' }, parse(source) {
+    if (!source.startsWith('[@sources:')) return null;
+    const end = source.indexOf(String.fromCharCode(13, 10, 13, 10)) + 4;
+    if (end < 4) return null;
+    return { content: source.slice(end), sourceOffset: end, serialize() { throw new Error('The host must preserve the prefix'); } };
+  }}); window.sourcesLoaded = true } });`,
+    )
+    await writeFile(
+      join(addon, '.hibi-install.json'),
+      JSON.stringify({
+        hash: 'a'.repeat(64),
+        files: ['hibi-addon.json', 'index.js'],
+        source: 'local',
+      }),
+    )
+    await writeFile(
+      join(profile, 'addons.json'),
+      JSON.stringify({ sources: true }),
+    )
+    const header =
+      '\uFEFF---\r\ntitle: original\r\npublic: false\r\n...\r\n\r\n'
+    const body = 'A paragraph of the large note.\r\n\r\n'.repeat(9300)
+    // The adapter matches nothing in one note; in the other it owns a header.
+    const notes = {
+      'unmatched.md': `${header}${body}`,
+      'matched.md': `${header}[@sources: exact ]\r\n\r\n${body}`,
+    }
+    for (const [name, text] of Object.entries(notes))
+      await writeFile(join(folder, name), text)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
+    })
+    t.after(async () => {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, 'codemirror')
+    await page.waitForFunction(() => window.sourcesLoaded === true)
+    const properties = page.getByRole('region', {
+      name: /frontmatter properties/i,
+    })
+    const source = (expected) =>
+      waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        expected,
+      )
+    for (const [name, original] of Object.entries(notes)) {
+      await app.evaluate(
+        ({ dialog }, file) => {
+          dialog.showOpenDialog = async () => ({
+            canceled: false,
+            filePaths: [file],
+          })
+        },
+        join(folder, name),
+      )
+      await clickMenu(app, 'Open…')
+      await waitForDocumentEditor(app, page)
+      await page.getByRole('tab', { name, exact: true }).waitFor()
+      const title = properties.getByRole('textbox', {
+        name: /^title$/i,
+        exact: true,
+      })
+      assert.equal(await title.inputValue(), 'original', name)
+      await title.fill('changed')
+      let expected = original.replace('title: original', 'title: changed')
+      await source(expected)
+      await properties
+        .getByRole('checkbox', { name: /^public$/i, exact: true })
+        .check()
+      expected = expected.replace('public: false', 'public: true')
+      await source(expected)
+      await properties
+        .getByRole('button', { name: /^yaml$/i, exact: true })
+        .click()
+      await properties
+        .getByRole('textbox', { name: /frontmatter yaml/i })
+        .fill('title: from yaml\npublic: true\n')
+      await properties
+        .getByRole('button', { name: /^apply yaml$/i, exact: true })
+        .click()
+      expected = expected.replace('title: changed', 'title: from yaml')
+      await source(expected)
+      // The body after the edited frontmatter still takes typing.
+      await page.locator('.rich-pane .cm-content').evaluate((element) => {
+        const view = element.cmTile.root.view
+        view.dispatch({ selection: { anchor: view.state.doc.length } })
+        view.focus()
+      })
+      await page.keyboard.insertText('typed')
+      await source(`${expected}typed`)
+      // Select all still stops at the body: the frontmatter, and the header
+      // the adapter owns, stay outside it.
+      await pressShortcut(app, `${mod}+a`)
+      assert.equal(
+        await page.locator('.rich-pane .cm-content').evaluate(({ cmTile }) => {
+          const { state } = cmTile.root.view
+          return state
+            .sliceDoc(0, state.selection.main.from)
+            .replace(/^\uFEFF/, '')
+        }),
+        expected
+          .slice(1, expected.indexOf('A paragraph'))
+          .replaceAll('\r\n', '\n'),
+        name,
+      )
+    }
+  },
+)
 
 test('typing a leading divider never activates frontmatter or disables editing', {
   timeout: 30000,

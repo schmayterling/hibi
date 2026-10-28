@@ -6,8 +6,9 @@ import {
 } from '@tiptap/core'
 import { DOMParser } from '@tiptap/pm/model'
 import { Plugin } from '@tiptap/pm/state'
-import type { Token } from 'marked'
 import { markdownSyntax } from './markdown-syntax.ts'
+
+export { preserveInlineHtml } from '../../shared/markdown-inline-html.ts'
 
 let lastCopiedHtml = ''
 const trustedClipboardElements = new WeakSet<Element>()
@@ -24,51 +25,6 @@ export function clipboardHtml(html: string) {
     .replace(/^(?:<meta\b[^>]*>)+/i, '')
 }
 const htmlBreak = /^<br\s*\/?>$/i
-
-const voidTags = new Set(
-  'area base br col embed hr img input link meta param source track wbr'.split(
-    ' ',
-  ),
-)
-
-/** Keep paired inline HTML together without sending workspace markup to a DOM parser. */
-export function preserveInlineHtml(tokens: Token[]) {
-  if (!tokens.some((token) => token?.type === 'html' && !token.block))
-    return tokens
-  const stack: { name: string; index: number }[] = []
-  const ends = new Map<number, number>()
-  for (const [index, token] of tokens.entries()) {
-    if (token.type !== 'html' || token.block) continue
-    const tag = /^<(\/?)([a-z][\w:-]*)\b/i.exec(token.raw)
-    if (!tag?.[2]) continue
-    const name = tag[2].toLowerCase()
-    if (tag[1]) {
-      if (stack.at(-1)?.name === name) {
-        const start = stack.pop()!
-        ends.set(start.index, index)
-      } else stack.length = 0
-    } else if (!voidTags.has(name) && !/\/>$/.test(token.raw))
-      stack.push({ name, index })
-  }
-  const result: Token[] = []
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index]!
-    if (token.type !== 'html' || token.block) {
-      result.push(token)
-      continue
-    }
-    const end = ends.get(index) ?? index
-    const raw = tokens
-      .slice(index, end + 1)
-      .map((part) => part.raw)
-      .join('')
-    result.push({ type: 'rawHtmlInline', raw, text: raw })
-    index = end
-  }
-  tokens.length = 0
-  for (const token of result) tokens.push(token)
-  return tokens
-}
 
 /** Keep break spelling and marked HTML fragments outside Tiptap's text-only mark handling. */
 export function preserveHtml(extension: AnyExtension) {

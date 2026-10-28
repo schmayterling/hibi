@@ -1,5 +1,7 @@
 import { Lexer, marked, type Token, Tokenizer, type TokensList } from 'marked'
 
+export { referenceLabel } from './markdown-reference-label.ts'
+
 /**
  * Let the existing tokenizer normalize reference labels and distinguish images.
  * With `gfm`, a bare URL such as `www.example.com` is a link too.

@@ -1,11 +1,21 @@
 import type { Token } from 'marked'
 import type { BoundaryRecord } from './chunked-markdown.ts'
-import type { BoundaryConfig } from './markdown-boundary-syntax.ts'
+import type {
+  BoundaryConfig,
+  CodeBlockExtent,
+} from './markdown-boundary-syntax.ts'
 
 /** Prefix positions follow source edits; they do not select a grammar. */
 export const boundaryKey = (config: BoundaryConfig) =>
   JSON.stringify({ ...config, prefix: 0 })
 
+/** Complete code coverage for a normalized source range, including the absence of blocks. */
+export type CodeExtentPage = {
+  version: number
+  from: number
+  to: number
+  records: readonly CodeBlockExtent[]
+}
 export type BoundaryPage = {
   type: 'boundaries'
   epoch: string
@@ -18,6 +28,7 @@ export type BoundaryPage = {
   /** End of the repaired range; the suffix after it is unchanged from baseVersion. */
   to?: number
   records: BoundaryRecord[]
+  code?: Omit<CodeExtentPage, 'version'>
   done: boolean
 }
 export type BoundaryReceive = (
@@ -28,7 +39,22 @@ export type BoundaryReceive = (
 import type { SourceOwnerPage } from './markdown-source-model.ts'
 import type { SourceOperation } from './source-operations.ts'
 import type { ReferenceValue } from './source-references.ts'
-import type { SearchLocation } from './source-search-index.ts'
+import type {
+  SearchHighlights,
+  SearchLocation,
+  SearchViewport,
+} from './source-search-index.ts'
+
+export type FindMode = 'source' | 'rendered'
+export type FindOptions = Readonly<{
+  mode?: FindMode
+  prefix?: number
+  viewport?: SearchViewport
+  /** Exact active formatted configuration, supplied by the editor. */
+  config?: BoundaryConfig
+  replacement?: string
+}>
+
 import type {
   SourceTransferChunk,
   SourceTransferHead,
@@ -78,6 +104,10 @@ export type DocumentWorkerRequest =
       config: BoundaryConfig
       from?: number
       baseVersion?: number
+      /** Omitted without listeners; null requests whole-note code coverage. */
+      codeVersion?: number | null
+      /** A retained code watch does not replay syntax boundary records. */
+      codeOnly?: boolean
     }
   | {
       type: 'boundary-ack'
@@ -98,6 +128,11 @@ export type DocumentWorkerRequest =
       id: number
       version: number
       query: string
+      mode?: FindMode
+      prefix?: number
+      config?: BoundaryConfig
+      replacement?: string
+      viewport?: SearchViewport
       highlights?: boolean
       from: number
       to: number
@@ -148,12 +183,16 @@ export type DocumentWorkerReply =
       id: number
       version: number
       location: SearchLocation
+      mode?: FindMode
+      highlights?: SearchHighlights
       highlightStarts?: readonly number[]
+      replacement?: import('./rendered-replace.ts').RenderedReplacement
     }
   | {
       type: 'error'
       epoch: string
       id?: number
       stage: 'replica' | 'find' | 'metadata'
+      reason?: 'unsupported'
       message: string
     }

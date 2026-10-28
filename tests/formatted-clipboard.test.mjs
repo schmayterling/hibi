@@ -343,6 +343,99 @@ test('cut removes the selection in one undoable edit', {
   await settled(note)
 })
 
+test('typing over the whole selected note replaces its hidden fence too', {
+  timeout: 60000,
+}, async () => {
+  const content = page.locator('.rich-pane .cm-content')
+  const fenced = '```js\nconst answer = 42\n```\n\nend'
+  const metadata = '---\ntitle: test\n---\n\n'
+  try {
+    // A typed letter that also starts the note's shown text.
+    for (const [text, key, typed] of [
+      [fenced, 'x', 'x'],
+      [fenced, 'c', 'c'],
+      [metadata + fenced, 'x', `${metadata}x`],
+    ]) {
+      await setFixture(text)
+      if (!text.startsWith(metadata)) {
+        // As after copying the note, cutting it and undoing the cut.
+        assert.equal((await clipboardEvent('copy', 0, null)).text, text)
+        await clipboardEvent('cut', 0, null)
+        await settled('')
+        await undo()
+        await settled(text)
+      }
+      await content.focus()
+      await page.keyboard.press(`${mod}+a`)
+      // A key as a keyboard sends it, not inserted text.
+      await page.keyboard.press(key)
+      await settled(typed)
+      await undo()
+      await settled(text)
+    }
+  } finally {
+    // Frontmatter keeps edits out of itself unless an addon makes them.
+    await content.evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length },
+        userEvent: 'input.addon',
+      })
+    })
+    await setFixture(note)
+  }
+})
+
+test('input handlers see typing over the whole selected note', {
+  timeout: 60000,
+}, async () => {
+  const content = page.locator('.rich-pane .cm-content')
+  // An input handler that types in capitals, as an addon's can.
+  await content.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const EditorView = view.constructor
+    const StateEffect = EditorView.scrollIntoView(0).constructor
+    window.upperCalls = []
+    window.upperActive = true
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.inputHandler.of((view, from, to, text) => {
+          if (!window.upperActive) return false
+          window.upperCalls.push([from, to, text])
+          view.dispatch({
+            changes: { from, to, insert: text.toUpperCase() },
+            selection: { anchor: from + text.length },
+            userEvent: 'input.type',
+          })
+          return true
+        }),
+      ),
+    })
+  })
+  try {
+    for (const text of ['plain', '```js\nconst answer = 42\n```\n\nend']) {
+      await setFixture(text)
+      await page.evaluate(() => {
+        window.upperCalls = []
+      })
+      await content.focus()
+      await page.keyboard.press(`${mod}+a`)
+      await page.keyboard.press('x')
+      await settled('X')
+      assert.deepEqual(await page.evaluate(() => window.upperCalls), [
+        [0, text.length, 'x'],
+      ])
+      await undo()
+      await settled(text)
+    }
+  } finally {
+    await page.evaluate(() => {
+      window.upperActive = false
+    })
+    await setFixture(note)
+  }
+})
+
 test('pasted html becomes markdown in one edit; plain text and own copies paste as they are', {
   timeout: 30000,
 }, async () => {
@@ -433,6 +526,61 @@ test('incidental copy-marker text does not bypass html conversion', {
   await settled(`${note}literal data-hibi-markdown and **bold**`)
   await undo()
   await settled(note)
+})
+
+test('html in a native clipboard envelope pastes only its fragment, in its context', {
+  timeout: 30000,
+}, async () => {
+  const at = note.length
+  const start = '<!--StartFragment-->',
+    end = '<!--EndFragment-->'
+  const wrap = (body) =>
+    `<html>\r\n<head><meta charset="utf-8"></head>\r\n<body>\r\n${body}\r\n</body>\r\n</html>`
+  for (const [html, expected] of [
+    // Multibyte text before and inside the fragment markers.
+    [
+      wrap(
+        `<p>outside é</p><ul><li>outside 😀</li>${start}<li>in é</li><li>中 😀</li>${end}<li>after</li></ul><p>after 😀</p>`,
+      ),
+      '- in é\n- 中 😀',
+    ],
+    [
+      wrap(`<p>before é ${start}<strong>bold</strong> 中 😀${end} after</p>`),
+      '**bold** 中 😀',
+    ],
+    // Ordered items keep their numbers.
+    [
+      wrap(
+        `<ol start="3"><li>before</li>${start}<li>in</li>${end}<li>after</li></ol>`,
+      ),
+      '4. in',
+    ],
+    // As in Chromium, the first start and the last end mark it.
+    [
+      wrap(
+        `${start}<p>one</p>${start}<p>two</p>${end}<p>three</p>${end}<p>after</p>`,
+      ),
+      'one\n\ntwo\n\nthree',
+    ],
+    // Look-alike declarations parse to the same comments but mark nothing.
+    [
+      wrap(
+        `<p>before</p><!StartFragment><p>between</p>${start}<p>in</p><!EndFragment><p>still in</p>${end}<p>after</p>`,
+      ),
+      'in\n\nstill in',
+    ],
+    // Markers before the body still mark it.
+    [`${start}<p>in</p>${end}<p>after</p>`, 'in'],
+    [`<meta charset="utf-8">${start}<p>in</p>${end}<p>after</p>`, 'in'],
+  ]) {
+    await clipboardEvent('paste', at, at, {
+      'text/html': html,
+      'text/plain': 'ignored',
+    })
+    await settled(note + expected)
+    await undo()
+    await settled(note)
+  }
 })
 
 test('large html pastes convert without losing their text', {

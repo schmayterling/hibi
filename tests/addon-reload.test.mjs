@@ -810,26 +810,29 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
     }),
     {
       // The restarted consumer adds a syntax flavor, so the editor rebuilds after the user's choice
-      // with a widget that renders text before it. The formatted view offers no rich editor SDK.
+      // with a widget that renders text before it. The formatted view refuses the legacy SDK, so
+      // there the flavor arrives without the widget.
       'index.js': `export default (sdk) => ({
         async start(context) {
           window.consumerStarts = (window.consumerStarts || 0) + 1;
           if (window.holdConsumer) {
             window.holdConsumer = false;
             await new Promise((resolve) => { window.releaseConsumer = resolve; });
-            let tiptap;
-            try { tiptap = sdk.tiptap; } catch {}
-            const widget = tiptap?.Extension.create({
-              name: 'lateWidget',
-              addDecorations: () => ({
-                create: () => [tiptap.Decoration.Widget(0, () => {
-                  const element = document.createElement('div');
-                  element.textContent = 'Rendered widget text ';
-                  return element;
-                }, { key: 'late-widget' })],
-              }),
-            });
-            context.editor.registerFlavor({ id: 'late', name: 'Late', kind: 'syntax', description: 'Rebuilds the editor', detect: () => false, richExtensions: widget ? [widget] : [] });
+            const richExtensions = [];
+            try {
+              const { tiptap } = sdk;
+              richExtensions.push(tiptap.Extension.create({
+                name: 'lateWidget',
+                addDecorations: () => ({
+                  create: () => [tiptap.Decoration.Widget(0, () => {
+                    const element = document.createElement('div');
+                    element.textContent = 'Rendered widget text ';
+                    return element;
+                  }, { key: 'late-widget' })],
+                }),
+              }));
+            } catch {}
+            context.editor.registerFlavor({ id: 'late', name: 'Late', kind: 'syntax', description: 'Rebuilds the editor', detect: () => false, richExtensions });
           }
         },
       });`,

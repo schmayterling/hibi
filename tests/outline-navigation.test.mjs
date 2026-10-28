@@ -361,9 +361,6 @@ test('source outline resolves references through its worker and preserves native
   if (cm)
     await t.test(
       'formatted references render their resolved heading labels',
-      {
-        todo: 'formatted gap link-001: formatted heading references must render resolved link labels',
-      },
       checkFormattedHeadings,
     )
   else await checkFormattedHeadings()

@@ -6,6 +6,7 @@ import {
   certifyVisualEcho,
   editorDocumentUpdates,
   hasDocumentFootnotes,
+  largeSource,
   preferSourceOpening,
   sameDocumentShell,
   subscribeDocumentShell,
@@ -340,6 +341,9 @@ test('opening mode stays fixed while edits cross the threshold, then refreshes o
     )
     session.counters(true)
     assert.equal(preferSourceOpening(runtime, runtime.get()), before)
+    // The live size follows the edit, from the snapshot length alone.
+    assert.equal(largeSource(runtime, 'one'), !before)
+    assert.equal(largeSource(runtime, 'missing'), false)
     assert.equal(session.counters().materializations, 0)
     const next = { ...runtime.get(), revision: 2 }
     runtime.activate(next)

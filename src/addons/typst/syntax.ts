@@ -1,5 +1,4 @@
 import { Marked, type MarkedExtension } from 'marked'
-import { blockMarkdown } from '../../shared/marked-blocks.ts'
 import type { MarkdownFlavor } from '../api'
 
 export function typstBlock(source: string) {
@@ -27,7 +26,7 @@ export function typstBlock(source: string) {
 export const typstTokens: MarkedExtension = {
   extensions: [{ name: 'typstBlock', level: 'block', tokenizer: typstBlock }],
 }
-const detector = new Marked(typstTokens, blockMarkdown)
+export const detector = new Marked(typstTokens)
 export const typstFlavor: MarkdownFlavor = {
   id: 'blocks',
   name: 'Typst blocks',

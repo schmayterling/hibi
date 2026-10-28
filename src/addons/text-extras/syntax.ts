@@ -1,5 +1,4 @@
 import { Marked, type MarkedExtension } from 'marked'
-import { blockMarkdown } from '../../shared/marked-blocks.ts'
 import { blockStart } from '../_shared/block-start.ts'
 
 export function subscriptToken(source: string) {
@@ -41,7 +40,7 @@ export const textExtrasMarkdown: MarkedExtension = {
     },
   ],
 }
-const detector = new Marked(textExtrasMarkdown, blockMarkdown)
+export const detector = new Marked(textExtrasMarkdown)
 export function detectTextExtras(source: string) {
   if (!source.includes('~') && !source.includes('-#')) return false
   let found = false

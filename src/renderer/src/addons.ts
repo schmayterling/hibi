@@ -119,10 +119,10 @@ function loadInteractionBroker() {
   return interactionBrokerModule
 }
 
-/** Slash command checks, loaded before addons start, which then read them synchronously. */
+/** Host checks load before addons start, which then read them synchronously. */
 let slashChecks: typeof import('./slash-availability') | undefined
 const loadSlashChecks = () =>
-  import('./slash-availability').then((module) => {
+  import('./addon-checks').then((module) => {
     slashChecks = module
   })
 

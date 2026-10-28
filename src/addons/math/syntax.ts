@@ -1,5 +1,4 @@
 import { Marked, type MarkedExtension } from 'marked'
-import { blockMarkdown } from '../../shared/marked-blocks.ts'
 import { blockStart } from '../_shared/block-start.ts'
 import type { MarkdownFlavor, MarkdownParagraphRule } from '../api'
 
@@ -83,7 +82,7 @@ export const mathTokens: MarkedExtension = {
     },
   ],
 }
-const detector = new Marked(mathTokens, blockMarkdown)
+export const detector = new Marked(mathTokens)
 export const mathFlavor: MarkdownFlavor = {
   id: 'latex',
   name: 'Math',

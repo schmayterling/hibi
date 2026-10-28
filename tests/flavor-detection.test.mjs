@@ -13,6 +13,7 @@ import {
 import { typstFlavor, typstTokens } from '../src/addons/typst/syntax.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
+import '../src/renderer/src/addon-checks.ts'
 
 const detect = (parser, matches) => (source) => {
   let found = false
@@ -100,7 +101,11 @@ test('block extension starts find line starts in the paragraph and retain native
 
 test('invalid reference titles leave footnotes and flavor syntax visible to detection', async (t) => {
   for (const [name, body, detect] of [
-    ['footnote', '[^1]: note\n\ntext[^1]', hasFootnoteDefinitions],
+    [
+      'footnote',
+      '[^1]: note\n\ntext[^1]',
+      (source) => hasFootnoteDefinitions(source, blockMarkdown),
+    ],
     ['github footnote', '[^1]: note\n\ntext[^1]', github.detect],
     ['github strike', '~~strike~~', github.detect],
     ['block math', '$$\nx^2\n$$', mathFlavor.detect],

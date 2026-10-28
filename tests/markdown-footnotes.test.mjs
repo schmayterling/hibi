@@ -29,6 +29,15 @@ test('footnote definitions are distinguished from code and ordinary links', () =
   assert.equal(hasFootnoteDefinitions('An unresolved note[^source].'), false)
 })
 
+test('legacy synchronous footnote fallback sees definitions behind invalid titles', {
+  todo: 'follow-up: move the synchronous shell footnote gate behind loaded block grammar',
+}, () => {
+  assert.equal(
+    hasFootnoteDefinitions('[ref]: /x "a\n\n[^1]: note\n"\n\ntext[^1]'),
+    true,
+  )
+})
+
 test('shell renders lex each unchanged source once across panes and unsaved edits', (t) => {
   let lexes = 0
   const { lexer } = Marked.prototype

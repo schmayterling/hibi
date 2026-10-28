@@ -1,17 +1,16 @@
-import { Marked } from 'marked'
+import { Marked, type MarkedExtension } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
-import { blockMarkdown } from './marked-blocks.ts'
 
 const definition = /(?:^|\r?\n) {0,3}\[\^[^\]\s]+\]:/
 
 /** Keep source editing available when formatted editing cannot retain footnotes. */
-export function hasFootnoteDefinitions(source: string) {
+export function hasFootnoteDefinitions(
+  source: string,
+  grammar?: MarkedExtension,
+) {
   if (!definition.test(source)) return false
-  const parser = new Marked(
-    { gfm: true },
-    markedGithubFootnote(),
-    blockMarkdown,
-  )
+  const parser = new Marked({ gfm: true }, markedGithubFootnote())
+  if (grammar) parser.use(grammar)
   let found = false
   parser.walkTokens(parser.lexer(source), (token) => {
     if (token.type === 'footnoteDef') found = true

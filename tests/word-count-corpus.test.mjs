@@ -438,7 +438,7 @@ test('schema corpus: escaped blank-line titles stay visible as CommonMark text',
       '[a\n\nb]: /url "one\n\ntwo\\"\n\nafter',
       '[a\nb]: /url "one\ntwo"\nafter',
     ],
-    ['[a]:\n/url "one\n\ntwo\\"\n\nafter', '[a]:\n/url "one\ntwo"\nafter'],
+    ['[a]:\n/url "one\n\ntwo\\"\n\nafter', '[a]: /url "one\ntwo"\nafter'],
   ])
     for (const eol of ['\n', '\r\n']) {
       const text = source.replaceAll('\n', eol)

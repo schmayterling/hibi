@@ -92,11 +92,9 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | input-073 | [editor-input.test.mjs:3440](editor-input.test.mjs#L3440) | native bold typing keeps bold action pressed | 8a: native input, structure and toolbar state |
 | input-074 | [editor-input.test.mjs:3454](editor-input.test.mjs#L3454) | native bold typing renders strong text in canonical source | 8a: native input, structure and toolbar state |
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
-| find-001 | [formatted-find.test.mjs:210](formatted-find.test.mjs#L210) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
-| find-002 | [formatted-find.test.mjs:339](formatted-find.test.mjs#L339) | undo must restore matches without a current find result | 4b: find wiring and navigation |
-| find-006 | [formatted-find.test.mjs:384](formatted-find.test.mjs#L384) | increasing total matches must preserve the viewport highlight budget | 4b: find wiring and navigation |
-| find-003 | [formatted-find.test.mjs:451](formatted-find.test.mjs#L451) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
-| find-005 | [formatted-find.test.mjs:703](formatted-find.test.mjs#L703) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
+| find-001 | [formatted-find.test.mjs:247](formatted-find.test.mjs#L247) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
+| find-003 | [formatted-find.test.mjs:491](formatted-find.test.mjs#L491) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
+| find-005 | [formatted-find.test.mjs:743](formatted-find.test.mjs#L743) | wide code matches must scroll horizontally with their start visible | 4b: find wiring and navigation |
 | release-001 | [formatted-hidden-source.test.mjs:167](formatted-hidden-source.test.mjs#L167) | reopening source must restore its saved scroll position | 2c: hidden source release and mapped bookmarks |
 | release-002 | [formatted-hidden-source.test.mjs:188](formatted-hidden-source.test.mjs#L188) | formatted edits must map the saved source scroll position | 2c: hidden source release and mapped bookmarks |
 | corpus-008 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | a quoted title with a blank line must not define a reference | 5a: shared reference definition parsing |
@@ -128,3 +126,5 @@ corpus-004, corpus-014: a reference in a `-# ` subtext line resolves against a d
 marker-005: copying from the formatted view puts the selection's exact Markdown on the clipboard as text, as a Markdown editor does, and its rendered HTML as HTML ([markdown-markers.test.mjs:867](markdown-markers.test.mjs#L867)). The rich editor copies rendered text. A formatted-view copy pastes back as the same Markdown; formatted-clipboard.test.mjs covers that contract.
 
 marker-007: with markers shown, the formatted view reveals a focused heading's `# ` as editable text, so the heading's text content includes it; the heading's name in the accessibility tree is the rendered heading text ([sidebar-views.test.mjs:103](sidebar-views.test.mjs#L103)). The rich editor draws the marker as generated content outside the text. Each engine asserts its own outcome.
+
+find-002: with the find bar open, undoing an edit that replaced the selected match restores that selection in the formatted view, so the restored match is the current one (1/10000), as in source view; the find count reflects the selection it is given ([formatted-find.test.mjs:377](formatted-find.test.mjs#L377)). The rich editor leaves a caret after the restored text, so it shows 0/10000. After closing the bar, typing and undoing, reopening it searches again from the selection, and both engines show the first match as current (1/10000).

@@ -22,17 +22,54 @@ async function measureFindLayout(rich) {
   )
 }
 
-async function denseHighlights(_page, rich) {
+// The rich editor highlights matches overlapping the lines on screen and about
+// a screen of text, at least 2,000 characters, to each side.
+async function denseHighlights(page, rich) {
   await measureFindLayout(rich)
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
   return rich.evaluate((element) => {
-    const ranges = element.cmTile.root.view.visibleRanges
+    const view = element.cmTile.root.view
+    const box = element.getBoundingClientRect()
+    const pane = element.closest('.rich-pane').getBoundingClientRect()
+    const x =
+      box.left + Number.parseFloat(getComputedStyle(element).paddingLeft) + 1
+    const from = view.posAtCoords({ x, y: Math.max(box.top, pane.top) + 1 })
+    const to = view.posAtCoords({ x, y: Math.min(box.bottom, pane.bottom) - 1 })
+    const margin = Math.max(to - from, 2000)
+    const window = {
+      from: Math.max(0, from - margin),
+      to: Math.min(view.state.doc.length, to + margin),
+    }
+    const starts = (positions) => ({
+      count: positions.length,
+      first: positions[0],
+      last: positions.at(-1),
+    })
+    const highlighted = starts(
+      [...element.querySelectorAll('.cm-searchMatch')].map((match) =>
+        view.posAtDOM(match, 0),
+      ),
+    )
     return {
-      count: element.querySelectorAll('.cm-searchMatch').length,
-      units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
-      // each edge can show a partial match and the query's lookaround margin.
-      bound: ranges.reduce(
-        (sum, range) =>
-          sum + Math.ceil((range.to - range.from) / 'needle word '.length) + 4,
+      count: highlighted.count,
+      units: highlighted.last + 'needle'.length - highlighted.first,
+      highlighted,
+      expected: starts(
+        [...view.state.doc.toString().matchAll(/needle/g)]
+          .map((match) => match.index)
+          .filter(
+            (start) =>
+              start < window.to && start + 'needle'.length > window.from,
+          ),
+      ),
+      screen: to - from,
+      rendered: view.visibleRanges.reduce(
+        (sum, range) => sum + range.to - range.from,
         0,
       ),
     }
@@ -299,13 +336,11 @@ test('formatted dense find counts every match, bounds highlights, and preserves 
   await input.fill('NEEDLE')
   await count('1/10000')
   const nearby = await denseHighlights(page, rich)
-  assert.ok(
-    nearby.count > 1 && nearby.count <= nearby.bound,
-    JSON.stringify(nearby),
-  )
-  assert.ok(
-    nearby.units < dense.length / 2,
-    'highlights cover only the rendered source window',
+  assert.ok(nearby.count > 1, JSON.stringify(nearby))
+  assert.deepEqual(
+    nearby.highlighted,
+    nearby.expected,
+    'highlights cover the rich editor window around the screen',
   )
   await input.press('Enter')
   await count('2/10000')
@@ -332,17 +367,27 @@ test('formatted dense find counts every match, bounds highlights, and preserves 
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     dense,
   )
+  // Reopening searches again from the restored selection, as the rich editor
+  // does.
   await pressShortcut(app, `${mod}+f`)
-  await t.test(
-    'undo restores matches without a current result',
-    {
-      todo: 'formatted gap find-002: undo must restore matches without a current find result',
-    },
-    async () => {
-      await count('0/10000')
-      assert.equal(await rich.locator('.cm-searchMatch-selected').count(), 0)
-    },
+  const selected = rich.locator('.cm-searchMatch-selected')
+  await selected.waitFor()
+  await count('1/10000')
+  assert.equal(await selected.count(), 1)
+  // Accepted difference: undo restores the selected match, so it stays the
+  // current one, as in source view. The rich editor leaves a caret after it.
+  await rich.evaluate((element) => element.focus())
+  await page.keyboard.insertText('pin')
+  await count('0/9999')
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    dense,
   )
+  await count('1/10000')
+  assert.equal(await selected.count(), 1)
+  assert.equal(await selected.textContent(), 'needle')
 })
 
 test('formatted find keeps highlights bounded when match count grows from ten thousand to one hundred thousand', {
@@ -353,13 +398,11 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await input.fill('needle')
   await count('1/10000')
   const nearby = await denseHighlights(page, rich)
-  assert.ok(
-    nearby.count > 1 && nearby.count <= nearby.bound,
-    JSON.stringify(nearby),
-  )
-  assert.ok(
-    nearby.units < dense.length / 2,
-    'highlights cover only the rendered source window',
+  assert.ok(nearby.count > 1, JSON.stringify(nearby))
+  assert.deepEqual(
+    nearby.highlighted,
+    nearby.expected,
+    'highlights cover the rich editor window around the screen',
   )
   await input.press('Escape')
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
@@ -378,21 +421,18 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await input.fill('needle')
   await count('1/100000')
   const more = await denseHighlights(page, rich)
-  await t.test(
-    'highlight count stays fixed when total matches grow',
-    {
-      todo: 'formatted gap find-006: increasing total matches must preserve the viewport highlight budget',
-    },
-    () => {
-      assert.equal(more.count, nearby.count, JSON.stringify({ nearby, more }))
-      assert.equal(
-        more.units,
-        nearby.units,
-        'ten times as many matches stays within the same viewport budget',
-      )
-    },
-  )
   t.diagnostic(JSON.stringify({ nearby, more }))
+  assert.deepEqual(more.highlighted, more.expected)
+  assert.equal(more.count, nearby.count)
+  assert.equal(
+    more.units,
+    nearby.units,
+    'ten times as many matches stays within the same viewport budget',
+  )
+  // CodeMirror draws a wrapped line's visible part and a fixed margin of text
+  // around it, so what it renders does not grow with the note.
+  for (const { rendered, screen } of [nearby, more])
+    assert.ok(rendered <= 8 * screen, JSON.stringify({ rendered, screen }))
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     larger,

@@ -1294,10 +1294,20 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
   await harness.evaluate(async () => {
     const unit =
       '## Section\n\nWords between blocks.\n\n```js\nconst value = 1\n```\n\n```rust\nfn main() {}\n```\n\n'
+    // A parse finishes in the transaction that starts it.
     await window.livePreview.mount(
       unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
       { width: 800, height: 600 },
+      { slice: Number.POSITIVE_INFINITY },
     )
+    // Idle time parses ahead of the screen; held, it counts in no change.
+    window.holdIdle = () => {
+      const idle = window.requestIdleCallback
+      window.requestIdleCallback = () => 0
+      return () => {
+        window.requestIdleCallback = idle
+      }
+    }
     window.codeKeywords = (text) =>
       [
         ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
@@ -1308,19 +1318,24 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
       ({ text, shown }) => window.codeKeywords(text) > 0 === shown,
       { text, shown },
     )
-  // Work of one change: the parse it starts, before idle time parses ahead.
+  // Work of one change: the parse it starts, without idle parsing ahead.
   const measure = (change) =>
     harness.evaluate(async (change) => {
       const preview = window.livePreview
       await preview.settle()
-      preview.reset()
-      if (change === 'disable') preview.setCodeLanguage('javascript', false)
-      else preview.hide(false)
-      await preview.settle()
-      return {
-        ...preview.probe,
-        keywords: window.codeKeywords('const'),
-        blocks: document.querySelectorAll('.hibi-lp-codeblock').length,
+      const release = window.holdIdle()
+      try {
+        preview.reset()
+        if (change === 'disable') preview.setCodeLanguage('javascript', false)
+        else preview.hide(false)
+        await preview.settle()
+        return {
+          ...preview.probe,
+          keywords: window.codeKeywords('const'),
+          blocks: document.querySelectorAll('.hibi-lp-codeblock').length,
+        }
+      } finally {
+        release()
       }
     }, change)
   try {
@@ -1338,11 +1353,16 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
     const hidden = await harness.evaluate(async () => {
       const preview = window.livePreview
       await preview.settle()
-      preview.reset()
-      preview.setCodeLanguage('javascript', true)
-      await preview.settle()
-      await preview.settle()
-      return { ...preview.probe, keywords: window.codeKeywords('const') }
+      const release = window.holdIdle()
+      try {
+        preview.reset()
+        preview.setCodeLanguage('javascript', true)
+        await preview.settle()
+        await preview.settle()
+        return { ...preview.probe, keywords: window.codeKeywords('const') }
+      } finally {
+        release()
+      }
     })
     const shown = await measure('show')
     // Code parsed before its language changed parses again when it returns to the screen.

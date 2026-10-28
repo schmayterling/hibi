@@ -783,6 +783,13 @@ button:disabled {
   border-radius: var(--radius-panel);
   background: var(--surface);
 }
+.experimental-editor-settings {
+  border-color: color-mix(in srgb, var(--status-warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--status-warning) 8%, var(--surface));
+}
+.experimental-editor-settings .setting-copy label {
+  color: var(--status-warning);
+}
 .workspace-setting-actions {
   display: flex;
   flex-wrap: wrap;

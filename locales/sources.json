@@ -1530,6 +1530,9 @@
   "cb580f6fe5b1": [
     "src/renderer/src/AddonSettings.tsx"
   ],
+  "39944ec84c8a": [
+    "src/renderer/src/SettingsScreen.tsx"
+  ],
   "655907890730": [
     "src/addons/frontmatter/Properties.tsx"
   ],
@@ -2130,6 +2133,9 @@
   "a42f7d67e1fe": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "10c5f48ececb": [
+    "src/renderer/src/SettingsScreen.tsx"
+  ],
   "3809a20d54e6": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
@@ -2311,7 +2317,8 @@
     "src/renderer/src/markdown-serialization.ts"
   ],
   "3dc9f569422d": [
-    "src/addons/vim/Settings.tsx"
+    "src/addons/vim/Settings.tsx",
+    "src/renderer/src/SettingsScreen.tsx"
   ],
   "3664895579f0": [
     "src/addons/_shared/format-renderer.tsx",
@@ -7034,6 +7041,9 @@
     "src/main/updates.ts"
   ],
   "30704b40105a": [
+    "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "07ef64ace382": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "0c78f3e5ef4e": [

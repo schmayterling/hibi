@@ -12,6 +12,7 @@ import {
 import type { AddonState } from '../../addons/api'
 import type { AppInfo } from '../../shared/desktop'
 import { type DocumentView, isDocumentView } from '../../shared/document-types'
+import { errorMessage } from '../../shared/errors'
 import { actions, type Hotkeys } from '../../shared/hotkeys'
 import { ColorschemeSettings } from '../../ui/ColorschemeSettings'
 import {
@@ -49,6 +50,7 @@ import { DependencySettings } from './DependencySettings'
 import type { CursorSettings } from './EditorCursor'
 import { ToolbarSettings } from './EditorToolbar'
 import { FormatsSettings } from './FormatsSettings'
+import { codemirrorFormattedView } from './formatted-engine'
 import { HibiSettings } from './HibiSettings'
 import { HotkeySettings } from './HotkeySettings'
 import { tabIndent } from './indentation'
@@ -120,6 +122,49 @@ function AddonUpdating() {
       message="These settings open again when the update finishes."
       busy
     />
+  )
+}
+
+function FormattedEngineSettings() {
+  const [changing, setChanging] = useState(false)
+  const [error, setError] = useState('')
+  async function change(enabled: boolean) {
+    setChanging(true)
+    setError('')
+    try {
+      await window.hibi.flushDocumentChanges()
+      localStorage.setItem(
+        'hibi:formatted-engine',
+        enabled ? 'codemirror' : 'tiptap',
+      )
+      location.reload()
+    } catch (error) {
+      setError(errorMessage(error))
+      setChanging(false)
+    }
+  }
+  return (
+    <>
+      <h2>Experimental</h2>
+      <div className="settings-group experimental-editor-settings">
+        <SettingRow
+          id="exotic-butter"
+          label="Enable exotic butter (experimental)"
+          description="Use CodeMirror instead of Tiptap/ProseMirror. Reloads this window to apply."
+        >
+          <Toggle
+            id="exotic-butter"
+            aria-describedby="exotic-butter-description"
+            checked={codemirrorFormattedView}
+            disabled={changing}
+            onChange={(event) => void change(event.target.checked)}
+          />
+        </SettingRow>
+      </div>
+      {error && (
+        <DocumentNotice title="Could not switch editor" message={error} />
+      )}
+    </>
   )
 }
 
@@ -582,6 +627,7 @@ export function SettingsScreen({
                 openAddons={() => onCategory('addons')}
               />
             )}
+            <FormattedEngineSettings />
           </SettingsPanel>
           <SettingsPanel id="syntax" label="Syntax" category={category}>
             <SyntaxSettings />

@@ -18,6 +18,7 @@ export const flavorInfo: MarkdownFlavor = {
     let found = false
     parser.walkTokens(parser.lexer(source), (token) => {
       found ||=
+        token.type === 'footnoteDef' ||
         token.type === 'table' ||
         token.type === 'del' ||
         (token.type === 'blockquote' && !!alertMarker(token.text)) ||

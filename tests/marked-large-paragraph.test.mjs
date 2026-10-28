@@ -38,6 +38,7 @@ const bundle = await build({
       export { textProjection } from './src/renderer/src/text-projection.ts'
       export { BlockTokenizer } from './src/shared/marked-blocks.ts'
       export { Tokenizer } from 'marked'
+      export { mathFlavor } from './src/addons/math/syntax.ts'
     `,
     resolveDir: process.cwd(),
   },
@@ -73,6 +74,7 @@ const {
   textProjection,
   BlockTokenizer: ExportBlockTokenizer,
   Tokenizer: ExportTokenizer,
+  mathFlavor: ExportMathFlavor,
 } = module.exports
 const size = 50 * 1024 * 1024
 const paragraph = 'ordinary words '.repeat(Math.ceil(size / 15)).slice(0, size)
@@ -101,6 +103,10 @@ function references(source, gfm = false) {
     model.dispose()
   }
 }
+
+test('standalone export loads shared grammar for flavor detection', () => {
+  assert.equal(ExportMathFlavor.detect('[ref]: /x "a\n\n$$\nx^2\n$$\n"'), true)
+})
 
 test('CommonMark reference titles reject blank lines in shared parsing and export', () => {
   for (const [open, close, encodedOpen, encodedClose] of [

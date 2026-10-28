@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
+import { markedGithubFootnote } from 'marked-github-footnote'
 import { blockStartCounters } from '../src/addons/_shared/block-start.ts'
 import { alertMarker, alertStart } from '../src/addons/markdown/alerts.ts'
 import {
@@ -23,9 +24,10 @@ import {
   typstFlavor,
   typstTokens,
 } from '../src/addons/typst/syntax.ts'
-import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
-import '../src/renderer/src/addon-checks.ts'
+
+const startupGithub = { ...github }
+await import('../src/renderer/src/addon-checks.ts')
 
 const detect = (parser, matches) => (source) => {
   let found = false
@@ -38,8 +40,9 @@ const pairs = [
   [
     github.detect,
     detect(
-      new Marked({ gfm: true }, blockMarkdown),
+      new Marked({ gfm: true }, markedGithubFootnote(), blockMarkdown),
       (token) =>
+        token.type === 'footnoteDef' ||
         token.type === 'table' ||
         token.type === 'del' ||
         (token.type === 'blockquote' && alertMarker(token.text)) ||
@@ -113,11 +116,6 @@ test('block extension starts find line starts in the paragraph and retain native
 
 test('invalid reference titles leave footnotes and flavor syntax visible to detection', async (t) => {
   for (const [name, body, detect] of [
-    [
-      'footnote',
-      '[^1]: note\n\ntext[^1]',
-      (source) => hasFootnoteDefinitions(source, blockMarkdown),
-    ],
     ['github footnote', '[^1]: note\n\ntext[^1]', github.detect],
     ['github strike', '~~strike~~', github.detect],
     ['block math', '$$\nx^2\n$$', mathFlavor.detect],
@@ -130,6 +128,12 @@ test('invalid reference titles leave footnotes and flavor syntax visible to dete
       assert.equal(detect(source), true, source)
       assert.equal(detect('````md\n' + source + '\n````'), false)
     })
+})
+
+test('lazy grammar updates existing startup metadata snapshots', () => {
+  const source = '[ref]: /x "a\n\n[^1]: note\n"\n\ntext[^1]'
+  assert.equal(github.detect(source), true)
+  assert.equal(startupGithub.detect(source), true)
 })
 
 test('lazy flavor grammar does not retain readers in shared parser options', () => {

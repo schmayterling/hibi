@@ -6,6 +6,7 @@ import syntaxStyles from '../../ui/syntax.css?raw'
 import { codeHtml, escapeCode } from './code-languages'
 import { flavorMatches, flavors, loadFlavor, selectedFlavors } from './flavors'
 import { installSyntaxPreferences } from './syntax-parser'
+import './markdown-detectors.ts'
 
 export function renderMarkdown(
   source: string,

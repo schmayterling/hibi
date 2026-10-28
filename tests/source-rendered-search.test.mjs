@@ -127,7 +127,8 @@ test('50 mib rendered projection yields bounded reads and retains source ranges 
   assert.ok(counters.maximumYieldRead <= 8192, JSON.stringify(counters))
   assert.ok(counters.maximumAdvanceRead <= 128 * 1024, JSON.stringify(counters))
   assert.ok(counters.maskBytes <= 4096)
-  assert.ok(counters.retainedWindows <= 2)
+  assert.equal(counters.retainedWindows, 0)
+  assert.equal(counters.retainedNodes, 0)
   assert.ok(counters.parses <= 3)
   assert.ok(counters.sourceUnits < text.length * 8, JSON.stringify(counters))
   const index = new SourceSearchIndex(
@@ -138,6 +139,9 @@ test('50 mib rendered projection yields bounded reads and retains source ranges 
   )
   finish(index.build())
   assert.equal(index.state().total, 1)
+  const coldParses = projection.counters().parses
+  finish(index.locate(0, 0))
+  assert.equal(projection.counters().parses, coldParses + 1)
   const parseWork = projection.counters()
   finish(index.locate(0, 0))
   const nextQuery = new SourceSearchIndex(

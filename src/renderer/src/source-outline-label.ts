@@ -68,6 +68,7 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
         const value = (token.raw ?? token.text).replace(/[ \t]*\n[ \t]*/g, ' ')
         text.push(token.escaped ? value : decodeMarkdownEntities(value))
       } else if (
+        'text' in token &&
         /^(?:escape|codespan|hibiLiteralInline|hibiLiteralBlock)$/.test(
           token.type,
         )

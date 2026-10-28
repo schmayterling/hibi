@@ -186,17 +186,39 @@ function placeOf(view: EditorView) {
  */
 function keptPlaceScroll(top: number, margin: number): Extension {
   let state: 'waiting' | 'aligning' | 'done' = 'waiting',
-    moved = false
+    moved = false,
+    // The view's own scroll there, first from its construction.
+    scrolling = true,
+    scrolled = false
   const stop = () => {
     state = 'done'
   }
   const align = {
+    // Only a line CodeMirror has laid out has a measured position.
     read: (view: EditorView) =>
-      view.documentTop +
-      view.lineBlockAt(top).top -
-      view.scrollDOM.getBoundingClientRect().top,
-    write: (offset: number, view: EditorView) => {
+      top < view.viewport.from || top > view.viewport.to
+        ? null
+        : view.documentTop +
+          view.lineBlockAt(top).top -
+          view.scrollDOM.getBoundingClientRect().top,
+    write: (offset: number | null, view: EditorView) => {
       if (state !== 'aligning') return
+      if (offset === null) {
+        // Scroll there once, which lays it out; the measure after aligns it.
+        if (scrolled) return stop()
+        scrolled = scrolling = true
+        state = 'waiting'
+        queueMicrotask(() => {
+          if (state !== 'done')
+            view.dispatch({
+              effects: EditorView.scrollIntoView(top, {
+                y: 'start',
+                yMargin: margin,
+              }),
+            })
+        })
+        return
+      }
       if (moved) {
         moved = false
         queueMicrotask(() => view.requestMeasure(align))
@@ -206,9 +228,20 @@ function keptPlaceScroll(top: number, margin: number): Extension {
       view.scrollDOM.scrollTop += offset - margin
     },
   }
+  const begin = (view: EditorView) => {
+    if (state !== 'waiting' || scrolling) return
+    state = 'aligning'
+    moved = false
+    view.requestMeasure(align)
+  }
   return [
-    EditorView.scrollHandler.of((_view, range, options) => {
+    EditorView.scrollHandler.of((view, range, options) => {
       if (range.head !== top || options.yMargin !== margin) stop()
+      else {
+        scrolling = false
+        // On screen, this scroll lays the line out; the next measure aligns it.
+        if (view.inView) queueMicrotask(() => begin(view))
+      }
       return false
     }),
     EditorView.domEventHandlers({
@@ -218,21 +251,19 @@ function keptPlaceScroll(top: number, margin: number): Extension {
       wheel: stop,
     }),
     ViewPlugin.define(() => ({
+      destroy: stop,
       update(update) {
         if (update.docChanged) top = update.changes.mapPos(top, 1)
         if (update.heightChanged || update.geometryChanged) moved = true
         // A measure on screen; its own height changes still move the view.
         if (
-          state !== 'waiting' ||
-          update.transactions.length ||
-          !update.view.inView ||
-          !(update.geometryChanged || update.viewportChanged)
-        )
-          return
-        state = 'aligning'
-        moved = false
-        const view = update.view
-        queueMicrotask(() => view.requestMeasure(align))
+          !update.transactions.length &&
+          update.view.inView &&
+          (update.geometryChanged || update.viewportChanged)
+        ) {
+          const { view } = update
+          queueMicrotask(() => begin(view))
+        }
       },
     })),
   ]

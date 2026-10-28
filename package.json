@@ -25,6 +25,7 @@
     "build": "npm run typecheck && npm run build:app",
     "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs",
     "bench": "vitest bench --run bench/core",
+    "bench:build": "npm run typecheck && npm run docs && node scripts/build-provenance.mjs",
     "bench:desktop": "node bench/desktop/startup.bench.mjs",
     "bench:startup": "node scripts/benchmark-startup.mjs",
     "bench:input": "node scripts/benchmark-input.mjs",

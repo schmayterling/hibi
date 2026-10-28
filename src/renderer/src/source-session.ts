@@ -396,9 +396,15 @@ export function createSourceSession(
     pending: ChangeSet | null = null,
     flush = () => {},
     // A view that could not show an echo takes no edits until it is rebuilt.
-    failed = false
-  const undo = () => !failed && !!session.undo()
-  const redo = () => !failed && !!session.redo()
+    failed = false,
+    // Only an attached view that is not read-only undoes or redoes, by any route.
+    attached: Pick<EditorView, 'state'> | null = null
+  const writable = () => !failed && !!attached && !attached.state.readOnly
+  const history = {
+    undo: () => writable() && !!session.undo(),
+    redo: () => writable() && !!session.redo(),
+  }
+  const { undo, redo } = history
   const dispatch = (
     transactions: readonly Transaction[],
     view: Pick<EditorView, 'state' | 'update' | 'setState'> & {
@@ -448,7 +454,7 @@ export function createSourceSession(
           viewId,
         )
       }
-      rememberSourceHistory(state, session.historyDepth())
+      rememberSourceHistory(state, session.historyDepth(), history)
       update(view, transactions)
       return
     }
@@ -488,7 +494,7 @@ export function createSourceSession(
       group,
       (prepared) => {
         snapshot = prepared.after
-        rememberSourceHistory(state, session.historyDepth())
+        rememberSourceHistory(state, session.historyDepth(), history)
         update(view, transactions)
       },
       (prepared) => rawSelection(prepared.after, state.selection),
@@ -520,8 +526,9 @@ export function createSourceSession(
       if (!session.ownsCurrentSnapshot(snapshot))
         throw new Error('The source editor is synchronizing.')
       snapshot = session.snapshot()
-      const unregister = registerSourceHistory(view, { undo, redo })
-      rememberSourceHistory(view.state, session.historyDepth())
+      attached = view
+      const unregister = registerSourceHistory(view, history)
+      rememberSourceHistory(view.state, session.historyDepth(), history)
       // A waiting view gets the caret immediate echoes would have left: the
       // session selection, or its own caret mapped through each operation.
       let echo = '',
@@ -542,6 +549,7 @@ export function createSourceSession(
           rememberSourceHistory(
             reachedState(transaction),
             session.historyDepth(),
+            history,
           )
           update(view, [transaction])
         } catch (error) {
@@ -586,6 +594,7 @@ export function createSourceSession(
       return () => {
         flush = () => {}
         pending = null
+        attached = null
         unregister()
         unsubscribe()
         unsubscribeStorage()

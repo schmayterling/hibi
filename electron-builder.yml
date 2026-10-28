@@ -8,6 +8,7 @@ directories:
   output: release
 files:
   - out/**/*
+  - "!out/benchmark-build.json"
   - package.json
   - LICENSE.md
 asar: true

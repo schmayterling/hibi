@@ -212,10 +212,12 @@ function paneMotionAround(element: Element) {
         continue
       const end = animation.effect?.getComputedTiming().endTime,
         now = animation.currentTime
-      if (typeof end !== 'number' || !Number.isFinite(end)) continue
-      if (typeof now !== 'number') continue
+      if (typeof end !== 'number' || typeof now !== 'number') continue
+      // In real time; a stopped one never ends.
+      const remaining = (end - now) / animation.playbackRate
+      if (!Number.isFinite(remaining) || remaining <= 0) continue
       transitions.push(animation)
-      left = Math.max(left, end - now)
+      left = Math.max(left, remaining)
     }
   return { transitions, left }
 }
@@ -239,7 +241,9 @@ function keptPlaceScroll(top: number, margin: number) {
     // The view's own scroll there, first from its construction.
     scrolling = true,
     scrolled = false,
-    settling: ReturnType<typeof setTimeout> | null = null
+    settling: ReturnType<typeof setTimeout> | null = null,
+    // The first wait sets when waiting ends, whatever moves after it.
+    deadline: number | null = null
   const stop = () => {
     state = 'done'
     if (settling) clearTimeout(settling)
@@ -288,7 +292,10 @@ function keptPlaceScroll(top: number, margin: number) {
     // ends with that motion, or at the latest when it was due to end, and
     // holds the view only weakly.
     const { transitions, left } = paneMotionAround(view.dom)
-    if (left > 0) {
+    const now = performance.now()
+    if (left > 0) deadline ??= now + left
+    const wait = deadline === null ? 0 : Math.min(left, deadline - now)
+    if (wait > 0) {
       const owner = new WeakRef(view)
       const wake = () => {
         if (!settling) return
@@ -297,7 +304,7 @@ function keptPlaceScroll(top: number, margin: number) {
         const view = owner.deref()
         if (view) begin(view)
       }
-      settling = setTimeout(wake, left)
+      settling = setTimeout(wake, wait)
       for (const transition of transitions) transition.finished.then(wake, wake)
       return
     }

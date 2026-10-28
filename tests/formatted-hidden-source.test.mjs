@@ -371,6 +371,33 @@ test("an unrelated paused transition does not hold a returning source view's pla
   samePlace(places, before)
 })
 
+test("stopped pane motion does not hold a returning source view's place", {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await open(t, 2 * 1024)
+  await view('Source view')
+  await sourceShown(page)
+  await scrollInto(page, 20000)
+  const before = await scrolled(page)
+  await view('normal')
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  )
+  // A move of the panes stopped at a playback rate of 0 stays running and
+  // never gets nearer its end.
+  await page.evaluate(async () => {
+    const panes = document.querySelector('.editor-panes')
+    panes.style.setProperty('transition', 'transform 2s linear', 'important')
+    panes.style.transform = 'translateX(0)'
+    getComputedStyle(panes).transform
+    panes.style.transform = 'translateX(0.01px)'
+    await new Promise(requestAnimationFrame)
+    for (const transition of panes.getAnimations()) transition.playbackRate = 0
+  })
+  samePlace(await returns(page, view, 1024 * 1024, 2), before)
+})
+
 test('a source view left while its place waits for pane motion is released', {
   timeout: 240000,
 }, async (t) => {

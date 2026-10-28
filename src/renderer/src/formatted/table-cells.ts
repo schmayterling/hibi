@@ -24,6 +24,7 @@ import type { MarkdownConfig, MarkdownParser } from '@lezer/markdown'
 import { formattedInlineParser } from '../../../shared/formatted-markdown.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
+  blockMarkedNodes,
   claimFormattedReplacement,
   type FormattedDecorations,
   type FormattedRenderContext,
@@ -128,6 +129,12 @@ function decorateCell(
   }
   const revealedAt = (start: number, end: number) =>
     touched(local(start), local(end))
+  // A cell is one block: its formatting shows all its delimiters while the
+  // selection is in the cell.
+  const revealedFor = (node: SyntaxNodeRef) =>
+    blockMarkedNodes.has(node.name)
+      ? touched(0, text.length)
+      : revealedAt(node.from, node.to)
   // Line breaks in cells are written as <br>, as the rich editor saved them.
   const lineBreakAt = (node: SyntaxNodeRef) =>
     node.name === 'HTMLTag' &&
@@ -167,7 +174,7 @@ function decorateCell(
   cursor.iterate((node) => {
     // Syntax whose setting is off shows as written, its children too.
     if (literal.has(node.name)) return false
-    const revealed = revealedAt(node.from, node.to)
+    const revealed = revealedFor(node)
     const nodeOut = sink(revealed)
     let skip = false
     // A cell draws its line breaks itself, so contributed HTML renderers
@@ -200,10 +207,7 @@ function decorateCell(
         return
       case 'EmphasisMark': {
         const parent = node.node.parent
-        sink(!!parent && revealedAt(parent.from, parent.to)).syntax(
-          node.from,
-          node.to,
-        )
+        sink(!!parent && revealedFor(parent)).syntax(node.from, node.to)
         return
       }
       case 'InlineCode': {

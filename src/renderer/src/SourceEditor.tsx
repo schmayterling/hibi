@@ -2269,7 +2269,10 @@ export function SourceEditor({
       )
       reportFormatting.current(formatting.current)
     }
-    const unsubscribe = codeLanguages.subscribe(() => configureParser.current())
+    // The formatted view parses changed code languages again in its own syntax.
+    const unsubscribe = formatted
+      ? () => {}
+      : codeLanguages.subscribe(() => configureParser.current())
     // Flavors that bring no source syntax keep the parser and its parse.
     configureFlavors.current = () => {
       const configs = formatted ? null : flavorConfigs()

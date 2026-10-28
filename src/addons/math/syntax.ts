@@ -93,9 +93,7 @@ export const mathFlavor: MarkdownFlavor = {
     if (!source.includes('$')) return false
     let found = false
     detector.walkTokens(detector.lexer(source), (token) => {
-      if (token.type === 'inlineMath' || token.type === 'blockMath')
-        found = true
-      return []
+      found ||= token.type === 'inlineMath' || token.type === 'blockMath'
     })
     return found
   },

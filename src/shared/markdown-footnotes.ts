@@ -13,8 +13,7 @@ export function hasFootnoteDefinitions(
   if (grammar) parser.use(grammar)
   let found = false
   parser.walkTokens(parser.lexer(source), (token) => {
-    if (token.type === 'footnoteDef') found = true
-    return []
+    found ||= token.type === 'footnoteDef'
   })
   return found
 }

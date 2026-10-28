@@ -3,14 +3,26 @@ import test from 'node:test'
 import { Lexer, Marked } from 'marked'
 import { blockStartCounters } from '../src/addons/_shared/block-start.ts'
 import { alertMarker, alertStart } from '../src/addons/markdown/alerts.ts'
-import { flavorInfo as github } from '../src/addons/markdown/github-flavor-info.ts'
-import { mathFlavor, mathTokens } from '../src/addons/math/syntax.ts'
+import {
+  flavorInfo as github,
+  parser as githubParser,
+} from '../src/addons/markdown/github-flavor-info.ts'
+import {
+  detector as mathDetector,
+  mathFlavor,
+  mathTokens,
+} from '../src/addons/math/syntax.ts'
 import {
   detectTextExtras,
   subtextStart,
+  detector as textExtrasDetector,
   textExtrasMarkdown,
 } from '../src/addons/text-extras/syntax.ts'
-import { typstFlavor, typstTokens } from '../src/addons/typst/syntax.ts'
+import {
+  detector as typstDetector,
+  typstFlavor,
+  typstTokens,
+} from '../src/addons/typst/syntax.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 import '../src/renderer/src/addon-checks.ts'
@@ -118,6 +130,20 @@ test('invalid reference titles leave footnotes and flavor syntax visible to dete
       assert.equal(detect(source), true, source)
       assert.equal(detect('````md\n' + source + '\n````'), false)
     })
+})
+
+test('lazy flavor grammar does not retain readers in shared parser options', () => {
+  for (const [detector, reference] of pairs) {
+    const source = '[ref]: /x "a\n\n$x$ ~~strike~~ H~2~O\n"'
+    assert.equal(detector(source), reference(source))
+  }
+  for (const parser of [
+    githubParser,
+    mathDetector,
+    textExtrasDetector,
+    typstDetector,
+  ])
+    assert.equal(parser.defaults.tokenizer?.lexer, undefined)
 })
 
 test('flavor detector guards preserve contextual parsing and delimiter edge cases', () => {

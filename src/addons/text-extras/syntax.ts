@@ -45,8 +45,7 @@ export function detectTextExtras(source: string) {
   if (!source.includes('~') && !source.includes('-#')) return false
   let found = false
   detector.walkTokens(detector.lexer(source), (token) => {
-    if (token.type === 'subscript' || token.type === 'subtext') found = true
-    return []
+    found ||= token.type === 'subscript' || token.type === 'subtext'
   })
   return found
 }

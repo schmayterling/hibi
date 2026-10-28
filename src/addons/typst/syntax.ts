@@ -37,8 +37,7 @@ export const typstFlavor: MarkdownFlavor = {
     if (!/(?:`{3}|~{3})typst/i.test(source)) return false
     let found = false
     detector.walkTokens(detector.lexer(source), (token) => {
-      if (token.type === 'typstBlock') found = true
-      return []
+      found ||= token.type === 'typstBlock'
     })
     return found
   },

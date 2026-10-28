@@ -17,8 +17,7 @@ for (const parser of [math, textExtras, typst]) {
 }
 
 github.lexer = (source, options) =>
-  new Marked(
-    { ...github.defaults, ...options },
-    markedGithubFootnote(),
-    blockMarkdown,
-  ).lexer(source)
+  new Marked({ gfm: true }, markedGithubFootnote(), blockMarkdown).lexer(
+    source,
+    options,
+  )

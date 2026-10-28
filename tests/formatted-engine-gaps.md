@@ -110,7 +110,7 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | marker-001 | [markdown-markers.test.mjs:515](markdown-markers.test.mjs#L515) | left arrow must reenter nested final formatting before typing | 8b: hidden markers and math caret placement |
 | marker-002 | [markdown-markers.test.mjs:574](markdown-markers.test.mjs#L574) | one right arrow must leave final formatting for the next paragraph | 8b: hidden markers and math caret placement |
 | marker-003 | [markdown-markers.test.mjs:700](markdown-markers.test.mjs#L700) | the caret beside tall math must remain text sized | 8b: hidden markers and math caret placement |
-| marker-005 | [markdown-markers.test.mjs:751](markdown-markers.test.mjs#L751) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
+| marker-005 | [markdown-markers.test.mjs:773](markdown-markers.test.mjs#L773) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
 | corpus-001 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | lazy reference definitions must render only native paragraph text | 9: outline semantics and diagram lifecycle |
 | corpus-002 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | gfm tables and alerts must report native formatted character counts | 9: outline semantics and diagram lifecycle |
 | corpus-003 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | reference definitions must hide while resolved labels remain visible | 9: outline semantics and diagram lifecycle |

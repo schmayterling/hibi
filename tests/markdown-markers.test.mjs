@@ -707,6 +707,28 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
   assert.ok(math.caret.bottom <= math.formula.bottom + 1, JSON.stringify(math))
 })
 
+test('codemirror: a focused table cell reveals all its formatting markers', {
+  timeout: 60000,
+}, async (t) => {
+  const cell = 'some **bold** and *italic* with `code` and ~~strike~~'
+  const { page, rich } = await openCMMarkers(
+    t,
+    `| head | other |\n| --- | --- |\n| ${cell} | plain |`,
+  )
+  await rich.locator('.hibi-lp-table td').first().click()
+  const editor = page.locator('.hibi-lp-cell-editor .cm-content')
+  await editor.waitFor()
+  await editor.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('bold') + 1 },
+    })
+    view.focus()
+  })
+  await editor.locator('.hibi-lp-marker').first().waitFor()
+  assert.equal(await editor.locator('.hibi-lp-marker').count(), 8)
+})
+
 test('codemirror: focused markers preserve copying, source, undo, preferences and split editing', {
   timeout: 60000,
 }, async (t) => {

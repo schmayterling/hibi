@@ -43,6 +43,7 @@ import {
   lineBreak,
 } from './formatted-commands'
 import {
+  blockMarkedNodes,
   claimFormattedReplacement,
   type FormattedContainer,
   type FormattedDecorations,
@@ -80,17 +81,6 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 })
 
 type Revealed = { from: number; to: number }
-
-/**
- * Formatting whose delimiters the rich editor hints for the whole focused
- * block, rather than only where the selection is.
- */
-const blockMarked = new Set([
-  'Emphasis',
-  'StrongEmphasis',
-  'InlineCode',
-  'Strikethrough',
-])
 
 class SpaceWidget extends WidgetType {
   override eq() {
@@ -339,7 +329,7 @@ function inline(
     reveal.some((range) => range.from <= to && range.to >= from)
   /** Whether a node shows its source: the delimiters of emphasis, code and strikethrough show for their whole block. */
   const revealedAt = (node: SyntaxNodeRef) => {
-    let block: SyntaxNode | null = blockMarked.has(node.name)
+    let block: SyntaxNode | null = blockMarkedNodes.has(node.name)
       ? node.node.parent
       : null
     while (block && !block.type.is('LeafBlock')) block = block.parent

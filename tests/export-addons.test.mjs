@@ -195,11 +195,13 @@ test('addon dates come from the first-parent history of each addon folder', asyn
         GIT_COMMITTER_DATE: date,
       },
     })
-  const commit = async (date, file) => {
-    await mkdir(dirname(join(addons, file)), { recursive: true })
-    await writeFile(join(addons, file), date)
+  const commit = async (date, ...files) => {
+    for (const file of files) {
+      await mkdir(dirname(join(addons, file)), { recursive: true })
+      await writeFile(join(addons, file), date)
+    }
     run(date, 'add', '.')
-    run(date, 'commit', '-qm', file)
+    run(date, 'commit', '-qm', files.join(' '))
   }
   assert.equal(await addonDates(root, ['first']), null)
   run('2026-01-01T00:00:00Z', 'init', '-q', '-b', 'main')
@@ -224,6 +226,35 @@ test('addon dates come from the first-parent history of each addon folder', asyn
     first: { released: '2026-01-04', updated: '2026-03-01' },
     second: { released: '2026-02-01', updated: '2026-02-01' },
   })
+  // Commits across more than three addons are sweeping changes and never count.
+  await commit(
+    '2026-04-01T00:00:00Z',
+    'first/a.md',
+    'second/a.md',
+    'third/manifest.ts',
+    'fourth/manifest.ts',
+  )
+  assert.deepEqual(
+    await addonDates(addons, ['first', 'second', 'third', 'fourth']),
+    {
+      first: { released: '2026-01-04', updated: '2026-03-01' },
+      second: { released: '2026-02-01', updated: '2026-02-01' },
+    },
+  )
+  await commit(
+    '2026-04-02T00:00:00Z',
+    'first/b.md',
+    'second/b.md',
+    'third/b.md',
+  )
+  assert.deepEqual(
+    await addonDates(addons, ['first', 'second', 'third', 'fourth']),
+    {
+      first: { released: '2026-01-04', updated: '2026-04-02' },
+      second: { released: '2026-02-01', updated: '2026-04-02' },
+      third: { released: '2026-04-02', updated: '2026-04-02' },
+    },
+  )
   run(
     '2026-03-01T00:00:00Z',
     'clone',

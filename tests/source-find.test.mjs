@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorState } from '@codemirror/state'
+import { EditorSelection, EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { sourceFindHighlights } from '../src/renderer/src/source-find.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
@@ -209,4 +209,39 @@ test('source highlights scan only visible ranges and merge overlapping margins',
     previous ??= found
     assert.deepEqual(found, previous)
   }
+})
+
+test('formatted highlights check only selections that can be a match outside their window', (t) => {
+  const lower = String.prototype.toLowerCase
+  let folded = 0
+  t.mock.method(String.prototype, 'toLowerCase', function () {
+    folded += this.length
+    return lower.call(this)
+  })
+  const text = 'needle word '.repeat(100000)
+  const starts = checkpoints(text, 'needle')
+  const doc = EditorState.create({ doc: text }).doc
+  const shown = { from: text.length - 6000, to: text.length }
+  const work = (selection) => {
+    const state = EditorState.create({
+      doc,
+      selection,
+      extensions: [sourceFindHighlights('needle', doc, starts)],
+    })
+    let marks = 0
+    folded = 0
+    state
+      .facet(EditorView.decorations)[0]({
+        // The formatted view's highlight window, as its state field holds it.
+        state: { doc, selection: state.selection, field: () => shown },
+        visibleRanges: [shown],
+      })
+      .between(0, text.length, () => {
+        marks++
+      })
+    return { folded, marks }
+  }
+  const caret = work(EditorSelection.single(0))
+  assert.deepEqual(work(EditorSelection.single(0, 600000)), caret)
+  assert.equal(work(EditorSelection.single(12, 18)).marks, caret.marks + 1)
 })

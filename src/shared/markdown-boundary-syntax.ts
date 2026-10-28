@@ -39,6 +39,18 @@ const catalog = {
   'obsidian@1': obsidianSyntax,
 } satisfies Record<string, MarkdownConfig>
 
+/** Normalized UTF-16 offsets; whole-block bounds exclude its terminating newline. */
+export type CodeBlockExtent = Readonly<{
+  from: number
+  to: number
+  kind: 'fenced' | 'indented'
+  contentFrom: number
+  contentTo: number
+  contentLines: number
+  /** Approximate scrollbar columns: UTF-16 units, with tab stops every four. */
+  contentColumns: number
+  closed: boolean
+}>
 export type BoundarySyntax = keyof typeof catalog
 export type BoundaryConfig = {
   schema: 1

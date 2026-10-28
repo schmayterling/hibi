@@ -1,4 +1,4 @@
-import { type Input, type Tree, TreeFragment } from '@lezer/common'
+import { type Tree, TreeFragment } from '@lezer/common'
 import {
   boundaryRecords,
   boundaryRejoin,
@@ -13,7 +13,10 @@ import {
   boundaryKey,
   boundaryParser,
 } from './markdown-boundary-syntax.ts'
-import { MarkdownCodeExtents } from './markdown-code-extents.ts'
+import {
+  type CodeExtentInput,
+  MarkdownCodeExtents,
+} from './markdown-code-extents.ts'
 import type {
   PreparedSourceOperation,
   SourceSnapshot,
@@ -22,14 +25,18 @@ import { sourceParserInput } from './source-parser.ts'
 import { editorChangesFromSource, mappedPrefix } from './source-projection.ts'
 
 /** Cache normalized ranges so short lines do not each seek the rope. */
-function boundaryInput(source: SourceSnapshot): Input {
+function boundaryInput(source: SourceSnapshot): CodeExtentInput {
   const input = sourceParserInput(source)
   let from = -1,
     text = ''
+  let breaks: number[] | null = null
+  let anchor: { number: number; from: number } | null = null
   const read = (start: number, end: number) => {
     if (end - start > 16384) return input.read(start, end)
     if (start < from || end > from + text.length) {
       from = Math.max(0, start - 4096)
+      breaks = null
+      anchor = null
       text = input.read(
         from,
         Math.min(input.length, Math.max(end, from + 16384)),
@@ -40,7 +47,61 @@ function boundaryInput(source: SourceSnapshot): Input {
   return {
     length: input.length,
     lineChunks: false,
-    chunk: (start) => read(start, Math.min(input.length, start + 4096)),
+    // Geometry reuses the scanner's normalized window. Rope line seeks occur
+    // once per window, not several times for every code block and CodeText.
+    line: (at) => {
+      read(at, at)
+      if (!breaks) {
+        breaks = []
+        for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1))
+          breaks.push(from + i)
+      }
+      if (!anchor) {
+        const line = source.lineAt(source.editorToRaw(from)!)!
+        anchor = { number: line.number, from: source.rawToEditor(line.from)! }
+      }
+      let low = 0,
+        high = breaks.length
+      while (low < high) {
+        const mid = (low + high) >>> 1
+        if (breaks[mid]! < at) low = mid + 1
+        else high = mid
+      }
+      const start = low ? breaks[low - 1]! + 1 : anchor.from
+      const end =
+        breaks[low] ??
+        (from + text.length === input.length ? input.length : null)
+      if (start >= from && end !== null)
+        return {
+          number: anchor.number + low,
+          from: start,
+          to: end,
+          next: Math.min(input.length, end + 1),
+        }
+      const line = source.lineAt(source.editorToRaw(at)!)!
+      const to = source.rawToEditor(line.to)!
+      return {
+        number: line.number,
+        from: source.rawToEditor(line.from)!,
+        to,
+        next: Math.min(input.length, to + 1),
+      }
+    },
+    chunk: (start) => {
+      let end = Math.min(input.length, start + 4096)
+      const first = read(start, end)
+      if (first.includes('\n') || end === input.length) return first
+      // Markdown's line reader treats a chunk without a newline as a whole line.
+      const parts = [first]
+      while (end < input.length) {
+        const next = Math.min(input.length, end + 4096)
+        const part = read(end, next)
+        parts.push(part)
+        end = next
+        if (part.includes('\n')) break
+      }
+      return parts.join('')
+    },
     read,
   }
 }
@@ -49,7 +110,8 @@ function boundaryInput(source: SourceSnapshot): Input {
 export class MarkdownBoundaryIndex {
   readonly key: string
   readonly parser: ChunkedMarkdownParser
-  private readonly code: MarkdownCodeExtents
+  private code: MarkdownCodeExtents
+  private codeCoverage: boolean
   private parse: ChunkedPartialParse
   private tree: Tree | null = null
   private fragments: readonly TreeFragment[] = []
@@ -64,27 +126,39 @@ export class MarkdownBoundaryIndex {
     source: SourceSnapshot,
     config: BoundaryConfig,
     probe?: ChunkedMarkdownProbe,
+    codeCoverage = false,
   ) {
     this.config = config
     const base = boundaryParser(config)
     if (!base || config.prefix > source.normalizedLength)
       throw new Error('Could not read a document worker reply.')
     this.key = boundaryKey(config)
-    this.code = new MarkdownCodeExtents(source)
+    const input = boundaryInput(source)
+    this.code = new MarkdownCodeExtents(source, input)
+    this.codeCoverage = codeCoverage
     this.parser = new ChunkedMarkdownParser(base, base, {
       chunkSize: config.chunkSize,
       groupSize: config.groupSize,
       giantBlock: config.giantBlock,
       opaque: new Set(config.opaque),
-      codeBlocks: this.code,
+      ...(codeCoverage ? { codeBlocks: this.code } : {}),
       ...(probe ? { probe } : {}),
     })
     this.source = source
-    this.parse = this.parser.startBoundaryParse(
-      boundaryInput(source),
-      [],
-      config.prefix,
-    )
+    this.parse = this.parser.startBoundaryParse(input, [], config.prefix)
+  }
+  setCodeCoverage(enabled: boolean) {
+    if (enabled === this.codeCoverage) return
+    this.codeCoverage = enabled
+    delete this.parser.options.codeBlocks
+    if (!enabled) return
+    const input = boundaryInput(this.source)
+    this.code = new MarkdownCodeExtents(this.source, input)
+    this.parser.options.codeBlocks = this.code
+    this.tree = null
+    this.advanced = false
+    this.fragments = []
+    this.parse = this.parser.startBoundaryParse(input, [], this.config.prefix)
   }
   acknowledgeCode(version: number) {
     if (this.tree) this.code.acknowledge(version)
@@ -101,6 +175,7 @@ export class MarkdownBoundaryIndex {
   advance() {
     this.tree = this.parse.advance()
     this.advanced = true
+    if (this.tree && this.codeCoverage) this.code.finish()
     return this.tree !== null
   }
   apply(prepared: PreparedSourceOperation) {
@@ -159,13 +234,16 @@ export class MarkdownBoundaryIndex {
         fragments: TreeFragment.applyChanges(this.retained.fragments, changes),
       }
     this.fragments = TreeFragment.applyChanges(fragments, changes)
-    this.code.apply(prepared.before, prepared.after, changes)
-    if (this.config.prefix) this.code.clear(0, this.config.prefix)
+    const input = boundaryInput(prepared.after)
+    if (this.codeCoverage) {
+      this.code.apply(prepared.before, prepared.after, changes, input)
+      if (this.config.prefix) this.code.clear(0, this.config.prefix)
+    }
     this.source = prepared.after
     this.tree = null
     this.advanced = false
     this.parse = this.parser.startBoundaryParse(
-      boundaryInput(prepared.after),
+      input,
       this.fragments,
       this.config.prefix,
     )
@@ -175,6 +253,7 @@ export class MarkdownBoundaryIndex {
     baseVersion?: number,
     codeVersion: number | null | undefined = baseVersion,
     codeOnly = false,
+    includeCode = true,
   ) {
     if (!this.tree) throw new Error('Could not read a document worker reply.')
     const start = codeOnly ? 0 : boundaryStart(this.tree, from)
@@ -190,11 +269,15 @@ export class MarkdownBoundaryIndex {
       ? [].values()
       : boundaryRecords(this.tree, from, to)
     // Geometry coverage is independent of the syntax repair suffix.
-    const code = this.code.pages(
-      0,
-      this.length,
-      typeof codeVersion === 'number' && codeVersion === this.code.baseVersion,
-    )
+    const code =
+      includeCode && this.codeCoverage
+        ? this.code.pages(
+            0,
+            this.length,
+            typeof codeVersion === 'number' &&
+              codeVersion === this.code.baseVersion,
+          )
+        : [].values()
     let next = records.next(),
       coverage = code.next()
     if (next.done && coverage.done) {

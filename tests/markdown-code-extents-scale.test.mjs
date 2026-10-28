@@ -107,7 +107,7 @@ test('a 50 mib code index retains giant width summaries and pushes only repaired
   assert.ok(text.length >= 50 * 1024 * 1024)
   const store = new SourceStore(text, { tabId: 'code-scale', revision: 0 })
   const work = probe(),
-    index = new MarkdownBoundaryIndex(store.snapshot(), config, work)
+    index = new MarkdownBoundaryIndex(store.snapshot(), config, work, true)
   store.counters(true)
   const coldAdvance = drain(index, store)
   const cold = transferred(index)
@@ -131,6 +131,20 @@ test('a 50 mib code index retains giant width summaries and pushes only repaired
     codeRead: index.codeWork.readUnits,
     widthRuns: index.codeWork.widthRuns,
     maximumAdvance: coldAdvance,
+  }
+
+  const syntaxOnly = new MarkdownBoundaryIndex(store.snapshot(), config)
+  assert.equal(syntaxOnly.parser.options.codeBlocks, undefined)
+  store.counters(true)
+  const syntaxAdvance = drain(syntaxOnly, store)
+  const syntaxTransfer = transferred(syntaxOnly)
+  assert.equal(syntaxTransfer.code.length, 0)
+  assert.equal(syntaxOnly.codeWork.readUnits, 0)
+  assert.equal(store.counters().materializations, 0)
+  const noListeners = {
+    ...syntaxTransfer.result,
+    codeRead: syntaxOnly.codeWork.readUnits,
+    maximumAdvance: syntaxAdvance,
   }
 
   index.apply(prepare(store, [{ from: peak, to: peak + 1100, insert: 'tiny' }]))
@@ -190,6 +204,7 @@ test('a 50 mib code index retains giant width summaries and pushes only repaired
     JSON.stringify({
       length: text.length,
       initial,
+      noListeners,
       repaired: repairedWork,
       pending: pendingWork,
     }),
@@ -213,7 +228,7 @@ test('giant container code reuses unchanged widths when the scanner replays its 
     '\n>   ~~~\n'
   const store = new SourceStore(text, { tabId: 'container-code', revision: 0 })
   const work = probe(),
-    index = new MarkdownBoundaryIndex(store.snapshot(), config, work)
+    index = new MarkdownBoundaryIndex(store.snapshot(), config, work, true)
   drain(index, store)
   assert.equal(transferred(index).code[0].contentColumns, 1100)
   index.apply(prepare(store, [{ from: peak, to: peak + 1100, insert: 'tiny' }]))
@@ -233,5 +248,55 @@ test('giant container code reuses unchanged widths when the scanner replays its 
         scanned: work.scannedUnits,
       },
     }),
+  )
+})
+
+test('code geometry derives line positions from scanner windows instead of seeking each block', (t) => {
+  const unit =
+    '# part\n\n' +
+    'paragraph words\n\n'.repeat(32) +
+    '~~~js\nsmall\tbody\n~~~\n\n    indented\n\n> ~~~\n> quote\n> ~~~\n\n- ~~~\n  list\n  ~~~\n\n'
+  const text = unit.repeat(Math.ceil(1048576 / unit.length))
+  const store = new SourceStore(text, { tabId: 'code-seeks', revision: 0 })
+  const prototype = Object.getPrototypeOf(store.snapshot())
+  const counts = {
+    lineAt: 0,
+    lineStart: 0,
+    editorToRaw: 0,
+    rawToEditor: 0,
+    sliceRaw: 0,
+  }
+  for (const name of Object.keys(counts)) {
+    const original = prototype[name]
+    t.mock.method(prototype, name, function (...args) {
+      counts[name]++
+      return original.apply(this, args)
+    })
+  }
+  const indexed = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    config,
+    undefined,
+    true,
+  )
+  while (!indexed.advance()) {}
+  assert.equal(
+    [...indexed.code.records()].length,
+    4 * Math.ceil(1048576 / unit.length),
+  )
+  const withCode = { ...counts }
+  for (const name of Object.keys(counts)) counts[name] = 0
+  const plain = new MarkdownBoundaryIndex(store.snapshot(), config)
+  while (!plain.advance()) {}
+  assert.ok(
+    withCode.rawToEditor <= counts.rawToEditor * 3,
+    JSON.stringify({ withCode, withoutCode: counts }),
+  )
+  assert.ok(
+    withCode.sliceRaw <= counts.sliceRaw * 3,
+    JSON.stringify({ withCode, withoutCode: counts }),
+  )
+  t.diagnostic(
+    JSON.stringify({ geometrySeeks: { withCode, withoutCode: counts } }),
   )
 })

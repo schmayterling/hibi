@@ -1,7 +1,11 @@
-import type { ChangedRange, SyntaxNode, Tree } from '@lezer/common'
+import type { ChangedRange, Input, SyntaxNode, Tree } from '@lezer/common'
 import type { CodeBlockExtent } from './markdown-boundary-syntax.ts'
 import type { SourceSnapshot } from './source-buffer.ts'
 import { normalizedSource } from './source-projection.ts'
+
+export type CodeExtentInput = Input & {
+  line(at: number): { number: number; from: number; to: number; next: number }
+}
 
 type Columns = { from: number; to: number; columns: number; prefix: number }
 type Entry = Columns | CodeBlockExtent
@@ -226,19 +230,23 @@ function* columnRuns(
 /** Worker-only code rows and width runs. Edits split summaries; they never reread a retained body. */
 export class MarkdownCodeExtents {
   #source: SourceSnapshot
+  #input: CodeExtentInput | undefined
   #dirty: { from: number; to: number }[] | null = null
   #baseVersion: number | null = null
   #blocks: Node | null = null
   #columns: Node | null = null
+  #widthDirty: { from: number; to: number }[] = []
   readonly work = {
     readUnits: 0,
     maximumRead: 0,
     maximumWindow: 0,
     recordsWritten: 0,
     widthRuns: 0,
+    reuseMisses: 0,
   }
-  constructor(source: SourceSnapshot) {
+  constructor(source: SourceSnapshot, input?: CodeExtentInput) {
     this.#source = source
+    this.#input = input
   }
   get baseVersion() {
     return this.#baseVersion
@@ -249,6 +257,7 @@ export class MarkdownCodeExtents {
     this.#dirty = []
   }
   #line(at: number) {
+    if (this.#input) return this.#input.line(at)
     const source = this.#source
     const line = source.lineAt(source.editorToRaw(at)!)!
     return {
@@ -264,6 +273,7 @@ export class MarkdownCodeExtents {
   #read(from: number, to: number) {
     this.work.readUnits += to - from
     this.work.maximumRead = Math.max(this.work.maximumRead, to - from)
+    if (this.#input) return this.#input.read(from, to)
     return normalizedSource(
       this.#source.sliceRaw(
         this.#source.editorToRaw(from)!,
@@ -307,8 +317,29 @@ export class MarkdownCodeExtents {
     this.#blocks = join(left, right)
     if (removed) this.#changed(removed.first, removed.last)
   }
+  canReuse(from: number, to: number) {
+    if (this.#widthDirty.some((range) => range.from < to && range.to > from)) {
+      this.work.reuseMisses++
+      return false
+    }
+    return true
+  }
+  finish() {
+    this.#widthDirty = []
+  }
+  #verified(from: number, to: number) {
+    this.#widthDirty = this.#widthDirty.flatMap((range) =>
+      range.to <= from || range.from >= to
+        ? [range]
+        : [
+            ...(range.from < from ? [{ from: range.from, to: from }] : []),
+            ...(range.to > to ? [{ from: to, to: range.to }] : []),
+          ],
+    )
+  }
   clear(from: number, to: number) {
     this.#eraseStarts(from, to)
+    this.#verified(from, to)
     this.#columns = replaceColumns(this.#columns, from, to, [])
     this.work.widthRuns = count(this.#columns)
   }
@@ -316,17 +347,18 @@ export class MarkdownCodeExtents {
     before: SourceSnapshot,
     after: SourceSnapshot,
     changes: readonly ChangedRange[],
+    input?: CodeExtentInput,
   ) {
     const lines: { from: number; to: number; offset: number }[] = []
     for (const change of changes) {
       const a = before.lineAt(before.editorToRaw(change.fromA)!)!,
-        b = before.lineAt(before.editorToRaw(change.toA)!)!
-      const from = before.rawToEditor(
-        before.lineStart(Math.max(1, a.number - 1))!,
-      )!
+        b = before.lineAt(
+          before.editorToRaw(Math.max(change.fromA, change.toA - 1))!,
+        )!
+      const from = before.rawToEditor(a.from)!
       const to =
-        b.number + 2 <= before.lineCount
-          ? before.rawToEditor(before.lineStart(b.number + 2)!)!
+        b.number < before.lineCount
+          ? before.rawToEditor(before.lineStart(b.number + 1)!)!
           : before.normalizedLength
       const offset = change.toB - change.fromB - (change.toA - change.fromA)
       const last = lines.at(-1)
@@ -340,9 +372,13 @@ export class MarkdownCodeExtents {
       const mapped = (at: number, end: boolean) =>
         at < change.fromA || (at === change.fromA && !end)
           ? at
-          : at > change.toA || (at === change.toA && end)
+          : at >= change.toA
             ? at + offset
             : change.fromA + (end ? change.toB - change.fromB : 0)
+      this.#widthDirty = this.#widthDirty.map((range) => ({
+        from: mapped(range.from, false),
+        to: mapped(range.to, true),
+      }))
       if (this.#dirty)
         this.#dirty = this.#dirty.map((range) => ({
           from: mapped(range.from, false),
@@ -354,18 +390,51 @@ export class MarkdownCodeExtents {
         first = edge(left, true)
         left = pop(left, true)
       }
-      const [removed, right] = split(tail, change.toA, true)
-      if (first || removed)
+      const [touched, right] = split(tail, change.toA, true)
+      let retained: Node | null = null
+      const records = [
+        ...(first ? [first as CodeBlockExtent] : []),
+        ...between(touched, -1, Infinity),
+      ]
+      // Projected edits can touch a reused next line. Keep its record until a
+      // verified scan replaces or clears it, including edits at either edge.
+      for (const record of records) {
+        const next = {
+          ...record,
+          from: mapped(record.from, false),
+          to: mapped(record.to, true),
+          contentFrom: mapped(record.contentFrom, false),
+          contentTo: mapped(record.contentTo, true),
+        }
+        if (next.to > next.from) retained = join(retained, make(next))
+      }
+      if (first || touched)
         this.#changed(
           mapped(
-            Math.min(first?.from ?? Infinity, removed?.first ?? Infinity),
+            Math.min(first?.from ?? Infinity, touched?.first ?? Infinity),
             false,
           ),
-          mapped(Math.max(first?.to ?? -1, removed?.last ?? -1), true),
+          mapped(Math.max(first?.to ?? -1, touched?.last ?? -1), true),
         )
       move(right, offset)
-      this.#blocks = join(left, right)
+      this.#blocks = join(join(left, retained), right)
     }
+    const project = (at: number, end: boolean) => {
+      let offset = 0
+      for (const change of changes) {
+        if (at < change.fromA || (at === change.fromA && !end))
+          return at + offset
+        if (at <= change.toA)
+          return at === change.toA || end ? change.toB : change.fromB
+        offset = change.toB - change.toA
+      }
+      return at + offset
+    }
+    for (const line of lines)
+      this.#widthDirty.push({
+        from: project(line.from, false),
+        to: project(line.to, true),
+      })
     for (const line of lines.reverse())
       this.#columns = replaceColumns(
         this.#columns,
@@ -375,6 +444,7 @@ export class MarkdownCodeExtents {
         line.offset,
       )
     this.#source = after
+    this.#input = input
     this.work.widthRuns = count(this.#columns)
   }
   #put(record: CodeBlockExtent) {
@@ -519,7 +589,8 @@ export class MarkdownCodeExtents {
             }
             at += value.length
           }
-          if (line < end) row(line, last.next, columns, prefix)
+          if (line < end && end >= last.to)
+            row(line, last.next, columns, prefix)
         }
         if (base + node.to <= to) blocks.push(node)
         return false
@@ -529,6 +600,7 @@ export class MarkdownCodeExtents {
     const ending = this.#line(to)
     const widthTo = ending.from === to ? to : ending.next
     this.#columns = replaceColumns(this.#columns, from, widthTo, rows)
+    this.#verified(from, to)
     this.work.widthRuns = count(this.#columns)
     for (const node of blocks) {
       const close = node.lastChild

@@ -22,7 +22,12 @@ const config = {
 }
 function extents(text) {
   const store = new SourceStore(text, { tabId: 'code-extents', revision: 0 })
-  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    config,
+    undefined,
+    true,
+  )
   while (!index.advance()) {}
   return [...index.pages()].flatMap((page) => page.code?.records ?? [])
 }
@@ -229,7 +234,12 @@ test('pending edits split and join crlf without retaining stale code rows or wid
       tabId: 'queued-extents',
       revision: 0,
     })
-    const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+    const index = new MarkdownBoundaryIndex(
+      store.snapshot(),
+      config,
+      undefined,
+      true,
+    )
     let known = [],
       acknowledged
     const check = () => {
@@ -295,7 +305,12 @@ test('unconsumed indexed versions preserve repairs against the acknowledged code
     tabId: 'code-ack',
     revision: 0,
   })
-  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    config,
+    undefined,
+    true,
+  )
   drain(index)
   assert.equal(collect(index).length, 200)
   index.acknowledgeCode(0)
@@ -326,7 +341,12 @@ test('a storage-only crlf join still ends an empty repair and keeps the cached c
     tabId: 'code-ending',
     revision: 0,
   })
-  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    config,
+    undefined,
+    true,
+  )
   drain(index)
   const initial = collect(index)
   index.acknowledgeCode(0)
@@ -356,4 +376,309 @@ test('a coverage query includes complete blocks crossing either edge', () => {
   assert.deepEqual(pages[0].records, records)
   assert.ok(records[0].from < from && records[0].to > to)
   assert.deepEqual([...index.records(records[0].to, text.length)], [])
+})
+
+const production = {
+  ...config,
+  syntax: ['table@1', 'tasks@1'],
+  opaque: ['Table'],
+  chunkSize: 4096,
+  groupSize: 64,
+  giantBlock: 65536,
+}
+
+test('giant fence closers match only the opening fence character', () => {
+  for (const open of [
+    '~~~' + ticks[0] + 'js',
+    ticks + '~',
+    ticks + ticks[0] + '~~~~',
+  ]) {
+    const close = /^(`+|~+)/.exec(open)[0]
+    const text =
+      open + '\n' + 'code line\n'.repeat(20000) + close + '\n\nafter\n'
+    const store = new SourceStore(text, { tabId: 'code-marker', revision: 0 })
+    const index = new MarkdownBoundaryIndex(
+      store.snapshot(),
+      production,
+      undefined,
+      true,
+    )
+    drain(index)
+    assert.deepEqual(collect(index), fresh(text), open)
+  }
+})
+
+test('editing a giant closer retains the reused block on the next line and its consumer patch', () => {
+  const head = ticks + '\n' + 'code line\n'.repeat(8000) + ticks
+  for (const settings of [
+    production,
+    { ...production, syntax: [], opaque: ['FencedCode'] },
+  ])
+    for (const next of [
+      '~~~\nnext\n~~~\n',
+      '    indented\n',
+      '> ~~~\n> q\n> ~~~\n',
+    ])
+      for (const insert of [' ', ticks[0]]) {
+        const text = head + '\n' + next + '\npara\n'.repeat(20)
+        const store = new SourceStore(text, { tabId: 'code-next', revision: 0 })
+        const index = new MarkdownBoundaryIndex(
+          store.snapshot(),
+          settings,
+          undefined,
+          true,
+        )
+        drain(index)
+        const initial = collect(index)
+        index.acknowledgeCode(0)
+        index.apply(
+          prepare(store, [{ from: head.length, to: head.length, insert }]),
+        )
+        drain(index)
+        const expected = fresh(
+          text.slice(0, head.length) + insert + text.slice(head.length),
+        )
+        assert.equal(expected.length, 2)
+        const pages = [...index.pages(0, undefined, 0, true)]
+        let consumer = initial.map((record) =>
+          record.from > head.length
+            ? {
+                ...record,
+                from: record.from + insert.length,
+                to: record.to + insert.length,
+                contentFrom: record.contentFrom + insert.length,
+                contentTo: record.contentTo + insert.length,
+              }
+            : record,
+        )
+        for (const { code } of pages) {
+          if (!code) continue
+          consumer = consumer.filter(
+            (record) => record.to <= code.from || record.from >= code.to,
+          )
+          consumer.push(...code.records)
+        }
+        consumer.sort((a, b) => a.from - b.from)
+        assert.deepEqual(
+          consumer,
+          expected,
+          JSON.stringify({ next, insert, settings }),
+        )
+        assert.deepEqual(collect(index), expected)
+      }
+})
+
+test('splitting a line above a retained giant width maximum keeps the unvisited neighbour summary', () => {
+  const lengths = [
+    5747, 6515, 5402, 4095, 1384, 6923, 7488, 2368, 6599, 28, 2, 56, 9800, 4495,
+    4611,
+  ]
+  const prefix = 'intro\n\n~~~\n'
+  const text =
+    prefix + lengths.map((n) => 'w'.repeat(n)).join('\n') + '\n~~~\n\nafter\n'
+  const store = new SourceStore(text, {
+    tabId: 'code-width-neighbour',
+    revision: 0,
+  })
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    production,
+    undefined,
+    true,
+  )
+  drain(index)
+  assert.equal(collect(index)[0].contentColumns, 9800)
+  index.acknowledgeCode(0)
+  const at =
+    prefix.length + lengths.slice(0, 11).reduce((sum, n) => sum + n + 1, 0) + 1
+  index.apply(prepare(store, [{ from: at, to: at, insert: '\n' }]))
+  drain(index)
+  const patch = [...index.pages(0, undefined, 0, true)].flatMap(
+    (page) => page.code?.records ?? [],
+  )
+  assert.equal(patch[0].contentColumns, 9800)
+  assert.deepEqual(
+    collect(index),
+    fresh(text.slice(0, at) + '\n' + text.slice(at)),
+  )
+})
+
+test('long physical container code lines stay one block across input chunks and edits', () => {
+  for (const [open, prefix, close] of [
+    ['> ~~~\n', '> ', '> ~~~\n'],
+    ['- ~~~\n', '  ', '  ~~~\n'],
+    ['> - ~~~\n', '>   ', '>   ~~~\n'],
+  ]) {
+    const text =
+      open +
+      prefix +
+      'a\n' +
+      prefix +
+      'v'.repeat(5000) +
+      '\n' +
+      prefix +
+      'b\n' +
+      close
+    const store = new SourceStore(text, {
+      tabId: 'code-container-long',
+      revision: 0,
+    })
+    const index = new MarkdownBoundaryIndex(
+      store.snapshot(),
+      production,
+      undefined,
+      true,
+    )
+    drain(index)
+    assert.deepEqual(collect(index), fresh(text))
+    const at = open.length + prefix.length + 2 + prefix.length + 4100
+    index.apply(prepare(store, [{ from: at, to: at, insert: '\t' }]))
+    drain(index)
+    assert.deepEqual(
+      collect(index),
+      fresh(text.slice(0, at) + '\t' + text.slice(at)),
+    )
+  }
+})
+
+test('giant reuse waits until both halves of a split source line have width summaries', () => {
+  for (const settings of [config, production])
+    for (const insert of ['\n', '\n\n', 'Z'.repeat(300), '\t'.repeat(10)]) {
+      const head = '~~~\n' + 'body\n'.repeat(settings === config ? 100 : 3000)
+      const long = 'x'.repeat(settings === config ? 200 : 12000)
+      const text = head + long + '\n' + head.slice(4) + '~~~\n'
+      const store = new SourceStore(text, {
+        tabId: 'code-split-width',
+        revision: 0,
+      })
+      const index = new MarkdownBoundaryIndex(
+        store.snapshot(),
+        settings,
+        undefined,
+        true,
+      )
+      drain(index)
+      const at = head.length + 40
+      index.apply(prepare(store, [{ from: at, to: at, insert }]))
+      drain(index)
+      assert.deepEqual(
+        collect(index),
+        fresh(text.slice(0, at) + insert + text.slice(at)),
+        JSON.stringify({ settings, insert }),
+      )
+    }
+})
+
+test('a reused tiny giant fence keeps the longer half of an edited crlf body line', () => {
+  const text =
+    '>\t~~~\r\n>\tx\ty   ~~~\r\n\tx\r\n   ~~~~  \r\n> - ~~~\r\n>   a\r\n>   ~~~\r\n$$\r\nmath\r\n$$\r\n- ```\r\n  a\tb\r\n  ```\r\n> > ~~~\r\n\r\n > nested\r\n> ~~~\r\n|  | b |\r\n| - | - |\r\n| 1 | 2 |\r\n~~~`~~~\r\n```\r\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx````xxxxxxxx`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx```xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n\nxxxxxxxxxxxxxxx1. xxxxxxxxxxxxxxxxxxxxxxx- xxxxxxxxxxxxxx> ```\r\nunclosed body\r\n> > ~~~\r\n>    \r\n>\t~~````\r\n>\tx\ty\r\npar\rline\r\n~~~js\ta\tb\r\n~~~\r\n```\r\ncode\r\n```\r\n1. ~~~\r\n   x\r\n\r\n   y\r\n  \n    x\n~\r\n'
+  const store = new SourceStore(text, { tabId: 'code-tiny-width', revision: 0 })
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    {
+      ...production,
+      syntax: ['table@1'],
+      chunkSize: 32,
+      groupSize: 2,
+      giantBlock: 128,
+    },
+    undefined,
+    true,
+  )
+  drain(index)
+  const changes = [{ from: 261, to: 262, insert: '\n\n' }]
+  index.apply(prepare(store, changes))
+  drain(index)
+  const change = changes[0]
+  assert.deepEqual(
+    collect(index),
+    fresh(text.slice(0, change.from) + change.insert + text.slice(change.to)),
+  )
+})
+
+test('pending giant-line splits compare with fresh parsing using high-bit random choices', (t) => {
+  let checks = 0,
+    reuseMisses = 0
+  for (let seed = 1; seed <= 40; seed++) {
+    let state = seed
+    const random = () => {
+      state = (state + 0x6d2b79f5) >>> 0
+      let value = state
+      value = Math.imul(value ^ (value >>> 15), value | 1)
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61)
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+    }
+    random()
+    let body = ''
+    while (body.length < 90000) {
+      const length =
+        random() < 0.3
+          ? 1000 + Math.floor(random() * 9000)
+          : Math.floor(random() * 60)
+      body += 'w'.repeat(length) + '\n'
+    }
+    let text = 'intro\n\n~~~\n' + body + '~~~\n\nafter\n'
+    const store = new SourceStore(text, {
+      tabId: 'code-random-width',
+      revision: 0,
+    })
+    const index = new MarkdownBoundaryIndex(
+      store.snapshot(),
+      production,
+      undefined,
+      true,
+    )
+    drain(index)
+    for (let step = 0; step < 25; step++) {
+      let at = Math.floor(random() * text.length)
+      if (random() < 0.7) {
+        let longest = 0,
+          start = 0,
+          position = 0
+        for (const line of text.split('\n')) {
+          if (line.length > longest) {
+            longest = line.length
+            start = position
+          }
+          position += line.length + 1
+        }
+        at =
+          random() < 0.5
+            ? start + 1 + Math.floor(random() * 20)
+            : Math.max(0, start - 1 - Math.floor(random() * 3))
+      }
+      const choice = random()
+      const insert =
+        choice < 0.4
+          ? '\n'
+          : choice < 0.6
+            ? '\n\n'
+            : choice < 0.8
+              ? 'Q'.repeat(900)
+              : '\t'.repeat(300)
+      index.apply(prepare(store, [{ from: at, to: at, insert }]))
+      text = text.slice(0, at) + insert + text.slice(at)
+      if (random() < 0.5) drain(index)
+      else
+        for (let n = Math.floor(random() * 3); n > 0; n--)
+          if (index.advance()) break
+      if (random() < 0.3 || step === 24) {
+        drain(index)
+        checks++
+        assert.deepEqual(
+          collect(index),
+          fresh(text),
+          JSON.stringify({ seed, step }),
+        )
+      }
+    }
+    reuseMisses += index.codeWork.reuseMisses
+  }
+  assert.ok(checks >= 300)
+  assert.ok(reuseMisses > 0)
+  t.diagnostic(
+    JSON.stringify({
+      giantWidthFuzz: { seeds: 40, edits: 1000, checks, reuseMisses },
+    }),
+  )
 })

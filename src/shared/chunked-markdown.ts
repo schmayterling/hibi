@@ -319,6 +319,8 @@ export type ChunkedMarkdownOptions = {
     scan(tree: Tree, base: number, from: number, to: number): void
     leaf(key: string, start: number, end: number): void
     clear(from: number, to: number): void
+    /** A changed physical line may extend past the grammar's reuse point. */
+    canReuse?(from: number, to: number): boolean
   }
 }
 
@@ -500,7 +502,7 @@ function stateKey(input: Input, name: string, from: number) {
     case 'CodeBlock':
       return name
     case 'FencedCode':
-      return `${name} ${/^[`~]+/.exec(first)?.[0]}`
+      return `${name} ${/^(`+|~+)/.exec(first)?.[0]}`
     default:
       return `${name} ${first}`
   }
@@ -1554,7 +1556,9 @@ class ChunkedParse implements ChunkedPartialParse {
       return null
     const end =
       found.start + (info.block.end ?? found.chunk.length) - old.fragment.offset
-    return end > pos && end <= old.safe
+    return end > pos &&
+      end <= old.safe &&
+      (this.parser.options.codeBlocks?.canReuse?.(pos, end) ?? true)
       ? {
           at: end,
           closed: info.block.end !== null,

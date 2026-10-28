@@ -153,6 +153,8 @@ export class DocumentWorkerClient {
     from: number
     baseVersion?: number
     codeOnly: boolean
+    coverage: boolean
+    complete: boolean
     receive: BoundaryReceive
     declined: (reason: 'stale' | 'mismatch') => void
   } | null = null
@@ -257,9 +259,9 @@ export class DocumentWorkerClient {
     const replay = this.#codeDelivered || this.#codeVersion >= 0
     this.#codeVersion = -1
     if (
-      request &&
+      request?.codeOnly &&
       request.version === this.#session.snapshot().version &&
-      (replay || request.from !== 0 || request.baseVersion !== undefined)
+      replay
     ) {
       // A late listener needs the retained prefix too; replay metadata, never source.
       this.#boundaries = null
@@ -272,14 +274,23 @@ export class DocumentWorkerClient {
         request.codeOnly,
       )
     }
-    if (!request || request.version !== this.#session.snapshot().version)
-      this.#watchCode()
+    this.#watchCode()
     return () => {
       this.#codeReceivers.delete(receive)
-      if (!this.#codeReceivers.size && this.#boundaries?.codeOnly) {
-        const config = this.#codeConfig
-        this.releaseBoundaries()
-        this.#codeConfig = config
+      if (!this.#codeReceivers.size) {
+        const request = this.#boundaries
+        if (request?.codeOnly) this.releaseBoundaries(true)
+        else if (request?.coverage && !request.complete) {
+          this.#boundaries = null
+          this.#requestBoundaries(
+            request.config,
+            request.receive,
+            request.declined,
+            request.from,
+            request.baseVersion,
+            false,
+          )
+        }
       }
     }
   }
@@ -288,6 +299,7 @@ export class DocumentWorkerClient {
     if (
       this.#boundaries &&
       !this.#boundaries.codeOnly &&
+      !this.#boundaries.complete &&
       this.#boundaries.version === version
     )
       return
@@ -328,7 +340,8 @@ export class DocumentWorkerClient {
       this.#boundaries.version === version &&
       this.#boundaries.from === from &&
       this.#boundaries.baseVersion === baseVersion &&
-      this.#boundaries.codeOnly === codeOnly
+      this.#boundaries.codeOnly === codeOnly &&
+      this.#boundaries.coverage === !!this.#codeReceivers.size
     ) {
       this.#boundaries.receive = receive
       return
@@ -340,6 +353,8 @@ export class DocumentWorkerClient {
       id: ++this.#requestId,
       from,
       codeOnly,
+      coverage: !!this.#codeReceivers.size,
+      complete: false,
       ...(baseVersion === undefined ? {} : { baseVersion }),
       receive,
       declined,
@@ -392,7 +407,9 @@ export class DocumentWorkerClient {
       id: request.id,
       version: request.version,
       config: request.config,
-      codeVersion: this.#codeVersion < 0 ? null : this.#codeVersion,
+      ...(request.coverage
+        ? { codeVersion: this.#codeVersion < 0 ? null : this.#codeVersion }
+        : {}),
       ...(request.codeOnly ? { codeOnly: true } : {}),
       ...(request.from ? { from: request.from } : {}),
       ...(request.baseVersion === undefined
@@ -600,6 +617,12 @@ export class DocumentWorkerClient {
   }
   #reply(reply: DocumentWorkerReply) {
     if (this.#disposed) return
+    if (
+      (reply.type === 'boundaries' || reply.type === 'boundary-declined') &&
+      this.#boundaries &&
+      reply.id < this.#boundaries.id
+    )
+      return
     if (reply.epoch !== this.#epoch) {
       if (reply.type === 'boundaries') this.#boundaries?.declined('stale')
       return
@@ -670,7 +693,10 @@ export class DocumentWorkerClient {
         )
           return
         acknowledged = true
-        if (reply.done) this.#codeVersion = reply.version
+        if (reply.done) {
+          request.complete = true
+          if (request.codeOnly) this.#codeVersion = reply.version
+        }
         this.#post({
           type: 'boundary-ack',
           epoch: this.#epoch,
@@ -679,6 +705,7 @@ export class DocumentWorkerClient {
           key: request.key,
           sequence: reply.sequence,
         })
+        if (reply.done && !request.codeOnly) this.#watchCode()
       })
       return
     }

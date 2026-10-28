@@ -157,6 +157,8 @@ export class DocumentWorkerService {
       this.#boundaryModel ??= new this.#boundaryModule!.MarkdownBoundaryIndex(
         this.#store.snapshot(),
         request.config,
+        undefined,
+        request.codeVersion !== undefined,
       )
       if (!this.#boundaryPages) {
         const deadline = performance.now() + 4
@@ -173,6 +175,8 @@ export class DocumentWorkerService {
           request.baseVersion,
           request.codeVersion,
           request.codeOnly,
+          // Geometry follows syntax completion in a separately acknowledged watch.
+          request.codeOnly === true,
         )
       }
       const page = this.#boundaryPages.next()
@@ -409,6 +413,7 @@ export class DocumentWorkerService {
           this.#boundaryModel?.config.prefix !== message.config.prefix
         )
           this.#boundaryModel = null
+        this.#boundaryModel?.setCodeCoverage(message.codeVersion !== undefined)
         this.#boundaryRequest = message
         this.#scheduleBoundaries()
       } else if (message.type === 'boundary-ack') {
@@ -421,7 +426,7 @@ export class DocumentWorkerService {
           message.sequence !== this.#boundaryAwaiting
         )
           return
-        if (this.#boundaryFinal)
+        if (this.#boundaryFinal && request.codeOnly)
           this.#boundaryModel?.acknowledgeCode(message.version)
         this.#boundaryAwaiting = null
         this.#scheduleBoundaries()
@@ -429,6 +434,7 @@ export class DocumentWorkerService {
         if (message.retain !== undefined && typeof message.retain !== 'boolean')
           throw new Error('Could not read a document worker reply.')
         this.#stopBoundaries(!message.retain)
+        this.#boundaryModel?.setCodeCoverage(false)
         this.#boundaryRequest = null
       } else if (message.type === 'cancel-find') {
         if (this.#request?.id === message.id) {

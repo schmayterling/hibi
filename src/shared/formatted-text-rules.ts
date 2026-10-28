@@ -34,6 +34,7 @@ export const textFeatures = new Set([
 export function formattedMarkerRanges(
   node: SyntaxNode,
   read: TextRead,
+  resolvedReference = false,
 ): RenderedRange[] {
   const { from, to, name } = node
   if (name === 'HeaderMark') {
@@ -108,7 +109,7 @@ export function formattedMarkerRanges(
     return open &&
       close &&
       read(open.from, open.to) === '[' &&
-      read(close.to, close.to + 1) === '('
+      (read(close.to, close.to + 1) === '(' || resolvedReference)
       ? [
           { from, to: open.to },
           { from: close.from, to },

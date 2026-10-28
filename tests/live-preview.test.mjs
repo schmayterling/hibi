@@ -1158,6 +1158,213 @@ test('links whose destination spans lines render on one line while mounting and 
   }
 })
 
+test('reference links render the labels the note defines and keep their brackets otherwise', {
+  timeout: 60000,
+}, async () => {
+  const doc = [
+    'full [text][REF] end',
+    'collapsed [Ref][] end',
+    'shortcut [ref] end',
+    'spaced [x][a\nb] end',
+    '[**bold** words\non two lines][ref] end',
+    'missing [nope] and [t][nope] and [**kept**][nope]',
+    'inline [site](https://example.com/) end',
+    // Labels match definitions trimmed and case folded, as navigation reads them.
+    'padded [t][ A\tB ] end',
+    'folded [ẞ] end',
+  ].join('\n\n')
+  const shown = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    preview.references.defined = new Set(['ref', 'a b', 'ss'])
+    preview.references.titles = { ref: 'Go there' }
+    preview.references.asked = []
+    await preview.mount(doc, { width: 800, height: 600 }, { references: true })
+    await preview.settle()
+    return {
+      lines: [...document.querySelectorAll('.cm-line')]
+        .map((line) => line.textContent.replace(/\s+/g, ' ').trim())
+        .filter(Boolean),
+      roles: [
+        ...new Set(
+          [...document.querySelectorAll('.hibi-lp-link')].map((link) =>
+            link.getAttribute('role'),
+          ),
+        ),
+      ],
+      // Titles of defined labels, as the rich view shows them, per line.
+      titles: [...document.querySelectorAll('.cm-line')]
+        .map((line) => line.querySelector('.hibi-lp-link'))
+        .filter(Boolean)
+        .map((link) => link.getAttribute('title')),
+      // Link text per line, which a widget inside it may split.
+      links: [...document.querySelectorAll('.cm-line')]
+        .map((line) =>
+          [...line.querySelectorAll('.hibi-lp-link')]
+            .filter((link) => !link.parentElement.closest('.hibi-lp-link'))
+            .map((link) => link.textContent)
+            .join('')
+            .replace(/\s+/g, ' '),
+        )
+        .filter(Boolean),
+      strong: [...document.querySelectorAll('.hibi-lp-strong')].map(
+        (node) => node.textContent,
+      ),
+      asked: [...preview.references.asked].sort(),
+    }
+  }, doc)
+  assert.deepEqual(shown.lines, [
+    'full text end',
+    'collapsed Ref end',
+    'shortcut ref end',
+    'spaced x end',
+    'bold words on two lines end',
+    'missing [nope] and [t][nope] and [kept][nope]',
+    'inline site end',
+    'padded t end',
+    'folded ẞ end',
+  ])
+  assert.deepEqual(shown.links, [
+    'text',
+    'Ref',
+    'ref',
+    'x',
+    'bold words on two lines',
+    'site',
+    't',
+    'ẞ',
+  ])
+  assert.deepEqual(shown.roles, ['link'])
+  assert.deepEqual(shown.titles, [
+    'Go there',
+    'Go there',
+    'Go there',
+    null,
+    'Go there',
+    null,
+    null,
+    null,
+  ])
+  // Formatting inside a reference's text renders whether or not it resolves.
+  assert.deepEqual(shown.strong, ['bold', 'kept'])
+  // Each drawn label is asked about once, normalized as definitions are.
+  assert.deepEqual(shown.asked, ['a b', 'nope', 'ref', 'ss'])
+})
+
+test('reference labels follow definition changes after an edit and ask only about drawn labels in a 50 MiB note', {
+  timeout: 120000,
+}, async () => {
+  const changed = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    preview.references.defined = new Set(['ref'])
+    preview.references.asked = []
+    await preview.mount('see [ref] here\n\nlast', undefined, {
+      references: true,
+      editable: true,
+    })
+    await preview.settle()
+    const before = document.querySelectorAll('.hibi-lp-link').length
+    // The definition goes away with an edit elsewhere in the note.
+    preview.references.defined = new Set()
+    const view = preview.view()
+    view.dispatch({ changes: { from: view.state.doc.length, insert: '!' } })
+    const until = (check) =>
+      new Promise((resolve) => {
+        const poll = () =>
+          check() ? resolve(true) : requestAnimationFrame(poll)
+        poll()
+      })
+    await until(() => !document.querySelector('.hibi-lp-link'))
+    return {
+      before,
+      after: document.querySelectorAll('.hibi-lp-link').length,
+      text: document.querySelector('.cm-line').textContent,
+      asked: preview.references.asked,
+    }
+  })
+  assert.deepEqual(changed, {
+    before: 1,
+    after: 0,
+    text: 'see [ref] here',
+    asked: ['ref', 'ref'],
+  })
+  const scale = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const unit = Array.from(
+      { length: 50 },
+      (_, i) => `Paragraph with [label ${i}][r${i}] and [r${i}] words.\n\n`,
+    ).join('')
+    preview.references.defined = new Set(
+      Array.from({ length: 50 }, (_, i) => `r${i}`),
+    )
+    preview.references.asked = []
+    const doc = unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length))
+    // Earlier cases leave the pane scrolled; this note opens at its start.
+    document.querySelector('.rich-pane').scrollTop = 0
+    await preview.mount(doc, { width: 800, height: 600 }, { references: true })
+    while (!document.querySelector('.hibi-lp-link')) await preview.settle()
+    const opened = {
+      length: preview.view().state.doc.length,
+      asked: preview.references.asked.length,
+      links: document.querySelectorAll('.hibi-lp-link').length,
+    }
+    const view = preview.view()
+    view.dispatch({
+      selection: { anchor: Math.floor(doc.length / 2) },
+      scrollIntoView: true,
+    })
+    await preview.settle()
+    await preview.settle()
+    return {
+      opened,
+      scrolled: preview.references.asked.length,
+      requested: preview.referenceWork.requested,
+    }
+  })
+  assert.ok(scale.opened.length > 50 * 1024 * 1024)
+  assert.ok(scale.opened.links > 0, JSON.stringify(scale))
+  // Labels drawn on screen, at most the 50 distinct ones, never the note's.
+  assert.ok(scale.opened.asked <= 50, JSON.stringify(scale))
+  assert.ok(scale.scrolled <= 100, JSON.stringify(scale))
+  // Layout hides labels on later lines over parsed text past the viewport
+  // too, but only labels of lines drawn are asked about.
+  const multiline = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    preview.references.defined = { has: () => true }
+    preview.references.asked = []
+    const drawn = new Set()
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          for (const [, number] of (node.textContent ?? '').matchAll(
+            /link (\d+)/g,
+          ))
+            drawn.add(number)
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    const count = Math.ceil((50 * 1024 * 1024) / 40)
+    const doc = Array.from(
+      { length: count },
+      (_, i) => `Paragraph [link ${i}][label\n${i}] words.`,
+    ).join('\n\n')
+    // The case before leaves the pane scrolled to the middle of its note.
+    document.querySelector('.rich-pane').scrollTop = 0
+    await preview.mount(doc, { width: 800, height: 600 }, { references: true })
+    while (!document.querySelector('.hibi-lp-link')) await preview.settle()
+    await preview.settle()
+    observer.disconnect()
+    const asked = preview.references.asked
+    return {
+      length: doc.length,
+      asked: asked.length,
+      drawn: drawn.size,
+      undrawn: asked.filter((label) => !drawn.has(label.split(' ')[1])).length,
+    }
+  })
+  assert.ok(multiline.length > 50 * 1024 * 1024)
+  assert.ok(multiline.asked > 0, JSON.stringify(multiline))
+  assert.equal(multiline.undrawn, 0, JSON.stringify(multiline))
+})
+
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {
   timeout: 180000,
 }, async () => {

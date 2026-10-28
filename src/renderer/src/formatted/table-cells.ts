@@ -28,6 +28,7 @@ import {
 import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
+  blockMarkedNodes,
   claimFormattedReplacement,
   type FormattedDecorations,
   type FormattedRenderContext,
@@ -40,6 +41,7 @@ import {
   formattedRefresh,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
+import { drawReference, referenceLink } from '../formatted-references.ts'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -134,6 +136,12 @@ function decorateCell(
   }
   const revealedAt = (start: number, end: number) =>
     touched(local(start), local(end))
+  // A cell is one block: its formatting shows all its delimiters while the
+  // selection is in the cell.
+  const revealedFor = (node: SyntaxNodeRef) =>
+    blockMarkedNodes.has(node.name)
+      ? touched(0, text.length)
+      : revealedAt(node.from, node.to)
   // Line breaks in cells are written as <br>, as the rich editor saved them.
   const lineBreakAt = (node: SyntaxNodeRef) =>
     node.name === 'HTMLTag' &&
@@ -173,7 +181,7 @@ function decorateCell(
   cursor.iterate((node) => {
     // Syntax whose setting is off shows as written, its children too.
     if (literal.has(node.name)) return false
-    const revealed = revealedAt(node.from, node.to)
+    const revealed = revealedFor(node)
     const nodeOut = sink(revealed)
     let skip = false
     // A cell draws its line breaks itself, so contributed HTML renderers
@@ -206,10 +214,7 @@ function decorateCell(
         return
       case 'EmphasisMark': {
         const parent = node.node.parent
-        sink(!!parent && revealedAt(parent.from, parent.to)).syntax(
-          node.from,
-          node.to,
-        )
+        sink(!!parent && revealedFor(parent)).syntax(node.from, node.to)
         return
       }
       case 'InlineCode': {
@@ -232,17 +237,24 @@ function decorateCell(
         const close = linkMarks.find(
           (mark) => state.sliceDoc(mark.from, mark.to) === ']',
         )
-        // Reference links need the note's definitions, so they stay literal.
-        if (
-          !open ||
-          !close ||
-          state.sliceDoc(open.from, open.from + 1) !== '[' ||
-          state.sliceDoc(close.to, close.to + 1) !== '('
-        )
+        if (!open || !close || state.sliceDoc(open.from, open.from + 1) !== '[')
           return false
+        // A reference link renders when the note defines its label.
+        const reference =
+          state.sliceDoc(close.to, close.to + 1) !== '(' &&
+          referenceLink(state.doc, node.node)
+        if (reference === null) return false
+        const answer = reference
+          ? drawReference(state, reference.label, node.from)
+          : null
+        if (reference && !answer) return
         out.syntax(node.from, open.to)
         out.syntax(close.from, node.to)
-        out.link(open.to, close.from)
+        out.link(
+          open.to,
+          close.from,
+          answer?.title ? { title: answer.title } : undefined,
+        )
         return
       }
       case 'Autolink': {

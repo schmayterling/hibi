@@ -11,12 +11,15 @@ const provided = new Set([
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/renderer',
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/details',
 ])
-// Outline labels and the addon SDK still load the rich editor's schema, from these imports only.
+// outline labels still load the rich editor's schema, from this import only.
 const retained = new Set([
   'src/renderer/src/use-source-outline.ts -> ./markdown-semantics',
-  'src/renderer/src/addon-definition.ts -> ../../addons/sdk-loader',
 ])
 const local = (file) => relative('', file).replaceAll('\\', '/')
+const legacy = (modules) =>
+  modules.filter((path) =>
+    /node_modules\/(?:@tiptap\/|prosemirror-)/.test(path),
+  )
 
 // Modules the CodeMirror editors would load from the rich editor's engine,
 // with `load.code` appended to `load.file` and `load.alias` resolved when given.
@@ -65,9 +68,45 @@ async function legacyModules(followDemand, load) {
   assert.ok(modules.includes('src/renderer/src/SourceEditor.tsx'))
   if (followDemand)
     assert.ok(modules.includes('src/renderer/src/MarkdownSourceEditor.tsx'))
-  return modules.filter((path) =>
-    /node_modules\/(?:@tiptap\/|prosemirror-)/.test(path),
-  )
+  return legacy(modules)
+}
+
+// Diagram addons keep their rich editor node until the rich editor goes. Only
+// the node's constructor may come from its module: the formatted view's blocks,
+// edit dialogs and previews load nothing from the rich editor's engine.
+const richNodes = { mermaid: 'mermaidNode', typst: 'typstNode' }
+
+async function diagramLegacyModules(addon, withNode) {
+  const entry = `src/addons/${addon}/index.tsx`
+  const { metafile } = await build({
+    entryPoints: [entry],
+    bundle: true,
+    write: false,
+    platform: 'browser',
+    format: 'esm',
+    metafile: true,
+    logLevel: 'silent',
+    loader: { '.css': 'empty' },
+    plugins: [
+      {
+        name: 'rich-node',
+        setup(bundle) {
+          if (withNode) return
+          bundle.onResolve({ filter: /^\.\/Block$/ }, ({ importer }) =>
+            local(importer) === entry
+              ? { path: 'Block', namespace: 'rich-node' }
+              : undefined,
+          )
+          bundle.onLoad({ filter: /.*/, namespace: 'rich-node' }, () => ({
+            contents: `export function ${richNodes[addon]}() {}`,
+          }))
+        },
+      },
+    ],
+  })
+  const modules = Object.keys(metafile.inputs)
+  assert.ok(modules.includes(`src/addons/${addon}/formatted.tsx`))
+  return legacy(modules)
 }
 
 test('codemirror editors load no tiptap or prosemirror modules', async () => {
@@ -83,7 +122,7 @@ test('the rich schema stays allowed only through its retained imports', async ()
     },
     {
       file: 'src/renderer/src/SourceEditor.tsx',
-      code: "void import('../../addons/sdk-loader')",
+      code: "void import('../../addons/sdk')",
     },
     {
       file: 'src/renderer/src/use-source-outline.ts',
@@ -91,7 +130,7 @@ test('the rich schema stays allowed only through its retained imports', async ()
     },
     {
       file: 'src/renderer/src/addon-definition.ts',
-      code: "void import('../../addons/sdk-loader?sdk')",
+      code: "void import('../../addons/sdk?sdk')",
     },
     {
       file: 'src/renderer/src/addon-registry.ts',
@@ -103,4 +142,11 @@ test('the rich schema stays allowed only through its retained imports', async ()
     },
   ])
     assert.notDeepEqual(await legacyModules(true, load), [], load.code)
+})
+
+test('diagram blocks and their edit dialogs load no tiptap or prosemirror modules', async () => {
+  for (const addon of Object.keys(richNodes)) {
+    assert.deepEqual(await diagramLegacyModules(addon, false), [], addon)
+    assert.notDeepEqual(await diagramLegacyModules(addon, true), [], addon)
+  }
 })

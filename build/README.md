@@ -1,8 +1,14 @@
+# app icon
+
+`icon.png` is the light app icon and `icon-dark.png` is the dark one. each is 1024 by 1024 pixel artwork that fills the canvas, with transparent rounded corners. run `npm run icons` on macos to regenerate `icon-mac.png`, `icon-win.png`, `icon-linux.png`, `icon.icns`, and `icon.ico` from the light icon, the matching `-dark` pngs from the dark icon, and the about panel's `src/renderer/src/assets/app-icon.png` and `app-icon-dark.png`.
+
+installers and the macos app bundle carry the light icon. while the dark appearance is active, the app shows the dark icon at runtime: the dock icon on macos and the window icons on windows and linux.
+
 # tray icons
 
 run `node scripts/tray-icons.mjs` from the repository root to regenerate the tray assets. run `node scripts/tray-icons.mjs --check` to verify that the committed outputs match their sources without rewriting them. the script uses `sharp`, which is already installed as a transitive dependency in the locked dependency tree. it does not add a dependency or launch the desktop app.
 
-the letter comes from `icon-mac.png`. the script selects the 336 by 488 pixel region starting at pixel (318, 268) and retains pixels whose red, green, blue, and alpha values are all at least 240. this separates the white letter from the scenery. the resulting transparent white shape is saved as `tray-glyph.png`. update the crop if the source artwork changes.
+the letter is `tray-glyph.png`, the white h cut from the app icon before the app icon became a butterfly. the script derives every tray image from it, so edit that file to change the letter.
 
 `trayTemplate.png` and `trayTemplate@2x.png` contain the same black shape at 16 and 32 pixels. their transparent canvases include one and two pixels of vertical padding, respectively. only the letter contributes opacity, so macos can tint the template for light and dark menu bars.
 

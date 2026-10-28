@@ -34,6 +34,8 @@ const prepared = {
   nightlyTag: 'nightly-2026-10-25-aaaaaaa-12-1',
   nightlyVersion: '0.2.0-nightly.20261025.gaaaaaaa.12.1',
   previous: 'v0.1.0',
+  previousRelease: 'v0.1.0',
+  releaseCommits: `${sha}\tFix [editor] *cursor*`,
   commits: `${sha}\tFix [editor] *cursor*`,
   runUrl: 'https://github.com/owner/repo/actions/runs/123',
 }
@@ -134,6 +136,71 @@ test('version computation uses numeric latest tags, package floor, minor input a
   assert.throws(() => nightly(cwd, date, 'patch', '01.1'), /run identity/)
   writeFileSync(join(cwd, 'package.json'), '{"version":"0.5.2-beta.1"}')
   assert.throws(() => nightly(cwd, date), /plain semver/)
+})
+
+test('versioned release notes include changes since the previous versioned tag', async (t) => {
+  const { cwd, git } = repository(t)
+  git('tag', 'v0.2.1')
+  git('commit', '--allow-empty', '-m', 'first release change')
+  const earlier = nightly(cwd, date, 'patch', '12.1')
+  git('tag', earlier.nightlyTag)
+  git('commit', '--allow-empty', '-m', 'second release change')
+  git('tag', 'nightly')
+  git('tag', 'beta')
+
+  for (const [name, options] of [
+    ['normal', {}],
+    ['forced', { forceRelease: true }],
+    ['forced version', { version: '0.2.3^' }],
+  ])
+    await t.test(name, () => {
+      const prepared = JSON.parse(
+        JSON.stringify(nightly(cwd, date, 'patch', '12.2', options)),
+      )
+      const reports = shards(prepared.sha)
+      if (name !== 'normal') reports[0].checks = 'failure'
+      const release = classifyRelease(decideRelease(prepared, reports), [])
+      assert.equal(release.channel, 'beta')
+      assert.equal(release.previous, 'v0.2.1')
+      assert.match(release.commits, /first release change/)
+      assert.match(release.commits, /second release change/)
+      assert.doesNotMatch(release.commits, /Initial app/)
+      const notes = releaseNotes(release, 'owner/repo', '')
+      assert.ok(notes.includes(`/compare/v0.2.1...${release.tag}`))
+      assert.match(notes, /first release change/)
+    })
+
+  const prepared = nightly(cwd, date, 'patch', '12.2')
+  const reports = shards(prepared.sha)
+  reports[0].checks = 'failure'
+  const release = classifyRelease(decideRelease(prepared, reports), [])
+  assert.equal(release.channel, 'nightly')
+  assert.equal(release.previous, earlier.nightlyTag)
+  assert.match(release.commits, /second release change/)
+  assert.doesNotMatch(release.commits, /first release change/)
+  assert.ok(
+    releaseNotes(release, 'owner/repo', '').includes(
+      `/compare/${earlier.nightlyTag}...${release.sha}`,
+    ),
+  )
+})
+
+test('a first versioned release includes history before any nightly', (t) => {
+  const { cwd, git } = repository(t)
+  git('tag', nightly(cwd, date).nightlyTag)
+  git('commit', '--allow-empty', '-m', 'first release change')
+  const prepared = JSON.parse(JSON.stringify(nightly(cwd, date)))
+  const release = classifyRelease(
+    decideRelease(prepared, shards(prepared.sha)),
+    [],
+  )
+  assert.equal(release.previous, undefined)
+  assert.match(release.commits, /Initial app/)
+  assert.match(release.commits, /first release change/)
+  assert.doesNotMatch(
+    releaseNotes(release, 'owner/repo', ''),
+    /full comparison/,
+  )
 })
 
 test('every shard must pass for beta; other complete runs publish nightlies without relabeling packages', () => {
@@ -257,7 +324,11 @@ test('release notes and webhook announce both channels with check results, logs 
     assert.ok(notes.includes(`[build and test logs](${prepared.runUrl})`))
     assert.doesNotMatch(notes, /\b(green|red|broken)\b/)
     assert.match(notes, /Fix \\\[editor\\\] \\\*cursor\\\*/)
-    assert.ok(notes.includes(`/compare/v0.1.0...${sha}`))
+    assert.ok(
+      notes.includes(
+        `/compare/v0.1.0...${release.channel === 'beta' ? release.tag : sha}`,
+      ),
+    )
     assert.equal(
       notes.match(/^SHA256 /gm).length,
       downloads(release.version).length,

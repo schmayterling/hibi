@@ -115,6 +115,23 @@ test('unmounted panes keep independent places mapped through edits without full-
   f.session.dispose()
 })
 
+test('a hidden pane keeps its top line mapped through the edits it has not shown', () => {
+  const f = fixture('line\n'.repeat(1000))
+  const source = f.attach('source')
+  source.dispatch({ selection: { anchor: 500 } })
+  source.bridge.setVisible(false)
+  f.session.edit([{ from: 0, to: 0, insert: 'new\n' }], 'visual', 'prefix')
+  // The view's own top line is still in the text it showed before the edit.
+  source.bridge.keepPlace(source.view, 400, -5)
+  source.dispose()
+  const place = createSourceSession(f.session, 'source').place()
+  assert.equal(place.selection.main.head, 504)
+  assert.equal(place.top, 404)
+  assert.equal(place.margin, -5)
+  assert.deepEqual(f.errors, [])
+  f.session.dispose()
+})
+
 test('addon admission uses exact ranges and rejects native vetoes without flattening', () => {
   for (const extensions of [
     [],

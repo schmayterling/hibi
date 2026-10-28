@@ -314,6 +314,14 @@ export type ChunkedMarkdownOptions = {
   /** Node names whose blocks longer than two chunks need inner nodes only for their opening and last lines. */
   opaque?: ReadonlySet<string>
   probe?: ChunkedMarkdownProbe
+  /** Worker-only metadata follows verified scans and reused giant leaf extents. */
+  codeBlocks?: {
+    scan(tree: Tree, base: number, from: number, to: number): void
+    leaf(key: string, start: number, end: number): void
+    clear(from: number, to: number): void
+    /** A changed physical line may extend past the grammar's reuse point. */
+    canReuse?(from: number, to: number): boolean
+  }
   /** Immutable derived indexes invalidate on edits and need no per-line edit dependencies. */
   trackReadAhead?: boolean
 }
@@ -523,7 +531,7 @@ function stateKey(input: Input, name: string, from: number) {
     case 'CodeBlock':
       return name
     case 'FencedCode':
-      return `${name} ${/^[`~]+/.exec(first)?.[0]}`
+      return `${name} ${/^(`+|~+)/.exec(first)?.[0]}`
     default:
       return `${name} ${first}`
   }
@@ -1242,6 +1250,7 @@ class ChunkedParse implements ChunkedPartialParse {
         }
         return
       }
+      this.parser.options.codeBlocks?.scan(tree, from, from, found.frontier)
       const top = tree.topNode.firstChild!
       const block: Continuation = {
         from,
@@ -1272,6 +1281,7 @@ class ChunkedParse implements ChunkedPartialParse {
         this.startParse(chunkFrom, start)
         return
       }
+      this.parser.options.codeBlocks?.scan(tree, from, chunkFrom, start)
       this.pos = chunkFrom
       this.addChunk(this.leaf('pending', start - chunkFrom))
       if (demand && chunkFrom >= demand.to) this.resynced += start - chunkFrom
@@ -1584,7 +1594,9 @@ class ChunkedParse implements ChunkedPartialParse {
       return null
     const end =
       found.start + (info.block.end ?? found.chunk.length) - old.fragment.offset
-    return end > pos && end <= old.safe
+    return end > pos &&
+      end <= old.safe &&
+      (this.parser.options.codeBlocks?.canReuse?.(pos, end) ?? true)
       ? {
           at: end,
           closed: info.block.end !== null,
@@ -1687,6 +1699,7 @@ class ChunkedParse implements ChunkedPartialParse {
     const end = base + (top?.to ?? 0)
     const limit = this.limit(to, block.frontier)
     if (to >= this.input.length || end < limit) {
+      this.parser.options.codeBlocks?.scan(tree, base, block.frontier, end)
       if (!block.leaf) this.noteEnds(block, tree, base, end)
       this.endGiant(block, end)
       return
@@ -1709,6 +1722,7 @@ class ChunkedParse implements ChunkedPartialParse {
       }
     }
     if (frontier > block.frontier) {
+      this.parser.options.codeBlocks?.scan(tree, base, block.frontier, frontier)
       if (!block.leaf) this.noteEnds(block, tree, base, frontier)
       block.frontier = frontier
       block.span = Math.min(this.parser.giantBlock, block.span * 2)
@@ -1952,6 +1966,8 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** A continued block ends at `end`: one chunk, windowed when it is giant. */
   private endGiant(block: Continuation, end: number) {
+    if (block.leaf && block.key !== null)
+      this.parser.options.codeBlocks?.leaf(block.key, block.start, end)
     const { from } = block
     const to = end < this.input.length ? end + 1 : end
     const demand = this.demand()
@@ -2200,6 +2216,11 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** Append a chunk starting at the current position. */
   private addChunk(chunk: Tree) {
+    if (
+      this.parser.options.codeBlocks &&
+      chunk.prop(chunkInfo)?.kind === 'plain'
+    )
+      this.parser.options.codeBlocks.clear(this.pos, this.pos + chunk.length)
     // Read-ahead decisions made inside the chunk travel with it.
     if (this.reads.size) {
       const from = this.pos,

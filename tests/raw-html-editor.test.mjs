@@ -1141,24 +1141,8 @@ test('codemirror: Windows html fragment wrappers exclude outside markup and reta
       insertedPrefix: pasted.slice(from, from + 80),
     }),
   )
-  await t.test(
-    'only the selected fragment is pasted',
-    {
-      todo: 'formatted gap contracts-001: clipboard html must exclude markup outside the selected fragment',
-    },
-    () => {
-      assert.doesNotMatch(pasted, /OUTSIDE/)
-    },
-  )
-  await t.test(
-    'the fragment restores exact selected source',
-    {
-      todo: 'formatted gap contracts-002: a clipboard fragment must restore its exact selected markdown source',
-    },
-    () => {
-      assert.equal(pasted, original)
-    },
-  )
+  assert.doesNotMatch(pasted, /OUTSIDE/)
+  assert.equal(pasted, original)
   await inert()
 })
 

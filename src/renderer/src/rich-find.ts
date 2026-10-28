@@ -10,6 +10,7 @@ import {
 import { type Mapping, StepMap } from '@tiptap/pm/transform'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 import { foldSearchText } from '../../shared/search-fold.ts'
+import { findWindow, visibleRange } from './find-window.ts'
 
 type Range = { from: number; to: number }
 type FindState = {
@@ -403,47 +404,6 @@ function select(state: EditorState, find: FindState): FindState {
   }
 }
 
-/** Document positions at the top and bottom of the editor's visible area. */
-function visibleRange(view: EditorView): Range | null {
-  const box = view.dom.getBoundingClientRect()
-  let top = Math.max(box.top, 0)
-  let bottom = Math.min(box.bottom, window.innerHeight)
-  // Scrolling panes and other clipping ancestors bound what is visible.
-  for (
-    let element = view.dom.parentElement;
-    element;
-    element = element.parentElement
-  )
-    if (getComputedStyle(element).overflowY !== 'visible') {
-      const clip = element.getBoundingClientRect()
-      top = Math.max(top, clip.top)
-      bottom = Math.min(bottom, clip.bottom)
-    }
-  if (top >= bottom) return null
-  // Hit-test at the start of lines: a point past a line's end can resolve to
-  // the end of its block.
-  const left =
-    box.left + Number.parseFloat(getComputedStyle(view.dom).paddingLeft) + 1
-  const at = (y: number, step: number) => {
-    // Overlays such as the find bar can cover a point, so look past them.
-    for (let tries = 0; tries < 8 && y > top && y < bottom; tries++) {
-      const caret = document.caretPositionFromPoint(left, y)
-      if (caret && view.dom.contains(caret.offsetNode)) {
-        try {
-          return view.posAtDOM(caret.offsetNode, caret.offset)
-        } catch {
-          // Markup a node view owns has no document position; look further.
-        }
-      }
-      y += step
-    }
-    return null
-  }
-  const from = at(top + 1, 24)
-  const to = at(bottom - 1, -24)
-  return from === null || to === null || from > to ? null : { from, to }
-}
-
 export const richFindKey = new PluginKey<FindState>('richFind')
 
 /**
@@ -484,22 +444,24 @@ export function richFind() {
         frame = 0
         const find = richFindKey.getState(view.state)
         if (!find?.index) return
-        const visible = visibleRange(view)
+        const visible = visibleRange(view.dom, (node, offset) => {
+          try {
+            return view.posAtDOM(node, offset)
+          } catch {
+            // Markup a node view owns has no document position; look further.
+            return null
+          }
+        })
         const shown = find.window
         if (
           !visible ||
           (shown && shown.from <= visible.from && visible.to <= shown.to)
         )
           return
-        // About a screen of text on each side keeps scrolling ahead of updates.
-        const margin = Math.max(visible.to - visible.from, 2000)
         view.dispatch(
           view.state.tr
             .setMeta(richFindKey, {
-              window: {
-                from: Math.max(0, visible.from - margin),
-                to: Math.min(view.state.doc.content.size, visible.to + margin),
-              },
+              window: findWindow(visible, view.state.doc.content.size),
             })
             .setMeta('addToHistory', false),
         )

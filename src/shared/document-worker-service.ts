@@ -53,6 +53,7 @@ export class DocumentWorkerService {
   }> | null = null
   #boundarySequence = 0
   #boundaryAwaiting: number | null = null
+  #boundaryFinal = false
 
   readonly #post: (reply: DocumentWorkerReply) => void
   #store: SourceStore | null = null
@@ -105,6 +106,7 @@ export class DocumentWorkerService {
     this.#boundaryPages = null
     this.#boundarySequence = 0
     this.#boundaryAwaiting = null
+    this.#boundaryFinal = false
     if (release) {
       this.#boundaryRequest = null
       this.#boundaryModel = null
@@ -162,6 +164,8 @@ export class DocumentWorkerService {
       this.#boundaryModel ??= new this.#boundaryModule!.MarkdownBoundaryIndex(
         this.#store.snapshot(),
         request.config,
+        undefined,
+        request.codeVersion !== undefined,
       )
       if (!this.#boundaryPages) {
         const deadline = performance.now() + 4
@@ -176,6 +180,10 @@ export class DocumentWorkerService {
         this.#boundaryPages = this.#boundaryModel.pages(
           request.from ?? 0,
           request.baseVersion,
+          request.codeVersion,
+          request.codeOnly,
+          // Geometry follows syntax completion in a separately acknowledged watch.
+          request.codeOnly === true,
         )
       }
       const page = this.#boundaryPages.next()
@@ -185,6 +193,7 @@ export class DocumentWorkerService {
       }
       const sequence = this.#boundarySequence++
       this.#boundaryAwaiting = sequence
+      this.#boundaryFinal = page.value.done
       this.#post({
         type: 'boundaries',
         epoch: this.#epoch,
@@ -390,7 +399,17 @@ export class DocumentWorkerService {
           (message.baseVersion !== undefined &&
             (!Number.isSafeInteger(message.baseVersion) ||
               message.baseVersion < 0 ||
-              message.baseVersion > message.version))
+              message.baseVersion > message.version)) ||
+          (message.codeVersion !== undefined &&
+            message.codeVersion !== null &&
+            (!Number.isSafeInteger(message.codeVersion) ||
+              message.codeVersion < 0 ||
+              message.codeVersion > message.version))
+        )
+          throw new Error('Could not read a document worker reply.')
+        if (
+          message.codeOnly !== undefined &&
+          typeof message.codeOnly !== 'boolean'
         )
           throw new Error('Could not read a document worker reply.')
         if (
@@ -398,6 +417,8 @@ export class DocumentWorkerService {
           this.#boundaryRequest.version === message.version &&
           this.#boundaryRequest.from === message.from &&
           this.#boundaryRequest.baseVersion === message.baseVersion &&
+          this.#boundaryRequest.codeVersion === message.codeVersion &&
+          this.#boundaryRequest.codeOnly === message.codeOnly &&
           JSON.stringify(this.#boundaryRequest.config) ===
             JSON.stringify(message.config)
         )
@@ -408,6 +429,7 @@ export class DocumentWorkerService {
           this.#boundaryModel?.config.prefix !== message.config.prefix
         )
           this.#boundaryModel = null
+        this.#boundaryModel?.setCodeCoverage(message.codeVersion !== undefined)
         this.#boundaryRequest = message
         this.#scheduleBoundaries()
       } else if (message.type === 'boundary-ack') {
@@ -420,12 +442,15 @@ export class DocumentWorkerService {
           message.sequence !== this.#boundaryAwaiting
         )
           return
+        if (this.#boundaryFinal && request.codeOnly)
+          this.#boundaryModel?.acknowledgeCode(message.version)
         this.#boundaryAwaiting = null
         this.#scheduleBoundaries()
       } else if (message.type === 'cancel-boundaries') {
         if (message.retain !== undefined && typeof message.retain !== 'boolean')
           throw new Error('Could not read a document worker reply.')
         this.#stopBoundaries(!message.retain)
+        this.#boundaryModel?.setCodeCoverage(false)
         this.#boundaryRequest = null
       } else if (message.type === 'cancel-find') {
         if (this.#request?.id === message.id) {

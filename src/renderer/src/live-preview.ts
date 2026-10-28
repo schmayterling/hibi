@@ -43,6 +43,7 @@ import {
   lineBreak,
 } from './formatted-commands'
 import {
+  blockMarkedNodes,
   claimFormattedReplacement,
   type FormattedContainer,
   type FormattedDecorations,
@@ -55,12 +56,19 @@ import {
   formattedLinkAttributes,
   formattedLiteral,
   formattedNodeViews,
+  formattedPrefix,
   formattedRefresh,
   formattedRenderInputs,
   formattedTree,
   formattedViews,
   showMarkdownMarkers,
 } from './formatted-contributions'
+import {
+  drawReference,
+  knownReference,
+  referenceLink,
+  referenceLinks,
+} from './formatted-references'
 import type { FormattedSyntax } from './formatted-syntax'
 import './formatted'
 import './live-preview.css'
@@ -93,6 +101,12 @@ class SpaceWidget extends WidgetType {
 }
 const space = Decoration.replace({ widget: new SpaceWidget() })
 const hiddenLine = Decoration.replace({ block: true })
+/** Lines of a link reference definition, which exports leave out too. */
+const hiddenDefinition = Decoration.replace({ block: true })
+/** A definition after a list marker, hidden up to the item's next block, which follows the marker. */
+const hiddenItemDefinition = Decoration.replace({})
+const definitionRange = (value: Decoration) =>
+  value === hiddenDefinition || value === hiddenItemDefinition
 
 /** Margins of a block in px, as in the formatted view's document styles. */
 function blockSpace(name: string): { top: number; bottom: number } {
@@ -129,7 +143,9 @@ const noBlocks: Blocks = {
 }
 let blocks = noBlocks
 
-const isBlock = (node: SyntaxNode) => node.type.is('Block')
+/** Blocks the view lays out; link reference definitions take no space. */
+const isBlock = (node: SyntaxNode) =>
+  node.type.is('Block') && node.name !== 'LinkReference'
 const isList = (node: SyntaxNode) =>
   node.name === 'BulletList' || node.name === 'OrderedList'
 /** Blocks that hold blocks; unless padded, their first and last children's margins collapse through them. */
@@ -170,6 +186,42 @@ function loneMarker(doc: Text, item: SyntaxNode) {
   return first && !isContainer(first) && first.name !== 'FencedCode'
     ? own
     : null
+}
+
+/**
+ * What a link reference definition hides, as exports drop it: its lines and
+ * the blank lines up to the next block, or after the previous block when
+ * none follows. After a list marker, it hides from its text, with the
+ * item's definitions after it, up to the item's next paragraph, which then
+ * shows beside the marker, or up to the last definition before other blocks.
+ */
+function definitionLines(doc: Text, node: SyntaxNode) {
+  const first = doc.lineAt(node.from)
+  const after = (block: SyntaxNode) => {
+    let next = block.nextSibling
+    while (next && !next.type.is('Block')) next = next.nextSibling
+    return next
+  }
+  let next = after(node)
+  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) {
+    let last = node
+    while (next?.name === 'LinkReference') {
+      last = next
+      next = after(next)
+    }
+    return {
+      from: node.from,
+      to: next?.name === 'Paragraph' ? next.from : last.to,
+      item: true,
+    }
+  }
+  if (next) return { from: first.from, to: doc.lineAt(next.from).from - 1 }
+  let previous = node.prevSibling
+  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
+  return {
+    from: previous ? doc.lineAt(previous.to).to + 1 : first.from,
+    to: doc.lineAt(node.to).to,
+  }
 }
 
 /** The first line a block shows: a lone list marker's line collapses into the next. */
@@ -326,6 +378,14 @@ function inline(
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
     reveal.some((range) => range.from <= to && range.to >= from)
+  /** Whether a node shows its source: the delimiters of emphasis, code and strikethrough show for their whole block. */
+  const revealedAt = (node: SyntaxNodeRef) => {
+    let block: SyntaxNode | null = blockMarkedNodes.has(node.name)
+      ? node.node.parent
+      : null
+    while (block && !block.type.is('LeafBlock')) block = block.parent
+    return block ? touched(block.from, block.to) : touched(node.from, node.to)
+  }
   /** Contributed container layouts, once per container node and render. */
   const shapeCache = new Map<string, FormattedContainer | undefined>()
   const shapes = (node: SyntaxNode) => {
@@ -414,21 +474,26 @@ function inline(
     const close = linkMarks.find(
       (current) => doc.sliceString(current.from, current.to) === ']',
     )
-    const target = close && doc.sliceString(close.to, close.to + 1)
-    // Reference links need the note's definitions, so they stay literal for now.
-    if (
-      !open ||
-      !close ||
-      doc.sliceString(open.from, open.to) !== '[' ||
-      target !== '('
-    )
+    if (!open || !close || doc.sliceString(open.from, open.to) !== '[')
       return false
+    // A reference link renders when the note defines its label; until then
+    // its brackets show around its formatted text.
+    const reference =
+      doc.sliceString(close.to, close.to + 1) !== '(' &&
+      referenceLink(doc, node)
+    if (reference === null) return false
+    const answer = reference ? drawReference(state, reference.label) : null
+    if (reference && !answer) return undefined
     const revealed = touched(node.from, node.to)
     syntax(node.from, open.to, revealed)
-    // A destination on later lines is hidden with its line breaks by the layout field.
+    // A destination or label on later lines is hidden with its line breaks by the layout field.
     if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
       syntax(close.from, node.to, revealed)
-    linkText(open.to, close.from)
+    linkText(
+      open.to,
+      close.from,
+      answer?.title ? { title: answer.title } : undefined,
+    )
     return undefined
   }
 
@@ -527,13 +592,10 @@ function inline(
         if (!skip) {
           const contributed = views(ref.type)
           if (contributed.views.length) {
-            const out = sink(touched(ref.from, ref.to))
-            const grouped = sink(touched(ref.from, ref.to), groupMarks)
-            const context = {
-              state,
-              revealed: touched(ref.from, ref.to),
-              visible: range,
-            }
+            const revealed = revealedAt(ref)
+            const out = sink(revealed)
+            const grouped = sink(revealed, groupMarks)
+            const context = { state, revealed, visible: range }
             for (const nodeView of contributed.views)
               if (
                 nodeView.decorate?.(
@@ -657,7 +719,7 @@ function inline(
         return
       case 'EmphasisMark': {
         const parent = ref.node.parent
-        syntax(ref.from, ref.to, !!parent && touched(parent.from, parent.to))
+        syntax(ref.from, ref.to, !!parent && revealedAt(parent))
         return
       }
       case 'InlineCode': {
@@ -669,7 +731,7 @@ function inline(
           open.from === close.from
         )
           return false
-        const revealed = touched(ref.from, ref.to)
+        const revealed = revealedAt(ref)
         syntax(open.from, open.to, revealed)
         syntax(close.from, close.to, revealed)
         mark('hibi-lp-code', open.to, close.from)
@@ -742,7 +804,7 @@ function inline(
     }
     return undefined
   }
-  const end = spacing(view, tree, line)
+  const end = spacing(view, tree, line, layout)
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
@@ -1006,6 +1068,7 @@ function spacing(
   view: EditorView,
   tree: Tree,
   line: (pos: number) => LineInfo,
+  layout: DecorationSet,
 ) {
   const doc = view.state.doc
   const place = (
@@ -1016,20 +1079,23 @@ function spacing(
     // The first block after an unparsed prefix such as frontmatter starts the document.
     if (previous.name === 'Frontmatter') return
     const gap = Math.max(bottomMargin(previous), topMargin(block))
-    const start = doc.lineAt(block.from),
-      end = doc.lineAt(previous.to)
-    if (end.number + 1 >= start.number) {
+    const start = doc.lineAt(block.from)
+    // Lines the layout hides between the blocks, such as definitions, take no space.
+    let first = doc.lineAt(previous.to).number + 1
+    while (first < start.number && replacedLine(layout, doc.line(first)))
+      first++
+    if (first >= start.number) {
       const shown = shownLine(doc, block)
       if (shown.from >= range.from && shown.from <= range.to)
         line(shown.from).gap = gap
       return
     }
-    for (let number = end.number + 1; number < start.number; number++) {
+    for (let number = first; number < start.number; number++) {
       const blank = doc.line(number)
       if (blank.from < range.from || blank.from > range.to) continue
       const info = line(blank.from)
       info.classes.push('hibi-lp-gap')
-      const height = number === end.number + 1 ? gap : 28
+      const height = number === first ? gap : 28
       info.style.push(`height: ${height}px`, `line-height: ${height}px`)
     }
   }
@@ -1142,6 +1208,8 @@ function chunkLayout(
       )
     },
   }
+  /** Where definitions hidden from a list marker end. */
+  let itemDefinitions = -1
   for (const range of covered) {
     /** The leaf block whose line breaks flow as spaces, except hard breaks and hidden link destinations. */
     let leaf: {
@@ -1223,12 +1291,20 @@ function chunkLayout(
             const close = ref.node
               .getChildren('LinkMark')
               .find((mark) => doc.sliceString(mark.from, mark.to) === ']')
-            // A destination on later lines is hidden with its line breaks.
             if (
-              leaf &&
-              close &&
-              doc.sliceString(close.to, close.to + 1) === '(' &&
-              doc.lineAt(close.from).number !== doc.lineAt(ref.to).number
+              !leaf ||
+              !close ||
+              doc.lineAt(close.from).number === doc.lineAt(ref.to).number
+            )
+              return
+            // A destination, or the label of a defined reference, on later
+            // lines is hidden with its line breaks.
+            const reference =
+              doc.sliceString(close.to, close.to + 1) !== '(' &&
+              referenceLink(doc, ref.node)
+            if (
+              reference === false ||
+              (reference && knownReference(state, reference.label))
             ) {
               leaf.hidden.push({ from: close.from, to: ref.to })
               if (starts(close.from))
@@ -1236,12 +1312,25 @@ function chunkLayout(
             }
             return
           }
+          case 'LinkReference': {
+            // Definitions after one on a list marker hide with it.
+            if (ref.from < itemDefinitions) return false
+            const lines = definitionLines(doc, ref.node)
+            if (lines.item) itemDefinitions = lines.to
+            if (starts(ref.from))
+              out.push(
+                (lines.item ? hiddenItemDefinition : hiddenDefinition).range(
+                  lines.from - from,
+                  lines.to - from,
+                ),
+              )
+            return false
+          }
           case 'CodeBlock':
           case 'HTMLBlock':
           case 'CommentBlock':
           case 'ProcessingInstructionBlock':
           case 'Table':
-          case 'LinkReference':
             return false
         }
       },
@@ -1375,11 +1464,39 @@ const focused = StateField.define<boolean>({
     EditorView.focusChangeEffect.of((_, focusing) => setFocus.of(focusing)),
 })
 
+/**
+ * Selection ranges inside one block. As in the rich editor, a selection
+ * across blocks, such as select all, shows no markers.
+ */
+function inBlocks(state: EditorState, tree: Tree): readonly Revealed[] {
+  const ranges: Revealed[] = []
+  for (const { from, to } of state.selection.ranges) {
+    let block: SyntaxNode | null = from < to ? tree.resolve(from, 1) : null
+    while (block && !block.type.is('LeafBlock')) block = block.parent
+    if (from === to || (block && block.to >= to)) ranges.push({ from, to })
+  }
+  return ranges
+}
+
+/**
+ * Whether the selection was placed since the editor last lost focus, so a
+ * definition it is in shows. Placing it before focusing keeps it there:
+ * focusing draws it in the shown text rather than beside a hidden line.
+ */
+const placed = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects)
+      if (effect.is(setFocus) && !effect.value) return false
+    return transaction.selection ? true : value
+  },
+})
+
 /** The selection while the focused editor shows markers. */
-function revealedIn(state: EditorState): readonly Revealed[] {
+function revealedIn(state: EditorState, tree: Tree): readonly Revealed[] {
   if (!state.field(focused, false) || !state.facet(showMarkdownMarkers))
     return []
-  return state.selection.ranges.map(({ from, to }) => ({ from, to }))
+  return inBlocks(state, tree)
 }
 
 const sameRanges = (a: readonly Revealed[], b: readonly Revealed[]) =>
@@ -1390,9 +1507,9 @@ const sameRanges = (a: readonly Revealed[], b: readonly Revealed[]) =>
   )
 
 /** Ranges whose markers show: the selection while the focused editor shows markers. */
-function revealed(view: EditorView): readonly Revealed[] {
+function revealed(view: EditorView, tree: Tree): readonly Revealed[] {
   if (!view.hasFocus || !view.state.facet(showMarkdownMarkers)) return []
-  return view.state.selection.ranges.map(({ from, to }) => ({ from, to }))
+  return inBlocks(view.state, tree)
 }
 
 /**
@@ -1410,13 +1527,27 @@ function mapLines(set: DecorationSet, update: ViewUpdate) {
 /**
  * A link destination on later lines shows while the selection touches it:
  * input beside a range that hides line breaks would not map to the text.
+ * A definition shows while a selection placed since the editor last lost
+ * focus is inside it, so text typed into one stays in view: a caret past
+ * its start, before the paragraph a list item's definition hides up to, or
+ * a selection it holds whole.
  */
 function revealDestinations(set: DecorationSet, state: EditorState) {
+  const shown = state.field(placed, false)
   for (const { from, to } of state.selection.ranges)
     set = set.update({
       filterFrom: from,
       filterTo: to,
-      filter: (a, b, value) => value !== hide || b < from || a > to,
+      filter: (a, b, value) => {
+        if (value !== hiddenDefinition && value !== hiddenItemDefinition)
+          return value !== hide || b < from || a > to
+        const inside =
+          from === to
+            ? a < from &&
+              (from < b || (from === b && value === hiddenDefinition))
+            : a <= from && to <= b
+        return !shown || !inside
+      },
     })
   return set
 }
@@ -1428,11 +1559,15 @@ export function livePreview(
 ): Extension {
   const layout = StateField.define<DecorationSet>({
     create: (state) =>
-      layoutDecorations(state, syntax.tree(state), revealedIn(state)),
+      layoutDecorations(
+        state,
+        syntax.tree(state),
+        revealedIn(state, syntax.tree(state)),
+      ),
     update(value, transaction) {
       const { state, startState } = transaction
       const tree = syntax.tree(state),
-        reveal = revealedIn(state)
+        reveal = revealedIn(state, tree)
       // An edit's unfinished reparse keeps the layout it replaces, mapped.
       if (
         syntax.settling(state) ||
@@ -1446,9 +1581,9 @@ export function livePreview(
             startState.facet(formattedDocument) &&
           state.facet(formattedRenderInputs) ===
             startState.facet(formattedRenderInputs) &&
-          (sameRanges(reveal, revealedIn(startState)) ||
+          (sameRanges(reveal, revealedIn(startState, tree)) ||
             (!revealMatters(state, tree, reveal) &&
-              !revealMatters(state, tree, revealedIn(startState)))))
+              !revealMatters(state, tree, revealedIn(startState, tree)))))
       )
         return value.map(transaction.changes)
       return layoutDecorations(state, tree, reveal)
@@ -1465,7 +1600,7 @@ export function livePreview(
       end: number
       reveal: readonly Revealed[]
       constructor(view: EditorView) {
-        this.reveal = revealed(view)
+        this.reveal = revealed(view, syntax.tree(view.state))
         ;({
           decorations: this.decorations,
           groupMarks: this.groupMarks,
@@ -1491,7 +1626,7 @@ export function livePreview(
               from: update.changes.mapPos(range.from, -1),
               to: update.changes.mapPos(range.to, 1),
             }))
-          : revealed(update.view)
+          : revealed(update.view, tree)
         const changedReveal =
           reveal.length !== this.reveal.length ||
           reveal.some(
@@ -1601,8 +1736,9 @@ export function livePreview(
     syntax.extension,
     codeIndent,
     focused,
+    placed,
     layout,
-    EditorView.decorations.compute([layout, 'selection'], (state) =>
+    EditorView.decorations.compute([layout, placed, 'selection'], (state) =>
       revealDestinations(state.field(layout), state),
     ),
     // Hidden layout syntax is atomic too.
@@ -1615,6 +1751,8 @@ export function livePreview(
       (view) => view.plugin(preview)?.groupMarks ?? Decoration.none,
     ),
     preview,
+    // After the preview, whose drawing collects the labels it asks about.
+    referenceLinks,
     EditorView.outerDecorations.of(
       (view) => view.plugin(preview)?.outer ?? Decoration.none,
     ),
@@ -1632,9 +1770,10 @@ export function livePreview(
     EditorView.atomicRanges.of((view) => {
       const { doc } = view.state
       const lines: Range<Decoration>[] = []
+      const shown = revealDestinations(view.state.field(layout), view.state)
       for (const { from, to } of view.visibleRanges)
-        view.state.field(layout).between(from, to, (a, b, value) => {
-          if (value === hiddenLine)
+        shown.between(from, to, (a, b, value) => {
+          if (value === hiddenLine || value === hiddenDefinition)
             lines.push(
               hide.range(Math.max(0, a - 1), Math.min(doc.length, b + 1)),
             )
@@ -1648,12 +1787,41 @@ export function livePreview(
       const { doc } = transaction.startState
       const before = transaction.startState.selection.ranges
       const lines = transaction.startState.field(layout)
+      // Where the note's text starts after metadata the view keeps hidden.
+      let body = 0
+      for (const measure of transaction.startState.facet(formattedPrefix))
+        body = Math.max(body, measure(transaction.startState))
       let moved = false
       const ranges = transaction.selection.ranges.map((range, index) => {
+        // Selecting the whole note, or all its text after its metadata,
+        // includes the hidden lines at its ends.
+        if (
+          range.to === doc.length &&
+          (range.from === 0 || range.from === body)
+        )
+          return range
         let head = range.head
         lines.between(head, head, (from, to, value) => {
-          if (value !== hiddenLine || head < from || head > to) return
-          const back = head < (before[index]?.head ?? head)
+          const was = before[index]?.head ?? head,
+            back = head < was
+          if (definitionRange(value)) {
+            // Arrow keys and clicks step over a definition they were not in;
+            // a selection placed in one, or moving inside a shown one, stays.
+            const block = value === hiddenDefinition,
+              end = block ? to : to - 1
+            if (
+              !range.empty ||
+              !transaction.isUserEvent('select') ||
+              head < (block ? from : from + 1) ||
+              head > end ||
+              (was > from && was <= end)
+            )
+              return
+            if (value === hiddenItemDefinition) {
+              head = back ? from : to
+              return
+            }
+          } else if (value !== hiddenLine || head < from || head > to) return
           head =
             (back && from > 0) || to >= doc.length
               ? Math.max(0, from - 1)

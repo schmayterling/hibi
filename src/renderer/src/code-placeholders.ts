@@ -358,11 +358,20 @@ const follow = ViewPlugin.fromClass(
           if (effects.length)
             queueMicrotask(() => {
               if (this.destroyed) return
-              this.view.dispatch({ effects })
-              // Reading the layout measures the lines that turned back now,
-              // before another update takes the text at the top from their
-              // estimated heights.
-              this.view.lineBlockAtHeight(0)
+              // The editor keeps the text at the top in place while it
+              // measures these lines; the browser's own scroll anchoring
+              // would move it again from their estimated heights.
+              const { style } = this.view.dom
+              style.overflowAnchor = 'none'
+              try {
+                this.view.dispatch({ effects })
+                // Reading the layout measures the lines that turned back now,
+                // before another update takes the text at the top from their
+                // estimated heights.
+                this.view.lineBlockAtHeight(0)
+              } finally {
+                style.overflowAnchor = ''
+              }
             })
         },
       })

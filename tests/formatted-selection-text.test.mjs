@@ -203,3 +203,42 @@ test('footnotes resolve against cached definitions outside the projected window'
     ).to < 100,
   )
 })
+
+test('completing selection syntax skips code-language parsing', async (t) => {
+  const { javascriptLanguage } = await import('@codemirror/lang-javascript')
+  const { codeLanguages } = await import(
+    '../src/renderer/src/code-languages.ts'
+  )
+  const { formattedSyntax } = await import(
+    '../src/renderer/src/formatted-syntax.ts'
+  )
+  const remove = codeLanguages.register('selection-text-tests', {
+    id: 'selection-text',
+    language: javascriptLanguage,
+  })
+  t.after(remove)
+  const parse = t.mock.method(javascriptLanguage.parser, 'startParse')
+  for (const lines of [20000, 40000]) {
+    const body = 'const value = 1\n'.repeat(lines)
+    const syntax = formattedSyntax({ slice: 0 })
+    const state = EditorState.create({
+      doc: '**before**\n\n```selection-text\n' + body + '```\n\n**after**\n',
+      extensions: syntax.extension,
+    })
+    const before = parse.mock.calls.length
+    const tree = syntax.selectionTree(state, 0, state.doc.length)
+    assert.equal(parse.mock.calls.length, before)
+    assert.equal(
+      formattedSelectionText(
+        state,
+        tree,
+        syntax.parser(state),
+        0,
+        state.doc.length,
+        '\n',
+      ),
+      'before\n' + body.slice(0, -1) + '\nafter',
+    )
+    assert.equal(parse.mock.calls.length, before)
+  }
+})

@@ -119,25 +119,29 @@ function markdownParser(
 ) {
   const base = formattedMarkdownParser(contributed, options.extensions)
   const runs = createPlainTextRunExtension()
-  const full = base.configure([
-    runs.extension,
+  const text = base.configure(runs.extension)
+  const full = text.configure(
     parseCode({
       codeParser: (info) => codeLanguages.resolve(info)?.parser ?? null,
     }),
-  ])
+  )
   const chunked = new ChunkedMarkdownParser(full, base, {
     opaque: new Set(opaque),
     ...(options.probe ? { probe: options.probe } : {}),
   })
+  // Text capture needs the same Markdown nodes, without code-language nesting.
+  const selection = new ChunkedMarkdownParser(text, base, chunked.options)
   // The plain-text shortcut stops only at the characters core inline syntax
   // starts with; contributed inline syntax that starts elsewhere turns it off.
   if (
     contributed.every(
       (config) => !config.parseInline?.length || inlineStops(config),
     )
-  )
+  ) {
     runs.allow(chunked.full)
-  return chunked
+    runs.allow(selection.full)
+  }
+  return { view: chunked, selection }
 }
 
 const mapDemand = (demand: Demand, changes: ChangeDesc) => ({
@@ -178,9 +182,9 @@ function syntaxField(options: FormattedSyntaxOptions) {
   // Contributions change the node set, so each set of extensions gets its own parser.
   const parsers = new WeakMap<
     readonly MarkdownConfig[],
-    WeakMap<readonly string[], ChunkedMarkdownParser>
+    WeakMap<readonly string[], ReturnType<typeof markdownParser>>
   >()
-  const chunkedFor = (state: EditorState) => {
+  const grammarFor = (state: EditorState) => {
     const contributed = state.facet(formattedMarkdown),
       opaque = state.facet(formattedOpaque)
     let byOpaque = parsers.get(contributed)
@@ -188,13 +192,15 @@ function syntaxField(options: FormattedSyntaxOptions) {
       byOpaque = new WeakMap()
       parsers.set(contributed, byOpaque)
     }
-    let chunked = byOpaque.get(opaque)
-    if (!chunked) {
-      chunked = markdownParser(options, contributed, opaque)
-      byOpaque.set(opaque, chunked)
+    let grammar = byOpaque.get(opaque)
+    if (!grammar) {
+      grammar = markdownParser(options, contributed, opaque)
+      byOpaque.set(opaque, grammar)
     }
-    return chunked
+    return grammar
   }
+  const chunkedFor = (state: EditorState) => grammarFor(state).view
+  const textFor = (state: EditorState) => grammarFor(state).selection
   const prefixOf = (state: EditorState) => {
     let prefix = 0
     for (const measure of state.facet(formattedPrefix))
@@ -422,7 +428,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
       )
     },
   })
-  return { field, chunkedFor, prefixOf }
+  return { field, chunkedFor, textFor, prefixOf }
 }
 
 /**
@@ -872,7 +878,7 @@ export function formattedSyntax(
       const value = state.field(field)
       if (from === to || !uncovered(value.tree, from, to)) return value.tree
       const parse = syntax
-        .chunkedFor(state)
+        .textFor(state)
         .startChunkedParse(
           new DocInput(state.doc),
           TreeFragment.addTree(value.tree),

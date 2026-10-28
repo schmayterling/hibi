@@ -62,6 +62,12 @@ import {
   formattedViews,
   showMarkdownMarkers,
 } from './formatted-contributions'
+import {
+  drawReference,
+  knownReference,
+  referenceLink,
+  referenceLinks,
+} from './formatted-references'
 import type { FormattedSyntax } from './formatted-syntax'
 import './formatted'
 import './live-preview.css'
@@ -459,21 +465,26 @@ function inline(
     const close = linkMarks.find(
       (current) => doc.sliceString(current.from, current.to) === ']',
     )
-    const target = close && doc.sliceString(close.to, close.to + 1)
-    // Reference links need the note's definitions, so they stay literal for now.
-    if (
-      !open ||
-      !close ||
-      doc.sliceString(open.from, open.to) !== '[' ||
-      target !== '('
-    )
+    if (!open || !close || doc.sliceString(open.from, open.to) !== '[')
       return false
+    // A reference link renders when the note defines its label; until then
+    // its brackets show around its formatted text.
+    const reference =
+      doc.sliceString(close.to, close.to + 1) !== '(' &&
+      referenceLink(doc, node)
+    if (reference === null) return false
+    const answer = reference ? drawReference(state, reference.label) : null
+    if (reference && !answer) return undefined
     const revealed = touched(node.from, node.to)
     syntax(node.from, open.to, revealed)
-    // A destination on later lines is hidden with its line breaks by the layout field.
+    // A destination or label on later lines is hidden with its line breaks by the layout field.
     if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
       syntax(close.from, node.to, revealed)
-    linkText(open.to, close.from)
+    linkText(
+      open.to,
+      close.from,
+      answer?.title ? { title: answer.title } : undefined,
+    )
     return undefined
   }
 
@@ -1274,12 +1285,20 @@ function chunkLayout(
             const close = ref.node
               .getChildren('LinkMark')
               .find((mark) => doc.sliceString(mark.from, mark.to) === ']')
-            // A destination on later lines is hidden with its line breaks.
             if (
-              leaf &&
-              close &&
-              doc.sliceString(close.to, close.to + 1) === '(' &&
-              doc.lineAt(close.from).number !== doc.lineAt(ref.to).number
+              !leaf ||
+              !close ||
+              doc.lineAt(close.from).number === doc.lineAt(ref.to).number
+            )
+              return
+            // A destination, or the label of a defined reference, on later
+            // lines is hidden with its line breaks.
+            const reference =
+              doc.sliceString(close.to, close.to + 1) !== '(' &&
+              referenceLink(doc, ref.node)
+            if (
+              reference === false ||
+              (reference && knownReference(state, reference.label))
             ) {
               leaf.hidden.push({ from: close.from, to: ref.to })
               if (starts(close.from))
@@ -1708,6 +1727,8 @@ export function livePreview(
       (view) => view.plugin(preview)?.groupMarks ?? Decoration.none,
     ),
     preview,
+    // After the preview, whose drawing collects the labels it asks about.
+    referenceLinks,
     EditorView.outerDecorations.of(
       (view) => view.plugin(preview)?.outer ?? Decoration.none,
     ),

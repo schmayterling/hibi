@@ -94,22 +94,10 @@ const cases = [
 ]
 
 const formattedGaps = {
-  '0/lazy definition/0':
-    'formatted gap corpus-001: lazy reference definitions must render only native paragraph text',
-  '0/references/0':
-    'formatted gap corpus-003: reference definitions must hide while resolved labels remain visible',
   '0/forward references/0':
     'formatted gap corpus-004: forward definitions must resolve formatted labels without showing definitions',
-  '0/reference edits/0':
-    'formatted gap corpus-005: formatted references must render labels before a destination edit',
-  '0/reference edits/1':
-    'formatted gap corpus-006: formatted references must retain labels after a destination edit',
   '0/multiline title/0':
     'formatted gap corpus-008: multiline reference titles must hide and avoid false headings',
-  '0/quoted title/0':
-    'formatted gap corpus-009: quoted reference titles must hide definitions and resolve labels',
-  '1/lazy definition/0':
-    'formatted gap corpus-010: disabled syntax must preserve native lazy reference rendering',
   '1/gfm/0':
     'formatted gap corpus-011: disabled heading syntax must preserve bold formatting inside alerts',
   '1/extras/0':
@@ -118,8 +106,6 @@ const formattedGaps = {
     'formatted gap corpus-014: disabled heading syntax must hide forward reference definitions',
   '1/multiline title/0':
     'formatted gap corpus-018: disabled heading syntax must hide multiline reference titles',
-  '1/quoted title/0':
-    'formatted gap corpus-019: disabled heading syntax must hide quoted reference titles',
 }
 
 // frozen native outcomes; the tiptap control verifies every fixture.

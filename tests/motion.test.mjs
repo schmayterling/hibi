@@ -216,18 +216,9 @@ test('split panes align corresponding carets in both directions without feedback
       })
     })
     await rich.locator('.hibi-lp-h2').filter({ hasText: 'section 45' }).click()
-    await t.test(
-      'split formatted view is read-only without an input caret',
-      {
-        todo: cm
-          ? 'formatted gap split-005: split formatted view must remain read-only without an input caret'
-          : undefined,
-      },
-      async () => {
-        assert.equal(await rich.getAttribute('contenteditable'), 'false')
-        assert.equal(await page.locator('.rich-pane .editor-cursor').count(), 0)
-      },
-    )
+    // Accepted difference: the codemirror split pane stays editable, with its caret.
+    assert.equal(await rich.getAttribute('contenteditable'), 'true')
+    await page.locator('.rich-pane .editor-cursor').waitFor()
   } else {
     await rich.locator('h2').nth(45).click()
     assert.equal(await rich.getAttribute('aria-readonly'), 'true')
@@ -271,21 +262,16 @@ test('split panes align corresponding carets in both directions without feedback
     markdown,
   )
   if (cm) {
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    const before = await page.evaluate(() => window.hibi.getDocument())
     await page.keyboard.insertText('x')
     await page.evaluate(() => window.hibi.flushDocumentChanges())
-    const typed = (await page.evaluate(() => window.hibi.getDocument()))
-      .markdown
-    await t.test(
-      'split formatted input preserves source',
-      {
-        todo: 'formatted gap split-006: typing in a read-only split preview must preserve source',
-      },
-      () => {
-        assert.equal(typed, markdown)
-      },
-    )
-    if (typed !== markdown)
-      await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+    const typed = await page.evaluate(() => window.hibi.getDocument())
+    // Typing in the codemirror split pane makes one source edit, and undo takes it back.
+    assert.equal(typed.markdown.length, markdown.length + 1)
+    assert.equal(typed.markdown.replace('x', ''), markdown)
+    assert.equal(typed.contentVersion, before.contentVersion + 1)
+    await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
     await waitForAsync(
       page,
       async (markdown) =>

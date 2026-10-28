@@ -314,6 +314,16 @@ export type ChunkedMarkdownOptions = {
   /** Node names whose blocks longer than two chunks need inner nodes only for their opening and last lines. */
   opaque?: ReadonlySet<string>
   probe?: ChunkedMarkdownProbe
+  /** Worker-only metadata follows verified scans and reused giant leaf extents. */
+  codeBlocks?: {
+    scan(tree: Tree, base: number, from: number, to: number): void
+    leaf(key: string, start: number, end: number): void
+    clear(from: number, to: number): void
+    /** A changed physical line may extend past the grammar's reuse point. */
+    canReuse?(from: number, to: number): boolean
+  }
+  /** Immutable derived indexes invalidate on edits and need no per-line edit dependencies. */
+  trackReadAhead?: boolean
 }
 
 /** A visible document range. */
@@ -382,6 +392,33 @@ type Work =
       units: number
       parse: PartialParse
     }
+
+/** Markdown consumes whole lines, unlike the generic lezer chunk contract. */
+function markdownInput(
+  input: Input,
+  ranges: readonly { from: number; to: number }[],
+): Input {
+  const result: Input = {
+    length: input.length,
+    lineChunks: false,
+    read: (from, to) => input.read(from, to),
+    chunk(at) {
+      const end = ranges.find((range) => range.to > at)?.to ?? input.length
+      const parts: string[] = []
+      while (at < end) {
+        const chunk = input.chunk(at).slice(0, end - at)
+        if (!chunk) break
+        const lf = chunk.indexOf('\n')
+        parts.push(lf < 0 ? chunk : chunk.slice(0, lf + 1))
+        if (lf >= 0) break
+        at += chunk.length
+      }
+      return parts.join('')
+    },
+  }
+  if (readers.has(input)) readers.set(result, (to) => readAhead(input, to))
+  return result
+}
 
 /** Inner parser steps per outer step, so the host can yield inside a long range. */
 const innerSteps = 256
@@ -494,7 +531,7 @@ function stateKey(input: Input, name: string, from: number) {
     case 'CodeBlock':
       return name
     case 'FencedCode':
-      return `${name} ${/^[`~]+/.exec(first)?.[0]}`
+      return `${name} ${/^(`+|~+)/.exec(first)?.[0]}`
     default:
       return `${name} ${first}`
   }
@@ -767,10 +804,11 @@ class ChunkedParse implements ChunkedPartialParse {
         },
       ]
     })
-    readers.set(input, (to) => {
-      const at = this.reading?.parsedPos ?? this.pos
-      this.reads.set(at, Math.max(this.reads.get(at) ?? -1, to))
-    })
+    if (parser.options.trackReadAhead !== false)
+      readers.set(input, (to) => {
+        const at = this.reading?.parsedPos ?? this.pos
+        this.reads.set(at, Math.max(this.reads.get(at) ?? -1, to))
+      })
   }
 
   get parsedPos() {
@@ -1109,10 +1147,13 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** Scan a bounded window, so no inner step reads past it. */
   private startScan(span: number) {
+    const ranges = [
+      { from: this.pos, to: Math.min(this.input.length, this.pos + span) },
+    ]
     const parse = this.parser.scan.startParse(
-      this.input,
+      markdownInput(this.input, ranges),
       [],
-      [{ from: this.pos, to: Math.min(this.input.length, this.pos + span) }],
+      ranges,
     )
     this.work = { kind: 'scan', from: this.pos, span, parse }
   }
@@ -1127,10 +1168,11 @@ class ChunkedParse implements ChunkedPartialParse {
       !/^[ \t\r]*$/.test(this.input.read(to, lineEnd(this.input, to)))
         ? to - 1
         : to
+    const ranges = [{ from, to: end }]
     const parse = this.parser.full.startParse(
-      this.input,
+      markdownInput(this.input, ranges),
       [],
-      [{ from, to: end }],
+      ranges,
     )
     this.work = { kind: 'parse', from, to, parse }
   }
@@ -1208,6 +1250,7 @@ class ChunkedParse implements ChunkedPartialParse {
         }
         return
       }
+      this.parser.options.codeBlocks?.scan(tree, from, from, found.frontier)
       const top = tree.topNode.firstChild!
       const block: Continuation = {
         from,
@@ -1238,6 +1281,7 @@ class ChunkedParse implements ChunkedPartialParse {
         this.startParse(chunkFrom, start)
         return
       }
+      this.parser.options.codeBlocks?.scan(tree, from, chunkFrom, start)
       this.pos = chunkFrom
       this.addChunk(this.leaf('pending', start - chunkFrom))
       if (demand && chunkFrom >= demand.to) this.resynced += start - chunkFrom
@@ -1445,7 +1489,11 @@ class ChunkedParse implements ChunkedPartialParse {
     const last = ranges.at(-1)
     if (last && last.to === at) last.to = to
     else ranges.push({ from: at, to })
-    const parse = this.parser.scan.startParse(input, [], ranges)
+    const parse = this.parser.scan.startParse(
+      markdownInput(input, ranges),
+      [],
+      ranges,
+    )
     let replayed: Tree | null = null
     this.reading = parse
     while (!replayed) replayed = parse.advance()
@@ -1546,7 +1594,9 @@ class ChunkedParse implements ChunkedPartialParse {
       return null
     const end =
       found.start + (info.block.end ?? found.chunk.length) - old.fragment.offset
-    return end > pos && end <= old.safe
+    return end > pos &&
+      end <= old.safe &&
+      (this.parser.options.codeBlocks?.canReuse?.(pos, end) ?? true)
       ? {
           at: end,
           closed: info.block.end !== null,
@@ -1632,7 +1682,11 @@ class ChunkedParse implements ChunkedPartialParse {
       base: ranges[0]!.from,
       to,
       units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
-      parse: this.parser.scan.startParse(this.input, [], ranges),
+      parse: this.parser.scan.startParse(
+        markdownInput(this.input, ranges),
+        [],
+        ranges,
+      ),
     }
   }
 
@@ -1645,6 +1699,7 @@ class ChunkedParse implements ChunkedPartialParse {
     const end = base + (top?.to ?? 0)
     const limit = this.limit(to, block.frontier)
     if (to >= this.input.length || end < limit) {
+      this.parser.options.codeBlocks?.scan(tree, base, block.frontier, end)
       if (!block.leaf) this.noteEnds(block, tree, base, end)
       this.endGiant(block, end)
       return
@@ -1667,6 +1722,7 @@ class ChunkedParse implements ChunkedPartialParse {
       }
     }
     if (frontier > block.frontier) {
+      this.parser.options.codeBlocks?.scan(tree, base, block.frontier, frontier)
       if (!block.leaf) this.noteEnds(block, tree, base, frontier)
       block.frontier = frontier
       block.span = Math.min(this.parser.giantBlock, block.span * 2)
@@ -1910,6 +1966,8 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** A continued block ends at `end`: one chunk, windowed when it is giant. */
   private endGiant(block: Continuation, end: number) {
+    if (block.leaf && block.key !== null)
+      this.parser.options.codeBlocks?.leaf(block.key, block.start, end)
     const { from } = block
     const to = end < this.input.length ? end + 1 : end
     const demand = this.demand()
@@ -2014,7 +2072,11 @@ class ChunkedParse implements ChunkedPartialParse {
       point,
       base: ranges[0]!.from,
       units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
-      parse: this.parser.full.startParse(input, [], ranges),
+      parse: this.parser.full.startParse(
+        markdownInput(input, ranges),
+        [],
+        ranges,
+      ),
     }
   }
 
@@ -2154,6 +2216,11 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** Append a chunk starting at the current position. */
   private addChunk(chunk: Tree) {
+    if (
+      this.parser.options.codeBlocks &&
+      chunk.prop(chunkInfo)?.kind === 'plain'
+    )
+      this.parser.options.codeBlocks.clear(this.pos, this.pos + chunk.length)
     // Read-ahead decisions made inside the chunk travel with it.
     if (this.reads.size) {
       const from = this.pos,
@@ -2322,7 +2389,10 @@ export class ChunkedMarkdownParser extends Parser {
     this.document = full.nodeSet.types.find((type) => type.name === 'Document')!
     // Inline parsers never change block structure, so boundary scans skip them.
     const inline = (base as unknown as { inlineNames?: unknown }).inlineNames
-    const scan = base.configure({ wrap: trackReadAhead })
+    const scan =
+      options.trackReadAhead === false
+        ? base
+        : base.configure({ wrap: trackReadAhead })
     this.scan = Array.isArray(inline)
       ? scan.configure({
           remove: inline.filter(
@@ -2350,7 +2420,11 @@ export class ChunkedMarkdownParser extends Parser {
       ranges[0]?.from !== 0 ||
       ranges[0]?.to !== input.length
     )
-      return this.full.createParse(input, fragments, ranges)
+      return this.full.createParse(
+        markdownInput(input, ranges),
+        fragments,
+        ranges,
+      )
     return new ChunkedParse(this, input, fragments, null)
   }
 

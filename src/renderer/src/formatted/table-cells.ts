@@ -21,12 +21,8 @@ import {
   WidgetType,
 } from '@codemirror/view'
 import { type SyntaxNodeRef, Tree } from '@lezer/common'
-import {
-  type MarkdownConfig,
-  type MarkdownParser,
-  parser,
-} from '@lezer/markdown'
-import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
+import type { MarkdownConfig, MarkdownParser } from '@lezer/markdown'
+import { formattedInlineParser } from '../../../shared/formatted-markdown.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   blockMarkedNodes,
@@ -63,10 +59,7 @@ function cellParser(state: EditorState) {
   const contributed = state.facet(formattedMarkdown)
   let found = cellParsers.get(contributed)
   if (!found) {
-    const inline = protectMarkdownParser(parser, contributed)
-    const blocks =
-      (inline as unknown as { blockNames?: readonly string[] }).blockNames ?? []
-    found = inline.configure({ remove: [...blocks] })
+    found = formattedInlineParser(contributed)
     cellParsers.set(contributed, found)
   }
   return found

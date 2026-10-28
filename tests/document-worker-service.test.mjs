@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
+import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
+import { renderedConfig } from './rendered-config.mjs'
 
 function fixture(t, source = 'one two one') {
   const messages = [],
@@ -45,7 +47,14 @@ function fixture(t, source = 'one two one') {
   const load = (epoch = 'first', body = source) => {
     loadWorker(worker, messages, body, epoch)
   }
-  const find = (id, version = 0, query = 'one', from = 0, to = 0) =>
+  const find = (
+    id,
+    version = 0,
+    query = 'one',
+    from = 0,
+    to = 0,
+    options = {},
+  ) =>
     worker.receive({
       type: 'find',
       epoch: 'first',
@@ -54,6 +63,10 @@ function fixture(t, source = 'one two one') {
       query,
       from,
       to,
+      ...(options.mode === 'rendered'
+        ? { config: { ...renderedConfig, prefix: options.prefix ?? 0 } }
+        : {}),
+      ...options,
     })
   load()
   return { worker, messages, next, load, find }
@@ -918,5 +931,328 @@ test('metadata frontmatter opt-in owns only the proven prefix and reconfigures o
   assert.equal(
     f.messages.some((reply) => reply.type === 'metadata' && reply.id === 3),
     false,
+  )
+})
+
+test('rendered find reuses one replica, projection and scheduler for navigation and viewport pages', async (t) => {
+  const text = 'hello **world**\n\nhello world\n\nHELLO world'
+  const original = RenderedTextIndex.prototype.build,
+    projections = []
+  t.mock.method(RenderedTextIndex.prototype, 'build', function* () {
+    projections.push(this)
+    return yield* original.call(this)
+  })
+  const f = fixture(t, text)
+  f.find(1, 0, 'hello world')
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 1)).location
+      .total,
+    2,
+  )
+  f.find(2, 0, 'hello world', 0, 0, {
+    mode: 'rendered',
+    highlights: true,
+    viewport: { from: 0, to: text.length, limit: 2 },
+  })
+  const rendered = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(rendered.mode, 'rendered')
+  assert.equal(rendered.location.total, 3)
+  assert.equal(rendered.highlightStarts, undefined)
+  assert.equal(rendered.highlights.matches.length, 2)
+  assert.equal(rendered.highlights.next, text.indexOf('HELLO'))
+  const first = rendered.highlights.matches[0]
+  assert.deepEqual(first.segments, [
+    { from: 0, to: 6 },
+    { from: 8, to: 13 },
+  ])
+  const work = projections[0].counters()
+  f.find(3, 0, 'hello world', first.from, first.to, { mode: 'rendered' })
+  const selected = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 3,
+  )
+  assert.equal(selected.location.current, 1)
+  assert.equal(projections.length, 1)
+  f.find(4, 0, 'world', 0, 0, { mode: 'rendered' })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 4)).location
+      .total,
+    3,
+  )
+  assert.equal(projections[1], projections[0])
+  assert.equal(projections[0].counters().sourceUnits, work.sourceUnits)
+  f.find(5, 0, 'hello world')
+  const raw = await f.next((reply) => reply.type === 'find' && reply.id === 5)
+  assert.equal(raw.location.total, 2)
+  assert.equal(raw.mode, undefined)
+  assert.equal(projections.length, 2)
+})
+
+test('reference links return unsupported without hiding source find on the same replica', async (t) => {
+  const f = fixture(t, 'hello [label][hidden]\n\n[hidden]: /url')
+  f.find(1, 0, 'hidden', 0, 0, { mode: 'rendered' })
+  const unsupported = await f.next(
+    (reply) => reply.type === 'error' && reply.id === 1,
+  )
+  assert.equal(unsupported.stage, 'find')
+  assert.equal(unsupported.reason, 'unsupported')
+  assert.ok(
+    !f.messages.some((reply) => reply.type === 'find' && reply.id === 1),
+  )
+  f.find(2, 0, 'hidden')
+  const source = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(source.location.total, 2)
+  assert.equal(f.messages.filter((reply) => reply.type === 'ack').length, 1)
+})
+
+test('rendered replacements return only grammar-verified edits for an exact match', async (t) => {
+  const f = fixture(t, '2 * 3 * 4\n\nTARGET tail')
+  f.find(1, 0, ' 3 ', 3, 6, { mode: 'rendered', replacement: '3' })
+  const refused = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 1,
+  )
+  assert.equal(refused.location.current, 1)
+  assert.deepEqual(refused.replacement, {
+    from: 3,
+    to: 6,
+    text: '3',
+    edits: null,
+  })
+  f.find(2, 0, 'TARGET', 11, 17, {
+    mode: 'rendered',
+    replacement: '#tag',
+    viewport: { from: 0, to: 22 },
+  })
+  const prepared = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(prepared.location.current, 1)
+  assert.deepEqual(prepared.replacement, {
+    from: 11,
+    to: 17,
+    text: '#tag',
+    edits: [{ from: 11, to: 17, insert: '#tag' }],
+  })
+  assert.equal(prepared.highlights.matches.length, 1)
+  f.find(3, 0, 'TARGET', 11, 16, { mode: 'rendered', replacement: 'X' })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 3))
+      .replacement.edits,
+    null,
+  )
+})
+
+test('deep shared-parser recursion fails closed and leaves source find available', async (t) => {
+  const marks = '*'.repeat(20000),
+    text = marks + 'word' + marks
+  const f = fixture(t, text)
+  f.find(1, 0, 'word', 20000, 20004, { mode: 'rendered', replacement: 'X' })
+  const error = await f.next(
+    (reply) => reply.type === 'error' && reply.id === 1,
+  )
+  assert.equal(error.stage, 'find')
+  assert.match(error.message, /call stack/i)
+  assert.ok(
+    !f.messages.some((reply) => reply.type === 'find' && reply.id === 1),
+  )
+  f.find(2, 0, 'word')
+  const result = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(result.location.total, 1)
+  assert.equal(result.location.next.match.from, 20000)
+})
+
+test('unsupported cold rendered configuration replies with a find error', async (t) => {
+  const f = fixture(t, 'note')
+  f.find(1, 0, 'note', 0, 0, {
+    mode: 'rendered',
+    config: { ...renderedConfig, textSyntax: null },
+  })
+  assert.match(
+    (await f.next((reply) => reply.type === 'error' && reply.id === 1)).message,
+    /configuration is unsupported/,
+  )
+})
+
+test('rendered grammar config changes invalidate projection and unknown renderers are refused', async (t) => {
+  const f = fixture(t, 'hello ==world==')
+  const config = {
+    ...renderedConfig,
+    syntax: [...renderedConfig.syntax, 'obsidian@1'],
+    textFeatures: [...renderedConfig.textFeatures, 'markdown.obsidian'],
+  }
+  f.find(1, 0, 'hello world', 0, 0, { mode: 'rendered', config })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 1)).location
+      .total,
+    1,
+  )
+  f.find(2, 0, 'hello world', 0, 0, {
+    mode: 'rendered',
+    config: { ...config, literal: ['Highlight'] },
+  })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 2)).location
+      .total,
+    0,
+  )
+  f.find(3, 0, 'hello', 0, 0, {
+    mode: 'rendered',
+    config: { ...config, textFeatures: ['unknown.custom'] },
+  })
+  const error = await f.next(
+    (reply) => reply.type === 'error' && reply.id === 3,
+  )
+  assert.match(error.message, /configuration is unsupported/)
+})
+
+test('rendered replacement validation cancels through the existing find channel', async (t) => {
+  const original = RenderedTextIndex.prototype.prepareReplacement
+  let steps = 0
+  t.mock.method(
+    RenderedTextIndex.prototype,
+    'prepareReplacement',
+    function* (...args) {
+      for (const step of original.apply(this, args)) {
+        steps++
+        yield step
+      }
+    },
+  )
+  const f = fixture(t, 'TARGET\n\n' + 'plain words.\n'.repeat(1024))
+  f.find(1, 0, 'TARGET', 0, 6, { mode: 'rendered', replacement: 'X' })
+  await f.next(
+    (reply) => reply.type === 'find-progress' && reply.id === 1 && steps > 0,
+  )
+  f.worker.receive({ type: 'cancel-find', epoch: 'first', id: 1 })
+  await f.next((reply) => reply.type === 'canceled' && reply.id === 1)
+  const before = steps
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(steps, before)
+  assert.ok(
+    !f.messages.some((reply) => reply.type === 'find' && reply.id === 1),
+  )
+})
+
+test('rendered projection cancels through queued tasks and resumes without another replica', async (t) => {
+  const original = RenderedTextIndex.prototype.build,
+    projections = []
+  t.mock.method(RenderedTextIndex.prototype, 'build', function* () {
+    projections.push(this)
+    return yield* original.call(this)
+  })
+  const f = fixture(t, 'hello **world**\n\n' + 'ordinary words. '.repeat(16384))
+  f.find(1, 0, 'hello world', 0, 0, { mode: 'rendered' })
+  await f.next((reply) => reply.type === 'find-progress' && reply.id === 1)
+  const before = projections[0].counters()
+  f.worker.receive({ type: 'cancel-find', epoch: 'first', id: 1 })
+  await f.next((reply) => reply.type === 'canceled' && reply.id === 1)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(projections[0].counters(), before)
+  f.find(2, 0, 'hello world', 0, 0, { mode: 'rendered' })
+  const result = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(result.location.total, 1)
+  assert.equal(projections[1], projections[0])
+  assert.ok(
+    !f.messages.some((reply) => reply.type === 'find' && reply.id === 1),
+  )
+  assert.ok(projections[0].counters().maximumStep <= 2048)
+})
+
+test('rendered projection, search and viewport paging use one find channel without a timer', async (t) => {
+  const NativeChannel = MessageChannel,
+    channels = []
+  t.mock.method(
+    globalThis,
+    'MessageChannel',
+    class extends NativeChannel {
+      constructor() {
+        super()
+        channels.push(this)
+      }
+    },
+  )
+  t.mock.method(
+    performance,
+    'now',
+    (() => {
+      let now = 0
+      return () => ++now
+    })(),
+  )
+  const f = fixture(t, 'x**y** '.repeat(2048))
+  const timers = t.mock.method(globalThis, 'setTimeout')
+  f.find(1, 0, 'xy', 0, 0, {
+    mode: 'rendered',
+    viewport: { from: 0, to: 7 * 2048, limit: 512 },
+  })
+  const result = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 1,
+  )
+  assert.equal(result.location.total, 2048)
+  assert.equal(result.highlights.matches.length, 512)
+  assert.equal(channels.length, 1)
+  assert.equal(
+    timers.mock.calls.length,
+    1,
+    'only fixture deadline uses a timer',
+  )
+  assert.ok(
+    f.messages.filter((reply) => reply.type === 'find-progress').length > 1,
+  )
+})
+
+test('rendered prefix follows normalized CRLF coordinates and invalidates only the projection configuration', async (t) => {
+  const header = '---\r\ntitle: hello **world**\r\n---\r\n\r\n'
+  const f = fixture(t, header + 'hello **world**')
+  f.find(1, 0, 'hello world', 0, 0, {
+    mode: 'rendered',
+    prefix: header.replace(/\r\n/g, '\n').length,
+  })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 1)).location
+      .total,
+    1,
+  )
+  f.find(2, 0, 'hello world', 0, 0, { mode: 'rendered', prefix: 0 })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 2)).location
+      .total,
+    2,
+  )
+  f.find(3, 0, 'hello world')
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === 3)).location
+      .total,
+    0,
+  )
+})
+
+test('rendered find validates mode, prefix and bounded viewport payloads', async (t) => {
+  const f = fixture(t, '😀 hello **world**')
+  let id = 0
+  for (const options of [
+    { mode: 'unknown' },
+    { mode: 'rendered', prefix: 1 },
+    { mode: 'rendered', viewport: { from: 0, to: 8, limit: 513 } },
+    { mode: 'rendered', viewport: null },
+  ]) {
+    f.find(++id, 0, 'hello world', 0, 0, options)
+    const error = await f.next(
+      (reply) => reply.type === 'error' && reply.id === id,
+    )
+    assert.equal(error.stage, 'find')
+  }
+  f.find(++id, 0, 'world')
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find' && reply.id === id)).location
+      .total,
+    1,
   )
 })

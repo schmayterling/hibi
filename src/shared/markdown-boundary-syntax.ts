@@ -7,14 +7,21 @@ import {
   Table,
   TaskList,
 } from '@lezer/markdown'
+import { obsidianSyntax } from '../addons/markdown/formatted-syntax.ts'
 import {
   blockMathSyntax,
   inlineMathSyntax,
 } from '../addons/math/formatted-syntax.ts'
-import { subtextSyntax } from '../addons/text-extras/formatted-syntax.ts'
+import {
+  subscriptSyntax,
+  subtextSyntax,
+} from '../addons/text-extras/formatted-syntax.ts'
+import {
+  formattedInlineParser,
+  formattedMarkdownParser,
+} from './formatted-markdown.ts'
 
 import { EmptyTask, Footnotes, GithubAlerts } from './markdown-extra-syntax.ts'
-import { ContainerHTML } from './markdown-html-syntax.ts'
 
 /** Block grammars must use these same objects in both realms. */
 const catalog = {
@@ -28,8 +35,22 @@ const catalog = {
   'math-inline@1': inlineMathSyntax,
   'math-block@1': blockMathSyntax,
   'subtext@1': subtextSyntax,
+  'subscript@1': subscriptSyntax,
+  'obsidian@1': obsidianSyntax,
 } satisfies Record<string, MarkdownConfig>
 
+/** Normalized UTF-16 offsets; whole-block bounds exclude its terminating newline. */
+export type CodeBlockExtent = Readonly<{
+  from: number
+  to: number
+  kind: 'fenced' | 'indented'
+  contentFrom: number
+  contentTo: number
+  contentLines: number
+  /** Approximate scrollbar columns: UTF-16 units, with tab stops every four. */
+  contentColumns: number
+  closed: boolean
+}>
 export type BoundarySyntax = keyof typeof catalog
 export type BoundaryConfig = {
   schema: 1
@@ -37,6 +58,9 @@ export type BoundaryConfig = {
   flavors: readonly string[]
   literal: readonly string[]
   opaque: readonly string[]
+  /** Active text renderers; unknown custom rendering declines text projection. */
+  textFeatures?: readonly string[]
+  textSyntax?: BoundarySyntax[] | null
   prefix: number
   chunkSize: number
   groupSize: number
@@ -95,6 +119,7 @@ function inlineOnly(config: MarkdownConfig) {
 /** Known grammars retain order; proven inline-only configs need no worker syntax. */
 export function boundarySyntaxIds(
   extensions: MarkdownExtension,
+  requireInline = false,
 ): BoundarySyntax[] | null {
   const ids: BoundarySyntax[] = []
   const visit = (extension: MarkdownExtension): boolean => {
@@ -102,7 +127,7 @@ export function boundarySyntaxIds(
     const id = (Object.keys(catalog) as BoundarySyntax[]).find(
       (key) => catalog[key] === extension,
     )
-    if (!id) return inlineOnly(extension as MarkdownConfig)
+    if (!id) return !requireInline && inlineOnly(extension as MarkdownConfig)
     ids.push(id)
     return true
   }
@@ -126,9 +151,16 @@ export function boundaryParser(config: BoundaryConfig) {
     config.giantBlock < 1
   )
     return null
-  return parser.configure([
-    { defineNodes: [{ name: 'Frontmatter', block: true }] },
-    ContainerHTML,
-    ...config.syntax.map((id) => catalog[id]),
-  ])
+  return formattedMarkdownParser(config.syntax.map((id) => catalog[id]))
+}
+
+/** Exact inline-only counterpart of a supported formatted configuration. */
+export function boundaryInlineParser(config: BoundaryConfig) {
+  const syntax = config.textSyntax ?? config.syntax
+  if (
+    config.textSyntax === null ||
+    syntax.some((id) => !Object.hasOwn(catalog, id))
+  )
+    return null
+  return formattedInlineParser(syntax.map((id) => catalog[id]))
 }

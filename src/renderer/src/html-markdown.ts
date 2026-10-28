@@ -6,6 +6,10 @@
  */
 
 import DOMPurify from 'dompurify'
+import {
+  markdownLineStarts as escapeLineStarts,
+  markdownLiteral as literal,
+} from '../../shared/markdown-literal.ts'
 import { renderedHtmlOptions } from '../../shared/rendered-html.ts'
 
 const blocks = new Set([
@@ -47,29 +51,6 @@ const skipped = new Set(['HEAD', 'SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT'])
 const isBlock = (node: Node) =>
   node.nodeType === Node.ELEMENT_NODE && blocks.has(node.nodeName)
 const hasBlocks = (node: Node) => [...node.childNodes].some(isBlock)
-
-/**
- * Text that reads as itself in Markdown, whichever flavors the note uses now
- * or later: delimiters (strikethrough and subscript `~`, math `$`, highlight
- * `==`) and entity references are escaped too.
- */
-function literal(text: string) {
-  return (
-    text
-      .replace(/[\\`*_[\]<~$]/g, '\\$&')
-      .replace(/&(?=#?\w+;)/g, '\\&')
-      .replace(/=(?==)/g, '\\=')
-      // Character references preserve Unicode spaces through Markdown trimming.
-      .replace(/[^\S \t\r\n\f]/gu, (space) => `&#${space.codePointAt(0)};`)
-  )
-}
-
-/** Line starts that would begin a block. */
-function escapeLineStarts(text: string) {
-  return text
-    .replace(/^( {0,3})(\d{1,9})([.)])/gm, '$1$2\\$3')
-    .replace(/^( {0,3})([#>+=-])/gm, '$1\\$2')
-}
 
 /** Wrap inline content in a delimiter, keeping its outer spaces outside. */
 function wrap(content: string, mark: string) {
@@ -296,9 +277,81 @@ function table(element: Element): string {
   ].join('\n')
 }
 
+/**
+ * Parse clipboard HTML, keeping only its selection. Native clipboards can wrap
+ * it in a page and mark it with `<!--StartFragment-->` and
+ * `<!--EndFragment-->`; as in Chromium, the first start and the last end
+ * count. Only the source between them is parsed, after start tags for the
+ * elements around the start, so the parser's repairs cannot bring anything
+ * from outside it in, nor drop what is inside; ordered lists keep their
+ * numbers.
+ */
+function parseSelection(html: string) {
+  const parser = new DOMParser()
+  const parse = (source: string) => parser.parseFromString(source, 'text/html')
+  const markers = [...html.matchAll(/<!--(start|end)fragment-->/gi)]
+  if (!markers.length) return parse(html)
+  // Only markers the parser reads as comments count, not the same text in an
+  // attribute, a textarea, CDATA, a template or another comment. A first
+  // parse names each one, with names this paste alone knows, to see which.
+  const id = crypto.getRandomValues(new Uint32Array(4)).join('-')
+  let named = '',
+    at = 0
+  for (const [index, marker] of markers.entries()) {
+    named += `${html.slice(at, marker.index)}<!--${id}-${index}-->`
+    at = marker.index + marker[0].length
+  }
+  const probe = parse(named + html.slice(at))
+  const read = new Map<string | null, Node>()
+  const comments = probe.createTreeWalker(probe, NodeFilter.SHOW_COMMENT)
+  for (let node = comments.nextNode(); node; node = comments.nextNode())
+    read.set(node.nodeValue, node)
+  const genuine = markers.flatMap((marker, index) => {
+    const node = read.get(`${id}-${index}`)
+    return node ? [{ marker, node }] : []
+  })
+  const start = genuine.find(({ marker }) => /^<!--s/i.test(marker[0]))
+  const end =
+    start &&
+    genuine.findLast(
+      ({ marker }) =>
+        marker.index > start.marker.index && /^<!--e/i.test(marker[0]),
+    )
+  if (!start || !end) return parse(html)
+  let context = ''
+  const { body } = probe
+  if (body?.contains(start.node))
+    for (
+      let child = start.node;
+      child.parentNode !== body;
+      child = child.parentNode as Node
+    ) {
+      const element = child.parentNode as Element
+      const open = element.cloneNode(false) as Element
+      if (open instanceof HTMLOListElement) {
+        let items = 0
+        for (
+          let item = child.previousSibling;
+          item;
+          item = item.previousSibling
+        )
+          if (item.nodeName === 'LI') items++
+        open.start = (element as HTMLOListElement).start + items
+      }
+      const tags = open.outerHTML
+      context = tags.slice(0, tags.lastIndexOf('</')) + context
+    }
+  return parse(
+    context +
+      // The start comment stays first, so a `<pre>` around it cannot take the
+      // selection's leading line break for its own.
+      html.slice(start.marker.index, end.marker.index),
+  )
+}
+
 /** Markdown for pasted HTML. */
 export function htmlToMarkdown(html: string, original?: string) {
-  const document = new DOMParser().parseFromString(html, 'text/html')
+  const document = parseSelection(html)
   if (
     original !== undefined &&
     document.body.firstElementChild?.hasAttribute('data-hibi-markdown')

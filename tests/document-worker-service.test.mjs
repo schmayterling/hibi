@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import nodeTest from 'node:test'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
 import { renderedConfig } from './rendered-config.mjs'
-import { waitForProgress } from './worker-progress.mjs'
+import { WORKER_HANG_TIMEOUT, waitForProgress } from './worker-progress.mjs'
+
+const test = (name, run) =>
+  nodeTest(name, { timeout: WORKER_HANG_TIMEOUT }, run)
 
 function fixture(t, source = 'one two one') {
   const messages = [],

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { waitForProgress } from './worker-progress.mjs'
+import { waitForProgress, workerBusyProgress } from './worker-progress.mjs'
 
 function clock(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] })
@@ -67,6 +67,38 @@ test('reply subscriptions settle at the handshake and release their listener', a
   assert.equal(detached, true)
   assert.equal(await pending, reply)
   t.mock.timers.tick(2000)
+})
+
+test('synchronous worker activity keeps the guard alive and idle silence rejects', async (t) => {
+  const timers = clock(t)
+  let active = 0,
+    reply
+  const worker = { performance: { eventLoopUtilization: () => ({ active }) } }
+  const pending = waitForProgress(
+    () => reply,
+    () => workerBusyProgress(worker),
+    1000,
+    undefined,
+    { timers },
+  )
+  for (let n = 0; n < 8; n++) {
+    t.mock.timers.tick(900)
+    active += 100
+    t.mock.timers.tick(5)
+  }
+  reply = { done: true }
+  t.mock.timers.tick(5)
+  assert.equal(await pending, reply)
+  const idle = waitForProgress(
+    () => false,
+    () => workerBusyProgress(worker),
+    1000,
+    undefined,
+    { timers },
+  )
+  const rejected = assert.rejects(idle, /Worker made no progress/)
+  t.mock.timers.tick(1000)
+  await rejected
 })
 
 test('a worker that never replies exhausts one silence interval', async (t) => {

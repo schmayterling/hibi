@@ -6,7 +6,7 @@ import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceSearchIndex } from '../src/shared/source-search-index.ts'
 import { renderedConfig } from './rendered-config.mjs'
-import { waitForProgress } from './worker-progress.mjs'
+import { WORKER_HANG_TIMEOUT, waitForProgress } from './worker-progress.mjs'
 
 const wait = async (predicate) => {
   const end = Date.now() + 3000
@@ -23,8 +23,10 @@ class TestWorker {
   onerror = null
   onmessageerror = null
   replies = []
+  observeReply = null
   service = new DocumentWorkerService((reply) => {
     this.replies.push(reply)
+    this.observeReply?.(reply)
     setImmediate(() => {
       if (!this.terminated) this.onmessage?.({ data: structuredClone(reply) })
     })
@@ -465,15 +467,46 @@ test('reference-link unsupported reason reaches the client and source mode remai
   assert.equal(f.workers.length, 1)
 })
 
-test('32 mib real find build completes with progress on one worker', async (t) => {
+test('32 mib real find build completes with progress on one worker', {
+  timeout: WORKER_HANG_TIMEOUT,
+}, async (t) => {
   // Same ordinary-word corpus as the review probe, with one distant match.
   const unit = `${'ordinary words '.repeat(16)}\n\n`,
     length = 32 * 1024 * 1024,
     source =
       unit.repeat(Math.ceil(length / unit.length)).slice(0, length - 11) +
       'scale-start'
-  let result, failure
+  let result,
+    failure,
+    scanned = 0,
+    transferred = 0,
+    loaded = false
+  const build = SourceSearchIndex.prototype.build
+  t.mock.method(SourceSearchIndex.prototype, 'build', function* (...args) {
+    const steps = build.apply(this, args)
+    try {
+      for (;;) {
+        const next = steps.next()
+        if (next.done) return next.value
+        assert.ok(next.value.scanned >= 0 && next.value.scanned <= length)
+        scanned = Math.max(scanned, next.value.scanned)
+        yield next.value
+      }
+    } finally {
+      steps.return?.()
+    }
+  })
   const f = fixture(t, source, {
+    worker: () => {
+      const worker = new TestWorker()
+      worker.observeReply = (reply) => {
+        if (reply.type === 'load-ack')
+          transferred = Math.max(transferred, reply.request.sequence)
+        if (reply.type === 'ack') loaded = true
+      }
+      f.workers.push(worker)
+      return worker
+    },
     result: (location) => {
       result = location
     },
@@ -487,16 +520,12 @@ test('32 mib real find build completes with progress on one worker', async (t) =
       if (failure) throw failure
       return result
     },
-    () =>
-      f.workers.reduce(
-        (count, worker) =>
-          count + worker.messages.length + worker.replies.length,
-        0,
-      ),
+    () => transferred + Number(loaded) + scanned,
     3000,
     'Find worker made no progress',
   )
   assert.equal(location.total, 1)
+  assert.equal(scanned, length)
   assert.equal(location.next.match.from, source.length - 11)
   assert.equal(f.workers.length, 1)
   const worker = f.workers[0],
@@ -517,6 +546,7 @@ test('32 mib real find build completes with progress on one worker', async (t) =
   t.diagnostic(
     JSON.stringify({
       units: source.length,
+      scanned,
       workers: f.workers.length,
       progress: progress.length,
       total: location.total,

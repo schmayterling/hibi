@@ -1,3 +1,10 @@
+// A named last resort for livelocks that keep reporting activity.
+export const WORKER_HANG_TIMEOUT = 10 * 60 * 1000
+
+// Worker ELU includes time inside synchronous parser calls, but excludes idle waits.
+export const workerBusyProgress = (worker) =>
+  Math.floor(worker?.performance.eventLoopUtilization().active ?? 0)
+
 /** Wait for completion while work advances; the timeout measures only silence. */
 export function waitForProgress(
   predicate,

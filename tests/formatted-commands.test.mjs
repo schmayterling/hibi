@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { history, isolateHistory, redo, undo } from '@codemirror/commands'
-import { EditorState } from '@codemirror/state'
+import { EditorSelection, EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
-import { Tree } from '@lezer/common'
+import { NodeType, Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { MarkdownManager } from '@tiptap/markdown'
+import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
   blockBreak,
   codeIndent,
@@ -15,6 +16,7 @@ import {
   gapInput,
   indent,
   lineBreak,
+  lineInput,
 } from '../src/renderer/src/formatted-commands.ts'
 import {
   codeIndentLines,
@@ -71,6 +73,12 @@ function run(doc, command) {
     [head, '|'],
   ].sort((a, b) => a[0] - b[0])
   return `${next.doc.sliceString(0, marks[0][0])}${marks[0][1]}${next.doc.sliceString(marks[0][0], marks[1][0])}${marks[1][1]}${next.doc.sliceString(marks[1][0])}`
+}
+
+/** Multi-line text input as a structure command for `run`. */
+const typing = (text) => (state, tree) => {
+  const { from, to } = state.selection.main
+  return lineInput(state, tree, from, to, text)
 }
 
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {
@@ -771,4 +779,355 @@ test('enter with a selection at the edges of formatting leaves no empty markers,
     run('1. parent\n   - child\n   - |\n2. after', blockBreak),
     '1. parent\n   - child\n2. |\n3. after',
   )
+})
+
+test('multi-line text input is literal and breaks blocks where it lands', () => {
+  // Before, typed syntax became Markdown and each break was one source line.
+  assert.equal(run('|', typing('# a\n*b* <i>')), '\\# a\n\n\\*b\\* \\<i>|')
+  assert.equal(run('a\n|\nb', typing('x\ny')), 'a\n\nx\n\ny|\n\nb')
+  // In a quote in a list item, the next line is the list's next item.
+  assert.equal(run('- > a|', typing('b\nc')), '- > ab\n- c|')
+  assert.equal(
+    run('- parent\n  > ab|cd\n- tail', typing('x\ny')),
+    '- parent\n  > abx\n- y|cd\n- tail',
+  )
+  // Spaces and tabs typed with a line break are text, not Enter.
+  assert.equal(
+    run('- [x] ab|cd', typing('\n\t\t')),
+    '- [x] ab\n- [ ] &#9;\t|cd',
+  )
+  assert.equal(run('1. a|\n2. b', typing('x\ny')), '1. ax\n2. y|\n3. b')
+  assert.equal(run('> - a|', typing('\n\nb')), '> - a\n>\n> b|')
+  assert.equal(
+    run('> - a|\n> - b', typing('x\n\ny')),
+    '> - ax\n>\n> y|\n>\n> - b',
+  )
+  // Bold goes on to later lines; a link only where its text continues.
+  assert.equal(run('**ab|**', typing('x\ny')), '**abx**\n\n**y|**')
+  assert.equal(
+    run('**[a|b](u)**', typing('x\ny')),
+    '**[ax](u)**\n\n**y|[b](u)**',
+  )
+  // One blank break is Enter; code, tables and several carets keep the default.
+  assert.equal(run('ab|', typing('\n')), 'ab\n\n|')
+  assert.equal(run('```\na|\n```', typing('x\ny')), null)
+  const table = '| a |\n| - |\n| b |'
+  const cell = EditorState.create({ doc: table, selection: { anchor: 15 } })
+  assert.equal(lineInput(cell, markdown.parse(table), 15, 15, 'x\ny'), null)
+  const carets = EditorState.create({
+    doc: 'ab',
+    selection: EditorSelection.create([
+      EditorSelection.cursor(1),
+      EditorSelection.cursor(2),
+    ]),
+    extensions: EditorState.allowMultipleSelections.of(true),
+  })
+  assert.equal(lineInput(carets, markdown.parse('ab'), 1, 1, 'x\ny'), null)
+})
+
+test('multi-line text input repairs formatting it cuts, as the browser types', () => {
+  // Before, a selection cutting formatting fell back to raw source: `**aX\nYd`.
+  assert.equal(run('**a^b**c|d', typing('X\nY')), '**aX**\n\nY|d')
+  assert.equal(run('**a^b**c|d', typing('\nY')), '**a**\n\n**Y|**d')
+  assert.equal(run('a^b**c|d**', typing('x\ny')), 'ax\n\n**y|d**')
+  assert.equal(run('a^b**c|d**', typing('\ny')), 'a\n\ny|**d**')
+  assert.equal(run('**a^b**\n\nc|d', typing('x\ny')), '**ax**\n\ny|d')
+  // Joins across nested items and soft lines.
+  assert.equal(
+    run('- a^b\n  - c|d\n- tail', typing('x\ny')),
+    '- ax\n- y|d\n- tail',
+  )
+  assert.equal(run('a^b\ncd\n\ne|f\ngh', typing('X\nY')), 'aX\n\nY|f\ngh')
+  // Spaces at the ends of typed text stay outside markers, which cannot
+  // close after a space.
+  assert.equal(run('**ab|cd**', typing(' x \ny ')), '**ab x** \n\n**y |cd**')
+  assert.equal(run('*ab|cd*', typing(' x \ny ')), '*ab x* \n\n*y |cd*')
+  assert.equal(run('`ab|cd`', typing(' x \ny ')), '`ab x` \n\n`y |cd`')
+  assert.equal(
+    run('**ab|cd**', typing('\tx\n    y')),
+    '**ab\tx**\n\n&#32;   **y|cd**',
+  )
+  assert.equal(run('**ab |cd**', typing('\ny')), '**ab** \n\n**y|cd**')
+  // Only the closing markers move before spaces the caret follows.
+  assert.equal(run('**a   |b**', typing('\ny')), '**a**   \n\n**y|b**')
+  // A line break alone is the browser's input, not Enter: a heading continues.
+  assert.equal(run('## ab|cd', typing('\n')), '## ab\n\n## |cd')
+  assert.equal(run('## a^b\n\nc|d', typing('\n')), '## a\n\n## |d')
+  // Numbered items in a quote count on past its markers, for Enter too.
+  assert.equal(
+    run('> 9. ab|cd\n> 10. tail', typing('x\ny')),
+    '> 9. abx\n> 10. y|cd\n> 11. tail',
+  )
+  assert.equal(
+    run('> 9. ab|\n> 10. tail', blockBreak),
+    '> 9. ab\n> 10. |\n> 11. tail',
+  )
+  // In a quote in an item, new items continue only the inner list, after
+  // the outer item's indentation.
+  assert.equal(
+    run('- > 8. ab|cd\n  > 9. tail', typing('x\ny')),
+    '- > 8. abx\n  > 9. y|cd\n  > 10. tail',
+  )
+  assert.equal(run('- > - ab|cd', typing('x\ny')), '- > - abx\n  > - y|cd')
+  assert.equal(
+    run('- > 8. ab|\n  > 9. tail', blockBreak),
+    '- > 8. ab\n  > 9. |\n  > 10. tail',
+  )
+  // A wider number moves the item's later lines inside the quote markers.
+  assert.equal(
+    run('> 8. ab|cd\n> 9. tail\n>\n>    more', typing('x\ny')),
+    '> 8. abx\n> 9. y|cd\n> 10. tail\n>\n>     more',
+  )
+  assert.equal(
+    run('> 9. ab|\n> 9. tail\n>\n>    more', blockBreak),
+    '> 9. ab\n> 10. |\n> 11. tail\n>\n>     more',
+  )
+  // Each line in a task list is a task, as Enter makes it (an accepted
+  // difference: the rich editor nests later lines as bullets).
+  assert.equal(
+    run('- [x] ab|cd\n- [ ] tail', typing('x\n\ny')),
+    '- [x] abx\n- [ ] \n- [ ] y|cd\n- [ ] tail',
+  )
+})
+
+test('multi-line input over select-all replaces all of a partly parsed note', () => {
+  // Before, text after the last parsed block survived: `x\n\ny\n\nold tail`.
+  const doc = 'first\n\nold tail'
+  const sample = markdown.parse('first')
+  const pending = new Tree(
+    sample.type,
+    [
+      new Tree(sample.topNode.firstChild.type, [], [], 5),
+      new Tree(NodeType.none, [], [], 8),
+    ],
+    [0, 7],
+    doc.length,
+  )
+  const large = `first\n\n${'old tail\n\n'.repeat(20000)}`
+  const chunked = new ChunkedMarkdownParser(markdown, markdown)
+  const parse = chunked.startChunkedParse(
+    {
+      length: large.length,
+      lineChunks: false,
+      chunk: (from) => large.slice(from, from + 4096),
+      read: (from, to) => large.slice(from, to),
+    },
+    [],
+    { from: 0, to: 8192 },
+  )
+  let partial = parse.advance()
+  while (!partial) partial = parse.advance()
+  for (const [source, tree] of [
+    [doc, pending],
+    [large, partial],
+    // The trailing blank lines are an empty paragraph the selection holds.
+    ['first\n\n', markdown.parse('first\n\n')],
+  ]) {
+    const state = EditorState.create({
+      doc: source,
+      selection: { anchor: 0, head: source.length },
+    })
+    const spec = lineInput(state, tree, 0, source.length, 'x\ny')
+    assert.equal(state.update(spec).state.doc.toString(), 'x\n\ny')
+  }
+})
+
+test('multi-line input after a long run of spaces reads a bounded part of it', () => {
+  // Before, the spaces before the caret were read and moved: 4,194,245 units for 1 MiB.
+  const sample = markdown.parse('**ab**')
+  const strong = sample.topNode.firstChild.firstChild
+  const mark = strong.firstChild.type
+  for (const size of [2 ** 20, 50 * 2 ** 20]) {
+    const doc = `**a${' '.repeat(size)}b**`
+    const tree = new Tree(
+      sample.type,
+      [
+        new Tree(
+          sample.topNode.firstChild.type,
+          [
+            new Tree(
+              strong.type,
+              [new Tree(mark, [], [], 2), new Tree(mark, [], [], 2)],
+              [0, doc.length - 2],
+              doc.length,
+            ),
+          ],
+          [0],
+          doc.length,
+        ),
+      ],
+      [0],
+      doc.length,
+    )
+    const caret = doc.length - 3
+    const state = EditorState.create({ doc, selection: { anchor: caret } })
+    const prototype = Object.getPrototypeOf(state.doc)
+    const originals = Object.fromEntries(
+      ['sliceString', 'lineAt', 'line'].map((name) => [name, prototype[name]]),
+    )
+    let units = 0
+    for (const name of Object.keys(originals))
+      prototype[name] = function (...args) {
+        const value = originals[name].apply(this, args)
+        units += value.length
+        return value
+      }
+    let spec
+    try {
+      spec = lineInput(state, tree, caret, caret, '\ny')
+    } finally {
+      Object.assign(prototype, originals)
+    }
+    // Past the limit the input is left to the default insertion, which
+    // keeps the bold whole across a soft line break.
+    assert.equal(spec, null)
+    if (size === 2 ** 20) {
+      const typed = `${doc.slice(0, caret)}\ny${doc.slice(caret)}`
+      const strong = markdown.parse(typed).topNode.firstChild.firstChild
+      assert.deepEqual(
+        [strong?.name, strong?.from, strong?.to],
+        ['StrongEmphasis', 0, typed.length],
+      )
+    }
+    assert.ok(units > 0 && units <= 1024, `${units} units read`)
+  }
+})
+
+test('multi-line text input at the edges of formatting, headings and lists, as the browser types', () => {
+  // Typed right after an opening marker: an empty first line leaves no empty
+  // markers (before, `****` made a thematic break), and its spaces stay
+  // outside them (before, `** x**` could not open).
+  for (const mark of ['**', '*', '~~', '`']) {
+    const source = `${mark}|abcd${mark}`
+    assert.equal(run(source, typing('\ny')), `\n\n${mark}y|abcd${mark}`)
+    assert.equal(
+      run(source, typing(' x\ny')),
+      ` ${mark}x${mark}\n\n${mark}y|abcd${mark}`,
+    )
+  }
+  // An empty task the input adds leaves the list, as a plain item does.
+  assert.equal(run('- [x] ab|', typing('x\n\ny')), '- [x] abx\n\ny|')
+  assert.equal(run('- [x] ab|', typing('\n\n')), '- [x] ab\n- [ ] |')
+  // A setext heading's underline stays with its last part.
+  assert.equal(run('ab|cd\n====', typing('X\nY')), '# abX\n\nY|cd\n====')
+  assert.equal(run('abcd|\n====', typing('X\nY')), 'abcdX\n====\n\nY|')
+  // Select-all keeps the formatting the text starts with, and a first code
+  // block, which takes the text as code.
+  assert.equal(run('^**abcd**|', typing('x\ny')), '**x**\n\n**y|**')
+  assert.equal(
+    run('^```\nabcd\n```\n\nend|', typing('**x**\ny')),
+    '```\n**x**\ny|\n```',
+  )
+  // A carriage return is a line break too.
+  assert.equal(run('ab|', typing('# typed\ry')), 'ab\\# typed\n\ny|')
+  assert.equal(
+    run('^plain\n\n```\ncode\n```|', typing('# typed\ry')),
+    '\\# typed\n\ny|',
+  )
+  assert.equal(
+    run('^```\nabcd\n```\n\nend|', typing('# typed\r\ny')),
+    '```\n# typed\ny|\n```',
+  )
+  // Wider numbers in quotes shift continuation lines and children inside them.
+  assert.equal(
+    run('> 8. ab|cd\n> 9. tail\n>    - child', typing('x\ny')),
+    '> 8. abx\n> 9. y|cd\n> 10. tail\n>     - child',
+  )
+  assert.equal(
+    run('> > 8. ab|cd\n> > 9. tail\n> >\n> >    more', typing('x\ny')),
+    '> > 8. abx\n> > 9. y|cd\n> > 10. tail\n> >\n> >     more',
+  )
+})
+
+test('backticks typed into inline code keep the code span', {
+  todo: 'formatted gap input-075: multi-line input with backticks inside inline code keeps the code span',
+}, () => {
+  assert.equal(run('`ab|cd`', typing('x\n`y`')), '`abx`\n\n`` `y`|cd ``')
+})
+
+test('multi-line input in a 50 MiB block reads and rewrites only around the caret', () => {
+  const size = 50 * 2 ** 20
+  const sample = markdown.parse('# a\n\nb')
+  const heading = sample.topNode.firstChild,
+    paragraph = sample.topNode.lastChild
+  const blocks = [
+    // Before, the paragraph after the caret was read and rewritten: 52,428,799 units.
+    [`a${'b'.repeat(size)}`, 1, new Tree(paragraph.type, [], [], size + 1)],
+    [
+      `# a${'b'.repeat(size)}`,
+      3,
+      new Tree(
+        heading.type,
+        [new Tree(heading.firstChild.type, [], [], 1)],
+        [0],
+        size + 3,
+      ),
+    ],
+  ]
+  const reads = []
+  for (const [doc, caret, block] of blocks) {
+    const tree = new Tree(sample.type, [block], [0], doc.length)
+    const state = EditorState.create({ doc, selection: { anchor: caret } })
+    const prototype = Object.getPrototypeOf(state.doc)
+    const originals = Object.fromEntries(
+      ['sliceString', 'lineAt', 'line'].map((name) => [name, prototype[name]]),
+    )
+    let units = 0
+    for (const name of Object.keys(originals))
+      prototype[name] = function (...args) {
+        const value = originals[name].apply(this, args)
+        units += value.length
+        return value
+      }
+    let spec
+    try {
+      spec = lineInput(state, tree, caret, caret, 'x\ny')
+    } finally {
+      Object.assign(prototype, originals)
+    }
+    let removed = 0,
+      inserted = 0
+    spec.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
+      removed += toA - fromA
+      inserted += text.length
+    })
+    reads.push(units)
+    assert.ok(units <= 4096, `${units} units read`)
+    assert.equal(removed, 0)
+    assert.ok(inserted > 0 && inserted <= 16, `${inserted} inserted`)
+  }
+  // The heading's text start and end are read from its first characters.
+  assert.ok(reads[1] > 0, 'positive read control')
+})
+
+test('select-all code input keeps matching fences as literal code', () => {
+  const { parser: marked, options, core, addons } = markdownConfiguration([])
+  const manager = new MarkdownManager({
+    extensions: [...core, ...addons],
+    marked,
+    markedOptions: options,
+  })
+  for (const [opening, input, closing] of [
+    ['```', '```\nX', '````'],
+    ['```js', '  `````\nX', '``````'],
+    ['~~~js', '~~~\r\nX', '~~~~'],
+    ['`````js', '```\nX', '`````'],
+    ['```', '~~~\nX', '```'],
+  ]) {
+    const source = `${opening}\nabcd\n${opening.match(/`+|~+/)[0]}\n\nend`
+    const normalized = input.replace(/\r\n?/g, '\n')
+    const next = run(`^${source}|`, typing(input))
+    assert.equal(
+      next,
+      `${closing}${opening.replace(/`+|~+/, '')}\n${normalized}|\n${closing}`,
+    )
+    const doc = manager.parse(next.replace('|', ''))
+    assert.equal(doc.content.length, 1)
+    assert.equal(doc.content[0].type, 'codeBlock')
+    assert.equal(
+      doc.content[0].attrs.language,
+      opening.replace(/`+|~+/, '') || null,
+    )
+    assert.equal(doc.content[0].content[0].text, normalized)
+  }
 })

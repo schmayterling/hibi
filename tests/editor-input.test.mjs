@@ -2117,6 +2117,10 @@ function inputOutcome(source) {
               item.task ? Boolean(item.checked) : null,
               blocks(item.tokens),
             ]),
+            // Every item's number, not only the start the list renders from.
+            token.ordered
+              ? token.items.map((item) => Number(/\d+/.exec(item.raw)[0]))
+              : null,
           ],
         ]
       if (token.type === 'table')
@@ -2148,6 +2152,7 @@ test('cm outcome projection keeps task state, prose breaks and literal text', ()
     inputOutcome('one\n\ntwo'),
     inputOutcome('one\n\n\n\ntwo'),
   )
+  assert.notDeepEqual(inputOutcome('9. a\n10. b'), inputOutcome('9. a\n9. b'))
   assert.deepEqual(inputOutcome('~~~\none\ntwo\n~~~'), [
     ['code-block', '', 'one\ntwo'],
   ])
@@ -2275,85 +2280,9 @@ const cmCaretText = (rich) =>
   })
 
 const multilineInputGaps = {
-  markdown: {
-    structure:
-      'formatted gap input-001: native multiline markdown preserves literal text and block structure',
-  },
-  paragraph: {
-    structure:
-      'formatted gap input-002: native multiline paragraph preserves literal text and block structure',
-    caret:
-      'formatted gap input-003: native multiline paragraph keeps inserted caret and following text',
-  },
-  'heading middle': {
-    structure:
-      'formatted gap input-004: native multiline heading middle preserves literal text and block structure',
-  },
-  list: {
-    structure:
-      'formatted gap input-005: native multiline list preserves literal text and block structure',
-  },
-  'list end': {
-    structure:
-      'formatted gap input-006: native multiline list end preserves literal text and block structure',
-    caret:
-      'formatted gap input-007: native multiline list end keeps inserted caret and following text',
-  },
-  'item paragraphs': {
-    structure:
-      'formatted gap input-008: native multiline item paragraphs preserves literal text and block structure',
-    caret:
-      'formatted gap input-009: native multiline item paragraphs keeps inserted caret and following text',
-  },
-  'ordered end': {
-    structure:
-      'formatted gap input-010: native multiline ordered end preserves literal text and block structure',
-    caret:
-      'formatted gap input-011: native multiline ordered end keeps inserted caret and following text',
-  },
-  'nested list': {
-    structure:
-      'formatted gap input-012: native multiline nested list preserves literal text and block structure',
-    caret:
-      'formatted gap input-013: native multiline nested list keeps inserted caret and following text',
-  },
-  quote: {
-    structure:
-      'formatted gap input-014: native multiline quote preserves literal text and block structure',
-  },
   cell: {
     input:
       'formatted gap input-015: native table cell input emits one signal with inserted text',
-  },
-  selection: {
-    structure:
-      'formatted gap input-016: native multiline selection preserves literal text and block structure',
-    caret:
-      'formatted gap input-017: native multiline selection keeps inserted caret and following text',
-  },
-  bold: {
-    structure:
-      'formatted gap input-018: native multiline bold preserves literal text and block structure',
-    caret:
-      'formatted gap input-019: native multiline bold keeps inserted caret and following text',
-  },
-  'link end': {
-    structure:
-      'formatted gap input-020: native multiline link end preserves literal text and block structure',
-    caret:
-      'formatted gap input-021: native multiline link end keeps inserted caret and following text',
-  },
-  'code end': {
-    structure:
-      'formatted gap input-022: native multiline code end preserves literal text and block structure',
-    caret:
-      'formatted gap input-023: native multiline code end keeps inserted caret and following text',
-  },
-  'stored mark': {
-    structure:
-      'formatted gap input-024: native multiline stored mark preserves literal text and block structure',
-    caret:
-      'formatted gap input-025: native multiline stored mark keeps inserted caret and following text',
   },
   cells: {
     selection:
@@ -2369,42 +2298,6 @@ const multilineInputGaps = {
     caret:
       'formatted gap input-031: native multiline cells keeps inserted caret and following text',
   },
-  blocks: {
-    structure:
-      'formatted gap input-032: native multiline blocks preserves literal text and block structure',
-    caret:
-      'formatted gap input-033: native multiline blocks keeps inserted caret and following text',
-  },
-  'blocks into a list': {
-    structure:
-      'formatted gap input-034: native multiline blocks into a list preserves literal text and block structure',
-    caret:
-      'formatted gap input-035: native multiline blocks into a list keeps inserted caret and following text',
-  },
-  items: {
-    structure:
-      'formatted gap input-036: native multiline items preserves literal text and block structure',
-    caret:
-      'formatted gap input-037: native multiline items keeps inserted caret and following text',
-  },
-  all: {
-    structure:
-      'formatted gap input-038: native multiline all preserves literal text and block structure',
-  },
-  'all from a list': {
-    structure:
-      'formatted gap input-039: native multiline all from a list preserves literal text and block structure',
-  },
-  'line breaks only': {
-    structure:
-      'formatted gap input-040: native multiline line breaks only preserves literal text and block structure',
-  },
-  'block kinds': {
-    structure:
-      'formatted gap input-041: native multiline block kinds preserves literal text and block structure',
-    caret:
-      'formatted gap input-042: native multiline block kinds keeps inserted caret and following text',
-  },
   'into a table': {
     selection:
       'formatted gap input-043: native table into a table selection preserves both source endpoints',
@@ -2415,31 +2308,14 @@ const multilineInputGaps = {
     caret:
       'formatted gap input-046: native multiline into a table keeps inserted caret and following text',
   },
-  task: {
-    structure:
-      'formatted gap input-047: native multiline task preserves literal text and block structure',
-    caret:
-      'formatted gap input-048: native multiline task keeps inserted caret and following text',
-  },
-  'nested list end': {
-    structure:
-      'formatted gap input-049: native multiline nested list end preserves literal text and block structure',
-  },
-  'item start': {
-    structure:
-      'formatted gap input-050: native multiline item start preserves literal text and block structure',
-  },
 }
 
-const linearInputGaps = {
-  empty: {
-    500: 'formatted gap input-052: native 500 line input into empty paragraph preserves literal blocks',
-    1000: 'formatted gap input-053: native 1000 line input into empty paragraph preserves literal blocks',
-  },
-  all: {
-    500: 'formatted gap input-054: native 500 line input into select all preserves literal blocks',
-    1000: 'formatted gap input-055: native 1000 line input into select all preserves literal blocks',
-  },
+// Accepted differences (formatted-engine-gaps.md): the rich editor kept these
+// browser results, which the formatted view does not repeat.
+const formattedInputOutcomes = {
+  'block kinds': { markdown: 'aX\n\nYd', caret: ['Y', 'd'] },
+  task: { caret: ['b', ''] },
+  'nested list end': { markdown: '- x\n  - ya\n- b' },
 }
 
 async function selectNativeInputTable(t, page, rich, what, oracle) {
@@ -2585,7 +2461,10 @@ for (const [what, , text, select] of multilineInputCases) {
     const actual = await acceptedInput(page)
     const work = await page.evaluate(() => window.cmInputWork)
     const normalized = text.replace(/\r\n?|\n/g, '\n')
-    const expected = oracle.result.markdown
+    const expected =
+      formattedInputOutcomes[what]?.markdown ?? oracle.result.markdown
+    const expectedCaret =
+      formattedInputOutcomes[what]?.caret ?? oracle.result.caret
     await t.test(
       'formatted structure and marks preserve the historical browser outcome',
       { todo: multilineInputGaps[what]?.structure },
@@ -2681,12 +2560,12 @@ for (const [what, , text, select] of multilineInputCases) {
       async () => {
         const caret = await cmCaretText(rich)
         assert.ok(caret)
-        assert.equal(caret[1], oracle.result.caret[1])
+        assert.equal(caret[1], expectedCaret[1])
         const last = normalized.split('\n').at(-1)
         assert.ok(
           what === 'code'
             ? caret[0].endsWith(last)
-            : caret[0] === oracle.result.caret[0],
+            : caret[0] === expectedCaret[0],
           JSON.stringify(caret),
         )
       },
@@ -2722,15 +2601,9 @@ test('codemirror: native multiline input at the only empty list item retains the
   )
   await page.keyboard.insertText('\nb')
   const actual = await acceptedInput(page)
-  await t.test(
-    'native input exits the empty list',
-    {
-      todo: 'formatted gap input-051: native multiline input exits empty list and preserves following paragraph',
-    },
-    () => {
-      assert.equal(actual.markdown, 'b\n\nz')
-    },
-  )
+  await t.test('native input exits the empty list', () => {
+    assert.equal(actual.markdown, 'b\n\nz')
+  })
   await t.test('the native caret follows the inserted text', async () => {
     assert.deepEqual(await cmCaretText(rich), ['b', ''])
   })
@@ -2966,7 +2839,6 @@ for (const all of [false, true]) {
       counts.push({ lines, ...work })
       await t.test(
         lines + ' lines preserve the historical formatted source outcome',
-        { todo: linearInputGaps[all ? 'all' : 'empty'][lines] },
         () => {
           const expected = Array.from(
             { length: oracle.result.lineCount },
@@ -3049,6 +2921,21 @@ for (const all of [false, true]) {
     assert.equal(large.changes, small.changes)
   })
 }
+
+test('codemirror: multi-line input over select-all replaces all of a large note', {
+  timeout: 60000,
+}, async (t) => {
+  // The formatted view parses a large note in steps; input before the parser
+  // reaches its end must still replace the whole selection.
+  const source = 'first\n\n' + 'old tail paragraph\n\n'.repeat(120000)
+  const { page, rich } = await launchInputFixture(t, source)
+  await rich.focus()
+  await rich.press('ControlOrMeta+a')
+  await page.keyboard.insertText('x\ny')
+  const { markdown } = await acceptedInput(page)
+  // Only the rich editor's result; a raw insertion fails too.
+  assert.ok(markdown === 'x\n\ny', JSON.stringify(markdown.slice(0, 80)))
+})
 
 test('codemirror: blank paragraphs and a typed trailing space survive tab switches and exact disk save', {
   timeout: 30000,

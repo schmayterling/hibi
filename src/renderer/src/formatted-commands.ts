@@ -12,6 +12,11 @@ import {
   type TransactionSpec,
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import {
+  markdownLineStarts as escapeLineStarts,
+  markdownLiteral as literal,
+} from '../../shared/markdown-literal.ts'
+import { uncovered } from './chunked-markdown.ts'
 import { formattedFormatting } from './formatted-contributions.ts'
 import { codeIndentLines, detectIndentUnit, tabIndent } from './indentation.ts'
 
@@ -159,11 +164,12 @@ function renumbered(
   end: number,
 ) {
   const changes: { from: number; to?: number; insert?: string }[] = []
-  let number = Number(/^\s*(\d+)/.exec(marker)?.[1])
+  // The marker may follow quote markers and end with a task box.
+  let number = Number(/(\d+)[.)][^\d]*$/.exec(marker)?.[1])
   for (
-    let next = item.nextSibling;
-    Number.isFinite(number) && next?.name === 'ListItem';
-    next = next.nextSibling
+    let next = nextItem(item);
+    Number.isFinite(number) && next;
+    next = nextItem(next)
   ) {
     const mark = next.getChild('ListMark')
     if (mark && mark.from < end) continue
@@ -187,13 +193,34 @@ function renumbered(
   return changes
 }
 
+/**
+ * What a new line of an item beside `item` starts with: the indentation and
+ * quote markers before its marker, or, where an outer item's marker shares
+ * that line, its containers' continuation.
+ */
+function itemIndent(state: EditorState, item: SyntaxNode, mark: SyntaxNode) {
+  const before = state.sliceDoc(state.doc.lineAt(mark.from).from, mark.from)
+  if (/^[ \t>]*$/.test(before)) return before
+  const prefix = prefixOf(state, item.parent)
+  return prefix == null
+    ? before
+    : prefix + ' '.repeat(Math.max(0, before.length - prefix.length))
+}
+
+/** The markers that start a line of `item` for the quotes it is in. */
+function quoteMarkers(item: SyntaxNode, text: string) {
+  let quotes = 0
+  for (let node = item.parent; node; node = node.parent)
+    if (node.name === 'Blockquote') quotes++
+  return quotes
+    ? (new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`).exec(text)?.[0] ?? '')
+    : ''
+}
+
 /** The content column of a list item's first line, as its marker sets it. */
 function itemWidth(state: EditorState, item: SyntaxNode) {
-  const line = state.doc.lineAt(item.from)
-  const match = /^([ \t]*(?:\d+[.)]|[-+*]))( *)(.?)/.exec(line.text)
-  if (!match) return 0
-  const spaces = match[2]!.length
-  return match[1]!.length + (!match[3] || spaces > 4 ? 1 : spaces)
+  const marker = itemMarker(state, item)
+  return marker ? marker.mark.from - marker.line.from + marker.width : 0
 }
 
 /**
@@ -212,10 +239,13 @@ function shiftContent(
   const end = state.doc.lineAt(item.to).number
   for (let number = after + 1; number <= end; number++) {
     const line = state.doc.line(number)
-    const leading = /^ */.exec(line.text)![0].length
-    if (blank(line.text) || leading < width) continue
-    if (by > 0) changes.push({ from: line.from, insert: ' '.repeat(by) })
-    else changes.push({ from: line.from, to: line.from - by })
+    // Inside quotes, the indentation follows their markers.
+    const from = line.from + quoteMarkers(item, line.text).length
+    const text = state.sliceDoc(from, line.to)
+    const leading = /^ */.exec(text)![0].length
+    if (blank(text) || from - line.from + leading < width) continue
+    if (by > 0) changes.push({ from, insert: ' '.repeat(by) })
+    else changes.push({ from, to: from - by })
   }
   return changes
 }
@@ -224,8 +254,7 @@ function shiftContent(
 function nextMarker(state: EditorState, item: SyntaxNode) {
   const mark = item.getChild('ListMark')
   if (!mark) return null
-  const line = state.doc.lineAt(item.from)
-  const indent = state.sliceDoc(line.from, mark.from)
+  const indent = itemIndent(state, item, mark)
   const text = state.sliceDoc(mark.from, mark.to)
   const ordered = /^(\d+)([.)])$/.exec(text)
   const task = item.getChild('Task')
@@ -346,6 +375,804 @@ export function lineBreak(
       range: EditorSelection.cursor(range.from + text.length),
     }
   })
+}
+
+/** Formatting the browser carries to the lines after a break, as styles. */
+const styles = ['Emphasis', 'StrongEmphasis', 'Strikethrough']
+const spanNames = [...styles, 'InlineCode', 'Link']
+/** Delimiters a format action leaves around an empty caret, waiting for text. */
+const pending = ['**', '__', '~~', '*', '_', '~', '`']
+
+/** The leaf block holding `pos`, or null on a blank line or in an empty list item. */
+function leafAt(tree: Tree, pos: number) {
+  for (const side of [-1, 1] as const)
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(pos, side);
+      node;
+      node = node.parent
+    )
+      if (node.type.is('LeafBlock') && node.from <= pos && pos <= node.to)
+        return node
+  return null
+}
+
+/** The list item or quote holding `pos`. */
+function containerAt(tree: Tree, pos: number) {
+  for (const side of [-1, 1] as const)
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(pos, side);
+      node;
+      node = node.parent
+    )
+      if (
+        (node.name === 'ListItem' || node.name === 'Blockquote') &&
+        node.from <= pos &&
+        pos <= node.to
+      )
+        return node
+  return null
+}
+
+/** Longest run of spaces read around the caret; past it, input is left to the default. */
+const spaceLimit = 256
+
+/**
+ * How many spaces (and tabs, with `tabs`) start the text from `from` to
+ * `to`, or -1 past `limit`.
+ */
+function blankRun(
+  state: EditorState,
+  from: number,
+  to: number,
+  tabs = true,
+  limit = spaceLimit,
+) {
+  const end = Math.min(to, from + limit + 1)
+  const count = (tabs ? /^[ \t]*/ : /^ */).exec(state.sliceDoc(from, end))![0]
+    .length
+  return count > limit ? -1 : count
+}
+
+/** Where the text of a paragraph, task or ATX heading starts; null for other blocks. */
+function textStart(state: EditorState, leaf: SyntaxNode) {
+  if (leaf.name === 'Paragraph' || /^SetextHeading\d$/.test(leaf.name))
+    return leaf.from
+  if (leaf.name !== 'Task' && !/^ATXHeading\d$/.test(leaf.name)) return null
+  const mark = leaf.firstChild
+  if (mark?.name !== (leaf.name === 'Task' ? 'TaskMarker' : 'HeaderMark'))
+    return null
+  const spaces = blankRun(state, mark.to, leaf.to)
+  return spaces < 0 ? null : mark.to + spaces
+}
+
+/** The first or last leaf block in `node`. */
+function edgeLeaf(node: SyntaxNode | null, last: boolean) {
+  while (node && !node.type.is('LeafBlock')) {
+    let child = last ? node.lastChild : node.firstChild
+    while (child && !child.type.is('Block'))
+      child = last ? child.prevSibling : child.nextSibling
+    node = child
+  }
+  return node
+}
+
+/** The block children of `node`. */
+function blocksOf(node: SyntaxNode) {
+  const blocks: SyntaxNode[] = []
+  for (let child = node.firstChild; child; child = child.nextSibling)
+    if (child.type.is('Block')) blocks.push(child)
+  return blocks
+}
+
+/** The item after `item` in its list; quote markers between them are not blocks. */
+function nextItem(item: SyntaxNode) {
+  let next = item.nextSibling
+  while (next && !next.type.is('Block')) next = next.nextSibling
+  return next?.name === 'ListItem' ? next : null
+}
+
+/** A list item's marker, its line, and the width from the marker to the item's text. */
+function itemMarker(state: EditorState, item: SyntaxNode) {
+  const mark = item.getChild('ListMark')
+  if (!mark) return null
+  const line = state.doc.lineAt(mark.from)
+  // Only up to five spaces after the marker count.
+  const spaces = blankRun(state, mark.to, line.to, false, 5)
+  const width =
+    mark.to -
+    mark.from +
+    (!spaces || spaces < 0 || spaces > 4 || mark.to + spaces === line.to
+      ? 1
+      : spaces)
+  return { mark, line, width }
+}
+
+/** Quote markers and list indentation that put a line inside `node`, outermost first. */
+function prefixOf(state: EditorState, node: SyntaxNode | null) {
+  const containers: SyntaxNode[] = []
+  for (; node; node = node.parent)
+    if (node.name === 'Blockquote' || node.name === 'ListItem')
+      containers.unshift(node)
+  let prefix = ''
+  for (const container of containers) {
+    if (container.name === 'Blockquote') prefix += '> '
+    else {
+      const marker = itemMarker(state, container)
+      if (!marker) return null
+      const column = marker.mark.from - marker.line.from + marker.width
+      prefix += ' '.repeat(Math.max(marker.width, column - prefix.length))
+    }
+  }
+  return prefix
+}
+
+/** A typed line as literal Markdown; at a block's start, its indentation stays text. */
+function literalLine(text: string, verbatim: boolean, start: boolean) {
+  const value = verbatim ? text : escapeLineStarts(literal(text))
+  return start && /^(?: {4}| {0,3}\t)/.test(value)
+    ? (value[0] === ' ' ? '&#32;' : '&#9;') + value.slice(1)
+    : value
+}
+
+/** Whether the text from `from` to `to` is only spaces and line breaks, read in growing slices. */
+function blankText(state: EditorState, from: number, to: number) {
+  for (let size = 64; from < to; from += size, size *= 2)
+    if (/\S/.test(state.sliceDoc(from, Math.min(to, from + size)))) return false
+  return true
+}
+
+/** How many spaces and tabs end the text from `from` to `to`, or -1 past the limit. */
+function blankBefore(state: EditorState, to: number, from: number) {
+  const start = Math.max(from, to - spaceLimit - 1)
+  const count = /[ \t]*$/.exec(state.sliceDoc(start, to))![0].length
+  return count > spaceLimit ? -1 : count
+}
+
+/** Literal text split into its leading spaces, the rest, and its trailing spaces. */
+function spaced(text: string): [string, string, string] {
+  const lead = /^(?:&#(?:32|9);)?[ \t]*/.exec(text)![0].length
+  const trail = lead === text.length ? 0 : /[ \t]*$/.exec(text)![0].length
+  return [
+    text.slice(0, lead),
+    text.slice(lead, text.length - trail),
+    text.slice(text.length - trail),
+  ]
+}
+
+/** The number in an ordered list marker. */
+const ordinal = (state: EditorState, mark: SyntaxNode | null) =>
+  mark && /^(\d+)([.)])$/.exec(state.sliceDoc(mark.from, mark.to))
+
+/**
+ * Text input with line breaks, such as dictation or a text service, as the
+ * browser typed it into the rich editor, in one source change. The selection
+ * goes first: the text after it joins the block it starts in, and the list
+ * item it ends in keeps its other blocks. The text is literal. Each break
+ * starts a block like the one it is in: a paragraph, a heading (a paragraph
+ * after a heading's end) or a new item after the list item; a break in an
+ * empty item moves it up a level or out of the list. Formatting goes on to
+ * later lines where the text after the caret has it, and styles (bold, italic,
+ * strikethrough) always do; a link takes no text at its edge. Null leaves
+ * code, tables and other input as it is.
+ */
+export function lineInput(
+  state: EditorState,
+  tree: Tree,
+  from: number,
+  to: number,
+  text: string,
+): TransactionSpec | null {
+  const { main } = state.selection
+  const lines = text.split(/\r\n?|\n/)
+  if (
+    state.readOnly ||
+    state.selection.ranges.length > 1 ||
+    main.from !== from ||
+    main.to !== to ||
+    lines.length < 2
+  )
+    return null
+  const { doc } = state
+  const last = lines.length - 1
+  // Line breaks alone that the browser turns into exactly one new block are
+  // read back as a single line break, as the rich editor reads them.
+  const breaks = /^[\r\n]+$/.test(text)
+  const single = () => lineInput(state, tree, main.from, main.to, '\n')
+  // Select-all keeps the first block's kind and replaces everything from its
+  // text on, whatever the parser has reached; the note's first line keeps the
+  // first block's markers. Elsewhere, unparsed text is left to the default.
+  const all = from === 0 && to === doc.length && to > 0
+  let lineStart = 0
+  if (all) {
+    const first = edgeLeaf(tree.topNode, false)
+    if (!first) return null
+    lineStart = doc.lineAt(first.from).from
+    if (
+      !blankText(state, 0, lineStart) ||
+      !/^(?:[ \t>]|(?:[-+*]|\d{1,9}[.)])(?=[ \t]))*$/.test(
+        state.sliceDoc(lineStart, first.from),
+      )
+    )
+      return null
+    // A first code block takes literal text; a typed fence must not close it.
+    const fence =
+      first.name === 'FencedCode' &&
+      /^ {0,3}(`{3,}|~{3,})/.exec(doc.lineAt(first.from).text)
+    if (fence) {
+      let marker = fence[1]!
+      for (const line of lines) {
+        const run = /^ {0,3}(`+|~+)/.exec(line)?.[1]
+        if (run && run[0] === marker[0] && run.length >= marker.length)
+          marker = marker[0]!.repeat(run.length + 1)
+      }
+      const open = doc.lineAt(first.from).text.replace(fence[1]!, marker)
+      const code = `${open}\n${lines.join('\n')}`
+      return {
+        changes: { from: 0, to: doc.length, insert: `${code}\n${marker}` },
+        selection: EditorSelection.cursor(code.length),
+        userEvent: 'input.type',
+      }
+    }
+    const start = textStart(state, first)
+    if (start == null) return null
+    from = start
+    // The typed text takes the formatting the note's text starts with.
+    for (let moved = true; moved; ) {
+      moved = false
+      for (
+        let node: SyntaxNode | null = tree.resolveInner(from, 1);
+        node && !node.type.is('Block');
+        node = node.parent
+      )
+        if (
+          node.from === from &&
+          node.name !== 'Link' &&
+          spanNames.includes(node.name) &&
+          node.firstChild?.from === from
+        ) {
+          from = node.firstChild.to
+          moved = true
+          break
+        }
+    }
+  } else if (uncovered(tree, from, to)) return null
+  // A format waiting at the caret (Bold with nothing selected writes `****`)
+  // is not one the browser types with.
+  let waiting = false
+  const inner = tree.resolveInner(from, 0).name
+  if (from === to && /^(?:Paragraph|HorizontalRule|ATXHeading\d)$/.test(inner))
+    for (let found = true; found; ) {
+      found = false
+      for (const mark of pending)
+        if (
+          state.sliceDoc(from - mark.length, from) === mark &&
+          state.sliceDoc(to, to + mark.length) === mark
+        ) {
+          from -= mark.length
+          to += mark.length
+          found = waiting = true
+          break
+        }
+    }
+  let start = leafAt(tree, from)
+  if (start?.name === 'HorizontalRule' && waiting && start.from >= from)
+    start = null
+  const startText = start && textStart(state, start)
+  if (start && (startText == null || from < startText)) return null
+  let end = start
+  if (to > from && !waiting && !all) {
+    end = leafAt(tree, to)
+    const endText = end && textStart(state, end)
+    if (!start || !end || endText == null || to < endText) return null
+  }
+  const across = !!start && !!end && start.from !== end.from
+  // A tail of several lines keeps its line prefixes, so the blocks must
+  // share their container.
+  if (
+    across &&
+    doc.lineAt(to).number !== doc.lineAt(end!.to).number &&
+    start!.parent?.from !== end!.parent?.from
+  )
+    return null
+
+  // Formatting around the selection, innermost first: around all of it
+  // (`spans`), cut by its start (`ended`: the text before the selection keeps
+  // it, up to the caret) or cut by its end (`started`: the text after keeps
+  // it). A selection end inside formatting markers is not modelled.
+  let spans: Formatting[] = []
+  const ended: Formatting[] = []
+  const started: Formatting[] = []
+  const seen = new Set<string>()
+  for (const found of [
+    ...formatting(state, tree, from),
+    ...formatting(state, tree, to),
+  ]) {
+    const { node, first, last: close } = found
+    const key = `${node.name}:${node.from}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (node.to <= from || node.from >= to) continue
+    if (from <= node.from && node.to <= to) continue
+    if (!spanNames.includes(node.name)) return null
+    if (node.from < from && to < node.to) {
+      if (from < first.to || to > close.from) return null
+      spans.push(found)
+    } else if (node.from < from) {
+      if (from < first.to || from > close.from || node.name === 'Link')
+        return null
+      ended.push(found)
+    } else {
+      if (to < first.to || to > close.from) return null
+      started.push(found)
+    }
+  }
+  // Inline syntax that is not formatting, such as an escape, takes no text.
+  for (const pos of [from, to])
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(pos, 0);
+      node && !node.type.is('Block');
+      node = node.parent
+    )
+      if (!spanNames.includes(node.name)) return null
+  let at = from
+  // Formatting that loses all its text after the caret loses its closing marker.
+  const gone = started.filter(({ last: close }) => to === close.from),
+    opened = started.filter((span) => !gone.includes(span))
+  // A link takes text only inside it: at its edge, the text goes beside it.
+  for (let index = 0; index < spans.length; index++) {
+    const { node, first, last: close } = spans[index]!
+    if (node.name !== 'Link' || (at > first.to && at < close.from)) continue
+    if (from !== to || first.to === close.from) return null
+    at = to = at === first.to ? node.from : node.to
+    spans = spans.slice(index + 1)
+    index = -1
+  }
+  const inside = spans.filter(({ last: close }) => to < close.from),
+    edge = spans.filter(({ last: close }) => to === close.from)
+  if (gone.length && edge.length) return null
+  const skip =
+    edge.at(-1)?.node.to ?? Math.max(to, ...gone.map(({ node }) => node.to))
+  const replaceEnd = all ? doc.length : end ? end.to : to
+  // The text after the caret stays in place: only whether there is any is read.
+  const after = skip < replaceEnd
+  // As the browser types, later lines take the formatting of the text after
+  // the caret (but no link) once the first line has text, and otherwise the
+  // formatting around the caret and the styles it ends: bold, italic and
+  // strikethrough.
+  const following = after ? [...opened, ...inside] : []
+  const kept =
+    after && lines[0]
+      ? following.filter(({ node }) => node.name !== 'Link')
+      : [...ended, ...edge, ...inside].filter(
+          (span) =>
+            styles.includes(span.node.name) ||
+            (inside.includes(span) && span.node.name !== 'Link'),
+        )
+  // The last line closes kept formatting the text after does not have, and
+  // opens what that text has but the line does not, which must nest inside
+  // the kept formatting.
+  const closed = kept.filter((span) => !following.includes(span)),
+    dropped = following.filter((span) => !kept.includes(span))
+  if (
+    dropped.some(({ node }) =>
+      kept.some(
+        (span) =>
+          following.includes(span) &&
+          (node.from < span.node.from || node.to > span.node.to),
+      ),
+    )
+  )
+    return null
+  const code = (list: Formatting[]) =>
+    list.some(({ node }) => node.name === 'InlineCode')
+  const verbatim = code(kept),
+    verbatimFirst = code([...spans, ...ended])
+  if (
+    (verbatimFirst && lines[0]!.includes('`')) ||
+    (verbatim && lines.slice(1).some((line) => line.includes('`')))
+  )
+    return null
+  const open = (list: Formatting[]) =>
+    list
+      .map((span) => opener(state, span))
+      .reverse()
+      .join('')
+  const close = (list: Formatting[]) =>
+    list.map((span) => closer(state, span)).join('')
+  const heading = start && /^(?:ATX|Setext)Heading(\d)$/.exec(start.name)
+  const setext = !!heading && start!.name.startsWith('Setext')
+  if (across && end!.name.startsWith('Setext')) return null
+  // At a heading's end, later lines are paragraphs after its closing sequence.
+  let headingEnd = false
+  if (heading) {
+    const block = end ?? start!
+    const closing = block.lastChild
+    const textEnd =
+      closing?.name === 'HeaderMark' && closing.from > textStart(state, block)!
+        ? block.name.startsWith('Setext')
+          ? doc.lineAt(closing.from).from - 1
+          : closing.from
+        : block.to
+    headingEnd =
+      skip >= textEnd || blankRun(state, skip, textEnd) === textEnd - skip
+  }
+  const [lead, core, trail] = spaced(
+    literalLine(lines[0]!, verbatimFirst, at === startText),
+  )
+  // Formatting whose text starts at the caret takes the first line after the
+  // spaces it starts with; with no text typed into it, its opening marker
+  // goes, so no empty markers remain.
+  const around = [...ended, ...edge, ...inside]
+  const starting = around.filter(({ first }) => at === first.to)
+  const ending = core
+    ? around
+    : around.filter((span) => !starting.includes(span))
+  const openFrom = Math.min(at, ...starting.map(({ node }) => node.from))
+  let openers = ''
+  if (starting.length && (!core || lead)) {
+    openers = core ? state.sliceDoc(openFrom, at) : ''
+    at = openFrom
+  }
+  // The first line closes formatting the caret ends; spaces it ends with,
+  // or the text before it when it has none, go after the closing markers.
+  const closing = close(ending)
+  let closeAt = -1
+  if (closing && !core) {
+    // The closing markers move before the spaces; the spaces stay.
+    const innermost = ending[0]!
+    const spaces = blankBefore(state, at, innermost.first.to)
+    if (spaces < 0) return null
+    if (spaces && spaces < at - innermost.first.to) closeAt = at - spaces
+  }
+  // A setext heading's underline stays with its last part, so the first
+  // part, or all of it when the underline goes, is written as ATX.
+  const atx =
+    setext && (!headingEnd || all || across)
+      ? `${'#'.repeat(Number(heading![1]))} `
+      : ''
+  const first =
+    (atx && at === start!.from ? atx : '') +
+    (core
+      ? lead + openers + core + closing + trail
+      : (closeAt < 0 ? closing : '') + lead + trail)
+  /** Line `index` (from 1) with the caret's offset in it; the last line ends with `rest`. */
+  const line = (index: number, rest = '') => {
+    const value = literalLine(lines[index]!, verbatim, true)
+    const [lead, core, trail] = spaced(value)
+    if (index === last && after) {
+      const typed = lead + open(kept) + core
+      const text = core
+        ? typed + close(closed) + trail
+        : lead + open(kept.filter((span) => following.includes(span)))
+      return {
+        text: text + open(dropped) + rest,
+        caret: core && !trail ? typed.length : text.length,
+      }
+    }
+    if (!core) return { text: value, caret: value.length }
+    // With nothing typed after them, the caret stays inside the styles.
+    const typed = lead + open(kept) + core
+    const text = typed + close(kept) + trail
+    return { text, caret: trail ? text.length : typed.length }
+  }
+  const changes: { from: number; to?: number; insert?: string }[] =
+    closeAt < 0 ? [] : [{ from: closeAt, insert: closing }]
+  if (atx && at !== start!.from)
+    changes.push({ from: start!.from, insert: atx })
+
+  // A list item the selection ends in keeps its other blocks as an item.
+  if (across)
+    for (let node = end!.parent; node; node = node.parent) {
+      if (node.name !== 'ListItem' || node.from <= from || node.to <= end!.to)
+        continue
+      const marker = itemMarker(state, node)
+      const next = blocksOf(node).find((block) => block.from >= end!.to)
+      if (!marker || !next || changes.length) return null
+      const target =
+        doc.lineAt(next.from).from + marker.mark.from - marker.line.from
+      if (state.sliceDoc(target, target + marker.width).trim()) return null
+      changes.push({
+        from: target,
+        to: target + marker.width,
+        insert: state
+          .sliceDoc(marker.mark.from, marker.mark.from + marker.width)
+          .padEnd(marker.width),
+      })
+    }
+
+  let insert: string,
+    replaceFrom = at,
+    replaceTo = replaceEnd,
+    offset: number
+  let container = start ? start.parent : containerAt(tree, at)
+  // In a quote that is part of a list item, a break starts a new item of
+  // that list, outside the quote.
+  if (
+    container?.name === 'Blockquote' &&
+    container.parent?.name === 'ListItem'
+  ) {
+    // The text after the caret goes with the new item, so it must end on
+    // the caret's line.
+    if (after && doc.lineAt(skip).number !== doc.lineAt(replaceEnd).number)
+      return null
+    container = container.parent
+  }
+  if (container?.name !== 'ListItem') {
+    // Paragraphs and headings, quoted or not.
+    if (start && !heading && start.name !== 'Paragraph') return null
+    if (breaks && last === 1 && text !== '\n') return single()
+    const prefix = prefixOf(state, container)
+    if (prefix == null) return null
+    const blank = prefix.trimEnd(),
+      lead = heading && !headingEnd ? `${'#'.repeat(Number(heading[1]))} ` : ''
+    let added = ''
+    offset = 0
+    for (let index = 1; index <= last; index++) {
+      const { text, caret } = line(index)
+      // The last line holds the text after the caret, which stays in place.
+      added += `\n${blank}\n${text || (index === last && after) ? prefix + (setext && index === last ? '' : lead) : blank}`
+      offset = added.length + caret
+      added += text
+    }
+    if (headingEnd && after) {
+      // The heading keeps its closing sequence; the paragraphs follow it.
+      changes.push({ from: at, to: skip, insert: first })
+      replaceFrom = replaceTo = replaceEnd
+      insert = added
+    } else {
+      replaceTo = skip
+      insert = first + added
+      offset += first.length
+    }
+    // On a blank line beside a block, the text is a paragraph of its own.
+    if (!start && !container) {
+      const { number } = doc.lineAt(at)
+      const shows = (line: Line) =>
+        blankRun(state, line.from, line.to) !== line.length
+      if (number > 1 && shows(doc.line(number - 1))) {
+        insert = `\n${insert}`
+        offset++
+      }
+      if (number < doc.lines && shows(doc.line(number + 1))) insert += '\n'
+    }
+  } else {
+    const item = container
+    const marker = itemMarker(state, item)
+    const blocks = blocksOf(item)
+    if (
+      !marker ||
+      (start && start.name !== 'Paragraph' && start.name !== 'Task') ||
+      (!start &&
+        (marker.line.number !== doc.lineAt(at).number ||
+          at < Math.min(marker.line.to, marker.mark.from + marker.width) ||
+          blocks.length))
+    )
+      return null
+    // The item, and the items its list is nested in.
+    const levels = [item]
+    for (
+      let up = item.parent?.parent;
+      up?.name === 'ListItem';
+      up = up.parent?.parent
+    )
+      levels.push(up)
+    // Across blocks, the selection ends after this item: in a later item of
+    // its list, whose next items follow, or after the list.
+    let restAfter: SyntaxNode | null = all ? null : item
+    if (across) {
+      restAfter = null
+      for (let node = end!.parent; node; node = node.parent)
+        if (node.name === 'ListItem' && node.parent?.from === item.parent?.from)
+          restAfter = node
+      // Or it ends in a block nested in this item, when nothing follows it there.
+      const nested = restAfter?.from === item.from
+      if (
+        levels.length > 1 ||
+        (nested ? item.to > end!.to : end!.from < item.to) ||
+        (!restAfter && end!.from < item.parent!.to)
+      )
+        return null
+    }
+    const others = blocks.filter(
+      (block) =>
+        block.from !== start?.from && (!(across || all) || block.to <= from),
+    )
+    const headEmpty = startText == null || startText === at
+    if (headEmpty && !lines[0] && after) {
+      // At an item's start, the new items come before its text.
+      if (
+        spans.length ||
+        ended.length ||
+        started.length ||
+        across ||
+        (start && blocks[0]!.from !== start.from)
+      )
+        return null
+      const markers = markersOf(state, levels)
+      insert = first
+      offset = 0
+      for (let index = 1; index <= last; index++) {
+        const { text, caret } = line(index)
+        insert += `\n${markers[0]!.next()}`
+        offset = insert.length + caret
+        insert += text
+      }
+      replaceTo = at
+      changes.push(...markers[0]!.renumber(item, at))
+    } else {
+      // Where each break leaves the text after it: in a new item at a level,
+      // or a paragraph after the list. A break in an empty item takes the
+      // item up a level, or out of the list.
+      type Block = { level: number; paragraph: boolean; index: number }
+      const original: Block = { level: 0, paragraph: false, index: 0 }
+      const made: Block[] = []
+      let current = original
+      for (let index = 1; index <= last; index++) {
+        const empty =
+          !after &&
+          (index === 1
+            ? headEmpty && !lines[0] && !others.length
+            : !lines[index - 1])
+        const level = levels[current.level]!
+        // The browser never takes the original task item, with its
+        // checkbox, out of the list; items it adds leave when empty.
+        if (
+          current.paragraph ||
+          !empty ||
+          (current === original && level.getChild('Task'))
+        ) {
+          current = { ...current, index }
+          made.push(current)
+          continue
+        }
+        if (current.level + 1 < levels.length) {
+          // Up a level: the item must end its list, and the list its parent item.
+          const parent = levels[current.level + 1]!
+          if (
+            nextItem(level) ||
+            blocksOf(parent).at(-1)?.from !== level.parent!.from
+          )
+            return null
+          current.level++
+        } else current.paragraph = true
+        current.index = index
+      }
+      if (breaks && made.length === 1 && text !== '\n') return single()
+      const moved = original.index > 0
+      if (moved && first) return null
+      const top = levels.at(-1)!.parent!
+      const outside = prefixOf(state, top.parent)
+      if (outside == null) return null
+      const blank = outside.trimEnd()
+      const markers = markersOf(state, levels)
+      let out = '',
+        caretAt = 0
+      for (const block of moved ? [original, ...made] : made) {
+        const { text, caret } = line(block.index)
+        out += block.paragraph
+          ? `\n${blank}\n${text ? outside : blank}`
+          : `\n${markers[block.level]!.next()}`
+        if (block.index === last) caretAt = out.length + caret
+        out += text
+      }
+      const final = made.at(-1) ?? original
+      const insertAt = across || all ? replaceEnd : Math.max(item.to, at)
+      if (final.paragraph) {
+        const outer = all
+          ? null
+          : levels.length > 1
+            ? levels.at(-1)!
+            : restAfter
+        const rest = outer && nextItem(outer)
+        if (rest) {
+          out += `\n${blank}`
+          changes.push(...restartList(state, top, rest))
+        }
+      } else if (!all && (restAfter || final.level))
+        changes.push(
+          ...markers[final.level]!.renumber(
+            final.level ? levels[final.level]! : restAfter!,
+            insertAt,
+          ),
+        )
+      if (moved) {
+        // The empty item itself becomes the first block.
+        replaceFrom = marker.line.from
+        replaceTo = insertAt
+        if (replaceFrom > lineStart) replaceFrom--
+        else {
+          const separator = /^\n(?:[^\n]*\n)?/.exec(out)![0]
+          out = out.slice(original.paragraph ? separator.length : 1)
+          caretAt -= original.paragraph ? separator.length : 1
+        }
+        insert = out
+        offset = caretAt
+      } else if (!across && !all && start && start.to < insertAt) {
+        // The item's other blocks stay in it, before the new items, which
+        // take the text after the caret.
+        changes.push({ from: at, to: start.to, insert: first })
+        replaceFrom = replaceTo = insertAt
+        insert = out + state.sliceDoc(skip, start.to)
+        offset = caretAt
+      } else {
+        replaceTo = skip
+        insert = first + out
+        offset = first.length + caretAt
+      }
+    }
+  }
+  if (all) {
+    // One change of the whole note, its leading blank lines included.
+    if (changes.length || replaceFrom < lineStart) return null
+    const kept = doc.sliceString(lineStart, replaceFrom)
+    insert = kept + insert
+    offset += kept.length
+    replaceFrom = 0
+    replaceTo = doc.length
+  }
+  changes.push({ from: replaceFrom, to: replaceTo, insert })
+  const set = state.changes(changes)
+  return {
+    changes: set,
+    selection: EditorSelection.cursor(set.mapPos(replaceFrom, -1) + offset),
+    userEvent: 'input.type',
+  }
+}
+
+/** New markers for the list at each level, counting on from its item, and renumbering after. */
+function markersOf(state: EditorState, levels: readonly SyntaxNode[]) {
+  return levels.map((item) => {
+    const mark = item.getChild('ListMark')!
+    const text = state.sliceDoc(mark.from, mark.to)
+    const number = ordinal(state, mark)
+    const indent = itemIndent(state, item, mark)
+    const task = item.getChild('Task') ? '[ ] ' : ''
+    let count = 0
+    const value = () =>
+      number ? `${Number(number[1]) + count}${number[2]}` : text
+    return {
+      next: () => {
+        count++
+        return `${indent}${value()} ${task}`
+      },
+      /** Numbered items after `after` count on from the last new marker. */
+      renumber: (after: SyntaxNode, end: number) =>
+        count ? renumbered(state, after, value(), end) : [],
+    }
+  })
+}
+
+/** The items from `rest` on, as a list of their own numbered from `list`'s start. */
+function restartList(state: EditorState, list: SyntaxNode, rest: SyntaxNode) {
+  const changes: { from: number; to?: number; insert?: string }[] = []
+  const start = ordinal(
+    state,
+    list.getChild('ListItem')?.getChild('ListMark') ?? null,
+  )
+  if (!start) return changes
+  let number = Number(start[1])
+  for (
+    let item: SyntaxNode | null = rest;
+    item;
+    item = nextItem(item), number++
+  ) {
+    const mark = item.getChild('ListMark')
+    if (!mark) break
+    const digits = String(number),
+      old = state.sliceDoc(mark.from, mark.to - 1)
+    if (digits === old) continue
+    changes.push(
+      { from: mark.from, to: mark.to - 1, insert: digits },
+      ...shiftContent(
+        state,
+        item,
+        state.doc.lineAt(item.from).number,
+        itemWidth(state, item),
+        digits.length - old.length,
+      ),
+    )
+  }
+  return changes
 }
 
 /** Whether a line opens or closes a fenced code block, or underlines a heading. */

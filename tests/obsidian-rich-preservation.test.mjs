@@ -385,7 +385,14 @@ test('codemirror: native block insertion keeps CRLF and untouched Markdown', {
   const { app, page, rich, cdp, caret, save, expected } =
     await openFormattedPreservation(t, original)
   await caret(0)
-  await page.keyboard.insertText('# replacement\n\n')
+  // Typed lines stay text; pasted plain text is Markdown.
+  await rich.evaluate((element) => {
+    const data = new DataTransfer()
+    data.setData('text/plain', '# replacement\n\n')
+    element.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true }),
+    )
+  })
   const changed = '# replacement\r\n\r\n' + original
   await save(changed)
   assert.equal(

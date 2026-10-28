@@ -11,10 +11,6 @@ const provided = new Set([
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/renderer',
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/details',
 ])
-// The addon SDK still loads the rich editor's schema, from this import only.
-const retained = new Set([
-  'src/renderer/src/addon-definition.ts -> ../../addons/sdk-loader',
-])
 const local = (file) => relative('', file).replaceAll('\\', '/')
 
 // Modules the CodeMirror editors would load from the rich editor's engine,
@@ -40,8 +36,7 @@ async function legacyModules(
           bundle.onResolve({ filter: /.*/ }, ({ importer, kind, path }) => {
             const edge = `${local(importer)} -> ${path}`
             return provided.has(edge) ||
-              (kind === 'dynamic-import' &&
-                (!followDemand || retained.has(edge)))
+              (kind === 'dynamic-import' && !followDemand)
               ? { path, external: true }
               : undefined
           })
@@ -91,7 +86,7 @@ test('outline label workers load no tiptap or prosemirror modules', async () => 
   )
 })
 
-test('the rich schema stays allowed only through its retained imports', async () => {
+test('codemirror editors reject injected rich runtime imports', async () => {
   for (const load of [
     {
       file: 'src/renderer/src/SourceEditor.tsx',
@@ -99,7 +94,7 @@ test('the rich schema stays allowed only through its retained imports', async ()
     },
     {
       file: 'src/renderer/src/SourceEditor.tsx',
-      code: "void import('../../addons/sdk-loader')",
+      code: "void import('../../addons/sdk')",
     },
     {
       file: 'src/renderer/src/use-source-outline.ts',
@@ -107,7 +102,7 @@ test('the rich schema stays allowed only through its retained imports', async ()
     },
     {
       file: 'src/renderer/src/addon-definition.ts',
-      code: "void import('../../addons/sdk-loader?sdk')",
+      code: "void import('../../addons/sdk?sdk')",
     },
     {
       file: 'src/renderer/src/addon-registry.ts',

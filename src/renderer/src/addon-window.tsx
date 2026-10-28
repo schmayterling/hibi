@@ -1,6 +1,7 @@
 import { lazy, type ReactNode, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { AddonWindowEditorProps, AddonWindowProps } from '../../addons/api'
+import { legacySdk } from '../../addons/sdk-host'
 import type {
   AddonWindowContext,
   AddonWindowGlobal,
@@ -13,6 +14,7 @@ import {
 } from '../../ui/colorschemes'
 import './styles.css'
 import '../../ui/ui-case'
+import { codemirrorFormattedView } from './formatted-engine'
 
 declare global {
   interface Window {
@@ -23,6 +25,10 @@ declare global {
 // Take the bridge before any addon module loads. This module's imports contain no
 // addon code, and afterwards the global answers only `context` and `close`.
 const bridge = window.hibiAddonWindow.seal()
+if (!codemirrorFormattedView) {
+  legacySdk.all = () => import('../../addons/sdk')
+  legacySdk.rich = () => import('@tiptap/core')
+}
 // Same origin as the main window, so appearance follows its saved choice.
 createColorschemeStore('hibi-colorscheme').start()
 // The main window's resolved palette wins, so addon colorschemes apply here too.

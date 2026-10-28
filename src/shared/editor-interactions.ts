@@ -1,6 +1,6 @@
 import type { ViewTarget } from './foundation-contracts'
 
-/** Positions belong to the named editor, not to the Markdown source. */
+/** Positions are opaque and editor-local. `editor: 'rich'` names either implementation, without an engine discriminator. Derive ranges from selection, before/after, and documentLength, never Markdown text or constants. CodeMirror uses normalized-source UTF-16 offsets; legacy rich uses ProseMirror positions, including node boundaries. */
 export interface EditorInteractionRequest {
   readonly view: ViewTarget
   readonly contentVersion: number

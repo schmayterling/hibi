@@ -131,6 +131,10 @@ function markdownParser(
       codeParser: (info) => codeLanguages.resolve(info)?.parser ?? null,
     }),
   ])
+  const chunked = new ChunkedMarkdownParser(full, base, {
+    opaque: new Set(opaque),
+    ...(options.probe ? { probe: options.probe } : {}),
+  })
   // The plain-text shortcut stops only at the characters core inline syntax
   // starts with; contributed inline syntax that starts elsewhere turns it off.
   if (
@@ -138,11 +142,8 @@ function markdownParser(
       (config) => !config.parseInline?.length || inlineStops(config),
     )
   )
-    runs.allow(full)
-  return new ChunkedMarkdownParser(full, base, {
-    opaque: new Set(opaque),
-    ...(options.probe ? { probe: options.probe } : {}),
-  })
+    runs.allow(chunked.full)
+  return chunked
 }
 
 const mapDemand = (demand: Demand, changes: ChangeDesc) => ({

@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
+import { legacySdk } from '../../addons/sdk-host'
 import type {
   AppInfo,
   DocumentCommand,
@@ -118,6 +119,11 @@ import { viewNotifications } from './view-notifications'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
 import { WorkspacesSidebar } from './WorkspacesSidebar'
 import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
+
+if (!codemirrorFormattedView) {
+  legacySdk.all = () => import('../../addons/sdk')
+  legacySdk.rich = () => import('@tiptap/core')
+}
 
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
 import.meta.hot?.dispose(stopLocalDiagnostics)

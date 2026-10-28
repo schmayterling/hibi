@@ -108,10 +108,9 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | release-004 | [formatted-hidden-source.test.mjs:336](formatted-hidden-source.test.mjs#L336) | releasing a grown huge source must destroy its editor | 2c: hidden source release and mapped bookmarks |
 | marker-001 | [markdown-markers.test.mjs:515](markdown-markers.test.mjs#L515) | left arrow must reenter nested final formatting before typing | 8b: hidden markers and math caret placement |
 | marker-002 | [markdown-markers.test.mjs:574](markdown-markers.test.mjs#L574) | one right arrow must leave final formatting for the next paragraph | 8b: hidden markers and math caret placement |
-| marker-003 | [markdown-markers.test.mjs:700](markdown-markers.test.mjs#L700) | the caret beside tall math must remain text sized | 8b: hidden markers and math caret placement |
-| marker-004 | [markdown-markers.test.mjs:729](markdown-markers.test.mjs#L729) | focused paragraphs must reveal all their formatting markers | 8b: hidden markers and math caret placement |
-| marker-005 | [markdown-markers.test.mjs:757](markdown-markers.test.mjs#L757) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
-| marker-006 | [markdown-markers.test.mjs:785](markdown-markers.test.mjs#L785) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
+| marker-004 | [markdown-markers.test.mjs:721](markdown-markers.test.mjs#L721) | focused paragraphs must reveal all their formatting markers | 8b: hidden markers and math caret placement |
+| marker-005 | [markdown-markers.test.mjs:749](markdown-markers.test.mjs#L749) | formatted copying must preserve rendered plain text | 8b: hidden markers and math caret placement |
+| marker-006 | [markdown-markers.test.mjs:777](markdown-markers.test.mjs#L777) | select all must hide formatting markers | 8b: hidden markers and math caret placement |
 | corpus-001 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | lazy reference definitions must render only native paragraph text | 9: outline semantics and diagram lifecycle |
 | corpus-003 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | reference definitions must hide while resolved labels remain visible | 9: outline semantics and diagram lifecycle |
 | corpus-004 | [markdown-semantics-native.test.mjs:102](markdown-semantics-native.test.mjs#L102) | forward definitions must resolve formatted labels without showing definitions | 9: outline semantics and diagram lifecycle |

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { parseArgs } from 'node:util'
 import vm from 'node:vm'
 import * as flows from '../scripts/benchmark-flows.mjs'
 import { electron } from './electron.mjs'
@@ -536,11 +537,79 @@ test('release packaging excludes the benchmark build receipt', async () => {
   assert.match(builder, /^ {2}- ['"]?!out\/benchmark-build\.json['"]?$/m)
 })
 
-test('provenance refuses missing or stale build manifests including ignored addon changes', async (t) => {
+for (const [file, start, end] of [
+  ['benchmark-startup.mjs', 'const { values }', 'const temp ='],
+  ['benchmark-editors.mjs', '  const { values }', '  const selected ='],
+]) {
+  test(`${file} accepts hosted windows by default and requires hidden windows for verified runs`, async () => {
+    const source = await readFile(
+      new URL(`../scripts/${file}`, import.meta.url),
+      'utf8',
+    )
+    const setup = source
+      .slice(source.indexOf(start), source.indexOf(end))
+      .replaceAll('new URL(import.meta.url)', "'sampler'")
+    const run = (args, shown) =>
+      vm.runInNewContext(
+        `(async () => { ${setup}; return values['require-build-manifest'] })()`,
+        {
+          assert,
+          parseArgs: (options) => parseArgs({ ...options, args }),
+          showTestWindows: shown,
+          benchmarkEngine: flows.benchmarkEngine,
+          benchmarkProvenance: async (_sampler, _root, required) => {
+            assert.equal(required, args.includes('--require-build-manifest'))
+            return {}
+          },
+          process: { env: {} },
+        },
+      )
+    assert.equal(await run([], true), false)
+    assert.equal(await run([], false), false)
+    assert.equal(await run(['--require-build-manifest'], false), true)
+    await assert.rejects(
+      () => run(['--require-build-manifest'], true),
+      /hidden test windows/,
+    )
+  })
+}
+
+test('missing manifests record unverified provenance unless explicitly required', async (t) => {
+  const root = await provenanceFixture(t)
+  const sampler = new URL(import.meta.url)
+  const before = await flows.benchmarkProvenance(sampler, root)
+  assert.equal(before.buildVerified, false)
+  assert.equal(before.buildManifest, null)
+  await flows.verifyBenchmarkProvenance(before, sampler, root)
+  await assert.rejects(
+    () => flows.benchmarkProvenance(sampler, root, true),
+    /build manifest missing/,
+  )
+  await writeFile(join(root, 'out/main/index.js'), 'changed output')
+  await assert.rejects(
+    () => flows.verifyBenchmarkProvenance(before, sampler, root),
+    /changed during sampling/,
+  )
+})
+
+test('historical builds without docs-revision retain unverified source fingerprints', async (t) => {
+  const root = await provenanceFixture(t)
+  const sampler = new URL(import.meta.url)
+  await rm(join(root, 'docs-revision'))
+  const before = await flows.benchmarkProvenance(sampler, root)
+  assert.equal(before.buildVerified, false)
+  await writeFile(join(root, 'docs-revision'), 'new pin')
+  await assert.rejects(
+    () => flows.verifyBenchmarkProvenance(before, sampler, root),
+    /changed during sampling/,
+  )
+})
+
+test('verified provenance refuses missing or stale build manifests including ignored addon changes', async (t) => {
   const root = await provenanceFixture(t)
   const sampler = new URL(import.meta.url)
   await assert.rejects(
-    () => flows.benchmarkProvenance(sampler, root),
+    () => flows.benchmarkProvenance(sampler, root, true),
     /build manifest/,
   )
   const { recordBenchmarkBuild } = await import(
@@ -549,6 +618,7 @@ test('provenance refuses missing or stale build manifests including ignored addo
   const build = () => recordBenchmarkBuild(async () => {}, root)
   await build()
   const before = await flows.benchmarkProvenance(sampler, root)
+  assert.equal(before.buildVerified, true)
   assert.match(before.revision, /^[a-f0-9]{40}$/)
   assert.equal(before.lockfileHash, hash('lock'))
   assert.equal(before.buildFiles['out/main/index.js'], hash('main'))

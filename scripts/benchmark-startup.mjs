@@ -25,6 +25,7 @@ import {
 const { values } = parseArgs({
   options: {
     'script-census': { type: 'boolean', default: false },
+    'require-build-manifest': { type: 'boolean', default: false },
     engine: {
       type: 'string',
       default: process.env.HIBI_BENCH_ENGINE ?? 'tiptap',
@@ -32,11 +33,19 @@ const { values } = parseArgs({
   },
 })
 const engine = benchmarkEngine(values.engine)
-assert.ok(!showTestWindows, 'startup comparison requires hidden test windows')
+if (values['require-build-manifest'])
+  assert.ok(
+    !showTestWindows,
+    'verified startup comparison requires hidden test windows',
+  )
 const runs = Number(process.env.HIBI_BENCH_RUNS ?? 5)
 if (!Number.isInteger(runs) || runs < 1 || runs > 50)
   throw new Error('Use 1–50 runs.')
-const provenance = await benchmarkProvenance(new URL(import.meta.url))
+const provenance = await benchmarkProvenance(
+  new URL(import.meta.url),
+  '.',
+  values['require-build-manifest'],
+)
 const temp = await mkdtemp(join(tmpdir(), 'hibi-benchmark-'))
 const samples = []
 const profileSeeds = new Map()
@@ -342,6 +351,8 @@ try {
         provenanceVerifiedAtEnd: true,
         engine,
         scriptCensus: values['script-census'],
+        requireBuildManifest: values['require-build-manifest'],
+        windowPolicy: showTestWindows ? 'visible' : 'hidden',
         runtime: process.version,
         host: {
           cpu: cpus()[0]?.model,
@@ -352,7 +363,7 @@ try {
         arch: process.arch,
         enabledAddons,
         conditions:
-          'production assets in test electron; hidden launch policy, isVisible is diagnostic only on macos; one focus-emulated session per renderer, editor focus and two frames before input timing; all profiles including minimal seeded at app origin without loading hibi and with hardware acceleration disabled during seeding, before launch timing; seed file inventories recorded per sample; fresh means app-cold seeded chromium profile, not os cold-cache; input timing and script census use separate launches, timed renderers never enable the debugger; driver latency included; build manifest binds source including ignored user addons to output, verified again at end.',
+          'production assets in test electron; configured windowPolicy, isVisible is diagnostic only on macos; one focus-emulated session per renderer, editor focus and two frames before input timing; all profiles including minimal seeded at app origin without loading hibi and with hardware acceleration disabled during seeding, before launch timing; seed file inventories recorded per sample; fresh means app-cold seeded chromium profile, not os cold-cache; input timing and script census use separate launches, timed renderers never enable the debugger; driver latency included; source/output fingerprints include ignored user addons and are verified again at end; buildVerified records manifest binding, false when the manifest is absent.',
         initialBytes: initial.reduce((sum, chunk) => sum + chunk.bytes, 0),
         initialModules: initial.flatMap((chunk) => chunk.modules),
         summary,

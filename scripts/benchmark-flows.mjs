@@ -172,7 +172,9 @@ export async function benchmarkSourceHash(root) {
           'electron.vite.config.ts',
           'package.json',
           'package-lock.json',
-          'docs-revision',
+          ...((await readdir(root)).includes('docs-revision')
+            ? ['docs-revision']
+            : []),
         ],
         root,
       ),
@@ -201,36 +203,42 @@ export async function benchmarkBuild(root) {
   }
 }
 
-export async function benchmarkProvenance(sampler, root = '.') {
+export async function benchmarkProvenance(
+  sampler,
+  root = '.',
+  requireBuildManifest = false,
+) {
   root = resolve(root)
   const build = await benchmarkBuild(root)
   const manifest = await readFile(
     join(root, 'out/benchmark-build.json'),
     'utf8',
-  ).catch((cause) => {
-    throw new Error(
-      'benchmark build manifest missing; run npm run bench:build',
-      {
-        cause,
-      },
-    )
+  ).catch((error) => {
+    if (error.code !== 'ENOENT') throw error
+    return null
   })
-  const buildManifest = JSON.parse(manifest)
-  assert.equal(
-    buildManifest.status,
-    'complete',
-    'incomplete build; run npm run bench:build',
+  assert.ok(
+    !requireBuildManifest || manifest !== null,
+    'benchmark build manifest missing; run npm run bench:build',
   )
-  assert.equal(
-    buildManifest.sourceHash,
-    build.sourceHash,
-    'stale build: source changed; run npm run bench:build',
-  )
-  assert.equal(
-    buildManifest.buildHash,
-    build.buildHash,
-    'stale build: output changed; run npm run bench:build',
-  )
+  const buildManifest = manifest === null ? null : JSON.parse(manifest)
+  if (manifest !== null) {
+    assert.equal(
+      buildManifest.status,
+      'complete',
+      'incomplete build; run npm run bench:build',
+    )
+    assert.equal(
+      buildManifest.sourceHash,
+      build.sourceHash,
+      'stale build: source changed; run npm run bench:build',
+    )
+    assert.equal(
+      buildManifest.buildHash,
+      build.buildHash,
+      'stale build: output changed; run npm run bench:build',
+    )
+  }
   const git = (args) =>
     execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
   return {
@@ -249,6 +257,7 @@ export async function benchmarkProvenance(sampler, root = '.') {
       .filter(Boolean)
       .join('\n'),
     ...build,
+    buildVerified: buildManifest !== null,
     buildManifest,
     samplerHash: hash(await readFile(sampler)),
     helperHashes: await fileHashes(

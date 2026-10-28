@@ -921,7 +921,7 @@ function markdownReport(report) {
         `| ${row.size} | ${row.fixture} | ${row.engine} | ${row.keyIndexMedians.readyMs.map((value) => (Number.isFinite(value) ? value.toFixed(2) : 'n/a')).join(' ') || 'n/a'} |`,
     ),
     '',
-    `hidden launch policy (isVisible is diagnostic only on macos), persistent focus emulation, seeded app-cold profiles; engine order: ${report.config.order}. profile seeding uses hardware acceleration disabled and records file inventories; seeding and startup are excluded; engine is selected before the first editor import. no os cache clearing.`,
+    `${report.config.windowPolicy} launch policy (isVisible is diagnostic only on macos), build binding: ${report.buildVerified ? 'verified' : 'unverified (manifest absent)'}, persistent focus emulation, seeded app-cold profiles; engine order: ${report.config.order}. profile seeding uses hardware acceleration disabled and records file inventories; seeding and startup are excluded; engine is selected before the first editor import. no os cache clearing.`,
     'open readyMs ends at the first frame after editable, non-busy formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap attempts normal view; open+switch is reported only if an editable formatted view becomes ready. an observed read-only preview, or codemirror source fallback needing #450, records unavailable formatted metrics while retaining source-open timing, capability state, source hash and traces. unavailable samples make the report partial; unexpected errors fail it. the matrix continues in both cases.',
     `${report.config.warmupKeys} untimed warm-up keys precede measured keys; each p95 is quoted only when every launch observed at least ${minimumKeysForP95} values for that metric. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.`,
     'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. full frame, layout, gc and User Timing evidence is retained in traces.',
@@ -945,6 +945,7 @@ async function main() {
   const { values } = parseArgs({
     options: {
       smoke: { type: 'boolean', default: false },
+      'require-build-manifest': { type: 'boolean', default: false },
       engine: { type: 'string' },
       runs: { type: 'string' },
       keys: { type: 'string' },
@@ -956,10 +957,11 @@ async function main() {
       out: { type: 'string', default: 'test-results/editor-benchmark' },
     },
   })
-  assert.ok(
-    !showTestWindows,
-    'editor comparison requires hidden test windows; unset window-visibility overrides',
-  )
+  if (values['require-build-manifest'])
+    assert.ok(
+      !showTestWindows,
+      'verified editor comparison requires hidden test windows; unset window-visibility overrides',
+    )
   const selected =
     values.sizes?.split(',') ?? (values.smoke ? sizes.slice(0, 2) : sizes)
   assert.ok(
@@ -1005,7 +1007,11 @@ async function main() {
   const out = resolve(values.out)
   await mkdir(join(out, 'traces'), { recursive: true })
   const directory = await mkdtemp(join(out, 'scratch-'))
-  const provenance = await benchmarkProvenance(new URL(import.meta.url))
+  const provenance = await benchmarkProvenance(
+    new URL(import.meta.url),
+    '.',
+    values['require-build-manifest'],
+  )
   const report = {
     smoke: values.smoke,
     status: 'running',
@@ -1036,6 +1042,8 @@ async function main() {
       logicalCores: cpus().length,
     },
     config: {
+      requireBuildManifest: values['require-build-manifest'],
+      windowPolicy: showTestWindows ? 'visible' : 'hidden',
       runs,
       engines: [...new Set(plan.map((row) => row.engine))],
       keys,

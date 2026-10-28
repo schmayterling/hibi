@@ -5902,6 +5902,9 @@
   "364e042318da": [
     "src/main/media.ts"
   ],
+  "8a9c263a360f": [
+    "src/renderer/src/SourceEditor.tsx"
+  ],
   "a5aedb8a518f": [
     "src/addons/mcp-server/index.ts",
     "src/renderer/src/document-edits.ts",

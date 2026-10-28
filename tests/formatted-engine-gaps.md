@@ -108,7 +108,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | contracts-004 | [raw-html-editor.test.mjs:1227](raw-html-editor.test.mjs#L1227) | superseded inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-005 | [raw-html-editor.test.mjs:1231](raw-html-editor.test.mjs#L1231) | modified block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-006 | [raw-html-editor.test.mjs:1233](raw-html-editor.test.mjs#L1233) | superseded block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
-| api-005 | [rich-edit-api.test.mjs:295](rich-edit-api.test.mjs#L295) | rich source edits must reject structural markup changes | 6: verbatim projections and selection contracts |
 | semantics-002 | [source-reference-navigation.test.mjs:160](source-reference-navigation.test.mjs#L160) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | addon-001 | [source-reference-navigation.test.mjs:185](source-reference-navigation.test.mjs#L185) | rich-only addon syntax must retain native editing and source reference isolation | 2b: legacy feature notices and literal fallback |
 

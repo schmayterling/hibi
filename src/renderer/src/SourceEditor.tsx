@@ -138,6 +138,7 @@ import {
 } from './formatted-contributions'
 import { formattedReferences } from './formatted-references'
 import { formattedSelectionText } from './formatted-selection-text'
+import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
@@ -2110,6 +2111,24 @@ export function SourceEditor({
           return { status: 'applied', contentVersion: current.contentVersion }
       } catch (error) {
         return { status: 'invalid', message: String(error) }
+      }
+      if (formatted) {
+        const proof = formattedLiteralEdits(
+          transaction,
+          syntax.parser(editor.state),
+          tree(editor.state),
+        )
+        if (proof === null)
+          return {
+            status: 'busy',
+            message:
+              'The document index is still building. Try the edits again in a moment.',
+          }
+        if (!proof)
+          return {
+            status: 'unsupported-view',
+            message: 'Open source view to apply these edits.',
+          }
       }
       exactChanges.current = request.changes
       try {

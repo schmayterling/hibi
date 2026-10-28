@@ -1875,6 +1875,7 @@
   "2a4bec529492": "The document changed. Review the edits again.",
   "e9876edd08d2": "The document changed. Run the current version again.",
   "364e042318da": "The document changed. Try attaching the file again.",
+  "8a9c263a360f": "The document index is still building. Try the edits again in a moment.",
   "a5aedb8a518f": "The document is busy. Try again in a moment.",
   "cb65399b7ce1": "The document is busy. Try again.",
   "b88bd0babc22": "The document is no longer open.",

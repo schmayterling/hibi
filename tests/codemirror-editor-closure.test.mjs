@@ -11,18 +11,21 @@ const provided = new Set([
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/renderer',
   'src/renderer/src/addon-registry.ts -> virtual:hibi-addon-catalog/details',
 ])
-// Outline labels and the addon SDK still load the rich editor's schema, from these imports only.
+// The addon SDK still loads the rich editor's schema, from this import only.
 const retained = new Set([
-  'src/renderer/src/use-source-outline.ts -> ./markdown-semantics',
   'src/renderer/src/addon-definition.ts -> ../../addons/sdk-loader',
 ])
 const local = (file) => relative('', file).replaceAll('\\', '/')
 
 // Modules the CodeMirror editors would load from the rich editor's engine,
 // with `load.code` appended to `load.file` and `load.alias` resolved when given.
-async function legacyModules(followDemand, load) {
+async function legacyModules(
+  followDemand,
+  load,
+  entry = 'src/renderer/src/FormattedEditor.tsx',
+) {
   const { metafile } = await build({
-    entryPoints: ['src/renderer/src/FormattedEditor.tsx'],
+    entryPoints: [entry],
     bundle: true,
     write: false,
     platform: 'browser',
@@ -62,9 +65,11 @@ async function legacyModules(followDemand, load) {
     ],
   })
   const modules = Object.keys(metafile.inputs)
-  assert.ok(modules.includes('src/renderer/src/SourceEditor.tsx'))
-  if (followDemand)
-    assert.ok(modules.includes('src/renderer/src/MarkdownSourceEditor.tsx'))
+  if (entry === 'src/renderer/src/FormattedEditor.tsx') {
+    assert.ok(modules.includes('src/renderer/src/SourceEditor.tsx'))
+    if (followDemand)
+      assert.ok(modules.includes('src/renderer/src/MarkdownSourceEditor.tsx'))
+  }
   return modules.filter((path) =>
     /node_modules\/(?:@tiptap\/|prosemirror-)/.test(path),
   )
@@ -73,6 +78,17 @@ async function legacyModules(followDemand, load) {
 test('codemirror editors load no tiptap or prosemirror modules', async () => {
   assert.deepEqual(await legacyModules(false), [])
   assert.deepEqual(await legacyModules(true), [])
+})
+
+test('outline label workers load no tiptap or prosemirror modules', async () => {
+  assert.deepEqual(
+    await legacyModules(
+      true,
+      undefined,
+      'src/renderer/src/source-outline-label.worker.ts',
+    ),
+    [],
+  )
 })
 
 test('the rich schema stays allowed only through its retained imports', async () => {

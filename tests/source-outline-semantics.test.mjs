@@ -17,9 +17,9 @@ import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { documentImage } from '../src/renderer/src/DocumentImage.ts'
 import { editorExtensions } from '../src/renderer/src/markdown.ts'
-import { createMarkdownSemantics } from '../src/renderer/src/markdown-semantics.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
+import { createOutlineLabelRenderer } from '../src/renderer/src/source-outline-label.ts'
 import { createOutlineLabelReader } from '../src/renderer/src/source-outline-label.worker.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
@@ -111,7 +111,9 @@ function finish(work, resolve, readLabel) {
 
 function setup(source, { math = false, deferLabels = false } = {}) {
   const activeFlavors = math ? [...flavors, mathFlavor] : flavors
-  const consumer = createMarkdownSemantics(activeFlavors, 0)
+  const consumer = createOutlineLabelRenderer(
+    activeFlavors.map((flavor) => flavor.id),
+  )
   assert.ok(consumer)
   const store = new SourceStore(source, {
     tabId: 'outline-semantics',
@@ -124,19 +126,7 @@ function setup(source, { math = false, deferLabels = false } = {}) {
     textExtras: true,
     math,
     deferLabels,
-    renderLabel: (tokens, level) =>
-      consumer.read(
-        [
-          {
-            type: 'heading',
-            raw: '',
-            text: '',
-            depth: level,
-            tokens: [...tokens],
-          },
-        ],
-        { before: false, after: false },
-      )?.headings[0]?.label ?? null,
+    renderLabel: consumer,
   })
   return { store, model, activeFlavors }
 }

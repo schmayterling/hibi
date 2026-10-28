@@ -12,6 +12,7 @@ import {
 import {
   Decoration,
   type DecorationSet,
+  Direction,
   EditorView,
   keymap,
   runScopeHandlers,
@@ -29,6 +30,7 @@ import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   claimFormattedReplacement,
+  delimiterRuns,
   type FormattedDecorations,
   type FormattedRenderContext,
   followsLink,
@@ -98,6 +100,8 @@ type CellDecorations = {
   hide(from: number, to: number, widget: WidgetType | null): void
   /** Syntax shown as an editable marker. */
   marker(from: number, to: number): void
+  /** Hidden syntax delimiters, which the caret crosses together where they touch. */
+  delimiter?(from: number, to: number): void
   widget(at: number, widget: WidgetType, side: number): void
 }
 
@@ -154,7 +158,10 @@ function decorateCell(
         to = local(end)
       if (to <= from) return
       if (revealed) out.marker(from, to)
-      else out.hide(from, to, null)
+      else {
+        out.hide(from, to, null)
+        out.delimiter?.(from, to)
+      }
     },
     line() {},
     widget(at, widget, side = 1) {
@@ -350,7 +357,8 @@ function editorDecorations(main: EditorState, view: EditorView, from?: number) {
       ? view.state.selection.ranges
       : []
   const decorations: Range<Decoration>[] = [],
-    atomic: Range<Decoration>[] = []
+    atomic: Range<Decoration>[] = [],
+    delimiters: { from: number; to: number }[] = []
   const hide = (from: number, to: number, widget: WidgetType | null) => {
     if (to <= from) return
     const range = Decoration.replace(widget ? { widget } : {}).range(from, to)
@@ -380,6 +388,7 @@ function editorDecorations(main: EditorState, view: EditorView, from?: number) {
           ),
         widget: (at, widget, side) =>
           decorations.push(Decoration.widget({ widget, side }).range(at)),
+        delimiter: (from, to) => delimiters.push({ from, to }),
       },
       (from, to) =>
         reveal.some((range) => range.from <= to && range.to >= from),
@@ -388,6 +397,11 @@ function editorDecorations(main: EditorState, view: EditorView, from?: number) {
   return {
     decorations: Decoration.set(decorations, true),
     atomic: Decoration.set(atomic, true),
+    runs: Decoration.set(
+      delimiterRuns(delimiters).map(({ from, to }) =>
+        Decoration.replace({}).range(from, to),
+      ),
+    ),
   }
 }
 
@@ -448,9 +462,13 @@ export class CellEditor {
       class {
         decorations: DecorationSet
         atomic: DecorationSet
+        runs: DecorationSet
         constructor(view: EditorView) {
-          ;({ decorations: this.decorations, atomic: this.atomic } =
-            editorDecorations(host.main.state, view, host.span()?.from))
+          ;({
+            decorations: this.decorations,
+            atomic: this.atomic,
+            runs: this.runs,
+          } = editorDecorations(host.main.state, view, host.span()?.from))
         }
         update(update: ViewUpdate) {
           // Local input reaches the parent after view.update. Keep mapped
@@ -458,6 +476,7 @@ export class CellEditor {
           if (update.docChanged) {
             this.decorations = this.decorations.map(update.changes)
             this.atomic = this.atomic.map(update.changes)
+            this.runs = this.runs.map(update.changes)
           } else if (
             update.selectionSet ||
             update.focusChanged ||
@@ -465,12 +484,15 @@ export class CellEditor {
               transaction.effects.some((effect) => effect.is(formattedRefresh)),
             )
           )
-            ({ decorations: this.decorations, atomic: this.atomic } =
-              editorDecorations(
-                host.main.state,
-                update.view,
-                host.span()?.from,
-              ))
+            ({
+              decorations: this.decorations,
+              atomic: this.atomic,
+              runs: this.runs,
+            } = editorDecorations(
+              host.main.state,
+              update.view,
+              host.span()?.from,
+            ))
         }
       },
       {
@@ -489,6 +511,25 @@ export class CellEditor {
       return !at || !edge || Math.abs(at.top - edge.top) < 2
     }
     const content = (view: EditorView) => padding(view.state.doc.toString())
+    /** Arrows cross touching hidden delimiters in one step, as in the formatted view. */
+    const overRun = (view: EditorView, right: boolean) => {
+      const range = view.state.selection.main
+      if (!range.empty || view.state.selection.ranges.length > 1) return false
+      const forward =
+        right === (view.textDirectionAt(range.head) === Direction.LTR)
+      const next = view.moveByChar(range, forward).head
+      let target = -1
+      view.plugin(preview)?.runs.between(next, next, (from, to) => {
+        if (from < next && next < to) target = forward ? to : from
+      })
+      if (target < 0) return false
+      view.dispatch({
+        selection: { anchor: target },
+        scrollIntoView: true,
+        userEvent: 'select',
+      })
+      return true
+    }
     const move = (to: CellMove) => () => host.move(to)
     /** A line break in the cell, which Enter, Shift-Enter and Mod-Enter all make in the rich editor's cells. */
     const lineBreak = (view: EditorView) => {
@@ -597,16 +638,18 @@ export class CellEditor {
               {
                 key: 'ArrowLeft',
                 run: (view) =>
-                  view.state.selection.main.empty &&
-                  view.state.selection.main.head <= content(view).start &&
-                  host.move('left'),
+                  (view.state.selection.main.empty &&
+                    view.state.selection.main.head <= content(view).start &&
+                    host.move('left')) ||
+                  overRun(view, false),
               },
               {
                 key: 'ArrowRight',
                 run: (view) =>
-                  view.state.selection.main.empty &&
-                  view.state.selection.main.head >= content(view).end &&
-                  host.move('right'),
+                  (view.state.selection.main.empty &&
+                    view.state.selection.main.head >= content(view).end &&
+                    host.move('right')) ||
+                  overRun(view, true),
               },
             ]),
           ),

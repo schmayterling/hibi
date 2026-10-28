@@ -46,6 +46,20 @@ export function claimFormattedReplacement(
   return true
 }
 
+/**
+ * Hidden delimiters that touch, such as `***` closing strong emphasis inside
+ * emphasis, as one run each: the caret crosses a run in one step.
+ */
+export function delimiterRuns(ranges: readonly { from: number; to: number }[]) {
+  const runs: { from: number; to: number }[] = []
+  for (const { from, to } of [...ranges].sort((a, b) => a.from - b.from)) {
+    const last = runs.at(-1)
+    if (last && from <= last.to) last.to = Math.max(last.to, to)
+    else runs.push({ from, to })
+  }
+  return runs
+}
+
 export type FormattedContribution = {
   id: string
   /**

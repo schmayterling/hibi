@@ -34,7 +34,6 @@ import { highlightTree } from '@lezer/highlight'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
-  blank,
   blockBreak,
   codeIndent,
   deleteBackward,
@@ -46,6 +45,7 @@ import {
 } from './formatted-commands'
 import {
   claimFormattedReplacement,
+  delimiterRuns,
   type FormattedContainer,
   type FormattedDecorations,
   type FormattedLayout,
@@ -276,6 +276,8 @@ type LineInfo = {
   attributes: Record<string, string>
   /** Space above the line in px. */
   gap: number
+  /** The line only holds the space between two blocks. */
+  margin: boolean
 }
 
 /** Item start offsets per immutable list tree, so ordinals need no sibling walk. */
@@ -318,6 +320,8 @@ function inline(
   groupMarks: DecorationSet
   atomic: DecorationSet
   runs: DecorationSet
+  /** Starts of the lines that only hold the space between two blocks. */
+  margins: number[]
   outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
@@ -373,6 +377,7 @@ function inline(
         marker: true,
         attributes: {},
         gap: 0,
+        margin: false,
       }
       lines.set(pos, info)
     }
@@ -782,18 +787,6 @@ function inline(
     )
   }
   blocks = noBlocks
-  // Touching delimiters, such as `***` closing strong emphasis inside
-  // emphasis, are one step: the caret never rests between them.
-  const runs: Range<Decoration>[] = []
-  let run: { from: number; to: number } | null = null
-  delimiters.sort((a, b) => a.from - b.from)
-  for (const { from, to } of delimiters)
-    if (run && from <= run.to) run.to = Math.max(run.to, to)
-    else {
-      if (run) runs.push(hide.range(run.from, run.to))
-      run = { from, to }
-    }
-  if (run) runs.push(hide.range(run.from, run.to))
   const wrappers: Range<BlockWrapper>[] = []
   for (const { from, to, level } of headings.values()) {
     wrappers.push(
@@ -810,7 +803,10 @@ function inline(
     decorations: Decoration.set(decorations, true),
     groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
-    runs: Decoration.set(runs),
+    runs: Decoration.set(
+      delimiterRuns(delimiters).map(({ from, to }) => hide.range(from, to)),
+    ),
+    margins: [...lines].flatMap(([at, info]) => (info.margin ? [at] : [])),
     outer: Decoration.set(outer, true),
     wrappers: BlockWrapper.set(wrappers, true),
     end,
@@ -1049,7 +1045,8 @@ function spacing(
       if (blank.from < range.from || blank.from > range.to) continue
       const info = line(blank.from)
       info.classes.push('hibi-lp-gap')
-      const height = number === end.number + 1 ? gap : 28
+      info.margin = number === end.number + 1
+      const height = info.margin ? gap : 28
       info.style.push(`height: ${height}px`, `line-height: ${height}px`)
     }
   }
@@ -1481,6 +1478,7 @@ export function livePreview(
       atomic: DecorationSet
       /** Touching hidden delimiters, each crossed in one step. */
       runs: DecorationSet
+      margins: number[]
       outer: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
@@ -1493,6 +1491,7 @@ export function livePreview(
           groupMarks: this.groupMarks,
           atomic: this.atomic,
           runs: this.runs,
+          margins: this.margins,
           outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
@@ -1529,6 +1528,7 @@ export function livePreview(
           this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)
           this.runs = mapLines(this.runs, update)
+          this.margins = this.margins.map((at) => update.changes.mapPos(at))
           this.outer = this.outer.map(update.changes)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
@@ -1554,6 +1554,7 @@ export function livePreview(
             groupMarks: this.groupMarks,
             atomic: this.atomic,
             runs: this.runs,
+            margins: this.margins,
             outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
@@ -1567,42 +1568,60 @@ export function livePreview(
   const runs = (view: EditorView) =>
     view.plugin(preview)?.runs ?? Decoration.none
   /**
-   * Arrows move as in the rich view: past the blank line between blocks, and
-   * out of formatting that ends a line only at the end of the note.
+   * Arrows move as in the rich view, one visible step at a time: over hidden
+   * delimiters, the space between blocks and the hidden syntax at the start
+   * of a line. Formatting is left without moving only at the end of the note.
    */
   const arrow = (right: boolean) => (view: EditorView) => {
     const { state } = view
     const range = state.selection.main
-    if (state.selection.ranges.length > 1 || !range.empty) return false
-    const tree = syntax.tree(state)
-    const end = tree.topNode.lastChild?.to ?? 0
-    const passed = (pos: number) => {
-      const line = state.doc.lineAt(pos)
-      if (pos === line.to && pos < end) {
+    const plugin = view.plugin(preview)
+    if (!plugin || state.selection.ranges.length > 1 || !range.empty)
+      return false
+    const end = syntax.tree(state).topNode.lastChild?.to ?? 0
+    const covered = (set: DecorationSet, from: number, to: number) => {
+      let found = false
+      set.between(from, to, (a, b, value) => {
+        if (a <= from && b >= to && !value.spec.widget) found = true
+      })
+      return found
+    }
+    /** Whether the caret, moved from `from` to `to`, rests where nothing visible changed. */
+    const through = (from: number, to: number, first: boolean) => {
+      const line = state.doc.lineAt(to)
+      if (
+        first &&
+        from !== end &&
+        to !== end &&
+        covered(plugin.runs, Math.min(from, to), Math.max(from, to))
+      )
+        return true
+      if (to === line.to && to < end) {
         let after = false
-        runs(view).between(pos, pos, (from, to) => {
-          if (from < pos && to === pos) after = true
+        plugin.runs.between(to, to, (a, b) => {
+          if (a < to && b === to) after = true
         })
         if (after) return true
       }
-      if (line.number === 1 || !blank(line.text)) return false
-      if (blank(state.doc.line(line.number - 1).text)) return false
-      for (
-        let node: SyntaxNode | null = tree.resolve(pos, 1);
-        node;
-        node = node.parent
-      )
-        if (node.type.is('LeafBlock')) return false
-      return true
+      if (plugin.margins.includes(line.from)) return true
+      if (to !== line.from || to === line.to) return false
+      let prefix = false
+      plugin.atomic.between(to, to, (a, b, value) => {
+        if (a === to && b > to && !value.spec.widget) prefix = true
+      })
+      return prefix
     }
     const forward =
       right === (view.textDirectionAt(range.head) === Direction.LTR)
+    let at = range.head
     let next = view.moveByChar(range, forward)
-    if (!passed(next.head)) return false
-    for (let at = range.head; next.head !== at && passed(next.head); ) {
+    if (next.head === at || !through(at, next.head, true)) return false
+    while (next.head !== at && through(at, next.head, at === range.head)) {
       at = next.head
       next = view.moveByChar(next, forward)
     }
+    // Nothing visible is left in that direction.
+    if (next.head === at) return true
     view.dispatch({
       selection: next,
       scrollIntoView: true,

@@ -28,7 +28,7 @@ type Hidden = RangeSet<RangeValue>
 const shown = (value: RangeValue) =>
   (value as { spec?: { widget?: unknown } }).spec?.widget !== undefined
 
-export const blank = (text: string) => /^[ \t]*$/.test(text)
+const blank = (text: string) => /^[ \t]*$/.test(text)
 
 /** The innermost node of one of `names` around `pos`. */
 function around(tree: Tree, pos: number, names: readonly string[]) {

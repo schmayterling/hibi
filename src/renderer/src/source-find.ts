@@ -74,8 +74,9 @@ export function sourceFindHighlights(
       if (shown)
         scan(shown.from - margin, Math.min(length, shown.to + margin), overlaps)
       // Outside the window, a match is highlighted only while it is selected.
+      // Matches fit within the margin, so a longer selection is not one.
       for (const range of view.state.selection.ranges)
-        if (!range.empty && !overlaps(range))
+        if (!range.empty && range.to - range.from <= margin && !overlaps(range))
           scan(
             range.from - margin,
             range.to,

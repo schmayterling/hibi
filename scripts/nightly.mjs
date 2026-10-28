@@ -90,30 +90,33 @@ export function nightly(
           tag,
         ),
     )
-  const previous = tags.length
-    ? git(
-        'describe',
-        '--tags',
-        ...tags.flatMap((tag) => ['--match', tag]),
-        '--abbrev=0',
-        'HEAD',
-      )
-    : undefined
+  const nearest = (tags) =>
+    tags.length
+      ? git(
+          'describe',
+          '--tags',
+          ...tags.flatMap((tag) => ['--match', tag]),
+          '--abbrev=0',
+          'HEAD',
+        )
+      : undefined
+  const previous = nearest(tags)
+  const previousRelease = nearest(tags.filter((tag) => tag.startsWith('v')))
+  const commits = (previous) =>
+    git('log', '--format=%H%x09%s', previous ? `${previous}..HEAD` : 'HEAD')
   const day = date.toISOString().slice(0, 10)
   return {
     sha,
     previous,
+    previousRelease,
+    releaseCommits: commits(previousRelease),
     betaVersion,
     requestedVersion,
     forceRelease,
     changed,
     nightlyTag: `nightly-${day}-${sha.slice(0, 7)}-${run.replace('.', '-')}`,
     nightlyVersion: `${betaVersion}-nightly.${day.replaceAll('-', '')}.g${sha.slice(0, 7)}.${run}`,
-    commits: git(
-      'log',
-      '--format=%H%x09%s',
-      previous ? `${previous}..HEAD` : 'HEAD',
-    ),
+    commits: commits(previous),
   }
 }
 
@@ -157,6 +160,8 @@ export function decideRelease(release, shards) {
       checks.every((report) => report.checks === 'success'))
   return {
     ...release,
+    previous: beta ? release.previousRelease : release.previous,
+    commits: beta ? release.releaseCommits : release.commits,
     channel: beta ? 'beta' : 'nightly',
     tag: beta ? `v${release.betaVersion}` : release.nightlyTag,
     version: beta ? release.betaVersion : release.nightlyVersion,
@@ -443,7 +448,7 @@ export function releaseNotes(release, repository, checksums) {
     '',
     ...(release.previous
       ? [
-          `[full comparison](${url}/compare/${encodeURIComponent(release.previous)}...${release.sha})`,
+          `[full comparison](${url}/compare/${encodeURIComponent(release.previous)}...${release.channel === 'beta' ? encodeURIComponent(release.tag) : release.sha})`,
           '',
         ]
       : []),

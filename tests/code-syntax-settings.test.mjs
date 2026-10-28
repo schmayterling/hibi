@@ -7,11 +7,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import {
-  clickMenu,
-  pressShortcut,
-  replaceSourceText,
-} from './keyboard.mjs'
+import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 async function loadMarkdown(app, page, markdown) {
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'

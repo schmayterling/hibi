@@ -13,6 +13,7 @@ import type { FormattedExtension } from '../../addons/api'
 import { builtInFlavors } from '../../shared/built-in-grammar'
 import { sourceChange } from '../../shared/document-journal'
 import type { ViewId } from '../../shared/foundation-contracts'
+import { headingAnchors } from '../../shared/heading-anchor'
 import { isMediaFile } from '../../shared/media'
 import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
@@ -24,6 +25,7 @@ import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import type { FormattedHeadingList } from './formatted-headings'
+import { formattedProjectionSource } from './formatted-projection'
 import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
@@ -96,12 +98,34 @@ export function MarkdownEditor({
     markdownExtensions.some(
       ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
     )
+  const projectionExtensions = useMemo<readonly FormattedExtension[]>(() => {
+    if (
+      !markdownExtensions.some(
+        ({ id, preservation }) =>
+          id !== 'frontmatter.metadata' && preservation?.level === 'verbatim',
+      )
+    )
+      return []
+    const adapters = markdownExtensions
+    return [
+      {
+        id: 'formatted.projection',
+        create: () =>
+          import('./formatted-projection').then(({ formattedProjection }) =>
+            formattedProjection(adapters, () =>
+              documentRuntime.session(documentState.tabId)?.snapshot(),
+            ),
+          ),
+      },
+    ]
+  }, [markdownExtensions, documentState.tabId])
   const editorExtensions = useMemo(
-    () =>
-      showProperties
-        ? [...propertiesExtensions, ...formattedExtensions]
-        : formattedExtensions,
-    [showProperties, formattedExtensions],
+    () => [
+      ...(showProperties ? propertiesExtensions : []),
+      ...projectionExtensions,
+      ...formattedExtensions,
+    ],
+    [showProperties, projectionExtensions, formattedExtensions],
   )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
@@ -211,8 +235,19 @@ export function MarkdownEditor({
   // screen reader report and always read it.
   const [assistive, setAssistive] = useState(!window.hibi)
   useEffect(() => window.hibi?.onAccessibilitySupport(setAssistive), [])
+  // A link to a heading of the note reads its outline until it moves there.
+  const [anchor, setAnchor] = useState<{ target: string } | null>(null)
+  const pendingAnchor = useRef<string | null>(null)
+  const revealAnchor = useRef(() => {})
+  /** Heading positions by destination, for the outline's published headings. */
+  const anchorIndex = useRef<{
+    headings: OutlineHeading[]
+    index: Map<string, number>
+  } | null>(null)
   const outlineRead =
-    markdownDocument && formattedReady && (outlineActive || assistive)
+    markdownDocument &&
+    formattedReady &&
+    (outlineActive || assistive || anchor !== null)
   const outlineShown = useRef(outlineActive)
   outlineShown.current = outlineActive
   const outline = useRef<{
@@ -225,9 +260,11 @@ export function MarkdownEditor({
   const reportOutline = useCallback(
     (headings: OutlineHeading[]) => {
       outline.current.headings = headings
+      if (anchorIndex.current?.headings !== headings) anchorIndex.current = null
       headingList.current?.update(headings)
       measureHeadings.current()
       if (outlineShown.current) onOutline(headings)
+      revealAnchor.current()
     },
     [onOutline],
   )
@@ -242,6 +279,10 @@ export function MarkdownEditor({
     (reason: string | null) => {
       outline.current.unavailable = reason
       if (outlineShown.current) onOutlineUnavailable?.(reason)
+      if (reason) {
+        pendingAnchor.current = null
+        setAnchor(null)
+      }
     },
     [onOutlineUnavailable],
   )
@@ -280,6 +321,46 @@ export function MarkdownEditor({
     onOutlineUnavailable: reportUnavailable,
     onActiveOutline: reportActiveOutline,
   })
+  /**
+   * Heading destinations as the exported site and the rich view assign
+   * them, from the labels of all the note's headings.
+   */
+  revealAnchor.current = () => {
+    const target = pendingAnchor.current,
+      current = sourceOutline.outline(),
+      { headings } = outline.current
+    if (target === null || current?.headings.length !== headings.length) return
+    // Destinations are assigned once per outline, not per link followed.
+    if (anchorIndex.current?.headings !== headings) {
+      const index = new Map<string, number>()
+      headingAnchors(headings.map(({ label }) => label)).forEach(
+        ({ anchor, legacy }, position) => {
+          if (!index.has(anchor)) index.set(anchor, position)
+          if (legacy !== null && !index.has(legacy)) index.set(legacy, position)
+        },
+      )
+      anchorIndex.current = { headings, index }
+    }
+    const heading = headings[anchorIndex.current.index.get(target) ?? -1]
+    // A stale outline is read again after the edit that made it stale.
+    if (heading && !sourceOutline.reveal(heading.id)) return
+    pendingAnchor.current = null
+    setAnchor(null)
+  }
+  const followLink = (href: string) => {
+    if (!href.startsWith('#')) {
+      onLink(href)
+      return
+    }
+    try {
+      pendingAnchor.current = decodeURIComponent(href.slice(1))
+    } catch {
+      return
+    }
+    if (sourceOutline.outline()) revealAnchor.current()
+    if (pendingAnchor.current !== null)
+      setAnchor({ target: pendingAnchor.current })
+  }
   const richView = () => {
     const element = content.current?.querySelector<HTMLElement>(
       '.rich-pane .cm-content',
@@ -421,7 +502,10 @@ export function MarkdownEditor({
     view.dispatch({
       changes: { from, to, insert: normalizedSource(change.insert) },
       userEvent: 'input.addon',
-      annotations: isolateHistory.of('full'),
+      annotations: [
+        isolateHistory.of('full'),
+        formattedProjectionSource.of(markdown),
+      ],
     })
   }
   const ready =
@@ -519,7 +603,7 @@ export function MarkdownEditor({
                 supportsMedia={!!format?.insertMedia}
                 label={formatName}
                 waitForFont
-                onLink={onLink}
+                onLink={followLink}
                 onFormatting={attachRich}
                 sourceExtensions={editorExtensions}
                 showLineNumbers={false}
@@ -573,7 +657,7 @@ export function MarkdownEditor({
                   codeLanguage={format?.codeLanguage}
                   label={formatName}
                   waitForFont
-                  onLink={onLink}
+                  onLink={followLink}
                   onFormatting={attachSource}
                   sourceExtensions={sourceExtensions}
                   flavors={flavorIds}

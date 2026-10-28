@@ -10,9 +10,27 @@ import {
 import {
   clickMenu,
   pressShortcut,
-  replaceRichText,
   replaceSourceText,
 } from './keyboard.mjs'
+
+async function loadMarkdown(app, page, markdown) {
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  // Fixture markdown loads through source mode; formatted typing inserts literal text.
+  await pressShortcut(app, `${mod}+Shift+]`)
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await replaceSourceText(
+    page,
+    page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
+    markdown,
+  )
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    markdown,
+  )
+  await pressShortcut(app, `${mod}+Shift+[`)
+  await waitForDocumentEditor(app, page)
+}
 
 test('code highlighting controls update both panes, persist, and discover addon languages', {
   timeout: 30000,
@@ -309,7 +327,7 @@ test(
     const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
     await page.getByRole('textbox', { name: /document editor/i }).waitFor()
     const rich = page.locator(cm ? '.rich-pane .cm-content' : '.tiptap')
-    if (cm) await replaceRichText(page, rich, '```js\nconst hidden = 42;\n```')
+    if (cm) await loadMarkdown(app, page, '```js\nconst hidden = 42;\n```')
     else
       await rich.evaluate((element) =>
         element.editor.commands.setContent('```js\nconst hidden = 42;\n```', {
@@ -408,7 +426,7 @@ test(
     }
     // One long line decorates the columns near the visible ones, also after typing.
     const longLine = `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``
-    if (cm) await replaceRichText(page, rich, longLine)
+    if (cm) await loadMarkdown(app, page, longLine)
     else
       await rich.evaluate((element) =>
         element.editor.commands.setContent(
@@ -472,7 +490,7 @@ test(
     await page.getByRole('textbox', { name: /document editor/i }).waitFor()
     const rich = page.locator(cm ? '.rich-pane .cm-content' : '.tiptap')
     const show = async (markdown, place) => {
-      if (cm) await replaceRichText(page, rich, markdown)
+      if (cm) await loadMarkdown(app, page, markdown)
       else
         await rich.evaluate(
           (element, markdown) =>

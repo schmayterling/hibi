@@ -98,22 +98,31 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
     t.formattedEngine,
   )
   // Accepted difference: the formatted view reveals the heading's `# ` as
-  // editable text under the caret, so the heading's rendered text is its
-  // accessible name rather than its text content.
+  // editable text under the caret, so the heading's rendered text is the
+  // name in its accessibility tree rather than its text content.
   await t.test('outline navigation exposes rendered heading text', async () => {
-    const heading = await page.evaluate(() => {
-      const element = window
-        .getSelection()
-        ?.anchorNode?.parentElement?.closest('h1, [role="heading"]')
-      return {
-        text: element?.textContent,
-        name: element?.getAttribute('aria-label') ?? element?.textContent,
-      }
-    })
-    assert.equal(
-      t.formattedEngine === 'codemirror' ? heading.name : heading.text,
-      'alpha',
-    )
+    const heading =
+      'window.getSelection()?.anchorNode?.parentElement?.closest(\'h1, [role="heading"]\')'
+    if (t.formattedEngine !== 'codemirror') {
+      assert.equal(await page.evaluate(`${heading}?.textContent`), 'alpha')
+      return
+    }
+    const cdp = await page.context().newCDPSession(page)
+    try {
+      const { result } = await cdp.send('Runtime.evaluate', {
+        expression: heading,
+      })
+      const { nodes } = await cdp.send('Accessibility.queryAXTree', {
+        objectId: result.objectId,
+        role: 'heading',
+      })
+      assert.deepEqual(
+        nodes.filter((node) => !node.ignored).map((node) => node.name?.value),
+        ['alpha'],
+      )
+    } finally {
+      await cdp.detach()
+    }
   })
   await pressShortcut(
     app,

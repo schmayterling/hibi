@@ -2006,7 +2006,7 @@ export function livePreview(
       if (view.composing) return false
       const tree = syntax.tree(view.state)
       const spec =
-        (text.includes('\n') && lineInput(view.state, tree, from, to, text)) ||
+        (/[\r\n]/.test(text) && lineInput(view.state, tree, from, to, text)) ||
         gapInput(view.state, tree, from, to, text)
       if (!spec) return false
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))

@@ -968,10 +968,61 @@ test('multi-line input after a long run of spaces reads a bounded part of it', (
     } finally {
       Object.assign(prototype, originals)
     }
-    // Past the limit the input is left to the default insertion.
+    // Past the limit the input is left to the default insertion, which
+    // keeps the bold whole across a soft line break.
     assert.equal(spec, null)
+    if (size === 2 ** 20) {
+      const typed = `${doc.slice(0, caret)}\ny${doc.slice(caret)}`
+      const strong = markdown.parse(typed).topNode.firstChild.firstChild
+      assert.deepEqual(
+        [strong?.name, strong?.from, strong?.to],
+        ['StrongEmphasis', 0, typed.length],
+      )
+    }
     assert.ok(units > 0 && units <= 1024, `${units} units read`)
   }
+})
+
+test('multi-line text input at the edges of formatting, headings and lists, as the browser types', () => {
+  // Typed right after an opening marker: an empty first line leaves no empty
+  // markers (before, `****` made a thematic break), and its spaces stay
+  // outside them (before, `** x**` could not open).
+  for (const mark of ['**', '*', '~~', '`']) {
+    const source = `${mark}|abcd${mark}`
+    assert.equal(run(source, typing('\ny')), `\n\n${mark}y|abcd${mark}`)
+    assert.equal(
+      run(source, typing(' x\ny')),
+      ` ${mark}x${mark}\n\n${mark}y|abcd${mark}`,
+    )
+  }
+  // An empty task the input adds leaves the list, as a plain item does.
+  assert.equal(run('- [x] ab|', typing('x\n\ny')), '- [x] abx\n\ny|')
+  assert.equal(run('- [x] ab|', typing('\n\n')), '- [x] ab\n- [ ] |')
+  // A setext heading's underline stays with its last part.
+  assert.equal(run('ab|cd\n====', typing('X\nY')), '# abX\n\nY|cd\n====')
+  assert.equal(run('abcd|\n====', typing('X\nY')), 'abcdX\n====\n\nY|')
+  // Select-all keeps the formatting the text starts with, and a first code
+  // block, which takes the text as code.
+  assert.equal(run('^**abcd**|', typing('x\ny')), '**x**\n\n**y|**')
+  assert.equal(
+    run('^```\nabcd\n```\n\nend|', typing('**x**\ny')),
+    '```\n**x**\ny|\n```',
+  )
+  // A carriage return is a line break too.
+  assert.equal(run('ab|', typing('# typed\ry')), 'ab\\# typed\n\ny|')
+  assert.equal(
+    run('^```\nabcd\n```\n\nend|', typing('# typed\r\ny')),
+    '```\n# typed\ny|\n```',
+  )
+  // Wider numbers in quotes shift continuation lines and children inside them.
+  assert.equal(
+    run('> 8. ab|cd\n> 9. tail\n>    - child', typing('x\ny')),
+    '> 8. abx\n> 9. y|cd\n> 10. tail\n>     - child',
+  )
+  assert.equal(
+    run('> > 8. ab|cd\n> > 9. tail\n> >\n> >    more', typing('x\ny')),
+    '> > 8. abx\n> > 9. y|cd\n> > 10. tail\n> >\n> >     more',
+  )
 })
 
 test('backticks typed into inline code keep the code span', {

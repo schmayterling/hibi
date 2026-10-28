@@ -435,7 +435,8 @@ function blankRun(
 
 /** Where the text of a paragraph, task or ATX heading starts; null for other blocks. */
 function textStart(state: EditorState, leaf: SyntaxNode) {
-  if (leaf.name === 'Paragraph') return leaf.from
+  if (leaf.name === 'Paragraph' || /^SetextHeading\d$/.test(leaf.name))
+    return leaf.from
   if (leaf.name !== 'Task' && !/^ATXHeading\d$/.test(leaf.name)) return null
   const mark = leaf.firstChild
   if (mark?.name !== (leaf.name === 'Task' ? 'TaskMarker' : 'HeaderMark'))
@@ -562,7 +563,7 @@ export function lineInput(
   text: string,
 ): TransactionSpec | null {
   const { main } = state.selection
-  const lines = text.split('\n')
+  const lines = text.split(/\r\n?|\n/)
   if (
     state.readOnly ||
     state.selection.ranges.length > 1 ||
@@ -583,17 +584,50 @@ export function lineInput(
   let lineStart = 0
   if (all) {
     const first = edgeLeaf(tree.topNode, false)
-    const start = first && textStart(state, first)
-    if (start == null) return null
-    lineStart = doc.lineAt(first!.from).from
+    if (!first) return null
+    lineStart = doc.lineAt(first.from).from
     if (
       !blankText(state, 0, lineStart) ||
       !/^(?:[ \t>]|(?:[-+*]|\d{1,9}[.)])(?=[ \t]))*$/.test(
-        state.sliceDoc(lineStart, first!.from),
+        state.sliceDoc(lineStart, first.from),
       )
     )
       return null
+    // A first code block keeps its opening fence and takes the text as code.
+    const fence =
+      first.name === 'FencedCode' &&
+      /^ {0,3}(`{3,}|~{3,})/.exec(doc.lineAt(first.from).text)
+    if (fence) {
+      const open = doc.lineAt(first.from)
+      const code = `${open.text}\n${lines.join('\n')}`
+      return {
+        changes: { from: 0, to: doc.length, insert: `${code}\n${fence[1]}` },
+        selection: EditorSelection.cursor(code.length),
+        userEvent: 'input.type',
+      }
+    }
+    const start = textStart(state, first)
+    if (start == null) return null
     from = start
+    // The typed text takes the formatting the note's text starts with.
+    for (let moved = true; moved; ) {
+      moved = false
+      for (
+        let node: SyntaxNode | null = tree.resolveInner(from, 1);
+        node && !node.type.is('Block');
+        node = node.parent
+      )
+        if (
+          node.from === from &&
+          node.name !== 'Link' &&
+          spanNames.includes(node.name) &&
+          node.firstChild?.from === from
+        ) {
+          from = node.firstChild.to
+          moved = true
+          break
+        }
+    }
   } else if (uncovered(tree, from, to)) return null
   // A format waiting at the caret (Bold with nothing selected writes `****`)
   // is not one the browser types with.
@@ -639,7 +673,7 @@ export function lineInput(
   // it, up to the caret) or cut by its end (`started`: the text after keeps
   // it). A selection end inside formatting markers is not modelled.
   let spans: Formatting[] = []
-  let ended: Formatting[] = []
+  const ended: Formatting[] = []
   const started: Formatting[] = []
   const seen = new Set<string>()
   for (const found of [
@@ -674,13 +708,7 @@ export function lineInput(
     )
       if (!spanNames.includes(node.name)) return null
   let at = from
-  // Formatting that loses all its text before the caret loses its opening
-  // marker too; formatting that loses all its text after it, its closing one.
-  ended = ended.filter(({ node, first }) => {
-    if (from > first.to) return true
-    at = Math.min(at, node.from)
-    return false
-  })
+  // Formatting that loses all its text after the caret loses its closing marker.
   const gone = started.filter(({ last: close }) => to === close.from),
     opened = started.filter((span) => !gone.includes(span))
   // A link takes text only inside it: at its edge, the text goes beside it.
@@ -744,7 +772,9 @@ export function lineInput(
       .join('')
   const close = (list: Formatting[]) =>
     list.map((span) => closer(state, span)).join('')
-  const heading = start && /^ATXHeading(\d)$/.exec(start.name)
+  const heading = start && /^(?:ATX|Setext)Heading(\d)$/.exec(start.name)
+  const setext = !!heading && start!.name.startsWith('Setext')
+  if (across && end!.name.startsWith('Setext')) return null
   // At a heading's end, later lines are paragraphs after its closing sequence.
   let headingEnd = false
   if (heading) {
@@ -752,28 +782,52 @@ export function lineInput(
     const closing = block.lastChild
     const textEnd =
       closing?.name === 'HeaderMark' && closing.from > textStart(state, block)!
-        ? closing.from
+        ? block.name.startsWith('Setext')
+          ? doc.lineAt(closing.from).from - 1
+          : closing.from
         : block.to
     headingEnd =
       skip >= textEnd || blankRun(state, skip, textEnd) === textEnd - skip
   }
-  // The first line closes formatting the caret ends; spaces it ends with,
-  // or the text before it when it has none, go after the closing markers.
-  const closing =
-    close(ended) + (edge.length ? state.sliceDoc(to, skip) : '') + close(inside)
   const [lead, core, trail] = spaced(
     literalLine(lines[0]!, verbatimFirst, at === startText),
   )
+  // Formatting whose text starts at the caret takes the first line after the
+  // spaces it starts with; with no text typed into it, its opening marker
+  // goes, so no empty markers remain.
+  const around = [...ended, ...edge, ...inside]
+  const starting = around.filter(({ first }) => at === first.to)
+  const ending = core
+    ? around
+    : around.filter((span) => !starting.includes(span))
+  const openFrom = Math.min(at, ...starting.map(({ node }) => node.from))
+  let openers = ''
+  if (starting.length && (!core || lead)) {
+    openers = core ? state.sliceDoc(openFrom, at) : ''
+    at = openFrom
+  }
+  // The first line closes formatting the caret ends; spaces it ends with,
+  // or the text before it when it has none, go after the closing markers.
+  const closing = close(ending)
   let closeAt = -1
   if (closing && !core) {
     // The closing markers move before the spaces; the spaces stay.
-    const innermost = [...ended, ...edge, ...inside][0]!
+    const innermost = ending[0]!
     const spaces = blankBefore(state, at, innermost.first.to)
     if (spaces < 0) return null
     if (spaces && spaces < at - innermost.first.to) closeAt = at - spaces
   }
+  // A setext heading's underline stays with its last part, so the first
+  // part, or all of it when the underline goes, is written as ATX.
+  const atx =
+    setext && (!headingEnd || all || across)
+      ? `${'#'.repeat(Number(heading![1]))} `
+      : ''
   const first =
-    closeAt < 0 ? lead + core + closing + trail : lead + core + trail
+    (atx && at === start!.from ? atx : '') +
+    (core
+      ? lead + openers + core + closing + trail
+      : (closeAt < 0 ? closing : '') + lead + trail)
   /** Line `index` (from 1) with the caret's offset in it; the last line ends with `rest`. */
   const line = (index: number, rest = '') => {
     const value = literalLine(lines[index]!, verbatim, true)
@@ -796,6 +850,8 @@ export function lineInput(
   }
   const changes: { from: number; to?: number; insert?: string }[] =
     closeAt < 0 ? [] : [{ from: closeAt, insert: closing }]
+  if (atx && at !== start!.from)
+    changes.push({ from: start!.from, insert: atx })
 
   // A list item the selection ends in keeps its other blocks as an item.
   if (across)
@@ -835,7 +891,7 @@ export function lineInput(
     for (let index = 1; index <= last; index++) {
       const { text, caret } = line(index)
       // The last line holds the text after the caret, which stays in place.
-      added += `\n${blank}\n${text || (index === last && after) ? prefix + lead : blank}`
+      added += `\n${blank}\n${text || (index === last && after) ? prefix + (setext && index === last ? '' : lead) : blank}`
       offset = added.length + caret
       added += text
     }
@@ -939,7 +995,13 @@ export function lineInput(
             ? headEmpty && !lines[0] && !others.length
             : !lines[index - 1])
         const level = levels[current.level]!
-        if (current.paragraph || !empty || level.getChild('Task')) {
+        // The browser never takes the original task item, with its
+        // checkbox, out of the list; items it adds leave when empty.
+        if (
+          current.paragraph ||
+          !empty ||
+          (current === original && level.getChild('Task'))
+        ) {
           current = { ...current, index }
           made.push(current)
           continue

@@ -8,6 +8,7 @@ import { Lexer, Marked, Tokenizer } from 'marked'
 import { outsideCode } from '../src/addons/_shared/import-markdown.ts'
 import { exportOptions } from '../src/addons/documentation/options.ts'
 import { prepareSite } from '../src/addons/documentation/site.ts'
+import { mathTokens } from '../src/addons/math/syntax.ts'
 import { imageSources } from '../src/main/images.ts'
 import { parseWorkspaceMetadata } from '../src/main/workspace-index-metadata.ts'
 import { WorkspaceMetadataParser } from '../src/main/workspace-metadata-parser.ts'
@@ -186,14 +187,7 @@ test('reference titles keep ordinary and escaped continuation lines', () => {
     ["'", "'"],
     ['(', ')'],
   ])
-    for (const line of [
-      'two',
-      '2. two',
-      '-',
-      '===',
-      '\\# two',
-      'a|b\n---|---\nlast',
-    ])
+    for (const line of ['two', '2. two', '-', '===', '\\# two'])
       for (const gfm of [false, true]) {
         const source = `[ref]: /x ${open}one\n${line}${close}\n\n[ref]`
         const markdown = new Marked({ gfm }, blockMarkdown)
@@ -204,6 +198,104 @@ test('reference titles keep ordinary and escaped continuation lines', () => {
           source,
         )
       }
+})
+
+test('reference titles stop at setext underline boundaries', async (t) => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const line of ['===', '   ===', '-', '- '])
+        await t.test(JSON.stringify({ open, separator, line }), () => {
+          for (const eol of ['\n', '\r\n', '\r']) {
+            const source =
+              `[ref]: /x${separator}${open}one\n${line}\nlast${close}\n\n[ref]`.replaceAll(
+                '\n',
+                eol,
+              )
+            const href = separator === ' ' ? null : '/x'
+            for (const gfm of [false, true]) {
+              const markdown = new Marked({ gfm }, blockMarkdown)
+              assert.equal(markdown.lexer(source).links.ref?.href ?? null, href)
+              assert.equal(references(source, gfm)?.href ?? null, href)
+              assert.equal(
+                new Lexer({ gfm, tokenizer: new BlockTokenizer() }).lex(source)
+                  .links.ref?.href ?? null,
+                href,
+              )
+              assert.match(markdown.parse(source), /<h[12]>/)
+            }
+            assert.equal(
+              /<a href="\/x"/.test(renderMarkdown(source).html),
+              href !== null,
+            )
+          }
+        })
+})
+
+test('reference title boundaries follow the gfm table grammar', () => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const gfm of [false, true])
+        for (const eol of ['\n', '\r\n']) {
+          const source =
+            `[ref]: /x${separator}${open}one\na | b\n--|--\nlast${close}\n\n[ref]`.replaceAll(
+              '\n',
+              eol,
+            )
+          const markdown = new Marked({ gfm }, blockMarkdown)
+          const href = !gfm || separator === '\n' ? '/x' : null
+          assert.equal(markdown.lexer(source).links.ref?.href ?? null, href)
+          assert.equal(references(source, gfm)?.href ?? null, href)
+          assert.equal(
+            markdown.lexer(source).links.ref?.title ?? null,
+            gfm ? null : 'one\na | b\n--|--\nlast',
+          )
+          assert.equal(/<table>/.test(markdown.parse(source)), gfm)
+        }
+})
+
+test('reference titles keep mismatched and escaped gfm table candidates', () => {
+  for (const [header, titleHeader] of [
+    ['a b', 'a b'],
+    ['a \\| b', 'a | b'],
+    ['a | b | c', 'a | b | c'],
+  ]) {
+    const source = `[ref]: /x "one\n${header}\n--|--\nlast"\n\n[ref]`
+    const markdown = new Marked({ gfm: true }, blockMarkdown)
+    assert.equal(markdown.lexer(source).links.ref?.href, '/x')
+    assert.equal(
+      markdown.lexer(source).links.ref?.title,
+      `one\n${titleHeader}\n--|--\nlast`,
+    )
+    assert.equal(references(source, true)?.href, '/x')
+  }
+})
+
+test('math block interruptions end reference titles', {
+  todo: 'formatted gap export-003: a block math interruption must end a reference title',
+}, () => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n']) {
+      const source = `[ref]: /x${separator}${open}one\n$$\nx^2\n$$\nlast${close}\n\n[ref]`
+      const markdown = new Marked({ gfm: false }, mathTokens, blockMarkdown)
+      const tokens = markdown.lexer(source)
+      assert.equal(
+        tokens.links.ref?.href ?? null,
+        separator === ' ' ? null : '/x',
+      )
+      assert.ok(tokens.some((token) => token.type === 'blockMath'))
+    }
 })
 
 test('html interruptions keep newline searches linear across paragraph starts', (t) => {

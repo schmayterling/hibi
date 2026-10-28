@@ -24,11 +24,26 @@ function paragraphRule(pattern: RegExp) {
 }
 
 /** Reference titles cannot cross CommonMark paragraph boundaries. */
-export function endsReferenceTitle(source: string) {
-  return (
+export function endsReferenceTitle(
+  source: string,
+  paragraph = marked.Lexer.rules.block.normal.paragraph,
+) {
+  if (
     /^[ \t]*(?:\r?\n|$)/.test(source) ||
-    !!paragraphRule(marked.Lexer.rules.block.normal.paragraph)?.test(source)
+    /^ {0,3}(?:=+|-+)[ \t]*(?:\r?\n|$)/.test(source)
   )
+    return true
+  if (!paragraphRule(paragraph)?.test(source)) return false
+  if (
+    paragraph !== marked.Lexer.rules.block.gfm.paragraph ||
+    paragraphRule(marked.Lexer.rules.block.normal.paragraph)?.test(source)
+  )
+    return true
+  // The GFM paragraph rule only finds table candidates; cell counts must agree.
+  const tokenizer = new Tokenizer()
+  new marked.Lexer({ gfm: true, tokenizer })
+  const end = source.indexOf('\n', source.indexOf('\n') + 1)
+  return !!tokenizer.table(end < 0 ? source : source.slice(0, end))
 }
 
 export function lexMarkdown(source: string) {
@@ -106,7 +121,7 @@ export class BlockTokenizer extends Tokenizer {
       end >= 0;
       end = title.indexOf('\n', end + 1)
     )
-      if (endsReferenceTitle(title.slice(end + 1)))
+      if (endsReferenceTitle(title.slice(end + 1), this.rules.block.paragraph))
         // A failed next-line title can leave a destination-only definition.
         return read.call(this, source.slice(0, from + end))
     return token

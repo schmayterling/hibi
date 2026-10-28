@@ -93,6 +93,25 @@ function fixture(t, text, config = syntax) {
   return { store, model, read, edit, expected }
 }
 
+test('regional definitions without bracket lookahead respect gfm table boundaries', (t) => {
+  for (const [open, close] of [
+    ['"', '"'],
+    ["'", "'"],
+    ['(', ')'],
+  ])
+    for (const separator of [' ', '\n'])
+      for (const gfm of [false, true]) {
+        const source = `[ref]: /x${separator}${open}one\na | b\n--|--\nlast${close}\n\n[ref]`
+        const f = fixture(t, source, { ...syntax, gfm })
+        assert.deepEqual(f.read(), f.expected(), source)
+        const from = source.indexOf('--|--')
+        f.edit(from, from + 5, 'plain')
+        assert.deepEqual(f.read(), f.expected())
+        f.edit(from, from + 5, '--|--', 'undo')
+        assert.deepEqual(f.read(), f.expected())
+      }
+})
+
 const references = [
   '[ref\n\n]: ht',
   '[re\n\nf]: https://example.test',

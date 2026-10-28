@@ -55,7 +55,7 @@ export class FormattedCounter {
   constructor(store: SourceStore, syntax: CountSyntax) {
     this.store = store
     this.#syntax = syntax
-    this.#brackets = new CountBrackets(store.snapshot())
+    this.#brackets = new CountBrackets(store.snapshot(), syntax.gfm)
     const base = metadataParsers[syntax.gfm ? 'gfm' : 'commonmark'].configure(
       countMarkdownSyntax(
         syntax,

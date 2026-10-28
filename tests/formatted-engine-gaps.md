@@ -123,7 +123,7 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | contracts-006 | [raw-html-editor.test.mjs:1249](raw-html-editor.test.mjs#L1249) | superseded block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | api-005 | [rich-edit-api.test.mjs:295](rich-edit-api.test.mjs#L295) | rich source edits must reject structural markup changes | 6: verbatim projections and selection contracts |
 | marker-007 | [sidebar-views.test.mjs:105](sidebar-views.test.mjs#L105) | outline navigation must expose rendered heading text | 8b: hidden markers and math caret placement |
-| semantics-002 | [source-reference-navigation.test.mjs:160](source-reference-navigation.test.mjs#L160) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
+| semantics-002 | [source-reference-navigation.test.mjs:161](source-reference-navigation.test.mjs#L161) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
 
 ## accepted differences
 

@@ -293,6 +293,12 @@ test(
       )
       assert.equal(await page.locator('.tiptap a').count(), 1)
     } else {
+      await page
+        .getByText(
+          'Literal definitions has features made for the previous formatted editor. Those features are off until it is updated; source view is unaffected.',
+          { exact: true },
+        )
+        .waitFor()
       // API 2 rich nodes do not render in the CodeMirror pane.
       assert.equal(await page.locator('.literal-definition').count(), 0)
       assert.equal(

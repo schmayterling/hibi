@@ -289,7 +289,12 @@ export type FormattedContainer = {
 export type FormattedNodeView = {
   /** Names of the nodes it renders, or of their Lezer groups, such as `LeafBlock`. */
   nodes: readonly string[]
-  /** Local registerSyntax id controlling this renderer. Disabled nodes show literal source. */
+  /**
+   * Local registerSyntax id controlling this renderer. It also pairs a legacy
+   * flavor's rich extension with this formatted renderer, including child-only
+   * views. Without it, coverage requires every feature node to match a view
+   * name or Lezer group. Disabled syntax suppresses this view and its children.
+   */
   feature?: string
   /** Inline decorations. Return false to skip the node's children. */
   decorate?(
@@ -530,7 +535,11 @@ export type MarkdownFlavor = {
   /** False when disabled syntax has a lossless built-in fallback, such as a code fence. */
   readOnlyWhenDisabled?: boolean
   markedOptions?: { gfm?: boolean; breaks?: boolean }
-  /** @deprecated Legacy Tiptap schema extensions. Use syntax and render for the CodeMirror formatted editor. */
+  /**
+   * @deprecated Legacy Tiptap schema extensions. Use syntax and render for the CodeMirror formatted editor.
+   * registerSyntax.extensions must include each rich extension's name to
+   * identify its feature; unmapped extensions use the flavor as one feature.
+   */
   richExtensions?: readonly AnyExtension[]
   /**
    * Lezer Markdown extensions for the formatted view and source highlighting (API 3).
@@ -951,7 +960,12 @@ export type AddonContext = {
     /** Escaped code HTML using the app's enabled languages and shared token classes. */
     renderCode: (source: string, language: string) => string
     onCodeHighlightingChange: (listener: () => void) => () => void
-    /** Contribute a renderer toggle; disabled tokens remain literal, editable Markdown. */
+    /**
+     * Contribute a renderer toggle; disabled tokens remain literal, editable Markdown.
+     * For dual-engine flavors, list legacy extension names in extensions and the
+     * feature's syntax node names in nodes. Pair render.feature with this local id,
+     * or provide views matching every node by name or Lezer group.
+     */
     registerSyntax: (feature: MarkdownSyntaxFeature) => () => void
     /** Format-specific rendering control, without a Markdown token matcher. */
     registerDocumentSyntax: (
@@ -994,11 +1008,20 @@ export type AddonContext = {
     registerContextActionProvider: (
       provider: import('../shared/editor-interactions').EditorContextActionProvider,
     ) => Promise<() => void>
-    /** @deprecated Tiptap-only. Use registerFormatted for the CodeMirror formatted editor. */
+    /**
+     * @deprecated Tiptap-only. Use registerFormatted for the CodeMirror formatted editor.
+     * A formatted registration with the same local id marks this feature migrated.
+     * Other ids do not cover it; remaining legacy features keep their update notice.
+     */
     registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void
     registerSource: (extension: SourceExtension) => () => void
-    /** Create an extension for each CodeMirror formatted editor (API 3). */
+    /**
+     * Create an extension for each CodeMirror formatted editor (API 3).
+     * Use the same local id as registerRich to pair the feature. If that id also
+     * names a syntax feature, the formatted registration covers its literal fallback.
+     * Removing the registration restores the notice for its remaining rich feature.
+     */
     registerFormatted: (extension: FormattedExtension) => () => void
     registerFlavor: (flavor: MarkdownFlavor) => () => void
     /** Render with the file's flavor choice and active projections for static export. */

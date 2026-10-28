@@ -1,8 +1,16 @@
+import type { NodeType } from '@lezer/common'
+import { parser } from '@lezer/markdown'
 import type { MarkdownFlavor, ToastApi } from '../../addons/api'
+import { flavorSyntax } from './flavor-syntax'
 import { flavors } from './flavors'
 import { formattedCompatibility } from './formatted-compatibility'
 import { formattedRegistry } from './formatted-registry'
 import { markdownSyntax } from './markdown-syntax'
+
+// These singleton stores outlive individual addon scopes.
+markdownSyntax.subscribe(formattedCompatibility.refresh)
+flavors.subscribe(formattedCompatibility.refresh)
+formattedRegistry.subscribe(formattedCompatibility.refresh)
 
 /** Owned notices for addons that have not migrated their formatted features. */
 export function createFormattedCompatibility(
@@ -12,9 +20,6 @@ export function createFormattedCompatibility(
   openSettings: () => void,
 ) {
   let notice: ReturnType<ToastApi['show']> | undefined
-  const syntax = markdownSyntax.subscribe(formattedCompatibility.refresh)
-  const registeredFlavors = flavors.subscribe(formattedCompatibility.refresh)
-  const formatted = formattedRegistry.subscribe(formattedCompatibility.refresh)
   const unsubscribe = formattedCompatibility.subscribe(() => {
     if (formattedCompatibility.snapshot().includes(id)) {
       notice ??= toasts.show({
@@ -32,9 +37,28 @@ export function createFormattedCompatibility(
       formattedCompatibility.register(id, kind, feature),
     registerFlavor(flavor: MarkdownFlavor) {
       const flavorId = `${id}.${flavor.id}`
+      let seenFormatted = false
+      let types: readonly NodeType[] | undefined
       return formattedCompatibility.registerFeatures(id, () => {
-        if (!flavors.snapshot().some((entry) => entry.id === flavorId))
-          return { rich: [], formatted: [] }
+        const registered = flavors
+          .snapshot()
+          .find((entry) => entry.id === flavorId)
+        if (!registered) return { rich: [], formatted: [] }
+        if (!types) {
+          try {
+            types = parser.configure(flavorSyntax(registered) ?? {}).nodeSet
+              .types
+          } catch {
+            // The formatted loader reports invalid syntax through its existing error route.
+            types = parser.nodeSet.types
+          }
+        }
+        const present = formattedRegistry
+          .entries()
+          .some((entry) => entry.id === `flavor:${flavorId}`)
+        seenFormatted ||= present
+        const covered =
+          present || (!seenFormatted && (flavor.syntax || flavor.render))
         const features = markdownSyntax
           .snapshot()
           .filter(
@@ -52,9 +76,7 @@ export function createFormattedCompatibility(
                 ? matching.map(local)
                 : [`flavor:${flavor.id}`]
             }) ?? [],
-          formatted: formattedRegistry
-            .entries()
-            .some((entry) => entry.id === `flavor:${flavorId}`)
+          formatted: covered
             ? [
                 `flavor:${flavor.id}`,
                 ...(flavor.render?.flatMap((view) =>
@@ -64,11 +86,16 @@ export function createFormattedCompatibility(
                   .filter(
                     (feature) =>
                       feature.nodes?.length &&
-                      feature.nodes.every((node) =>
-                        flavor.render?.some(
-                          (view) => !view.feature && view.nodes.includes(node),
-                        ),
-                      ),
+                      feature.nodes.every((node) => {
+                        const type = types?.find((type) => type.name === node)
+                        return flavor.render?.some(
+                          (view) =>
+                            !view.feature &&
+                            view.nodes.some((name) =>
+                              type ? type.is(name) : node === name,
+                            ),
+                        )
+                      }),
                   )
                   .map(local),
               ]
@@ -77,9 +104,6 @@ export function createFormattedCompatibility(
       })
     },
     dispose() {
-      syntax()
-      registeredFlavors()
-      formatted()
       unsubscribe()
       notice?.dismiss()
     },

@@ -62,7 +62,7 @@ test('formatted sdk shares the host Lezer common runtime', async () => {
   )
 })
 
-test('legacy flavor compatibility follows declared features and live renderer registrations', async () => {
+async function loadCompatibility() {
   const { outputFiles } = await build({
     stdin: {
       contents: `
@@ -80,15 +80,19 @@ test('legacy flavor compatibility follows declared features and live renderer re
     format: 'esm',
     loader: { '.css': 'empty' },
   })
+  return import(
+    `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`
+  )
+}
+
+test('legacy flavor compatibility follows declared features and live renderer registrations', async () => {
   const {
     createFormattedCompatibility,
     formattedCompatibility,
     formattedRegistry,
     markdownSyntax,
     flavors,
-  } = await import(
-    `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`
-  )
+  } = await loadCompatibility()
   let notices = 0
   const scope = createFormattedCompatibility(
     'flavor-proof',
@@ -220,5 +224,148 @@ test('legacy compatibility follows each feature through migration and cleanup', 
     assert.deepEqual(formattedCompatibility.snapshot(), [])
   } finally {
     for (const remove of removals.reverse()) remove()
+  }
+})
+
+for (const disposed of ['another addon', 'an older scope of the same addon'])
+  test(`disposing ${disposed} keeps live flavor compatibility subscribed`, async () => {
+    const {
+      createFormattedCompatibility,
+      formattedCompatibility,
+      formattedRegistry,
+      markdownSyntax,
+      flavors,
+    } = await loadCompatibility()
+    let notices = 0
+    const toasts = {
+      show() {
+        notices++
+        return {
+          dismiss() {
+            notices--
+          },
+        }
+      },
+    }
+    const old = createFormattedCompatibility(
+      disposed === 'another addon' ? 'alpha' : 'beta',
+      'Old scope',
+      toasts,
+      () => {},
+    )
+    const scope = createFormattedCompatibility('beta', 'Beta', toasts, () => {})
+    const removals = []
+    try {
+      removals.push(
+        markdownSyntax.register('beta', {
+          id: 'mark',
+          label: 'Mark',
+          group: 'Beta',
+          level: 'inline',
+          extensions: ['betaMark'],
+          nodes: ['Emphasis'],
+          matches: () => false,
+        }),
+      )
+      const flavor = {
+        id: 'proof',
+        name: 'Proof',
+        kind: 'syntax',
+        description: 'Proof',
+        detect: () => true,
+        richExtensions: [{ name: 'betaMark' }],
+      }
+      removals.push(flavors.register('beta', flavor))
+      const removeRenderer = formattedRegistry.register({
+        id: 'flavor:beta.proof',
+        load: () => ({}),
+      })
+      removals.push(removeRenderer)
+      removals.push(
+        scope.registerFlavor({
+          ...flavor,
+          render: [{ nodes: ['Emphasis'], decorate() {} }],
+        }),
+      )
+      assert.deepEqual(formattedCompatibility.features(), [])
+      assert.equal(notices, 0)
+      old.dispose()
+      removeRenderer()
+      assert.deepEqual(formattedCompatibility.features(), ['beta.mark'])
+      assert.equal(notices, 1)
+    } finally {
+      for (const remove of removals.reverse()) remove()
+      scope.dispose()
+      old.dispose()
+    }
+  })
+
+test('dual-engine flavors never publish a legacy notice before their lazy registration', async () => {
+  const {
+    createFormattedCompatibility,
+    formattedRegistry,
+    markdownSyntax,
+    flavors,
+  } = await loadCompatibility()
+  let insertions = 0
+  for (let activation = 0; activation < 2; activation++) {
+    const removals = []
+    const scope = createFormattedCompatibility(
+      'ready',
+      'Ready',
+      {
+        show() {
+          insertions++
+          return { dismiss() {} }
+        },
+      },
+      () => {},
+    )
+    let unsubscribe
+    const loaded = new Promise((resolve) => {
+      unsubscribe = formattedRegistry.subscribe(() => {
+        if (
+          formattedRegistry
+            .entries()
+            .some((entry) => entry.id === 'flavor:ready.proof')
+        )
+          resolve()
+      })
+    })
+    try {
+      removals.push(
+        markdownSyntax.register('ready', {
+          id: 'mark',
+          label: 'Mark',
+          group: 'Ready',
+          level: 'inline',
+          extensions: ['readyMark'],
+          nodes: ['Emphasis'],
+          matches: () => false,
+        }),
+      )
+      const flavor = {
+        id: 'proof',
+        name: 'Proof',
+        kind: 'syntax',
+        description: 'Proof',
+        detect: () => true,
+        richExtensions: [{ name: 'readyMark' }],
+        render: [{ nodes: ['Emphasis'], decorate() {} }],
+      }
+      removals.push(flavors.register('ready', flavor))
+      removals.push(scope.registerFlavor(flavor))
+      assert.equal(
+        insertions,
+        0,
+        'declared coverage must precede the lazy entry',
+      )
+      await loaded
+      assert.equal(insertions, 0)
+    } finally {
+      unsubscribe()
+      for (const remove of removals.reverse()) remove()
+      scope.dispose()
+    }
   }
 })

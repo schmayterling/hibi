@@ -159,6 +159,23 @@ export const formattedFormatting = Facet.define<string>()
 /** Nodes of syntax settings that are off: they and their children show as written. */
 export const formattedLiteral = Facet.define<string>()
 
+/** Legacy fallback suppresses builtins while preserving its owner's node views. */
+export const formattedLegacyLiteral = Facet.define<
+  { nodes: readonly string[]; views: readonly FormattedNodeView[] },
+  ReadonlyMap<string, ReadonlySet<FormattedNodeView>>
+>({
+  combine(entries) {
+    const nodes = new Map<string, Set<FormattedNodeView>>()
+    for (const entry of entries)
+      for (const name of entry.nodes) {
+        const views = nodes.get(name) ?? new Set<FormattedNodeView>()
+        for (const view of entry.views) views.add(view)
+        nodes.set(name, views)
+      }
+    return nodes
+  },
+})
+
 /**
  * The document a formatted view edits, provided by its host: the tab that
  * shows it, and a revision that changes when its files or media may have.
@@ -325,28 +342,44 @@ export const formattedContributions = {
    * `subscribe` reports when they arrive.
    */
   extension(flavors?: readonly string[] | undefined): Extension {
-    const literal = markdownSyntax
+    const contributions = formattedRegistry.entries().flatMap((entry) => {
+      load(entry)
+      const contribution = loaded.get(entry)
+      return contribution &&
+        (!contribution.flavor ||
+          !flavors ||
+          flavors.includes(contribution.flavor))
+        ? [contribution]
+        : []
+    })
+    const features = markdownSyntax
       .snapshot()
-      .flatMap((feature) =>
-        (!feature.enabled ||
-          formattedCompatibility.features().includes(feature.id)) &&
-        feature.scope !== 'document'
-          ? (feature.nodes ?? coreNodes[feature.id] ?? [])
-          : [],
+      .filter((feature) => feature.scope !== 'document')
+    const disabled = new Set(
+      features.flatMap((feature) =>
+        !feature.enabled ? (feature.nodes ?? coreNodes[feature.id] ?? []) : [],
+      ),
+    )
+    const legacy = features
+      .filter(
+        (feature) =>
+          feature.enabled &&
+          formattedCompatibility.features().includes(feature.id),
       )
+      .map((feature) => ({
+        nodes: (feature.nodes ?? []).filter((name) => !disabled.has(name)),
+        views: contributions
+          .filter((entry) => entry.id.startsWith(`${feature.owner}.`))
+          .flatMap((entry) => entry.views ?? []),
+      }))
     return [
       formattedFlavors.of(flavors ?? []),
-      literal.map((name) => formattedLiteral.of(name)),
-      formattedRegistry.entries().flatMap((entry) => {
-        load(entry)
-        const contribution = loaded.get(entry)
-        return contribution &&
-          (!contribution.flavor ||
-            !flavors ||
-            flavors.includes(contribution.flavor))
-          ? contributionExtension(contribution)
-          : []
-      }),
+      [...disabled, ...legacy.flatMap((entry) => entry.nodes)].map((name) =>
+        formattedLiteral.of(name),
+      ),
+      legacy.map((entry) => formattedLegacyLiteral.of(entry)),
+      formattedRenderInputs.of(legacy),
+      contributions.map(contributionExtension),
     ]
   },
 }

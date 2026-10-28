@@ -226,13 +226,15 @@ export function formattedTextRuns(
     throw new Error('Find selection is outside its source snapshot.')
   if (selection.from === selection.to) return []
   const mask = new FormattedTextMask(input)
+  let before = window.from === 0,
+    after = window.to === input.length
   for (const effect of effects) {
-    if (
-      !effect ||
-      effect.kind === 'leaf' ||
-      effect.to <= selection.from ||
-      effect.from >= selection.to
-    )
+    if (effect?.kind === 'leaf') {
+      before ||= effect.from >= window.from && effect.to <= selection.from
+      after ||= effect.from >= selection.to && effect.to <= window.to
+      continue
+    }
+    if (!effect || effect.to <= selection.from || effect.from >= selection.to)
       continue
     // The producer supplies edge separators; only selected cells need a mask.
     // Keep an intersecting atom's complete provenance.
@@ -246,5 +248,7 @@ export function formattedTextRuns(
     for (const _ of mask.effect(effect, bounds)) {
     }
   }
+  if (!before || !after)
+    throw new Error('Rendered text window is missing neighbouring blocks.')
   return [...mask.runs(selection.from, selection.to)]
 }

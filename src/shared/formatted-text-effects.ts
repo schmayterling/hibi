@@ -41,6 +41,54 @@ const leafNames = new Set([
   'BlockMath',
 ])
 
+/** Whether a candidate leaf contributes separator evidence; opaque widgets still do. */
+export function formattedTextLeafVisible(
+  node: SyntaxNode,
+  literal: ReadonlySet<string>,
+) {
+  if (node.name !== 'LinkReference') return true
+  for (let parent: SyntaxNode | null = node; parent; parent = parent.parent)
+    if (literal.has(parent.name)) return true
+  return false
+}
+
+/** Retained context for a selection, or null when 64 syntax steps cannot prove each neighbour. */
+export function formattedTextWindow(
+  tree: Tree,
+  selection: RenderedRange,
+  literal: ReadonlySet<string>,
+): RenderedRange | null {
+  const neighbour = (at: number, direction: -1 | 1) => {
+    const cursor = tree.cursor(IterMode.IgnoreMounts)
+    let work = 0
+    while (++work <= 64) {
+      const leaf =
+        literal.has(cursor.name) ||
+        cursor.type.is('LeafBlock') ||
+        leafNames.has(cursor.name) ||
+        cursor.name === 'Table'
+      if (leaf) {
+        if (
+          (direction < 0 ? cursor.to <= at : cursor.from >= at) &&
+          formattedTextLeafVisible(cursor.node, literal)
+        )
+          return cursor.node
+      } else if (direction < 0 ? cursor.childBefore(at) : cursor.childAfter(at))
+        continue
+      while (!(direction < 0 ? cursor.prevSibling() : cursor.nextSibling())) {
+        if (!cursor.parent()) return null
+        if (++work > 64) return undefined
+      }
+    }
+    return undefined
+  }
+  const before = neighbour(selection.from, -1),
+    after = neighbour(selection.to, 1)
+  // ponytail: retain visible-leaf metadata to cover longer hidden runs synchronously.
+  if (before === undefined || after === undefined) return null
+  return { from: before?.from ?? 0, to: after?.to ?? tree.length }
+}
+
 // A retained node's cursor keeps its parents; next() can escape into sibling blocks.
 function nextInScope(
   cursor: TreeCursor,
@@ -217,6 +265,16 @@ export function* formattedTextEffects(
       descend = false
       continue
     }
+    // Definitions hide adjoining gaps without contributing a rendered leaf.
+    if (!inlineOnly && !formattedTextLeafVisible(node, literal)) {
+      const hidden = formattedDefinitionRange(node, read, (at) => {
+        const bounds = input.lineAt(offset + at)
+        return { from: bounds.from - offset, to: bounds.to - offset }
+      })
+      yield effect('hide', hidden.from, hidden.to)
+      descend = false
+      continue
+    }
     const heading = /^(ATX|Setext)Heading/.exec(name)
     const leaf =
       !inlineOnly && (leafNames.has(name) || heading || name === 'Table')
@@ -224,10 +282,11 @@ export function* formattedTextEffects(
       const first = line(from)
       first.prefix = Math.max(first.prefix, from)
     }
-    if (range.selection && leaf && outside) {
-      leaves.push({ from, to })
-      descend = false
-      continue
+    if (range.selection && heading?.[1] === 'ATX') {
+      const close = node.lastChild
+      if (close?.name === 'HeaderMark' && !literal.has(close.name))
+        for (const hidden of formattedMarkerRanges(close, read))
+          yield effect('hide', hidden.from, hidden.to)
     }
     if (formattedAtomic(node, read, features)) {
       yield effect('barrier', node.from, node.to)
@@ -235,12 +294,24 @@ export function* formattedTextEffects(
       descend = false
       continue
     }
-    if (!inlineOnly && name === 'LinkReference') {
-      const hidden = formattedDefinitionRange(node, read, (at) => {
-        const bounds = input.lineAt(offset + at)
-        return { from: bounds.from - offset, to: bounds.to - offset }
-      })
-      yield effect('hide', hidden.from, hidden.to)
+    if (name === 'FencedCode') {
+      const first = input.lineAt(from),
+        last = input.lineAt(to)
+      yield {
+        kind: 'hide',
+        from: first.from,
+        to: Math.min(input.length, first.to + 1),
+      }
+      if (formattedClosedFence(node) && last.from > first.from)
+        yield {
+          kind: 'hide',
+          from: Math.max(first.to + 1, last.from - 1),
+          to: last.to,
+        }
+    }
+
+    if (range.selection && leaf && outside) {
+      leaves.push({ from, to })
       descend = false
       continue
     }
@@ -396,21 +467,6 @@ export function* formattedTextEffects(
       }
     }
     if (name === 'FencedCode' || name === 'CodeBlock') {
-      if (name === 'FencedCode') {
-        const first = input.lineAt(from),
-          last = input.lineAt(to)
-        yield {
-          kind: 'hide',
-          from: first.from,
-          to: Math.min(input.length, first.to + 1),
-        }
-        if (formattedClosedFence(node) && last.from > first.from)
-          yield {
-            kind: 'hide',
-            from: Math.max(first.to + 1, last.from - 1),
-            to: last.to,
-          }
-      }
       const code = node.cursor(IterMode.IgnoreMounts)
       if (code.childAfter(selectedFrom - offset))
         do {

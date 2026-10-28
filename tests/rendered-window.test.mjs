@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { MountedTree, NodeProp, Tree, TreeCursor } from '@lezer/common'
 import { parser as javascriptParser } from '@lezer/javascript'
-import { formattedTextEffects } from '../src/shared/formatted-text-effects.ts'
+import {
+  formattedTextEffects,
+  formattedTextWindow,
+} from '../src/shared/formatted-text-effects.ts'
 import { textFeatures } from '../src/shared/formatted-text-rules.ts'
 import {
   FormattedTextMask,
@@ -64,6 +67,9 @@ function projectionWork(work) {
         'next',
         'enter',
         'childAfter',
+        'childBefore',
+        'prevSibling',
+        'lastChild',
         'firstChild',
         'enterChild',
         'nextSibling',
@@ -287,6 +293,46 @@ test('retained projection cursor moves follow its window rather than preceding o
   }
 })
 
+test('retained neighbour context stops safely across long hidden definition runs', (t) => {
+  const sample = boundaryParser(config).parse(
+      'before\n\n[id]: /hidden\n\nafter\n',
+    ),
+    first = sample.topNode.getChild('Paragraph').toTree(),
+    reference = sample.topNode.getChild('LinkReference').toTree(),
+    last = sample.topNode.lastChild.toTree(),
+    results = []
+  for (const blocks of [20000, 40000]) {
+    const end = 8 + blocks * (reference.length + 1) + 1,
+      tree = new Tree(
+        sample.type,
+        [first, ...Array(blocks).fill(reference), last],
+        [
+          0,
+          ...Array.from(
+            { length: blocks },
+            (_, at) => 8 + at * (reference.length + 1),
+          ),
+          end,
+        ],
+        end + last.length,
+      )
+    for (const [label, selection] of [
+      ['before', { from: 0, to: 1 }],
+      ['after', { from: end, to: end + 1 }],
+    ]) {
+      const result = projectionWork(() =>
+        formattedTextWindow(tree, selection, new Set()),
+      )
+      assert.equal(result.value, null)
+      assert.ok(result.total <= 256, JSON.stringify(result))
+      results.push({ blocks, label, moves: result.total })
+      t.diagnostic(JSON.stringify(results.at(-1)))
+    }
+  }
+  assert.equal(results[0].moves, results[2].moves)
+  assert.equal(results[1].moves, results[3].moves)
+})
+
 test('50 mib fenced context projects only a deep selection and its boundary evidence', (t) => {
   const bodyLine = 'code line\n',
     bodyLength = 50 * 1024 * 1024,
@@ -337,8 +383,7 @@ test('50 mib fenced context projects only a deep selection and its boundary evid
         [fence, new Tree(sample.topNode.lastChild.type, [], [], 4)],
         [0, fenceEnd + 2],
         length,
-      ),
-      window = { from: 0, to: length }
+      )
     for (const [label, selection, expected] of [
       ['deep', { from: deepFrom, to: deepFrom + 10 }, 'line\ncode '],
       [
@@ -383,9 +428,11 @@ test('50 mib fenced context projects only a deep selection and its boundary evid
           return { from: fenceEnd + 2, to: length }
         },
       }
-      const work = projectionWork(() =>
-          selectedRuns(tree, input, window, selection),
-        ),
+      const work = projectionWork(() => {
+          const window = formattedTextWindow(tree, selection, new Set())
+          assert.ok(window)
+          return selectedRuns(tree, input, window, selection)
+        }),
         mask = work.masks[0]
       assert.equal(work.value, expected)
       assert.deepEqual(

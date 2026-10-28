@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { formattedTextEffects } from '../src/shared/formatted-text-effects.ts'
+import {
+  formattedTextEffects,
+  formattedTextLeafVisible,
+  formattedTextWindow,
+} from '../src/shared/formatted-text-effects.ts'
 import { textFeatures } from '../src/shared/formatted-text-rules.ts'
 import {
   FormattedTextMask,
@@ -14,7 +18,10 @@ import {
   renderedBoundary,
   renderedRange,
 } from '../src/shared/rendered-range.ts'
-import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
+import {
+  RenderedTextIndex,
+  UnsupportedRenderedFind,
+} from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { renderedConfig } from './rendered-config.mjs'
 
@@ -182,6 +189,27 @@ test('a bounded context window resolves footnotes using note-wide definitions', 
   )
 })
 
+test('hidden reference definitions keep adjoining gaps hidden outside the selection', () => {
+  const text = 'before\n\n[id]: /hidden\n\nafter\n',
+    input = inputFor(text),
+    window = { from: 0, to: text.length },
+    selection = { from: 21, to: 22 },
+    effects = effectsFor(
+      parser.parse(text),
+      input,
+      window,
+      undefined,
+      selection,
+    ),
+    runs = formattedTextRuns(effects, input, { window, selection }),
+    index = indexFor(text)
+  assert.equal(textFor(runs, input, selection), '')
+  assert.deepEqual(
+    [...renderedRange(runs, selection.from, selection.to, input)],
+    [...index.range(selection.from, selection.to)],
+  )
+})
+
 test('bounded selected effects retain context separators and note-wide definitions for every small range', (t) => {
   let compared = 0
   for (const text of [
@@ -199,24 +227,33 @@ test('bounded selected effects retain context separators and note-wide definitio
     '\x60\x60\x60\nline one\nline two\n\x60\x60\x60\n\nlast',
     '| a | **b** |\n|---|---|\n| c | d |',
     'a ![alt](pic) b\n\n---\n\nlast',
+    'before\n\n[id]: /hidden\n\nafter\n',
+    'before\n\n[a]: /one\n[b]: /two\n\nafter\n',
+    'before\n\n[id]: /hidden\n[other]: /also-hidden\n\nafter\n',
+    '# Title #\n\nnext',
+    'before\n\n> [id]: /hidden\n>\n> after\n',
+    'before\n\n[id]: /hidden\n\n\x60\x60\x60\ncode\n\x60\x60\x60\n',
+    '[a]: /one\n\n[b]: /two\n\nlast\n',
+    '> [id]: /hidden\n>\n> after\n',
+    '- [id]: /hidden\n\n  after\n',
+    'before\n\n[^1]: note\n\nafter',
+    'before\n\n---\n\nafter\n',
+    'before\n\n$$\nx\n$$\n\nafter\n',
+    'before\n\n> [!NOTE]\n> body\n\nafter',
+    '\x60\x60\x60\n[id]: /visible\n\x60\x60\x60\n\nlast',
   ]) {
     const input = inputFor(text),
       tree = parser.parse(text),
       definitions = definitionsFor(tree, input),
-      whole = { from: 0, to: text.length },
-      leaves = effectsFor(tree, input, whole, definitions).filter(
-        (effect) => effect?.kind === 'leaf',
-      ),
       index = indexFor(text)
     for (let from = 0; from <= text.length; from++) {
       if (!renderedBoundary(input, from)) continue
       for (let to = from; to <= text.length; to++) {
         if (!renderedBoundary(input, to)) continue
         const selection = { from, to },
-          before = leaves.findLast((leaf) => leaf.to <= from),
-          after = leaves.find((leaf) => leaf.from >= to),
-          window = { from: before?.from ?? 0, to: after?.to ?? text.length },
-          effects = effectsFor(tree, input, window, definitions, selection),
+          window = formattedTextWindow(tree, selection, new Set(config.literal))
+        assert.ok(window, JSON.stringify({ text, selection }))
+        const effects = effectsFor(tree, input, window, definitions, selection),
           runs = formattedTextRuns(effects, input, { window, selection })
         ordered(runs)
         assert.deepEqual(
@@ -230,6 +267,134 @@ test('bounded selected effects retain context separators and note-wide definitio
   }
   assert.ok(compared > 2000, String(compared))
   t.diagnostic(JSON.stringify({ compared, mismatches: 0 }))
+})
+
+test('normalization refuses missing neighbour evidence and the leaf predicate retains literal definitions', () => {
+  const text = 'before\n\n[id]: /hidden\n[other]: /also-hidden\n\nafter\n',
+    input = inputFor(text),
+    tree = parser.parse(text),
+    selection = { from: 43, to: 45 }
+  for (const window of [selection, { from: 8, to: text.length }])
+    assert.throws(
+      () =>
+        formattedTextRuns(
+          effectsFor(tree, input, window, undefined, selection),
+          input,
+          { window, selection },
+        ),
+      /missing neighbouring blocks/,
+    )
+  assert.deepEqual(formattedTextWindow(tree, selection, new Set()), {
+    from: 0,
+    to: text.length - 1,
+  })
+  const quoted = parser
+    .parse('> [id]: /hidden')
+    .topNode.getChild('Blockquote')
+    .getChild('LinkReference')
+  assert.ok(quoted)
+  assert.equal(formattedTextLeafVisible(quoted, new Set()), false)
+  assert.equal(
+    formattedTextLeafVisible(quoted, new Set(['LinkReference'])),
+    true,
+  )
+  assert.equal(formattedTextLeafVisible(quoted, new Set(['Blockquote'])), true)
+})
+
+test('hidden block edges keep selected chunks and provenance equal to the complete index', (t) => {
+  const blocks = [
+    'para **b** text\n',
+    'plain\n',
+    '\n',
+    '\n\n',
+    '[id]: /hidden\n',
+    '[x]: <u> "t"\n',
+    '<!-- c -->\n',
+    '<!--\nmulti\n-->\n',
+    '<div>\n*x*\n</div>\n',
+    '[^1]: note\n',
+    '\x60\x60\x60\ncode\n\x60\x60\x60\n',
+    '~~~js\nc\n~~~\n',
+    '$$\nx\n$$\n',
+    '---\n',
+    '***\n',
+    '> [!NOTE] t\n> b\n',
+    '| a | b |\n|---|---|\n| c | d |\n',
+    '- [ ] t\n',
+    '- a\n  - b\n',
+    '# h #\n',
+    'Title\n===\n',
+    '    indented\n',
+    '> q\n>\n> r\n',
+    'ref [^1] x\n',
+    '![i](p)\n',
+    '-# small\n',
+    'a %%c%% b\n',
+    '<br>\n',
+    '  \n',
+    '\t\n',
+  ]
+  let seed = 1,
+    compared = 0,
+    refused = 0
+  const random = (limit) => {
+    seed ^= seed << 13
+    seed ^= seed >>> 17
+    seed ^= seed << 5
+    return Math.floor(((seed >>> 0) / 4294967296) * limit)
+  }
+  for (let fixture = 0; fixture < 1500; fixture++) {
+    let text = ''
+    for (let at = 0, count = 2 + random(8); at < count; at++)
+      text += blocks[random(blocks.length)]
+    if (!random(3)) text = text.replace(/\n$/, '')
+    const input = inputFor(text),
+      tree = parser.parse(text),
+      definitions = definitionsFor(tree, input)
+    let index
+    try {
+      index = indexFor(text)
+    } catch (error) {
+      if (!(error instanceof UnsupportedRenderedFind)) throw error
+      refused++
+      continue
+    }
+    for (let range = 0; range < 8; range++) {
+      const from = random(text.length + 1),
+        to = Math.min(text.length, from + random(12)),
+        selection = { from, to }
+      if (!renderedBoundary(input, from) || !renderedBoundary(input, to))
+        continue
+      const window = formattedTextWindow(
+        tree,
+        selection,
+        new Set(config.literal),
+      )
+      assert.ok(window, JSON.stringify({ text, selection }))
+      for (const context of [window, { from: 0, to: text.length }]) {
+        const effects = effectsFor(
+            tree,
+            input,
+            context,
+            definitions,
+            selection,
+          ),
+          runs = formattedTextRuns(effects, input, {
+            window: context,
+            selection,
+          })
+        ordered(runs)
+        assert.deepEqual(
+          [...renderedRange(runs, from, to, input)],
+          [...index.range(from, to)],
+          JSON.stringify({ text, window: context, selection }),
+        )
+        compared++
+      }
+    }
+  }
+  assert.ok(compared > 10000, String(compared))
+  t.diagnostic(JSON.stringify({ compared, refused, mismatches: 0 }))
 })
 
 test('effect order retains mask precedence and unchanged atoms remain literal', () => {
@@ -284,7 +449,10 @@ test('bounded atom ranges retain complete envelopes and mark partial assembly im
     input = inputFor(text),
     atom = { kind: 'atom', from: text.indexOf('&'), to: text.indexOf(';') + 1 },
     range = { from: atom.from + 2, to: atom.to - 1 },
-    runs = formattedTextRuns([atom], input, { window: range, selection: range })
+    runs = formattedTextRuns([atom], input, {
+      window: { from: 0, to: text.length },
+      selection: range,
+    })
   assert.deepEqual(runs, [{ from: atom.from, to: atom.to, text: '≂̸' }])
   assert.deepEqual(
     [...renderedRange(runs, range.from, range.to, input)],
@@ -320,9 +488,10 @@ test('an enclosing quoted-list leaf shares the same bounded run assembly as find
     range = { from: text.indexOf('\n') + 1, to: text.length }
   let leaf = tree.resolveInner(text.indexOf('word'), 1)
   while (leaf.name !== 'Paragraph') leaf = leaf.parent
-  const effects = effectsFor(leaf, input, range),
+  const window = { from: 0, to: text.length },
+    effects = effectsFor(leaf, input, window, undefined, range),
     runs = formattedTextRuns(effects, input, {
-      window: range,
+      window,
       selection: range,
     }),
     index = indexFor(text)
@@ -339,8 +508,7 @@ test('deep selection assembly work follows its range rather than preceding 20k b
     from = 19000 * 7,
     range = { from, to: from + 5 },
     tree = parser.parse(text),
-    definitions = definitionsFor(tree, input),
-    leaf = tree.resolveInner(from + 1, 1)
+    definitions = definitionsFor(tree, input)
   let readUnits = 0,
     effectCount = 0
   const read = input.read
@@ -348,7 +516,8 @@ test('deep selection assembly work follows its range rather than preceding 20k b
     readUnits += to - from
     return read(from, to)
   }
-  const effects = effectsFor(leaf, input, range, definitions),
+  const window = formattedTextWindow(tree, range, new Set(config.literal)),
+    effects = effectsFor(tree, input, window, definitions, range),
     mask = new FormattedTextMask(input)
   for (const effect of effects)
     if (effect) {
@@ -358,7 +527,7 @@ test('deep selection assembly work follows its range rather than preceding 20k b
     }
   const runs = [...mask.runs(range.from, range.to)]
   assert.deepEqual(
-    formattedTextRuns(effects, input, { window: range, selection: range }),
+    formattedTextRuns(effects, input, { window, selection: range }),
     runs,
   )
   assert.equal(textFor(runs, input, range), 'block')
@@ -402,7 +571,10 @@ test('a small range in a 50 mib leaf never allocates or walks a whole-note mask'
     }
   const runs = [...mask.runs(range.from, range.to)]
   assert.deepEqual(
-    formattedTextRuns(effects, input, { window: range, selection: range }),
+    formattedTextRuns(effects, input, {
+      window: { from: 0, to: length },
+      selection: range,
+    }),
     runs,
   )
   assert.deepEqual(runs, [{ ...range, text: '' }])
@@ -410,7 +582,7 @@ test('a small range in a 50 mib leaf never allocates or walks a whole-note mask'
   assert.equal(counters.effectWork, 256)
   assert.ok(counters.runWork <= 320, JSON.stringify(counters))
   assert.equal(counters.maskBytes, 2048)
-  assert.equal(readUnits, 4)
+  assert.equal(readUnits, 2)
   t.diagnostic(
     JSON.stringify({ length, sourceReadUnits: readUnits, ...counters }),
   )

@@ -4743,6 +4743,9 @@
   "2591fcfd6dcd": [
     "src/addons/_shared/format-worker.ts"
   ],
+  "d2e29bb001d1": [
+    "src/shared/formatted-text-runs.ts"
+  ],
   "6073c625266c": [
     "src/addons/diagnostics/Settings.tsx"
   ],

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { extname, join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
 import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
@@ -104,7 +105,7 @@ const markers = `# Marker lines
 closing paragraph.
 `
 
-let app, folder, page, harness
+let app, folder, page, harness, server
 
 const palette = (id) => {
   const scheme = bundledColorschemes.find((entry) => entry.id === id)
@@ -153,6 +154,29 @@ before(
       html,
       '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
+    // Module workers need an HTTP origin, as in the boundary-worker fixture.
+    server = createServer(async (request, response) => {
+      try {
+        const path = new URL(request.url, 'http://fixture').pathname
+        const file = join(bundle, path.replace(/^\/bundle\//, ''))
+        const type = {
+          '.js': 'text/javascript',
+          '.css': 'text/css',
+          '.html': 'text/html',
+        }[extname(file)]
+        const content = await readFile(file)
+        response.writeHead(200, {
+          'Content-Type': type
+            ? `${type}; charset=utf-8`
+            : 'application/octet-stream',
+        })
+        response.end(content)
+      } catch {
+        response.writeHead(404)
+        response.end()
+      }
+    })
+    await new Promise((ready) => server.listen(0, '127.0.0.1', ready))
     const file = join(folder, 'notes', 'parity.md')
     await mkdir(join(folder, 'notes'))
     await writeFile(file, note)
@@ -188,9 +212,12 @@ before(
             backgroundThrottling: false,
           },
         })
-        void window.loadFile(path)
+        void window.loadURL(path)
       },
-      { path: html, size },
+      {
+        path: `http://127.0.0.1:${server.address().port}/bundle/index.html`,
+        size,
+      },
     )
     harness = await next
     harness.setDefaultTimeout(10000)
@@ -229,8 +256,12 @@ async function open(file, title) {
 
 after(
   async () => {
-    await app?.close()
-    if (folder) await rm(folder, { recursive: true, force: true })
+    try {
+      await app?.close()
+    } finally {
+      if (server) await new Promise((done) => server.close(done))
+      if (folder) await rm(folder, { recursive: true, force: true })
+    }
   },
   { timeout: 30000 },
 )
@@ -771,6 +802,10 @@ test('scrolling up through known code blocks keeps the scroll position as withou
           target += step
         )
           await scroll(target)
+        // Draw the tail too: the last step can stop before its empty paragraph.
+        await scroll(pane.scrollHeight - pane.clientHeight)
+        if (pane.scrollTop !== pane.scrollHeight - pane.clientHeight)
+          throw new Error('the downward pass must reach the bottom')
         const moved = []
         for (
           let target = pane.scrollHeight - pane.clientHeight;
@@ -1781,7 +1816,7 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
     await window.livePreview.mount(
       unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
       { width: 800, height: 600 },
-      { slice: Number.POSITIVE_INFINITY },
+      { slice: Number.POSITIVE_INFINITY, worker: true },
     )
     // Idle time parses ahead of the screen; held, it counts in no change.
     window.holdIdle = () => {
@@ -1795,6 +1830,11 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
       [
         ...document.querySelectorAll('.hibi-lp-codeblock .hibi-token-keyword'),
       ].filter((token) => token.textContent === text).length
+  })
+  // As in the app, index the note off-thread before measuring language changes.
+  await harness.waitForFunction(() => {
+    const { probe, workerState } = window.livePreview
+    return workerState.ready && probe.adoptionSlices === workerState.pages
   })
   const keywords = (text, shown) =>
     harness.waitForFunction(
@@ -1849,15 +1889,26 @@ test('code language changes reparse only the code on screen of a 50 MiB note', {
     })
     const shown = await measure('show')
     // Code parsed before its language changed parses again when it returns to the screen.
-    await harness.evaluate(() => {
+    const scanned = await harness.evaluate(() => {
       const preview = window.livePreview
       const { doc } = preview.view().state
+      const before = preview.probe.scannedUnits
       preview.scrollTo(doc.lineAt(Math.floor(doc.length / 2)).from)
+      return before
     })
     await harness.waitForFunction(
       () =>
         window.livePreview.view().viewport.from > 1024 * 1024 &&
         window.codeKeywords('const') > 0,
+    )
+    assert.equal(
+      await harness.evaluate(() => window.livePreview.probe.scannedUnits),
+      scanned,
+      'the indexed jump must not scan the note on the main thread',
+    )
+    assert.deepEqual(
+      await harness.evaluate(() => window.livePreview.workerState.errors),
+      [],
     )
     await harness.evaluate(() =>
       window.livePreview.setCodeLanguage('javascript', false),

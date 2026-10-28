@@ -122,7 +122,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     'legacy-flavor-proof',
     2,
     undefined,
-    "export default sdk => ({ start(context) { context.editor.registerSource({ id: 'failed', create: () => sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-failed-sdk': 'yes' }) }); context.editor.registerFlavor({ id: 'legacy', name: 'Legacy flavor', kind: 'syntax', description: 'Legacy', detect: () => false, richExtensions: [sdk.tiptap.Extension.create({ name: 'legacyProof' })] }) }, stop() { window.legacySdkStops = (window.legacySdkStops || 0) + 1 } })",
+    "export default sdk => ({ start(context) { context.editor.registerSource({ id: 'failed', create: () => sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-failed-sdk': 'yes' }) }); const extension = sdk.tiptap.Extension.create({ name: 'legacyProof' }); window.legacyFullSdkAvailable = extension.name; context.editor.registerFlavor({ id: 'legacy', name: 'Legacy flavor', kind: 'syntax', description: 'Legacy', detect: () => false, richExtensions: [extension] }) }, stop() { window.legacySdkStops = (window.legacySdkStops || 0) + 1 } })",
   )
   await install(
     profile,
@@ -170,6 +170,9 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
+  await page.waitForFunction(
+    () => window.legacyFullSdkAvailable === 'legacyProof',
+  )
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(
     () =>
@@ -200,7 +203,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     .waitFor()
   await page
     .getByText(
-      'This addon uses the previous formatted editor SDK. Update it to addon API 3 before using its formatted-view features.',
+      'This addon uses the previous formatted editor SDK. Update its formatted-view features for the current editor before using them here.',
       { exact: true },
     )
     .first()

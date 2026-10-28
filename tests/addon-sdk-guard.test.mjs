@@ -3,7 +3,7 @@ import test from 'node:test'
 import { createServer } from 'vite'
 
 const updateRequired =
-  'This addon uses the previous formatted editor SDK. Update it to addon API 3 before using its formatted-view features.'
+  'This addon uses the previous formatted editor SDK. Update its formatted-view features for the current editor before using them here.'
 const capabilities = [
   undefined,
   [],
@@ -114,11 +114,7 @@ for (const formatted of [true, false]) {
       assert.deepEqual(
         [...server.moduleGraph.idToModuleMap.values()]
           .filter(
-            (node) =>
-              node.ssrModule &&
-              /(?:src\/addons\/sdk\.ts|node_modules\/(?:@tiptap\/|prosemirror-))/.test(
-                node.id,
-              ),
+            (node) => node.ssrModule && /src\/addons\/sdk\.ts$/.test(node.id),
           )
           .map((node) => node.id),
         [],

@@ -15,10 +15,7 @@ import { sourceChange } from '../../shared/document-journal'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { headingAnchors } from '../../shared/heading-anchor'
 import { isMediaFile } from '../../shared/media'
-import {
-  normalizedSource,
-  sourceChangesFromEditor,
-} from '../../shared/source-projection'
+import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
 import { largeOpening, largeSource } from './document-shell'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
@@ -36,7 +33,12 @@ import { markdownSyntax } from './markdown-syntax'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import type { OutlineHeading } from './OutlineSidebar'
 import { SourceEditor } from './SourceEditor'
-import { editorPosition, revealSourcePosition, sourceView } from './source-view'
+import {
+  editorPosition,
+  revealSourcePosition,
+  sourceAfter,
+  sourceView,
+} from './source-view'
 import { useEditorPanes } from './use-editor-panes'
 import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
 
@@ -558,18 +560,12 @@ export function MarkdownEditor({
       return
     const edit = { ...change, insert: normalizedSource(change.insert) }
     // Verbatim projections, which read the whole note, accept frontmatter
-    // edits with the whole new source, as from small notes' properties.
-    let replacement: string | undefined
-    if (projectionExtensions.length) {
-      const snapshot = documentRuntime.session(documentState.tabId)?.snapshot()
-      if (!snapshot || snapshot.normalizedLength !== view.state.doc.length)
-        return
-      replacement = sourceChangesFromEditor(snapshot, [edit]).reduceRight(
-        (source, raw) =>
-          source.slice(0, raw.from) + raw.insert + source.slice(raw.to),
-        snapshot.materialize(),
-      )
-    }
+    // edits with the whole new source, as from small notes' properties: the
+    // one this view commits.
+    const replacement = projectionExtensions.length
+      ? sourceAfter(view, [edit])
+      : undefined
+    if (replacement === null) return
     view.dispatch({
       changes: edit,
       userEvent: 'input.addon',

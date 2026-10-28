@@ -1,5 +1,6 @@
 import type { EditorView } from '@codemirror/view'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
+import type { RawEdit } from '../../shared/source-operations'
 import type { ReferenceValue } from '../../shared/source-references'
 
 export type SourceReferenceSyntax = MarkdownReferenceSyntax & {
@@ -22,6 +23,7 @@ const mounted = new WeakMap<
     positions?: {
       toSource: (position: number) => number
       toEditor: (position: number) => number | null
+      sourceAfter?: (changes: readonly RawEdit[]) => string | null
     }
     resolveReference?: ReferenceResolver
   }
@@ -33,6 +35,7 @@ export function registerSourceView(
   positions?: {
     toSource: (position: number) => number
     toEditor: (position: number) => number | null
+    sourceAfter?: (changes: readonly RawEdit[]) => string | null
   },
   resolveReference?: ReferenceResolver,
 ) {
@@ -46,6 +49,9 @@ export function registerSourceView(
 }
 export const sourcePosition = (view: EditorView, position: number) =>
   mounted.get(view.dom)?.positions?.toSource(position) ?? position
+/** The whole source after editor changes, exactly as the mounted view commits them. */
+export const sourceAfter = (view: EditorView, changes: readonly RawEdit[]) =>
+  mounted.get(view.dom)?.positions?.sourceAfter?.(changes) ?? null
 export const editorPosition = (view: EditorView, position: number) => {
   const positions = mounted.get(view.dom)?.positions
   return positions ? positions.toEditor(position) : position

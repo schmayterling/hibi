@@ -2202,6 +2202,7 @@ export function SourceEditor({
         toSource: (position) =>
           bridge.snapshot().editorToRaw(position) ?? position,
         toEditor: (position) => bridge.snapshot().rawToEditor(position),
+        sourceAfter: bridge.sourceAfter,
       },
       resolveReference,
     )

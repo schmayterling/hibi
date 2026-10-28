@@ -263,8 +263,13 @@ test('oversized table-cell context keeps preview reads bounded or declines', (t)
   assert.ok(result === null || result === 'a'.repeat(256))
 })
 
-test('a source page must prove the complete preview or decline', () => {
-  const value = fixture('&CounterClockwiseContourIntegral;'.repeat(300), false)
+test('a source page must prove the complete preview or decline', (t) => {
+  const value = fixture('&ClockwiseContourIntegral;'.repeat(300), false)
   const text = value.preview(0, value.state.doc.length)
-  assert.ok(text === null || text === '\u2233'.repeat(256))
+  t.diagnostic(
+    JSON.stringify({
+      completePreview: { length: text?.length, first: text?.slice(0, 40) },
+    }),
+  )
+  assert.ok(text === null || text === '\u2232'.repeat(256))
 })

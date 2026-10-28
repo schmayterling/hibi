@@ -5,26 +5,12 @@ import sharp from 'sharp'
 
 const build = fileURLToPath(new URL('../build/', import.meta.url))
 const check = process.argv.includes('--check')
-const { data, info } = await sharp(join(build, 'icon-mac.png'))
-  .extract({ left: 318, top: 268, width: 336, height: 488 })
+// The letter is its own source: the white h cut from the app icon before the icon became a butterfly.
+const glyph = await readFile(join(build, 'tray-glyph.png'))
+const { data, info } = await sharp(glyph)
   .ensureAlpha()
   .raw()
   .toBuffer({ resolveWithObject: true })
-
-// Isolate the white letter, excluding the scene behind it.
-for (let at = 0; at < data.length; at += 4) {
-  const alpha =
-    Math.min(data[at], data[at + 1], data[at + 2], data[at + 3]) >= 240
-      ? 255
-      : 0
-  data.fill(255, at, at + 3)
-  data[at + 3] = alpha
-}
-const glyph = await sharp(data, {
-  raw: { width: info.width, height: info.height, channels: 4 },
-})
-  .png()
-  .toBuffer()
 for (let at = 0; at < data.length; at += 4) data.fill(0, at, at + 3)
 const blackGlyph = await sharp(data, {
   raw: { width: info.width, height: info.height, channels: 4 },
@@ -64,7 +50,6 @@ async function output(name, png) {
   }
 }
 
-await output('tray-glyph.png', glyph)
 await output('trayTemplate.png', await render(16, true))
 await output('trayTemplate@2x.png', await render(32, true))
 await output('tray.png', await render(32))

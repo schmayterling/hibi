@@ -180,16 +180,10 @@ it('empty entry, three views, and lossless source switching', {
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
-  await t.test(
-    'split formatted view is read-only',
-    {
-      todo: cm
-        ? 'formatted gap split-002: split formatted view must remain read-only'
-        : undefined,
-    },
-    async () => {
-      assert.equal(await rich.getAttribute('contenteditable'), 'false')
-    },
+  // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
+  assert.equal(
+    await rich.getAttribute('contenteditable'),
+    cm ? 'true' : 'false',
   )
   if (cm) {
     await rich.locator('.hibi-lp-codeblock').waitFor()

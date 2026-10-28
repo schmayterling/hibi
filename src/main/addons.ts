@@ -222,7 +222,11 @@ export function getAddonStates(): AddonState[] {
   setDocumentExtensions(
     manifests().flatMap((manifest) => manifest.fileExtensions ?? []),
   )
-  return addonStates(enabled)
+  return addonStates(enabled).map((state) =>
+    active(state)
+      ? { ...state, activation: generations.get(state.id) ?? 0 }
+      : state,
+  )
 }
 
 function addonStates(
@@ -291,6 +295,8 @@ export function invalidateAddonActivations(): void {
   for (const state of getAddonStates())
     if (state.enabled)
       generations.set(state.id, (generations.get(state.id) ?? 0) + 1)
+  // Editor windows compare failures by activation.
+  onAddonStatesChanged(getAddonStates())
 }
 
 export function getImporters(): import('../shared/imports').Importer[] {

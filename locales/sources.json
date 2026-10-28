@@ -329,6 +329,9 @@
   "293aad4970e4": [
     "src/renderer/src/Editor.tsx"
   ],
+  "ce2d3152cde7": [
+    "src/renderer/src/source-session.ts"
+  ],
   "6e1bc14eb426": [
     "src/renderer/src/addons.ts"
   ],
@@ -6371,7 +6374,7 @@
   "5eebb144c45a": [
     "src/shared/addon-manifest.ts"
   ],
-  "50cf98d7b64d": [
+  "211d9f26c0c3": [
     "src/addons/sdk-legacy-rich.ts"
   ],
   "2d715c5a75aa": [

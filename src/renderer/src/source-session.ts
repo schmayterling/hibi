@@ -3,9 +3,12 @@ import {
   Annotation,
   ChangeSet,
   EditorSelection,
-  type EditorState,
+  EditorState,
+  Prec,
+  type StateEffect,
   Text,
   Transaction,
+  type TransactionSpec,
 } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import {
@@ -27,7 +30,7 @@ import {
 } from '../../shared/source-projection.ts'
 import type { SourceSelection } from '../../shared/source-selection.ts'
 
-const sourceOperationEcho = Annotation.define<string>()
+export const sourceOperationEcho = Annotation.define<string>()
 
 export type SourceEditorTextTask = Readonly<{
   sourceUnits: number
@@ -192,12 +195,187 @@ function update(
   view: Pick<EditorView, 'state' | 'update' | 'setState'>,
   transactions: readonly Transaction[],
 ) {
+  // A state an extension failed on never reaches the view.
+  for (const transaction of transactions) reachedState(transaction)
   try {
     view.update(transactions)
   } catch (error) {
     view.setState(transactions.at(-1)?.state ?? view.state)
     throw error
   }
+}
+
+/** CodeMirror keeps the part of a state it reached when an extension failed, and returns it on later reads. */
+const failedStates = new WeakMap<Transaction, unknown>()
+
+/**
+ * Keeps an extension's failure on the transaction: every later read throws it,
+ * and the transaction's own `state` reads as its start, so extensions that read
+ * it later never get the half-built state.
+ */
+function recordFailure(transaction: Transaction, error: unknown) {
+  if (failedStates.has(transaction)) return
+  failedStates.set(transaction, error)
+  Object.defineProperty(transaction, 'state', { value: transaction.startState })
+}
+
+/** Transactions whose state was checked complete. */
+const completeStates = new WeakSet<Transaction>()
+
+/**
+ * The state a transaction reaches. When an extension fails on it, every read
+ * throws that error. A state CodeMirror left with a slot it never finished
+ * (its per-slot status, an internal) failed too, even if every throw on the
+ * way was caught.
+ */
+function reachedState(transaction: Transaction): EditorState {
+  if (failedStates.has(transaction)) throw failedStates.get(transaction)
+  let state: EditorState
+  try {
+    state = transaction.state
+  } catch (error) {
+    recordFailure(transaction, error)
+    throw error
+  }
+  if (completeStates.has(transaction)) return state
+  // 2 marks a computed slot.
+  if (
+    (state as unknown as { status: number[] }).status.some(
+      (slot) => !(slot & 2),
+    )
+  ) {
+    const error = new Error(
+      'An editor extension failed while this edit was made.',
+    )
+    recordFailure(transaction, error)
+    throw error
+  }
+  completeStates.add(transaction)
+  return state
+}
+
+/**
+ * Reads each new state before any change filter can, so a failure is kept on
+ * its transaction before addon code could read it and catch it. It goes first.
+ */
+export const firstStateRead = Prec.highest(
+  EditorState.changeFilter.of((transaction) => {
+    transactionState(transaction)
+    return true
+  }),
+)
+
+/**
+ * Reads each new state before other filters and extenders can, so a failure
+ * is kept on its transaction before any of them reads it, and dispatch
+ * rejects that transaction. Both run from the last one, so these go last.
+ */
+export const failedEditGuard = [
+  Prec.lowest(
+    EditorState.transactionFilter.of((transaction) => {
+      transactionState(transaction)
+      return transaction
+    }),
+  ),
+  Prec.lowest(
+    EditorState.transactionExtender.of((transaction) => {
+      transactionState(transaction)
+      return null
+    }),
+  ),
+]
+
+/**
+ * The state a transaction reaches, or null when an extension fails on it.
+ * Filters pass such a transaction on: dispatch rejects it and reports the
+ * extension's owner.
+ */
+export function transactionState(transaction: Transaction) {
+  try {
+    return reachedState(transaction)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A transaction that only reconfigures. Taking an extension out runs its own
+ * filters and extenders first, which may read fields it takes along, so this
+ * skips them, with CodeMirror's internal constructor.
+ */
+export function reconfiguration(
+  state: EditorState,
+  effect: StateEffect<unknown>,
+): Transaction {
+  const { create } = Transaction as unknown as {
+    create: (
+      startState: EditorState,
+      changes: ChangeSet,
+      selection: undefined,
+      effects: readonly StateEffect<unknown>[],
+      annotations: readonly Annotation<unknown>[],
+      scrollIntoView: boolean,
+    ) => Transaction
+  }
+  return create(
+    state,
+    ChangeSet.empty(state.doc.length),
+    undefined,
+    [effect],
+    [],
+    false,
+  )
+}
+
+/** A spec that makes a transaction's edit again, with everything it carries. */
+export function editSpec(transaction: Transaction): TransactionSpec {
+  return {
+    changes: transaction.changes,
+    ...(transaction.selection ? { selection: transaction.selection } : {}),
+    effects: transaction.effects,
+    // CodeMirror keeps these internal; an extension may fail on its own.
+    annotations: (
+      transaction as unknown as { annotations: readonly Annotation<unknown>[] }
+    ).annotations,
+    scrollIntoView: transaction.scrollIntoView,
+  }
+}
+
+/**
+ * The parts of a configuration that an edit fails with, and their errors.
+ * From `start` with none of them, each is installed in turn while the edit
+ * is replayed; one it fails with is left out of the rest. An edit that fails
+ * without any of them names none. The edit is the transactions it made, or
+ * the specs it failed to make one from.
+ */
+export function failingParts<Part>(
+  start: EditorState,
+  edit: readonly Transaction[] | readonly TransactionSpec[],
+  parts: readonly Part[],
+  install: (parts: readonly Part[]) => StateEffect<unknown>,
+) {
+  const replay = (installed: readonly Part[]) => {
+    let state = reachedState(reconfiguration(start, install(installed)))
+    if (edit.every((part) => part instanceof Transaction))
+      for (const transaction of edit as readonly Transaction[])
+        state = reachedState(state.update(editSpec(transaction)))
+    else reachedState(state.update(...(edit as readonly TransactionSpec[])))
+  }
+  const accepted: Part[] = []
+  const failing: { part: Part; error: unknown }[] = []
+  try {
+    replay(accepted)
+  } catch {
+    return failing
+  }
+  for (const part of parts)
+    try {
+      replay([...accepted, part])
+      accepted.push(part)
+    } catch (error) {
+      failing.push({ part, error })
+    }
+  return failing
 }
 
 /** How far above a pane's kept top line its scroll position was, per session and view. */
@@ -218,9 +396,15 @@ export function createSourceSession(
     pending: ChangeSet | null = null,
     flush = () => {},
     // A view that could not show an echo takes no edits until it is rebuilt.
-    failed = false
-  const undo = () => !failed && !!session.undo()
-  const redo = () => !failed && !!session.redo()
+    failed = false,
+    // Only an attached view that is not read-only undoes or redoes, by any route.
+    attached: Pick<EditorView, 'state'> | null = null
+  const writable = () => !failed && !!attached && !attached.state.readOnly
+  const history = {
+    undo: () => writable() && !!session.undo(),
+    redo: () => writable() && !!session.redo(),
+  }
+  const { undo, redo } = history
   const dispatch = (
     transactions: readonly Transaction[],
     view: Pick<EditorView, 'state' | 'update' | 'setState'> & {
@@ -246,7 +430,7 @@ export function createSourceSession(
       if (transaction.annotation(sourceOperationEcho))
         throw new Error('Source echoes must bypass input dispatch.')
       combined = combined.compose(transaction.changes)
-      state = transaction.state
+      state = reachedState(transaction)
     }
     const changes: RawEdit[] = []
     combined.iterChanges((from, to, _fromB, _toB, inserted) => {
@@ -270,7 +454,7 @@ export function createSourceSession(
           viewId,
         )
       }
-      rememberSourceHistory(state, session.historyDepth())
+      rememberSourceHistory(state, session.historyDepth(), history)
       update(view, transactions)
       return
     }
@@ -310,7 +494,7 @@ export function createSourceSession(
       group,
       (prepared) => {
         snapshot = prepared.after
-        rememberSourceHistory(state, session.historyDepth())
+        rememberSourceHistory(state, session.historyDepth(), history)
         update(view, transactions)
       },
       (prepared) => rawSelection(prepared.after, state.selection),
@@ -342,8 +526,9 @@ export function createSourceSession(
       if (!session.ownsCurrentSnapshot(snapshot))
         throw new Error('The source editor is synchronizing.')
       snapshot = session.snapshot()
-      const unregister = registerSourceHistory(view, { undo, redo })
-      rememberSourceHistory(view.state, session.historyDepth())
+      attached = view
+      const unregister = registerSourceHistory(view, history)
+      rememberSourceHistory(view.state, session.historyDepth(), history)
       // A waiting view gets the caret immediate echoes would have left: the
       // session selection, or its own caret mapped through each operation.
       let echo = '',
@@ -361,7 +546,11 @@ export function createSourceSession(
             filter: false,
           })
           pending = selection = null
-          rememberSourceHistory(transaction.state, session.historyDepth())
+          rememberSourceHistory(
+            reachedState(transaction),
+            session.historyDepth(),
+            history,
+          )
           update(view, [transaction])
         } catch (error) {
           // Like a failed rich synchronization: the view stays, read-only.
@@ -405,6 +594,7 @@ export function createSourceSession(
       return () => {
         flush = () => {}
         pending = null
+        attached = null
         unregister()
         unsubscribe()
         unsubscribeStorage()

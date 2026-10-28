@@ -37,6 +37,8 @@ test('575 kb source-first samples record real capability and continue to editabl
   const report = JSON.parse(
     await readFile(join(directory, 'results.json'), 'utf8'),
   )
+  assert.equal(typeof report.buildVerified, 'boolean')
+  assert.equal(report.provenanceVerifiedAtEnd, true)
   assert.equal(report.samples.length, 8)
   assert.deepEqual(
     report.samples.map(({ engine }) => engine),

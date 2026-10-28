@@ -335,12 +335,6 @@ for (const route of ['menu', 'shortcut']) {
     await snapshot('locked after redo')
     await t.test(
       'read-only redo leaves source and content version unchanged',
-      {
-        todo:
-          route === 'shortcut'
-            ? 'formatted gap history-001: keyboard redo must preserve read-only formatted source and history'
-            : undefined,
-      },
       async () => {
         assert.equal(await markdown(), undone)
         assert.equal(

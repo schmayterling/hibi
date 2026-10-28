@@ -130,9 +130,11 @@ import {
   followsLink,
   formattedDocument,
   formattedFollowLink,
+  formattedRefresh,
   formattedRenderInputs,
   showMarkdownMarkers,
 } from './formatted-contributions'
+import { formattedReferences } from './formatted-references'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
@@ -674,6 +676,12 @@ export function SourceEditor({
     )
       clearReferences('stale')
   }, [referenceSyntax, markdownMode, clearReferences])
+  // Rendered reference labels resolve again with other syntax.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the syntax the resolver reads changed.
+  useEffect(() => {
+    if (formatted)
+      view.current?.dispatch({ effects: formattedRefresh.of(null) })
+  }, [formatted, referenceSyntax, markdownMode])
   const requestFind = useCallback(
     function requestFind(action: FindAction = null) {
       const editor = view.current
@@ -1549,6 +1557,25 @@ export function SourceEditor({
               ]),
           // Table cells follow their links through the view's own resolution.
           formatted ? formattedFollowLink.of(followLink) : [],
+          // Reference links render with the labels the reference worker resolves.
+          formatted
+            ? formattedReferences.of({
+                syntax: () => {
+                  const { markdownMode, referenceSyntax } =
+                    parserOptions.current
+                  return markdownMode && referenceSyntax
+                    ? JSON.stringify(referenceSyntax)
+                    : ''
+                },
+                resolve: (label, signal) => {
+                  const { markdownMode, referenceSyntax } =
+                    parserOptions.current
+                  return markdownMode && referenceSyntax
+                    ? resolveReference(referenceSyntax, label, signal)
+                    : Promise.resolve({ status: 'unavailable' })
+                },
+              })
+            : [],
           EditorView.domEventHandlers({
             keydown(event, view) {
               // CodeMirror arms Tab focus for two seconds after an unhandled Escape;

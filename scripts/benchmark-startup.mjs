@@ -1,23 +1,54 @@
+import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { cpus, loadavg, release, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { parseArgs } from 'node:util'
+import { showTestWindows } from '../tests/electron.mjs'
 import {
   benchmarkDocuments,
+  benchmarkEngine,
+  benchmarkProvenance,
+  focusBenchmarkPage,
   launchBenchmarkApp,
   openBenchmarkDocument,
+  prepareBenchmarkInput,
+  seedBenchmarkProfile,
   selectBenchmarkFile,
   switchToSource,
   typeCharacter,
+  verifyBenchmarkProvenance,
   waitForEditor,
   waitForWorkspaces,
 } from './benchmark-flows.mjs'
 
+const { values } = parseArgs({
+  options: {
+    'script-census': { type: 'boolean', default: false },
+    'require-build-manifest': { type: 'boolean', default: false },
+    engine: {
+      type: 'string',
+      default: process.env.HIBI_BENCH_ENGINE ?? 'tiptap',
+    },
+  },
+})
+const engine = benchmarkEngine(values.engine)
+if (values['require-build-manifest'])
+  assert.ok(
+    !showTestWindows,
+    'verified startup comparison requires hidden test windows',
+  )
 const runs = Number(process.env.HIBI_BENCH_RUNS ?? 5)
 if (!Number.isInteger(runs) || runs < 1 || runs > 50)
   throw new Error('Use 1–50 runs.')
+const provenance = await benchmarkProvenance(
+  new URL(import.meta.url),
+  '.',
+  values['require-build-manifest'],
+)
 const temp = await mkdtemp(join(tmpdir(), 'hibi-benchmark-'))
 const samples = []
+const profileSeeds = new Map()
 const recentPaths = ['notes', 'journal', 'projects'].map((name) =>
   join(temp, name),
 )
@@ -38,32 +69,53 @@ app.whenReady().then(()=>{ const win=new BrowserWindow({width:1000,height:720,sh
 app.on('window-all-closed',()=>app.quit());`,
 )
 
-async function measure(page, start, app, scenario) {
+async function measure(page, start, app, scenario, profileSeed) {
+  const session = await focusBenchmarkPage(page)
   const editor = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
   })
-  await waitForEditor(page)
-  const editable = performance.now() - start
+  await waitForEditor(page, scenario === 'minimal' ? undefined : engine)
+  const editable = values['script-census'] ? null : performance.now() - start
   let ready = null
   if (
     ['fresh-profile', 'warm-profile', 'warm-profile-prime'].includes(scenario)
   ) {
     await waitForWorkspaces(page, recentPaths)
-    ready = performance.now() - start
+    ready = values['script-census'] ? null : performance.now() - start
   }
-  const previousText = await editor.textContent()
-  const beforeInput = performance.now()
-  await typeCharacter(page, previousText)
-  const firstInput = performance.now() - beforeInput
+  await prepareBenchmarkInput(page)
+  // census launches never type; timed renderers never enable the debugger.
+  let beforeInputScripts = null
+  if (values['script-census']) {
+    const scripts = []
+    const parsed = ({ url }) => {
+      if (url.startsWith('app://hibi/')) scripts.push(url)
+    }
+    session.on('Debugger.scriptParsed', parsed)
+    try {
+      await session.send('Debugger.enable')
+      await session.send('Debugger.disable')
+      beforeInputScripts = [...new Set(scripts)]
+    } finally {
+      session.off('Debugger.scriptParsed', parsed)
+    }
+  }
+  let firstInput = null
   const typing = []
-  for (let i = 0; i < 8; i++) {
-    const before = performance.now()
-    if (process.env.HIBI_BENCH_INSERT_TEXT === '1')
-      await page.keyboard.insertText('a')
-    else await editor.press('a')
-    typing.push(performance.now() - before)
-    await new Promise((done) => setTimeout(done, 50))
+  if (!values['script-census']) {
+    const previousText = await editor.textContent()
+    const beforeInput = performance.now()
+    await typeCharacter(page, previousText)
+    firstInput = performance.now() - beforeInput
+    for (let i = 0; i < 8; i++) {
+      const before = performance.now()
+      if (process.env.HIBI_BENCH_INSERT_TEXT === '1')
+        await page.keyboard.insertText('a')
+      else await editor.press('a')
+      typing.push(performance.now() - before)
+      await new Promise((done) => setTimeout(done, 50))
+    }
   }
   const renderer = await page.evaluate(() => ({
     timeOrigin: performance.timeOrigin,
@@ -82,19 +134,13 @@ async function measure(page, start, app, scenario) {
     paint: performance
       .getEntriesByType('paint')
       .map((entry) => ({ name: entry.name, ms: entry.startTime })),
-    sourceMounted: !!document.querySelector('.cm-editor'),
+    sourceMounted: !!document.querySelector('.source-pane .cm-editor'),
   }))
-  // Custom-scheme scripts are absent from Resource Timing on some Electron versions.
-  // Attach only after latency samples so debugger work does not affect those timings.
-  const session = await page.context().newCDPSession(page)
-  renderer.scripts = []
-  session.on('Debugger.scriptParsed', ({ url }) => {
-    if (url.startsWith('app://hibi/')) renderer.scripts.push(url)
-  })
-  await session.send('Debugger.enable')
-  await session.detach()
+  renderer.beforeInputScripts = beforeInputScripts
+  renderer.scripts = beforeInputScripts
   const main = await app.evaluate(() => ({
     timeOrigin: performance.timeOrigin,
+    runtime: { ...process.versions },
     entries: performance
       .getEntries()
       .filter((entry) => entry.name.startsWith('hibi:'))
@@ -104,8 +150,27 @@ async function measure(page, start, app, scenario) {
         duration: entry.duration,
       })),
   }))
+  const visibility = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    return { visible: window.isVisible(), focused: window.isFocused() }
+  })
+  const addons =
+    scenario === 'minimal'
+      ? []
+      : await page.evaluate(async () =>
+          (await window.hibi.getAddonStates())
+            .filter(({ enabled, blockedBy }) => enabled && !blockedBy?.length)
+            .map(({ id }) => id)
+            .sort(),
+        )
   samples.push({
     scenario,
+    profileSeed,
+    engine: scenario === 'minimal' ? null : engine,
+    addons,
+    visibility,
+    focusEmulation: true,
+    loadAverage: loadavg(),
     startedAt: performance.timeOrigin + start,
     editable,
     ready,
@@ -136,6 +201,9 @@ try {
             Object.fromEntries(enabledAddons.map((id) => [id, true])),
           ),
         )
+      if (!profileSeeds.has(profile))
+        profileSeeds.set(profile, await seedBenchmarkProfile(profile, engine))
+      const profileSeed = profileSeeds.get(profile)
       const start = performance.now()
       const app = await launchBenchmarkApp(
         profile,
@@ -149,6 +217,7 @@ try {
           scenario === 'warm-profile' && run === 0
             ? 'warm-profile-prime'
             : scenario,
+          profileSeed,
         )
         if (scenario === 'fresh-profile' && process.platform === 'darwin') {
           await app.evaluate(
@@ -162,7 +231,13 @@ try {
           const reopening = performance.now()
           const window = app.waitForEvent('window')
           await app.evaluate(({ app }) => app.emit('activate'))
-          await measure(await window, reopening, app, 'window-reopen')
+          await measure(
+            await window,
+            reopening,
+            app,
+            'window-reopen',
+            profileSeed,
+          )
         }
         if (scenario === 'fresh-profile') {
           const page = await app.firstWindow()
@@ -170,9 +245,15 @@ try {
             await selectBenchmarkFile(app, join(temp, document.name))
             const opening = performance.now()
             await openBenchmarkDocument(app, page, document.title)
-            await measure(page, opening, app, `document-open:${document.name}`)
+            await measure(
+              page,
+              opening,
+              app,
+              `document-open:${document.name}`,
+              profileSeed,
+            )
           }
-          if (documents.length) {
+          if (documents.length && !values['script-census']) {
             const switching = performance.now()
             await switchToSource(app, page)
             samples.at(-1).firstSourceSwitch = performance.now() - switching
@@ -198,11 +279,32 @@ try {
   const initial = chunks.filter((chunk) => visited.has(chunk.file))
   const quantile = (values, q) =>
     values.toSorted((a, b) => a - b)[Math.ceil(values.length * q) - 1]
+  for (const sample of samples) {
+    if (sample.renderer.beforeInputScripts === null) {
+      sample.renderer.beforeInputBytes = null
+      sample.renderer.beforeInputModules = null
+      continue
+    }
+    const loaded = new Set(
+      sample.renderer.beforeInputScripts.map((url) =>
+        new URL(url).pathname.slice(1),
+      ),
+    )
+    const beforeInput = chunks.filter((chunk) => loaded.has(chunk.file))
+    sample.renderer.beforeInputBytes = beforeInput.reduce(
+      (sum, chunk) => sum + chunk.bytes,
+      0,
+    )
+    sample.renderer.beforeInputModules = beforeInput.flatMap(
+      (chunk) => chunk.modules,
+    )
+  }
   const summary = [...new Set(samples.map((sample) => sample.scenario))].map(
     (scenario) => {
       const group = samples.filter((sample) => sample.scenario === scenario)
       return {
         scenario,
+        engine: group[0].engine,
         runs: group.length,
         editableMedian: quantile(
           group.map((sample) => sample.editable),
@@ -226,25 +328,42 @@ try {
             ),
             0.95,
           ) ?? null,
-        firstInputP95: quantile(
-          group.map((sample) => sample.firstInput),
-          0.95,
-        ),
-        typingP95: quantile(
-          group.flatMap((sample) => sample.typing),
-          0.95,
-        ),
+        firstInputP95:
+          quantile(
+            group.flatMap((sample) =>
+              sample.firstInput === null ? [] : [sample.firstInput],
+            ),
+            0.95,
+          ) ?? null,
+        typingP95:
+          quantile(
+            group.flatMap((sample) => sample.typing),
+            0.95,
+          ) ?? null,
       }
     },
   )
+  await verifyBenchmarkProvenance(provenance, new URL(import.meta.url))
   console.log(
     JSON.stringify(
       {
+        ...provenance,
+        provenanceVerifiedAtEnd: true,
+        engine,
+        scriptCensus: values['script-census'],
+        requireBuildManifest: values['require-build-manifest'],
+        windowPolicy: showTestWindows ? 'visible' : 'hidden',
         runtime: process.version,
+        host: {
+          cpu: cpus()[0]?.model,
+          logicalCores: cpus().length,
+          release: release(),
+        },
         platform: process.platform,
         arch: process.arch,
         enabledAddons,
-        conditions: `Production assets in test Electron; fresh profile is not OS cold-cache; ${process.env.GITHUB_ACTIONS === 'true' ? 'visible focused windows' : 'hidden windows'}; automation latency included.`,
+        conditions:
+          'production assets in test electron; configured windowPolicy, isVisible is diagnostic only on macos; one focus-emulated session per renderer, editor focus and two frames before input timing; all profiles including minimal seeded at app origin without loading hibi and with hardware acceleration disabled during seeding, before launch timing; seed file inventories recorded per sample; fresh means app-cold seeded chromium profile, not os cold-cache; input timing and script census use separate launches, timed renderers never enable the debugger; driver latency included; source/output fingerprints include ignored user addons and are verified again at end; buildVerified records manifest binding, false when the manifest is absent.',
         initialBytes: initial.reduce((sum, chunk) => sum + chunk.bytes, 0),
         initialModules: initial.flatMap((chunk) => chunk.modules),
         summary,

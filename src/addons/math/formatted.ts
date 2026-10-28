@@ -74,6 +74,13 @@ class FormulaWidget extends WidgetType {
       target.append(pending)
     }
     pending.textContent = latex
+    // An empty element on an inline formula's baseline, where the caret
+    // beside the formula is drawn as tall as the text.
+    const baseline = display ? null : document.createElement('span')
+    if (baseline) {
+      baseline.className = 'hibi-lp-formula-baseline'
+      dom.append(baseline)
+    }
     const control = document.createElement('button')
     for (const [name, value] of Object.entries(editControl))
       control.setAttribute(name, value)
@@ -98,7 +105,7 @@ class FormulaWidget extends WidgetType {
     const fill = (content: (into: HTMLElement) => void) => {
       const into = display && content !== error ? target : dom
       for (const child of [...into.childNodes])
-        if (child !== control) child.remove()
+        if (child !== control && child !== baseline) child.remove()
       content(into)
     }
     const error = (into: HTMLElement) => {
@@ -138,6 +145,15 @@ class FormulaWidget extends WidgetType {
       userEvent: 'input.format',
     })
     view.focus()
+  }
+  /** The caret beside an inline formula is text sized, as in the rich view. */
+  override coordsAt(dom: HTMLElement, pos: number) {
+    const baseline = dom.querySelector(':scope > .hibi-lp-formula-baseline')
+    if (!baseline) return null
+    const { top, bottom } = baseline.getBoundingClientRect()
+    const box = dom.getBoundingClientRect()
+    const x = pos > 0 ? box.right : box.left
+    return { left: x, right: x, top, bottom }
   }
   override destroy(dom: HTMLElement) {
     cancels.get(dom)?.()

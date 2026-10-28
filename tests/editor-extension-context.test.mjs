@@ -245,12 +245,6 @@ test('editor extensions receive the view id of the editor they attach to', {
   }
   await t.test(
     'source and formatted editors preserve hosting view identities',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap api-002: source and formatted editors must preserve hosting view identities'
-          : undefined,
-    },
     async () => {
       assert.deepEqual(sourceViews, richViews)
       assert.deepEqual(

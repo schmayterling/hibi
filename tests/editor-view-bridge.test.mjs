@@ -181,26 +181,11 @@ test('installed addon addresses source and rich selections by live view', {
     const view = window.viewProbe.active()
     return window.viewProbe.selection(view).value
   })
-  await t.test(
-    'source switches retain the hosting view identity',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap api-003: switching source view must retain the hosting view identity'
-          : undefined,
-    },
-    () => {
-      assert.equal(source.view.viewId, rich.view.viewId)
-    },
-  )
+  await t.test('source switches retain the hosting view identity', () => {
+    assert.equal(source.view.viewId, rich.view.viewId)
+  })
   await t.test(
     'switching to source makes the previous formatted selection stale',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap api-006: switching to source must stale the previous formatted selection'
-          : undefined,
-    },
     async () => {
       assert.equal(
         (
@@ -241,6 +226,30 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
+
+  await page.evaluate(() => {
+    window.viewProbe.events.length = 0
+  })
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await page.waitForFunction(() => {
+    const view = window.viewProbe.active()
+    const result = view && window.viewProbe.selection(view)
+    return result?.ok && result.value.editor === 'rich'
+  })
+  assert.equal(
+    await page.evaluate(() =>
+      window.viewProbe.events.some(
+        ([kind, selection]) => kind === 'selection' && selection === null,
+      ),
+    ),
+    false,
+  )
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await page.waitForFunction(() => {
+    const view = window.viewProbe.active()
+    const result = view && window.viewProbe.selection(view)
+    return result?.ok && result.value.editor === 'source'
+  })
 
   await open(second)
   await page.waitForFunction((oldViewId) => {

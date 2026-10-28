@@ -2481,6 +2481,7 @@
   ],
   "15182c44f611": [
     "src/shared/document-worker-service.ts",
+    "src/shared/formatted-text-runs.ts",
     "src/shared/rendered-range.ts",
     "src/shared/rendered-text.ts",
     "src/shared/source-search-index.ts"

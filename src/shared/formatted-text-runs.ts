@@ -208,35 +208,43 @@ export class FormattedTextMask {
   }
 }
 
-/** Normalize retained syntax effects without parsing or projecting the rest of the note. */
+/** Normalize a context window with note-wide definitions, then return exact selection runs. */
 export function formattedTextRuns(
   effects: Iterable<TextEffect | null>,
   input: FormattedTextInput,
-  range: RenderedRange,
+  {
+    window,
+    selection,
+  }: Readonly<{
+    window: RenderedRange
+    selection: RenderedRange
+  }>,
 ): RenderedRun[] {
-  assertRenderedRange(input, range.from, range.to)
-  if (range.from === range.to) return []
+  assertRenderedRange(input, window.from, window.to)
+  assertRenderedRange(input, selection.from, selection.to)
+  if (selection.from < window.from || selection.to > window.to)
+    throw new Error('Find selection is outside its source snapshot.')
+  if (selection.from === selection.to) return []
   const mask = new FormattedTextMask(input)
   for (const effect of effects) {
-    if (!effect || effect.to <= range.from || effect.from >= range.to) continue
-    // Keep an intersecting atom's complete provenance; leaves only carry window context.
+    if (
+      !effect ||
+      effect.kind === 'leaf' ||
+      effect.to <= selection.from ||
+      effect.from >= selection.to
+    )
+      continue
+    // The producer supplies edge separators; only selected cells need a mask.
+    // Keep an intersecting atom's complete provenance.
     const bounds =
       effect.kind === 'atom'
         ? {
-            from: Math.min(range.from, effect.from),
-            to: Math.max(range.to, effect.to),
+            from: Math.min(selection.from, effect.from),
+            to: Math.max(selection.to, effect.to),
           }
-        : range
-    const clipped =
-      effect.kind === 'leaf'
-        ? {
-            ...effect,
-            from: Math.max(range.from, effect.from),
-            to: Math.min(range.to, effect.to),
-          }
-        : effect
-    for (const _ of mask.effect(clipped, bounds)) {
+        : selection
+    for (const _ of mask.effect(effect, bounds)) {
     }
   }
-  return [...mask.runs(range.from, range.to)]
+  return [...mask.runs(selection.from, selection.to)]
 }

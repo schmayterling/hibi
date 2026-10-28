@@ -117,6 +117,7 @@ function refresh(
   state: EditorState,
   from: number,
   to: number,
+  keep = false,
 ): DecorationSet {
   const ends = state.selection.ranges.flatMap((range) => [
     range.anchor,
@@ -125,9 +126,13 @@ function refresh(
   const add: Range<Decoration>[] = []
   const { metrics, live } = value
   const tree = treeOf(state)
+  // With `keep`, placeholders only come back: none turns into lines.
+  const kept = new Set<number>()
+  if (keep) value.set.between(from, to, (start) => void kept.add(start))
   if (metrics && live)
     value.extents.between(from, to, (start, end, lines) => {
       if (
+        !kept.has(start) &&
         lines.lines > 0 &&
         (end < live.from ||
           start > live.to ||
@@ -142,7 +147,7 @@ function refresh(
         )
     })
   return value.set.update({
-    filter: (start, end) => end < from || start > to,
+    filter: (start, end) => keep || end < from || start > to,
     filterFrom: from,
     filterTo: to,
     add,
@@ -212,6 +217,11 @@ const placeholders = StateField.define<Placeholders>({
         next = { ...next, live: effect.value }
         dirty.push(effect.value)
       }
+    // Code the view has to parse again turns back at once, from heights it
+    // has measured to the same exact ones; parsed code turns into lines only
+    // in the view's own measured update.
+    const reparsed =
+      next.live && treeOf(state) !== treeOf(startState) ? next.live : null
     // Blocks a selection end leaves or enters.
     if (transaction.selection || transaction.docChanged)
       for (const range of [
@@ -224,10 +234,12 @@ const placeholders = StateField.define<Placeholders>({
         dirty.push({ from: range.from, to: range.from })
         dirty.push({ from: range.to, to: range.to })
       }
-    if (!dirty.length) return next
+    if (!dirty.length && !reparsed) return next
     let set = next.set
     for (const { from, to } of dirty)
       set = refresh({ ...next, set }, state, from, to)
+    if (reparsed)
+      set = refresh({ ...next, set }, state, reparsed.from, reparsed.to, true)
     return { ...next, set }
   },
   // Placeholders cover the hidden fence lines that start where they do.

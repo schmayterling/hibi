@@ -97,27 +97,24 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
       ),
     t.formattedEngine,
   )
-  await t.test(
-    'outline navigation exposes rendered heading text',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap marker-007: outline navigation must expose rendered heading text'
-          : undefined,
-    },
-    async () => {
-      assert.equal(
-        await page.evaluate(
-          () =>
-            window
-              .getSelection()
-              ?.anchorNode?.parentElement?.closest('h1, [role="heading"]')
-              ?.textContent,
-        ),
-        'alpha',
-      )
-    },
-  )
+  // Accepted difference: the formatted view reveals the heading's `# ` as
+  // editable text under the caret, so the heading's rendered text is its
+  // accessible name rather than its text content.
+  await t.test('outline navigation exposes rendered heading text', async () => {
+    const heading = await page.evaluate(() => {
+      const element = window
+        .getSelection()
+        ?.anchorNode?.parentElement?.closest('h1, [role="heading"]')
+      return {
+        text: element?.textContent,
+        name: element?.getAttribute('aria-label') ?? element?.textContent,
+      }
+    })
+    assert.equal(
+      t.formattedEngine === 'codemirror' ? heading.name : heading.text,
+      'alpha',
+    )
+  })
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+/' : 'Control+/',

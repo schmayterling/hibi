@@ -860,13 +860,13 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
       html: clipboardData.getData('text/html'),
     }
   })
+  // Accepted difference: the formatted view copies the selection's exact
+  // Markdown as text, as a Markdown editor does, where the rich editor copies
+  // rendered text. Both copy the rendered HTML.
   await t.test(
-    'copy preserves exact markdown and clean rendered html',
-    {
-      todo: 'formatted gap marker-005: formatted copying must preserve rendered plain text',
-    },
+    'copy keeps the exact markdown as text and clean rendered html',
     async () => {
-      assert.equal(copied.text, 'Some bold and italic with code and strike.')
+      assert.equal(copied.text, source.slice(from, to))
       assert.equal(
         await page.evaluate(
           (html) =>

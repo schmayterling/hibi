@@ -1,8 +1,14 @@
-import type { SyntaxNode, Tree } from '@lezer/common'
+import {
+  IterMode,
+  type SyntaxNode,
+  type Tree,
+  type TreeCursor,
+} from '@lezer/common'
 import type { MarkdownParser } from '@lezer/markdown'
 import {
   type FormattedTextInput,
   formattedAtomic,
+  formattedClosedFence,
   formattedDefinitionRange,
   formattedListStart,
   formattedMarkerRanges,
@@ -35,6 +41,69 @@ const leafNames = new Set([
   'BlockMath',
 ])
 
+/** Whether a candidate leaf contributes separator evidence; opaque widgets still do. */
+export function formattedTextLeafVisible(
+  node: SyntaxNode,
+  literal: ReadonlySet<string>,
+) {
+  if (node.name !== 'LinkReference') return true
+  for (let parent: SyntaxNode | null = node; parent; parent = parent.parent)
+    if (literal.has(parent.name)) return true
+  return false
+}
+
+/** Retained context for a selection, or null when 64 syntax steps cannot prove each neighbour. */
+export function formattedTextWindow(
+  tree: Tree,
+  selection: RenderedRange,
+  literal: ReadonlySet<string>,
+): RenderedRange | null {
+  const neighbour = (at: number, direction: -1 | 1) => {
+    const cursor = tree.cursor(IterMode.IgnoreMounts)
+    let work = 0
+    while (++work <= 64) {
+      const leaf =
+        literal.has(cursor.name) ||
+        cursor.type.is('LeafBlock') ||
+        leafNames.has(cursor.name) ||
+        cursor.name === 'Table'
+      if (leaf) {
+        if (
+          (direction < 0 ? cursor.to <= at : cursor.from >= at) &&
+          formattedTextLeafVisible(cursor.node, literal)
+        )
+          return cursor.node
+      } else if (direction < 0 ? cursor.childBefore(at) : cursor.childAfter(at))
+        continue
+      while (!(direction < 0 ? cursor.prevSibling() : cursor.nextSibling())) {
+        if (!cursor.parent()) return null
+        if (++work > 64) return undefined
+      }
+    }
+    return undefined
+  }
+  const before = neighbour(selection.from, -1),
+    after = neighbour(selection.to, 1)
+  // ponytail: retain visible-leaf metadata to cover longer hidden runs synchronously.
+  if (before === undefined || after === undefined) return null
+  return { from: before?.from ?? 0, to: after?.to ?? tree.length }
+}
+
+// A retained node's cursor keeps its parents; next() can escape into sibling blocks.
+function nextInScope(
+  cursor: TreeCursor,
+  end: number,
+  from: number,
+  descend = true,
+) {
+  if (descend && cursor.childAfter(from)) return true
+  while (cursor.to < end) {
+    if (cursor.nextSibling()) return true
+    if (!cursor.parent()) break
+  }
+  return false
+}
+
 /** Source cells actually rendered by the table view, before its inline parse. */
 export function formattedTableRow(
   node: SyntaxNode,
@@ -61,12 +130,14 @@ export function formattedTableRow(
 /**
  * Pure unrevealed-text effects from the same nodes and source ranges the view draws.
  * Pass an enclosing node to retain ancestors without visiting sibling blocks.
+ * A range.selection keeps generic line and inline work on the selected cells.
+ * ponytail: title trim, task padding and table cells need retained metadata to avoid whole-span reads.
  */
 export function* formattedTextEffects(
   tree: Tree | SyntaxNode,
   offset: number,
   input: FormattedTextInput,
-  range: RenderedRange,
+  range: RenderedRange & Readonly<{ selection?: RenderedRange }>,
   config: BoundaryConfig,
   inline: MarkdownParser,
   definitions: Set<string>,
@@ -75,7 +146,10 @@ export function* formattedTextEffects(
   referenceResolved?: (label: string) => boolean,
 ): Generator<TextEffect | null> {
   const literal = new Set(config.literal),
-    features = new Set(config.textFeatures ?? [])
+    features = new Set(config.textFeatures ?? []),
+    selected = range.selection ?? range,
+    // A marker's four padding units can reach the selection after its source end.
+    selectedFrom = Math.max(range.from, selected.from - 5)
   const read = (from: number, to: number) =>
     input.read(
       Math.max(0, Math.min(input.length, offset + from)),
@@ -129,12 +203,14 @@ export function* formattedTextEffects(
       at = end
     }
   }
-  const cursor = tree.cursor()
+  const cursor = tree.cursor(IterMode.IgnoreMounts),
+    scopeEnd = cursor.to
   let inheritedLiteral: string | undefined
   for (let parent = cursor.node.parent; parent; parent = parent.parent)
     if (literal.has(parent.name)) inheritedLiteral = parent.name
   let descend = true,
-    work = 0
+    work = 0,
+    selectedLeaf: SyntaxNode | null = null
   do {
     if (++work === 1024) {
       yield null
@@ -143,18 +219,36 @@ export function* formattedTextEffects(
     const from = offset + cursor.from,
       to = offset + cursor.to
     descend = true
-    if (to <= range.from || from >= range.to) {
+    if (from >= range.to) break
+    if (to <= range.from) {
+      descend = false
+      continue
+    }
+    if (
+      range.selection &&
+      selectedLeaf &&
+      from >= selected.to &&
+      to <= offset + selectedLeaf.to
+    ) {
+      while (
+        cursor.from !== selectedLeaf.from ||
+        cursor.to !== selectedLeaf.to ||
+        cursor.name !== selectedLeaf.name
+      )
+        if (!cursor.parent()) break
       descend = false
       continue
     }
     const node = cursor.node,
-      name = node.name
+      name = node.name,
+      outside = to <= selected.from || from >= selected.to
     const literalName = literal.has(name) ? name : inheritedLiteral
     if (literalName) {
       // The surrounding quote's own markers still hide in literal child blocks.
-      if (literalName !== 'Blockquote') {
-        const quotes = node.cursor()
+      if (literalName !== 'Blockquote' && !outside) {
+        const quotes = node.cursor(IterMode.IgnoreMounts)
         do {
+          if (offset + quotes.from >= selected.to) break
           if (quotes.name === 'QuoteMark') {
             const at = offset + quotes.from
             const state = line(at)
@@ -165,19 +259,14 @@ export function* formattedTextEffects(
                 (/^[ \t]$/.test(read(quotes.to, quotes.to + 1)) ? 1 : 0),
             )
           }
-        } while (quotes.next())
+        } while (nextInScope(quotes, node.to, selectedFrom - offset))
       }
       leaves.push({ from, to })
       descend = false
       continue
     }
-    if (formattedAtomic(node, read, features)) {
-      yield effect('barrier', node.from, node.to)
-      leaves.push({ from, to })
-      descend = false
-      continue
-    }
-    if (!inlineOnly && name === 'LinkReference') {
+    // Definitions hide adjoining gaps without contributing a rendered leaf.
+    if (!inlineOnly && !formattedTextLeafVisible(node, literal)) {
       const hidden = formattedDefinitionRange(node, read, (at) => {
         const bounds = input.lineAt(offset + at)
         return { from: bounds.from - offset, to: bounds.to - offset }
@@ -187,11 +276,51 @@ export function* formattedTextEffects(
       continue
     }
     const heading = /^(ATX|Setext)Heading/.exec(name)
-    if (!inlineOnly && (leafNames.has(name) || heading || name === 'Table')) {
+    const leaf =
+      !inlineOnly && (leafNames.has(name) || heading || name === 'Table')
+    if (range.selection && leaf) {
+      const first = line(from)
+      first.prefix = Math.max(first.prefix, from)
+    }
+    if (range.selection && heading?.[1] === 'ATX') {
+      const close = node.lastChild
+      if (close?.name === 'HeaderMark' && !literal.has(close.name))
+        for (const hidden of formattedMarkerRanges(close, read))
+          yield effect('hide', hidden.from, hidden.to)
+    }
+    if (formattedAtomic(node, read, features)) {
+      yield effect('barrier', node.from, node.to)
       leaves.push({ from, to })
+      descend = false
+      continue
+    }
+    if (name === 'FencedCode') {
+      const first = input.lineAt(from),
+        last = input.lineAt(to)
+      yield {
+        kind: 'hide',
+        from: first.from,
+        to: Math.min(input.length, first.to + 1),
+      }
+      if (formattedClosedFence(node) && last.from > first.from)
+        yield {
+          kind: 'hide',
+          from: Math.max(first.to + 1, last.from - 1),
+          to: last.to,
+        }
+    }
+
+    if (range.selection && leaf && outside) {
+      leaves.push({ from, to })
+      descend = false
+      continue
+    }
+    if (leaf) {
+      leaves.push({ from, to })
+      if (range.selection) selectedLeaf = node
       for (
-        let at = Math.max(range.from, from);
-        at <= Math.min(range.to - 1, to);
+        let at = Math.max(selected.from, from);
+        at <= Math.min(selected.to - 1, to);
       ) {
         const state = line(at)
         if (from >= state.from && from <= state.to)
@@ -283,21 +412,30 @@ export function* formattedTextEffects(
       descend = false
       continue
     }
-    if (name === 'TaskMarker') {
-      const task = node.parent,
-        item = task?.parent
+    const taskMarker =
+      range.selection && name === 'Task'
+        ? node.getChild('TaskMarker')
+        : !range.selection && name === 'TaskMarker'
+          ? node
+          : null
+    if (taskMarker) {
+      const task = taskMarker.parent,
+        item = task?.parent,
+        markerFrom = offset + taskMarker.from
       const first = item?.firstChild && item.childAfter(item.firstChild.to)
       if (item?.name === 'ListItem' && first?.from === task?.from) {
-        const state = line(from)
-        let end = to
+        const state = line(markerFrom)
+        let end = offset + taskMarker.to
         while (end < state.to) {
           const text = input.read(end, Math.min(state.to, end + 4096))
           const length = /^[ \t]*/.exec(text)![0].length
           end += length
           if (length < text.length) break
         }
-        yield { kind: 'hide', from, to: end }
+        yield { kind: 'hide', from: markerFrom, to: end }
       }
+    }
+    if (name === 'TaskMarker') {
       descend = false
       continue
     }
@@ -329,25 +467,17 @@ export function* formattedTextEffects(
       }
     }
     if (name === 'FencedCode' || name === 'CodeBlock') {
-      if (name === 'FencedCode') {
-        const first = input.lineAt(from),
-          last = input.lineAt(to)
-        yield {
-          kind: 'hide',
-          from: first.from,
-          to: Math.min(input.length, first.to + 1),
-        }
-        if (node.lastChild?.name === 'CodeMark' && last.from > first.from)
-          yield {
-            kind: 'hide',
-            from: Math.max(first.to + 1, last.from - 1),
-            to: last.to,
+      const code = node.cursor(IterMode.IgnoreMounts)
+      if (code.childAfter(selectedFrom - offset))
+        do {
+          if (code.name === 'CodeText') {
+            const state = line(offset + code.from)
+            state.prefix = Math.max(state.prefix, offset + code.from)
           }
-      }
-      for (const text of node.getChildren('CodeText')) {
-        const state = line(offset + text.from)
-        state.prefix = Math.max(state.prefix, offset + text.from)
-      }
+          // The first following code line supplies any selected indentation.
+          if (offset + code.from >= selected.to) break
+        } while (code.nextSibling())
+      descend = false
     }
     const reference =
       name === 'Link' ? formattedReferenceLink(node, read) : null
@@ -365,24 +495,27 @@ export function* formattedTextEffects(
     if (name === 'Highlight' || name === 'WikiLink') {
       const hidden = formattedMarkerRanges(node, read)
       if (hidden.length === 2)
-        yield* refs(offset + hidden[0]!.to, offset + hidden[1]!.from)
+        yield* refs(
+          Math.max(offset + hidden[0]!.to, selected.from - 34),
+          Math.min(offset + hidden[1]!.from, selected.to + 34),
+        )
       descend = false
     }
     if (name === 'Table' && features.has('markdown.tables')) {
       const firstRow = input.lineAt(from),
         delimiter = input.lineAt(firstRow.to + 1)
-      let row = input.lineAt(Math.max(from, range.from))
+      let row = input.lineAt(Math.max(from, selected.from))
       yield {
         kind: 'hide',
         from: Math.max(0, delimiter.from - 1),
         to: delimiter.to,
       }
-      while (row.from <= to && row.from < range.to) {
+      while (row.from <= to && row.from < selected.to) {
         const ordinal =
           row.from === firstRow.from ? 0 : row.from === delimiter.from ? 1 : 2
         if (ordinal === 1)
           yield { kind: 'hide', from: Math.max(0, row.from - 1), to: row.to }
-        else if (row.to >= range.from && row.from < range.to) {
+        else if (row.to >= selected.from && row.from < selected.to) {
           const parsed = formattedTableRow(node, offset, input, row.from)!
           let at = row.from
           for (let index = 0; index < parsed.cells.length; index++) {
@@ -441,12 +574,24 @@ export function* formattedTextEffects(
           }
           yield { kind: 'hide', from: at, to: row.to }
         }
-        if (row.to >= input.length || row.to >= to || row.to >= range.to) break
+        if (row.to >= input.length || row.to >= to || row.to >= selected.to)
+          break
         row = input.lineAt(row.to + 1)
       }
       descend = false
     }
-  } while (cursor.next(descend))
+  } while (
+    nextInScope(
+      cursor,
+      scopeEnd,
+      selectedLeaf &&
+        cursor.from >= selectedLeaf.from &&
+        cursor.to <= selectedLeaf.to
+        ? selectedFrom - offset
+        : range.from - offset,
+      descend,
+    )
+  )
   if (inlineOnly) return
   for (const state of lines.values()) {
     if (state.trim) {
@@ -470,8 +615,7 @@ export function* formattedTextEffects(
   let end = -1
   for (const leaf of leaves) {
     if (end >= 0 && leaf.from > end) {
-      let first = end
-      while (first < leaf.from && input.read(first, first + 1) !== '\n') first++
+      const first = Math.min(leaf.from, input.lineAt(end).to)
       if (first < leaf.from) {
         yield { kind: 'block', from: first, to: first + 1 }
         if (first > end) yield { kind: 'hide', from: end, to: first }

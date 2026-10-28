@@ -91,8 +91,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | semantics-001 | [editor-plugins.test.mjs:67](editor-plugins.test.mjs#L67) | source-view word counts must include markdown characters | 9: outline semantics and diagram lifecycle |
 | find-001 | [formatted-find.test.mjs:401](formatted-find.test.mjs#L401) | formatted find must match rendered phrases across hidden marks | 4a: rendered find projection |
 | find-003 | [formatted-find.test.mjs:664](formatted-find.test.mjs#L664) | formatted phrase counts must include matches across marks | 4a: rendered find projection |
-| release-001 | [formatted-hidden-source.test.mjs:167](formatted-hidden-source.test.mjs#L167) | reopening source must restore its saved scroll position | 2c: hidden source release and mapped bookmarks |
-| release-002 | [formatted-hidden-source.test.mjs:188](formatted-hidden-source.test.mjs#L188) | formatted edits must map the saved source scroll position | 2c: hidden source release and mapped bookmarks |
 | corpus-008 | [markdown-semantics-native.test.mjs:100](markdown-semantics-native.test.mjs#L100) | a quoted title with a blank line must not define a reference | 5a: shared reference definition parsing |
 | corpus-011 | [markdown-semantics-native.test.mjs:98](markdown-semantics-native.test.mjs#L98) | disabled heading syntax must preserve bold formatting inside alerts | 9: outline semantics and diagram lifecycle |
 | corpus-012 | [markdown-semantics-native.test.mjs:104](markdown-semantics-native.test.mjs#L104) | disabled heading syntax must preserve bold formatting inside subtext | 9: outline semantics and diagram lifecycle |
@@ -105,7 +103,6 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | contracts-004 | [raw-html-editor.test.mjs:1227](raw-html-editor.test.mjs#L1227) | superseded inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-005 | [raw-html-editor.test.mjs:1231](raw-html-editor.test.mjs#L1231) | modified block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
 | contracts-006 | [raw-html-editor.test.mjs:1233](raw-html-editor.test.mjs#L1233) | superseded block html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |
-| api-005 | [rich-edit-api.test.mjs:295](rich-edit-api.test.mjs#L295) | rich source edits must reject structural markup changes | 6: verbatim projections and selection contracts |
 | semantics-002 | [source-reference-navigation.test.mjs:160](source-reference-navigation.test.mjs#L160) | formatted and source references must reuse one document worker | 9: outline semantics and diagram lifecycle |
 | addon-001 | [source-reference-navigation.test.mjs:185](source-reference-navigation.test.mjs#L185) | rich-only addon syntax must retain native editing and source reference isolation | 2b: legacy feature notices and literal fallback |
 

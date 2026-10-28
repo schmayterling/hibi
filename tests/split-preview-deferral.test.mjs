@@ -861,12 +861,12 @@ async function cmSplit(t, original) {
       .markdown
     const sourceMode = await page.locator('.editor-panes.mode-markdown').count()
     const editors = sourceMode ? [] : [rich]
-    if (
-      original.length > 256 * 1024 &&
-      (await page.locator('.editor-panes.mode-normal').count())
-    ) {
-      // Opening size stays cached while this fixture edits one revision.
-      // Huge-note growth needs a separate release check.
+    const released =
+      (original.length > 256 * 1024 || canonical.length > 256 * 1024) &&
+      (await page.locator('.editor-panes.mode-normal').count()) > 0
+    if (released) {
+      // A note that opened or has grown past the large size releases its
+      // hidden source view; these fixtures only grow.
       await source.waitFor({ state: 'detached' })
       assert.equal(await source.count(), 0)
     } else {
@@ -884,7 +884,8 @@ async function cmSplit(t, original) {
       const tail = canonical.match(/^omega[^\n]*$/m)?.[0]
       if (tail) assert.ok((await rich.innerText()).includes(tail), tail)
       if (
-        await source.evaluate((element) => document.activeElement === element)
+        !released &&
+        (await source.evaluate((element) => document.activeElement === element))
       ) {
         if (canonical.includes('$y^2$'))
           assert.ok(

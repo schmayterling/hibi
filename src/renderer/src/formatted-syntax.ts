@@ -12,6 +12,7 @@ import { IterMode, NodeProp, type Tree, TreeFragment } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
+  type MarkdownParser,
   parseCode,
 } from '@lezer/markdown'
 import type { BoundaryReceive } from '../../shared/document-worker-protocol.ts'
@@ -124,6 +125,10 @@ function markdownParser(
       codeParser: (info) => codeLanguages.resolve(info)?.parser ?? null,
     }),
   ])
+  const chunked = new ChunkedMarkdownParser(full, base, {
+    opaque: new Set(opaque),
+    ...(options.probe ? { probe: options.probe } : {}),
+  })
   // The plain-text shortcut stops only at the characters core inline syntax
   // starts with; contributed inline syntax that starts elsewhere turns it off.
   if (
@@ -131,11 +136,8 @@ function markdownParser(
       (config) => !config.parseInline?.length || inlineStops(config),
     )
   )
-    runs.allow(full)
-  return new ChunkedMarkdownParser(full, base, {
-    opaque: new Set(opaque),
-    ...(options.probe ? { probe: options.probe } : {}),
-  })
+    runs.allow(chunked.full)
+  return chunked
 }
 
 const mapDemand = (demand: Demand, changes: ChangeDesc) => ({
@@ -837,6 +839,8 @@ export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
   tree: (state: EditorState) => Tree
+  /** The same configured grammar for a bounded source-block proof. */
+  parser: (state: EditorState) => MarkdownParser
   /**
    * An edit's reparse has not finished, so renderers keep what they drew,
    * mapped through the edit, instead of rendering the edited chunks bare.
@@ -861,6 +865,7 @@ export function formattedSyntax(
       driver(syntax, options),
     ],
     tree: (state) => state.field(field).tree,
+    parser: (state) => syntax.chunkedFor(state).full,
     settling: (state) => state.field(field).settling,
   }
 }

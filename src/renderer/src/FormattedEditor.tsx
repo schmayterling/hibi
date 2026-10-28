@@ -15,7 +15,10 @@ import { sourceChange } from '../../shared/document-journal'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { headingAnchors } from '../../shared/heading-anchor'
 import { isMediaFile } from '../../shared/media'
-import { normalizedSource } from '../../shared/source-projection'
+import {
+  normalizedSource,
+  sourceChangesFromEditor,
+} from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
 import { largeOpening } from './document-shell'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
@@ -547,10 +550,29 @@ export function MarkdownEditor({
       view.state.sliceDoc(0, frontmatter.length) !== frontmatter
     )
       return
+    const edit = { ...change, insert: normalizedSource(change.insert) }
+    // Verbatim projections, which read the whole note, accept frontmatter
+    // edits with the whole new source, as from small notes' properties.
+    let replacement: string | undefined
+    if (projectionExtensions.length) {
+      const snapshot = documentRuntime.session(documentState.tabId)?.snapshot()
+      if (!snapshot || snapshot.normalizedLength !== view.state.doc.length)
+        return
+      replacement = sourceChangesFromEditor(snapshot, [edit]).reduceRight(
+        (source, raw) =>
+          source.slice(0, raw.from) + raw.insert + source.slice(raw.to),
+        snapshot.materialize(),
+      )
+    }
     view.dispatch({
-      changes: { ...change, insert: normalizedSource(change.insert) },
+      changes: edit,
       userEvent: 'input.addon',
-      annotations: isolateHistory.of('full'),
+      annotations: [
+        isolateHistory.of('full'),
+        ...(replacement === undefined
+          ? []
+          : [formattedProjectionSource.of(replacement)]),
+      ],
     })
   }
   const ready =

@@ -371,13 +371,16 @@ test('reference lookup follows edits to multiline title closing delimiters', (t)
   assert.equal(f.references.lookup('ref').title, 'title\n[other]: /inside\nend')
 })
 
-test('an indented multiline title can contain heading, rule, and fence-looking lines', (t) => {
+test('paragraph interruptions end indented titles and expose following references', (t) => {
   for (const line of ['# heading', '***', '~~~']) {
     const title = `title\n${line}\n[other]: /hidden\nend`,
       f = fixture(t, `[ref]: /x\n\t"${title}"\n\n[other]`)
     f.checkDefinitions(['ref', 'other'])
-    assert.deepEqual(f.references.lookup('ref'), { href: '/x', title })
-    assert.equal(f.references.lookup('other'), null)
+    assert.deepEqual(f.references.lookup('ref'), { href: '/x', title: undefined })
+    assert.equal(
+      f.references.lookup('other')?.href ?? null,
+      line === '~~~' ? null : '/hidden',
+    )
   }
 })
 

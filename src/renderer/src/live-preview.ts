@@ -82,19 +82,6 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 
 type Revealed = { from: number; to: number }
 
-/**
- * A range over the whole note, or all its text after metadata the view keeps
- * hidden: it includes the hidden lines at the note's ends.
- */
-function selectsWholeNote(state: EditorState, range: Revealed) {
-  if (range.to !== state.doc.length || range.from === range.to) return false
-  if (range.from === 0) return true
-  let body = 0
-  for (const measure of state.facet(formattedPrefix))
-    body = Math.max(body, measure(state))
-  return range.from === body
-}
-
 class SpaceWidget extends WidgetType {
   override eq() {
     return true
@@ -1662,9 +1649,19 @@ export function livePreview(
       const { doc } = transaction.startState
       const before = transaction.startState.selection.ranges
       const lines = transaction.startState.field(layout)
+      // Where the note's text starts after metadata the view keeps hidden.
+      let body = 0
+      for (const measure of transaction.startState.facet(formattedPrefix))
+        body = Math.max(body, measure(transaction.startState))
       let moved = false
       const ranges = transaction.selection.ranges.map((range, index) => {
-        if (selectsWholeNote(transaction.startState, range)) return range
+        // Selecting the whole note, or all its text after its metadata,
+        // includes the hidden lines at its ends.
+        if (
+          range.to === doc.length &&
+          (range.from === 0 || range.from === body)
+        )
+          return range
         let head = range.head
         lines.between(head, head, (from, to, value) => {
           if (value !== hiddenLine || head < from || head > to) return
@@ -1723,28 +1720,6 @@ export function livePreview(
     ),
     EditorView.inputHandler.of((view, from, to, text) => {
       if (view.composing) return false
-      // The page cannot select hidden edge lines, so typing over the whole
-      // note changes only its shown text: replace everything selected.
-      const { main } = view.state.selection
-      if (
-        view.state.selection.ranges.length === 1 &&
-        selectsWholeNote(view.state, main) &&
-        from >= main.from &&
-        to <= main.to &&
-        (from > main.from || to < main.to)
-      ) {
-        view.dispatch(
-          view.state.update(
-            {
-              changes: { from: main.from, to: main.to, insert: text },
-              selection: { anchor: main.from + text.length },
-              userEvent: 'input.type',
-            },
-            { scrollIntoView: true },
-          ),
-        )
-        return true
-      }
       const spec = gapInput(view.state, syntax.tree(view.state), from, to, text)
       if (!spec) return false
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))

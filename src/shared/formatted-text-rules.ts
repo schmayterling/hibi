@@ -170,6 +170,40 @@ export type TextEffect = RenderedRange & {
   kind: 'hide' | 'barrier' | 'atom' | 'block' | 'leaf' | 'trailing'
 }
 
+/** Link reference lines and adjoining gaps hidden by the formatted view. */
+export function formattedDefinitionRange(
+  node: SyntaxNode,
+  read: TextRead,
+  lineAt: (position: number) => RenderedRange,
+) {
+  const first = lineAt(node.from)
+  const after = (block: SyntaxNode) => {
+    let next = block.nextSibling
+    while (next && !next.type.is('Block')) next = next.nextSibling
+    return next
+  }
+  let next = after(node)
+  if (!/^[ \t>]*$/.test(read(first.from, node.from))) {
+    let last = node
+    while (next?.name === 'LinkReference') {
+      last = next
+      next = after(next)
+    }
+    return {
+      from: node.from,
+      to: next?.name === 'Paragraph' ? next.from : last.to,
+      item: true,
+    }
+  }
+  if (next) return { from: first.from, to: lineAt(next.from).from - 1 }
+  let previous = node.prevSibling
+  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
+  return {
+    from: previous ? lineAt(previous.to).to + 1 : first.from,
+    to: lineAt(node.to).to,
+  }
+}
+
 /** Conditions shared with the views that replace these nodes with widgets. */
 export function formattedClosedFence(node: SyntaxNode) {
   const open = node.firstChild,

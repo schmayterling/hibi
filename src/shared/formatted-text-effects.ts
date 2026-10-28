@@ -3,6 +3,7 @@ import type { MarkdownParser } from '@lezer/markdown'
 import {
   type FormattedTextInput,
   formattedAtomic,
+  formattedDefinitionRange,
   formattedListStart,
   formattedMarkerRanges,
   type TextEffect,
@@ -127,6 +128,9 @@ export function* formattedTextEffects(
     }
   }
   const cursor = tree.cursor()
+  let inheritedLiteral: string | undefined
+  for (let parent = cursor.node.parent; parent; parent = parent.parent)
+    if (literal.has(parent.name)) inheritedLiteral = parent.name
   let descend = true,
     work = 0
   do {
@@ -143,9 +147,10 @@ export function* formattedTextEffects(
     }
     const node = cursor.node,
       name = node.name
-    if (literal.has(name)) {
+    const literalName = literal.has(name) ? name : inheritedLiteral
+    if (literalName) {
       // The surrounding quote's own markers still hide in literal child blocks.
-      if (name !== 'Blockquote') {
+      if (literalName !== 'Blockquote') {
         const quotes = node.cursor()
         do {
           if (quotes.name === 'QuoteMark') {
@@ -167,6 +172,15 @@ export function* formattedTextEffects(
     if (formattedAtomic(node, read, features)) {
       yield effect('barrier', node.from, node.to)
       leaves.push({ from, to })
+      descend = false
+      continue
+    }
+    if (!inlineOnly && name === 'LinkReference') {
+      const hidden = formattedDefinitionRange(node, read, (at) => {
+        const bounds = input.lineAt(offset + at)
+        return { from: bounds.from - offset, to: bounds.to - offset }
+      })
+      yield effect('hide', hidden.from, hidden.to)
       descend = false
       continue
     }

@@ -35,6 +35,8 @@ test('rendered worker projection agrees with actual unrevealed formatted DOM', {
     'use \x60code &amp;\\*\x60 now',
     '-# small **text**',
     'ref [^1]\n\n[^1]: footnote\n    continued',
+    '[hidden]: https://hidden.example.test',
+    '- [hidden-item]: https://hidden.example.test\n\n  shown content',
     'sentinel',
   ].join('\n\n')
   const profile = await mkdtemp(join(tmpdir(), 'hibi-rendered-dom-'))

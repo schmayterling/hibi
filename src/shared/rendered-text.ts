@@ -515,13 +515,17 @@ export class RenderedTextIndex {
       at = to
       if (this.#tick(text.length)) yield
     }
+    yield* this.#certifyPlainTail(range)
+  }
+  *#certifyPlainTail(range: RenderedRange): Generator<void, boolean> {
+    if (range.from - this.prefix > this.#config.giantBlock) return false
     const headTo = Math.min(range.to, range.from + batch)
     const text = this.text(this.prefix, headTo)
     let tree: Tree
     try {
       tree = yield* this.#advance(this.#parser.full.startParse(text))
     } catch {
-      return
+      return false
     }
     const node = tree.resolveInner(range.from - this.prefix, 1)
     if (
@@ -529,7 +533,7 @@ export class RenderedTextIndex {
       node.from + this.prefix !== range.from ||
       node.parent?.name !== 'Document'
     )
-      return
+      return false
     this.#plainTail = range
     const length = range.from
     this.#syntaxInput = {
@@ -539,6 +543,7 @@ export class RenderedTextIndex {
       read: (from, to) =>
         this.#input.read(Math.min(from, length), Math.min(to, length)),
     }
+    return true
   }
 
   *#build(): Generator<void> {
@@ -885,7 +890,7 @@ export class RenderedTextIndex {
   *#partial(range: RenderedRange, fragments: readonly TreeFragment[]) {
     const tree = yield* this.#advance(
       this.#parser.startChunkedParse(
-        this.#input,
+        this.#syntaxInput,
         fragments,
         range,
         this.prefix,
@@ -903,6 +908,8 @@ export class RenderedTextIndex {
       this.#leafEnd = -1
       yield* this.#projectFrames(window.frames, range, true)
     }
+    if (this.#plainTail)
+      yield* this.#effect({ kind: 'leaf', ...this.#plainTail }, range)
     this.#complete = true
     return { window, definitions }
   }
@@ -1191,6 +1198,15 @@ export class RenderedTextIndex {
     yield* this.#projectFrames(old.frames, range, false, local, false)
     const next = new RenderedTextIndex(snapshot, this.prefix, this.#config)
     next.#definitions = this.#definitions
+    if (this.#plainTail) {
+      if (
+        !(yield* next.#certifyPlainTail({
+          from: map(this.#plainTail.from, -1),
+          to: map(this.#plainTail.to, 1),
+        }))
+      )
+        return false
+    }
     const nextRange = { from: map(range.from, -1), to: map(range.to, 1) }
     let partial: { window: Window; definitions: Set<string> }
     try {

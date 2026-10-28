@@ -31,6 +31,7 @@ import {
 } from '@lezer/common'
 import { highlightTree } from '@lezer/highlight'
 import {
+  formattedDefinitionRange,
   formattedListStart,
   formattedMarkerRanges,
 } from '../../shared/formatted-text-rules.ts'
@@ -193,32 +194,11 @@ function loneMarker(doc: Text, item: SyntaxNode) {
  * shows beside the marker, or up to the last definition before other blocks.
  */
 function definitionLines(doc: Text, node: SyntaxNode) {
-  const first = doc.lineAt(node.from)
-  const after = (block: SyntaxNode) => {
-    let next = block.nextSibling
-    while (next && !next.type.is('Block')) next = next.nextSibling
-    return next
-  }
-  let next = after(node)
-  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) {
-    let last = node
-    while (next?.name === 'LinkReference') {
-      last = next
-      next = after(next)
-    }
-    return {
-      from: node.from,
-      to: next?.name === 'Paragraph' ? next.from : last.to,
-      item: true,
-    }
-  }
-  if (next) return { from: first.from, to: doc.lineAt(next.from).from - 1 }
-  let previous = node.prevSibling
-  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
-  return {
-    from: previous ? doc.lineAt(previous.to).to + 1 : first.from,
-    to: doc.lineAt(node.to).to,
-  }
+  return formattedDefinitionRange(
+    node,
+    (from, to) => doc.sliceString(from, to),
+    (at) => doc.lineAt(at),
+  )
 }
 
 /** The first line a block shows: a lone list marker's line collapses into the next. */

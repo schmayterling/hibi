@@ -48,6 +48,50 @@ function inputFor(text) {
   }
 }
 
+test("reference definitions use the view's hidden source ranges", () => {
+  for (const [source, expected] of [
+    ['before\n\n[id]: https://example.test\n\nafter', 'before\nafter'],
+    ['[id]: https://example.test', ''],
+    ['- [id]: https://example.test\n\n  content', 'content'],
+  ]) {
+    const index = build(source)
+    assert.equal(
+      [...index.range(0, index.length)].map((chunk) => chunk.text).join(''),
+      expected,
+      source,
+    )
+    assert.equal(
+      [...searchRenderedLiteral(index, 'example.test')].flatMap(
+        (batch) => batch.matches,
+      ).length,
+      0,
+    )
+  }
+})
+
+test('leaf projection retains literal ancestor settings', () => {
+  const text = '> **word**',
+    input = inputFor(text)
+  const tree = boundaryParser(config).parse(text)
+  const leaf = tree.resolveInner(text.indexOf('word'), 1).parent
+  assert.equal(leaf.name, 'Paragraph')
+  const effects = [
+    ...formattedTextEffects(
+      leaf,
+      0,
+      input,
+      { from: leaf.from, to: leaf.to },
+      { ...config, literal: ['Blockquote'] },
+      boundaryInlineParser(config),
+      new Set(),
+      false,
+    ),
+  ].filter(Boolean)
+  assert.ok(
+    !effects.some((effect) => effect.kind === 'hide' || effect.kind === 'atom'),
+  )
+})
+
 test('quoted list continuations hide indentation after their quote markers', () => {
   for (const [source, expected] of [
     ['> - quoted *item*\n>   cont', 'quoted item cont'],
@@ -244,6 +288,30 @@ test('replacement proof includes the gap before an adjacent opaque block', () =>
       .map((chunk) => chunk.text)
       .join(''),
     'snake_case',
+  )
+})
+
+test('a changed prefix cannot reuse plain-tail proof across a new open fence', () => {
+  const source = 'needle start\n\n' + 'ordinary '.repeat(12000)
+  const index = build(source)
+  assert.ok(index.counters().plainTailUnits > 65536)
+  const [match] = [...searchRenderedLiteral(index, 'needle')].flatMap(
+    (batch) => batch.matches,
+  )
+  const work = index.prepareReplacement(match, '\x60\x60\x60\n')
+  let next = work.next()
+  while (!next.done) next = work.next()
+  if (!next.value.edits) return
+  let changed = source
+  for (const edit of [...next.value.edits].reverse())
+    changed = changed.slice(0, edit.from) + edit.insert + changed.slice(edit.to)
+  const actual = build(changed)
+  assert.equal(
+    [...actual.range(0, actual.length)].map((chunk) => chunk.text).join(''),
+    '\x60\x60\x60\n' +
+      [...index.range(match.to, index.length)]
+        .map((chunk) => chunk.text)
+        .join(''),
   )
 })
 

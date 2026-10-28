@@ -6,6 +6,7 @@ import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import { boundaryKey } from '../src/shared/markdown-boundary-syntax.ts'
+import { waitForProgress } from './worker-progress.mjs'
 
 const config = {
   schema: 1,
@@ -76,22 +77,15 @@ function codeDone(f, version = f.session.snapshot().version) {
     )
   )
 }
-let debug = () => ({})
+let debug = () => ({}),
+  progress = () => 0
 const until = (predicate) =>
-  new Promise((resolve, reject) => {
-    const end = Date.now() + 10000
-    const poll = () => {
-      if (predicate()) return resolve()
-      if (Date.now() > end)
-        return reject(
-          new Error(
-            `Boundary worker did not settle: ${JSON.stringify(debug())}`,
-          ),
-        )
-      setTimeout(poll, 5)
-    }
-    poll()
-  })
+  waitForProgress(
+    predicate,
+    () => progress(),
+    10000,
+    () => `Boundary worker made no progress: ${JSON.stringify(debug())}`,
+  )
 function fixture(
   t,
   source = '# title\n\ntext\n\n'.repeat(20000),
@@ -110,6 +104,19 @@ function fixture(
     { enqueue: () => {}, onError: (error) => errors.push(error) },
   )
   beforeClient?.(session)
+  const advance = MarkdownBoundaryIndex.prototype.advance
+  let advances = 0
+  t.mock.method(MarkdownBoundaryIndex.prototype, 'advance', function (...args) {
+    const result = advance.apply(this, args)
+    advances++
+    return result
+  })
+  progress = () =>
+    transports.reduce(
+      (count, transport) =>
+        count + transport.messages.length + transport.replies.length,
+      advances,
+    )
   const client = new DocumentWorkerClient(session, {
     changed: () => {},
     pending: () => {},

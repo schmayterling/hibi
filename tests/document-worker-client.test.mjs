@@ -6,6 +6,7 @@ import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceSearchIndex } from '../src/shared/source-search-index.ts'
 import { renderedConfig } from './rendered-config.mjs'
+import { waitForProgress } from './worker-progress.mjs'
 
 const wait = async (predicate) => {
   const end = Date.now() + 3000
@@ -464,22 +465,37 @@ test('reference-link unsupported reason reaches the client and source mode remai
   assert.equal(f.workers.length, 1)
 })
 
-test('32 mib real find build completes with progress on one worker', {
-  timeout: 60000,
-}, async (t) => {
+test('32 mib real find build completes with progress on one worker', async (t) => {
   // Same ordinary-word corpus as the review probe, with one distant match.
   const unit = `${'ordinary words '.repeat(16)}\n\n`,
     length = 32 * 1024 * 1024,
     source =
       unit.repeat(Math.ceil(length / unit.length)).slice(0, length - 11) +
-      'scale-start',
-    done = Promise.withResolvers(),
-    f = fixture(t, source, {
-      result: (location) => done.resolve(location),
-      error: (message) => done.reject(new Error(message)),
-    })
+      'scale-start'
+  let result, failure
+  const f = fixture(t, source, {
+    result: (location) => {
+      result = location
+    },
+    error: (message) => {
+      failure = new Error(message)
+    },
+  })
   f.find('scale-start')
-  const location = await done.promise
+  const location = await waitForProgress(
+    () => {
+      if (failure) throw failure
+      return result
+    },
+    () =>
+      f.workers.reduce(
+        (count, worker) =>
+          count + worker.messages.length + worker.replies.length,
+        0,
+      ),
+    3000,
+    'Find worker made no progress',
+  )
   assert.equal(location.total, 1)
   assert.equal(location.next.match.from, source.length - 11)
   assert.equal(f.workers.length, 1)
@@ -1189,42 +1205,25 @@ test('worker restarts are finite and disposal cancels bootstrap, listeners and p
   assert.equal(immediate.workers.length, 0)
 })
 
-test('a new document identity gets a fresh worker after a failed generation', async (t) => {
-  const workers = []
-  let blocked = true
-  let findSent
-  const freshFind = new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Fresh worker did not receive find')),
-      3000,
-    )
-    findSent = (worker) => {
-      clearTimeout(timer)
-      resolve(worker)
-    }
-  })
-  const f = fixture(t, 'one', {
-    timeoutMs: 5,
-    worker: () => {
-      const worker = new TestWorker()
-      worker.blocked = blocked
-      if (!blocked) {
-        const postMessage = worker.postMessage.bind(worker)
-        worker.postMessage = (message) => {
-          postMessage(message)
-          if (message.type === 'find') findSent(worker)
-        }
-      }
-      workers.push(worker)
-      return worker
-    },
-  })
+test('a new document identity gets a fresh worker after a failed generation', (t) => {
+  const f = queuedFixture(t, 'one', { timeoutMs: 5 })
   f.find('one')
-  await wait(() => f.errors.length === 1)
-  blocked = false
+  t.mock.timers.tick(0)
+  // Hold both bootstrap handshakes until the two generations time out.
+  t.mock.timers.tick(5)
+  t.mock.timers.tick(5)
+  assert.equal(f.errors.length, 1)
+  assert.equal(f.workers.length, 2)
+  assert.ok(f.workers.every((worker) => worker.terminated))
   f.session.reidentify({ tabId: 'a', revision: 1 })
-  const freshWorker = await freshFind
-  assert.equal(workers.length, 3)
-  assert.equal(freshWorker, workers[2])
+  t.mock.timers.tick(0)
+  f.drain()
+  const freshWorker = f.workers.find((worker) =>
+    worker.messages.some((message) => message.type === 'find'),
+  )
+  assert.equal(f.workers.length, 3)
+  assert.equal(freshWorker, f.workers[2])
   assert.equal(freshWorker.messages[0].head.revision, 1)
+  assert.equal(f.results.length, 1, 'fresh worker must reply to find')
+  assert.equal(f.results.at(-1).location.total, 1)
 })

@@ -300,14 +300,25 @@ export class DocumentWorkerClient {
     }
   }
   #watchCode() {
-    const version = this.#session.snapshot().version
+    const version = this.#session.snapshot().version,
+      request = this.#boundaries
     if (
-      this.#boundaries &&
-      !this.#boundaries.codeOnly &&
-      !this.#boundaries.complete &&
-      this.#boundaries.version === version
-    )
+      request &&
+      !request.codeOnly &&
+      !request.complete &&
+      request.version === version
+    ) {
+      if (this.#codeReceivers.size && !request.coverage)
+        this.#requestBoundaries(
+          request.config,
+          request.receive,
+          request.declined,
+          request.from,
+          request.baseVersion,
+          false,
+        )
       return
+    }
     if (this.#codeReceivers.size && this.#codeConfig?.version === version)
       this.#requestBoundaries(
         this.#codeConfig.config,

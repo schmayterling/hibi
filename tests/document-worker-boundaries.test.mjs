@@ -639,6 +639,7 @@ test('a code listener can edit without delivering an old page to another listene
   )
   f.request()
   await until(() => f.pages.at(-1)?.done && f.pages.at(-1)?.version === 1)
+  await until(() => second.length > 0)
   assert.ok(second.length > 0)
   assert.ok(second.every((page) => page.version === 1))
   assert.ok(
@@ -1089,6 +1090,50 @@ test('last unsubscribe retains the syntax model for the next suffix repair', asy
   assert.deepEqual(repairs, [repairs[0], repairs[0]])
   assert.ok(repairs[0] < 10, JSON.stringify(repairs))
   t.diagnostic(JSON.stringify({ retainedSyntaxRepairAdvances: repairs }))
+})
+
+test('subscribing after the first syntax request does not parse the note twice', async (t) => {
+  const advance = MarkdownBoundaryIndex.prototype.advance
+  let advances = 0
+  t.mock.method(MarkdownBoundaryIndex.prototype, 'advance', function () {
+    advances++
+    return advance.call(this)
+  })
+  const unit = '# h\n\npara words here\n\n~~~js\nx = 1\n~~~\n\n'
+  const blocks = Math.ceil((2 * 1048576) / unit.length)
+  const settings = {
+    ...config,
+    syntax: ['table@1', 'tasks@1'],
+    flavors: [],
+    opaque: ['Table'],
+    chunkSize: 4096,
+    giantBlock: 65536,
+  }
+  const work = []
+  for (const subscribeFirst of [true, false]) {
+    advances = 0
+    const f = fixture(t, unit.repeat(blocks)),
+      code = []
+    const listen = () =>
+      f.client.subscribeCodeExtents((page) => code.push(page))
+    if (subscribeFirst) listen()
+    f.request(settings)
+    if (!subscribeFirst) listen()
+    await until(() => codeDone(f))
+    assert.equal(code.flatMap((page) => page.records).length, blocks)
+    assert.ok(f.pages.at(-1).done)
+    assert.deepEqual(f.declined, [])
+    assert.deepEqual(f.errors, [])
+    work.push(advances)
+    f.client.dispose()
+    f.session.dispose()
+  }
+  t.diagnostic(
+    JSON.stringify({
+      mountOrderAdvances: { subscribeFirst: work[0], requestFirst: work[1] },
+    }),
+  )
+  assert.equal(work[1], work[0])
 })
 
 test('last unsubscribe removes geometry from an in-flight syntax request', async (t) => {

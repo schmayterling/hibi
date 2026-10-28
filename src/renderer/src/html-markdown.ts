@@ -11,7 +11,6 @@ import {
   markdownLiteral as literal,
 } from '../../shared/markdown-literal.ts'
 import { renderedHtmlOptions } from '../../shared/rendered-html.ts'
-import { escapeLineStarts, literal } from './markdown-literal.ts'
 
 const blocks = new Set([
   'ADDRESS',

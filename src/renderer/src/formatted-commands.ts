@@ -12,10 +12,13 @@ import {
   type TransactionSpec,
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import {
+  markdownLineStarts as escapeLineStarts,
+  markdownLiteral as literal,
+} from '../../shared/markdown-literal.ts'
 import { uncovered } from './chunked-markdown.ts'
 import { formattedFormatting } from './formatted-contributions.ts'
 import { codeIndentLines, detectIndentUnit, tabIndent } from './indentation.ts'
-import { escapeLineStarts, literal } from './markdown-literal.ts'
 
 /*
  * Structure keys for the formatted view. They edit the Markdown source the

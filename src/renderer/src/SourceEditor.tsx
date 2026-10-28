@@ -169,6 +169,15 @@ import {
 } from './source-view'
 import { textProjection } from './text-projection'
 
+/** Each mounted view's bridge to its document session. */
+const bridges = new WeakMap<
+  EditorView,
+  ReturnType<typeof createSourceSession>
+>()
+/** The whole source after editor changes, exactly as the mounted view commits them. */
+export const sourceAfter = (view: EditorView, changes: readonly RawEdit[]) =>
+  bridges.get(view)?.sourceAfter(changes) ?? null
+
 /** The line at a view's top, and where its block starts relative to the top. */
 function placeOf(view: EditorView) {
   const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
@@ -2316,6 +2325,7 @@ export function SourceEditor({
       },
       resolveReference,
     )
+    bridges.set(editor, bridge)
     const unregisterViewApi = editorViewRegistry.register(
       document.tabId,
       viewId as ViewId,
@@ -2445,6 +2455,7 @@ export function SourceEditor({
       formatting.current = null
       reportFormatting.current(null)
       unregister()
+      bridges.delete(editor)
       unregisterViewApi()
       detachInteractions()
       editor.contentDOM.removeEventListener(

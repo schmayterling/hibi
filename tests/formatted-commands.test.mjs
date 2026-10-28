@@ -663,6 +663,19 @@ test('tab on selected code lines indents each line, and delete never joins a fen
   // A heading's underline is never joined to its text or the paragraph after it.
   assert.equal(run('Title|\n===\n\nnext', deleteForward), 'Title|\n===\n\nnext')
   assert.equal(run('Title\n===\n|next', deleteBackward), 'Title\n===\n|next')
+  // Blank lines after a fence or a hidden definition go; the caret stays at the text.
+  assert.equal(
+    run('~~~\ncode\n~~~\n\n|after', deleteBackward),
+    '~~~\ncode\n~~~\n|after',
+  )
+  assert.equal(
+    run('[ref]: /target\n\n|after', deleteBackward),
+    '[ref]: /target\n|after',
+  )
+  assert.equal(
+    run('[ref]: /target\n|after', deleteBackward),
+    '[ref]: /target\n|after',
+  )
 })
 
 test('enter inside formatting closes it before the break and opens it again after', () => {

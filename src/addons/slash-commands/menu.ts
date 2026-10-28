@@ -69,6 +69,8 @@ export function createSlashMenu(
     menu.setAttribute('aria-hidden', 'true')
     if (open()) menu.hidePopover()
     for (const [name, value] of previous) {
+      // Dismissing a closed menu writes nothing to the editor.
+      if (editor.getAttribute(name) === value) continue
       if (value === null) editor.removeAttribute(name)
       else editor.setAttribute(name, value)
     }

@@ -512,12 +512,6 @@ it('app and exported site share heading destinations and retain legacy links', {
 
   await t.test(
     'app resolves the same canonical and legacy destinations',
-    {
-      todo:
-        t.formattedEngine === 'codemirror'
-          ? 'formatted gap link-003: heading links must navigate to canonical and legacy destinations'
-          : undefined,
-    },
     async () => {
       for (const index of [0, 1, 2, 3, 5]) {
         await desktop.evaluate(() => {

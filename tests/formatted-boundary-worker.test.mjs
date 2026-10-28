@@ -7,8 +7,9 @@ import test from 'node:test'
 import { build } from 'vite'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 
+// Its cases mount several 50 MiB notes, among them one fenced code block.
 test('a real worker formats a never-visited 50 mib far jump without main-thread scanning and declines unknown blocks', {
-  timeout: 180000,
+  timeout: 240000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-boundary-worker-'))
   let app, server
@@ -352,69 +353,148 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
     },
   )
 
-  await page.evaluate(async () => {
-    const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
-    await window.livePreview.mount(
-      unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length)),
-      undefined,
-      { worker: true, history: true, editable: true },
-    )
-  })
-  await page
-    .waitForFunction(
-      () =>
-        window.livePreview.workerState.ready ||
-        window.livePreview.workerState.errors.length,
-      undefined,
-      { timeout: 120000 },
-    )
-    .catch(async (error) => {
-      t.diagnostic(
-        JSON.stringify(
-          await page.evaluate(() => ({
-            ...window.livePreview.workerState,
-            ...window.livePreview.probe,
-          })),
-        ),
+  await t.test(
+    'foreground far-jump work stays bounded when idle prefetch precedes sampling',
+    async (t) => {
+      t.after(() => page.evaluate(() => window.prefetchIdle?.restore()))
+      await page.evaluate(async () => {
+        const request = window.requestIdleCallback
+        const cancel = window.cancelIdleCallback
+        const held = new Map()
+        let next = 0
+        // only optional parse-ahead waits; viewport continuations and worker adoption keep their timeouts.
+        window.requestIdleCallback = (callback, options) => {
+          if (options?.timeout !== undefined) return request(callback, options)
+          held.set(--next, callback)
+          return next
+        }
+        window.cancelIdleCallback = (id) => {
+          if (!held.delete(id)) cancel(id)
+        }
+        window.prefetchIdle = {
+          units: 0,
+          slices: 0,
+          run() {
+            const now = performance.now
+            // a quiet slice finishes its range regardless of machine speed.
+            performance.now = () => 0
+            try {
+              for (const [id, callback] of [...held]) {
+                held.delete(id)
+                const before = window.livePreview.probe.parsedUnits
+                callback({ didTimeout: false, timeRemaining: () => 50 })
+                const units = window.livePreview.probe.parsedUnits - before
+                this.units += units
+                this.slices += Number(units > 0)
+              }
+            } finally {
+              performance.now = now
+            }
+          },
+          restore() {
+            window.requestIdleCallback = request
+            window.cancelIdleCallback = cancel
+            const callbacks = [...held.values()]
+            held.clear()
+            for (const callback of callbacks)
+              callback({ didTimeout: false, timeRemaining: () => 0 })
+            delete window.prefetchIdle
+          },
+        }
+        const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+        await window.livePreview.mount(
+          unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length)),
+          undefined,
+          { worker: true, history: true, editable: true },
+        )
+      })
+      await page
+        .waitForFunction(
+          () =>
+            window.livePreview.workerState.ready ||
+            window.livePreview.workerState.errors.length,
+          undefined,
+          { timeout: 120000 },
+        )
+        .catch(async (error) => {
+          t.diagnostic(
+            JSON.stringify(
+              await page.evaluate(() => ({
+                ...window.livePreview.workerState,
+                ...window.livePreview.probe,
+              })),
+            ),
+          )
+          throw error
+        })
+      assert.deepEqual(
+        await page.evaluate(() => window.livePreview.workerState.errors),
+        [],
       )
-      throw error
-    })
-  assert.deepEqual(
-    await page.evaluate(() => window.livePreview.workerState.errors),
-    [],
-  )
-  const before = await page.evaluate(() => {
-    const preview = window.livePreview,
-      view = preview.view()
-    preview.reset()
-    const at = view.state.doc.lineAt(view.state.doc.length - 4096).from
-    view.dispatch({ selection: { anchor: at }, scrollIntoView: true })
-    return { at, length: view.state.doc.length }
-  })
-  await page.waitForFunction(
-    (at) =>
-      [...document.querySelectorAll('.hibi-lp-heading')].some(
-        (element) =>
-          Math.abs(window.livePreview.view().posAtDOM(element) - at) < 12000,
-      ),
-    before.at,
-  )
-  const after = await page.evaluate(() => ({
-    ...window.livePreview.probe,
-    ...window.livePreview.workerState,
-  }))
-  assert.ok(before.length >= 50 * 1024 * 1024)
-  assert.equal(after.scannedUnits, 0, JSON.stringify(after))
-  assert.ok(after.parsedUnits < 64 * 1024, JSON.stringify(after))
-  assert.ok(after.maxRecords <= 128)
-  assert.deepEqual(errors, [])
-  t.diagnostic(
-    JSON.stringify({
-      length: before.length,
-      mainThreadScannedUnits: after.scannedUnits,
-      mainThreadParsedUnits: after.parsedUnits,
-      pages: after.pages,
-    }),
+      const before = await page.evaluate(() => {
+        const preview = window.livePreview,
+          view = preview.view()
+        preview.reset()
+        window.prefetchIdle.units = window.prefetchIdle.slices = 0
+        const at = view.state.doc.lineAt(view.state.doc.length - 4096).from
+        view.dispatch({ selection: { anchor: at }, scrollIntoView: true })
+        return { at, length: view.state.doc.length }
+      })
+      await page.waitForFunction(
+        (at) =>
+          [...document.querySelectorAll('.hibi-lp-heading')].some(
+            (element) =>
+              Math.abs(window.livePreview.view().posAtDOM(element) - at) <
+              12000,
+          ),
+        before.at,
+      )
+      await page.waitForFunction(() => {
+        const preview = window.livePreview
+        preview.refresh()
+        window.prefetchIdle.run()
+        const { from, to } = preview.view().viewport
+        return window.prefetchIdle.units > 0 && preview.covered(from, to)
+      })
+      const after = await page.evaluate(() => ({
+        foregroundParsedUnits:
+          window.livePreview.probe.parsedUnits - window.prefetchIdle.units,
+        prefetchedUnits: window.prefetchIdle.units,
+        prefetchSlices: window.prefetchIdle.slices,
+        // sixteen chunks each way, plus context and whole-chunk alignment at both ends.
+        prefetchLimit:
+          Math.min(
+            window.livePreview.view().state.doc.length,
+            window.livePreview.view().viewport.to + 16 * 4096,
+          ) -
+          Math.max(0, window.livePreview.view().viewport.from - 16 * 4096) +
+          4 * 4096,
+        ...window.livePreview.probe,
+        ...window.livePreview.workerState,
+      }))
+      assert.ok(after.prefetchedUnits > 0)
+      assert.ok(
+        after.prefetchedUnits < after.prefetchLimit,
+        JSON.stringify(after),
+      )
+      assert.ok(after.parsedUnits > 64 * 1024, JSON.stringify(after))
+      assert.ok(before.length >= 50 * 1024 * 1024)
+      assert.equal(after.scannedUnits, 0, JSON.stringify(after))
+      assert.ok(after.foregroundParsedUnits < 64 * 1024, JSON.stringify(after))
+      assert.ok(after.maxRecords <= 128)
+      assert.deepEqual(errors, [])
+      t.diagnostic(
+        JSON.stringify({
+          length: before.length,
+          mainThreadScannedUnits: after.scannedUnits,
+          foregroundParsedUnits: after.foregroundParsedUnits,
+          prefetchedUnits: after.prefetchedUnits,
+          totalParsedUnits: after.parsedUnits,
+          prefetchLimit: after.prefetchLimit,
+          pages: after.pages,
+        }),
+      )
+    },
   )
 
   await t.test(
@@ -648,6 +728,78 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
         )
       }
       t.diagnostic(JSON.stringify({ structuralRepairs: repairs }))
+    },
+  )
+
+  await t.test(
+    'a code language change inside one 50 mib fence keeps the worker index',
+    async () => {
+      await page.evaluate(async () => {
+        const line = 'const value = 1\n'
+        await window.livePreview.mount(
+          `\`\`\`js\n${line.repeat(Math.ceil((50 * 1024 * 1024) / line.length))}\`\`\`\n\nend\n`,
+          { width: 800, height: 600 },
+          { worker: true, editable: true },
+        )
+        window.codeKeywords = () =>
+          [
+            ...document.querySelectorAll(
+              '.hibi-lp-codeblock .hibi-token-keyword',
+            ),
+          ].filter((token) => token.textContent === 'const').length
+      })
+      await page.waitForFunction(
+        () => window.livePreview.workerState.ready,
+        undefined,
+        { timeout: 120000 },
+      )
+      await page.evaluate(() => {
+        const preview = window.livePreview
+        preview.scrollTo(preview.view().state.doc.length - 2048)
+      })
+      await page.waitForFunction(
+        () =>
+          window.livePreview.view().viewport.from > 40 * 1024 * 1024 &&
+          window.codeKeywords() > 0 &&
+          !window.livePreview.settling(),
+        undefined,
+        { timeout: 120000 },
+      )
+      try {
+        // The fence's bounds stay known: no new boundary request, a scan of
+        // the lines on screen rather than of the fence, and at most its
+        // window around the screen parses again.
+        for (const enabled of [false, true]) {
+          await page.evaluate(async (enabled) => {
+            const preview = window.livePreview
+            await preview.settle()
+            preview.reset()
+            window.requestsBefore = preview.workerState.requests
+            preview.setCodeLanguage('javascript', enabled)
+          }, enabled)
+          await page.waitForFunction(
+            (enabled) =>
+              window.codeKeywords() > 0 === enabled &&
+              !window.livePreview.settling(),
+            enabled,
+          )
+          const result = await page.evaluate(() => ({
+            ...window.livePreview.probe,
+            requests:
+              window.livePreview.workerState.requests - window.requestsBefore,
+            errors: window.livePreview.workerState.errors,
+          }))
+          t.diagnostic(JSON.stringify({ enabled, ...result }))
+          assert.equal(result.requests, 0, JSON.stringify(result))
+          assert.ok(result.scannedUnits <= 16 * 1024, JSON.stringify(result))
+          assert.ok(result.parsedUnits <= 2 * 64 * 1024, JSON.stringify(result))
+          assert.deepEqual(result.errors, [])
+        }
+      } finally {
+        await page.evaluate(() =>
+          window.livePreview.setCodeLanguage('javascript', true),
+        )
+      }
     },
   )
 

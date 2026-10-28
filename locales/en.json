@@ -2027,7 +2027,7 @@
   "f59f73db914f": "This addon supplied duplicate or invalid settings.",
   "6783f24ab2c9": "This addon supplied invalid window options.",
   "5eebb144c45a": "This addon uses the ID of a built-in addon and cannot replace it.",
-  "50cf98d7b64d": "This addon uses the previous formatted editor SDK. Update it to addon API 3 before using its formatted-view features.",
+  "211d9f26c0c3": "This addon uses the previous formatted editor SDK. Update its formatted-view features for the current editor before using them here.",
   "2d715c5a75aa": "This addon was disabled. Enable it in Settings → Addons to continue.",
   "b442d72f5b4f": "This addon was disabled. Enable it to continue.",
   "6f81d1a9cd1d": "This addon window input must be JSON under 64 KB.",

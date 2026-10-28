@@ -6,6 +6,7 @@ import {
   formattedDefinitionRange,
   formattedListStart,
   formattedMarkerRanges,
+  formattedReferenceLink,
   type TextEffect,
 } from './formatted-text-rules.ts'
 import type { BoundaryConfig } from './markdown-boundary-syntax.ts'
@@ -71,6 +72,7 @@ export function* formattedTextEffects(
   definitions: Set<string>,
   resolveFootnotes: boolean,
   inlineOnly = false,
+  referenceResolved?: (label: string) => boolean,
 ): Generator<TextEffect | null> {
   const literal = new Set(config.literal),
     features = new Set(config.textFeatures ?? [])
@@ -347,11 +349,17 @@ export function* formattedTextEffects(
         state.prefix = Math.max(state.prefix, offset + text.from)
       }
     }
-    for (const hidden of formattedMarkerRanges(node, read))
-      yield effect('hide', hidden.from, hidden.to)
+    const reference =
+      name === 'Link' ? formattedReferenceLink(node, read) : null
+    const markers = formattedMarkerRanges(
+      node,
+      read,
+      !!reference && !!referenceResolved?.(reference.label),
+    )
+    for (const hidden of markers) yield effect('hide', hidden.from, hidden.to)
     if (
       name === 'InlineCode' ||
-      (name === 'Link' && !formattedMarkerRanges(node, read).length)
+      (name === 'Link' && !markers.length && !reference)
     )
       descend = false
     if (name === 'Highlight' || name === 'WikiLink') {
@@ -413,6 +421,7 @@ export function* formattedTextEffects(
               definitions,
               resolveFootnotes,
               true,
+              referenceResolved,
             )) {
               if (!effect) {
                 yield null

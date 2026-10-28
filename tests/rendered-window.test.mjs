@@ -6,7 +6,10 @@ import {
   boundaryInlineParser,
   boundaryParser,
 } from '../src/shared/markdown-boundary-syntax.ts'
-import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
+import {
+  RenderedTextIndex,
+  UnsupportedRenderedFind,
+} from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { searchRenderedLiteral } from '../src/shared/source-rendered-search.ts'
 import { renderedConfig } from './rendered-config.mjs'
@@ -89,6 +92,27 @@ test('leaf projection retains literal ancestor settings', () => {
   ].filter(Boolean)
   assert.ok(
     !effects.some((effect) => effect.kind === 'hide' || effect.kind === 'atom'),
+  )
+})
+
+test('reference link syntax fails closed until shared resolution is available', () => {
+  for (const text of [
+    'hello [label][hidden]',
+    'hello [hidden][]',
+    'hello [hidden]',
+    '| a | b |\n| - | - |\n| [label][hidden] | word |',
+  ]) {
+    assert.throws(
+      () => build(text + '\n\n[hidden]: /url'),
+      UnsupportedRenderedFind,
+      text,
+    )
+  }
+  assert.equal(
+    [...build('hello [label](url)').range(0, 18)]
+      .map((chunk) => chunk.text)
+      .join(''),
+    'hello label',
   )
 })
 

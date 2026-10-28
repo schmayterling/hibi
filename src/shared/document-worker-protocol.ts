@@ -178,5 +178,6 @@ export type DocumentWorkerReply =
       epoch: string
       id?: number
       stage: 'replica' | 'find' | 'metadata'
+      reason?: 'unsupported'
       message: string
     }

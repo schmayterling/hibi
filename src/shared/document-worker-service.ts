@@ -264,6 +264,10 @@ export class DocumentWorkerService {
       epoch: this.#epoch,
       stage,
       ...(id === undefined ? {} : { id }),
+      ...(this.#renderedModule &&
+      error instanceof this.#renderedModule.UnsupportedRenderedFind
+        ? { reason: 'unsupported' as const }
+        : {}),
       message: error instanceof Error ? error.message : String(error),
     })
   }

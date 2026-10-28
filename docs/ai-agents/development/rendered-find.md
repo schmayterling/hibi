@@ -4,7 +4,7 @@ rendered find is an opt-in mode of the existing document worker. source find rem
 
 ## configuration and requests
 
-DocumentWorkerClient.find(query, from, to, action, options) accepts mode: 'rendered', config, prefix, viewport and replacement. config is the exact BoundaryConfig produced by formattedSyntax for the editor's chosen flavours, enabled contributions and literal syntax settings. the client uses its active boundary configuration when one is available; explicit config is useful for tests. unsupported custom grammar or rendering is refused. the worker does not detect flavours independently or substitute a generic gfm parser.
+DocumentWorkerClient.find(query, from, to, action, options) accepts mode: 'rendered', config, prefix, viewport and replacement. config is the exact BoundaryConfig produced by formattedSyntax for the editor's chosen flavours, enabled contributions and literal syntax settings. the client uses its active boundary configuration when one is available; explicit config is useful for tests. unsupported custom grammar or rendering is refused. reference-link syntax also refuses rendered mode until the shared source-reference resolver is connected; this includes full, collapsed and shortcut references in table cells. the worker sends an error with stage: 'find' and reason: 'unsupported'. the client passes that reason as the optional second error-callback argument. the source replica remains available for source find. the worker does not detect flavours independently or substitute a generic gfm parser.
 
 prefix is the normalized source offset after an opaque header. it must agree with config.prefix. the shared frontmatter model supplies it; this projection does not parse yaml.
 
@@ -34,7 +34,7 @@ renderedRange(runs, from, to, { length, read }, { blockSeparator? }) is the pure
 
 the index follows unrevealed text: soft paragraph breaks flow as spaces, semantic blocks have a newline separator, and table cells have tab separators. literal syntax settings leave their source visible. raw html blocks and inline-code content remain literal. lenient links follow the actual grammar, including its incomplete-link behaviour.
 
-images, rules, math, mermaid, typst and other supported atomic widgets are search barriers with no searchable text. matches cannot cross them. their hidden source, including image alt text and urls, latex and diagram code, is searchable in source view. custom widget text and reference-link resolution are not synthesized.
+images, rules, math, mermaid, typst and other supported atomic widgets are search barriers with no searchable text. matches cannot cross them. their hidden source, including image alt text and urls, latex and diagram code, is searchable in source view. custom widget text and reference-link resolution are not synthesized. reference syntax produces an unsupported result rather than exposing a potentially hidden label. the planned resolver integration reuses the existing source-reference service, including its compatibility fallback for ambiguous definitions, and invalidates replacement proof when definitions change.
 
 ## verified replacement and history
 

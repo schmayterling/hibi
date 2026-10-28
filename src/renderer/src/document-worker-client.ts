@@ -47,7 +47,7 @@ type ClientOptions = {
     mode?: FindMode,
     replacement?: import('../../shared/rendered-replace.ts').RenderedReplacement,
   ) => void
-  error: (message: string) => void
+  error: (message: string, reason?: 'unsupported') => void
   metadataPending?: () => void
   metadataResult?: (
     page: SourceOwnerPage,
@@ -733,7 +733,10 @@ export class DocumentWorkerClient {
           this.#findDeadline = undefined
         }
       }
-      if (reply.id === this.#latest?.id) this.#options.error(reply.message)
+      if (reply.id === this.#latest?.id) {
+        if (reply.reason) this.#options.error(reply.message, reply.reason)
+        else this.#options.error(reply.message)
+      }
     }
     this.#flushQuery()
     this.#flushMetadata()

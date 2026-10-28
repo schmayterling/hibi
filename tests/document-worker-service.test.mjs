@@ -989,6 +989,25 @@ test('rendered find reuses one replica, projection and scheduler for navigation 
   assert.equal(projections.length, 2)
 })
 
+test('reference links return unsupported without hiding source find on the same replica', async (t) => {
+  const f = fixture(t, 'hello [label][hidden]\n\n[hidden]: /url')
+  f.find(1, 0, 'hidden', 0, 0, { mode: 'rendered' })
+  const unsupported = await f.next(
+    (reply) => reply.type === 'error' && reply.id === 1,
+  )
+  assert.equal(unsupported.stage, 'find')
+  assert.equal(unsupported.reason, 'unsupported')
+  assert.ok(
+    !f.messages.some((reply) => reply.type === 'find' && reply.id === 1),
+  )
+  f.find(2, 0, 'hidden')
+  const source = await f.next(
+    (reply) => reply.type === 'find' && reply.id === 2,
+  )
+  assert.equal(source.location.total, 2)
+  assert.equal(f.messages.filter((reply) => reply.type === 'ack').length, 1)
+})
+
 test('rendered replacements return only grammar-verified edits for an exact match', async (t) => {
   const f = fixture(t, '2 * 3 * 4\n\nTARGET tail')
   f.find(1, 0, ' 3 ', 3, 6, { mode: 'rendered', replacement: '3' })

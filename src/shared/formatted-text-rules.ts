@@ -1,6 +1,7 @@
 import type { SyntaxNode } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import { alertMarker, alertType } from '../addons/markdown/alerts.ts'
+import { referenceLabel } from './markdown-reference-label.ts'
 import type { RenderedInput, RenderedRange } from './rendered-range.ts'
 
 export type TextRead = (from: number, to: number) => string
@@ -29,6 +30,29 @@ export const textFeatures = new Set([
   'mermaid.blocks',
   'typst.blocks',
 ])
+
+/** A reference link shape shared with the view's definition lookup. */
+export function formattedReferenceLink(node: SyntaxNode, read: TextRead) {
+  const marks = node.getChildren('LinkMark'),
+    open = marks[0]
+  const close = marks.find((mark) => read(mark.from, mark.to) === ']')
+  if (
+    !open ||
+    !close ||
+    read(open.from, open.to) !== '[' ||
+    read(close.to, close.to + 1) === '('
+  )
+    return null
+  const written = node.getChild('LinkLabel')
+  const from =
+    written && written.to - written.from > 2 ? written.from + 1 : open.to
+  const to =
+    written && written.to - written.from > 2 ? written.to - 1 : close.from
+  if (to - from > 999) return null
+  const text = read(from, to)
+  if (!text.trim()) return null
+  return { open, close, end: node.to, label: referenceLabel(text) }
+}
 
 /** Source hidden by the unrevealed inline views. The view and worker share these exact ranges. */
 export function formattedMarkerRanges(

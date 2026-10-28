@@ -450,6 +450,20 @@ test('operation overflow restart preserves quiet time before rebuilding the late
   assert.deepEqual(f.errors, [])
 })
 
+test('reference-link unsupported reason reaches the client and source mode remains available', async (t) => {
+  const errors = []
+  const f = fixture(t, 'hello [label][hidden]\n\n[hidden]: /url', {
+    error: (message, reason) => errors.push({ message, reason }),
+  })
+  f.find('hidden', 0, 0, null, { mode: 'rendered', config: renderedConfig })
+  await wait(() => errors.length > 0)
+  assert.equal(errors[0].reason, 'unsupported')
+  f.find('hidden')
+  await wait(() => f.results.length > 0)
+  assert.equal(f.results.at(-1).location.total, 2)
+  assert.equal(f.workers.length, 1)
+})
+
 test('32 mib real find build completes with progress on one worker', {
   timeout: 60000,
 }, async (t) => {

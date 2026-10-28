@@ -135,6 +135,12 @@ class Reader {
   }
 }
 
+export class UnsupportedRenderedFind extends Error {
+  constructor() {
+    super('Formatted find configuration is unsupported.')
+  }
+}
+
 /**
  * The formatted parser owns syntax. Packed masks, shared boundary metadata
  * survive a build. Navigation lazily retains two windows; counts retain no matches.
@@ -437,6 +443,10 @@ export class RenderedTextIndex {
         this.#inline,
         definitions,
         resolveFootnotes,
+        false,
+        () => {
+          throw new UnsupportedRenderedFind()
+        },
       )) {
         if (effect && apply) yield* this.#effect(effect, range)
         if (this.#tick()) yield
@@ -824,7 +834,9 @@ export class RenderedTextIndex {
       return result(null)
     const raw = renderedReplacementCandidate(match, replacement)
     if (!raw) return result(null)
-    if (yield* this.#verifies(match, replacement, raw)) return result(raw)
+    const verified = yield* this.#verifies(match, replacement, raw)
+    if (verified === null) return result(null)
+    if (verified) return result(raw)
     const escaped = renderedReplacementCandidate(match, replacement, true)
     if (
       !escaped ||
@@ -1116,7 +1128,7 @@ export class RenderedTextIndex {
     match: SourceMatch,
     replacement: string,
     edits: readonly RenderedEdit[],
-  ): Generator<void, boolean> {
+  ): Generator<void, boolean | null> {
     const tail = this.#plainTail!
     let from = Math.max(tail.from, edits[0]!.from - page),
       to = Math.min(tail.to, edits.at(-1)!.to + page)
@@ -1159,7 +1171,7 @@ export class RenderedTextIndex {
     match: SourceMatch,
     replacement: string,
     edits: readonly RenderedEdit[],
-  ): Generator<void, boolean> {
+  ): Generator<void, boolean | null> {
     if (
       this.#plainTail &&
       edits.every(
@@ -1225,8 +1237,8 @@ export class RenderedTextIndex {
         nextRange,
         TreeFragment.applyChanges(this.#fragments, mapped),
       )
-    } catch {
-      return false
+    } catch (error) {
+      return error instanceof UnsupportedRenderedFind ? null : false
     }
     if (
       local.size !== partial.definitions.size ||

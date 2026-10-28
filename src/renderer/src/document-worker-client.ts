@@ -162,7 +162,7 @@ export class DocumentWorkerClient {
   #boundaryTo: number | null = null
   #codeDelivered = false
   #codeVersion = -1
-  #codeConfig: BoundaryConfig | null = null
+  #codeConfig: { config: BoundaryConfig; version: number } | null = null
   readonly #codeReceivers = new Set<(page: CodeExtentPage) => void>()
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
@@ -172,24 +172,27 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
-        if (this.#codeConfig?.prefix) {
-          let offset = 0
-          const changes = editorChangesFromSource(
-            prepared.before,
-            operation.changes,
-          ).map((change) => {
-            const range = {
-              fromA: change.from,
-              toA: change.to,
-              fromB: change.from + offset,
-              toB: change.from + offset + change.insert.length,
-            }
-            offset += change.insert.length - (change.to - change.from)
-            return range
-          })
-          const prefix = mappedPrefix(this.#codeConfig.prefix, changes)
-          if (prefix !== null)
-            this.#codeConfig = { ...this.#codeConfig, prefix }
+        if (this.#codeConfig?.version === prepared.before.version) {
+          this.#codeConfig.version = prepared.after.version
+          const config = this.#codeConfig.config
+          if (config.prefix) {
+            let offset = 0
+            const changes = editorChangesFromSource(
+              prepared.before,
+              operation.changes,
+            ).map((change) => {
+              const range = {
+                fromA: change.from,
+                toA: change.to,
+                fromB: change.from + offset,
+                toB: change.from + offset + change.insert.length,
+              }
+              offset += change.insert.length - (change.to - change.from)
+              return range
+            })
+            const prefix = mappedPrefix(config.prefix, changes)
+            if (prefix !== null) this.#codeConfig.config = { ...config, prefix }
+          }
         }
         if (this.#boundaries) {
           // The receiver still belongs to its view's old document until it requests again.
@@ -273,14 +276,24 @@ export class DocumentWorkerClient {
       this.#watchCode()
     return () => {
       this.#codeReceivers.delete(receive)
-      if (!this.#codeReceivers.size && this.#boundaries?.codeOnly)
+      if (!this.#codeReceivers.size && this.#boundaries?.codeOnly) {
+        const config = this.#codeConfig
         this.releaseBoundaries()
+        this.#codeConfig = config
+      }
     }
   }
   #watchCode() {
-    if (this.#codeReceivers.size && this.#codeConfig)
+    const version = this.#session.snapshot().version
+    if (
+      this.#boundaries &&
+      !this.#boundaries.codeOnly &&
+      this.#boundaries.version === version
+    )
+      return
+    if (this.#codeReceivers.size && this.#codeConfig?.version === version)
       this.#requestBoundaries(
-        this.#codeConfig,
+        this.#codeConfig.config,
         (_page, acknowledge) => acknowledge(),
         () => {},
         0,
@@ -306,9 +319,9 @@ export class DocumentWorkerClient {
     codeOnly: boolean,
   ) {
     if (this.#disposed || this.#failed) return
-    this.#codeConfig = config
     const key = boundaryKey(config),
       version = this.#session.snapshot().version
+    this.#codeConfig = { config, version }
     if (
       this.#boundaries?.key === key &&
       this.#boundaries.config.prefix === config.prefix &&
@@ -341,6 +354,7 @@ export class DocumentWorkerClient {
   }
   releaseBoundaries(retain = false) {
     if (retain && this.#codeReceivers.size && this.#codeConfig) {
+      if (!this.#boundaries?.codeOnly) this.#boundaries = null
       this.#watchCode()
       return
     }

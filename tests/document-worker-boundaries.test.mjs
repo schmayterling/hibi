@@ -59,7 +59,11 @@ const until = (predicate) =>
     }
     poll()
   })
-function fixture(t, source = '# title\n\ntext\n\n'.repeat(20000)) {
+function fixture(
+  t,
+  source = '# title\n\ntext\n\n'.repeat(20000),
+  beforeClient,
+) {
   const transports = [],
     pages = [],
     declined = [],
@@ -70,6 +74,7 @@ function fixture(t, source = '# title\n\ntext\n\n'.repeat(20000)) {
     0,
     { enqueue: () => {}, onError: (error) => errors.push(error) },
   )
+  beforeClient?.(session)
   const client = new DocumentWorkerClient(session, {
     changed: () => {},
     pending: () => {},
@@ -668,8 +673,17 @@ test('retained code coverage repairs after syntax release and stops work with th
     ),
   )
   await new Promise(setImmediate)
-  assert.equal(advances, stopped)
+  const stoppedWork = advances - stopped
+  assert.equal(stoppedWork, 0)
   assert.equal(code.length, count)
+  const restarted = []
+  const stopRestarted = f.client.subscribeCodeExtents((page) =>
+    restarted.push(page),
+  )
+  await until(() => restarted.flatMap((page) => page.records).length === 200)
+  assert.ok(restarted.every((page) => page.version === 2))
+  assert.equal(code.length, count)
+  stopRestarted()
   assert.deepEqual(f.declined, [])
   assert.deepEqual(f.errors, [])
   t.diagnostic(
@@ -678,10 +692,59 @@ test('retained code coverage repairs after syntax release and stops work with th
         messages: repair.length,
         codeRecords: repair[0].records.length,
         syntaxRecords: 0,
-        advancesAfterStop: advances - stopped,
+        advancesAfterStop: stoppedWork,
       },
     }),
   )
+})
+
+test('the code watch preserves a syntax request made earlier in the edit notification', async (t) => {
+  const prefix = '---\r\ntitle: a\r\n---\r\n\r\n'
+  const configured = {
+    ...config,
+    prefix: prefix.replaceAll('\r\n', '\n').length,
+  }
+  let f
+  f = fixture(
+    t,
+    prefix + '~~~\r\nbody\r\n~~~\r\n\r\n'.repeat(100),
+    (session) => {
+      t.after(
+        session.subscribeOperations(() => {
+          f.request({ ...configured, prefix: configured.prefix + 7 })
+        }),
+      )
+    },
+  )
+  const detach = f.client.subscribeCodeExtents(() => {})
+  f.request(configured)
+  await until(() => f.pages.at(-1)?.done)
+  f.client.releaseBoundaries(true)
+  const from = prefix.indexOf('a\r')
+  f.session.edit(
+    [{ from, to: from + 1, insert: 'longword' }],
+    'source',
+    'early-syntax',
+  )
+  await until(() =>
+    f.transports[0].messages.some(
+      (message) => message.type === 'boundaries' && message.version === 1,
+    ),
+  )
+  const request = f.transports[0].messages
+    .filter((message) => message.type === 'boundaries' && message.version === 1)
+    .at(-1)
+  assert.equal(request.codeOnly, undefined)
+  await until(() => f.pages.at(-1)?.done && f.pages.at(-1)?.version === 1)
+  f.client.releaseBoundaries(true)
+  const watch = f.transports[0].messages
+    .filter((message) => message.type === 'boundaries')
+    .at(-1)
+  assert.equal(watch.codeOnly, true)
+  assert.equal(watch.config.prefix, configured.prefix + 7)
+  assert.ok(f.declined.every((reason) => reason === 'stale'))
+  assert.deepEqual(f.errors, [])
+  detach()
 })
 
 test('a late code-only watch replays cached extents and maps a crlf frontmatter prefix', async (t) => {

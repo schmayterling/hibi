@@ -511,18 +511,40 @@ export class CellEditor {
       return !at || !edge || Math.abs(at.top - edge.top) < 2
     }
     const content = (view: EditorView) => padding(view.state.doc.toString())
-    /** Arrows cross touching hidden delimiters in one step, as in the formatted view. */
+    /**
+     * Arrows move one visible step, as in the formatted view: touching hidden
+     * delimiters are crossed together, and a step that crossed only them goes
+     * on to the next character.
+     */
     const overRun = (view: EditorView, right: boolean) => {
       const range = view.state.selection.main
-      if (!range.empty || view.state.selection.ranges.length > 1) return false
+      const runs = view.plugin(preview)?.runs
+      if (!runs || !range.empty || view.state.selection.ranges.length > 1)
+        return false
       const forward =
         right === (view.textDirectionAt(range.head) === Direction.LTR)
-      const next = view.moveByChar(range, forward).head
-      let target = -1
-      view.plugin(preview)?.runs.between(next, next, (from, to) => {
-        if (from < next && next < to) target = forward ? to : from
+      const step = (from: number) => {
+        let at = view.moveByChar(EditorSelection.cursor(from), forward).head
+        runs.between(at, at, (a, b) => {
+          if (a < at && at < b) at = forward ? b : a
+        })
+        return at
+      }
+      const first = view.moveByChar(range, forward).head
+      let target = step(range.head)
+      const low = Math.min(range.head, target),
+        high = Math.max(range.head, target)
+      let hidden = false
+      runs.between(low, high, (a, b) => {
+        if (a <= low && b >= high && low < high) hidden = true
       })
-      if (target < 0) return false
+      // Into or out of the ends of the cell's text, formatting is left or
+      // entered without moving, as at the end of the note.
+      const { start, end } = content(view)
+      const ends = [start, end]
+      if (hidden && !ends.includes(target) && !ends.includes(range.head))
+        target = step(target)
+      if (target === first) return false
       view.dispatch({
         selection: { anchor: target },
         scrollIntoView: true,

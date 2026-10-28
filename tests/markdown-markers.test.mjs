@@ -686,6 +686,27 @@ test('codemirror: arrows cross touching hidden delimiters in a table cell', {
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     source.replace('hello', 'helloy'),
   )
+  // Between adjacent formatting one press crosses the hidden delimiters and
+  // the next character, as in the formatted view's own text.
+  const adjacent = '| head | other |\n| --- | --- |\n| **a**_b_ | plain |'
+  const document = page.getByRole('textbox', { name: 'Document editor' })
+  await markerSource(document, adjacent, 0)
+  await document.locator('.hibi-lp-table td').first().click()
+  await editor.waitFor()
+  await editor.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('a') + 1 },
+    })
+    view.focus()
+  })
+  await editor.press('ArrowRight')
+  await page.keyboard.insertText('y')
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    adjacent.replace('_b_', '_by_'),
+  )
 })
 
 test('codemirror: drawn caret leaves final formatting and stays text-sized beside tall math', {

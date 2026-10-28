@@ -39,7 +39,22 @@ export type BoundaryReceive = (
 import type { SourceOwnerPage } from './markdown-source-model.ts'
 import type { SourceOperation } from './source-operations.ts'
 import type { ReferenceValue } from './source-references.ts'
-import type { SearchLocation } from './source-search-index.ts'
+import type {
+  SearchHighlights,
+  SearchLocation,
+  SearchViewport,
+} from './source-search-index.ts'
+
+export type FindMode = 'source' | 'rendered'
+export type FindOptions = Readonly<{
+  mode?: FindMode
+  prefix?: number
+  viewport?: SearchViewport
+  /** Exact active formatted configuration, supplied by the editor. */
+  config?: BoundaryConfig
+  replacement?: string
+}>
+
 import type {
   SourceTransferChunk,
   SourceTransferHead,
@@ -113,6 +128,11 @@ export type DocumentWorkerRequest =
       id: number
       version: number
       query: string
+      mode?: FindMode
+      prefix?: number
+      config?: BoundaryConfig
+      replacement?: string
+      viewport?: SearchViewport
       highlights?: boolean
       from: number
       to: number
@@ -163,12 +183,16 @@ export type DocumentWorkerReply =
       id: number
       version: number
       location: SearchLocation
+      mode?: FindMode
+      highlights?: SearchHighlights
       highlightStarts?: readonly number[]
+      replacement?: import('./rendered-replace.ts').RenderedReplacement
     }
   | {
       type: 'error'
       epoch: string
       id?: number
       stage: 'replica' | 'find' | 'metadata'
+      reason?: 'unsupported'
       message: string
     }

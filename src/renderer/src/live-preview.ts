@@ -31,6 +31,11 @@ import {
   type Tree,
 } from '@lezer/common'
 import { highlightTree } from '@lezer/highlight'
+import {
+  formattedDefinitionRange,
+  formattedListStart,
+  formattedMarkerRanges,
+} from '../../shared/formatted-text-rules.ts'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
@@ -90,6 +95,16 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 })
 
 type Revealed = { from: number; to: number }
+
+/** A range over the whole note, or all its text after metadata the view keeps hidden. */
+function selectsWholeNote(state: EditorState, range: Revealed) {
+  if (range.to !== state.doc.length || range.from === range.to) return false
+  if (range.from === 0) return true
+  let body = 0
+  for (const measure of state.facet(formattedPrefix))
+    body = Math.max(body, measure(state))
+  return range.from === body
+}
 
 class SpaceWidget extends WidgetType {
   override eq() {
@@ -198,32 +213,11 @@ function loneMarker(doc: Text, item: SyntaxNode) {
  * shows beside the marker, or up to the last definition before other blocks.
  */
 function definitionLines(doc: Text, node: SyntaxNode) {
-  const first = doc.lineAt(node.from)
-  const after = (block: SyntaxNode) => {
-    let next = block.nextSibling
-    while (next && !next.type.is('Block')) next = next.nextSibling
-    return next
-  }
-  let next = after(node)
-  if (!/^[ \t>]*$/.test(doc.sliceString(first.from, node.from))) {
-    let last = node
-    while (next?.name === 'LinkReference') {
-      last = next
-      next = after(next)
-    }
-    return {
-      from: node.from,
-      to: next?.name === 'Paragraph' ? next.from : last.to,
-      item: true,
-    }
-  }
-  if (next) return { from: first.from, to: doc.lineAt(next.from).from - 1 }
-  let previous = node.prevSibling
-  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
-  return {
-    from: previous ? doc.lineAt(previous.to).to + 1 : first.from,
-    to: doc.lineAt(node.to).to,
-  }
+  return formattedDefinitionRange(
+    node,
+    (from, to) => doc.sliceString(from, to),
+    (at) => doc.lineAt(at),
+  )
 }
 
 /** The first line a block shows: a lone list marker's line collapses into the next. */
@@ -497,10 +491,17 @@ function inline(
     const answer = reference ? drawReference(state, reference.label) : null
     if (reference && !answer) return undefined
     const revealed = touched(node.from, node.to)
-    syntax(node.from, open.to, revealed)
-    // A destination or label on later lines is hidden with its line breaks by the layout field.
-    if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
-      syntax(close.from, node.to, revealed)
+    // A destination or label on later lines is hidden by the layout field.
+    for (const range of formattedMarkerRanges(
+      node,
+      (from, to) => doc.sliceString(from, to),
+      !!answer,
+    ))
+      if (
+        range.from === node.from ||
+        doc.lineAt(close.from).number === doc.lineAt(node.to).number
+      )
+        syntax(range.from, range.to, revealed)
     linkText(
       open.to,
       close.from,
@@ -698,29 +699,12 @@ function inline(
     }
     switch (name) {
       case 'HeaderMark': {
-        const parent = ref.node.parent
-        if (!parent?.name.startsWith('ATX')) return
         const current = doc.lineAt(ref.from)
         const revealed = touched(current.from, current.to)
-        // The opening mark hides with its space, a closing mark with the space before it.
-        if (ref.from === parent.from) {
-          const after = doc.sliceString(ref.to, Math.min(parent.to, ref.to + 1))
-          syntax(
-            ref.from,
-            ref.to + (after === ' ' || after === '\t' ? 1 : 0),
-            revealed,
-          )
-        } else {
-          const before = doc.sliceString(
-            Math.max(parent.from, ref.from - 1),
-            ref.from,
-          )
-          syntax(
-            ref.from - (before === ' ' || before === '\t' ? 1 : 0),
-            ref.to,
-            revealed,
-          )
-        }
+        for (const range of formattedMarkerRanges(ref.node, (from, to) =>
+          doc.sliceString(from, to),
+        ))
+          syntax(range.from, range.to, revealed)
         return
       }
       case 'Emphasis':
@@ -744,8 +728,10 @@ function inline(
         )
           return false
         const revealed = revealedAt(ref)
-        syntax(open.from, open.to, revealed)
-        syntax(close.from, close.to, revealed)
+        for (const range of formattedMarkerRanges(ref.node, (from, to) =>
+          doc.sliceString(from, to),
+        ))
+          syntax(range.from, range.to, revealed)
         mark('hibi-lp-code', open.to, close.from)
         return false
       }
@@ -755,8 +741,10 @@ function inline(
         const url = ref.node.getChild('URL')
         if (!url) return false
         const revealed = touched(ref.from, ref.to)
-        syntax(ref.from, url.from, revealed)
-        syntax(url.to, ref.to, revealed)
+        for (const range of formattedMarkerRanges(ref.node, (from, to) =>
+          doc.sliceString(from, to),
+        ))
+          syntax(range.from, range.to, revealed)
         linkText(url.from, url.to)
         return false
       }
@@ -1045,11 +1033,11 @@ function itemLine(
   if (lone) content = continuation()
   else {
     // The marker and up to four following spaces are hidden.
-    const after = doc.sliceString(marker.to, current.to)
-    const gap = /^[ \t]{0,4}/.exec(after)![0].length
-    content = Math.max(
+    content = formattedListStart(
+      (from, to) => doc.sliceString(from, to),
+      marker,
+      current.to,
       info.leaf ?? 0,
-      marker.to + (gap === after.length ? after.length : gap),
     )
   }
   if (!info.marker) return content
@@ -1878,19 +1866,11 @@ export function livePreview(
       const { doc } = transaction.startState
       const before = transaction.startState.selection.ranges
       const lines = transaction.startState.field(layout)
-      // Where the note's text starts after metadata the view keeps hidden.
-      let body = 0
-      for (const measure of transaction.startState.facet(formattedPrefix))
-        body = Math.max(body, measure(transaction.startState))
       let moved = false
       const ranges = transaction.selection.ranges.map((range, index) => {
         // Selecting the whole note, or all its text after its metadata,
         // includes the hidden lines at its ends.
-        if (
-          range.to === doc.length &&
-          (range.from === 0 || range.from === body)
-        )
-          return range
+        if (selectsWholeNote(transaction.startState, range)) return range
         let head = range.head
         lines.between(head, head, (from, to, value) => {
           const was = before[index]?.head ?? head,
@@ -1967,6 +1947,60 @@ export function livePreview(
         { key: 'ArrowRight', run: arrow(true) },
       ]),
     ),
+    // The page cannot select hidden lines at the note's ends, so a key typed
+    // over the whole note would replace only what shows: replace it all, with
+    // input handlers seeing the whole range as for any typed text. Text with
+    // line breaks keeps the native multi-line input path.
+    EditorView.domEventHandlers({
+      beforeinput(event, view) {
+        const { selection, readOnly } = view.state
+        const hidden = (at: number) => {
+          let found = false
+          view.state.field(layout).between(at, at, (from, to, value) => {
+            if (value === hiddenLine && from <= at && at <= to) found = true
+          })
+          return found
+        }
+        if (
+          event.inputType !== 'insertText' ||
+          !event.data ||
+          event.data.includes('\n') ||
+          view.composing ||
+          readOnly ||
+          selection.ranges.length !== 1 ||
+          !selectsWholeNote(view.state, selection.main) ||
+          !(hidden(selection.main.from) || hidden(selection.main.to))
+        )
+          return false
+        event.preventDefault()
+        const { from, to } = selection.main
+        const text = event.data
+        const insert = () =>
+          view.state.update(
+            {
+              changes: { from, to, insert: text },
+              selection: { anchor: from + text.length },
+              userEvent: 'input.type',
+            },
+            { scrollIntoView: true },
+          )
+        if (
+          !view.state
+            .facet(EditorView.inputHandler)
+            .some((handler) => handler(view, from, to, text, insert))
+        )
+          view.dispatch(insert())
+        // Listeners such as typing state get the input the browser would have sent.
+        view.contentDOM.dispatchEvent(
+          new InputEvent('input', {
+            inputType: 'insertText',
+            data: text,
+            bubbles: true,
+          }),
+        )
+        return true
+      },
+    }),
     EditorView.inputHandler.of((view, from, to, text) => {
       if (view.composing) return false
       const spec = gapInput(view.state, syntax.tree(view.state), from, to, text)

@@ -6,6 +6,8 @@ import {
   type CodeExtentPage,
   type DocumentWorkerReply,
   type DocumentWorkerRequest,
+  type FindMode,
+  type FindOptions,
   type MarkdownReferenceRequest,
   type MarkdownReferenceSyntax,
   type MarkdownSemanticResult,
@@ -21,7 +23,10 @@ import {
   mappedPrefix,
 } from '../../shared/source-projection.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
-import type { SearchLocation } from '../../shared/source-search-index.ts'
+import type {
+  SearchHighlights,
+  SearchLocation,
+} from '../../shared/source-search-index.ts'
 import {
   type SourceTransferRequest,
   SourceTransferSender,
@@ -43,8 +48,11 @@ type ClientOptions = {
     action: FindAction,
     highlightStarts: readonly number[] | undefined,
     query: string,
+    highlights?: SearchHighlights,
+    mode?: FindMode,
+    replacement?: import('../../shared/rendered-replace.ts').RenderedReplacement,
   ) => void
-  error: (message: string) => void
+  error: (message: string, reason?: 'unsupported') => void
   metadataPending?: () => void
   metadataResult?: (
     page: SourceOwnerPage,
@@ -434,9 +442,18 @@ export class DocumentWorkerClient {
         : { baseVersion: request.baseVersion }),
     })
   }
-  find(query: string, from: number, to: number, action: FindAction = null) {
+  find(
+    query: string,
+    from: number,
+    to: number,
+    action: FindAction = null,
+    options: FindOptions = {},
+  ) {
     if (this.#disposed || this.#failed) return
     if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
+    const config =
+      options.config ??
+      (options.mode === 'rendered' ? this.#boundaries?.config : undefined)
     this.#latest = {
       type: 'find',
       epoch: this.#epoch,
@@ -446,6 +463,17 @@ export class DocumentWorkerClient {
       from,
       to,
       action,
+      ...(options.mode ? { mode: options.mode } : {}),
+      ...(config ? { config } : {}),
+      ...(options.replacement === undefined
+        ? {}
+        : { replacement: options.replacement }),
+      ...(options.prefix === undefined
+        ? config
+          ? { prefix: config.prefix }
+          : {}
+        : { prefix: options.prefix }),
+      ...(options.viewport ? { viewport: { ...options.viewport } } : {}),
     }
     this.#options.pending()
     this.#flushQuery()
@@ -606,7 +634,16 @@ export class DocumentWorkerClient {
       query: request.query,
       highlights:
         this.#highlightRequest?.query !== request.query ||
-        this.#highlightRequest?.version !== request.version,
+        this.#highlightRequest?.version !== request.version ||
+        this.#highlightRequest?.mode !== request.mode ||
+        this.#highlightRequest?.prefix !== request.prefix,
+      ...(request.mode ? { mode: request.mode } : {}),
+      ...(request.config ? { config: request.config } : {}),
+      ...(request.replacement === undefined
+        ? {}
+        : { replacement: request.replacement }),
+      ...(request.prefix === undefined ? {} : { prefix: request.prefix }),
+      ...(request.viewport ? { viewport: request.viewport } : {}),
       from: request.from,
       to: request.to,
     })
@@ -834,13 +871,29 @@ export class DocumentWorkerClient {
         request.version === reply.version &&
         reply.version === this.#session.snapshot().version
       ) {
-        if (reply.highlightStarts) this.#highlightRequest = request
-        this.#options.result(
-          reply.location,
-          request.action,
-          reply.highlightStarts,
-          request.query,
+        if (
+          reply.highlightStarts ||
+          reply.highlights ||
+          reply.mode === 'rendered'
         )
+          this.#highlightRequest = request
+        if (reply.mode === 'rendered' || reply.highlights)
+          this.#options.result(
+            reply.location,
+            request.action,
+            reply.highlightStarts,
+            request.query,
+            reply.highlights,
+            reply.mode ?? 'source',
+            reply.replacement,
+          )
+        else
+          this.#options.result(
+            reply.location,
+            request.action,
+            reply.highlightStarts,
+            request.query,
+          )
       }
     } else if (reply.type === 'metadata-progress') {
       const request = this.#metadata
@@ -903,7 +956,10 @@ export class DocumentWorkerClient {
           this.#findDeadline = undefined
         }
       }
-      if (reply.id === this.#latest?.id) this.#options.error(reply.message)
+      if (reply.id === this.#latest?.id) {
+        if (reply.reason) this.#options.error(reply.message, reply.reason)
+        else this.#options.error(reply.message)
+      }
     }
     this.#flushQuery()
     this.#flushMetadata()

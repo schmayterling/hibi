@@ -31,7 +31,7 @@ import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
 import type { OutlineHeading } from './OutlineSidebar'
-import { SourceEditor } from './SourceEditor'
+import { SourceEditor, sourceAfter } from './SourceEditor'
 import { editorPosition, revealSourcePosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
 import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
@@ -90,13 +90,28 @@ export function MarkdownEditor({
   outlineActive,
 }: Parameters<typeof RichMarkdownEditor>[0]) {
   const markdownDocument = format?.editing === 'markdown'
-  // Large notes keep frontmatter in the text while properties are unavailable.
   const showProperties =
-    !largeOpening(documentRuntime, documentState) &&
     markdownDocument &&
     markdownExtensions.some(
       ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
     )
+  // A large note's properties get its frontmatter from the formatted view's
+  // bounded read, not the whole note.
+  const largeProperties = largeOpening(documentRuntime, documentState)
+  const [frontmatter, setFrontmatter] = useState('')
+  const reportedProperties = useMemo<readonly FormattedExtension[]>(
+    () => [
+      {
+        id: 'formatted.frontmatter',
+        create: () =>
+          import('./formatted-frontmatter').then((module) => [
+            module.formattedFrontmatter,
+            module.reportFrontmatter(setFrontmatter),
+          ]),
+      },
+    ],
+    [],
+  )
   const projectionExtensions = useMemo<readonly FormattedExtension[]>(() => {
     if (
       !markdownExtensions.some(
@@ -120,11 +135,21 @@ export function MarkdownEditor({
   }, [markdownExtensions, documentState.tabId])
   const editorExtensions = useMemo(
     () => [
-      ...(showProperties ? propertiesExtensions : []),
+      ...(showProperties
+        ? largeProperties
+          ? reportedProperties
+          : propertiesExtensions
+        : []),
       ...projectionExtensions,
       ...formattedExtensions,
     ],
-    [showProperties, projectionExtensions, formattedExtensions],
+    [
+      showProperties,
+      largeProperties,
+      reportedProperties,
+      projectionExtensions,
+      formattedExtensions,
+    ],
   )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
@@ -496,6 +521,39 @@ export function MarkdownEditor({
       ],
     })
   }
+  /** A large note's properties return only the frontmatter they were given. */
+  const editFrontmatter = (markdown: string) => {
+    const element = content.current?.querySelector<HTMLElement>(
+      '.rich-pane .cm-content',
+    )
+    const view = element && sourceView(element)
+    const change = sourceChange(frontmatter, markdown)
+    // A change to frontmatter edited since the properties rendered is dropped.
+    if (
+      !view ||
+      !change ||
+      view.state.sliceDoc(0, frontmatter.length) !== frontmatter
+    )
+      return
+    const edit = { ...change, insert: normalizedSource(change.insert) }
+    // Verbatim projections, which read the whole note, accept frontmatter
+    // edits with the whole new source, as from small notes' properties: the
+    // one this view commits.
+    const replacement = projectionExtensions.length
+      ? sourceAfter(view, [edit])
+      : undefined
+    if (replacement === null) return
+    view.dispatch({
+      changes: edit,
+      userEvent: 'input.addon',
+      annotations: [
+        isolateHistory.of('full'),
+        ...(replacement === undefined
+          ? []
+          : [formattedProjectionSource.of(replacement)]),
+      ],
+    })
+  }
   const ready =
     (paneMode === 'markdown' || formattedReady) &&
     (paneMode === 'normal' || sourceReady)
@@ -565,16 +623,19 @@ export function MarkdownEditor({
             inert={paneMode === 'markdown'}
           >
             {markdownDocument &&
-              markdownExtensions.map(({ id, Editor }) =>
-                Editor ? (
+              markdownExtensions.map(({ id, Editor }) => {
+                if (!Editor) return null
+                const frontmatterOnly =
+                  largeProperties && id === 'frontmatter.metadata'
+                return (
                   <Editor
                     key={id}
-                    value={value}
+                    value={frontmatterOnly ? frontmatter : value}
                     disabled={disabled}
-                    onChange={editSource}
+                    onChange={frontmatterOnly ? editFrontmatter : editSource}
                   />
-                ) : null,
-              )}
+                )
+              })}
             <div className="rich-editor-host">
               <SourceEditor
                 presentation="formatted"

@@ -322,6 +322,8 @@ export type ChunkedMarkdownOptions = {
     /** A changed physical line may extend past the grammar's reuse point. */
     canReuse?(from: number, to: number): boolean
   }
+  /** Immutable derived indexes invalidate on edits and need no per-line edit dependencies. */
+  trackReadAhead?: boolean
 }
 
 /** A visible document range. */
@@ -390,6 +392,33 @@ type Work =
       units: number
       parse: PartialParse
     }
+
+/** Markdown consumes whole lines, unlike the generic lezer chunk contract. */
+function markdownInput(
+  input: Input,
+  ranges: readonly { from: number; to: number }[],
+): Input {
+  const result: Input = {
+    length: input.length,
+    lineChunks: false,
+    read: (from, to) => input.read(from, to),
+    chunk(at) {
+      const end = ranges.find((range) => range.to > at)?.to ?? input.length
+      const parts: string[] = []
+      while (at < end) {
+        const chunk = input.chunk(at).slice(0, end - at)
+        if (!chunk) break
+        const lf = chunk.indexOf('\n')
+        parts.push(lf < 0 ? chunk : chunk.slice(0, lf + 1))
+        if (lf >= 0) break
+        at += chunk.length
+      }
+      return parts.join('')
+    },
+  }
+  if (readers.has(input)) readers.set(result, (to) => readAhead(input, to))
+  return result
+}
 
 /** Inner parser steps per outer step, so the host can yield inside a long range. */
 const innerSteps = 256
@@ -775,10 +804,11 @@ class ChunkedParse implements ChunkedPartialParse {
         },
       ]
     })
-    readers.set(input, (to) => {
-      const at = this.reading?.parsedPos ?? this.pos
-      this.reads.set(at, Math.max(this.reads.get(at) ?? -1, to))
-    })
+    if (parser.options.trackReadAhead !== false)
+      readers.set(input, (to) => {
+        const at = this.reading?.parsedPos ?? this.pos
+        this.reads.set(at, Math.max(this.reads.get(at) ?? -1, to))
+      })
   }
 
   get parsedPos() {
@@ -1117,10 +1147,13 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** Scan a bounded window, so no inner step reads past it. */
   private startScan(span: number) {
+    const ranges = [
+      { from: this.pos, to: Math.min(this.input.length, this.pos + span) },
+    ]
     const parse = this.parser.scan.startParse(
-      this.input,
+      markdownInput(this.input, ranges),
       [],
-      [{ from: this.pos, to: Math.min(this.input.length, this.pos + span) }],
+      ranges,
     )
     this.work = { kind: 'scan', from: this.pos, span, parse }
   }
@@ -1135,10 +1168,11 @@ class ChunkedParse implements ChunkedPartialParse {
       !/^[ \t\r]*$/.test(this.input.read(to, lineEnd(this.input, to)))
         ? to - 1
         : to
+    const ranges = [{ from, to: end }]
     const parse = this.parser.full.startParse(
-      this.input,
+      markdownInput(this.input, ranges),
       [],
-      [{ from, to: end }],
+      ranges,
     )
     this.work = { kind: 'parse', from, to, parse }
   }
@@ -1455,7 +1489,11 @@ class ChunkedParse implements ChunkedPartialParse {
     const last = ranges.at(-1)
     if (last && last.to === at) last.to = to
     else ranges.push({ from: at, to })
-    const parse = this.parser.scan.startParse(input, [], ranges)
+    const parse = this.parser.scan.startParse(
+      markdownInput(input, ranges),
+      [],
+      ranges,
+    )
     let replayed: Tree | null = null
     this.reading = parse
     while (!replayed) replayed = parse.advance()
@@ -1644,7 +1682,11 @@ class ChunkedParse implements ChunkedPartialParse {
       base: ranges[0]!.from,
       to,
       units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
-      parse: this.parser.scan.startParse(this.input, [], ranges),
+      parse: this.parser.scan.startParse(
+        markdownInput(this.input, ranges),
+        [],
+        ranges,
+      ),
     }
   }
 
@@ -2030,7 +2072,11 @@ class ChunkedParse implements ChunkedPartialParse {
       point,
       base: ranges[0]!.from,
       units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
-      parse: this.parser.full.startParse(input, [], ranges),
+      parse: this.parser.full.startParse(
+        markdownInput(input, ranges),
+        [],
+        ranges,
+      ),
     }
   }
 
@@ -2343,7 +2389,10 @@ export class ChunkedMarkdownParser extends Parser {
     this.document = full.nodeSet.types.find((type) => type.name === 'Document')!
     // Inline parsers never change block structure, so boundary scans skip them.
     const inline = (base as unknown as { inlineNames?: unknown }).inlineNames
-    const scan = base.configure({ wrap: trackReadAhead })
+    const scan =
+      options.trackReadAhead === false
+        ? base
+        : base.configure({ wrap: trackReadAhead })
     this.scan = Array.isArray(inline)
       ? scan.configure({
           remove: inline.filter(
@@ -2371,7 +2420,11 @@ export class ChunkedMarkdownParser extends Parser {
       ranges[0]?.from !== 0 ||
       ranges[0]?.to !== input.length
     )
-      return this.full.createParse(input, fragments, ranges)
+      return this.full.createParse(
+        markdownInput(input, ranges),
+        fragments,
+        ranges,
+      )
     return new ChunkedParse(this, input, fragments, null)
   }
 

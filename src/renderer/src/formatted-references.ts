@@ -7,7 +7,7 @@ import {
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
-import { referenceLabel } from '../../shared/markdown-link.ts'
+import { formattedReferenceLink } from '../../shared/formatted-text-rules.ts'
 import {
   formattedOwner,
   formattedRefresh,
@@ -103,26 +103,7 @@ const answersOf = (state: EditorState) =>
  * link. `end` is where its label ends: after `]` of a shortcut reference.
  */
 export function referenceLink(doc: Text, node: SyntaxNode) {
-  const marks = node.getChildren('LinkMark')
-  const open = marks[0]
-  const close = marks.find(
-    (mark) => doc.sliceString(mark.from, mark.to) === ']',
-  )
-  if (
-    !open ||
-    !close ||
-    doc.sliceString(open.from, open.to) !== '[' ||
-    doc.sliceString(close.to, close.to + 1) === '('
-  )
-    return null
-  const written = node.getChild('LinkLabel')
-  const text =
-    written && written.to - written.from > 2
-      ? doc.sliceString(written.from + 1, written.to - 1)
-      : doc.sliceString(open.to, close.from)
-  // Longer labels never match a definition.
-  if (text.length > 999 || !text.trim()) return null
-  return { open, close, end: node.to, label: referenceLabel(text) }
+  return formattedReferenceLink(node, (from, to) => doc.sliceString(from, to))
 }
 
 /**

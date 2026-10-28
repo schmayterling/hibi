@@ -116,6 +116,26 @@ function document(seed, count = 24) {
   return r() < 0.5 ? `${text}\n` : text
 }
 
+test('markdown lookahead keeps nonempty chunks beyond the active parse range', () => {
+  let checks = 0
+  const grammar = parser.configure({
+    wrap(inner, input, _fragments, ranges) {
+      const end = ranges.at(-1).to
+      if (end < input.length) {
+        assert.notEqual(input.chunk(end), '')
+        checks++
+      }
+      return inner
+    },
+  })
+  new ChunkedMarkdownParser(grammar, grammar, {
+    chunkSize: 16,
+    groupSize: 4,
+    giantBlock: 64,
+  }).parse('- item\n'.repeat(100))
+  assert.ok(checks > 0)
+})
+
 const full = base
 const tiny = (options = {}) =>
   new ChunkedMarkdownParser(full, base, {

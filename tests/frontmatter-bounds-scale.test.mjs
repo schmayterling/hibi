@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import test from 'node:test'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
 import { parseDocument } from 'yaml'
 
 const limit = 256 * 1024
@@ -26,9 +26,12 @@ registerHooks({
     return loaded
   },
 })
-const { frontmatterBounds, frontmatterSearch } = await import(
-  '../src/renderer/src/formatted-frontmatter.ts'
-)
+const {
+  frontmatterBounds,
+  frontmatterProbe,
+  frontmatterSearch,
+  frontmatterSource,
+} = await import('../src/renderer/src/formatted-frontmatter.ts')
 const { readSourceFrontmatter } = await import(
   '../src/shared/source-frontmatter.ts'
 )
@@ -129,4 +132,51 @@ test('closed metadata parses once inside its bounds and never for body keystroke
   assert.equal(parses.calls, 1)
   assert.ok(parses.units < limit)
   assert.ok(state.field(frontmatterBounds).end > 0)
+})
+
+test('properties of a 50 mib note read only its frontmatter, and body keystrokes keep the read', (t) => {
+  const header = '---\ntitle: small\n---\n\n'
+  const doc = Text.of(`${header}${body}`.split('\n'))
+  // Units sliced from the note, counted at the outermost call.
+  const sliced = { units: 0 }
+  let depth = 0
+  const classes = new Set()
+  for (let node = doc; node; node = node.children?.[0])
+    classes.add(Object.getPrototypeOf(node))
+  const restore = [...classes].map((type) => {
+    const slice = type.sliceString
+    type.sliceString = function (from, to = this.length, separator) {
+      if (!depth) sliced.units += to - from
+      depth++
+      try {
+        return slice.call(this, from, to, separator)
+      } finally {
+        depth--
+      }
+    }
+    return () => {
+      type.sliceString = slice
+    }
+  })
+  t.after(() => {
+    for (const undo of restore) undo()
+  })
+  let state = EditorState.create({ doc, extensions: frontmatterBounds })
+  assert.equal(frontmatterSource(state), header)
+  t.diagnostic(`open: ${sliced.units} of ${doc.length} units`)
+  assert.ok(sliced.units < frontmatterProbe.search)
+  const read = state.field(frontmatterBounds)
+  for (let key = 0; key < 4; key++) {
+    sliced.units = 0
+    state = state.update({
+      changes: { from: state.doc.length, insert: 'x' },
+    }).state
+    assert.equal(state.field(frontmatterBounds), read, `keystroke ${key}`)
+    assert.ok(sliced.units <= header.length, `keystroke ${key}`)
+  }
+  sliced.units = 0
+  state = state.update({ changes: { from: 11, to: 16, insert: 'large' } }).state
+  assert.equal(frontmatterSource(state), header.replace('small', 'large'))
+  t.diagnostic(`frontmatter edit: ${sliced.units} units`)
+  assert.ok(sliced.units < frontmatterProbe.search)
 })

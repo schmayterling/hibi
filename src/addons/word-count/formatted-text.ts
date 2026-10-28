@@ -400,6 +400,13 @@ function block(token: Token, syntax: ProjectionSyntax, out: string[]) {
     case 'footnoteDef':
       children(token.tokens ?? [], syntax, out, true)
       return
+    case 'githubAlert': {
+      out.push('\n')
+      const start = out.length
+      children(token.tokens ?? [], syntax, out, false)
+      if (out.length === start) out.push('\n')
+      return
+    }
     case 'blockquote':
       out.push('\n')
       children((token as Tokens.Blockquote).tokens, syntax, out, true)

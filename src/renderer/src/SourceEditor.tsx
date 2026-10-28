@@ -827,7 +827,8 @@ export function SourceEditor({
         }),
       ]
     }
-    const place = keepingPlace.current ? bridge.place() : null
+    // A note that shrank since its view left still gets the place it kept.
+    const place = bridge.place()
     const selection = place?.selection ?? bridge.selection()
     type PendingCompletion = {
       request: CompletionRequest

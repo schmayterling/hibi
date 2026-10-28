@@ -17,7 +17,7 @@ import { headingAnchors } from '../../shared/heading-anchor'
 import { isMediaFile } from '../../shared/media'
 import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
-import { largeOpening } from './document-shell'
+import { largeOpening, largeSource } from './document-shell'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
@@ -173,7 +173,13 @@ export function MarkdownEditor({
     direction: 'next',
   })
   // A large note's source view unmounts when it is left, keeping its place.
-  const releaseSource = largeOpening(documentRuntime, documentState)
+  // A note that grows large releases a hidden one as it crosses the size.
+  const grownLarge = useSyncExternalStore(
+    documentRuntime.subscribeDocument,
+    () => largeSource(documentRuntime, documentState.tabId),
+  )
+  const releaseSource =
+    largeOpening(documentRuntime, documentState) || grownLarge
   const {
     content,
     paneMode,

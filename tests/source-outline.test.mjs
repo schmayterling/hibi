@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { InlineContext } from '@lezer/markdown'
 import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
+import { createOutlineLabelRenderer } from '../src/renderer/src/source-outline-label.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const snapshots = new WeakMap()
@@ -52,20 +54,29 @@ const edit = (store, model, changes) => {
 }
 
 test('outline structure skips pathological inline parsing outside the viewport', (t) => {
-  const prefix = 'ordinary body\n\n'.repeat(1000)
+  const bodyBlocks = 1000
+  const prefix = 'ordinary body\n\n'.repeat(bodyBlocks)
   const source = `${prefix}# ${'['.repeat(32768)}x${']'.repeat(32768)}\n\n## tail\n`
   const { model } = setup(source, { frontmatter: false })
+  const char = InlineContext.prototype.char
+  let inlineReads = 0
   try {
+    InlineContext.prototype.char = function (position) {
+      assert.ok(
+        ++inlineReads <= bodyBlocks + 2,
+        'outline scanned inline syntax',
+      )
+      return char.call(this, position)
+    }
     const { value } = finish(model.read())
     const work = model.counters()
     assert.equal(value.length, 2)
     assert.equal(value[1].label, 'tail')
-    t.diagnostic(JSON.stringify(work))
-    assert.ok(
-      work.longestAdvanceMs < 100,
-      `outline parser blocked for ${work.longestAdvanceMs}ms`,
-    )
+    assert.equal(inlineReads, bodyBlocks + 2)
+    assert.ok(work.readUnits <= source.length, JSON.stringify(work))
+    t.diagnostic(JSON.stringify({ inlineReads, readUnits: work.readUnits }))
   } finally {
+    InlineContext.prototype.char = char
     model.dispose()
   }
 })
@@ -138,22 +149,65 @@ test('source outline reuses parser fragments after a local edit', () => {
   model.dispose()
 })
 
+test('20k formatted heading labels convert once and stay cached after a body edit', (t) => {
+  const count = 20_000
+  const source = Array.from(
+    { length: count },
+    (_, index) =>
+      `# **heading ${index}** [link](/target) &amp;\n\nbody ${index}\n\n`,
+  ).join('')
+  const render = createOutlineLabelRenderer(['markdown.github'])
+  assert.ok(render)
+  let labels = 0
+  const { store, model } = setup(source, {
+    frontmatter: false,
+    renderLabel: (tokens, level) => {
+      labels++
+      return render(tokens, level)
+    },
+  })
+  try {
+    const before = finish(model.read())
+    assert.equal(before.value.length, count)
+    assert.equal(before.value[0].label, 'heading 0 link &')
+    assert.equal(before.value.at(-1).label, 'heading 19999 link &')
+    assert.equal(labels, count)
+    const cold = model.counters(true)
+    labels = 0
+    const from = source.indexOf('body 10000')
+    edit(store, model, [{ from, to: from + 1, insert: 'B' }])
+    const after = finish(model.read())
+    const warm = model.counters()
+    assert.equal(after.snapshot.headings, before.snapshot.headings)
+    assert.equal(labels, 0)
+    assert.ok(warm.indexVisits < 100, JSON.stringify(warm))
+    assert.equal(warm.published, 0)
+    assert.equal(store.counters().materializations, 0)
+    t.diagnostic(JSON.stringify({ headings: count, cold, warm, labels }))
+  } finally {
+    model.dispose()
+  }
+})
+
 test('50 MiB body edits reuse unchanged heading labels and bounded index work', (t) => {
   const block = `## heading\n\n${`${'plain text body '.repeat(15)}\n`.repeat(16)}\n\n`
   const source = block
     .repeat(Math.ceil((50 * 1024 * 1024) / block.length))
     .slice(0, 50 * 1024 * 1024)
   let labels = 0
+  const renderLabel = createOutlineLabelRenderer(['markdown.github'])
+  assert.ok(renderLabel)
   const { store, model } = setup(source, {
     frontmatter: false,
-    renderLabel: () => {
+    renderLabel: (tokens, level) => {
       labels++
-      return 'heading'
+      return renderLabel(tokens, level)
     },
   })
   try {
     let { value: headings, snapshot } = finish(model.read())
     assert.equal(headings.length, 13548)
+    assert.equal(labels, 13548)
     model.counters(true)
     for (const insert of ['B', 'body', 'X']) {
       labels = 0

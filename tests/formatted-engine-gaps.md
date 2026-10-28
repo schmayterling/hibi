@@ -4,7 +4,7 @@ these todos execute their assertions. each row identifies a reproduced parity ga
 
 owner numbers follow the ordered formatted engine readiness plan. the default flip requires `HIBI_EXPECT_FORMATTED_GAPS=0 node --test tests/formatted-engine-gaps.test.mjs` to pass. the count is annotation count; a shared annotation can execute in more than one fixture. locations identify the todo option or literal map entry to remove.
 
-accepted differences are not gaps; their tests assert each engine. the codemirror side-by-side formatted pane stays editable, with its caret and the markers under it, while the rich editor previews read-only.
+accepted differences are not gaps; their tests assert each engine. the codemirror side-by-side formatted pane stays editable, with its caret and the markers under it, while the rich editor previews read-only. after a code language is turned off and on while source mode hides the formatted view, the rich editor refreshes its highlighting once when shown; codemirror leaves the unchanged view as it is, and its shown highlighting follows the language.
 
 | gap id | test file:line | behavior | owning slice |
 | --- | --- | --- | --- |

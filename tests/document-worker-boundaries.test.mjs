@@ -1125,3 +1125,35 @@ test('last unsubscribe removes geometry from an in-flight syntax request', async
     2,
   )
 })
+
+test('an early last unsubscribe does not attach an old view receiver to the edited version', async (t) => {
+  let detach
+  const f = fixture(t, undefined, (session) => {
+    t.after(session.subscribeOperations(() => detach()))
+  })
+  detach = f.client.subscribeCodeExtents(() => {})
+  const held = []
+  f.request(config, (page, ack) => {
+    f.pages.push(page)
+    held.push(ack)
+  })
+  await until(() => f.pages.length === 1)
+  f.session.edit([{ from: 0, to: 1, insert: '>' }], 'source', 'early-detach')
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) => reply.type === 'ack' && reply.version === 1,
+    ),
+  )
+  await new Promise(setImmediate)
+  assert.equal(
+    f.transports[0].messages.filter(
+      (message) => message.type === 'boundaries' && message.version === 1,
+    ).length,
+    0,
+  )
+  held[0]()
+  assert.equal(f.pages.length, 1)
+  f.request()
+  await until(() => f.pages.at(-1).done && f.pages.at(-1).version === 1)
+  assert.deepEqual(f.errors, [])
+})

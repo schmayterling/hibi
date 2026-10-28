@@ -48,22 +48,32 @@ function drain(index, store) {
   }
 }
 function transferred(index, from = 0, base, codeOnly = false) {
-  const pages = [...index.pages(from, base, base, codeOnly)]
+  const syntax = codeOnly
+    ? []
+    : [...index.pages(from, base, base, false, false)]
+  const coverage = index.parser.options.codeBlocks
+    ? [...index.pages(0, undefined, base, true)]
+    : []
+  const pages = [...syntax, ...coverage]
   const code = pages.flatMap((page) => page.code?.records ?? [])
   const result = {
     pages: pages.length,
+    syntaxPages: syntax.length,
+    codePages: coverage.length,
     records: 0,
     codeRecords: code.length,
     bytes: 0,
     maximumRecords: 0,
     maximumUnits: 0,
   }
-  for (const [sequence, page] of pages.entries()) {
+  for (const [offset, page] of pages.entries()) {
+    const codePage = offset >= syntax.length
+    const sequence = codePage ? offset - syntax.length : offset
     const records = page.records.length + (page.code?.records.length ?? 0)
     const wire = {
       type: 'boundaries',
       epoch: '00000000-0000-4000-8000-000000000000',
-      id: 1,
+      id: codePage ? 2 : 1,
       version: index.version,
       key: boundaryKey(config),
       sequence,

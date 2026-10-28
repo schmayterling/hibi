@@ -279,7 +279,12 @@ export class DocumentWorkerClient {
       this.#codeReceivers.delete(receive)
       if (!this.#codeReceivers.size) {
         const request = this.#boundaries
-        if (request?.codeOnly) this.releaseBoundaries(true)
+        if (
+          request &&
+          (request.codeOnly ||
+            request.version !== this.#session.snapshot().version)
+        )
+          this.releaseBoundaries(true)
         else if (request?.coverage && !request.complete) {
           this.#boundaries = null
           this.#requestBoundaries(

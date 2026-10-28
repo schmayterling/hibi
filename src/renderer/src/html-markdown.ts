@@ -300,49 +300,66 @@ function table(element: Element): string {
  * Parse clipboard HTML, keeping only its selection. Native clipboards can wrap
  * it in a page and mark it with `<!--StartFragment-->` and
  * `<!--EndFragment-->`; as in Chromium, the first start and the last end
- * count. What lies outside goes, and the elements around the markers stay as
- * its context, ordered lists keeping their numbers.
+ * count. The source is cut at the end, so the parser's repairs cannot bring
+ * anything after it inside; before the start, nodes go up to the body, and
+ * the elements around it stay as its context, ordered lists keeping their
+ * numbers.
  */
 function parseSelection(html: string) {
-  // Only those exact comments mark it: `<!StartFragment>` parses to the same
-  // comment, so the markers get a name this paste alone knows.
+  const parser = new DOMParser()
+  const parse = (source: string) => parser.parseFromString(source, 'text/html')
+  const markers = [...html.matchAll(/<!--(start|end)fragment-->/gi)]
+  if (!markers.length) return parse(html)
+  // Only markers the parser reads as comments count, not the same text in an
+  // attribute, a textarea, CDATA, a template or another comment. A first
+  // parse names each one, with names this paste alone knows, to see which.
   const id = crypto.getRandomValues(new Uint32Array(4)).join('-')
-  const document = new DOMParser().parseFromString(
-    html.replace(
-      /<!--(Start|End)Fragment-->/gi,
-      (_, edge: string) => `<!--${edge.toLowerCase()} ${id}-->`,
-    ),
-    'text/html',
-  )
-  const comments = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT)
-  let start: Node | null = null,
-    end: Node | null = null
-  for (let node = comments.nextNode(); node; node = comments.nextNode())
-    if (!start) {
-      if (node.nodeValue === `start ${id}`) start = node
-    } else if (node.nodeValue === `end ${id}`) end = node
-  if (!start || !end) return document
-  // Markers outside the body prune up to the document.
-  const { body } = document
-  for (let at: Node | null = start; at && at !== body; at = at.parentNode) {
-    let items = 0
-    while (at.previousSibling) {
-      if (at.previousSibling.nodeName === 'LI') items++
-      at.previousSibling.remove()
-    }
-    if (items && at.parentNode instanceof HTMLOListElement)
-      at.parentNode.start += items
+  let named = '',
+    at = 0
+  for (const [index, marker] of markers.entries()) {
+    named += `${html.slice(at, marker.index)}<!--${id}-${index}-->`
+    at = marker.index + marker[0].length
   }
-  for (let at: Node | null = end; at && at !== body; at = at.parentNode)
-    while (at.nextSibling) at.nextSibling.remove()
+  const probe = parse(named + html.slice(at))
+  const read = new Set<string | null>()
+  const comments = probe.createTreeWalker(probe, NodeFilter.SHOW_COMMENT)
+  for (let node = comments.nextNode(); node; node = comments.nextNode())
+    read.add(node.nodeValue)
+  const genuine = markers.filter((_, index) => read.has(`${id}-${index}`))
+  const start = genuine.find((marker) => /^<!--s/i.test(marker[0]))
+  const end =
+    start &&
+    genuine.findLast(
+      (marker) => marker.index > start.index && /^<!--e/i.test(marker[0]),
+    )
+  if (!start || !end) return parse(html)
+  const document = parse(
+    `${html.slice(0, start.index)}<!--${id}-->${html.slice(start.index + start[0].length, end.index)}`,
+  )
+  const found = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT)
+  let marker = found.nextNode()
+  while (marker && marker.nodeValue !== id) marker = found.nextNode()
+  if (!marker) return parse('')
+  const { body } = document
+  for (
+    let node: Node | null = marker;
+    node && node !== body;
+    node = node.parentNode
+  ) {
+    let items = 0
+    while (node.previousSibling) {
+      if (node.previousSibling.nodeName === 'LI') items++
+      node.previousSibling.remove()
+    }
+    if (items && node.parentNode instanceof HTMLOListElement)
+      node.parentNode.start += items
+  }
   return document
 }
 
 /** Markdown for pasted HTML. */
 export function htmlToMarkdown(html: string, original?: string) {
   const document = parseSelection(html)
-  // Markers before the body select nothing in it.
-  if (!document.body) return ''
   if (
     original !== undefined &&
     document.body.firstElementChild?.hasAttribute('data-hibi-markdown')

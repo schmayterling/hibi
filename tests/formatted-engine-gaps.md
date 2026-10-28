@@ -9,9 +9,9 @@ accepted differences are not gaps; their tests assert each engine. the codemirro
 | gap id | test file:line | behavior | owning slice |
 | --- | --- | --- | --- |
 | reload-001 | [addon-reload.test.mjs:783](addon-reload.test.mjs#L783) | addon reload must retain selection and document focus | 3b: addon reload selection and focus |
-| reload-004 | [addon-reload.test.mjs:924](addon-reload.test.mjs#L924) | unlocked formatted editor must expose aria-readonly false | 3b: addon reload selection and focus |
-| reload-002 | [addon-reload.test.mjs:951](addon-reload.test.mjs#L951) | addon reload must retain selection moved while read-only | 3b: addon reload selection and focus |
-| reload-003 | [addon-reload.test.mjs:969](addon-reload.test.mjs#L969) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
+| reload-004 | [addon-reload.test.mjs:929](addon-reload.test.mjs#L929) | unlocked formatted editor must expose aria-readonly false | 3b: addon reload selection and focus |
+| reload-002 | [addon-reload.test.mjs:956](addon-reload.test.mjs#L956) | addon reload must retain selection moved while read-only | 3b: addon reload selection and focus |
+| reload-003 | [addon-reload.test.mjs:974](addon-reload.test.mjs#L974) | typing must resume at retained selection after addon reload | 3b: addon reload selection and focus |
 | api-001 | [addon-toolbar-command.test.mjs:149](addon-toolbar-command.test.mjs#L149) | api 2 rich selection must report rendered text | 6: verbatim projections and selection contracts |
 | completion-001 | [autocomplete-addon.test.mjs:369](autocomplete-addon.test.mjs#L369) | a fresh rich completion list must accept the word with tab | 8a: native input, structure and toolbar state |
 | syntax-004 | [code-syntax-settings.test.mjs:238](code-syntax-settings.test.mjs#L238) | code blocks must retain horizontal scrolling | 8c: highlighting and grammar lifecycle |

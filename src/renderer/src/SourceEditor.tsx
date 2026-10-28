@@ -168,6 +168,15 @@ import {
 } from './source-view'
 import { textProjection } from './text-projection'
 
+/** Each mounted view's bridge to its document session. */
+const bridges = new WeakMap<
+  EditorView,
+  ReturnType<typeof createSourceSession>
+>()
+/** The whole source after editor changes, exactly as the mounted view commits them. */
+export const sourceAfter = (view: EditorView, changes: readonly RawEdit[]) =>
+  bridges.get(view)?.sourceAfter(changes) ?? null
+
 const highlighting = HighlightStyle.define([
   { tag: tags.heading, color: 'var(--syntax-heading)', fontWeight: '600' },
   { tag: tags.strong, color: 'var(--syntax-strong)', fontWeight: '600' },
@@ -2207,6 +2216,7 @@ export function SourceEditor({
       },
       resolveReference,
     )
+    bridges.set(editor, bridge)
     const unregisterViewApi = editorViewRegistry.register(
       document.tabId,
       viewId as ViewId,
@@ -2336,6 +2346,7 @@ export function SourceEditor({
       formatting.current = null
       reportFormatting.current(null)
       unregister()
+      bridges.delete(editor)
       unregisterViewApi()
       detachInteractions()
       editor.contentDOM.removeEventListener(

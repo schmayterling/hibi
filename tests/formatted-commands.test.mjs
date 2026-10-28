@@ -852,6 +852,17 @@ test('multi-line text input repairs formatting it cuts, as the browser types', (
     run('> 9. ab|\n> 10. tail', blockBreak),
     '> 9. ab\n> 10. |\n> 11. tail',
   )
+  // In a quote in an item, new items continue only the inner list, after
+  // the outer item's indentation.
+  assert.equal(
+    run('- > 8. ab|cd\n  > 9. tail', typing('x\ny')),
+    '- > 8. abx\n  > 9. y|cd\n  > 10. tail',
+  )
+  assert.equal(run('- > - ab|cd', typing('x\ny')), '- > - abx\n  > - y|cd')
+  assert.equal(
+    run('- > 8. ab|\n  > 9. tail', blockBreak),
+    '- > 8. ab\n  > 9. |\n  > 10. tail',
+  )
   // A wider number moves the item's later lines inside the quote markers.
   assert.equal(
     run('> 8. ab|cd\n> 9. tail\n>\n>    more', typing('x\ny')),

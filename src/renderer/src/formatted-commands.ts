@@ -190,6 +190,20 @@ function renumbered(
   return changes
 }
 
+/**
+ * What a new line of an item beside `item` starts with: the indentation and
+ * quote markers before its marker, or, where an outer item's marker shares
+ * that line, its containers' continuation.
+ */
+function itemIndent(state: EditorState, item: SyntaxNode, mark: SyntaxNode) {
+  const before = state.sliceDoc(state.doc.lineAt(mark.from).from, mark.from)
+  if (/^[ \t>]*$/.test(before)) return before
+  const prefix = prefixOf(state, item.parent)
+  return prefix == null
+    ? before
+    : prefix + ' '.repeat(Math.max(0, before.length - prefix.length))
+}
+
 /** The markers that start a line of `item` for the quotes it is in. */
 function quoteMarkers(item: SyntaxNode, text: string) {
   let quotes = 0
@@ -200,15 +214,10 @@ function quoteMarkers(item: SyntaxNode, text: string) {
     : ''
 }
 
-/** The content column of a list item's first line after its quote markers, as its marker sets it. */
+/** The content column of a list item's first line, as its marker sets it. */
 function itemWidth(state: EditorState, item: SyntaxNode) {
-  const { text } = state.doc.lineAt(item.from)
-  const match = /^([ \t]*(?:\d+[.)]|[-+*]))( *)(.?)/.exec(
-    text.slice(quoteMarkers(item, text).length),
-  )
-  if (!match) return 0
-  const spaces = match[2]!.length
-  return match[1]!.length + (!match[3] || spaces > 4 ? 1 : spaces)
+  const marker = itemMarker(state, item)
+  return marker ? marker.mark.from - marker.line.from + marker.width : 0
 }
 
 /**
@@ -231,7 +240,7 @@ function shiftContent(
     const from = line.from + quoteMarkers(item, line.text).length
     const text = state.sliceDoc(from, line.to)
     const leading = /^ */.exec(text)![0].length
-    if (blank(text) || leading < width) continue
+    if (blank(text) || from - line.from + leading < width) continue
     if (by > 0) changes.push({ from, insert: ' '.repeat(by) })
     else changes.push({ from, to: from - by })
   }
@@ -242,8 +251,7 @@ function shiftContent(
 function nextMarker(state: EditorState, item: SyntaxNode) {
   const mark = item.getChild('ListMark')
   if (!mark) return null
-  const line = state.doc.lineAt(item.from)
-  const indent = state.sliceDoc(line.from, mark.from)
+  const indent = itemIndent(state, item, mark)
   const text = state.sliceDoc(mark.from, mark.to)
   const ordered = /^(\d+)([.)])$/.exec(text)
   const task = item.getChild('Task')
@@ -1034,7 +1042,7 @@ function markersOf(state: EditorState, levels: readonly SyntaxNode[]) {
     const mark = item.getChild('ListMark')!
     const text = state.sliceDoc(mark.from, mark.to)
     const number = ordinal(state, mark)
-    const indent = state.sliceDoc(state.doc.lineAt(mark.from).from, mark.from)
+    const indent = itemIndent(state, item, mark)
     const task = item.getChild('Task') ? '[ ] ' : ''
     let count = 0
     const value = () =>

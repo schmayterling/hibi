@@ -11,6 +11,7 @@ import {
   type FormattedNodeView,
   showMarkdownMarkers,
 } from '../../renderer/src/formatted-contributions.ts'
+import { formattedClosedFence } from '../../shared/formatted-text-rules.ts'
 
 /*
  * Fenced blocks that an addon renders in the formatted view, such as diagrams
@@ -137,8 +138,9 @@ export function readFence(doc: Text, node: SyntaxNode): Fence | null {
     close = node.lastChild
   const first = doc.lineAt(node.from)
   if (
-    open?.name !== 'CodeMark' ||
-    close?.name !== 'CodeMark' ||
+    !formattedClosedFence(node) ||
+    !open ||
+    !close ||
     doc.lineAt(close.from).number === first.number
   )
     return null

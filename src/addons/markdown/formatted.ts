@@ -1,6 +1,7 @@
 import { WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import type { FormattedContribution } from '../../renderer/src/formatted-contributions.ts'
+import { formattedAlertText } from '../../shared/formatted-text-rules.ts'
 import { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
 import { alertMarker, alertType } from './alerts.ts'
 import './formatted.css'
@@ -30,7 +31,7 @@ export function titleOf(source: string) {
   const marker = alertMarker(source)
   if (!marker) return null
   const type = alertType(marker[1]) ?? 'note'
-  return { type, text: marker[3]?.trim() || type }
+  return { type, text: formattedAlertText(source) }
 }
 
 /** The quote's first block. */

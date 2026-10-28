@@ -2398,7 +2398,10 @@ export class ChunkedMarkdownParser extends Parser {
     options: ChunkedMarkdownOptions = {},
   ) {
     super()
-    this.full = full.configure({ wrap: trackReadAhead })
+    this.full =
+      options.trackReadAhead === false
+        ? full
+        : full.configure({ wrap: trackReadAhead })
     this.options = options
     this.document = full.nodeSet.types.find((type) => type.name === 'Document')!
     // Inline parsers never change block structure, so boundary scans skip them.

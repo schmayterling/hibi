@@ -388,6 +388,7 @@ export class DocumentWorkerClient {
     this.#codeDelivered = false
     this.#boundaryFrom = null
     this.#boundaryTo = null
+    if (!this.#loaded) return
     this.#post({
       type: 'cancel-boundaries',
       epoch: this.#epoch,

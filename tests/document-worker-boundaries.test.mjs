@@ -24,6 +24,7 @@ class Transport {
   replies = []
   terminated = false
   holdCode = false
+  holdLoad = false
   onmessage = null
   onerror = null
   onmessageerror = null
@@ -32,7 +33,8 @@ class Transport {
     setImmediate(() => {
       if (
         !this.terminated &&
-        !(this.holdCode && reply.type === 'boundaries' && reply.code)
+        !(this.holdCode && reply.type === 'boundaries' && reply.code) &&
+        !(this.holdLoad && reply.type === 'load-ack')
       )
         this.onmessage?.({ data: structuredClone(reply) })
     })
@@ -95,6 +97,7 @@ function fixture(
   source = '# title\n\ntext\n\n'.repeat(20000),
   beforeClient,
   holdCode = false,
+  holdLoad = false,
 ) {
   const transports = [],
     pages = [],
@@ -115,6 +118,7 @@ function fixture(
     worker: () => {
       const worker = new Transport()
       worker.holdCode = holdCode
+      worker.holdLoad = holdLoad
       transports.push(worker)
       return worker
     },
@@ -1155,5 +1159,41 @@ test('an early last unsubscribe does not attach an old view receiver to the edit
   assert.equal(f.pages.length, 1)
   f.request()
   await until(() => f.pages.at(-1).done && f.pages.at(-1).version === 1)
+  assert.deepEqual(f.errors, [])
+})
+
+test('a code watch can unsubscribe during bootstrap without canceling the document transfer', async (t) => {
+  const f = fixture(t, '~~~\nbody\n~~~\n', undefined, false, true),
+    code = []
+  const detach = f.client.subscribeCodeExtents((page) => code.push(page))
+  f.request()
+  await until(() =>
+    f.transports[0]?.replies.some((reply) => reply.type === 'load-ack'),
+  )
+  const worker = f.transports[0]
+  const first = worker.replies.find((reply) => reply.type === 'load-ack')
+  f.session.edit(
+    [{ from: 4, to: 8, insert: 'wide\tbody' }],
+    'source',
+    'bootstrap-code',
+  )
+  detach()
+  assert.equal(
+    worker.messages.filter((message) => message.type === 'cancel-boundaries')
+      .length,
+    0,
+  )
+  f.request()
+  worker.holdLoad = false
+  worker.onmessage({ data: first })
+  await until(() => f.pages.at(-1)?.done && f.pages.at(-1).version === 1)
+  assert.equal(f.transports.length, 1)
+  assert.equal(code.length, 0)
+  const renewed = []
+  const stop = f.client.subscribeCodeExtents((page) => renewed.push(page))
+  await until(() => codeDone(f))
+  assert.equal(renewed.flatMap((page) => page.records)[0].contentColumns, 12)
+  stop()
+  assert.ok(worker.replies.every((reply) => reply.type !== 'error'))
   assert.deepEqual(f.errors, [])
 })

@@ -100,6 +100,7 @@ import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { uncovered } from './chunked-markdown'
 import { codeHighlighter, codeLanguages } from './code-languages'
+import { setCodeExtents } from './code-placeholders'
 import {
   completionBroker,
   lazyCompletionProse,
@@ -2315,6 +2316,30 @@ export function SourceEditor({
       if (!formatted) configureFlavors.current()
     })
     configureParser.current()
+    // The index's code blocks keep their height in the formatted view before
+    // it has drawn or parsed them. A late listener gets the index replayed.
+    const unsubscribeCode = formatted
+      ? getWorker().subscribeCodeExtents((page) => {
+          if (
+            disposed ||
+            page.version !== session.snapshot().version ||
+            !bridge.isCurrent()
+          )
+            return
+          editor.dispatch({
+            effects: setCodeExtents.of({
+              from: page.from,
+              to: page.to,
+              extents: page.records.map((record) => ({
+                from: record.from,
+                to: record.to,
+                lines: record.contentLines,
+                columns: record.contentColumns,
+              })),
+            }),
+          })
+        })
+      : () => {}
     const measure = () => {
       if (!disposed) editor.requestMeasure()
     }
@@ -2353,6 +2378,7 @@ export function SourceEditor({
       referenceFailed.current = false
       unsubscribe()
       unsubscribeFlavors()
+      unsubscribeCode()
       configureParser.current = () => {}
       configureFlavors.current = () => {}
       disposed = true

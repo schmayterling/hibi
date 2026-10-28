@@ -569,18 +569,32 @@ export function SourceEditor({
                         anchor: target.match.from,
                         head: target.match.to,
                       },
-                      scrollIntoView: true,
                     }
                   : {}),
-                effects: highlightStarts
-                  ? findHighlights.current.reconfigure(
-                      sourceFindHighlights(
-                        find.current.query,
-                        current.state.doc,
-                        highlightStarts,
-                      ),
-                    )
-                  : [],
+                effects: [
+                  // A match wider than the view shows its start.
+                  ...(target
+                    ? [
+                        EditorView.scrollIntoView(
+                          EditorSelection.range(
+                            target.match.to,
+                            target.match.from,
+                          ),
+                        ),
+                      ]
+                    : []),
+                  ...(highlightStarts
+                    ? [
+                        findHighlights.current.reconfigure(
+                          sourceFindHighlights(
+                            find.current.query,
+                            current.state.doc,
+                            highlightStarts,
+                          ),
+                        ),
+                      ]
+                    : []),
+                ],
               })
             } finally {
               applyingFind.current = false

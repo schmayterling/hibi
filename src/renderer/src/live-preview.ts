@@ -2137,13 +2137,15 @@ export function livePreview(
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))
       return true
     }),
-    // A caret in a code block scrolls the block sideways to show it, once
-    // the editor may read its layout.
+    // A caret or selection in a code block scrolls the block sideways to
+    // show it, all of a selection on one line where it fits and its head
+    // otherwise, once the editor may read its layout.
     EditorView.scrollHandler.of((view, range, { xMargin }) => {
       view.requestMeasure({
         key: revealCaret,
         read() {
-          if (range.head > view.state.doc.length) return null
+          const { doc } = view.state
+          if (Math.max(range.anchor, range.head) > doc.length) return null
           const { node } = view.domAtPos(range.head)
           const box = (
             node instanceof Element ? node : node.parentElement
@@ -2152,12 +2154,22 @@ export function livePreview(
           if (!box || !caret) return null
           const left = box.getBoundingClientRect().left + xMargin
           const right = left + box.clientWidth - 2 * xMargin
-          const by =
-            caret.left < left
-              ? caret.left - left
-              : caret.right > right
-                ? caret.right - right
-                : 0
+          const other =
+            !range.empty &&
+            doc.lineAt(range.anchor).from === doc.lineAt(range.head).from
+              ? view.coordsAtPos(range.anchor)
+              : null
+          let start = caret.left
+          let end = caret.right
+          if (
+            other &&
+            Math.max(end, other.right) - Math.min(start, other.left) <=
+              right - left
+          ) {
+            start = Math.min(start, other.left)
+            end = Math.max(end, other.right)
+          }
+          const by = start < left ? start - left : end > right ? end - right : 0
           return by ? { box, by } : null
         },
         write(move) {

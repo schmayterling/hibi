@@ -82,6 +82,16 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 
 type Revealed = { from: number; to: number }
 
+/** A range over the whole note, or all its text after metadata the view keeps hidden. */
+function selectsWholeNote(state: EditorState, range: Revealed) {
+  if (range.to !== state.doc.length || range.from === range.to) return false
+  if (range.from === 0) return true
+  let body = 0
+  for (const measure of state.facet(formattedPrefix))
+    body = Math.max(body, measure(state))
+  return range.from === body
+}
+
 class SpaceWidget extends WidgetType {
   override eq() {
     return true
@@ -1649,19 +1659,11 @@ export function livePreview(
       const { doc } = transaction.startState
       const before = transaction.startState.selection.ranges
       const lines = transaction.startState.field(layout)
-      // Where the note's text starts after metadata the view keeps hidden.
-      let body = 0
-      for (const measure of transaction.startState.facet(formattedPrefix))
-        body = Math.max(body, measure(transaction.startState))
       let moved = false
       const ranges = transaction.selection.ranges.map((range, index) => {
         // Selecting the whole note, or all its text after its metadata,
         // includes the hidden lines at its ends.
-        if (
-          range.to === doc.length &&
-          (range.from === 0 || range.from === body)
-        )
-          return range
+        if (selectsWholeNote(transaction.startState, range)) return range
         let head = range.head
         lines.between(head, head, (from, to, value) => {
           if (value !== hiddenLine || head < from || head > to) return
@@ -1718,6 +1720,45 @@ export function livePreview(
         { key: 'Tab', run: tab(false), shift: tab(true) },
       ]),
     ),
+    // The page cannot select hidden lines at the note's ends, so a key typed
+    // over the whole note would replace only what shows: replace it all.
+    // Text with line breaks keeps the native multi-line input path.
+    EditorView.domEventHandlers({
+      beforeinput(event, view) {
+        const { selection, readOnly } = view.state
+        const hidden = (at: number) => {
+          let found = false
+          view.state.field(layout).between(at, at, (from, to, value) => {
+            if (value === hiddenLine && from <= at && at <= to) found = true
+          })
+          return found
+        }
+        if (
+          event.inputType !== 'insertText' ||
+          !event.data ||
+          event.data.includes('\n') ||
+          view.composing ||
+          readOnly ||
+          selection.ranges.length !== 1 ||
+          !selectsWholeNote(view.state, selection.main) ||
+          !(hidden(selection.main.from) || hidden(selection.main.to))
+        )
+          return false
+        event.preventDefault()
+        const { from, to } = selection.main
+        view.dispatch(
+          view.state.update(
+            {
+              changes: { from, to, insert: event.data },
+              selection: { anchor: from + event.data.length },
+              userEvent: 'input.type',
+            },
+            { scrollIntoView: true },
+          ),
+        )
+        return true
+      },
+    }),
     EditorView.inputHandler.of((view, from, to, text) => {
       if (view.composing) return false
       const spec = gapInput(view.state, syntax.tree(view.state), from, to, text)

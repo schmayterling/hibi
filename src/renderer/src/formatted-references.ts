@@ -64,9 +64,10 @@ class Answers {
   readonly drawn = new Set<string>()
   /**
    * Drawn in table cells, which draw again only when answers change, with
-   * where each cell is, so cells scrolled away stop asking.
+   * where each such cell is, so a label whose cells all scrolled away stops
+   * asking.
    */
-  readonly cells = new Map<string, number>()
+  readonly cells = new Map<string, Set<number>>()
 }
 const answered = StateEffect.define<null>()
 
@@ -146,7 +147,11 @@ export function drawReference(
     answers.cells.delete(oldest)
   }
   answers.drawn.add(label)
-  if (cell !== undefined) answers.cells.set(label, cell)
+  if (cell !== undefined) {
+    const cells = answers.cells.get(label)
+    if (cells) cells.add(cell)
+    else answers.cells.set(label, new Set([cell]))
+  }
   return entry.answer
 }
 
@@ -200,8 +205,11 @@ const requests = ViewPlugin.fromClass(
         }
       } else if (update.docChanged) {
         this.generation++
-        for (const [label, at] of answers.cells)
-          answers.cells.set(label, update.changes.mapPos(at))
+        for (const [label, cells] of answers.cells)
+          answers.cells.set(
+            label,
+            new Set([...cells].map((at) => update.changes.mapPos(at))),
+          )
       } else if (update.viewportChanged) this.scrolled = true
       this.later()
     }
@@ -229,8 +237,10 @@ const requests = ViewPlugin.fromClass(
       if (this.scrolled) {
         this.scrolled = false
         const { from, to } = this.view.viewport
-        for (const [label, at] of cells)
-          if (at < from || at > to) cells.delete(label)
+        for (const [label, places] of cells) {
+          for (const at of places) if (at < from || at > to) places.delete(at)
+          if (!places.size) cells.delete(label)
+        }
         this.abort((label) => !drawn.has(label) && !cells.has(label))
       }
       this.flush()

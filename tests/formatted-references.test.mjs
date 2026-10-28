@@ -139,3 +139,35 @@ for (const cell of [undefined, 100])
     )
     plugin.destroy()
   })
+
+for (const order of [
+  [2, 100],
+  [100, 2],
+])
+  test(`a label in table cells in and out of view keeps its lookup, drawn in order ${order}`, async () => {
+    const jobs = [],
+      aborted = []
+    const { view, plugin } = referenceView(
+      (label, signal) =>
+        new Promise((resolve) => {
+          jobs.push({ label, resolve })
+          signal.addEventListener('abort', () => aborted.push(label))
+        }),
+    )
+    view.viewport = { from: 0, to: 104 }
+    for (const at of order) drawReference(view.state, 'shared', at)
+    plugin.later()
+    await settle()
+    assert.equal(jobs.length, 1)
+    // Only the cell at 100 scrolls away.
+    view.viewport = { from: 0, to: 4 }
+    plugin.update({
+      state: view.state,
+      startState: view.state,
+      docChanged: false,
+      viewportChanged: true,
+    })
+    await settle()
+    assert.deepEqual(aborted, [])
+    plugin.destroy()
+  })

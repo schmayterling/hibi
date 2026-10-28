@@ -331,6 +331,12 @@ for (const [open, close] of [
           f.check(separator === ' ' ? null : '/x')
           assert.equal(f.references.lookup('ref')?.title ?? null, null)
           assert.equal(f.references.lookup('other')?.href, '/visible')
+          assert.equal(
+            [...f.model.state().owners.records()].filter(
+              ({ owner }) => owner.kind === 'markdown:LinkReference',
+            ).length,
+            separator === ' ' ? 1 : 2,
+          )
         }
   })
 

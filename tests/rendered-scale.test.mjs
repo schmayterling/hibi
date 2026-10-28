@@ -48,8 +48,8 @@ for (const [shape, line] of [
         counters.maskBytes <= Math.ceil(length / 4096) * 2048,
         JSON.stringify(counters),
       )
-      assert.ok(counters.retainedWindows <= 2)
-      assert.ok(counters.retainedNodes < 1000000, JSON.stringify(counters))
+      assert.equal(counters.retainedWindows, 0)
+      assert.equal(counters.retainedNodes, 0)
       for (let at = 0; at < length - line.length; at += 65536) {
         const from = Math.floor(at / line.length) * line.length
         assert.equal(

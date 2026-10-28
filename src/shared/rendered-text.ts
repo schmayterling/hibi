@@ -69,6 +69,19 @@ const page = 4096,
   batch = 1024
 type Frame = ReturnType<typeof parsedChunks>[number]
 type Window = { from: number; to: number; frames: Frame[]; nodes: number }
+type ProofStyle = RenderedRange & { key: string }
+type PositionMap = (position: number, side?: -1 | 1) => number
+const markNames = new Set([
+  'InlineCode',
+  'Emphasis',
+  'StrongEmphasis',
+  'Strikethrough',
+  'Highlight',
+  'Subscript',
+  'Link',
+  'WikiLink',
+  'Autolink',
+])
 type DetailFrame = RenderedRange & {
   tree: Tree
   start: (position: number) => number
@@ -124,7 +137,7 @@ class Reader {
 
 /**
  * The formatted parser owns syntax. Packed masks, shared boundary metadata
- * and two syntax windows survive a build; counts never retain every match.
+ * survive a build. Navigation lazily retains two windows; counts retain no matches.
  */
 export class RenderedTextIndex {
   #source: SourceSnapshot
@@ -290,7 +303,7 @@ export class RenderedTextIndex {
     }
     const result = { from, to: coveredTo, frames, nodes }
     this.#windows.push(result)
-    if (this.#windows.length > 2) this.#windows.splice(1, 1)
+    if (this.#windows.length > 2) this.#windows.shift()
     return result
   }
   #code(at: number) {
@@ -388,35 +401,62 @@ export class RenderedTextIndex {
       if (this.#tick()) yield
     }
   }
+  #scope(tree: Tree, from: number, to: number) {
+    let node = tree.resolveInner(from, 1)
+    while (
+      node.parent &&
+      (node.from > from || node.to < to || !node.type.is('LeafBlock'))
+    )
+      node = node.parent
+    return node
+  }
+
+  *#projectFrames(
+    frames: readonly Frame[],
+    requested: RenderedRange,
+    resolveFootnotes: boolean,
+    definitions = this.#definitions,
+    apply = true,
+  ) {
+    for (const frame of frames) {
+      const range = {
+        from: Math.max(requested.from, frame.from),
+        to: Math.min(requested.to, frame.from + frame.chunk.length),
+      }
+      if (range.to <= range.from) continue
+      for (const effect of formattedTextEffects(
+        this.#scope(
+          frame.chunk,
+          range.from - frame.from,
+          range.to - frame.from,
+        ),
+        frame.from,
+        this.#input,
+        range,
+        this.#config,
+        this.#inline,
+        definitions,
+        resolveFootnotes,
+      )) {
+        if (effect && apply) yield* this.#effect(effect, range)
+        if (this.#tick()) yield
+      }
+    }
+  }
+
   *#project(resolveFootnotes: boolean) {
     this.#leafEnd = -1
     const width = this.#config.chunkSize * this.#config.groupSize
     for (let from = 0; from < this.#syntaxInput.length; from += width) {
       const window = yield* this.#window(from)
-      for (const frame of window.frames) {
-        const range = {
-          from: Math.max(from, frame.from),
-          to: Math.min(
-            from + width,
-            this.#syntaxInput.length,
-            frame.from + frame.chunk.length,
-          ),
-        }
-        if (range.to <= range.from) continue
-        for (const effect of formattedTextEffects(
-          frame.chunk,
-          frame.from,
-          this.#input,
-          range,
-          this.#config,
-          this.#inline,
-          this.#definitions,
-          resolveFootnotes,
-        )) {
-          if (effect) yield* this.#effect(effect, range)
-          if (this.#tick()) yield
-        }
-      }
+      yield* this.#projectFrames(
+        window.frames,
+        {
+          from,
+          to: Math.min(from + width, this.#syntaxInput.length),
+        },
+        resolveFootnotes,
+      )
     }
     if (this.#plainTail) {
       yield* this.#effect(
@@ -514,6 +554,7 @@ export class RenderedTextIndex {
       { from: 0, to: this.length },
     )
     this.#maximum = Math.max(this.#maximum, this.#pending)
+    this.#windows = []
     this.#complete = true
   }
   text(from: number, to: number) {
@@ -689,21 +730,7 @@ export class RenderedTextIndex {
           node.name !== 'Table'
         if (!descend) continue
         const hidden = formattedMarkerRanges(node, read)
-        if (
-          hidden.length !== 2 ||
-          ![
-            'InlineCode',
-            'Emphasis',
-            'StrongEmphasis',
-            'Strikethrough',
-            'Highlight',
-            'Subscript',
-            'Link',
-            'WikiLink',
-            'Autolink',
-          ].includes(node.name)
-        )
-          continue
+        if (hidden.length !== 2 || !markNames.has(node.name)) continue
         const open = {
             from: frame.start(hidden[0]!.from),
             to: frame.end(hidden[0]!.to),
@@ -825,33 +852,308 @@ export class RenderedTextIndex {
     }
     return result(minimal)
   }
-  *#tokens(from: number, to: number): Generator<string | null> {
-    for (const run of this.runs(from)) {
-      if (run.from >= to) break
-      if (run.barrier) {
-        yield null
+  #proofRange(
+    match: SourceMatch,
+    edits: readonly RenderedEdit[],
+  ): RenderedRange {
+    const lo = edits[0]!.from,
+      hi = edits.at(-1)!.to
+    let from = Math.max(this.prefix, lo - page),
+      to = Math.min(this.length, hi + page)
+    if (!this.validStart(from)) from--
+    if (!this.validStart(to)) to++
+    const first = this.runs(from).next().value
+    if (first?.text !== undefined) from = Math.min(from, first.from)
+    const last = this.runs(Math.max(from, to - 1)).next().value
+    if (last?.text !== undefined) to = Math.max(to, last.to)
+    return { from, to }
+  }
+
+  *#proofWindow(range: RenderedRange): Generator<void, Window> {
+    const frames: Frame[] = []
+    for (let at = range.from; at < range.to; ) {
+      const window = yield* this.#window(at)
+      for (const frame of window.frames)
+        if (
+          !frames.some(
+            (value) => value.from === frame.from && value.chunk === frame.chunk,
+          )
+        )
+          frames.push(frame)
+      at = Math.max(at + 1, window.to)
+    }
+    return { ...range, frames, nodes: 0 }
+  }
+
+  *#partial(range: RenderedRange, fragments: readonly TreeFragment[]) {
+    const tree = yield* this.#advance(
+      this.#parser.startChunkedParse(
+        this.#input,
+        fragments,
+        range,
+        this.prefix,
+      ),
+    )
+    const window: Window = {
+      ...range,
+      frames: parsedChunks(tree, range),
+      nodes: 0,
+    }
+    this.#fragments = TreeFragment.addTree(tree)
+    const definitions = new Set<string>()
+    yield* this.#projectFrames(window.frames, range, false, definitions)
+    if (this.#definitions.size) {
+      this.#leafEnd = -1
+      yield* this.#projectFrames(window.frames, range, true)
+    }
+    this.#complete = true
+    return { window, definitions }
+  }
+
+  #boundary(
+    window: Window,
+    position: number,
+    side: -1 | 1,
+    map: PositionMap = (position) => position,
+  ) {
+    for (const frame of window.frames) {
+      if (
+        position < frame.from ||
+        position > frame.from + frame.chunk.length ||
+        (position === frame.from && side < 0) ||
+        (position === frame.from + frame.chunk.length && side > 0)
+      )
+        continue
+      const names: string[] = []
+      for (
+        let node: SyntaxNode | null = frame.chunk.resolveInner(
+          position - frame.from,
+          side,
+        );
+        node;
+        node = node.parent
+      )
+        if (
+          markNames.has(node.name) ||
+          node.type.is('LeafBlock') ||
+          [
+            'Document',
+            'Blockquote',
+            'BulletList',
+            'OrderedList',
+            'ListItem',
+            'FootnoteDefinition',
+            'Table',
+            'Task',
+            'Subtext',
+            'AlertTitle',
+            'BlockMath',
+          ].includes(node.name)
+        )
+          names.push(
+            node.name +
+              ':' +
+              map(frame.from + node.from, -1) +
+              '-' +
+              map(frame.from + node.to, 1),
+          )
+      return names.join('/')
+    }
+    return null
+  }
+
+  *#styles(
+    window: Window,
+    range: RenderedRange,
+    map: PositionMap,
+    edits: readonly RenderedEdit[] = [],
+    match?: SourceMatch,
+  ): Generator<void, ProofStyle[] | null> {
+    const styles: ProofStyle[] = [],
+      seen = new Set<string>()
+    for (const frame of this.#details(window, range.from, range.to)) {
+      if (!frame) {
+        yield
         continue
       }
-      const start = Math.max(from, run.from),
-        end = Math.min(to, run.to)
+      const read = (a: number, b: number) =>
+        this.text(
+          Math.max(0, frame.start(a)),
+          Math.min(this.length, frame.end(b)),
+        )
+      const cursor = this.#scope(
+        frame.tree,
+        frame.local(Math.max(range.from, frame.from)),
+        frame.local(Math.min(range.to, frame.to)),
+      ).cursor()
+      let descend = true
+      do {
+        const node = cursor.node,
+          from = frame.start(node.from),
+          to = frame.end(node.to)
+        descend =
+          from < range.to &&
+          to > range.from &&
+          !this.#config.literal.includes(node.name) &&
+          node.name !== 'Table'
+        if (!descend) continue
+        const code = node.name === 'FencedCode' || node.name === 'CodeBlock'
+        if (!markNames.has(node.name) && !code) continue
+        const link = ['Link', 'WikiLink', 'Autolink'].includes(node.name)
+        const hidden = formattedMarkerRanges(node, read)
+        const container = match?.containers?.find(
+          (value) =>
+            value.kind === 'link' &&
+            value.open.from === from &&
+            value.close.to === to,
+        )
+        const visible =
+          container?.visible ??
+          (hidden.length === 2
+            ? {
+                from: frame.end(hidden[0]!.to),
+                to: frame.start(hidden[1]!.from),
+              }
+            : { from, to })
+        // A fully replaced link loses its destination, as the deletion helper specifies.
+        if (
+          link &&
+          match &&
+          match.from <= visible.from &&
+          match.to >= visible.to
+        )
+          continue
+        let key = code ? 'CodeBlock' : node.name
+        const target = link
+          ? (node.getChild('URL') ?? node.getChild('WikiTarget'))
+          : code
+            ? node.getChild('CodeInfo')
+            : null
+        if (target) {
+          const a = frame.start(target.from),
+            b = frame.end(target.to)
+          if (edits.some((edit) => edit.from < b && edit.to > a)) return null
+          // Equal mapped ranges refer to the same unchanged source, without reading a long href.
+          key += '@' + map(a, -1) + ':' + map(b, 1)
+        }
+        const id = from + ':' + to + ':' + key
+        if (!seen.has(id)) {
+          seen.add(id)
+          styles.push({ from, to, key })
+        }
+        if (this.#tick()) yield
+      } while (cursor.next(descend))
+    }
+    return styles
+  }
+
+  *#tokens(
+    range: RenderedRange,
+    styles: readonly ProofStyle[],
+    map: PositionMap,
+  ): Generator<string> {
+    const events = styles
+      .flatMap((style) => [
+        { at: style.from, key: style.key, delta: 1 },
+        { at: style.to, key: style.key, delta: -1 },
+      ])
+      .sort((a, b) => a.at - b.at || a.delta - b.delta)
+    const active = new Map<string, number>()
+    let event = 0,
+      signature = ''
+    const marked = (at: number, text: string) => {
+      let changed = false
+      while (event < events.length && events[event]!.at <= at) {
+        const value = events[event++]!,
+          count = (active.get(value.key) ?? 0) + value.delta
+        if (count) active.set(value.key, count)
+        else active.delete(value.key)
+        changed = true
+      }
+      if (changed) signature = [...active.keys()].sort().join('|')
+      return 'T' + signature + '\u0000' + text
+    }
+    for (const run of this.runs(range.from)) {
+      if (run.from >= range.to) break
+      const start = Math.max(range.from, run.from),
+        end = Math.min(range.to, run.to)
       if (end <= start || run.text === '') continue
+      if (run.barrier) {
+        yield 'B' + map(start, -1) + ':' + map(end, 1)
+        continue
+      }
       if (run.text !== undefined) {
-        yield* run.text
+        for (const scalar of run.text) yield marked(run.from, scalar)
         continue
       }
       for (let at = start; at < end; ) {
         let stop = Math.min(end, at + page)
         if (!this.validStart(stop)) stop--
-        yield* this.text(at, stop)
-        at = stop
+        const text = this.text(at, stop)
+        for (const scalar of text) {
+          yield marked(at, scalar)
+          at += scalar.length
+        }
       }
     }
   }
+
+  *#plainProof(
+    match: SourceMatch,
+    replacement: string,
+    edits: readonly RenderedEdit[],
+  ): Generator<void, boolean> {
+    const tail = this.#plainTail!
+    let from = Math.max(tail.from, edits[0]!.from - page),
+      to = Math.min(tail.to, edits.at(-1)!.to + page)
+    if (!this.validStart(from)) from--
+    if (!this.validStart(to)) to++
+    // The complete surrounding root was already proved free of inline starts.
+    // Plain guards retain mid-line flanking and detect new links crossing the seam.
+    const prefix = from > tail.from ? 'x' : '',
+      suffix = to < tail.to ? 'x' : ''
+    const text = prefix + this.text(from, to) + suffix,
+      shift = prefix.length - from
+    const source = new SourceStore(text, {
+      tabId: 'rendered-proof',
+      revision: 0,
+    })
+    const local = new RenderedTextIndex(source.snapshot(), 0, {
+      ...this.#config,
+      prefix: 0,
+    })
+    local.#definitions = this.#definitions
+    yield* local.#partial({ from: 0, to: text.length }, [])
+    const moved = (range: RenderedRange) => ({
+      from: range.from + shift,
+      to: range.to + shift,
+    })
+    return yield* local.#verifies(
+      {
+        ...match,
+        ...moved(match),
+        ...(match.segments ? { segments: match.segments.map(moved) } : {}),
+        containers: [],
+        context: { ...match.context!, block: { from: 0, to: text.length } },
+      },
+      replacement,
+      edits.map((edit) => ({ ...edit, ...moved(edit) })),
+    )
+  }
+
   *#verifies(
     match: SourceMatch,
     replacement: string,
     edits: readonly RenderedEdit[],
   ): Generator<void, boolean> {
+    if (
+      this.#plainTail &&
+      edits.every(
+        (edit) =>
+          edit.from >= this.#plainTail!.from && edit.to <= this.#plainTail!.to,
+      )
+    )
+      return yield* this.#plainProof(match, replacement, edits)
     const fork = SourceStore.fromSnapshot(this.#source)
     const changes = sourceChangesFromEditor(fork.snapshot(), edits)
     let snapshot = fork.snapshot()
@@ -859,7 +1161,7 @@ export class RenderedTextIndex {
       changes.some(
         (edit) => snapshot.sliceRaw(edit.from, edit.to) !== edit.insert,
       )
-    ) {
+    )
       snapshot = fork.prepare({
         document: snapshot.document,
         operationId: 'rendered-replace',
@@ -869,16 +1171,80 @@ export class RenderedTextIndex {
         contentVersion: snapshot.version + 1,
         changes,
       }).after
+    let shift = 0
+    const mapped = edits.map((edit) => {
+      const fromB = edit.from + shift,
+        toB = fromB + normalizedSource(edit.insert).length
+      shift = toB - edit.to
+      return { fromA: edit.from, toA: edit.to, fromB, toB }
+    })
+    const map: PositionMap = (position, side = -1) => {
+      let shift = 0
+      for (const edit of mapped) {
+        if (position <= edit.fromA) break
+        if (position === edit.toA && position > edit.fromA) return edit.toB
+        if (position <= edit.toA) return side < 0 ? edit.fromB : edit.toB
+        shift = edit.toB - edit.toA
+      }
+      return position + shift
     }
+    const range = this.#proofRange(edits)
+    const old = yield* this.#proofWindow(range)
+    const local = new Set<string>()
+    yield* this.#projectFrames(old.frames, range, false, local, false)
     const next = new RenderedTextIndex(snapshot, this.prefix, this.#config)
-    yield* next.build()
+    next.#definitions = this.#definitions
+    const nextRange = { from: map(range.from, -1), to: map(range.to, 1) }
+    let partial: { window: Window; definitions: Set<string> }
+    try {
+      partial = yield* next.#partial(
+        nextRange,
+        TreeFragment.applyChanges(this.#fragments, mapped),
+      )
+    } catch {
+      return false
+    }
+    if (
+      local.size !== partial.definitions.size ||
+      [...local].some((id) => !partial.definitions.has(id))
+    )
+      return false
+    if (
+      range.from > this.prefix &&
+      this.#boundary(old, range.from, -1, map) !==
+        next.#boundary(partial.window, nextRange.from, -1)
+    )
+      return false
+    if (
+      range.to < this.length &&
+      this.#boundary(old, range.to, 1, map) !==
+        next.#boundary(partial.window, nextRange.to, 1)
+    )
+      return false
+    const styles = yield* this.#styles(old, range, map, edits, match)
+    const actualStyles = yield* next.#styles(
+      partial.window,
+      nextRange,
+      (position) => position,
+    )
+    if (!styles || !actualStyles) return false
+    const inherited = [
+      ...new Set(
+        styles
+          .filter((style) => style.from <= match.from && match.from < style.to)
+          .map((style) => style.key),
+      ),
+    ]
+      .sort()
+      .join('|')
     const original = this
     const expected = (function* () {
-      yield* original.#tokens(0, match.from)
-      yield* normalizedSource(replacement)
-      yield* original.#tokens(match.to, original.length)
+      yield* original.#tokens({ from: range.from, to: match.from }, styles, map)
+      for (const scalar of normalizedSource(replacement))
+        yield 'T' + inherited + '\u0000' + scalar
+      yield* original.#tokens({ from: match.to, to: range.to }, styles, map)
     })()
-    const actual = next.#tokens(0, next.length)
+    const actual = next.#tokens(nextRange, actualStyles, (position) => position)
     let work = 0
     for (;;) {
       const a = expected.next(),

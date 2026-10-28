@@ -35,6 +35,12 @@ function replace(index, match, value) {
   assert.equal(
     render(build(text)),
     render(index, 0, match.from) + value + render(index, match.to),
+    JSON.stringify({
+      source: index.text(0, index.length),
+      query: match,
+      value,
+      text,
+    }),
   )
   return text
 }

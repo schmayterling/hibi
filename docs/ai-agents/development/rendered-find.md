@@ -30,7 +30,7 @@ src/shared/formatted-markdown.ts constructs the grammar used by both formattedSy
 
 RenderedTextIndex in src/shared/rendered-text.ts runs that grammar cooperatively through the existing ChunkedMarkdownParser. after build() completes, range(from, to, { blockSeparator? }) streams { from, to, text, precise } chunks without concatenating a selection. ordinary chunks cover at most 4096 source units and never split surrogate pairs. invalid, reversed, non-finite and partial-scalar bounds are refused.
 
-renderedRange(runs, from, to, { length, read }, { blockSeparator? }) is the pure assembly helper in src/shared/rendered-range.ts, re-exported by rendered-text.ts. it accepts ordered, non-overlapping RenderedRun values from retained syntax without building an index. decoded atoms have text; semantic block boundaries have block: true. blockSeparator: '\n' or '' changes only those explicit boundaries. ordinary runs retain their supplied text. slice 6 can assemble bounded selections synchronously from the formatted engine's retained tree.
+renderedRange(runs, from, to, { length, read }, { blockSeparator? }) is the pure assembly helper in src/shared/rendered-range.ts, re-exported by rendered-text.ts. it accepts ordered, non-overlapping RenderedRun values from retained syntax without building an index. decoded atoms have text; semantic block boundaries have block: true. blockSeparator: '\n' or '' changes only those explicit boundaries. ordinary runs retain their supplied text. bounded callers can pass an enclosing SyntaxNode to formattedTextEffects in src/shared/formatted-text-effects.ts. its cursor stays in that subtree while parent context remains available for quote and list prefixes. renderedRange then assembles the resulting runs synchronously.
 
 the index follows unrevealed text: soft paragraph breaks flow as spaces, semantic blocks have a newline separator, and table cells have tab separators. literal syntax settings leave their source visible. raw html blocks and inline-code content remain literal. lenient links follow the actual grammar, including its incomplete-link behaviour.
 
@@ -42,7 +42,7 @@ supply replacement: string on an exact match selection to prepare a replacement.
 
 RenderedTextIndex.prepareReplacement(match, text) is the cooperative preparation generator. it deletes every visible segment, inserts at the first segment using its marks, and drops delimiters of marks and links left empty. partial ordinary-link replacements retain their destination; whole-link replacements drop it. partial angle-autolink replacement is refused because its label is its href.
 
-preparation forks the immutable snapshot and reparses with the same grammar and hide rules. its rendered text, including widget barriers, must equal the original prefix plus the plain replacement plus the original suffix. a changed block structure or delimiter interpretation is refused unless it can be repaired. raw insertion is tested first. fallback reuses the shared literal-text helper; unnecessary escapes are removed only after another proof. snake_case, #tag, -1, +1 and 1.5 kg keep their spelling wherever safe. code receives verbatim text; backtick runs that would close inline code are refused.
+preparation forks the immutable snapshot and reparses the edited window with retained syntax fragments, the same grammar and the same hide rules. it compares rendered text, inherited marks, unchanged link destinations and widget source identities. surrounding syntax bounds and footnote definitions must remain equal across the window edges. certified ordinary paragraphs use a bounded local proof with plain guards preserving delimiter flanking. a changed block structure or delimiter interpretation is refused unless it can be repaired. raw insertion is tested first. fallback reuses the shared literal-text helper; unnecessary escapes are removed only after another proof. snake_case, #tag, -1, +1 and 1.5 kg keep their spelling wherever safe. code receives verbatim text; backtick runs that would close inline code are refused.
 
 renderedReplaceEdits(match, text, prepared) in src/shared/rendered-replace.ts is the pure apply helper. it returns only the verified edits for the exact from/to/text request, otherwise null. callers must also enforce the reply's source version. unverified structural candidates are never apply results.
 
@@ -53,8 +53,8 @@ examples:
 | hello **world** | lo wo | X | helX**rld** |
 | hello **world** | hello world | X | X |
 | hello **world** | world | X | hello **X** |
-| [hello world](url) | world | X | [hello X](url) |
-| [hello world](url) | hello world | X | X |
+| `[hello world](url)` | world | X | `[hello X](url)` |
+| `[hello world](url)` | hello world | X | X |
 
 dispatch every returned edit in one transaction and history group. one undo restores original source, including delimiters, destinations, unicode and line endings. undo's selection policy remains open for the ui integration.
 
@@ -62,7 +62,7 @@ location.current is one-based only for an exact source envelope. a caret, partia
 
 ## retained memory and parser limits
 
-the projection retains packed visibility masks, shared block-boundary metadata and two syntax windows, rather than objects for every marker or a second rendered note string. immutable find indexes omit the per-line read dependencies used to repair editable syntax trees; every source edit invalidates their cache. ordinary text needs no mask pages. query changes and selection-only navigation reuse the index; source edits and grammar changes invalidate it. replacement proof currently reparses an immutable fork cooperatively, rather than patching the retained index.
+the projection retains packed visibility masks and shared block-boundary metadata, rather than objects for every marker or a second rendered note string. completed builds release their syntax windows; match details lazily retain at most two recent windows. immutable find indexes omit the per-line read dependencies used to repair editable syntax trees; every source edit invalidates their cache. ordinary text needs no mask pages. query changes and selection-only navigation reuse the index; source edits and grammar changes invalidate it. replacement proof parses only its touched window on an immutable fork and leaves the retained index unchanged.
 
 projection snapshot reads stay bounded to 4096 normalized units. a syntax-free final root paragraph is proved with the configured grammar over a bounded prefix and the existing plain-run predicate, then streamed without flattening its line. other cases use the formatted parser. the underlying lezer parser still consumes an entire physical line when parsing inline syntax; a single huge line can allocate a transient line string and exceed a cooperative parser step. giant-block replay may also consume a full syntax window in one parser advance. deeply nested delimiters can hit lezer's recursion limit. these are shared parser limitations, not a separate find grammar or a note-size cap. the 50 mib regressions cover ordinary, list-heavy, markup-dense and entity-heavy notes and report source reads, packed bytes, retained syntax nodes and measured memory. no wall-clock threshold is used. packed masks and window counts bound retained projection structures; they do not impose a process-rss ceiling. heap deltas are process measurements across collection, not exclusive allocation ownership.
 

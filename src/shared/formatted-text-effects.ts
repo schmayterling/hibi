@@ -17,6 +17,7 @@ type Line = {
   prefix: number
   soft: boolean
   hard: boolean
+  trim: boolean
 }
 const leafNames = new Set([
   'Paragraph',
@@ -55,9 +56,12 @@ export function formattedTableRow(
   return { ...row, ...parsed, cells: parsed.cells.slice(0, columns) }
 }
 
-/** Pure unrevealed-text effects from the same nodes and source ranges the view draws. */
+/**
+ * Pure unrevealed-text effects from the same nodes and source ranges the view draws.
+ * Pass an enclosing node to retain ancestors without visiting sibling blocks.
+ */
 export function* formattedTextEffects(
-  tree: Tree,
+  tree: Tree | SyntaxNode,
   offset: number,
   input: FormattedTextInput,
   range: RenderedRange,
@@ -80,7 +84,13 @@ export function* formattedTextEffects(
     const bounds = input.lineAt(at)
     let found = lines.get(bounds.from)
     if (!found) {
-      found = { ...bounds, prefix: bounds.from, soft: false, hard: false }
+      found = {
+        ...bounds,
+        prefix: bounds.from,
+        soft: false,
+        hard: false,
+        trim: false,
+      }
       lines.set(bounds.from, found)
     }
     return found
@@ -176,6 +186,12 @@ export function* formattedTextEffects(
             Math.min(state.to, state.prefix + 4096),
           )
           state.prefix += /^[ \t]*/.exec(text)![0].length
+          // Quote markers are visited after the spanning leaf's lines.
+          state.trim =
+            name === 'Paragraph' ||
+            name === 'Task' ||
+            name === 'Subtext' ||
+            !!heading
         }
         if (
           name === 'Paragraph' ||
@@ -190,7 +206,8 @@ export function* formattedTextEffects(
     }
     if (name === 'FootnoteDefinition') {
       const label = node.getChild('FootnoteLabel')
-      if (label) definitions.add(read(label.from, label.to))
+      if (label && !resolveFootnotes)
+        definitions.add(read(label.from, label.to))
     }
     if (name === 'FootnoteReference') {
       const label = node.getChild('FootnoteLabel')
@@ -409,6 +426,18 @@ export function* formattedTextEffects(
   } while (cursor.next(descend))
   if (inlineOnly) return
   for (const state of lines.values()) {
+    if (state.trim) {
+      while (state.prefix < state.to) {
+        const text = input.read(
+          state.prefix,
+          Math.min(state.to, state.prefix + 4096),
+        )
+        const padding = /^[ \t]*/.exec(text)![0].length
+        state.prefix += padding
+        if (padding < text.length) break
+        yield null
+      }
+    }
     if (state.prefix > state.from)
       yield { kind: 'hide', from: state.from, to: state.prefix }
     if (state.soft && !state.hard && state.to < input.length)

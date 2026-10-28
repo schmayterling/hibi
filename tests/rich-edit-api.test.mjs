@@ -389,4 +389,58 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
   for (const from of positions)
     assert.equal(actual.slice(from, from + 3), 'the')
   assert.equal(actual.length, longSource.length)
+
+  const table =
+    '| a | b |\n| --- | --- |\n' +
+    '| teh mid-dle word | one two |\n'.repeat(400)
+  const prefix = 'para words here\n\n'.repeat(3000)
+  const tableSource = prefix + table + '\nafter\n'
+  const tableFile = join(profile, 'cold-table.md')
+  await writeFile(tableFile, tableSource)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, tableFile)
+  await clickMenu(app, 'Open…')
+  await page.waitForFunction(() =>
+    window.sourceReview.getDocument()?.markdown.startsWith('para words here'),
+  )
+  await waitForDocumentEditor(app, page)
+  const applyTableEdit = async (changes) => {
+    await waitForAsync(
+      page,
+      async (changes) => {
+        const api = window.sourceReview,
+          current = api.getDocument()
+        const result = api.applySourceEdits({
+          requestId: crypto.randomUUID(),
+          tabId: current.tabId,
+          revision: current.revision,
+          contentVersion: current.contentVersion,
+          changes,
+        })
+        window.coldTableEditResult = result
+        return result.status !== 'busy'
+      },
+      changes,
+    )
+    return page.evaluate(() => window.coldTableEditResult)
+  }
+  const pipe = await applyTableEdit([
+    {
+      from: prefix.length + 4,
+      to: prefix.length + 5,
+      insert: '',
+      expectedText: '|',
+    },
+  ])
+  assert.equal(pipe.status, 'unsupported-view')
+  const row = tableSource.indexOf('teh', prefix.length + 2000)
+  const literal = await applyTableEdit([
+    { from: row, to: row + 3, insert: 'the', expectedText: 'teh' },
+  ])
+  assert.equal(literal.status, 'applied')
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    tableSource.slice(0, row) + 'the' + tableSource.slice(row + 3),
+  )
 })

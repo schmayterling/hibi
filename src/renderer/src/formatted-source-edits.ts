@@ -1,7 +1,7 @@
 import type { EditorState, Text, Transaction } from '@codemirror/state'
 import type { Input, SyntaxNode, Tree } from '@lezer/common'
 import type { MarkdownParser } from '@lezer/markdown'
-import { boundaryWindow } from '../../shared/chunked-markdown.ts'
+import { boundaryWindow, readAheadFrom } from '../../shared/chunked-markdown.ts'
 import { formattedPrefix } from './formatted-contributions.ts'
 
 type Range = { from: number; to: number }
@@ -52,7 +52,11 @@ function inputFor(
 
 /** A table cell needs its row and header, not all other rows. */
 function tableRanges(doc: Text, start: number, at: number) {
-  const first = doc.lineAt(start)
+  let first = doc.lineAt(start)
+  while (first.to < at && /^[\t ]*$/.test(first.text)) {
+    first = doc.line(first.number + 1)
+    start = first.from
+  }
   const headerEnd = Math.min(doc.length, doc.line(first.number + 1).to + 1)
   const row = doc.lineAt(at)
   return [
@@ -213,8 +217,36 @@ export function formattedLiteralEdits(
         ? tableRanges(before.doc, indexed.from, from)
         : indexed.ranges
       offset = ranges[0]!.from
-      context = parser.parse(oldInput, [], ranges)
-      node = leafAt(context, from - offset, to - offset)
+      // Locate the leaf without parsing inline text in neighboring items.
+      const scan = Object.assign(parser.configure({}), {
+        parseInline: () => [],
+      })
+      const tail = ranges.at(-1)!
+      const line = before.doc.lineAt(to)
+      let stop = indexed.table
+        ? tail.to
+        : Math.min(
+            tail.to,
+            line.to < before.doc.length
+              ? before.doc.lineAt(line.to + 1).to + 1
+              : before.doc.length,
+          )
+      for (;;) {
+        ranges[ranges.length - 1] = { from: tail.from, to: stop }
+        context = scan.parse(oldInput, [], ranges)
+        node = leafAt(context, from - offset, to - offset)
+        // A following physical line proves the leaf ended before the cut.
+        if (
+          stop === tail.to ||
+          (node && offset + node.to < before.doc.lineAt(stop - 1).from)
+        )
+          break
+        stop = Math.min(tail.to, tail.from + (stop - tail.from) * 2)
+      }
+      if (indexed.table && node?.name !== 'Table') {
+        valid = false
+        return
+      }
     }
     if (
       !node ||
@@ -227,6 +259,11 @@ export function formattedLiteralEdits(
       return
     }
     const start = offset + node.from
+    const reads = readAheadFrom(tree, from)
+    if (reads === null || reads.some((at) => at < start)) {
+      valid = false
+      return
+    }
     const key = node.name === 'Table' ? before.doc.lineAt(from).from : start
     const known = blocks.get(key)
     if (known) {
@@ -265,7 +302,10 @@ export function formattedLiteralEdits(
     const edit = block.edits[0]!
     if (
       leafAt(oldTree, edit.from - oldBase, edit.to - oldBase)?.name !==
-      block.kind
+        block.kind ||
+      !block.edits.every((edit) =>
+        literalAt(oldTree, edit.from - oldBase, edit.to - oldBase),
+      )
     )
       return false
     const shape = (

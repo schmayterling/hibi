@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorState } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
 import { TreeCursor, TreeFragment } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { formattedLiteralEdits } from '../src/renderer/src/formatted-source-edits.ts'
@@ -12,6 +12,65 @@ import { sourceParserInput } from '../src/shared/source-parser.ts'
 
 const markdown = parser.configure(GFM)
 
+/** Count native text reads independently of the guard's chosen accessors. */
+function textReadUnits(run) {
+  let units = 0,
+    depth = 0
+  const restores = []
+  const prototypes = [
+    Text.prototype,
+    Object.getPrototypeOf(Text.of(['x'])),
+    Object.getPrototypeOf(Text.of(Array(128).fill('x'))),
+  ]
+  for (const prototype of prototypes)
+    for (const method of ['sliceString', 'iterRange', 'toString']) {
+      if (!Object.hasOwn(prototype, method)) continue
+      const original = prototype[method]
+      prototype[method] = function (...args) {
+        const outer = depth++ === 0
+        let result
+        try {
+          result = original.apply(this, args)
+        } finally {
+          depth--
+        }
+        if (method === 'iterRange') {
+          const next = result.next
+          result.next = function (...args) {
+            const value = next.apply(this, args)
+            if (!depth) units += this.value.length
+            return value
+          }
+        } else if (outer) units += result.length
+        return result
+      }
+      restores.push(() => {
+        prototype[method] = original
+      })
+    }
+  try {
+    run()
+    assert.ok(units > 0, 'native text counter must observe the proof')
+    return units
+  } finally {
+    for (const restore of restores) restore()
+  }
+}
+
+test('native text counters cover leaf and node accessors without double counting', () => {
+  for (const doc of [Text.of(['abc']), Text.of(Array(128).fill('abc'))])
+    for (const method of ['sliceString', 'iterRange', 'toString']) {
+      const units = textReadUnits(() => {
+        if (method === 'iterRange') {
+          const cursor = doc.iterRange(0, doc.length)
+          while (!cursor.next().done) {}
+        } else if (method === 'sliceString') doc.sliceString(0, doc.length)
+        else doc.toString()
+      })
+      assert.equal(units, doc.length, method)
+    }
+})
+
 test('a correction reads one list item regardless of the container length', (t) => {
   const work = []
   for (const count of [10, 2000]) {
@@ -22,13 +81,9 @@ test('a correction reads one list item regardless of the container length', (t) 
       changes: { from, to: from + 3, insert: 'the' },
     })
     const tree = markdown.parse(doc)
-    let units = 0
-    const read = state.sliceDoc.bind(state)
-    state.sliceDoc = (from, to) => {
-      units += to - from
-      return read(from, to)
-    }
-    assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+    const units = textReadUnits(() =>
+      assert.equal(formattedLiteralEdits(transaction, markdown, tree), true),
+    )
     work.push(units)
   }
   t.diagnostic(JSON.stringify({ units: work }))
@@ -79,13 +134,9 @@ test('table cell proofs read the row and header independently of row count', (t)
       changes: { from, to: from + 3, insert: 'the' },
     })
     const tree = markdown.parse(doc)
-    let units = 0
-    const read = state.sliceDoc.bind(state)
-    state.sliceDoc = (from, to) => {
-      units += to - from
-      return read(from, to)
-    }
-    assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+    const units = textReadUnits(() =>
+      assert.equal(formattedLiteralEdits(transaction, markdown, tree), true),
+    )
     work.push(units)
   }
   t.diagnostic(JSON.stringify({ units: work }))
@@ -164,22 +215,13 @@ test('container replay never reads an unrelated huge opening paragraph', () => {
     changes: { from, to: from + 3, insert: 'the' },
   })
   const tree = markdown.parse(source)
-  let units = 0
-  const read = state.sliceDoc.bind(state)
-  state.sliceDoc = (from, to) => {
-    units += to - from
-    return read(from, to)
-  }
-  const readNext = transaction.newDoc.sliceString.bind(transaction.newDoc)
-  transaction.newDoc.sliceString = (from, to) => {
-    units += to - from
-    return readNext(from, to)
-  }
-  assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+  const units = textReadUnits(() =>
+    assert.equal(formattedLiteralEdits(transaction, markdown, tree), true),
+  )
   assert.ok(units < 16384, String(units))
 })
 
-test('cold and released list proofs retain worker context without reading the container', () => {
+test('cold and released list proofs retain worker context without reading the container', (t) => {
   const list = '- some teh words\n'.repeat(2000)
   const doc = list + '\n' + 'paragraph words\n\n'.repeat(20000)
   const source = new SourceStore(doc, { tabId: 'list', revision: 0 }).snapshot()
@@ -218,17 +260,15 @@ test('cold and released list proofs retain worker context without reading the co
   const transaction = state.update({
     changes: { from, to: from + 3, insert: 'the' },
   })
-  let units = 0
-  const read = state.sliceDoc.bind(state)
-  state.sliceDoc = (from, to) => {
-    units += to - from
-    return read(from, to)
-  }
+  const work = []
   for (const tree of trees) {
-    units = 0
-    assert.equal(formattedLiteralEdits(transaction, markdown, tree), true)
+    const units = textReadUnits(() =>
+      assert.equal(formattedLiteralEdits(transaction, markdown, tree), true),
+    )
+    work.push(units)
     assert.ok(units < 16384, String(units))
   }
+  t.diagnostic(JSON.stringify({ coldReleasedUnits: work }))
 })
 
 test('cold container context preserves nested prose and fences', () => {
@@ -262,15 +302,11 @@ test('cold container context preserves nested prose and fences', () => {
     const transaction = state.update({
       changes: { from, to: from + 3, insert: 'the' },
     })
-    let units = 0
-    const read = state.sliceDoc.bind(state)
-    state.sliceDoc = (from, to) => {
-      units += to - from
-      return read(from, to)
-    }
-    assert.equal(
-      formattedLiteralEdits(transaction, markdown, builder.finish()),
-      allowed,
+    const units = textReadUnits(() =>
+      assert.equal(
+        formattedLiteralEdits(transaction, markdown, builder.finish()),
+        allowed,
+      ),
     )
     assert.ok(units < 20000, String(units))
   }
@@ -375,20 +411,12 @@ test('corrections outside the app viewport tree retain their literal proof', () 
       ),
       null,
     )
-    let units = 0
-    const read = state.sliceDoc.bind(state)
-    state.sliceDoc = (from, to) => {
-      units += to - from
-      return read(from, to)
-    }
-    try {
+    const units = textReadUnits(() =>
       assert.equal(
         formattedLiteralEdits(transaction, syntax.parser(state), boundaries),
         true,
-      )
-    } finally {
-      state.sliceDoc = read
-    }
+      ),
+    )
     assert.ok(units < 16384, String(units))
   }
 })
@@ -418,15 +446,11 @@ test('worker-indexed fenced contents after blank lines remain opaque without a b
   const transaction = state.update({
     changes: { from, to: from + 3, insert: 'the' },
   })
-  let units = 0
-  const read = state.sliceDoc.bind(state)
-  state.sliceDoc = (from, to) => {
-    units += to - from
-    return read(from, to)
-  }
-  assert.equal(
-    formattedLiteralEdits(transaction, markdown, builder.finish()),
-    false,
+  const units = textReadUnits(() =>
+    assert.equal(
+      formattedLiteralEdits(transaction, markdown, builder.finish()),
+      false,
+    ),
   )
   assert.ok(units < 32, String(units))
 })
@@ -479,4 +503,102 @@ test('proving a local correction in 20k paragraphs visits only the affected synt
       TreeCursor.prototype[method] = original
   }
   assert.ok(moves < 16, String(moves))
+})
+
+test('cold table headers after blank lines retain structural pipe protection', () => {
+  for (const count of [400, 2400]) {
+    const prefix = 'paragraph words\n\n'.repeat(3000)
+    const table =
+      '| a | b |\n| --- | --- |\n' +
+      '| teh mid-dle word | one two |\n'.repeat(count)
+    const doc = prefix + table + '\nafter\n'
+    const source = new SourceStore(doc, {
+      tabId: 'table',
+      revision: 0,
+    }).snapshot()
+    const index = new MarkdownBoundaryIndex(source, {
+      schema: 1,
+      syntax: ['table@1'],
+      flavors: ['markdown.github'],
+      literal: [],
+      opaque: ['Table'],
+      prefix: 0,
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+    })
+    while (!index.advance()) {}
+    const builder = new BoundaryTree(index.parser, index.length)
+    for (const page of index.pages()) builder.append(page.records)
+    const tree = builder.finish()
+    const state = EditorState.create({ doc })
+    const header = prefix.length
+    const row = doc.indexOf('teh', header + 2000)
+    for (const changes of [
+      { from: header + 4, to: header + 5, insert: '' },
+      { from: header, to: header + 1, insert: 'x' },
+      { from: header + 2, insert: '|' },
+    ]) {
+      const transaction = state.update({ changes })
+      assert.equal(
+        formattedLiteralEdits(transaction, index.parser.full, tree),
+        false,
+        JSON.stringify(changes),
+      )
+    }
+    const literal = state.update({
+      changes: { from: row, to: row + 3, insert: 'the' },
+    })
+    const units = textReadUnits(() =>
+      assert.equal(
+        formattedLiteralEdits(literal, index.parser.full, tree),
+        true,
+      ),
+    )
+    assert.ok(units < 16384, String(units))
+  }
+})
+
+test('a leaf correction cannot invalidate an earlier block read-ahead decision', () => {
+  const doc = '>1. $$\n>   x^2\n>   $$'
+  const source = new SourceStore(doc, {
+    tabId: 'lookahead',
+    revision: 0,
+  }).snapshot()
+  const index = new MarkdownBoundaryIndex(source, {
+    schema: 1,
+    syntax: ['math-block@1'],
+    flavors: ['math.latex'],
+    literal: [],
+    opaque: [],
+    prefix: 0,
+    chunkSize: 64,
+    groupSize: 4,
+    giantBlock: 1024,
+  })
+  while (!index.advance()) {}
+  const builder = new BoundaryTree(index.parser, index.length)
+  for (const page of index.pages()) builder.append(page.records)
+  const parser = index.parser.full
+  const from = doc.lastIndexOf('   ')
+  const transaction = EditorState.create({ doc }).update({
+    changes: { from, to: from + 3, insert: 'e' },
+  })
+  assert.match(parser.parse(doc).toString(), /BlockMath/)
+  assert.doesNotMatch(
+    parser.parse(transaction.newDoc.toString()).toString(),
+    /BlockMath/,
+  )
+  for (const tree of [parser.parse(doc), builder.finish()])
+    assert.equal(formattedLiteralEdits(transaction, parser, tree), false)
+  for (const text of ['teh\n\n' + doc, '$$\nx^2\n$$\n\nteh']) {
+    const at = text.indexOf('teh')
+    const correction = EditorState.create({ doc: text }).update({
+      changes: { from: at, to: at + 3, insert: 'the' },
+    })
+    assert.equal(
+      formattedLiteralEdits(correction, parser, parser.parse(text)),
+      true,
+    )
+  }
 })

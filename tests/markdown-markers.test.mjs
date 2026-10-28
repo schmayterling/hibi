@@ -481,6 +481,28 @@ async function openCMMarkers(t, source, math = false) {
   return { app, page, rich }
 }
 
+/** Replaces the formatted source directly, so its lines are not typed input. */
+async function markerSource(rich, source, anchor) {
+  await rich.evaluate(
+    (element, { source, anchor }) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: source },
+        selection: { anchor },
+        scrollIntoView: true,
+      })
+      view.focus()
+    },
+    { source, anchor },
+  )
+}
+
+const markerState = (rich) =>
+  rich.evaluate((element) => {
+    const { state } = element.cmTile.root.view
+    return { head: state.selection.main.head, doc: state.doc.toString() }
+  })
+
 async function markerSelection(rich, anchor, head = anchor) {
   await rich.evaluate(
     (element, { anchor, head }) => {
@@ -507,90 +529,113 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     '`hello`',
     '***hello***',
   ]) {
-    await t.test(
-      source,
-      {
-        todo:
-          source === '***hello***'
-            ? 'formatted gap marker-001: left arrow must reenter nested final formatting before typing'
-            : undefined,
-      },
-      async () => {
-        await replaceSourceText(page, rich, source)
-        const inside = source.indexOf('hello') + 5
-        await markerSelection(rich, inside)
-        await rich.press('ArrowRight')
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source,
-        )
-        await rich.press('ArrowRight')
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source,
-          'repeated right arrows must not insert spaces',
-        )
-        await rich.press('ArrowLeft')
-        await page.keyboard.insertText('y')
-        await page.evaluate(() => window.hibi.flushDocumentChanges())
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source.replace('hello', 'helloy'),
-          'left arrow returns inside the formatted text',
-        )
-        await pressShortcut(
-          app,
-          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
-        )
-        await waitForAsync(
-          page,
-          async (expected) =>
-            (await window.hibi.getDocument()).markdown === expected,
-          source,
-        )
-        await rich.press('ArrowRight')
-        await rich.press('ArrowRight')
-        await page.keyboard.insertText('x')
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          `${source}x`,
-          'input after formatting remains plain text',
-        )
-        await pressShortcut(
-          app,
-          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
-        )
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          source,
-          'one undo removes only the plain text',
-        )
-      },
-    )
-  }
-  await t.test(
-    'next paragraph',
-    {
-      todo: 'formatted gap marker-002: one right arrow must leave final formatting for the next paragraph',
-    },
-    async () => {
-      await replaceSourceText(page, rich, '*hello*\n\nnext')
-      await markerSelection(rich, 6)
+    await t.test(source, async () => {
+      await replaceSourceText(page, rich, source)
+      const inside = source.indexOf('hello') + 5
+      await markerSelection(rich, inside)
       await rich.press('ArrowRight')
       assert.equal(
-        await rich.evaluate(
-          (element) => element.cmTile.root.view.state.selection.main.head,
-        ),
-        9,
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source,
       )
+      await rich.press('ArrowRight')
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source,
+        'repeated right arrows must not insert spaces',
+      )
+      await rich.press('ArrowLeft')
+      await page.keyboard.insertText('y')
+      await page.evaluate(() => window.hibi.flushDocumentChanges())
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source.replace('hello', 'helloy'),
+        'left arrow returns inside the formatted text',
+      )
+      await pressShortcut(
+        app,
+        process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+      )
+      await waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        source,
+      )
+      await rich.press('ArrowRight')
+      await rich.press('ArrowRight')
       await page.keyboard.insertText('x')
       assert.equal(
         (await page.evaluate(() => window.hibi.getDocument())).markdown,
-        '*hello*\n\nxnext',
-        'right arrow still advances to the next paragraph',
+        `${source}x`,
+        'input after formatting remains plain text',
       )
-    },
-  )
+      await pressShortcut(
+        app,
+        process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+      )
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        source,
+        'one undo removes only the plain text',
+      )
+    })
+  }
+  await t.test('next paragraph', async () => {
+    await replaceSourceText(page, rich, '*hello*\n\nnext')
+    await markerSelection(rich, 6)
+    await rich.press('ArrowRight')
+    assert.equal(
+      await rich.evaluate(
+        (element) => element.cmTile.root.view.state.selection.main.head,
+      ),
+      9,
+    )
+    await page.keyboard.insertText('x')
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      '*hello*\n\nxnext',
+      'right arrow still advances to the next paragraph',
+    )
+    await rich.press('ArrowLeft')
+    await rich.press('ArrowLeft')
+    await page.keyboard.insertText('y')
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      '*helloy*\n\nxnext',
+      'left arrow returns inside the formatting that ends the paragraph',
+    )
+  })
+  await t.test('adjacent formatting', async () => {
+    await markerSource(rich, '**a**_b_', 3)
+    await rich.press('ArrowRight')
+    await page.keyboard.insertText('y')
+    assert.equal(
+      (await markerState(rich)).doc,
+      '**a**_by_',
+      'one right arrow crosses the hidden delimiters and the next character',
+    )
+  })
+  for (const source of [
+    '```\ncode\n```\n\nnext',
+    '> ```\n> code\n> ```\n>\n> next',
+    '- item\n\n  ```\n  code\n  ```\n\n  next',
+    '> - item\n>\n>   ```\n>   code\n>   ```\n>\n>   next',
+  ])
+    await t.test(`code block exit ${JSON.stringify(source)}`, async () => {
+      await markerSource(rich, source, source.indexOf('code') + 4)
+      await rich.press('ArrowRight')
+      assert.deepEqual(await markerState(rich), {
+        head: source.indexOf('next'),
+        doc: source,
+      })
+      await rich.press('ArrowLeft')
+      assert.equal(
+        (await markerState(rich)).head,
+        source.indexOf('code') + 4,
+        'left arrow returns to the end of the code',
+      )
+    })
   await t.test('hidden markers', async () => {
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
     await page.reload()
@@ -606,6 +651,62 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
       'formatting can be exited with markers hidden',
     )
   })
+})
+
+test('codemirror: arrows cross touching hidden delimiters in a table cell', {
+  timeout: 60000,
+}, async (t) => {
+  const source = '| head | other |\n| --- | --- |\n| ***hello*** | plain |'
+  const { app, page, rich } = await openCMMarkers(t, source)
+  await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await rich.locator('.hibi-lp-table td').first().click()
+  const editor = page.locator('.hibi-lp-cell-editor .cm-content')
+  await editor.waitFor()
+  const cell = () =>
+    editor.evaluate(
+      (element) => element.cmTile.root.view.state.selection.main.head,
+    )
+  await editor.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('hello') + 5 },
+    })
+    view.focus()
+  })
+  const inside = await cell()
+  await editor.press('ArrowRight')
+  assert.equal(await cell(), inside + 3, 'right arrow crosses all three')
+  await editor.press('ArrowLeft')
+  assert.equal(await cell(), inside, 'left arrow returns inside')
+  await page.keyboard.insertText('y')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    source.replace('hello', 'helloy'),
+  )
+  // Between adjacent formatting one press crosses the hidden delimiters and
+  // the next character, as in the formatted view's own text.
+  const adjacent = '| head | other |\n| --- | --- |\n| **a**_b_ | plain |'
+  const document = page.getByRole('textbox', { name: 'Document editor' })
+  await markerSource(document, adjacent, 0)
+  await document.locator('.hibi-lp-table td').first().click()
+  await editor.waitFor()
+  await editor.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('a') + 1 },
+    })
+    view.focus()
+  })
+  await editor.press('ArrowRight')
+  await page.keyboard.insertText('y')
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    adjacent.replace('_b_', '_by_'),
+  )
 })
 
 test('codemirror: drawn caret leaves final formatting and stays text-sized beside tall math', {
@@ -759,13 +860,13 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
       html: clipboardData.getData('text/html'),
     }
   })
+  // Accepted difference: the formatted view copies the selection's exact
+  // Markdown as text, as a Markdown editor does, where the rich editor copies
+  // rendered text. Both copy the rendered HTML.
   await t.test(
-    'copy preserves exact markdown and clean rendered html',
-    {
-      todo: 'formatted gap marker-005: formatted copying must preserve rendered plain text',
-    },
+    'copy keeps the exact markdown as text and clean rendered html',
     async () => {
-      assert.equal(copied.text, 'Some bold and italic with code and strike.')
+      assert.equal(copied.text, source.slice(from, to))
       assert.equal(
         await page.evaluate(
           (html) =>

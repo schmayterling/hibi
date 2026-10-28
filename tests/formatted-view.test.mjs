@@ -179,6 +179,8 @@ test('behind the switch, hidden fence lines and multi-line link destinations sta
 
   // Arrows step over hidden fence lines, so typing lands on visible lines.
   // Before, the caret could rest on one and the text went into the fence.
+  // As in the rich view, right arrow also steps over the blank line between
+  // blocks to the next block.
   await page.locator('.rich-pane .cm-line', { hasText: 'code' }).click()
   await page.keyboard.press('Home')
   await page.keyboard.press('ArrowLeft')
@@ -187,7 +189,7 @@ test('behind the switch, hidden fence lines and multi-line link destinations sta
   await page.locator('.rich-pane .cm-line', { hasText: 'code' }).click()
   await page.keyboard.press('End')
   await page.keyboard.press('ArrowRight')
-  assert.equal(await caretLine(), '')
+  assert.equal(await caretLine(), 'see [label](')
   await page.keyboard.type('Z')
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('Z'),

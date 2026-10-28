@@ -304,3 +304,58 @@ test('50 mib projected body edits map bounds without parser calls or whole-sourc
   assert.equal(counters.materializations, 0)
   assert.ok(counters.sourceUnitsRead < 4096, JSON.stringify(counters))
 })
+
+test('a frontmatter edit proves the line breaks its view commits, after the note respells one', () => {
+  const header = '[@owned: é 😀 exact  ]\r\n\r\n'
+  const fm = '\uFEFF---\r\ntitle: original\r\npublic: false\r\n...\r\n\r\n'
+  // Ahead of the frontmatter, this adapter owns the header only while the
+  // title line ends in CRLF.
+  const owner = {
+    id: 'owner',
+    preservation: { level: 'verbatim', version: '1' },
+    parse(source) {
+      const at = source.indexOf(header)
+      if (at < 0 || !/title:[^\n]*\r\npublic:/.test(source.slice(0, at)))
+        return null
+      return {
+        sourceOffset: at + header.length,
+        content: source.slice(at + header.length),
+        serialize() {
+          throw new Error('The host owns untouched source')
+        },
+      }
+    },
+  }
+  const frontmatter = { id: 'frontmatter.metadata', parse: parseFrontmatter }
+  const original = `${fm}${header}body`
+  const f = fixture(original, [owner, frontmatter])
+  const owned = normalizedSource(fm).length + 3
+  const read = () => f.session.snapshot().materialize()
+  f.dispatch({ changes: { from: owned, insert: 'x' }, userEvent: 'input.type' })
+  assert.equal(read(), original)
+  // Another view respells the opening line's break; this view keeps CRLF.
+  const respelled = original.replace('\r\n', '\n')
+  const crlf = original.indexOf('\r\n')
+  f.session.edit([{ from: crlf, to: crlf + 2, insert: '\n' }], 'source', 'eol')
+  assert.equal(read(), respelled)
+  // The properties editor rewrites the title and public lines together.
+  const from = f.view.state.sliceDoc(0, 100).indexOf('original')
+  const edit = {
+    from,
+    to: from + 'original\npublic: false'.length,
+    insert: 'changed\npublic: true',
+  }
+  const after = f.bridge.sourceAfter([edit])
+  f.dispatch({
+    changes: edit,
+    userEvent: 'input.addon',
+    annotations: formattedProjectionSource.of(after),
+  })
+  assert.equal(read(), after)
+  assert.equal(
+    after,
+    respelled.replace('original\r\npublic: false', 'changed\r\npublic: true'),
+  )
+  f.dispatch({ changes: { from: owned, insert: 'x' }, userEvent: 'input.type' })
+  assert.equal(read(), after)
+})

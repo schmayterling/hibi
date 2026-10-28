@@ -23,21 +23,94 @@ async function measureFindLayout(rich) {
   )
 }
 
-async function denseHighlights(_page, rich) {
+// The rich editor highlights matches overlapping the lines on screen and about
+// a screen of text, at least 2,000 characters, to each side.
+async function denseHighlights(page, rich) {
   await measureFindLayout(rich)
-  return rich.evaluate((element) => {
-    const ranges = element.cmTile.root.view.visibleRanges
-    return {
-      count: element.querySelectorAll('.cm-searchMatch').length,
-      units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
-      // each edge can show a partial match and the query's lookaround margin.
-      bound: ranges.reduce(
-        (sum, range) =>
-          sum + Math.ceil((range.to - range.from) / 'needle word '.length) + 4,
-        0,
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
+  )
+  return rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const box = element.getBoundingClientRect()
+    const pane = element.closest('.rich-pane').getBoundingClientRect()
+    const x =
+      box.left + Number.parseFloat(getComputedStyle(element).paddingLeft) + 1
+    const from = view.posAtCoords({ x, y: Math.max(box.top, pane.top) + 1 })
+    const to = view.posAtCoords({ x, y: Math.min(box.bottom, pane.bottom) - 1 })
+    const margin = Math.max(to - from, 2000)
+    const window = {
+      from: Math.max(0, from - margin),
+      to: Math.min(view.state.doc.length, to + margin),
+    }
+    const starts = (positions) => ({
+      count: positions.length,
+      first: positions[0],
+      last: positions.at(-1),
+    })
+    const overlaps = (start, range) =>
+      start < range.to && start + 'needle'.length > range.from
+    // The selected match stays highlighted outside the window.
+    const [selected, near] = [true, false].map((selected) =>
+      [...element.querySelectorAll('.cm-searchMatch')]
+        .filter(
+          (match) =>
+            match.classList.contains('cm-searchMatch-selected') === selected,
+        )
+        .map((match) => view.posAtDOM(match, 0)),
+    )
+    const positions = [
+      ...near,
+      ...selected.filter((start) => overlaps(start, window)),
+    ].sort((a, b) => a - b)
+    const highlighted = starts(positions)
+    const matches = [...view.state.doc.toString().matchAll(/needle/g)].map(
+      (match) => match.index,
+    )
+    return {
+      count: highlighted.count,
+      units: highlighted.last + 'needle'.length - highlighted.first,
+      highlighted,
+      expected: starts(matches.filter((start) => overlaps(start, window))),
+      selected: selected.length,
+      // Every match on screen is highlighted.
+      covered: matches
+        .filter((start) => overlaps(start, { from, to }))
+        .every((start) => positions.includes(start)),
+      screen: to - from,
+      // What CodeMirror renders around the screen, without what it keeps
+      // around an off-screen selection.
+      rendered: view.visibleRanges
+        .filter((range) => range.from < to && range.to > from)
+        .reduce((sum, range) => sum + range.to - range.from, 0),
+      ranges: view.visibleRanges.map((range) => [range.from, range.to]),
     }
   })
+}
+
+// Scrolls the pane to a fraction of its height, then waits until CodeMirror
+// stops correcting the position and what it renders.
+async function scrollFormatted(rich, fraction) {
+  await rich.evaluate((element, fraction) => {
+    const pane = element.closest('.rich-pane')
+    pane.scrollTop = fraction * (pane.scrollHeight - pane.clientHeight)
+  }, fraction)
+  let previous = null
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await measureFindLayout(rich)
+    const current = await rich.evaluate((element) =>
+      JSON.stringify([
+        element.closest('.rich-pane').scrollTop,
+        element.cmTile.root.view.visibleRanges,
+      ]),
+    )
+    if (current === previous) return
+    previous = current
+  }
+  throw new Error('the formatted view kept moving after scrolling')
 }
 
 async function installFindWorkProbe(page) {
@@ -417,13 +490,11 @@ test('formatted dense find counts every match, bounds highlights, and preserves 
   await input.fill('NEEDLE')
   await count('1/10000')
   const nearby = await denseHighlights(page, rich)
-  assert.ok(
-    nearby.count > 1 && nearby.count <= nearby.bound,
-    JSON.stringify(nearby),
-  )
-  assert.ok(
-    nearby.units < dense.length / 2,
-    'highlights cover only the rendered source window',
+  assert.ok(nearby.count > 1, JSON.stringify(nearby))
+  assert.deepEqual(
+    nearby.highlighted,
+    nearby.expected,
+    'highlights cover the rich editor window around the screen',
   )
   await input.press('Enter')
   await count('2/10000')
@@ -450,17 +521,27 @@ test('formatted dense find counts every match, bounds highlights, and preserves 
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     dense,
   )
+  // Reopening searches again from the restored selection, as the rich editor
+  // does.
   await pressShortcut(app, `${mod}+f`)
-  await t.test(
-    'undo restores matches without a current result',
-    {
-      todo: 'formatted gap find-002: undo must restore matches without a current find result',
-    },
-    async () => {
-      await count('0/10000')
-      assert.equal(await rich.locator('.cm-searchMatch-selected').count(), 0)
-    },
+  const selected = rich.locator('.cm-searchMatch-selected')
+  await selected.waitFor()
+  await count('1/10000')
+  assert.equal(await selected.count(), 1)
+  // Accepted difference: undo restores the selected match, so it stays the
+  // current one, as in source view. The rich editor leaves a caret after it.
+  await rich.evaluate((element) => element.focus())
+  await page.keyboard.insertText('pin')
+  await count('0/9999')
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    dense,
   )
+  await count('1/10000')
+  assert.equal(await selected.count(), 1)
+  assert.equal(await selected.textContent(), 'needle')
 })
 
 test('formatted find keeps highlights bounded when match count grows from ten thousand to one hundred thousand', {
@@ -471,14 +552,18 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await input.fill('needle')
   await count('1/10000')
   const nearby = await denseHighlights(page, rich)
-  assert.ok(
-    nearby.count > 1 && nearby.count <= nearby.bound,
-    JSON.stringify(nearby),
+  assert.ok(nearby.count > 1, JSON.stringify(nearby))
+  assert.deepEqual(
+    nearby.highlighted,
+    nearby.expected,
+    'highlights cover the rich editor window around the screen',
   )
-  assert.ok(
-    nearby.units < dense.length / 2,
-    'highlights cover only the rendered source window',
-  )
+  const scrolled = []
+  for (const fraction of [0.2, 0.7]) {
+    await scrollFormatted(rich, fraction)
+    scrolled.push(await denseHighlights(page, rich))
+  }
+  await scrollFormatted(rich, 0)
   await input.press('Escape')
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -496,21 +581,31 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await input.fill('needle')
   await count('1/100000')
   const more = await denseHighlights(page, rich)
-  await t.test(
-    'highlight count stays fixed when total matches grow',
-    {
-      todo: 'formatted gap find-006: increasing total matches must preserve the viewport highlight budget',
-    },
-    () => {
-      assert.equal(more.count, nearby.count, JSON.stringify({ nearby, more }))
-      assert.equal(
-        more.units,
-        nearby.units,
-        'ten times as many matches stays within the same viewport budget',
-      )
-    },
+  for (const fraction of [0.2, 0.7]) {
+    await scrollFormatted(rich, fraction)
+    scrolled.push(await denseHighlights(page, rich))
+  }
+  t.diagnostic(JSON.stringify({ nearby, more, scrolled }))
+  assert.deepEqual(more.highlighted, more.expected)
+  assert.equal(more.count, nearby.count)
+  assert.equal(
+    more.units,
+    nearby.units,
+    'ten times as many matches stays within the same viewport budget',
   )
-  t.diagnostic(JSON.stringify({ nearby, more }))
+  // CodeMirror draws a wrapped line's visible part and a fixed margin of text
+  // around it, so what it renders does not grow with the note.
+  // The window stays put while the screen is inside it, so after scrolling
+  // the highlights cover the screen and keep the selected match.
+  for (const position of scrolled) {
+    assert.equal(position.covered, true, JSON.stringify(position))
+    assert.equal(position.selected, 1)
+  }
+  // Away from the note's start CodeMirror renders about 10,000 estimated
+  // characters on both sides of the screen; its estimate runs up to a quarter
+  // denser than this text, so that stays under ten screens of it.
+  for (const { rendered, screen } of [nearby, more, ...scrolled])
+    assert.ok(rendered <= 12 * screen, JSON.stringify({ rendered, screen }))
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     larger,

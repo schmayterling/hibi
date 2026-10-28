@@ -159,6 +159,11 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   const cursor = page.locator('.editor-cursor')
   await cursor.waitFor()
   assert.equal(await cursor.getAttribute('data-style'), 'bar')
+  phase = 'rich selection'
+  await rich.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a')
+  await cursor.waitFor({ state: 'hidden' })
+  await rich.press('ArrowRight')
+  await cursor.waitFor()
   phase = 'rich animation'
   await assertCursorAnimationUnqueried(page, rich, 'cursor-blink')
   phase = 'settings controls'

@@ -785,7 +785,17 @@ test('multi-line text input is literal and breaks blocks where it lands', () => 
   // Before, typed syntax became Markdown and each break was one source line.
   assert.equal(run('|', typing('# a\n*b* <i>')), '\\# a\n\n\\*b\\* \\<i>|')
   assert.equal(run('a\n|\nb', typing('x\ny')), 'a\n\nx\n\ny|\n\nb')
-  assert.equal(run('- > a|', typing('b\nc')), '- > ab\n  >\n  > c|')
+  // In a quote in a list item, the next line is the list's next item.
+  assert.equal(run('- > a|', typing('b\nc')), '- > ab\n- c|')
+  assert.equal(
+    run('- parent\n  > ab|cd\n- tail', typing('x\ny')),
+    '- parent\n  > abx\n- y|cd\n- tail',
+  )
+  // Spaces and tabs typed with a line break are text, not Enter.
+  assert.equal(
+    run('- [x] ab|cd', typing('\n\t\t')),
+    '- [x] ab\n- [ ] &#9;\t|cd',
+  )
   assert.equal(run('1. a|\n2. b', typing('x\ny')), '1. ax\n2. y|\n3. b')
   assert.equal(run('> - a|', typing('\n\nb')), '> - a\n>\n> b|')
   assert.equal(
@@ -1010,6 +1020,10 @@ test('multi-line text input at the edges of formatting, headings and lists, as t
   )
   // A carriage return is a line break too.
   assert.equal(run('ab|', typing('# typed\ry')), 'ab\\# typed\n\ny|')
+  assert.equal(
+    run('^plain\n\n```\ncode\n```|', typing('# typed\ry')),
+    '\\# typed\n\ny|',
+  )
   assert.equal(
     run('^```\nabcd\n```\n\nend|', typing('# typed\r\ny')),
     '```\n# typed\ny|\n```',

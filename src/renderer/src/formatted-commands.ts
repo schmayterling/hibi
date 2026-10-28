@@ -574,8 +574,9 @@ export function lineInput(
     return null
   const { doc } = state
   const last = lines.length - 1
-  // Input with no visible text that the browser turns into exactly one new
-  // block is read back as a single line break, as the rich editor reads it.
+  // Line breaks alone that the browser turns into exactly one new block are
+  // read back as a single line break, as the rich editor reads them.
+  const breaks = /^[\r\n]+$/.test(text)
   const single = () => lineInput(state, tree, main.from, main.to, '\n')
   // Select-all keeps the first block's kind and replaces everything from its
   // text on, whatever the parser has reached; the note's first line keeps the
@@ -877,11 +878,23 @@ export function lineInput(
     replaceFrom = at,
     replaceTo = replaceEnd,
     offset: number
-  const container = start ? start.parent : containerAt(tree, at)
+  let container = start ? start.parent : containerAt(tree, at)
+  // In a quote that is part of a list item, a break starts a new item of
+  // that list, outside the quote.
+  if (
+    container?.name === 'Blockquote' &&
+    container.parent?.name === 'ListItem'
+  ) {
+    // The text after the caret goes with the new item, so it must end on
+    // the caret's line.
+    if (after && doc.lineAt(skip).number !== doc.lineAt(replaceEnd).number)
+      return null
+    container = container.parent
+  }
   if (container?.name !== 'ListItem') {
     // Paragraphs and headings, quoted or not.
     if (start && !heading && start.name !== 'Paragraph') return null
-    if (!/\S/.test(text) && last === 1 && text !== '\n') return single()
+    if (breaks && last === 1 && text !== '\n') return single()
     const prefix = prefixOf(state, container)
     if (prefix == null) return null
     const blank = prefix.trimEnd(),
@@ -1018,8 +1031,7 @@ export function lineInput(
         } else current.paragraph = true
         current.index = index
       }
-      if (!/\S/.test(text) && made.length === 1 && text !== '\n')
-        return single()
+      if (breaks && made.length === 1 && text !== '\n') return single()
       const moved = original.index > 0
       if (moved && first) return null
       const top = levels.at(-1)!.parent!

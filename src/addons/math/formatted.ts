@@ -21,17 +21,21 @@ export type MathHost = {
 }
 
 const cancels = new WeakMap<HTMLElement, () => void>()
-/** The reading position while one rendering slice fills formulas, per view. */
-const reading = new WeakMap<
-  EditorView,
-  { pos: number; margin: number; moved: boolean } | null
->()
+/** Where the reader is while one rendering slice fills formulas, per view. */
+type Reading = {
+  /** The element that scrolls the editor. */
+  pane: Element
+  pos: number
+  /** Where `pos` is on screen. */
+  top: number
+  /** The end of the line `pos` is on. */
+  line: number
+  moved: boolean
+}
+const reading = new WeakMap<EditorView, Reading | null>()
 
-/**
- * Where the reader is: the caret while it is on screen, else the first line
- * below the top of the scrolled pane, and its distance from that top.
- */
-function readingPosition(view: EditorView) {
+/** Where the reader is: the caret while it is on screen, else the first line below the top of the scrolled pane. */
+function readingPosition(view: EditorView): Reading | null {
   let pane: Element | null = view.scrollDOM
   while (
     pane &&
@@ -41,6 +45,7 @@ function readingPosition(view: EditorView) {
     )
   )
     pane = pane.parentElement
+  const scroller = pane ?? document.scrollingElement
   const { top, bottom } = pane?.getBoundingClientRect() ?? {
     top: 0,
     bottom: window.innerHeight,
@@ -55,13 +60,23 @@ function readingPosition(view: EditorView) {
     pos = block.from
     at = view.coordsAtPos(pos, 1)
   }
-  return at ? { pos, margin: at.top - top, moved: false } : null
+  return at && scroller
+    ? {
+        pane: scroller,
+        pos,
+        top: at.top,
+        line: view.state.doc.lineAt(pos).to,
+        moved: false,
+      }
+    : null
 }
 
 /**
- * A formula above the reading position grows when it renders. As the rich
- * view's scroll anchoring does, the reading position stays where it was:
- * one scroll per rendering slice, after its formulas fill.
+ * A formula on or above the reading line grows when it renders. As the rich
+ * view's scroll anchoring does, the reading position stays where it was. The
+ * correction runs once after a rendering slice fills its formulas, in the
+ * same task: the editor measures the new heights first, applying its own
+ * scroll anchoring, and any later scrolling by the reader stands.
  */
 function keepReading(view: EditorView, dom: HTMLElement) {
   // Formulas below what is on screen never move it, nor do hidden editors.
@@ -73,16 +88,12 @@ function keepReading(view: EditorView, dom: HTMLElement) {
     reading.set(view, position)
     queueMicrotask(() => {
       reading.delete(view)
-      if (position?.moved && view.dom.isConnected && !view.composing)
-        view.dispatch({
-          effects: EditorView.scrollIntoView(position.pos, {
-            y: 'start',
-            yMargin: position.margin,
-          }),
-        })
+      if (!position?.moved || !view.dom.isConnected || view.composing) return
+      const now = view.coordsAtPos(position.pos, 1)
+      if (now) position.pane.scrollTop += now.top - position.top
     })
   }
-  if (position && at < position.pos) position.moved = true
+  if (position && at <= position.line) position.moved = true
 }
 const widgets = new WeakMap<HTMLElement, FormulaWidget>()
 const editControl = {

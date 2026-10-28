@@ -1062,7 +1062,7 @@ class ChunkedParse implements ChunkedPartialParse {
         demand?.to ?? end,
       )
     ) {
-      this.startWindow(from, end, block, info)
+      this.startWindow(from, end, block, info, !info.window)
       return true
     }
     this.addChunk(
@@ -1961,11 +1961,13 @@ class ChunkedParse implements ChunkedPartialParse {
     to: number,
     block: Giant,
     reach: Reach = {},
+    reveal = false,
   ) {
     const input = this.input,
       demand = this.demand()
-    // Short blocks requested in full keep both complete syntax and replay data.
+    // Reveal short boundary chunks in full; edits keep opaque blocks windowed.
     const complete =
+      reveal &&
       block.end !== null &&
       to - from <= this.parser.giantBlock &&
       (!demand || (demand.from <= from && demand.to >= to))

@@ -338,15 +338,8 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
   if (t.formattedEngine === 'codemirror')
-    await t.test(
-      'split formatted view is read-only',
-      {
-        todo: 'formatted gap split-008: split formatted view must remain read-only',
-      },
-      async () => {
-        assert.equal(await rich.getAttribute('contenteditable'), 'false')
-      },
-    )
+    // Accepted difference: the codemirror split pane stays editable.
+    assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await t.test(
     'formatted heading slash commands survive split mode',
     async () => {

@@ -32,6 +32,7 @@ import {
 import { highlightTree } from '@lezer/highlight'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
+import { codePlaceholders } from './code-placeholders'
 import {
   blockBreak,
   codeIndent,
@@ -1997,6 +1998,7 @@ export function livePreview(
       })
       return false
     }),
+    codePlaceholders,
     EditorView.lineWrapping,
     EditorView.editorAttributes.of({ class: 'hibi-formatted' }),
   ]

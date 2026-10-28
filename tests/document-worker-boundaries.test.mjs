@@ -63,13 +63,13 @@ class Transport {
   onmessageerror = null
   service = new DocumentWorkerService((reply) => {
     this.replies.push(reply)
+    if (
+      (this.holdCode && reply.type === 'boundaries' && reply.code) ||
+      (this.holdLoad && reply.type === 'load-ack')
+    )
+      return
     setImmediate(() => {
-      if (
-        !this.terminated &&
-        !(this.holdCode && reply.type === 'boundaries' && reply.code) &&
-        !(this.holdLoad && reply.type === 'load-ack')
-      )
-        this.onmessage?.({ data: structuredClone(reply) })
+      if (!this.terminated) this.onmessage?.({ data: structuredClone(reply) })
     })
   })
   postMessage(message) {
@@ -1267,6 +1267,31 @@ test('a code watch can unsubscribe during bootstrap without canceling the docume
   stop()
   assert.ok(worker.replies.every((reply) => reply.type !== 'error'))
   assert.deepEqual(f.errors, [])
+})
+
+test('a held bootstrap reply stays held when a later turn releases the gate', async (t) => {
+  const worker = new Transport(),
+    delivered = []
+  t.after(() => worker.terminate())
+  worker.holdLoad = true
+  worker.onmessage = ({ data }) => delivered.push(data)
+  worker.service.receive({
+    type: 'load-start',
+    epoch: 'held',
+    head: {
+      tabId: 'held',
+      revision: 0,
+      contentVersion: 0,
+      streamId: 'held',
+      length: 0,
+    },
+  })
+  const reply = worker.replies[0]
+  assert.equal(reply.type, 'load-ack')
+  worker.holdLoad = false
+  worker.onmessage({ data: reply })
+  await new Promise(setImmediate)
+  assert.deepEqual(delivered, [reply])
 })
 
 test('boundary fixtures restore the parser observer after earlier tests', () => {

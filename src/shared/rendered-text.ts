@@ -852,10 +852,7 @@ export class RenderedTextIndex {
     }
     return result(minimal)
   }
-  #proofRange(
-    match: SourceMatch,
-    edits: readonly RenderedEdit[],
-  ): RenderedRange {
+  #proofRange(edits: readonly RenderedEdit[]): RenderedRange {
     const lo = edits[0]!.from,
       hi = edits.at(-1)!.to
     let from = Math.max(this.prefix, lo - page),

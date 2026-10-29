@@ -63,10 +63,15 @@ if (process.isMainFrame) {
     const diagnostics = new DiagnosticProducer((operation, token, body) =>
       transport.invoke(DIAGNOSTIC_CHANNEL, operation, token, body),
     )
-    const stopStartupDiagnostics = installStartupDiagnostics(
-      diagnostics,
-      contextBridge,
-    )
+    let stopStartupDiagnostics = () => {}
+    try {
+      stopStartupDiagnostics = installStartupDiagnostics(
+        diagnostics,
+        contextBridge,
+      )
+    } catch {
+      /* Losing pre-entry observation must not disable renderer diagnostics. */
+    }
     contextBridge.exposeInMainWorld('hibiDiagnostics', {
       record: (wire: unknown) => diagnostics.record(wire),
       configuration: () => {

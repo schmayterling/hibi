@@ -493,6 +493,7 @@ function App() {
     replaceLocal = false,
   ) {
     const previous = currentDocument.current
+    if (next.saved) documentRuntime.acceptSaved(next.saved)
     try {
       acceptDocument(next, false, replaceLocal)
     } catch (error) {

@@ -66,6 +66,8 @@ export type DocumentState = {
   contentVersion: number
   /** True only after this document has a real local save destination. */
   canAutosave: boolean
+  /** Tabs a cancelled close saved and kept open, at their saved source versions. */
+  saved?: Pick<DocumentState, 'tabId' | 'revision' | 'contentVersion'>[]
 }
 export type DocumentTab = { id: string; name: string; dirty: boolean }
 export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>

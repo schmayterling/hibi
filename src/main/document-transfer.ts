@@ -71,6 +71,7 @@ export function createDocumentTransfers() {
         revision: state.revision,
         contentVersion: state.contentVersion,
         canAutosave: state.canAutosave,
+        ...(state.saved && { saved: state.saved }),
       }
       if (immutable)
         return {

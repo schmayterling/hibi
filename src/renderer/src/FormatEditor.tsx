@@ -6,6 +6,7 @@ import { documentRuntime } from './document-runtime'
 import type { MarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
+import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
@@ -37,6 +38,9 @@ export function FormatEditor({
   onOutlineUnavailable,
   onActiveOutline,
 }: Parameters<typeof MarkdownEditor>[0]) {
+  const [syncPreviewScroll] = useEditorPreference(
+    editorPreferences.syncPreviewScroll,
+  )
   const {
     content,
     paneMode,
@@ -94,8 +98,10 @@ export function FormatEditor({
       rich,
       source,
       source.contains(window.document.activeElement) ? source : rich,
+      undefined,
+      syncPreviewScroll,
     )
-  }, [paneMode, sourceReady, content])
+  }, [paneMode, sourceReady, content, syncPreviewScroll])
   return (
     <>
       <FindBar

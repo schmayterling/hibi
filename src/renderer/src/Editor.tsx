@@ -92,6 +92,7 @@ import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
 } from './editor-interaction-presence'
+import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
@@ -305,6 +306,9 @@ export function MarkdownEditor({
   outlineActive: boolean
 }) {
   const markdownDocument = format?.editing === 'markdown'
+  const [syncPreviewScroll] = useEditorPreference(
+    editorPreferences.syncPreviewScroll,
+  )
   const exactSource = useRef<{ source: string; document: RichNode } | null>(
     null,
   )
@@ -2985,6 +2989,7 @@ export function MarkdownEditor({
       markdownDocument && !footnoteDocument
         ? { editor, content: geometryContent, positions }
         : undefined,
+      syncPreviewScroll,
     )
   }, [
     content,
@@ -2995,6 +3000,7 @@ export function MarkdownEditor({
     footnoteDocument,
     positions,
     geometryContent,
+    syncPreviewScroll,
   ])
   const { attachSource: attachSourceFormatting, attachFiles } =
     useFormattingToolbar(

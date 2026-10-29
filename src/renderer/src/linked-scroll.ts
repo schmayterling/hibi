@@ -2,7 +2,7 @@ import type { Editor } from '@tiptap/core'
 import type { MarkdownPositionLookup } from './markdown-positions'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
-/** Markdown follows text positions; other preview formats keep proportional scrolling. */
+/** Markdown caret alignment stays active even when linked scrolling is disabled. */
 export function linkScroll(
   first: HTMLElement,
   second: HTMLElement,
@@ -14,12 +14,33 @@ export function linkScroll(
         positions: MarkdownPositionLookup
       }
     | 'source',
+  syncScrolling = true,
 ) {
   const editor = markdown && markdown !== 'source' ? markdown.editor : null
   if (editor?.isDestroyed) return () => {}
   let leader = initial
   let frame = 0
   let refinements = 0
+  const paneState = (pane: HTMLElement) => {
+    if (pane === first && editor) return editor.state
+    const content = pane.querySelector('.cm-content')
+    const view = content && sourceView(content)
+    return view?.state
+  }
+  const caret = (pane: HTMLElement) => {
+    const state = paneState(pane)
+    if (!state) return null
+    const selection =
+      'main' in state.selection ? state.selection.main : state.selection
+    return {
+      pane,
+      doc: state.doc,
+      mirrorDoc: paneState(pane === first ? second : first)?.doc,
+      anchor: selection.anchor,
+      head: selection.head,
+    }
+  }
+  let previousCaret = caret(initial)
   const sourcePane = second.closest('.source-pane')
   function sourceTop(target: HTMLElement): number | null {
     const fromContent = leader.querySelector('.cm-content')
@@ -133,6 +154,7 @@ export function linkScroll(
     frame = requestAnimationFrame(sync)
   }
   const scroll = (event: Event) => {
+    if (!syncScrolling) return
     const origin = event.currentTarget as HTMLElement
     // Virtualized source layout can emit several delayed scroll events. Only
     // direct input or focus changes may hand control to the other pane.
@@ -141,20 +163,57 @@ export function linkScroll(
   }
   const intent = (event: Event) => {
     leader = event.currentTarget as HTMLElement
+    if (!syncScrolling) {
+      cancelAnimationFrame(frame)
+      frame = 0
+    }
   }
-  const selection = () => {
+  const selection = (event?: unknown) => {
     const focused = document.activeElement
     if (first.contains(focused)) leader = first
     else if (second.contains(focused)) leader = second
     else return
+    if (syncScrolling) {
+      schedule()
+      return
+    }
+    const next = caret(leader)
+    const changed =
+      next &&
+      (next.pane !== previousCaret?.pane ||
+        next.doc !== previousCaret?.doc ||
+        next.mirrorDoc !== previousCaret?.mirrorDoc ||
+        next.anchor !== previousCaret?.anchor ||
+        next.head !== previousCaret?.head)
+    previousCaret = next
+    // Virtualized scrolls can rewrite the native selection without moving the caret.
+    const deliberate =
+      event instanceof Event &&
+      ['pointerup', 'focusin', 'hibi:rich-content'].includes(event.type)
+    if (!changed && !deliberate) return
     schedule()
   }
-  const observer = new ResizeObserver(schedule)
+  const click = (event: Event) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('.cm-content, .tiptap')
+    )
+      selection(event)
+  }
+  const settled = () => {
+    if (syncScrolling) schedule()
+  }
+  const observer = new ResizeObserver(settled)
   for (const pane of [first, second]) {
     pane.addEventListener('wheel', intent, { passive: true })
     pane.addEventListener('pointerdown', intent)
   }
   if (markdown) {
+    if (!syncScrolling)
+      for (const pane of [first, second]) {
+        pane.addEventListener('pointerup', click)
+        pane.addEventListener('focusin', selection)
+      }
     const richContent = editor?.view.dom ?? first.querySelector('.cm-content')
     if (richContent) observer.observe(richContent)
     const sourceContent = second.querySelector('.cm-content')
@@ -167,17 +226,18 @@ export function linkScroll(
   }
   first.addEventListener('scroll', scroll, { passive: true })
   second.addEventListener('scroll', scroll, { passive: true })
-  const settled = () => schedule()
   // Widths settle during the view transition; new files are already at their final widths.
   first.addEventListener('transitionend', settled)
   sourcePane?.addEventListener('transitionend', settled)
-  schedule()
+  settled()
   return () => {
     cancelAnimationFrame(frame)
     observer.disconnect()
     for (const pane of [first, second]) {
       pane.removeEventListener('wheel', intent)
       pane.removeEventListener('pointerdown', intent)
+      pane.removeEventListener('pointerup', click)
+      pane.removeEventListener('focusin', selection)
     }
     document.removeEventListener('selectionchange', selection)
     document.removeEventListener('hibi:rich-content', selection)

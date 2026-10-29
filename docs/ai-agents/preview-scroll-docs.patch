@@ -1,0 +1,7 @@
+diff --git a/docs/guides/editing.md b/docs/guides/editing.md
+index 75c34e7..d4ffe60 100644
+--- a/docs/guides/editing.md
++++ b/docs/guides/editing.md
+@@ -10,0 +11,2 @@ While you type in the source pane, the formatted pane may catch up shortly after
++Side-by-side view keeps the source and preview aligned as you scroll. Turn off **Settings → Editor → Layout → Sync preview scrolling** to scroll each pane independently. Typing or clicking in either Markdown pane still aligns the other pane with that position. This setting also applies to scrolling in other format previews and is remembered when you restart Hibi.
++

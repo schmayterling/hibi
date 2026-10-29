@@ -101,6 +101,7 @@ import {
 } from './flavors'
 import { codemirrorFormattedView } from './formatted-engine'
 import { LoadingScreen } from './LoadingScreen'
+import { installRendererDiagnostics } from './local-diagnostics'
 import { transformMarkdown } from './markdown-projection'
 import {
   type OutlineHeading,
@@ -125,6 +126,8 @@ if (!codemirrorFormattedView) {
 }
 
 startupMark('renderer-entry')
+const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
+import.meta.hot?.dispose(stopLocalDiagnostics)
 // Only the app writes default-view, so its absence marks a profile's first launch.
 // The introduction stays pending until a launch without files can show it.
 if (localStorage.getItem('introduction') === null)

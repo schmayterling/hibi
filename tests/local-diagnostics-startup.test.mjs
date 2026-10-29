@@ -32,7 +32,112 @@ async function profile() {
   return mkdtemp(resolve('.scratch/startup-'))
 }
 
-test('pre-entry import failure retains navigation, resource and original error evidence locally', {
+for (const [entry, kind] of [
+  ['desktop-bridge', 'exception'],
+  ['main', 'exception'],
+  ['main', 'rejection'],
+]) {
+  test(`${entry} ${kind} before renderer entry retains navigation, resource and original error evidence locally`, {
+    timeout: 30000,
+  }, async (t) => {
+    const root = await profile()
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${root}`],
+    })
+    const page = await app.firstWindow()
+    t.after(async () => {
+      // The injected immutable asset may remain in Chromium's code cache.
+      // This fixture has no edits; retire its broken renderer explicitly.
+      const closed = waitForElectronShutdown(
+        app.process(),
+        app.waitForEvent('close'),
+      )
+      await app.evaluate(({ app, BrowserWindow }) => {
+        for (const window of BrowserWindow.getAllWindows()) window.destroy()
+        app.quit()
+      })
+      await closed
+    })
+    await waitForDocumentEditor(app, page)
+    await app.evaluate(
+      ({ app, protocol, net }, { entry, kind }) => {
+        const fs = process.getBuiltinModule('node:fs/promises')
+        const path = process.getBuiltinModule('node:path')
+        const { pathToFileURL } = process.getBuiltinModule('node:url')
+        let injected = false
+        globalThis.preEntryFaults = 0
+        protocol.unhandle('app')
+        protocol.handle('app', async (request) => {
+          const pathname = new URL(request.url).pathname
+          const file = path.join(
+            app.getAppPath(),
+            'out/renderer',
+            pathname === '/' ? 'index.html' : pathname,
+          )
+          const asset = entry === 'desktop-bridge' ? '/index-' : '/main-'
+          if (
+            !injected &&
+            pathname.includes(asset) &&
+            pathname.endsWith('.js')
+          ) {
+            injected = true
+            globalThis.preEntryFaults++
+            const source = await fs.readFile(file, 'utf8')
+            return new Response(
+              `${
+                kind === 'rejection'
+                  ? "void Promise.reject(new Error('PRIVATE_PRE_ENTRY')); await new Promise(() => {});"
+                  : "throw new Error('PRIVATE_PRE_ENTRY');"
+              }\n${source}`,
+              { headers: { 'Content-Type': 'text/javascript' } },
+            )
+          }
+          return net.fetch(pathToFileURL(file).href)
+        })
+      },
+      { entry, kind },
+    )
+    const session = await page.context().newCDPSession(page)
+    await session.send('Network.setCacheDisabled', { cacheDisabled: true })
+    await page.reload({ waitUntil: 'commit' })
+    await waitForAsync(
+      { evaluate: async (fn) => fn() },
+      async () => (await app.evaluate(() => globalThis.preEntryFaults)) === 1,
+      undefined,
+      { timeout: 4000 },
+    )
+    await waitForAsync(
+      { evaluate: async (fn) => fn() },
+      async () =>
+        (await records(root)).some(
+          (row) => row.code === 'RENDERER_STARTUP_FAILED',
+        ),
+      undefined,
+      { timeout: 4000 },
+    )
+    const rows = await records(root)
+    assert.ok(rows.some((row) => row.code === 'RENDERER_PRE_ENTRY'))
+    const snapshot = await startupDiagnostics(app, page)
+    assert.ok(snapshot.navigation, JSON.stringify(snapshot))
+    assert.ok(
+      snapshot.pageErrors.some((error) =>
+        error.stack?.includes(entry === 'desktop-bridge' ? 'index-' : 'main-'),
+      ),
+    )
+    assert.doesNotMatch(
+      JSON.stringify(rows),
+      /PRIVATE_PRE_ENTRY|startup-|\/Users\//,
+    )
+    assert.equal(
+      await page.evaluate(
+        () => performance.getEntriesByName('hibi:renderer-entry').length,
+      ),
+      0,
+    )
+  })
+}
+
+test('diagnostic metadata stays lazy and a stalled first-failure import keeps a bounded backlog', {
   timeout: 30000,
 }, async (t) => {
   const root = await profile()
@@ -41,73 +146,75 @@ test('pre-entry import failure retains navigation, resource and original error e
   })
   const page = await app.firstWindow()
   t.after(async () => {
-    // The injected immutable asset may remain in Chromium's code cache.
-    // This fixture has no edits; retire its broken renderer explicitly.
-    const closed = waitForElectronShutdown(
-      app.process(),
-      app.waitForEvent('close'),
-    )
-    await app.evaluate(({ app, BrowserWindow }) => {
-      for (const window of BrowserWindow.getAllWindows()) window.destroy()
-      app.quit()
-    })
-    await closed
+    await app
+      .evaluate(() => globalThis.releaseDiagnosticMetadata?.())
+      .catch(() => {})
+    await app.close()
   })
   await waitForDocumentEditor(app, page)
-  await app.evaluate(({ app, protocol, net }) => {
-    const fs = process.getBuiltinModule('node:fs/promises')
-    const path = process.getBuiltinModule('node:path')
-    const { pathToFileURL } = process.getBuiltinModule('node:url')
-    let injected = false
-    globalThis.preEntryFaults = 0
-    protocol.unhandle('app')
-    protocol.handle('app', async (request) => {
-      const pathname = new URL(request.url).pathname
-      const file = path.join(
-        app.getAppPath(),
-        'out/renderer',
-        pathname === '/' ? 'index.html' : pathname,
-      )
-      if (!injected && /\/main-[^/]+\.js$/.test(pathname)) {
-        injected = true
-        globalThis.preEntryFaults++
-        const source = await fs.readFile(file, 'utf8')
-        return new Response(
-          `throw new Error('PRIVATE_PRE_ENTRY');\n${source}`,
-          { headers: { 'Content-Type': 'text/javascript' } },
-        )
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const metadata = chunks.find((chunk) =>
+    chunk.modules.includes('src/renderer/src/local-diagnostics-report.ts'),
+  )?.file
+  assert.ok(metadata, 'failure metadata must have its own lazy chunk')
+  assert.equal(
+    await page.evaluate(
+      (file) =>
+        performance
+          .getEntriesByType('resource')
+          .some((entry) => entry.name.endsWith(file)),
+      metadata,
+    ),
+    false,
+  )
+  await app.evaluate(({ net }, file) => {
+    const fetch = net.fetch.bind(net)
+    globalThis.diagnosticMetadataRequests = 0
+    net.fetch = async (...args) => {
+      if (String(args[0]).endsWith(file)) {
+        globalThis.diagnosticMetadataRequests++
+        await new Promise((resolve) => {
+          globalThis.releaseDiagnosticMetadata = resolve
+        })
       }
-      return net.fetch(pathToFileURL(file).href)
-    })
+      return fetch(...args)
+    }
+  }, metadata)
+  await page.evaluate(() => {
+    for (let index = 0; index < 64; index++)
+      window.dispatchEvent(
+        new ErrorEvent('error', {
+          message: 'PRIVATE_DIAGNOSTIC_BURST',
+          error: new Error('PRIVATE_DIAGNOSTIC_BURST'),
+        }),
+      )
   })
-  const session = await page.context().newCDPSession(page)
-  await session.send('Network.setCacheDisabled', { cacheDisabled: true })
-  await page.reload()
-  assert.equal(await app.evaluate(() => globalThis.preEntryFaults), 1)
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () =>
+      (await app.evaluate(() => globalThis.diagnosticMetadataRequests)) === 1,
+    undefined,
+    { timeout: 4000 },
+  )
+  assert.equal(
+    (await records(root)).some((row) => row.code === 'RENDERER_ERROR'),
+    false,
+  )
+  await app.evaluate(() => globalThis.releaseDiagnosticMetadata())
   await waitForAsync(
     { evaluate: async (fn) => fn() },
     async () =>
       (await records(root)).some(
-        (row) => row.code === 'RENDERER_STARTUP_FAILED',
+        (row) => row.code === 'DIAGNOSTICS_DROPPED' && row.count >= 32,
       ),
     undefined,
     { timeout: 4000 },
   )
   const rows = await records(root)
-  assert.ok(rows.some((row) => row.code === 'RENDERER_PRE_ENTRY'))
-  const snapshot = await startupDiagnostics(app, page)
-  assert.ok(snapshot.navigation, JSON.stringify(snapshot))
-  assert.ok(snapshot.pageErrors.some((error) => error.stack?.includes('main-')))
-  assert.doesNotMatch(
-    JSON.stringify(rows),
-    /PRIVATE_PRE_ENTRY|startup-|\/Users\//,
-  )
-  assert.equal(
-    await page.evaluate(
-      () => performance.getEntriesByName('hibi:renderer-entry').length,
-    ),
-    0,
-  )
+  assert.ok(rows.some((row) => row.code === 'RENDERER_ERROR'))
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_DIAGNOSTIC_BURST/)
 })
 
 test('pending core asset records its catalog identity, status and elapsed time', {

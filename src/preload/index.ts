@@ -53,16 +53,26 @@ import {
   type WorkspaceStreamSnapshot,
 } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
-import { DiagnosticProducer } from './local-diagnostics'
+import {
+  DiagnosticProducer,
+  installStartupDiagnostics,
+} from './local-diagnostics'
 
 if (process.isMainFrame) {
   try {
     const diagnostics = new DiagnosticProducer((operation, token, body) =>
       transport.invoke(DIAGNOSTIC_CHANNEL, operation, token, body),
     )
+    const stopStartupDiagnostics = installStartupDiagnostics(
+      diagnostics,
+      contextBridge,
+    )
     contextBridge.exposeInMainWorld('hibiDiagnostics', {
       record: (wire: unknown) => diagnostics.record(wire),
-      configuration: () => diagnostics.configuration,
+      configuration: () => {
+        stopStartupDiagnostics()
+        return diagnostics.configuration
+      },
     })
   } catch {
     /* Diagnostics cannot prevent the document bridge from starting. */

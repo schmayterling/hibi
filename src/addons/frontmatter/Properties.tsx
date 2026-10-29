@@ -13,7 +13,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml'
 import type { MarkdownEditorProps } from '../api'
 import { Button, IconButton, Select, TextArea, TextInput, Toggle } from '../ui'
-import { replaceFrontmatter, splitFrontmatter } from './markdown'
+import { replaceFrontmatter, splitFrontmatter, yamlLines } from './markdown'
 import { propertiesExpanded } from './preferences'
 import './frontmatter.css'
 
@@ -62,7 +62,10 @@ function NumberProperty({
 export function Properties({ value, onChange, disabled }: MarkdownEditorProps) {
   const block = splitFrontmatter(value)
   const yaml = block?.yaml ?? ''
-  const doc = useMemo(() => parseDocument(yaml, { intAsBigInt: true }), [yaml])
+  const doc = useMemo(
+    () => parseDocument(yamlLines(yaml), { intAsBigInt: true }),
+    [yaml],
+  )
   const [open, setOpen] = useState(propertiesExpanded)
   const [raw, setRaw] = useState(false)
   const [draft, setDraft] = useState('')

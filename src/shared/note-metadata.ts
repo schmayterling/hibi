@@ -1,6 +1,6 @@
 import type { Token } from 'marked'
 import { isMap, parseDocument } from 'yaml'
-import { readFrontmatter } from './frontmatter.ts'
+import { readFrontmatter, yamlLines } from './frontmatter.ts'
 import { defaultNoteSyntax, type NoteSyntax, noteLexer } from './note-syntax.ts'
 
 export type PropertyScalar = string | number | boolean | null
@@ -36,9 +36,9 @@ export function noteProperties(
   if (!syntax.frontmatter) return { values, complete: true }
   const frontmatter = readFrontmatter(source)
   if (!frontmatter)
-    return { values, complete: !/^(?:\uFEFF)?---[ \t]*\r?\n/.test(source) }
+    return { values, complete: !/^(?:\uFEFF)?---[ \t]*[\r\n]/.test(source) }
   try {
-    const document = parseDocument(frontmatter.yaml, {
+    const document = parseDocument(yamlLines(frontmatter.yaml), {
       uniqueKeys: true,
     })
     if (document.errors.length || !isMap(document.contents))

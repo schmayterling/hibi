@@ -90,6 +90,25 @@ test('right sidebar starts empty, remembers its view and width, and collapses in
       .getByRole('combobox', { name: /search commands/i })
       .waitFor({ state: 'hidden' })
   }
+  // Workspace views live only on the left; every offered item opens.
+  await picker.click()
+  const offered = await page
+    .getByRole('menuitem')
+    .evaluateAll((items) => items.map((item) => item.textContent.trim()))
+  if (process.env.HIBI_RIGHT_SCREENSHOT)
+    await page.screenshot({
+      path: process.env.HIBI_RIGHT_SCREENSHOT.replace('.png', '-picker.png'),
+    })
+  await page.keyboard.press('Escape')
+  assert.deepEqual(offered.slice(0, 3), [
+    'No view',
+    'On this page',
+    'Backlinks',
+  ])
+  assert.ok(
+    offered.every((label) => !/^Workspaces?$/.test(label)),
+    JSON.stringify(offered),
+  )
   await choose('On this page')
   await right.getByText(/add headings to this note/i).waitFor()
   await page.getByRole('button', { name: /^source view$/i }).click()

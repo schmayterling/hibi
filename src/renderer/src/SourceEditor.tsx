@@ -1922,24 +1922,20 @@ export function SourceEditor({
           // Table cells follow their links through the view's own resolution.
           formatted ? formattedFollowLink.of(followLink) : [],
           // Reference links render with the labels the reference worker resolves.
-          formatted
-            ? formattedReferences.of({
-                syntax: () => {
-                  const { markdownMode, referenceSyntax } =
-                    parserOptions.current
-                  return markdownMode && referenceSyntax
-                    ? JSON.stringify(referenceSyntax)
-                    : ''
-                },
-                resolve: (label, signal) => {
-                  const { markdownMode, referenceSyntax } =
-                    parserOptions.current
-                  return markdownMode && referenceSyntax
-                    ? resolveReference(referenceSyntax, label, signal)
-                    : Promise.resolve({ status: 'unavailable' })
-                },
-              })
-            : [],
+          formattedReferences.of({
+            syntax: () => {
+              const { markdownMode, referenceSyntax } = parserOptions.current
+              return markdownMode && referenceSyntax
+                ? JSON.stringify(referenceSyntax)
+                : ''
+            },
+            resolve: (label, signal) => {
+              const { markdownMode, referenceSyntax } = parserOptions.current
+              return markdownMode && referenceSyntax
+                ? resolveReference(referenceSyntax, label, signal)
+                : Promise.resolve({ status: 'unavailable' })
+            },
+          }),
           EditorView.domEventHandlers({
             keydown(event, view) {
               // CodeMirror arms Tab focus for two seconds after an unhandled Escape;

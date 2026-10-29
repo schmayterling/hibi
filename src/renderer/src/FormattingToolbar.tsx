@@ -261,12 +261,16 @@ const actions: Action[] = [
   },
 ]
 
+type LinkResult = InsertValues & { remove?: boolean }
+
 function InsertForm({
   initial,
+  editing,
   close,
 }: {
   initial: InsertValues
-  close: (value: InsertValues | null) => void
+  editing: boolean
+  close: (value: LinkResult | null) => void
 }) {
   const [value, setValue] = useState(initial)
   const input = useRef<HTMLInputElement>(null)
@@ -300,12 +304,17 @@ function InsertForm({
       </div>
       <div className="dialog-actions">
         <Button onClick={() => close(null)}>Cancel</Button>
+        {editing && (
+          <Button onClick={() => close({ ...value, remove: true })}>
+            Remove link
+          </Button>
+        )}
         <Button
           type="submit"
           className="dialog-primary"
           disabled={!value.url.trim()}
         >
-          Insert
+          {editing ? 'Save' : 'Insert'}
         </Button>
       </div>
     </form>
@@ -483,15 +492,19 @@ export function useFormattingToolbar(
         const sourceSelection = useSource ? codeMirror?.capture() : null
         const document = editor?.state.doc
         const selection = editor?.state.selection
-        const result = await dialogs.open<InsertValues>({
-          title: 'Insert link',
+        // With the selection in a link, the action edits that link.
+        const href = useSource
+          ? ((await sourceSelection?.href) ?? null)
+          : editor?.isActive('link')
+            ? (editor.getAttributes('link').href ?? '')
+            : null
+        const result = await dialogs.open<LinkResult>({
+          title: href === null ? 'Insert link' : 'Edit link',
           content: ({ close }) => (
             <InsertForm
+              editing={href !== null}
               initial={{
-                url:
-                  !useSource && action.id === 'link'
-                    ? (editor?.getAttributes('link').href ?? '')
-                    : '',
+                url: href ?? '',
                 alt:
                   sourceSelection?.text ??
                   (editor && selection
@@ -504,7 +517,7 @@ export function useFormattingToolbar(
         }).result
         if (!result) return
         if (useSource) {
-          sourceSelection?.run(action.id, result)
+          sourceSelection?.run(result.remove ? 'unlink' : action.id, result)
           return
         }
         if (
@@ -523,7 +536,8 @@ export function useFormattingToolbar(
             tr.setSelection(selection)
             return true
           })
-        if (selection.empty && !editor.isActive('link'))
+        if (result.remove) chain.extendMarkRange('link').unsetLink().run()
+        else if (selection.empty && !editor.isActive('link'))
           chain
             .insertContent({
               type: 'text',
@@ -578,6 +592,9 @@ export function useFormattingToolbar(
                 : null
           handles[index]?.update({
             ...(action.active ? { pressed: state?.pressed ?? false } : {}),
+            ...(action.id === 'link'
+              ? { label: state?.pressed ? 'Edit link' : action.label }
+              : {}),
             disabled: disabled || hiddenTable || !state || state.disabled,
             hidden:
               (!latest.current.markdownMode && !state?.supported) ||

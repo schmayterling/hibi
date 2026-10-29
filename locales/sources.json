@@ -2017,6 +2017,9 @@
   "7ce59a82b75c": [
     "src/renderer/src/main.tsx"
   ],
+  "94026ca2d09f": [
+    "src/renderer/src/FormattingToolbar.tsx"
+  ],
   "7bc860ccf5e3": [
     "src/addons/frontmatter/hibi-addon.json"
   ],
@@ -4972,7 +4975,8 @@
   "1509f561f241": [
     "src/addons/quick-note/CaptureWindow.tsx",
     "src/main/document.ts",
-    "src/main/index.ts"
+    "src/main/index.ts",
+    "src/renderer/src/FormattingToolbar.tsx"
   ],
   "320e0cbe82d6": [
     "src/addons/ui-preview/index.tsx"

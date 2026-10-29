@@ -1,5 +1,6 @@
 import { posix } from 'node:path'
 import { Marked } from 'marked'
+import { readFrontmatter } from '../../shared/frontmatter.ts'
 import {
   type ImportEntry,
   type ImportFile,
@@ -16,12 +17,13 @@ export const textFile = (path: string, text: string): ImportFile => ({
 })
 const markdown = new Marked({}, blockMarkdown)
 
-/** Keep code fences and inline code literal when translating note links. */
+/** Keep frontmatter, code fences and inline code literal when translating note links. */
 export function outsideCode(
   source: string,
   transform: (source: string) => string,
 ) {
-  const normalized = source.replace(/\r\n?/g, '\n')
+  const prefix = readFrontmatter(source)?.prefix ?? ''
+  const normalized = source.slice(prefix.length).replace(/\r\n?/g, '\n')
   const inline = (text: string) => {
     let cursor = 0,
       result = ''
@@ -42,7 +44,7 @@ export function outsideCode(
       (token.type === 'code' ? token.raw : inline(token.raw))
     cursor = offset + token.raw.length
   }
-  return result + inline(normalized.slice(cursor))
+  return prefix + result + inline(normalized.slice(cursor))
 }
 export function createWikiLinkResolver(paths: readonly string[]) {
   type Match = { path: string; order: number; count: number }

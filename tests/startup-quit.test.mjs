@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -6,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
+import electronPath from 'electron'
 import { electron, stopElectronTree } from './electron.mjs'
 
 function recordStartupDialogs(
@@ -138,6 +140,66 @@ for (const delay of [0, 200, 500]) {
     )
   })
 }
+
+test('quitting inside the first window constructor waits for its native wrapper', {
+  skip: process.platform !== 'darwin',
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-constructor-quit-'))
+  const hook = join(profile, 'constructor-hook.cjs')
+  await writeFile(
+    hook,
+    `
+const { app, BrowserWindow } = require('electron')
+app.once('web-contents-created', () => {
+  console.error('constructing windows:', BrowserWindow.getAllWindows().length)
+  app.quit()
+  console.error('quit returned')
+})
+app.once('browser-window-created', () => console.error('window constructed'))
+app.once('quit', () => console.error('quit completed'))
+`,
+  )
+  const env = {
+    ...process.env,
+    HIBI_TEST_ADDON_REVOCATIONS_URL: new URL(
+      './fixtures/no-addon-revocations.json',
+      import.meta.url,
+    ).href,
+  }
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(
+    electronPath,
+    [
+      '--require',
+      hook,
+      resolve('.'),
+      `--user-data-dir=${profile}`,
+      '--hibi-test',
+    ],
+    { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
+  )
+  const closed = once(child, 'close')
+  t.diagnostic(`constructor quit process: ${child.pid}`)
+  // A native crash can leave helpers holding the output pipes open.
+  child.once('exit', () => stopElectronTree(child))
+  t.after(async () => {
+    stopElectronTree(child)
+    await closed
+    await rm(profile, { recursive: true, force: true })
+  })
+  let output = ''
+  for (const stream of [child.stdout, child.stderr])
+    stream.on('data', (chunk) => {
+      output = (output + chunk).slice(-16384)
+    })
+  const [code, signal] = await closed
+  assert.deepEqual([code, signal], [0, null], output)
+  assert.match(
+    output,
+    /constructing windows: 0[\s\S]*quit returned[\s\S]*window constructed[\s\S]*quit completed/,
+  )
+})
 
 test('a genuine startup navigation failure still shows the existing error', {
   timeout: 15000,

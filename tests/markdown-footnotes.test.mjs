@@ -29,16 +29,26 @@ test('footnote definitions are distinguished from code and ordinary links', () =
   assert.equal(hasFootnoteDefinitions('An unresolved note[^source].'), false)
 })
 
-test('legacy synchronous footnote fallback sees definitions behind invalid titles', {
-  todo: 'follow-up: move the synchronous shell footnote gate behind loaded block grammar',
-}, () => {
-  assert.equal(
-    hasFootnoteDefinitions('[ref]: /x "a\n\n[^1]: note\n"\n\ntext[^1]'),
-    true,
-  )
+test('legacy synchronous footnote fallback sees definitions behind invalid titles', async () => {
+  const repro = '[ref]: /x "a\n\n[^1]: note\n"\n\ntext[^1]'
+  const code = '```md\n[^source]: note\n```'
+  // Plain marked misses this definition; the lazy block grammar finds it.
+  assert.equal(hasFootnoteDefinitions(repro), false)
+  const runtime = { sourceFor: (document) => document.source }
+  const note = (markdown) => ({ markdown, source: { utf16Length: 0 } })
+  const [invalidTitle, fenced, plain] = [repro, code, source].map(note)
+  // Before the block grammar loads, unplaced definitions keep rich views closed.
+  assert.equal(hasDocumentFootnotes(runtime, invalidTitle), true)
+  assert.equal(hasDocumentFootnotes(runtime, fenced), true)
+  await import('../src/renderer/src/markdown-detectors.ts')
+  assert.equal(hasFootnoteDefinitions(repro), true)
+  assert.equal(hasDocumentFootnotes(runtime, invalidTitle), true)
+  assert.equal(hasDocumentFootnotes(runtime, fenced), false)
+  assert.equal(hasDocumentFootnotes(runtime, plain), true)
 })
 
-test('shell renders lex each unchanged source once across panes and unsaved edits', (t) => {
+test('shell renders lex each unchanged source once across panes and unsaved edits', async (t) => {
+  await import('../src/renderer/src/markdown-detectors.ts')
   let lexes = 0
   const { lexer } = Marked.prototype
   Marked.prototype.lexer = function (...input) {

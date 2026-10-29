@@ -291,6 +291,8 @@ function activateTab(id: string) {
   if (draft.source !== source) releaseMaintenance()
   activeTab = id
   ;({ source, saved, path, pendingPath, untitledName, draftId } = draft)
+  // Prompts activate tabs briefly; a retained tab keeps its revision.
+  revision = source.snapshot().document.revision
 }
 async function startTab(window: BrowserWindow, reuseEmpty = false) {
   if (!tabsEnabled) {
@@ -462,7 +464,6 @@ export async function focusDocumentTab(
     throw new Error('This pane has edits pending synchronization. Try again.')
   if (id !== activeTab) {
     activateTab(id)
-    revision = source.snapshot().document.revision
     refreshDirtyIndicator(window)
   }
   const currentPath = getDocumentPath()

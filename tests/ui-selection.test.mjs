@@ -203,6 +203,9 @@ testFormattedEngines(
       /Heading[\s\S]*Copy this document text/,
     )
     await page.getByRole('button', { name: /^side-by-side$/i }).click()
+    await page
+      .locator('.editor-panes.mode-side-by-side[data-source-ready="true"]')
+      .waitFor()
     await paragraph().waitFor()
     assert.equal(await userSelect(editor), 'text')
     assert.match(await dragText(page, paragraph()), /this document text/)

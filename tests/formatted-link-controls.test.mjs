@@ -106,7 +106,7 @@ test('codemirror removes a detected URL without changing its visible text', {
   await link.hover()
   await panel.getByRole('button', { name: 'Remove link', exact: true }).click()
   await link.waitFor({ state: 'detached' })
-  assert.ok((await read()).includes('https\\\\://bare.example/path'))
+  assert.ok((await read()).includes('https\\://bare.example/path'))
   await pressShortcut(app, `${mod}+z`)
   await link.waitFor()
 })

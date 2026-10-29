@@ -507,11 +507,12 @@ test('lost diagnostic credit cannot delay save, canceled close or acknowledged r
   assert.equal(recovered.markdown, 'PRIVATE RECOVERED TEXT 雪')
   // The recovered generation emits its own pre-entry record. Each generation
   // still holds at most one unacknowledged batch, independently of the old one.
+  await waitForAsync(app, () => globalThis.diagnosticBatches.size === 2)
+  await new Promise((resolve) => setTimeout(resolve, 350))
   assert.deepEqual(
     await app.evaluate(() => [...globalThis.diagnosticBatches.values()]),
     [1, 1],
   )
-  await new Promise((resolve) => setTimeout(resolve, 350))
   const logs = (
     await Promise.all(
       (

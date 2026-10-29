@@ -775,26 +775,50 @@ test("a shift-press in another table's cell extends the selection there; the ric
   timeout: 30000,
 }, async () => {
   // The rich editor's cell selection cannot span two tables: a shift-press on
-  // another table's text leaves the selection in the anchor's cell, and a
+  // another table's text puts a cell selection on the anchor's cell, and a
   // drag from it changes nothing.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  const richCell = (text) =>
-    page.locator('.tiptap td').filter({ hasText: new RegExp(`^${text}$`) })
-  await richCell('one').click()
-  const text = (cell) =>
-    page.evaluate((cell) => {
-      const node = [...document.querySelectorAll('.tiptap td p')].find(
-        (p) => p.textContent === cell,
-      ).firstChild
+  const richSelection = () => {
+    const selection = document.querySelector('.tiptap').editor.state.selection
+    const cell = ($pos) => {
+      for (let depth = $pos.depth; depth > 0; depth--)
+        if (/cell|header/i.test($pos.node(depth).type.name))
+          return $pos.node(depth).textContent
+      return null
+    }
+    return [
+      cell(selection.$from),
+      cell(selection.$to),
+      '$anchorCell' in selection,
+    ]
+  }
+  await page.locator('.tiptap td').filter({ hasText: /^one$/ }).click()
+  // The editor reads the click's caret from a later selectionchange.
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.tiptap').editor.state.selection.$anchor.parent
+        .textContent === 'one',
+  )
+  // The wide table sits below the window: a press there would land on the
+  // page root, which extends a native selection by timing.
+  const [target, further] = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('.tiptap td p')]
+    const text = (cell) => cells.find((p) => p.textContent === cell)
+    text('value 1').scrollIntoView({ block: 'center' })
+    return ['value 1', 'value 3'].map((cell) => {
       const range = document.createRange()
-      range.setStart(node, 2)
-      range.setEnd(node, 3)
+      range.setStart(text(cell).firstChild, 2)
+      range.setEnd(text(cell).firstChild, 3)
       const { left, top, height } = range.getBoundingClientRect()
-      return { x: left + 1, y: top + height / 2 }
-    }, cell)
-  const target = await text('value 1')
-  const further = await text('value 3')
+      const point = { x: left + 1, y: top + height / 2 }
+      return {
+        ...point,
+        hit: document.elementFromPoint(point.x, point.y) === text(cell),
+      }
+    })
+  })
+  assert.deepEqual([target.hit, further.hit], [true, true])
   await page.keyboard.down('Shift')
   try {
     await page.mouse.move(target.x, target.y)
@@ -804,19 +828,9 @@ test("a shift-press in another table's cell extends the selection there; the ric
   } finally {
     await page.keyboard.up('Shift')
   }
-  const rich = await page.evaluate(() => {
-    const { $from, $to } =
-      document.querySelector('.tiptap').editor.state.selection
-    const cell = ($pos) => {
-      for (let depth = $pos.depth; depth > 0; depth--)
-        if (/cell|header/i.test($pos.node(depth).type.name))
-          return $pos.node(depth).textContent
-      return null
-    }
-    return [cell($from), cell($to)]
-  })
+  const rich = await page.evaluate(richSelection)
   await page.locator('.tiptap p', { hasText: 'A paragraph before' }).click()
-  assert.deepEqual(rich, ['one', 'one'])
+  assert.deepEqual(rich, ['one', 'one', true])
   // The formatted view keeps the anchor in its cell, and the head follows
   // the pointer through the other table's cells, as from outside the tables.
   const doc =

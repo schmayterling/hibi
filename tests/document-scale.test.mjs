@@ -395,14 +395,15 @@ for (const size of sizes)
             tabId: document.tabId,
             revision: document.revision,
             contentVersion: document.contentVersion,
-            changes: [{ from: 0, to: 1, insert: 'Q', expectedText: '#' }],
+            // Formatted corrections must be literal text (#563), so not the heading marker.
+            changes: [{ from: 2, to: 3, insert: 'Q', expectedText: 's' }],
           })
           const second = context.editor.applySourceEdits({
             requestId: 'scale:restore',
             tabId: document.tabId,
             revision: document.revision,
             contentVersion: first.contentVersion,
-            changes: [{ from: 0, to: 1, insert: '#', expectedText: 'Q' }],
+            changes: [{ from: 2, to: 3, insert: 's', expectedText: 'Q' }],
           })
           return [first.status, second.status]
         } finally {

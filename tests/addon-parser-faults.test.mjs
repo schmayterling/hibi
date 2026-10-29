@@ -125,10 +125,11 @@ for (const [mode, cascade] of [
         mode === 'source'
           ? '.source-pane .cm-content'
           : '.rich-pane .cm-content'
+      // The note opens in its last table cell, whose cell editor also has a .cm-content.
       await page
         .locator(
           (mode === 'source' ? '.source-pane' : '.rich-pane') +
-            ' [data-parser-view] .cm-content',
+            ' [data-parser-view] .cm-content:not(.hibi-lp-cell-editor *)',
         )
         .waitFor()
       await waitForAsync(

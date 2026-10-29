@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join, posix, resolve } from 'node:path'
 import test from 'node:test'
 import { parseArgs } from 'node:util'
 import vm from 'node:vm'
@@ -440,7 +440,8 @@ test('all startup conditions seed identically before launch including minimal co
     minimal: 'minimal.cjs',
     engine: 'tiptap',
     profileSeeds: new Map(),
-    join,
+    // The loop runs as on linux, whose paths use forward slashes.
+    join: posix.join,
     process: { platform: 'linux' },
     mkdir: async () => {},
     writeFile: async () => {},

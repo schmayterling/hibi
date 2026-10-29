@@ -19,11 +19,13 @@ import {
   sep,
 } from 'node:path'
 import { app, type BrowserWindow, dialog } from 'electron'
-import type {
-  AutosaveResult,
-  DocumentFocus,
-  DocumentState,
-  DocumentTab,
+import {
+  type AutosaveResult,
+  DOCUMENT_CHANNELS,
+  type DocumentFocus,
+  type DocumentSaved,
+  type DocumentState,
+  type DocumentTab,
 } from '../shared/desktop'
 import type { DocumentSaveResult } from '../shared/document-edits'
 import { HISTORY_CHANNELS } from '../shared/history'
@@ -1018,10 +1020,20 @@ export async function confirmDiscard(window: BrowserWindow): Promise<boolean> {
   )
   if (result.response === 2) return false
   if (result.response === 1) return true
-  return (
-    Boolean(await saveDocument(window)) &&
-    (await sameSource(source.snapshot(), saved))
-  )
+  const document = await saveDocument(window)
+  if (!document) return false
+  // Retained editors take the saved baseline and file now, even if a later prompt cancels.
+  if (!window.isDestroyed())
+    window.webContents.send(DOCUMENT_CHANNELS.saved, {
+      tabId: document.tabId,
+      revision: document.revision,
+      contentVersion: saved.version,
+      id: document.id,
+      name: document.name,
+      ephemeral: document.ephemeral,
+      canAutosave: document.canAutosave,
+    } satisfies DocumentSaved)
+  return await sameSource(source.snapshot(), saved)
 }
 
 export async function newDocument(

@@ -530,7 +530,8 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     '***hello***',
   ]) {
     await t.test(source, async () => {
-      await markerSource(rich, source, source.length)
+      // Typing over a formatted selection is literal text, as in the rich editor.
+      await markerSource(rich, source, 0)
       const inside = source.indexOf('hello') + 5
       await markerSelection(rich, inside)
       await rich.press('ArrowRight')
@@ -639,7 +640,7 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
     await page.reload()
     await waitForDocumentEditor(app, page)
-    await markerSource(rich, '*hello*', 7)
+    await markerSource(rich, '*hello*', 0)
     await markerSelection(rich, 6)
     assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
     await rich.press('ArrowRight')
@@ -721,7 +722,7 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
     await waitForDocumentEditor(app, page)
     for (const source of ['**hello**', '`hello`'])
       await t.test(`${source}, hints ${hints}`, async () => {
-        await markerSource(rich, source, source.length)
+        await markerSource(rich, source, 0)
         const inside = source.indexOf('hello') + 5
         await markerSelection(rich, inside)
         // Shown delimiters are editable source, so each arrow crosses

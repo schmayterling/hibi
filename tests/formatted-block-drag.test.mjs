@@ -494,13 +494,21 @@ test('in a long note the handle follows the block under the pointer and moves it
   timeout: 120000,
 }, async () => {
   await open('long.md')
-  await page.locator('.rich-pane .cm-line:has-text("Paragraph 0 ")').waitFor()
+  // The note opens with the caret at its end, so its first line may be out of view.
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.startsWith('Paragraph 0 '),
+  )
+  await page
+    .locator('.rich-pane .cm-line:has-text("Paragraph ")')
+    .first()
+    .waitFor()
   const before = await markdown()
-  // Jump to the middle of the note.
+  // Jump to the middle of the note, with the caret in the block above, whose
+  // markers the focused view shows.
   await page.evaluate(() => {
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root
       .view
-    const at = view.state.doc.toString().indexOf('Paragraph 2500 ')
+    const at = view.state.doc.toString().indexOf('Paragraph 2499 ')
     view.dispatch({
       selection: { anchor: at },
       scrollIntoView: true,

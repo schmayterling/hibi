@@ -175,7 +175,8 @@ for (const engine of ['tiptap', 'codemirror']) {
         } else
           assert.deepEqual(await settled(), { name: 'a.md', opened: [target] })
       }
-    // The link of the cell being edited follows the same way.
+    // The link of the cell being edited follows the same way. The formatted
+    // view shows an entity under the caret as source, which names the link.
     for (const [name, target] of [
       ['cell link', 'b.md'],
       ['&', 'b.md'],
@@ -183,14 +184,14 @@ for (const engine of ['tiptap', 'codemirror']) {
     ])
       for (const modifiers of follows) {
         await link(name).click()
-        if (engine === 'codemirror')
-          await rich
-            .locator('.hibi-lp-cell-editor')
-            .getByRole('link', { name, exact: true })
-            .waitFor()
-        assert.equal(await link(name).count(), 1)
+        const editing =
+          engine === 'codemirror'
+            ? rich.locator('.hibi-lp-cell-editor').getByRole('link')
+            : link(name)
+        await editing.waitFor()
+        assert.equal(await editing.count(), 1)
         assert.deepEqual(await settled(), { name: 'a.md', opened: [] })
-        await link(name).click({ modifiers })
+        await editing.click({ modifiers })
         await shown(app, page, target)
         await pressShortcut(app, `${mod}+[`)
         await shown(app, page, 'a.md')

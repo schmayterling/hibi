@@ -208,10 +208,17 @@ test('a quoted diagram keeps the source outline in step with the rich view', {
     '> ```mermaid\n> graph TD\n> A-->B\n> ```\noutside\n===\n\n# real\n',
   )
   if (t.formattedEngine === 'codemirror') {
+    // The note opens with the caret in `# real`, whose revealed `# ` is
+    // editable text; the heading's name stays its rendered text (marker-007).
     assert.deepEqual(
       await page
-        .locator('.rich-pane :is(.hibi-lp-h1, .hibi-lp-h2)')
-        .allTextContents(),
+        .locator('.rich-pane [role="heading"]')
+        .evaluateAll((headings) =>
+          headings.map(
+            (heading) =>
+              heading.getAttribute('aria-label') ?? heading.textContent,
+          ),
+        ),
       ['outside', 'real'],
     )
     assert.deepEqual(await sourceOutline(page, 2), ['outside', 'real'])

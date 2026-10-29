@@ -297,11 +297,12 @@ test('images resolve beside the note, missing ones say so, and the caret reveals
     await pane('.document-media img[alt="gone"]').getAttribute('data-tooltip'),
     'Could not load this media. Check the file path. Save the note first if the path is relative to it.',
   )
-  // Clicking the image puts the caret beside it, which reveals its source.
+  // A press on the image selects it whole, as the rich editor's node
+  // selection (triple-001); a caret beside it reveals its source.
   await picture.click()
+  await page.keyboard.press('End')
   await pane('.hibi-lp-marker', { hasText: '](pic.png)' }).waitFor()
   assert.equal(await picture.count(), 1)
-  await page.keyboard.press('End')
   await page.keyboard.type(' after')
   const typed = note.replace('(pic.png)\n', '(pic.png) after\n')
   await source(typed)

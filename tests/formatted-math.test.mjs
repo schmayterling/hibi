@@ -294,8 +294,19 @@ test('the caret reveals formula source, typing edits it and undo restores it', {
   // Leaving renders the formula again.
   await page.locator('.rich-pane .cm-line', { hasText: 'last line' }).click()
   await page.locator('.rich-pane [data-type="inline-math"] .katex').waitFor()
-  // A display block shows its lines with the formula still rendered below them.
+  // A press on a display block selects it whole, as the rich editor's node
+  // selection, without showing its source (open-001, triple-001).
   await page.locator('.rich-pane [data-type="block-math"]').click()
+  assert.equal(await page.locator('.rich-pane .hibi-lp-math-source').count(), 0)
+  // A caret in it shows its lines with the formula still rendered below them.
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('c^2') },
+    })
+    view.focus()
+  })
   await page
     .locator('.rich-pane .hibi-lp-math-source', { hasText: 'c^2' })
     .waitFor()

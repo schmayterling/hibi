@@ -160,7 +160,8 @@ for (const hidden of [true, false]) {
       assert.equal(retried.formatted, `${typed}?!`)
       assert.equal(retried.canonical, `${typed}?!`)
       assert.equal(retried.editable, true)
-      assert.equal(retried.readOnly, null)
+      // The formatted view always states aria-readonly, as the rich editor does.
+      assert.equal(retried.readOnly, 'false')
       assert.equal(retried.sameElement, false)
       assert.equal(
         await page.getByText('Fixture rejected the source echo.').count(),

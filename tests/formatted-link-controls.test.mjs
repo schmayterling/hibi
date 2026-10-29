@@ -98,6 +98,40 @@ test('codemirror link hover offers URL, edit, open, copy and remove', {
   )
 })
 
+test('codemirror link actions stay up while the pointer crosses to them', {
+  timeout: 60000,
+}, async (t) => {
+  const { page, editor, panel } = await open(t)
+  const link = page.getByRole('link', { name: 'docs', exact: true })
+  for (const focused of [false, true]) {
+    // With the caret outside links, the panel shows for the hovered link only.
+    if (focused)
+      await editor.evaluate((element, anchor) => {
+        const view = element.cmTile.root.view
+        view.focus()
+        view.dispatch({ selection: { anchor } })
+      }, note.indexOf('here'))
+    const from = await link.boundingBox()
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+    await panel.waitFor()
+    const to = await panel
+      .getByRole('button', { name: 'Copy link', exact: true })
+      .boundingBox()
+    // Real pointers pass over the text between the link and the panel.
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
+      steps: 12,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(await panel.isVisible(), true, `focused: ${focused}`)
+    assert.equal(
+      await panel.locator('.hibi-link-destination').textContent(),
+      'https://old.example',
+    )
+    await page.mouse.move(4, 4)
+    await panel.waitFor({ state: 'hidden' })
+  }
+})
+
 test('codemirror removes a detected URL without changing its visible text', {
   timeout: 60000,
 }, async (t) => {

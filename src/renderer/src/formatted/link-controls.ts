@@ -149,7 +149,9 @@ export function linkControls(callbacks: Callbacks) {
           return
         }
         if (!link) {
-          if (this.target) this.caret()
+          // Off the link the panel waits, as when the pointer leaves the
+          // editor, so that the pointer can cross the text to it.
+          if (this.target) this.delayHide()
           return
         }
         this.keep()

@@ -333,7 +333,11 @@ export default sdk => ({
     source,
   )
   await waitForDocumentEditor(app, page)
-  await page.locator('.rich-pane [data-beta-view="Emphasis"]').waitFor()
+  // The note opens with the caret in its last block, whose shown markers
+  // split the emphasis view's mark around them.
+  const emphasis = () =>
+    page.locator('.rich-pane [data-beta-view="Emphasis"]').first()
+  await emphasis().waitFor()
   const toggle = async (id) => {
     await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
@@ -375,7 +379,7 @@ export default sdk => ({
     }, message)
     try {
       await toggle('beta-flavor')
-      await page.locator('.rich-pane [data-beta-view="Emphasis"]').waitFor()
+      await emphasis().waitFor()
       assert.equal(await page.evaluate(() => window.betaNoticeInsertions), 0)
       assert.equal(await notices().count(), 0)
     } finally {
@@ -384,7 +388,7 @@ export default sdk => ({
   })
   await t.test('same-owner Lezer group views cover their syntax', async () => {
     await activate('group')
-    await page.locator('.rich-pane [data-beta-view="Emphasis"]').waitFor()
+    await emphasis().waitFor()
     assert.equal(await notices().count(), 0)
   })
   await t.test(
@@ -435,7 +439,7 @@ export default sdk => ({
     'unrelated scope disposal cannot hide a failed renderer',
     async () => {
       await activate('named')
-      await page.locator('.rich-pane [data-beta-view="Emphasis"]').waitFor()
+      await emphasis().waitFor()
       await toggle('alpha-plain')
       await page.evaluate(() => {
         window.betaThrow = true

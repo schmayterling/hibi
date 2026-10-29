@@ -187,3 +187,16 @@ test('wiki link resolution never revisits the imported path list', () => {
     assert.equal(reads, count)
   }
 })
+
+test('frontmatter stays byte for byte while body wiki links convert', () => {
+  const resolve = createWikiLinkResolver(['Note.md', 'Other.md'])
+  for (const bom of ['', '\uFEFF'])
+    for (const eol of ['\n', '\r\n', '\r']) {
+      const header = `${bom}---${eol}related: "[[Other]]"${eol}---${eol}`
+      assert.equal(
+        wikiLinks(`${header}see [[Other]]${eol}`, 'Note.md', resolve).source,
+        `${header}see [Other](Other.md)\n`,
+        JSON.stringify(eol),
+      )
+    }
+})

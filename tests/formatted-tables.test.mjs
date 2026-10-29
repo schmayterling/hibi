@@ -1453,7 +1453,10 @@ const replacedOnce = async (doc, [from, to], text, label) => {
   assert.equal((await state()).doc, typed, label)
   await harness.keyboard.press('ControlOrMeta+z')
   assert.equal((await state()).doc, doc, label)
-  await harness.keyboard.press('ControlOrMeta+Shift+z')
+  // The harness binds CodeMirror's history keymap: redo is Ctrl+Y on Windows.
+  await harness.keyboard.press(
+    process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+z',
+  )
   assert.equal((await state()).doc, typed, label)
 }
 const compose = async (cdp, ...candidates) => {

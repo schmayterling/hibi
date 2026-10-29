@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import {
+  parseFrontmatter,
+  replaceFrontmatter,
+} from '../src/addons/frontmatter/markdown.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
+import { noteProperties } from '../src/shared/note-metadata.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import {
   keepUnclosedFrontmatterRead,
@@ -20,7 +25,7 @@ const scan = (source) => {
 const expected = (text) => {
   const block = readFrontmatter(text)
   if (!block) return null
-  const closing = /^(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/m.exec(
+  const closing = /^(?:---|\.\.\.)[ \t]*(?:\r\n?|\n|$)/m.exec(
     text.slice(block.opening.length),
   )
   return {
@@ -49,7 +54,7 @@ const compare = (text, chunkUnits = 7) => {
 
 test('source frontmatter matches existing mapping, delimiter and spacing behavior across chunk seams', () => {
   for (const bom of ['', '\uFEFF'])
-    for (const eol of ['\n', '\r\n'])
+    for (const eol of ['\n', '\r\n', '\r'])
       for (const yaml of [
         'title: hello',
         '{}',
@@ -83,8 +88,33 @@ test('source frontmatter matches existing mapping, delimiter and spacing behavio
     '---\na: 1\r---\rbody',
     '---\na: 1\u2028---\nbody',
     '---\na: 1\n---\n\rbody',
+    '---\ra: 1\r---',
+    '---\ra: 1\r---\r \r\r\nbody',
+    '---\r',
+    '---\r\r---\r',
   ])
     compare(text, 4)
+})
+
+test('bare CR frontmatter keeps raw slices while YAML reads LF lines', () => {
+  const header = '---\rrelated: "[[Other]]"\rlist:\r  - a\r---\r\r'
+  const text = `${header}# body\r`
+  const block = readFrontmatter(text)
+  assert.deepEqual(
+    [block.opening, block.yaml, block.eol, block.prefix, block.content],
+    ['---\r', 'related: "[[Other]]"\rlist:\r  - a\r', '\r', header, '# body\r'],
+  )
+  const properties = noteProperties(text)
+  assert.deepEqual(
+    [{ ...properties.values }, properties.complete],
+    [{ related: '[[Other]]', list: ['a'] }, true],
+  )
+  const projection = parseFrontmatter(text)
+  assert.equal(projection.serialize(projection.content), text)
+  assert.equal(
+    replaceFrontmatter(text, 'title: x\n'),
+    '---\rtitle: x\r---\r\r# body\r',
+  )
 })
 
 test('prefix inspection does not read or materialize the whole body', () => {

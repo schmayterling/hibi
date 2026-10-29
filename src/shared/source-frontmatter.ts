@@ -11,7 +11,7 @@ export type FrontmatterBounds = Readonly<{
   yamlTo: number
   headerTo: number
   contentFrom: number
-  eol: '\n' | '\r\n'
+  eol: '\n' | '\r\n' | '\r'
 }>
 export type FrontmatterRead = Readonly<{
   bounds: FrontmatterBounds | null
@@ -106,10 +106,12 @@ export function* readSourceFrontmatter(
     yield* spaces()
     const cr = peek() === '\r'
     if (cr) take()
-    if (take() !== '\n') return finish(null)
+    const lf = peek() === '\n'
+    if (lf) take()
+    else if (!cr) return finish(null)
     open = true
     const yamlFrom = position,
-      eol = cr ? '\r\n' : '\n'
+      eol = cr ? (lf ? '\r\n' : '\r') : '\n'
     let lineStart = true
     while (position < source.utf16Length) {
       if (normalized > maximumFrontmatterUnits) {
@@ -128,16 +130,9 @@ export function* readSourceFrontmatter(
             yield* spaces()
             const ending = peek()
             if (!ending || /[\r\n\u2028\u2029]/.test(ending)) {
-              let headerTo = position,
-                bareCr = false
-              if (ending === '\r') {
-                take()
-                bareCr = peek() !== '\n'
-              }
-              if (peek() === '\n') {
-                take()
-                headerTo = position
-              }
+              if (ending === '\r') take()
+              if (peek() === '\n') take()
+              const headerTo = position
               if (oversized) return finish(null)
               closedTo = headerTo
               if (
@@ -146,16 +141,14 @@ export function* readSourceFrontmatter(
               )
                 return finish(null)
               let contentFrom = headerTo
-              // JS multiline $ accepts bare CR and Unicode separators; the
-              // spacing expression accepts only LF/CRLF, exactly like the oracle.
-              if (!bareCr) {
-                for (;;) {
-                  yield* spaces()
-                  if (peek() === '\r') take()
-                  if (peek() !== '\n') break
-                  take()
-                  contentFrom = position
-                }
+              // Blank lines end in LF, CRLF or CR, exactly like the oracle.
+              for (;;) {
+                yield* spaces()
+                const cr = peek() === '\r'
+                if (cr) take()
+                if (peek() === '\n') take()
+                else if (!cr) break
+                contentFrom = position
               }
               return finish({ yamlFrom, yamlTo, headerTo, contentFrom, eol })
             }

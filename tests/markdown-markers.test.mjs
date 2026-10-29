@@ -12,7 +12,7 @@ import {
   waitForDocumentEditor,
 } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const schema = getSchema([StarterKit])
@@ -530,7 +530,8 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     '***hello***',
   ]) {
     await t.test(source, async () => {
-      await replaceSourceText(page, rich, source)
+      // Typing over a formatted selection is literal text, as in the rich editor.
+      await markerSource(rich, source, 0)
       const inside = source.indexOf('hello') + 5
       await markerSelection(rich, inside)
       await rich.press('ArrowRight')
@@ -639,7 +640,7 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
     await page.reload()
     await waitForDocumentEditor(app, page)
-    await replaceSourceText(page, rich, '*hello*')
+    await markerSource(rich, '*hello*', 0)
     await markerSelection(rich, 6)
     assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
     await rich.press('ArrowRight')
@@ -721,7 +722,7 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
     await waitForDocumentEditor(app, page)
     for (const source of ['**hello**', '`hello`'])
       await t.test(`${source}, hints ${hints}`, async () => {
-        await replaceSourceText(page, rich, source)
+        await markerSource(rich, source, 0)
         const inside = source.indexOf('hello') + 5
         await markerSelection(rich, inside)
         // Shown delimiters are editable source, so each arrow crosses
@@ -767,7 +768,7 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
         )
       })
   }
-  await replaceSourceText(page, rich, 'hello $\\dfrac{1}{\\dfrac{1}{2}}$')
+  await markerSource(rich, 'hello $\\dfrac{1}{\\dfrac{1}{2}}$', 0)
   await markerSelection(rich, 0)
   await page.locator('.rich-pane .katex').waitFor()
   await rich.press('End')

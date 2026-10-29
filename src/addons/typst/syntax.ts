@@ -1,10 +1,12 @@
 import { Marked, type MarkedExtension } from 'marked'
+import { commonMarkFences } from '../../shared/marked-fences.ts'
 import { fencedBlock } from '../_shared/fenced-block.ts'
 import type { MarkdownFlavor } from '../api'
 
 export const typstBlock = fencedBlock('typst', 'typstBlock', true)
 // Keep native code tokens: Marked uses their type to end lazy quote continuations.
 export const typstTokens: MarkedExtension = {
+  ...commonMarkFences,
   renderer: {
     code(token) {
       const block = typstBlock(token.raw)
@@ -14,7 +16,7 @@ export const typstTokens: MarkedExtension = {
     },
   },
 }
-export const detector = new Marked()
+export const detector = new Marked(commonMarkFences)
 export const typstFlavor: MarkdownFlavor = {
   id: 'blocks',
   name: 'Typst blocks',

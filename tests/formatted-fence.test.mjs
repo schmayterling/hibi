@@ -14,6 +14,7 @@ import {
 } from '../src/addons/_shared/formatted-fence.ts'
 import { typstBlock, typstTokens } from '../src/addons/typst/syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
+import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 
 const markdown = parser.configure(GFM)
 
@@ -35,7 +36,7 @@ function fences(source, language, text) {
 
 /** The rich view's mermaid diagrams: Marked code tokens of that language. */
 function markedDiagrams(source) {
-  const marked = new Marked()
+  const marked = new Marked(blockMarkdown)
   const found = []
   marked.walkTokens(marked.lexer(source), (token) => {
     if (token.type === 'code' && token.lang?.toLowerCase() === 'mermaid')
@@ -46,7 +47,7 @@ function markedDiagrams(source) {
 
 /** The rich view's Typst blocks: closed native code tokens of that language. */
 function markedTypst(source) {
-  const marked = new Marked(typstTokens)
+  const marked = new Marked(blockMarkdown, typstTokens)
   const found = []
   marked.walkTokens(marked.lexer(source), (token) => {
     if (token.type === 'code' && typstBlock(token.raw)) found.push(token.text)
@@ -139,8 +140,8 @@ test('editing a fence writes its body as one change and keeps the fence around i
     '~~~\ntilde',
   ]
   for (const [language, read, indented] of [
-    ['mermaid', markedDiagrams, (fence) => fence.marker.startsWith('`')],
-    ['typst', markedTypst, (fence) => fence.marker.startsWith('`')],
+    ['mermaid', markedDiagrams, () => true],
+    ['typst', markedTypst, () => true],
   ])
     for (const wrap of wrappers)
       for (const source of sources) {

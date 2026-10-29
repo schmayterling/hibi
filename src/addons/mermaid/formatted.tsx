@@ -37,7 +37,7 @@ export function diagramContribution(
     matches: (info) => info.toLowerCase() === 'mermaid',
     // The rich view reads diagrams from Marked's code tokens.
     source: markedFenceText,
-    indented: ({ marker }) => marker.startsWith('`'),
+    indented: () => true,
     mount(dom, block) {
       const root = createRoot(dom)
       // Rendered before the line is measured and painted, outside any React

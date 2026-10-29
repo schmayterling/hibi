@@ -131,12 +131,22 @@ test('fenced code keeps residual structural tab columns and unclosed bodies', ()
     }
 })
 
-test('quoted list and tilde compensation keep preexisting native rules distinct', () => {
+test('quoted list compensation keeps preexisting native rules distinct and tilde fences follow CommonMark', () => {
+  for (const source of [
+    '>  ~~~\n>  \tcode\n>  ~~~',
+    '>   ~~~\n>   \tcode\n>   ~~~',
+  ]) {
+    const native = new Marked({ gfm: false }).parse(source)
+    assert.notDeepEqual(code(native), code(micromark(source)), source)
+    assert.deepEqual(
+      code(new Marked({ gfm: false }, blockMarkdown).parse(source)),
+      code(micromark(source)),
+      source,
+    )
+  }
   for (const source of [
     '> - item\n>\n>   ```\n>   foo\n>   \tbar\n>   ```',
     '> - a\n>   - b\n>\n>     ```\n>     foo\n>     \tbar\n>     ```',
-    '>  ~~~\n>  \tcode\n>  ~~~',
-    '>   ~~~\n>   \tcode\n>   ~~~',
   ]) {
     const native = new Marked({ gfm: false }).parse(source)
     const oracle = micromark(source)
@@ -407,7 +417,7 @@ test('throwing quote and list reads restore grammar, hooks and container metadat
         tokenizer,
         extensions: {
           block: [
-            function (source) {
+            (source) => {
               if (source.startsWith('explode')) throw sentinel
             },
           ],

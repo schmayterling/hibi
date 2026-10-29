@@ -1,4 +1,5 @@
 import { Lexer, Tokenizer } from 'marked'
+import { withFenceRules } from '../../shared/marked-fences.ts'
 
 /** Use Marked's fence parser so indentation, long fences, and raw source round-trip. */
 export function fencedBlock(language: string, type: string, closed = false) {
@@ -6,10 +7,16 @@ export function fencedBlock(language: string, type: string, closed = false) {
   new Lexer({ gfm: true, tokenizer })
   return (source: string) => {
     if (!/^ {0,3}(?:`{3,}|~{3,})/.test(source)) return
-    const token = tokenizer.fences(source)
-    if (!token || token.lang?.toLowerCase() !== language) return
+    const [token, match] = withFenceRules(
+      tokenizer,
+      () =>
+        [
+          tokenizer.fences(source),
+          tokenizer.rules.block.fences.exec(source),
+        ] as const,
+    )
+    if (!token || !match || token.lang?.toLowerCase() !== language) return
     if (closed) {
-      const match = tokenizer.rules.block.fences.exec(source)!
       const lineEnd = source.indexOf('\n')
       const bodyEnd = lineEnd + 1 + (match[3]?.length ?? 0)
       if (lineEnd < 0 || !match[0].slice(bodyEnd).trim()) return

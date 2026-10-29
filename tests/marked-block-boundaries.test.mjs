@@ -199,24 +199,19 @@ test('renderMarkdown exports the diagram and following headings', async () => {
   }
 })
 
-test('closed typst detection uses native fence grammar and body indentation', () => {
-  for (const source of [
-    '  ```typst\n x\n  ```\n',
-    '~~~TyPsT\nx\n~~~~\n',
-    '```typst\n```',
-    '```typst',
-    '```typst\nunclosed',
-    '```typst\nx\n```\t\nafter',
-    '```typst\nx\n```\u2028after',
+test('closed typst detection uses CommonMark fence grammar and body indentation', () => {
+  for (const [source, closed] of [
+    ['  ```typst\n x\n  ```\n', true],
+    ['~~~TyPsT\nx\n~~~~\n', true],
+    ['```typst\n```', true],
+    ['```typst', false],
+    ['```typst\nunclosed', false],
+    ['```typst\nx\n```\t\nafter', true],
+    ['```typst\nx\n```\u2028after', false],
   ]) {
-    const native = new Marked().lexer(source)[0]
+    const native = new Marked(blockMarkdown).lexer(source)[0]
     const block = typstBlock(source)
-    if (
-      !source.includes('\n') ||
-      source.includes('unclosed') ||
-      source.includes('after')
-    )
-      assert.equal(block, undefined, source)
+    if (!closed) assert.equal(block, undefined, source)
     else
       assert.deepEqual(
         block,

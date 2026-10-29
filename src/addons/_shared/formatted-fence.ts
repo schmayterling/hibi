@@ -168,9 +168,9 @@ export function readFence(doc: Text, node: SyntaxNode): Fence | null {
   }
 }
 
-/** A fence's body as Marked's code token has it: lines lose up to an indented backtick fence's indentation. */
-export const markedFenceText = ({ lines, marker, indent }: Fence) =>
-  (marker.startsWith('`') && indent
+/** A fence's body as Marked's code token has it: lines lose up to the fence's indentation. */
+export const markedFenceText = ({ lines, indent }: Fence) =>
+  (indent
     ? lines.map((line) =>
         line.slice(Math.min(/^\s*/.exec(line)?.[0].length ?? 0, indent)),
       )

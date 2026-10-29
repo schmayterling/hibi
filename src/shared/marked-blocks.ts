@@ -1,4 +1,11 @@
-import { type MarkedExtension, marked, type Token, Tokenizer } from 'marked'
+import {
+  type MarkedExtension,
+  marked,
+  type Token,
+  Tokenizer,
+  type Tokens,
+} from 'marked'
+import { withFenceRules } from './marked-fences.ts'
 import {
   extendQuote,
   leafListEnd,
@@ -10,11 +17,212 @@ import {
 // per character or continuation line. Equivalence tests guard the rule delimiters.
 const setextRules = new WeakMap<RegExp, { start: RegExp; candidate: RegExp }>()
 const paragraphRules = new WeakMap<RegExp, RegExp>()
+const quoteRules = new WeakMap<RegExp, RegExp>()
+
+// The native quote regexp keeps a backtracking frame for every quoted/lazy
+// line. Use the same interruptions one line at a time, including an empty >.
+function quoteMatch(tokenizer: Tokenizer, source: string) {
+  const pattern = tokenizer.rules.block.blockquote
+  if (!tokenizer.rules.other.blockquoteStart.test(source)) return
+  let interrupt = quoteRules.get(pattern)
+  if (!interrupt) {
+    const start = '^( {0,3}> ?(([^\\n]+(?:\\n(?!'
+    const end = ')[^\\n]+)*)|[^\\n]*)(?:\\n|$))+'
+    if (!pattern.source.startsWith(start) || !pattern.source.endsWith(end))
+      return pattern.exec(source)
+    interrupt = new RegExp(
+      `^(?:${pattern.source.slice(start.length, -end.length)})`,
+    )
+    quoteRules.set(pattern, interrupt)
+  }
+  let end = 0
+  let lazy = false
+  while (end < source.length) {
+    const newline = source.indexOf('\n', end)
+    const to = newline < 0 ? source.length : newline + 1
+    const line = source.slice(end, to)
+    if (tokenizer.rules.other.blockquoteStart.test(line)) {
+      const marker = source.indexOf('>', end)
+      const body = marker + (source[marker + 1] === ' ' ? 2 : 1)
+      lazy = body < (newline < 0 ? to : newline)
+    } else if (!lazy || line === '\n' || interrupt.test(line)) break
+    end = to
+  }
+  return Object.assign([source.slice(0, end)] as [string], {
+    index: 0,
+    input: source,
+  })
+}
 // Tabs keep their physical columns when a list removes its content indent.
 const containerColumns = new WeakMap<Tokenizer, number>()
 
 // Candidate calls and source spans, including title interruption windows.
-export const blockScanCounters = { calls: 0, units: 0 }
+export const blockScanCounters = { calls: 0, units: 0, quoteLines: 0 }
+
+type SetextFrame = {
+  source: string
+  parent: SetextFrame | undefined
+  candidates: Map<RegExp, RegExpExecArray | null>
+  invalid?: number
+}
+const setextFrames = new WeakMap<Tokenizer, SetextFrame>()
+const scanningQuotes = new WeakSet<Tokenizer>()
+const invalidSetext = /[\r\u2028\u2029]/g
+
+// A candidate beyond custom blocks also belongs to later paragraphs in this
+// same blockTokens call. Cache it there, never across documents or containers.
+function withQuoteScan<T>(tokenizer: Tokenizer, read: () => T): T {
+  if (scanningQuotes.has(tokenizer)) return read()
+  scanningQuotes.add(tokenizer)
+  const lexer = tokenizer.lexer
+  const blockTokens = lexer.blockTokens
+  lexer.blockTokens = (...args) => {
+    const previous = setextFrames.get(tokenizer)
+    setextFrames.set(tokenizer, {
+      source: args[0],
+      parent: previous,
+      candidates: new Map(),
+    })
+    try {
+      return Reflect.apply(blockTokens, lexer, args)
+    } finally {
+      if (previous) setextFrames.set(tokenizer, previous)
+      else setextFrames.delete(tokenizer)
+    }
+  }
+  try {
+    return read()
+  } finally {
+    lexer.blockTokens = blockTokens
+    scanningQuotes.delete(tokenizer)
+  }
+}
+
+// Marked's quote algorithm, with a cursor instead of copying the unconsumed
+// line array at every lazy continuation. Keep its block and re-read decisions.
+function readQuote(
+  this: Tokenizer,
+  source: string,
+): Tokens.Blockquote | undefined {
+  const match = quoteMatch(this, source)
+  if (!match) return
+  let lines = match[0].replace(/\n+$/, '').split('\n')
+  let from = 0
+  let raw: string[] = []
+  let text: string[] = []
+  const tokens: Token[] = []
+  let paragraphTail:
+    | { token: Token; length: number; newline: boolean }
+    | undefined
+  while (from < lines.length) {
+    const start = from
+    let quoted = false
+    for (; from < lines.length; from++) {
+      blockScanCounters.quoteLines++
+      if (this.rules.other.blockquoteStart.test(lines[from]!)) quoted = true
+      else if (quoted) break
+    }
+    const chunk = lines.slice(start, from).join('\n')
+    const body = chunk
+      .replace(this.rules.other.blockquoteSetextReplace, '\n    $1')
+      .replace(this.rules.other.blockquoteSetextReplace2, '')
+    raw.push(chunk)
+    text.push(body)
+    const previous = tokens.at(-1)
+    const paragraph = this.paragraph
+    const parent = setextFrames.get(this)
+    let continuation: Tokens.Paragraph | undefined
+    if (previous?.type === 'paragraph' && paragraphTail?.token === previous) {
+      const length = paragraphTail.length
+      this.paragraph = function (input) {
+        const token = paragraph.call(this, input)
+        if (
+          token &&
+          input.length === body.length &&
+          token.raw.length === input.length &&
+          tokens.at(-1) === previous &&
+          previous.raw.length === length &&
+          setextFrames.get(this)?.parent === parent
+        ) {
+          // Let Marked finish this chunk without flattening the growing raw
+          // string in its paragraph merge's endsWith check. Rejoin below.
+          ;(previous as Token).type = 'text'
+          continuation = token
+        }
+        return token
+      }
+    }
+    const top = this.lexer.state.top
+    this.lexer.state.top = true
+    try {
+      this.lexer.blockTokens(body, tokens, true)
+    } finally {
+      this.paragraph = paragraph
+      if (continuation) previous!.type = 'paragraph'
+      this.lexer.state.top = top
+    }
+    if (continuation && previous?.type === 'paragraph') {
+      tokens.pop()
+      previous.raw += (paragraphTail!.newline ? '' : '\n') + continuation.raw
+      previous.text += '\n' + continuation.text
+      this.lexer.inlineQueue.pop()
+      this.lexer.inlineQueue.at(-1)!.src = previous.text
+    }
+    const last = tokens.at(-1)
+    if (body.length)
+      paragraphTail =
+        last?.type === 'paragraph'
+          ? {
+              token: last,
+              length: last.raw.length,
+              newline: body.endsWith('\n'),
+            }
+          : undefined
+    if (from === lines.length) break
+    if (last && ['code', 'heading', 'hr', 'html'].includes(last.type)) break
+    if (last?.type === 'blockquote') {
+      const rest = lines.slice(from).join('\n')
+      const input =
+        last.raw +
+        '\n' +
+        rest.replace(this.rules.other.blockquoteSetextReplace2, '')
+      const quote = this.blockquote(input)!
+      tokens[tokens.length - 1] = quote
+      const remaining = input.substring(quote.raw.length).replace(/^\n/, '')
+      const count = remaining ? remaining.split('\n').length : 0
+      const end = count ? lines.length - count : lines.length
+      if (end > from) raw.push(lines.slice(from, end).join('\n'))
+      const previous = text.join('\n')
+      text = [
+        previous.substring(0, previous.length - last.text.length) + quote.text,
+      ]
+      break
+    }
+    if (last?.type === 'list') {
+      const input = last.raw + '\n' + lines.slice(from).join('\n')
+      const list = this.list(input)!
+      tokens[tokens.length - 1] = list
+      const previousRaw = raw.join('\n')
+      raw = [
+        previousRaw.substring(0, previousRaw.length - last.raw.length) +
+          list.raw,
+      ]
+      const previousText = text.join('\n')
+      text = [
+        previousText.substring(0, previousText.length - last.raw.length) +
+          list.raw,
+      ]
+      lines = input.substring(list.raw.length).split('\n')
+      from = 0
+    }
+  }
+  return {
+    type: 'blockquote',
+    raw: raw.join('\n'),
+    text: text.join('\n'),
+    tokens,
+  }
+}
 
 const tableTokenizer = new Tokenizer()
 const tableLexer = new marked.Lexer({ gfm: true, tokenizer: tableTokenizer })
@@ -98,11 +306,7 @@ export const blockMarkdown: MarkedExtension = {
       )
     },
     blockquote(source) {
-      return BlockTokenizer.prototype.blockquote.call(
-        this,
-        source,
-        Object.getPrototypeOf(this).blockquote,
-      )
+      return BlockTokenizer.prototype.blockquote.call(this, source, readQuote)
     },
     def(source) {
       return BlockTokenizer.prototype.def.call(
@@ -297,7 +501,7 @@ function quoteExtensionInput(
     !tokenizer.rules.other.blockquoteStart.test(source)
   )
     return { text: source, offsets }
-  const match = tokenizer.rules.block.blockquote.exec(source)
+  const match = quoteMatch(tokenizer, source)
   if (!match?.[0].includes('\t')) return { text: source, offsets }
   const rule = tokenizer.rules.other.blockquoteSetextReplace2
   let row = line,
@@ -425,22 +629,24 @@ export class BlockTokenizer extends Tokenizer {
     return token
   }
 
-  override blockquote(source: string, read = Tokenizer.prototype.blockquote) {
-    return withLeafBlocks(this, () => {
-      const quote = BlockTokenizer.prototype.readBlockquote.call(
-        this,
-        source,
-        read,
-      )
-      return quote && extendQuote(quote, this.lexer)
-    })
+  override blockquote(source: string, read = readQuote) {
+    return withQuoteScan(this, () =>
+      withLeafBlocks(this, () => {
+        const quote = BlockTokenizer.prototype.readBlockquote.call(
+          this,
+          source,
+          read,
+        )
+        return quote && extendQuote(quote, this.lexer)
+      }),
+    )
   }
 
   private readBlockquote(
     source: string,
     read: typeof Tokenizer.prototype.blockquote,
   ) {
-    const match = this.rules.block.blockquote.exec(source)
+    const match = quoteMatch(this, source)
     if (!match) return read.call(this, source)
     const previousState = quoteFrames.get(this)
     if (!previousState && !match[0].includes('\t'))
@@ -589,24 +795,26 @@ export class BlockTokenizer extends Tokenizer {
   }
 
   override fences(source: string, read = Tokenizer.prototype.fences) {
-    const state = quoteFrames.get(this)
-    if (!state?.scope.columns) return read.call(this, source)
-    const match = this.rules.block.fences.exec(source)
-    const indent =
-      match &&
-      this.rules.other.indentCodeCompensation.exec(match[0])?.[1]?.length
-    if (!match || !indent) return read.call(this, source)
-    // Only the indent consumed by a backtick opening needs expansion.
-    const body = quoteInput(
-      this,
-      match[3] ?? '',
-      quoteOrigin(state, source) + 1,
-      indent,
-      true,
-    )
-    const parts = Array.from(match) as [string, ...string[]]
-    parts[3] = body.text
-    return blockToken(this, 'fences', source, parts, read)
+    return withFenceRules(this, () => {
+      const state = quoteFrames.get(this)
+      if (!state?.scope.columns) return read.call(this, source)
+      const match = this.rules.block.fences.exec(source)
+      const indent =
+        match &&
+        this.rules.other.indentCodeCompensation.exec(match[0])?.[1]?.length
+      if (!match || !indent) return read.call(this, source)
+      // Expand only the columns consumed by the opening fence's indentation.
+      const body = quoteInput(
+        this,
+        match[3] ?? '',
+        quoteOrigin(state, source) + 1,
+        indent,
+        true,
+      )
+      const parts = Array.from(match) as [string, ...string[]]
+      parts[3] = body.text
+      return blockToken(this, 'fences', source, parts, read)
+    })
   }
 
   override code(source: string, read = Tokenizer.prototype.code) {
@@ -705,27 +913,45 @@ export class BlockTokenizer extends Tokenizer {
       if (!interrupt || !underline) return read.call(this, source)
       rule = {
         start: new RegExp(start),
-        candidate: new RegExp(`\\n(?:(${underline})|${interrupt})`),
+        candidate: new RegExp(`\\n(?:(${underline})|${interrupt})`, 'g'),
       }
       setextRules.set(pattern, rule)
     }
     if (!rule.start.test(source)) return
     // Stop at the first underline or interruption without a frame per character.
     blockScanCounters.calls++
-    const candidate = rule.candidate.exec(source)
-    blockScanCounters.units += candidate
-      ? candidate.index + candidate[0].length
-      : source.length
-    if (!candidate?.[1] || !candidate.index) return
-    blockScanCounters.units += candidate.index
-    if (/[\r\u2028\u2029]/.test(source.slice(0, candidate.index))) return
+    const frame = this.options.pedantic ? undefined : setextFrames.get(this)
+    const from = frame ? frame.source.length - source.length : 0
+    let candidate = frame?.candidates.get(pattern)
+    if (candidate === undefined || (candidate && candidate.index < from)) {
+      rule.candidate.lastIndex = from
+      candidate = rule.candidate.exec(frame?.source ?? source)
+      blockScanCounters.units += candidate
+        ? candidate.index + candidate[0].length - from
+        : source.length
+      frame?.candidates.set(pattern, candidate)
+    }
+    const index = candidate ? candidate.index - from : 0
+    if (!candidate?.[1] || !index) return
+    if (frame) {
+      if (frame.invalid === undefined || frame.invalid < from) {
+        invalidSetext.lastIndex = from
+        const invalid = invalidSetext.exec(frame.source)
+        frame.invalid = invalid?.index ?? frame.source.length
+        blockScanCounters.units += frame.invalid - from
+      }
+      if (frame.invalid < candidate.index) return
+    } else {
+      blockScanCounters.units += index
+      if (/[\r\u2028\u2029]/.test(source.slice(0, index))) return
+    }
     return blockToken(
       this,
       'lheading',
       source,
       [
-        source.slice(0, candidate.index + candidate[0].length),
-        source.slice(0, candidate.index),
+        source.slice(0, index + candidate[0].length),
+        source.slice(0, index),
         candidate[2] as string,
       ],
       read,

@@ -157,6 +157,27 @@ const parseParagraph = (editor: Editor, source: string) =>
 const tableCell = ($pos: ResolvedPos) =>
   /cell/.test(String($pos.node(-1).type.spec.tableRole)) ? $pos.start(-1) : -1
 
+// Whether two documents differ at most in the marks on their text.
+const sameUnmarked = (a: RichNode, b: RichNode): boolean => {
+  if (!a.hasMarkup(b.type, b.attrs)) return false
+  if (a.inlineContent) {
+    const inline = (node: RichNode) => {
+      let text = ''
+      node.forEach((child) => {
+        text += child.isText
+          ? child.text
+          : `\0${child.type.name}${JSON.stringify(child.attrs)}\0`
+      })
+      return text
+    }
+    return inline(a) === inline(b)
+  }
+  if (a.childCount !== b.childCount) return false
+  for (let i = 0; i < a.childCount; i++)
+    if (!sameUnmarked(a.child(i), b.child(i))) return false
+  return true
+}
+
 // Addons whose syntax features the plain codec models.
 const plainTextOwners = new Set(
   [...builtInFlavors.values()].flatMap(({ owner, plainText }) =>
@@ -2191,6 +2212,7 @@ export function MarkdownEditor({
         serialize &&
         !caret.document.eq(tr.doc) &&
         caret.document.type.schema === tr.doc.type.schema &&
+        sameUnmarked(caret.document, tr.doc) &&
         serialize(caret.document).source === serialize(tr.doc).source
       )
         tr.replaceWith(0, tr.doc.content.size, caret.document.content)

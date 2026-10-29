@@ -41,6 +41,7 @@ import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import { codePlaceholders } from './code-placeholders'
 import {
+  blockAtom,
   blockBreak,
   blockText,
   codeIndent,
@@ -109,6 +110,9 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 })
 
 type Revealed = { from: number; to: number }
+
+/** Where the widget under the first press of a click sequence starts. */
+const pressedWidget = new WeakMap<EditorView, number | null>()
 
 /** A range over the whole note, or all its text after metadata the view keeps hidden. */
 function selectsWholeNote(state: EditorState, range: Revealed) {
@@ -2277,12 +2281,32 @@ export function livePreview(
     ),
     // A triple-click selects the clicked block's text, as in the rich editor:
     // not its markers or the line break after it, and not extended from the
-    // selection with Shift. Dragging on does not extend it either.
+    // selection with Shift. Dragging on does not extend it either. A block the
+    // rich editor draws as one node, or an image, formula or diagram widget,
+    // selects its source, as the rich editor node-selects it. The widget is
+    // the one first pressed: the caret the first click places can show the
+    // source in its place.
     EditorView.mouseSelectionStyle.of((view, event) => {
-      if (event.button !== 0 || event.detail !== 3) return null
+      if (event.button !== 0) return null
+      const target = event.target instanceof Element ? event.target : null
+      const widget = target?.closest('[contenteditable="false"]')
+      const under =
+        widget && view.contentDOM.contains(widget)
+          ? view.posAtDOM(widget)
+          : null
+      if (event.detail === 1) pressedWidget.set(view, under)
+      if (event.detail !== 3) return null
+      let drawn = pressedWidget.get(view) ?? under
       let at = view.posAtCoords({ x: event.clientX, y: event.clientY })
-      const text = () =>
-        at === null ? null : blockText(view.state, syntax.tree(view.state), at)
+      const text = () => {
+        const tree = syntax.tree(view.state)
+        const pos = drawn ?? at
+        if (pos === null) return null
+        return (
+          blockAtom(view.state, tree, pos, drawn !== null) ??
+          (at === null ? null : blockText(view.state, tree, at))
+        )
+      }
       const block = text()
       if (!block) return null
       return {
@@ -2292,6 +2316,7 @@ export function livePreview(
         },
         update: (update) => {
           if (at !== null) at = update.changes.mapPos(at)
+          if (drawn !== null) drawn = update.changes.mapPos(drawn)
         },
       }
     }),

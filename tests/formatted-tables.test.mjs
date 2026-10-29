@@ -603,6 +603,58 @@ test('shift-drag and shift-double-click from an edited cell keep the anchor in t
   assert.deepEqual([plain.anchor, plain.head], [1, doc.indexOf('five') + 1])
 })
 
+test('shift-double-click extends the selection by words in the formatted view; the rich editor extends it to the click', {
+  timeout: 30000,
+}, async () => {
+  // shift-word-001 in formatted-engine-gaps.md. The rich editor's head stays
+  // where the second press lands, as for a shift-click.
+  const paragraph = page.locator('.tiptap p', { hasText: 'A paragraph before' })
+  await paragraph.click()
+  await page.keyboard.press('Home')
+  const target = await paragraph.evaluate((p) => {
+    const node = p.firstChild
+    const index = node.data.indexOf('before') + 3
+    const range = document.createRange()
+    range.setStart(node, index)
+    range.setEnd(node, index + 1)
+    const { left, top, height } = range.getBoundingClientRect()
+    return { x: left + 1, y: top + height / 2 }
+  })
+  await page.keyboard.down('Shift')
+  try {
+    await page.mouse.dblclick(target.x, target.y)
+  } finally {
+    await page.keyboard.up('Shift')
+  }
+  // The rich editor reads the page's selection when it changes.
+  await page
+    .waitForFunction(
+      () => !document.querySelector('.tiptap').editor.state.selection.empty,
+    )
+    .catch(() => {})
+  const rich = await page.evaluate(() => {
+    const { state } = document.querySelector('.tiptap').editor
+    const { from, to } = state.selection
+    return state.doc.textBetween(from, to)
+  })
+  assert.equal(rich, 'A paragraph bef')
+  // The formatted view extends to the word's far edge, as CodeMirror does;
+  // from a cell too (the test above).
+  const doc = 'one two three\n\nfour five six'
+  await mount(doc)
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: 0 } })
+  })
+  const { x, y } = await at('five', 2)
+  const formatted = await shifted(() => harness.mouse.dblclick(x, y))
+  assert.deepEqual(
+    [formatted.anchor, formatted.head],
+    [0, doc.indexOf('five') + 4],
+  )
+})
+
 test('a shift-drag from an edited cell back over the table picks across cells, as in the rich editor', {
   timeout: 30000,
 }, async () => {
@@ -730,6 +782,30 @@ test("triple-click selects the clicked block's text, with or without Shift, as i
     [doc.slice(cell.anchor, cell.head), cell.editor],
     ['cell words', 'cell words'],
   )
+  // Presses in the open editor keep it focused and open, so clicks with no
+  // gap between them select the cell's text too, from a rendered cell or
+  // from the open editor.
+  for (const edited of [false, true]) {
+    const start = await at('end words', 1)
+    await harness.mouse.click(start.x, start.y)
+    const { x, y } = await at('cell words', 2)
+    if (edited) await harness.mouse.click(x, y)
+    const editor = await harness.evaluateHandle(() =>
+      document.querySelector('.hibi-lp-cell-editor'),
+    )
+    await harness.mouse.click(x, y, { clickCount: 3 })
+    const tripled = await state()
+    assert.deepEqual(
+      [doc.slice(tripled.anchor, tripled.head), tripled.editor],
+      ['cell words', 'cell words'],
+      edited ? 'edited' : 'rendered',
+    )
+    if (edited)
+      assert.ok(
+        await editor.evaluate((element) => element.isConnected),
+        'the editor stays open',
+      )
+  }
 })
 
 test("a shift-drag from a cell into another table's cells keeps the anchor, as in the rich editor", {

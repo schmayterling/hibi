@@ -48,6 +48,48 @@ const cases = [
     after: 'before 日本語 after\n',
   },
   {
+    name: 'range inside one table cell',
+    // The native editor only edits tables in their serialized spelling.
+    source:
+      'plain\n\n| aa          | bb   |\n| ----------- | ---- |\n| alpha bravo | tail |\n',
+    cell: true,
+    anchor: ['alpha', 1],
+    head: ['bravo', 2],
+    typed: ['Z', 'Q'],
+    after: 'plain\n\n| aa | bb |\n| --- | --- |\n| aZQavo | tail |\n',
+  },
+  {
+    // The composition's group cancels out, so history steps over it to the
+    // edit before it.
+    name: 'earlier caret past a composition that restored its text',
+    source: 'alpha bravo charlie\n',
+    earlier: { at: ['bravo', 2], typed: 'X' },
+    anchor: ['charlie', 0],
+    head: ['charlie', 7],
+    composed: ['日', '日本', 'charlie'],
+    after: 'alpha brXavo charlie\n',
+  },
+  {
+    // Typing and the deletions right after it are one step in either engine.
+    name: 'range typed over and partly deleted',
+    source: 'alpha bravo charlie\n',
+    anchor: ['bravo', 1],
+    head: ['charlie', 2],
+    typed: ['Z', 'Q'],
+    deleted: 1,
+    after: 'alpha bZarlie\n',
+  },
+  {
+    name: 'earlier caret past typing that its deletion took back',
+    source: 'alpha bravo charlie\n',
+    earlier: { at: ['bravo', 2], typed: 'X' },
+    anchor: ['charlie', 0],
+    head: ['charlie', 0],
+    typed: ['Q'],
+    deleted: 1,
+    after: 'alpha brXavo charlie\n',
+  },
+  {
     name: 'range formatted bold',
     source: 'alpha bravo charlie\n',
     anchor: ['bravo', 1],
@@ -107,18 +149,29 @@ for (const item of cases)
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    const rich = await selectFormattedEngine(app, page, engine)
+    await selectFormattedEngine(app, page, engine)
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    // Table padding follows each engine's serializer.
     const saved = (text) =>
       waitForAsync(
         page,
-        async (text) => {
+        async ({ text, cell }) => {
           await window.hibi.flushDocumentChanges()
-          return (await window.hibi.getDocument()).markdown === text
+          const spell = (text) =>
+            cell ? text.replace(/ +/g, ' ').replace(/-+/g, '---') : text
+          return (
+            spell((await window.hibi.getDocument()).markdown) === spell(text)
+          )
         },
-        text,
-      )
+        { text, cell: !!item.cell },
+      ).catch(async (error) => {
+        const { markdown } = await page.evaluate(() =>
+          window.hibi.getDocument(),
+        )
+        assert.equal(markdown, text, 'saved')
+        throw error
+      })
     const settled = async () => {
       await page.evaluate(
         () =>
@@ -139,59 +192,95 @@ for (const item of cases)
     await clickMenu(app, 'Open…')
     await waitForDocumentEditor(app, page)
     await saved(item.source)
-    const text = await rich.evaluate((root) => {
-      const clone = root.cloneNode(true)
-      for (const node of clone.querySelectorAll(
-        '.hibi-lp-marker, .cm-placeholder, [aria-hidden="true"], label',
-      ))
-        node.remove()
-      return clone.textContent
-    })
-    const point = ([word, offset]) => text.indexOf(word) + offset
-    const anchor = point(item.anchor),
-      head = point(item.head),
-      from = Math.min(anchor, head)
+    // The cell editor is another .cm-content.
+    const root = page.locator('.rich-pane [aria-label="Document editor"]')
+    const visibleText = () =>
+      root.evaluate((root) => {
+        const clone = root.cloneNode(true)
+        for (const node of clone.querySelectorAll(
+          '.hibi-lp-marker, .cm-placeholder, [aria-hidden="true"], label',
+        ))
+          node.remove()
+        return clone.textContent
+      })
     if (engine === 'codemirror')
-      await rich.evaluate((element) => element.cmTile.root.view.focus())
-    else await rich.focus()
-    // CodeMirror reverts a raw focus caret for a moment, so the pick repeats
-    // until the model holds it.
-    await page.waitForFunction(
-      ({ anchor, head }) => {
-        const root = document.querySelector(
-          '.rich-pane [aria-label="Document editor"]',
+      await root.evaluate((element) => element.cmTile.root.view.focus())
+    else await root.focus()
+    // Picks a DOM selection between two points, inside the cell editor when
+    // the formatted view has one open.
+    const pick = async (from, to) => {
+      const text = await visibleText()
+      if (item.cell && engine === 'codemirror') {
+        // Only enter the cell here. The range itself is a DOM pick below.
+        await root.evaluate(
+          (element, at) =>
+            element.cmTile.root.view.dispatch({ selection: { anchor: at } }),
+          item.source.indexOf(from[0]) + from[1],
         )
-        const find = ([word, offset]) => {
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-          while (walker.nextNode())
-            if (walker.currentNode.data.includes(word))
-              return [
-                walker.currentNode,
-                walker.currentNode.data.indexOf(word) + offset,
-              ]
-          return null
-        }
-        const empty = root.editor
-          ? root.editor.state.selection.empty
-          : root.cmTile.root.view.state.selection.main.empty
-        const dom = getSelection()
-        const [anchorNode, anchorOffset] = find(anchor)
-        const [focusNode, focusOffset] = find(head)
-        if (
-          !empty &&
-          dom.anchorNode === anchorNode &&
-          dom.anchorOffset === anchorOffset &&
-          dom.focusNode === focusNode &&
-          dom.focusOffset === focusOffset
+        await page.waitForFunction(
+          () =>
+            document.activeElement?.getAttribute('aria-label') ===
+              'Table cell' && document.activeElement.isContentEditable,
         )
-          return true
-        dom.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset)
-        document.dispatchEvent(new Event('selectionchange'))
-        return false
-      },
-      { anchor: item.anchor, head: item.head },
-      { polling: 100 },
-    )
+      }
+      // CodeMirror reverts a raw focus caret for a moment, so the pick repeats
+      // until the model holds it.
+      await page.waitForFunction(
+        ({ anchor, head }) => {
+          const root = document.querySelector(
+            '.rich-pane [aria-label="Document editor"]',
+          )
+          const scope =
+            root.querySelector('.hibi-lp-cell-editor .cm-content') ?? root
+          const find = ([word, offset]) => {
+            const walker = document.createTreeWalker(
+              scope,
+              NodeFilter.SHOW_TEXT,
+            )
+            while (walker.nextNode())
+              if (walker.currentNode.data.includes(word))
+                return [
+                  walker.currentNode,
+                  walker.currentNode.data.indexOf(word) + offset,
+                ]
+            return null
+          }
+          const model = root.editor
+            ? root.editor.state.selection
+            : root.cmTile.root.view.state.selection.main
+          const dom = getSelection()
+          const [anchorNode, anchorOffset] = find(anchor)
+          const [focusNode, focusOffset] = find(head)
+          const collapsed =
+            anchorNode === focusNode && anchorOffset === focusOffset
+          if (
+            model.empty === collapsed &&
+            dom.anchorNode === anchorNode &&
+            dom.anchorOffset === anchorOffset &&
+            dom.focusNode === focusNode &&
+            dom.focusOffset === focusOffset
+          )
+            return true
+          dom.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset)
+          document.dispatchEvent(new Event('selectionchange'))
+          return false
+        },
+        { anchor: from, head: to },
+        { polling: 100 },
+      )
+      return [from, to].map(([word, offset]) => text.indexOf(word) + offset)
+    }
+    // An earlier edit, whose history step is the one undo and redo reach.
+    let restored, reached
+    if (item.earlier) {
+      const [at] = await pick(item.earlier.at, item.earlier.at)
+      await page.keyboard.insertText(item.earlier.typed)
+      restored = [at, at]
+      reached = [at + item.earlier.typed.length, at + item.earlier.typed.length]
+      await saved(item.after)
+    }
+    const [anchor, head] = await pick(item.anchor, item.head),
+      from = Math.min(anchor, head)
     const picked = await settled()
     t.diagnostic(JSON.stringify({ engine, phase: 'picked', ...picked }))
     assert.deepEqual([picked.anchor, picked.head], [anchor, head], 'picked')
@@ -209,11 +298,16 @@ for (const item of cases)
         })
       await cdp.send('Input.insertText', { text: item.composed.at(-1) })
       length = item.composed.at(-1).length
-    } else
+    } else {
       for (const typed of item.typed) {
         await page.keyboard.insertText(typed)
         length += typed.length
       }
+      for (let left = item.deleted ?? 0; left; left--) {
+        await page.keyboard.press('Backspace')
+        length--
+      }
+    }
     await saved(item.after)
     // Typing leaves a caret after its text; formatting keeps the range.
     const left = item.action ? [anchor, head] : [from + length, from + length]
@@ -224,11 +318,15 @@ for (const item of cases)
     await saved(item.source)
     const undone = await settled()
     t.diagnostic(JSON.stringify({ engine, phase: 'undo', ...undone }))
-    assert.deepEqual([undone.anchor, undone.head], [anchor, head], 'undo')
+    assert.deepEqual(
+      [undone.anchor, undone.head],
+      restored ?? [anchor, head],
+      'undo',
+    )
     await pressShortcut(app, redo)
     await saved(item.after)
     const redone = await settled()
     t.diagnostic(JSON.stringify({ engine, phase: 'redo', ...redone }))
-    assert.deepEqual([redone.anchor, redone.head], left, 'redo')
+    assert.deepEqual([redone.anchor, redone.head], reached ?? left, 'redo')
     await cdp.detach()
   })

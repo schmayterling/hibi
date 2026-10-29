@@ -930,7 +930,10 @@ export class CellEditor {
       // view's history keeps the composition one step.
       if (!changes.length && view.composing) continue
       const selection = transaction.newSelection
-      const userEvent = transaction.annotation(Transaction.userEvent)
+      // The editor draws its own pointer selections: as one, the formatted
+      // view would write the page's selection over them and take the focus.
+      const own = transaction.annotation(Transaction.userEvent)
+      const userEvent = own === 'select.pointer' ? 'select' : own
       const isolate = transaction.annotation(isolateHistory)
       this.host.main.dispatch({
         changes,

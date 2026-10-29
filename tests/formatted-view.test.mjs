@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines,
+} from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -1092,3 +1095,168 @@ test('behind the switch, a composition in a table cell goes on through edits fro
     'before\n\n| n | aか | b | e |\n| :- | - | - | - |\n| m | cか | dか | f |\n\nafter\n',
   )
 })
+
+// triple-001 in formatted-engine-gaps.md: the rich editor node-selects a
+// block it draws as one node, and the formatted view selects its source.
+const atoms = {
+  html: ['<div>\nhtmlword here\n</div>', 'rawHtmlBlock', 'htmlword'],
+  comment: ['<!-- commentword -->', 'rawHtmlBlock', 'commentword'],
+  rule: ['***', 'horizontalRule', 'hr, .hibi-lp-rule'],
+  image: ['![alt](pic.png)', 'image', 'img[alt="alt"]'],
+  math: ['$$\nx^2\n$$', 'blockMath', '[data-type="block-math"]'],
+  mermaid: [
+    '```mermaid\ngraph TD\n  A --> B\n```',
+    'mermaidBlock',
+    '.mermaid-block',
+  ],
+  typst: ['```typst\n= typsthead\n```', 'typstBlock', '.typst-block'],
+}
+const atomNote = `first words\n\n${Object.values(atoms)
+  .map(([source]) => source)
+  .join('\n\n')}\n\nlast words\n`
+
+testFormattedEngines(
+  'a triple-click on a block drawn as one node selects it, and typed text replaces it',
+  {
+    timeout: 120000,
+  },
+  async (t) => {
+    const engine = t.formattedEngine
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-atoms-'))
+    const file = join(folder, 'notes', 'note.md')
+    await mkdir(join(folder, 'notes'))
+    await mkdir(join(folder, 'profile'))
+    await writeFile(file, atomNote)
+    // A 40×30 PNG.
+    await writeFile(
+      join(folder, 'notes', 'pic.png'),
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAIAAADVQXn+AAAAJklEQVR42u3NMQEAAAgDoK1/aE3hJxQgu1ryAKFQKBQKhUKhUCj8Bg/OH9qw+A0vAAAAAElFTkSuQmCC',
+        'base64',
+      ),
+    )
+    await writeFile(
+      join(folder, 'profile', 'addons.json'),
+      JSON.stringify({ math: true, typst: true }),
+    )
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(10000)
+    await selectFormattedEngine(app, page, engine)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await pressShortcut(app, `${mod}+o`)
+    // The addons' blocks draw once they load.
+    for (const drawn of [
+      '[data-type="block-math"]',
+      '.mermaid-block',
+      '.typst-block',
+    ])
+      await page.locator(`.rich-pane ${drawn}`).waitFor()
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    const markdown = async () =>
+      (await page.evaluate(() => window.hibi.getDocument())).markdown
+    const settled = (expected) =>
+      waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        expected,
+        { timeout: 3000 },
+      ).catch(() => {})
+    /** A point in the block: on its text for HTML, else on its drawing. */
+    /** A point in the block, once scrolled to it: on its text for HTML, else on its drawing. */
+    const point = (at) =>
+      page.evaluate(async (at) => {
+        const frames = async () => {
+          for (let frame = 0; frame < 3; frame++)
+            await new Promise(requestAnimationFrame)
+        }
+        await frames()
+        const root = document.querySelector(
+          '.rich-pane [aria-label="Document editor"]',
+        )
+        const box = (element) => {
+          const walker = document.createTreeWalker(
+            element,
+            NodeFilter.SHOW_TEXT,
+          )
+          while (walker.nextNode()) {
+            const index = walker.currentNode.data.indexOf(at)
+            if (index < 0) continue
+            const range = document.createRange()
+            range.setStart(walker.currentNode, index + 2)
+            range.setEnd(walker.currentNode, index + 3)
+            const { left, top, height } = range.getBoundingClientRect()
+            return { x: left + 1, y: top + height / 2 }
+          }
+          return null
+        }
+        if (/^[a-z]+word$/.test(at)) {
+          ;[...root.querySelectorAll('*')]
+            .findLast((element) => element.textContent.includes(at))
+            .scrollIntoView({ block: 'center' })
+          await frames()
+          return box(root)
+        }
+        root.querySelector(at).scrollIntoView({ block: 'center' })
+        await frames()
+        const { left, top, width, height } = root
+          .querySelector(at)
+          .getBoundingClientRect()
+        return { x: left + Math.min(20, width / 2), y: top + height / 2 }
+      }, at)
+    const selected = () =>
+      page.evaluate(async () => {
+        for (let frame = 0; frame < 2; frame++)
+          await new Promise(requestAnimationFrame)
+        const root = document.querySelector(
+          '.rich-pane [aria-label="Document editor"]',
+        )
+        if (root.editor) return root.editor.state.selection.node?.type.name
+        const view = root.cmTile.root.view
+        const { from, to } = view.state.selection.main
+        return view.state.sliceDoc(from, to)
+      })
+    for (const [kind, [source, node, at]] of Object.entries(atoms)) {
+      await page
+        .locator('.rich-pane p, .rich-pane .cm-line', { hasText: 'last words' })
+        .last()
+        .click()
+      const { x, y } = await point(at)
+      await page.mouse.click(x, y, { clickCount: 3 })
+      assert.equal(await selected(), engine === 'tiptap' ? node : source, kind)
+      // Focus leaves the rich editor for a moment after presses on a formula.
+      await page.waitForFunction(() =>
+        document.activeElement?.matches(
+          '.rich-pane [aria-label="Document editor"]',
+        ),
+      )
+      await page.keyboard.type('Z')
+      // The rich editor takes no text over a selected rule.
+      const replaced =
+        engine === 'tiptap' && kind === 'rule'
+          ? atomNote
+          : atomNote.replace(source, 'Z')
+      await settled(replaced)
+      assert.equal(await markdown(), replaced, kind)
+      await pressShortcut(app, `${mod}+z`)
+      await settled(atomNote)
+      assert.equal(await markdown(), atomNote, `${kind} undone`)
+    }
+  },
+)

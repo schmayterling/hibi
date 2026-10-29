@@ -233,9 +233,9 @@ test('outline grammar follows addon syntax and refuses only block syntax it cann
   ])
   // The formatted view reads only Lezer syntax, like the outline.
   assert.deepEqual(grammar([marked, tiptap], [], false).blocked, [])
-  // Rendering native code leaves the grammar unchanged, regardless of origin.
+  // A local copy cannot authorize Typst's shared fence tokenizer override.
   origins.typst = 'local'
-  assert.deepEqual(grammar([typst]).blocked, [])
+  assert.deepEqual(grammar([typst]).blocked, ['typst'])
   // A matching id cannot authorize an actual block grammar override.
   assert.deepEqual(
     grammar([

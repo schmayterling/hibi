@@ -380,7 +380,10 @@ export class DocumentRuntime {
         const dirty = retained
           ? retained.state().dirty || !!info?.ephemeral
           : tab.dirty
-        return dirty === tab.dirty ? tab : { ...tab, dirty }
+        const name = tab.id === id && info ? info.name : tab.name
+        return dirty === tab.dirty && name === tab.name
+          ? tab
+          : { ...tab, name, dirty }
       })
       if (tabs.some((tab, index) => tab !== activeMetadata.tabs[index])) {
         for (const [tabId, info] of this.#metadata) {
@@ -636,7 +639,7 @@ export class DocumentRuntime {
     return this.get()!
   }
   acknowledgeSave(
-    document: DocumentSaveReply,
+    document: DocumentSaveReply | DocumentFocus,
     token?: DocumentSaveToken,
     expectedId?: string,
   ) {
@@ -651,7 +654,6 @@ export class DocumentRuntime {
       this.resolveDocument(token.target) !== session ||
       token.epoch !== progress.epoch ||
       token.sequence <= progress.acknowledged ||
-      current.tabId !== document.tabId ||
       current.revision !== document.revision
     )
       return null
@@ -666,13 +668,13 @@ export class DocumentRuntime {
             'The saved document version is not owned by this request.',
           )
         session.markSaved(saved)
-      } else {
+      } else if ('savedMarkdown' in document) {
         const prepared = loadedDocument(document)
         session.importSaved(prepared ? prepared.saved : document.savedMarkdown)
       }
       progress.pending.delete(token.sequence)
       progress.acknowledged = token.sequence
-      if (expectedId !== undefined && current.id === expectedId)
+      if (current.id === expectedId)
         this.#metadata.set(document.tabId, {
           ...this.#metadata.get(document.tabId)!,
           id: document.id,

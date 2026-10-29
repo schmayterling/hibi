@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
   mkdir,
   mkdtemp,
@@ -1205,116 +1206,139 @@ test('context-menu bulk close confirms dirty tabs and cancels as a unit', {
   assert.equal(await app.evaluate(() => globalThis.choices.length), 2)
 })
 
-test('bulk close keeps saved retained tabs on their revision when a later prompt cancels', {
-  timeout: 40000,
-}, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-menu-partial-'))
-  const files = ['a', 'b', 'c'].map((name) => join(root, `${name}.md`))
-  for (const file of files) await writeFile(file, `original ${basename(file)}`)
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
+for (const failure of [false, true]) {
+  test(`bulk close keeps saved retained tabs when a later save ${failure ? 'fails' : 'is cancelled'}`, {
+    timeout: 40000,
+  }, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'hibi-tab-menu-partial-'))
+    const files = ['a', 'b', 'c'].map((name) => join(root, `${name}.md`))
+    for (const file of files)
+      await writeFile(file, `original ${basename(file)}`)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
     })
-    await app.close()
-    await rm(root, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  page.setDefaultTimeout(6500)
-  await waitForDocumentEditor(app, page)
-  const read = () => page.evaluate(() => window.hibi.getDocument())
-  for (const file of files) {
-    await app.evaluate(({ dialog }, file) => {
-      dialog.showOpenDialog = async () => ({
-        canceled: false,
-        filePaths: [file],
+    t.after(async () => {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
       })
-    }, file)
-    await clickMenu(app, 'Open…')
-    await waitForAsync(
-      page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      basename(file),
+      await app.close()
+      await rm(root, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, t.formattedEngine)
+    page.setDefaultTimeout(6500)
+    await waitForDocumentEditor(app, page)
+    const read = () => page.evaluate(() => window.hibi.getDocument())
+    for (const file of files) {
+      await app.evaluate(({ dialog }, file) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [file],
+        })
+      }, file)
+      await clickMenu(app, 'Open…')
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        basename(file),
+      )
+    }
+    const [a, b, c] = (await read()).tabs.filter((tab) =>
+      ['a.md', 'b.md', 'c.md'].includes(tab.name),
     )
-  }
-  const [a, b, c] = (await read()).tabs.filter((tab) =>
-    ['a.md', 'b.md', 'c.md'].includes(tab.name),
-  )
-  assert.ok(a && b && c)
-  const select = async (id) => {
-    await page.locator(`[data-tab-id="${id}"]`).click()
+    assert.ok(a && b && c)
+    const select = async (id) => {
+      await page.locator(`[data-tab-id="${id}"]`).click()
+      await waitForAsync(
+        page,
+        async (id) => (await window.hibi.getDocument()).tabId === id,
+        id,
+      )
+      await waitForDocumentEditor(app, page)
+    }
+    const editor = page.getByRole('textbox', { name: /document editor/i })
+    await select(b.id)
+    await replaceRichText(page, editor, 'dirty b')
+    await select(c.id)
+    await replaceRichText(page, editor, 'dirty c')
+    await select(a.id)
+    await app.evaluate(
+      ({ dialog }, { failure, file }) => {
+        globalThis.choices = []
+        dialog.showMessageBox = async (_window, options) => {
+          globalThis.choices.push(options.message)
+          return {
+            response: failure || options.message.includes('b.md') ? 0 : 2,
+          }
+        }
+        if (failure) {
+          const fs = process.getBuiltinModule('node:fs/promises')
+          const { syncBuiltinESMExports } =
+            process.getBuiltinModule('node:module')
+          const rename = fs.rename
+          fs.rename = async (from, to) => {
+            if (String(to) === file) {
+              fs.rename = rename
+              syncBuiltinESMExports()
+              throw new Error('second save failed')
+            }
+            return rename(from, to)
+          }
+          syncBuiltinESMExports()
+        }
+      },
+      { failure, file: await realpath(files[2]) },
+    )
+    await page.locator(`[data-tab-id="${a.id}"]`).click({ button: 'right' })
+    await page
+      .getByRole('menuitem', { name: 'Close other tabs', exact: true })
+      .click()
+    await waitForAsync(app, () => globalThis.choices.length === 2)
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+    )
+    assert.equal(await readFile(files[1], 'utf8'), 'dirty b')
+    assert.equal(await readFile(files[2], 'utf8'), 'original c.md')
+    const current = await read()
+    assert.equal(current.tabId, a.id)
+    assert.equal(current.tabs.length, 3)
+    const marked = (id, description) =>
+      page.waitForFunction(
+        ([id, description]) =>
+          document
+            .querySelector(`[data-tab-id="${id}"]`)
+            ?.getAttribute('aria-description') === description,
+        [id, description],
+      )
+    // B's retained editor takes the saved baseline although C did not save.
+    await marked(b.id, null)
+    await marked(c.id, 'Unsaved changes')
+    // Saving B activated it briefly in main; its retained editor still owns it.
+    await splitTab(app, page, b.id)
     await waitForAsync(
       page,
       async (id) => (await window.hibi.getDocument()).tabId === id,
-      id,
+      b.id,
     )
-    await waitForDocumentEditor(app, page)
-  }
-  const editor = page.getByRole('textbox', { name: /document editor/i })
-  await select(b.id)
-  await replaceRichText(page, editor, 'dirty b')
-  await select(c.id)
-  await replaceRichText(page, editor, 'dirty c')
-  await select(a.id)
-  await app.evaluate(({ dialog }) => {
-    globalThis.choices = []
-    // Save B, then cancel C.
-    dialog.showMessageBox = async (_window, options) => {
-      globalThis.choices.push(options.message)
-      return { response: options.message.includes('b.md') ? 0 : 2 }
-    }
+    const right = page
+      .locator('.editor-page[data-side="right"]')
+      .getByRole('textbox', { name: /document editor/i })
+    await right.waitFor()
+    const split = await read()
+    assert.equal(split.dirty, false)
+    assert.equal(split.markdown, 'dirty b')
+    // History keeps working against the saved text.
+    await right.press('ControlOrMeta+z')
+    await marked(b.id, 'Unsaved changes')
+    await right.press(
+      process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+z',
+    )
+    await marked(b.id, null)
+    await replaceRichText(page, right, 'dirty b again')
+    await marked(b.id, 'Unsaved changes')
   })
-  await page.locator(`[data-tab-id="${a.id}"]`).click({ button: 'right' })
-  await page
-    .getByRole('menuitem', { name: 'Close other tabs', exact: true })
-    .click()
-  await waitForAsync(app, () => globalThis.choices.length === 2)
-  await page.waitForFunction(
-    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
-  )
-  assert.equal(await readFile(files[1], 'utf8'), 'dirty b')
-  assert.equal(await readFile(files[2], 'utf8'), 'original c.md')
-  const current = await read()
-  assert.equal(current.tabId, a.id)
-  assert.equal(current.tabs.length, 3)
-  const marked = (id, description) =>
-    page.waitForFunction(
-      ([id, description]) =>
-        document
-          .querySelector(`[data-tab-id="${id}"]`)
-          ?.getAttribute('aria-description') === description,
-      [id, description],
-    )
-  // B's retained editor takes the saved baseline although C cancelled.
-  await marked(b.id, null)
-  await marked(c.id, 'Unsaved changes')
-  // Saving B activated it briefly in main; its retained editor still owns it.
-  await splitTab(app, page, b.id)
-  await waitForAsync(
-    page,
-    async (id) => (await window.hibi.getDocument()).tabId === id,
-    b.id,
-  )
-  const right = page
-    .locator('.editor-page[data-side="right"]')
-    .getByRole('textbox', { name: /document editor/i })
-  await right.waitFor()
-  const split = await read()
-  assert.equal(split.dirty, false)
-  assert.equal(split.markdown, 'dirty b')
-  // History keeps working against the saved text.
-  await right.press('ControlOrMeta+z')
-  await marked(b.id, 'Unsaved changes')
-  await right.press(
-    process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+z',
-  )
-  await marked(b.id, null)
-  await replaceRichText(page, right, 'dirty b again')
-  await marked(b.id, 'Unsaved changes')
-})
+}
 
 test('quit and workspace deletion keep tabs saved before a later prompt cancels', {
   timeout: 60000,
@@ -1358,7 +1382,15 @@ test('quit and workspace deletion keep tabs saved before a later prompt cancels'
   await waitForDocumentEditor(app, page)
   // The untitled draft comes first, so its prompt runs before the cancel.
   await replaceRichText(page, editor, 'untitled draft')
-  const draft = (await read()).tabId
+  const draftState = await read()
+  const draft = draftState.tabId
+  const flavor = JSON.stringify({ dialect: 'markdown', syntax: [] })
+  await page.evaluate(
+    ({ id, flavor }) => {
+      localStorage.setItem(`hibi:flavor:${id}`, flavor)
+    },
+    { id: draftState.id, flavor },
+  )
   for (const file of [a, c, d]) {
     await app.evaluate(({ dialog }, file) => {
       dialog.showOpenDialog = async () => ({
@@ -1411,14 +1443,20 @@ test('quit and workspace deletion keep tabs saved before a later prompt cancels'
     }, named)
 
   await answer()
-  await app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0].close()
-  })
+  await app.evaluate(({ app }) => app.quit())
   await waitForAsync(app, () => globalThis.choices.length === 3)
   await marked(draft, null)
   await marked(id('c.md'), null)
   await marked(id('d.md'), 'Unsaved changes')
   assert.equal(await readFile(named, 'utf8'), 'untitled draft')
+  assert.equal(
+    await page.evaluate(
+      (id) => localStorage.getItem(`hibi:flavor:${id}`),
+      createHash('sha256').update(named).digest('hex'),
+    ),
+    flavor,
+    'prompt Save As carries the draft flavor before it is focused',
+  )
   assert.equal(await readFile(c, 'utf8'), 'dirty c')
   assert.equal(await readFile(d, 'utf8'), 'original d.md')
   // Save As names the retained draft at once.

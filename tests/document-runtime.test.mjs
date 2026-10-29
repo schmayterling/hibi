@@ -236,7 +236,111 @@ test('save prompt receipts name retained tabs and accept only their saved versio
   receive({ ...saved, name: 'renamed.md' })
   assert.equal(runtime.get('one').dirty, true)
   assert.equal(runtime.get('one').savedMarkdown, 'draft')
-  assert.equal(runtime.get('one').name, 'one.md')
+  assert.equal(runtime.get('one').name, 'renamed.md')
+  assert.equal(shown.at(-1).name, 'renamed.md')
+  runtime.dispose()
+})
+
+test('prompt saves update a draft identity without accepting newer edits', () => {
+  const { runtime } = fixture()
+  runtime.activate(
+    document('draft', {
+      id: 'draft-one',
+      name: 'untitled.md',
+      savedMarkdown: '',
+      dirty: true,
+      ephemeral: true,
+      canAutosave: false,
+    }),
+  )
+  const before = runtime.get()
+  runtime.replace('draft plus later edit')
+  runtime.session().counters(true)
+  acceptSaved(runtime, {
+    tabId: before.tabId,
+    revision: before.revision,
+    contentVersion: before.contentVersion,
+    id: 'file-one',
+    name: 'saved.md',
+    ephemeral: false,
+    canAutosave: true,
+  })
+  assert.equal(runtime.session().counters().materializations, 0)
+  const after = runtime.get()
+  assert.equal(after.name, 'saved.md')
+  assert.equal(after.id, 'file-one')
+  assert.equal(after.canAutosave, true)
+  assert.equal(after.ephemeral, false)
+  assert.equal(after.markdown, 'draft plus later edit')
+  assert.equal(after.savedMarkdown, '')
+  assert.equal(after.dirty, true)
+  assert.equal(after.tabs[0].name, 'saved.md')
+  runtime.dispose()
+})
+
+test('a prompt save preserves newer tab-list names for other retained documents', () => {
+  const { runtime } = fixture()
+  const tabs = [
+    { id: 'one', name: 'one.md', dirty: true },
+    { id: 'two', name: 'two.md', dirty: false },
+  ]
+  runtime.activate(document('first', { tabs, savedMarkdown: '', dirty: true }))
+  runtime.activate(
+    document('second', { tabs, tabId: 'two', id: 'file-two', name: 'two.md' }),
+  )
+  runtime.focus({
+    ...runtime.get('one'),
+    tabs: [tabs[0], { ...tabs[1], name: 'renamed-elsewhere.md' }],
+  })
+  const before = runtime.get()
+  acceptSaved(runtime, {
+    tabId: before.tabId,
+    revision: before.revision,
+    contentVersion: before.contentVersion,
+    id: before.id,
+    name: 'saved-one.md',
+    ephemeral: false,
+    canAutosave: true,
+  })
+  assert.deepEqual(
+    runtime.get().tabs.map((tab) => tab.name),
+    ['saved-one.md', 'renamed-elsewhere.md'],
+  )
+  runtime.dispose()
+})
+
+test('prompt save reports reject malformed and future versions without mutation', () => {
+  const { runtime } = fixture()
+  runtime.activate(document('draft', { savedMarkdown: '', dirty: true }))
+  const before = runtime.get()
+  const valid = {
+    tabId: before.tabId,
+    revision: before.revision,
+    contentVersion: before.contentVersion,
+    id: 'saved-file',
+    name: 'saved.md',
+    ephemeral: false,
+    canAutosave: true,
+  }
+  for (const report of [
+    null,
+    undefined,
+    [],
+    'saved',
+    { ...valid, revision: -1 },
+    { ...valid, contentVersion: -1 },
+    { ...valid, contentVersion: 0.5 },
+    { ...valid, contentVersion: Infinity },
+    { ...valid, contentVersion: before.contentVersion + 1 },
+    { ...valid, id: null },
+    { ...valid, name: {} },
+    { ...valid, ephemeral: 'false' },
+    { ...valid, canAutosave: 1 },
+    { ...valid, tabId: 'another-window-tab' },
+  ]) {
+    assert.doesNotThrow(() => acceptSaved(runtime, report))
+    assert.equal(runtime.get(), before)
+  }
   runtime.dispose()
 })
 

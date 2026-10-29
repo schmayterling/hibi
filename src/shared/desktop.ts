@@ -43,6 +43,7 @@ export const DOCUMENT_CHANNELS = {
   link: 'document:link',
   remote: 'document:remote',
   requestRemote: 'document:request-remote',
+  saved: 'document:saved',
 } as const
 
 export type DocumentState = {
@@ -69,6 +70,17 @@ export type DocumentState = {
   /** True only after this document has a real local save destination. */
   canAutosave: boolean
 }
+/** A tab the save prompt saved: its saved source version and new file identity. */
+export type DocumentSaved = Pick<
+  DocumentState,
+  | 'tabId'
+  | 'revision'
+  | 'contentVersion'
+  | 'id'
+  | 'name'
+  | 'ephemeral'
+  | 'canAutosave'
+>
 export type DocumentTab = { id: string; name: string; dirty: boolean }
 export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
 export type DocumentSaveReceipt = DocumentFocus & {
@@ -601,6 +613,8 @@ export type DesktopApi = {
     errors: string[]
   }>
   onExternalDocuments: (callback: () => void) => () => void
+  /** Saves from close, quit and delete prompts, including ones a later prompt cancels. */
+  onDocumentSaved: (callback: (saved: DocumentSaved) => void) => () => void
   newDocument: () => Promise<DocumentState | null>
   saveDocument: (saveAs: boolean) => Promise<DocumentSaveReply | null>
   saveTargetDocument: (

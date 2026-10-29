@@ -838,23 +838,33 @@ test('failed-step reports and zero-build CLI publish metadata without glob error
   const notes = cli('notes').toString()
   assert.match(notes, /forced release/)
   assert.doesNotMatch(notes, /releases\/download/)
-  const bin = join(cwd, 'bin')
-  mkdirSync(bin)
-  writeFileSync(
-    join(bin, 'gh'),
-    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\nif [ "$2" = view ]; then exit 1; fi\n',
-    { mode: 0o755 },
+  // Stub the child Node process itself: Windows cannot execute a shell-script
+  // `gh`, and its PATH separator is not a colon.
+  const stub = `
+    import childProcess from 'node:child_process'
+    import { appendFileSync } from 'node:fs'
+    import { syncBuiltinESMExports } from 'node:module'
+    const execute = childProcess.execFileSync
+    childProcess.execFileSync = (command, args, ...options) => {
+      if (command !== 'gh') return execute(command, args, ...options)
+      appendFileSync(process.env.GH_CALLS, args.join(' ') + '\\n')
+      if (args[1] === 'view') throw new Error('fixture release does not exist')
+      return ''
+    }
+    syncBuiltinESMExports()
+  `
+  execFileSync(
+    process.execPath,
+    [
+      '--import',
+      `data:text/javascript,${encodeURIComponent(stub)}`,
+      script,
+      'publish',
+    ],
+    { cwd, env: { ...env, GH_CALLS: join(cwd, 'gh-calls') } },
   )
-  execFileSync(process.execPath, [script, 'publish'], {
-    cwd,
-    env: {
-      ...env,
-      PATH: `${bin}:${process.env.PATH}`,
-      GH_CALLS: join(cwd, 'gh-calls'),
-    },
-  })
   const calls = readFileSync(join(cwd, 'gh-calls'), 'utf8')
-  assert.match(calls, /installers\/SHA256SUMS.txt/)
+  assert.match(calls, /installers[\\/]SHA256SUMS\.txt/)
   assert.doesNotMatch(calls, /\*|\.exe|\.dmg|latest=true/)
   assert.ok(
     readFileSync(join(cwd, 'output'), 'utf8').includes('published=true'),

@@ -24,15 +24,17 @@ const event = (code = 'RENDERER_ERROR', extra = {}) =>
   JSON.stringify({ code, stackStatus: 'unavailable', ...extra })
 async function fixture(t, profile, options = {}) {
   const root = await fs.mkdtemp(join(tmpdir(), 'hibi-log-test-'))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
   const sink = new LocalDiagnosticSink({
     userData: root,
     profile,
     identity,
     ...options,
   })
+  t.after(async () => {
+    await sink.finish()
+    await fs.rm(root, { recursive: true, force: true })
+  })
   await sink.ready
-  t.after(() => sink.finish())
   return { root, sink, directory: join(root, 'logs', profile) }
 }
 async function files(directory) {
@@ -107,6 +109,7 @@ for (const profile of ['release', 'debug']) {
   })
   test(`${profile}: immediate reports retain admitted incidents and refuse linked export targets`, async (t) => {
     const { root, sink } = await fixture(t, profile)
+    t.after(() => assert.equal(sink.status.state, 'closed'))
     sink.enqueue(event('RENDERER_ERROR'))
     assert.match(sink.report(), /RENDERER_ERROR/)
     assert.equal(sink.report().includes('SINK_READY'), profile === 'debug')

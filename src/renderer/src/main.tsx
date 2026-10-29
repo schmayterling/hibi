@@ -75,11 +75,7 @@ import { useAutosave } from './autosave'
 import { CommandPalette, type PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
 import { documentFormats, editorDocument } from './document-formats'
-import {
-  type DocumentSaveToken,
-  documentRuntime,
-  observeDocumentErrors,
-} from './document-runtime'
+import { documentRuntime, observeDocumentErrors } from './document-runtime'
 import {
   hasDocumentFootnotes,
   preferSourceOpening,
@@ -162,13 +158,6 @@ type SplitTabs = {
   active: PaneSide
   leftMode: ViewMode
   rightMode: ViewMode
-}
-
-function carryFlavorChoice(from: string, to: string) {
-  const choice = localStorage.getItem(`hibi:flavor:${from}`)
-  if (!choice) return
-  localStorage.setItem(`hibi:flavor:${to}`, choice)
-  workspaceSyntaxEvents.publish()
 }
 
 function App() {
@@ -470,13 +459,6 @@ function App() {
         return { ...current, [current.active]: next.tabId }
       })
       if (previous?.revision !== next.revision) setOutlineTarget(null)
-      if (
-        previous &&
-        previous.tabId === next.tabId &&
-        previous.id !== next.id &&
-        previous.revision === next.revision
-      )
-        carryFlavorChoice(previous.id, next.id)
       currentDocument.current = active
       shellDocument.current = active
       setDocument(active)
@@ -563,32 +545,6 @@ function App() {
       return
     focusEditor({ preventScroll: true })
   }, [busy, DocumentEditor, splitTabs?.active])
-  const acknowledgeSave = useCallback(
-    (
-      saved: import('../../shared/desktop').DocumentSaveReply,
-      token: DocumentSaveToken,
-      expectedId?: string,
-    ) => {
-      const previous = documentRuntime.get(saved.tabId)
-      const acknowledged = documentRuntime.acknowledgeSave(
-        saved,
-        token,
-        expectedId,
-      )
-      if (!acknowledged) return
-      if (
-        previous &&
-        previous.id !== acknowledged.id &&
-        previous.revision === acknowledged.revision
-      )
-        carryFlavorChoice(previous.id, acknowledged.id)
-      if (documentRuntime.get()?.tabId !== saved.tabId) return
-      currentDocument.current = acknowledged
-      shellDocument.current = acknowledged
-      setDocument(acknowledged)
-    },
-    [],
-  )
   const autosaveStatus = useAutosave(document, busy)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('default-view')
@@ -1458,7 +1414,8 @@ function App() {
             : window.hibi.saveDocument(command === 'saveAs'))
         if (saving) saveCancellation.current.canceled = !next
         if (next) {
-          if (saving && token) acknowledgeSave(next, token, expectedId)
+          if (saving && token)
+            documentRuntime.acknowledgeSave(next, token, expectedId)
           else if (!('saveReceipt' in next))
             await acceptOperationDocument(
               next,
@@ -1493,7 +1450,7 @@ function App() {
           })
       }
     },
-    [dialogs, acknowledgeSave, setError, refreshWorkspaceView],
+    [dialogs, setError, refreshWorkspaceView],
   )
 
   const runCommand = useCallback(

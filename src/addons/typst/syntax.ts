@@ -1,32 +1,20 @@
 import { Marked, type MarkedExtension } from 'marked'
+import { fencedBlock } from '../_shared/fenced-block.ts'
 import type { MarkdownFlavor } from '../api'
 
-export function typstBlock(source: string) {
-  const start = /^( {0,3})(`{3,}|~{3,})typst[ \t]*\r?\n/i.exec(source)
-  if (!start) return
-  const fence = start[2]!
-  const close = new RegExp(
-    `^ {0,3}${fence[0]}{${fence.length},}[ \\t]*(?:\\r?\\n|$)`,
-    'm',
-  ).exec(source.slice(start[0].length))
-  if (!close) return
-  const raw = source.slice(0, start[0].length + close.index + close[0].length)
-  let code = source
-    .slice(start[0].length, start[0].length + close.index)
-    .replace(/\r?\n$/, '')
-  if (start[1])
-    code = code
-      .split('\n')
-      .map((line) =>
-        line.startsWith(start[1]!) ? line.slice(start[1]!.length) : line,
-      )
-      .join('\n')
-  return { type: 'typstBlock', raw, source: code }
-}
+export const typstBlock = fencedBlock('typst', 'typstBlock', true)
+// Keep native code tokens: Marked uses their type to end lazy quote continuations.
 export const typstTokens: MarkedExtension = {
-  extensions: [{ name: 'typstBlock', level: 'block', tokenizer: typstBlock }],
+  renderer: {
+    code(token) {
+      const block = typstBlock(token.raw)
+      return block
+        ? `<pre data-typst="${encodeURIComponent(token.text)}"></pre>`
+        : false
+    },
+  },
 }
-export const detector = new Marked(typstTokens)
+export const detector = new Marked()
 export const typstFlavor: MarkdownFlavor = {
   id: 'blocks',
   name: 'Typst blocks',
@@ -37,7 +25,7 @@ export const typstFlavor: MarkdownFlavor = {
     if (!/(?:`{3}|~{3})typst/i.test(source)) return false
     let found = false
     detector.walkTokens(detector.lexer(source), (token) => {
-      found ||= token.type === 'typstBlock'
+      found ||= token.type === 'code' && !!typstBlock(token.raw)
     })
     return found
   },

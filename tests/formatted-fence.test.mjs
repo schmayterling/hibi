@@ -5,7 +5,6 @@ import { TreeFragment } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { Marked } from 'marked'
 import {
-  dedentedFenceText,
   fenceBodyChanges,
   fencedView,
   fenceWork,
@@ -13,7 +12,7 @@ import {
   RenderedBlocks,
   readFence,
 } from '../src/addons/_shared/formatted-fence.ts'
-import { typstTokens } from '../src/addons/typst/syntax.ts'
+import { typstBlock, typstTokens } from '../src/addons/typst/syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 
 const markdown = parser.configure(GFM)
@@ -45,12 +44,12 @@ function markedDiagrams(source) {
   return found
 }
 
-/** The rich view's Typst blocks: the Typst tokenizer's tokens. */
+/** The rich view's Typst blocks: closed native code tokens of that language. */
 function markedTypst(source) {
   const marked = new Marked(typstTokens)
   const found = []
   marked.walkTokens(marked.lexer(source), (token) => {
-    if (token.type === 'typstBlock') found.push(token.source)
+    if (token.type === 'code' && typstBlock(token.raw)) found.push(token.text)
   })
   return found
 }
@@ -116,7 +115,7 @@ test('formatted fences read diagram and typst bodies as the rich view does', () 
         )
         const typst = `intro\n\n${wrap('typst', body)}${ending}`
         assert.deepEqual(
-          fences(typst, 'typst', dedentedFenceText).map(({ text }) => text),
+          fences(typst, 'typst', markedFenceText).map(({ text }) => text),
           markedTypst(typst),
           JSON.stringify(typst),
         )
@@ -141,7 +140,7 @@ test('editing a fence writes its body as one change and keeps the fence around i
   ]
   for (const [language, read, indented] of [
     ['mermaid', markedDiagrams, (fence) => fence.marker.startsWith('`')],
-    ['typst', markedTypst, () => true],
+    ['typst', markedTypst, (fence) => fence.marker.startsWith('`')],
   ])
     for (const wrap of wrappers)
       for (const source of sources) {
@@ -165,11 +164,7 @@ test('editing a fence writes its body as one change and keeps the fence around i
         // Both the rich view's reading and the formatted view's read the new source.
         assert.deepEqual(read(text), [source], JSON.stringify({ before, text }))
         assert.deepEqual(
-          fences(
-            text,
-            language,
-            language === 'typst' ? dedentedFenceText : markedFenceText,
-          ).map(({ text }) => text),
+          fences(text, language, markedFenceText).map(({ text }) => text),
           [source],
           JSON.stringify({ before, text }),
         )
@@ -342,4 +337,78 @@ test('fences of other languages are not read', () => {
     })
   }
   assert.equal(fenceWork.lines, 0)
+})
+
+test('an edit dialog follows a cached fence when its source visibility changes', async () => {
+  for (const [revealed, changed] of [
+    [false, false],
+    [true, false],
+    [false, true],
+  ]) {
+    const source = '```typst\nold\n```\n\ntail'
+    let state = EditorState.create({ doc: source })
+    const node = markdown.parse(source).topNode.firstChild
+    let answer
+    const renderer = fencedView({
+      id: 'typst',
+      className: 'typst-block',
+      matches: (info) => info === 'typst',
+      source: markedFenceText,
+      indented: ({ marker }) => marker.startsWith('`'),
+      mount: () => ({ update() {}, dispose() {} }),
+      settled: () => true,
+      ask: () =>
+        new Promise((resolve) => {
+          answer = resolve
+        }),
+      blocks: new RenderedBlocks(1),
+    })
+    const widget = (shown) => {
+      let result
+      renderer.layout(
+        { node, from: node.from, to: node.to },
+        {
+          replace: (_from, _to, value) => {
+            result = value
+          },
+          widget: (_at, value) => {
+            result = value
+          },
+        },
+        { state, revealed: shown },
+      )
+      return result
+    }
+    let at = revealed ? node.to : node.from
+    const view = {
+      get state() {
+        return state
+      },
+      posAtDOM: () => at,
+      dispatch: (spec) => {
+        state = state.update(spec).state
+      },
+      focus() {},
+    }
+    const original = widget(revealed)
+    const entry = {
+      owner: { view, widget: original },
+      dom: { isConnected: true },
+    }
+    const editing = original.edit(entry)
+    entry.owner.widget = widget(!revealed)
+    at = revealed ? node.from : node.to
+    if (changed) {
+      const from = source.indexOf('old')
+      state = state.update({
+        changes: { from, to: from + 3, insert: 'own' },
+      }).state
+    }
+    answer('new')
+    await editing
+    assert.equal(
+      state.doc.toString(),
+      source.replace('old', changed ? 'own' : 'new'),
+    )
+  }
 })

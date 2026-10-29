@@ -555,7 +555,8 @@ function App() {
     busyRef.current = focusUnsafe.current
     setBusy(focusUnsafe.current)
   }
-  useEffect(() => {
+  // Request focus before paint when a split pane becomes writable.
+  useLayoutEffect(() => {
     const side = focusSplitSide.current
     if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
     focusSplitSide.current = null

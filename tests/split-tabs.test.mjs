@@ -337,10 +337,16 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     document.addEventListener(
       'keydown',
       (event) => {
-        if (event.key === 'Z')
+        if (event.key === 'Z') {
           window.splitKeyBusy = document
             .querySelector('.app')
             ?.getAttribute('aria-busy')
+          window.splitKeyState = {
+            target: event.target.tagName,
+            active: document.activeElement?.tagName,
+            editable: event.target.isContentEditable,
+          }
+        }
       },
       true,
     )
@@ -357,9 +363,10 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   )
   const typed = (await right.innerText()).split('Z').length - 1
   const busy = await page.evaluate(() => window.splitKeyBusy)
+  const keyState = await page.evaluate(() => window.splitKeyState)
   assert.ok(
     typed === 1 || (typed === 0 && busy === 'true'),
-    `An immediate keypress must be inserted once or visibly blocked during focus (typed ${typed}, busy ${busy}).`,
+    `An immediate keypress must be inserted once or visibly blocked during focus (typed ${typed}, busy ${busy}, key ${JSON.stringify(keyState)}).`,
   )
   assert.doesNotMatch(await left.innerText(), /Z/)
   await app.evaluate(

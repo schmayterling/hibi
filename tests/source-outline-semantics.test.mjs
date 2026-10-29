@@ -77,12 +77,36 @@ function nativeHeadings(source, activeFlavors = flavors) {
   )
   const headings = []
   document.descendants((node) => {
-    if (node.type.name === 'heading')
-      headings.push({
-        label:
-          node.textContent.replace(/\s+/g, ' ').trim() || 'Untitled heading',
-        level: Number(node.attrs.level),
-      })
+    if (node.type.name !== 'heading') return
+    // Inline formulas read as their LaTeX, and stay apart in the label parts.
+    const parts = []
+    node.forEach((child) => {
+      if (child.type.name === 'inlineMath')
+        parts.push({ latex: child.attrs.latex })
+      else if (typeof parts.at(-1) === 'string')
+        parts[parts.length - 1] += child.textContent
+      else parts.push(child.textContent)
+    })
+    const label = parts
+      .map((part) => (typeof part === 'string' ? part : part.latex))
+      .join('')
+    const math = parts.some((part) => typeof part !== 'string')
+    headings.push({
+      label: label.replace(/\s+/g, ' ').trim() || 'Untitled heading',
+      level: Number(node.attrs.level),
+      ...(math && {
+        parts: parts
+          .map((part, index) =>
+            typeof part !== 'string'
+              ? part
+              : part
+                  .replace(/\s+/g, ' ')
+                  .replace(index === 0 ? /^ / : /(?!)/, '')
+                  .replace(index === parts.length - 1 ? / $/ : /(?!)/, ''),
+          )
+          .filter((part) => part !== ''),
+      }),
+    })
   })
   return headings
 }
@@ -151,7 +175,11 @@ function check(source, options) {
   try {
     const actual = finish(model.read(), referenceOracle(source))
     assert.deepEqual(
-      actual.map(({ label, level }) => ({ label, level })),
+      actual.map(({ label, level, parts }) => ({
+        label,
+        level,
+        ...(parts && { parts }),
+      })),
       nativeHeadings(source, activeFlavors),
       source,
     )
@@ -368,6 +396,54 @@ test('source outline labels preserve native inline math atoms', () => {
   check('# before $x^2$ after and **$y$**', { math: true })
 })
 
+test('source and rich outline labels keep heading formulas as their LaTeX and as parts', () => {
+  const [taylor, whole, spaced] = check(
+    '# If $f(x,y)\\in C^{k+1}$ at each point\n\n## $P_{k,(a,b)}(x,y) + R_{k,(a,b)}(x,y)$\n\n###   a  $\\bar x$  b  \n',
+    { math: true },
+  )
+  assert.deepEqual(taylor, {
+    ...taylor,
+    label: 'If f(x,y)\\in C^{k+1} at each point',
+    parts: ['If ', { latex: 'f(x,y)\\in C^{k+1}' }, ' at each point'],
+  })
+  assert.deepEqual(whole.parts, [
+    { latex: 'P_{k,(a,b)}(x,y) + R_{k,(a,b)}(x,y)' },
+  ])
+  assert.deepEqual(spaced.parts, ['a ', { latex: '\\bar x' }, ' b'])
+  check('# H~$x$~O and ~~$y$~~', { math: true })
+  // Without the math syntax, dollars are text and no parts are kept.
+  const [plain] = check('# If $f(x)$ holds')
+  assert.equal(plain.label, 'If $f(x)$ holds')
+  assert.equal(plain.parts, undefined)
+})
+
+test('large math outlines retain label parts and reuse them across body edits', () => {
+  const count = 1200
+  const source = Array.from(
+    { length: count },
+    (_, index) => `## Heading ${index} $x_{${index}}$\n\nbody ${index}\n\n`,
+  ).join('')
+  const { store, model } = setup(source, { math: true })
+  try {
+    const before = finish(model.read(), referenceOracle(source))
+    assert.equal(before.length, count)
+    assert.deepEqual(before.at(-1).parts, [
+      'Heading 1199 ',
+      { latex: 'x_{1199}' },
+    ])
+    model.counters(true)
+    const from = source.indexOf('body 600')
+    edit(store, model, [{ from, to: from + 1, insert: 'B' }])
+    const after = finish(model.read(), referenceOracle(source))
+    assert.equal(after, before)
+    assert.equal(model.counters().labelsRead, 0)
+    assert.ok(model.counters().indexVisits < 100)
+    assert.equal(store.counters().materializations, 0)
+  } finally {
+    model.dispose()
+  }
+})
+
 test('deferred labels preserve complete native formatting, references, math and disabled syntax', () => {
   const padding = 'heading '.repeat(90)
   const fixtures = [
@@ -428,7 +504,11 @@ test('deferred labels preserve complete native formatting, references, math and 
         )
         assert.ok(requests > 0)
         assert.deepEqual(
-          actual.map(({ label, level }) => ({ label, level })),
+          actual.map(({ label, level, parts }) => ({
+            label,
+            level,
+            ...(parts && { parts }),
+          })),
           nativeHeadings(source, activeFlavors),
         )
       } finally {

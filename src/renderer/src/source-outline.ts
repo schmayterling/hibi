@@ -30,6 +30,7 @@ import { SourceOwners } from '../../shared/source-owners.ts'
 import { SourceParserSession } from '../../shared/source-parser.ts'
 import { normalizedSource } from '../../shared/source-projection.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
+import { type OutlineLabelPart, outlineLabel } from './outline-label.ts'
 import {
   outlineMathParser,
   validateOutlineMathCandidate,
@@ -38,6 +39,7 @@ import {
 export type SourceOutlineHeading = Readonly<{
   id: string
   label: string
+  parts?: readonly OutlineLabelPart[]
   level: number
 }>
 export type SourceOutline = Readonly<{
@@ -53,6 +55,7 @@ export type SourceOutlineLabelRequest = {
 }
 export type SourceOutlineLabelResult = {
   label: string | null
+  parts?: readonly OutlineLabelPart[]
   references: string[]
   missing: string[]
 }
@@ -61,6 +64,11 @@ export type SourceOutlineInput =
   | SourceOutlineLabelResult
   | null
   | undefined
+
+type LabelRenderer = (
+  tokens: readonly Token[],
+  level: number,
+) => string | readonly OutlineLabelPart[] | null
 
 type Owned = { addonId?: string }
 type LegacyExtension = {
@@ -150,7 +158,7 @@ export function sourceOutlineGrammar(
 export function readSourceOutlineLabel(
   request: SourceOutlineLabelRequest,
   parser: ReturnType<typeof markdownSourceParser>,
-  render: (tokens: readonly Token[], level: number) => string | null,
+  render: LabelRenderer,
 ): SourceOutlineLabelResult {
   const references = request.references,
     used = new Set<string>(),
@@ -165,8 +173,11 @@ export function readSourceOutlineLabel(
     },
   })
   const tokens = lexer.inlineTokens(request.text)
+  const rendered = missing.size ? null : render(tokens, request.level)
   return {
-    label: missing.size ? null : render(tokens, request.level),
+    label: null,
+    ...(rendered !== null &&
+      outlineLabel(typeof rendered === 'string' ? [rendered] : rendered)),
     references: [...used],
     missing: [...missing],
   }
@@ -219,10 +230,7 @@ export class SourceOutlineModel {
   readonly #disabled: ReadonlySet<string>
   readonly #labels: ReturnType<typeof markdownSourceParser>
   readonly #deferLabels: boolean
-  readonly #renderLabel: (
-    tokens: readonly Token[],
-    level: number,
-  ) => string | null
+  readonly #renderLabel: LabelRenderer
   #frontmatterRead: FrontmatterRead | null = null
   #contentFrom = 0
   #epoch = 0
@@ -249,7 +257,7 @@ export class SourceOutlineModel {
       textExtras?: boolean
       math?: boolean
       deferLabels?: boolean
-      renderLabel?: (tokens: readonly Token[], level: number) => string | null
+      renderLabel?: LabelRenderer
       /** Addon Lezer syntax, so blocks it adds hide the `#` lines they contain. */
       syntax?: readonly MarkdownConfig[]
     },
@@ -438,7 +446,7 @@ export class SourceOutlineModel {
           const text = headingText(source, cursor.node),
             used = new Set<string>(),
             level = Number(heading[1])
-          let label: string | null
+          let label: string | null, parts: SourceOutlineHeading['parts']
           for (;;) {
             const request = { text, level, references },
               result =
@@ -453,6 +461,7 @@ export class SourceOutlineModel {
             for (const reference of result.references) used.add(reference)
             if (!result.missing.length) {
               label = result.label
+              parts = result.parts
               break
             }
             for (const reference of result.missing) {
@@ -470,6 +479,7 @@ export class SourceOutlineModel {
             heading: Object.freeze({
               id: `source:${this.#nextId++}`,
               label: label.replace(/\s+/g, ' ').trim() || 'Untitled heading',
+              ...(parts && { parts }),
               level,
             }),
             references: [...used],

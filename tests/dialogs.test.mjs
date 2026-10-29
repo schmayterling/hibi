@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test, { after, before } from 'node:test'
+import test from 'node:test'
 import { build } from 'vite'
-import { electron } from './electron.mjs'
+import { after, before, electron } from './electron.mjs'
 import { checkTooltips } from './tooltips.mjs'
 
 let app, folder, page

@@ -314,6 +314,22 @@ test('codemirror: revealed markers are ordinary editable source', {
     assert.equal(await rich.locator('.hibi-lp-task').isChecked(), true)
   })
   await t.test(
+    'a revealed task keeps its focused checkbox for the keyboard',
+    async () => {
+      await source(rich, '- [ ] buy milk\n- [x] done', 9)
+      assert.ok((await rich.textContent()).startsWith('- [ ] buy milk'))
+      await rich.locator('.hibi-lp-task').first().focus()
+      await page.evaluate(() => new Promise(requestAnimationFrame))
+      assert.ok(
+        await page.evaluate(() =>
+          document.activeElement?.classList.contains('hibi-lp-task'),
+        ),
+      )
+      await page.keyboard.press('Space')
+      assert.equal((await state(rich)).doc, '- [x] buy milk\n- [x] done')
+    },
+  )
+  await t.test(
     'a table cell edits revealed delimiters character by character',
     async () => {
       const doc = '| head | other |\n| --- | --- |\n| **word** | plain |'

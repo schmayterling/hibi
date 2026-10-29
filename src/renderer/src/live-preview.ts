@@ -1805,7 +1805,16 @@ const sameRanges = (a: readonly Revealed[], b: readonly Revealed[]) =>
 
 /** Ranges whose markers show: the selection while the focused editor shows markers. */
 function revealed(view: EditorView, tree: Tree): readonly Revealed[] {
-  if (!view.hasFocus || !view.state.facet(showMarkdownMarkers)) return []
+  // A control in the text, such as a task's checkbox, keeps what shows:
+  // drawn again without its source, it would lose the focus.
+  const active = view.root.activeElement
+  const control =
+    active instanceof HTMLElement &&
+    !active.isContentEditable &&
+    view.contentDOM.contains(active) &&
+    view.dom.ownerDocument.hasFocus()
+  if (!(view.hasFocus || control) || !view.state.facet(showMarkdownMarkers))
+    return []
   return inBlocks(view.state, tree)
 }
 
@@ -2461,8 +2470,8 @@ export function livePreview(
         !!first &&
         first.doc === view.state.doc &&
         pressedWidget.get(view) === null &&
-        Math.abs(press.clientX - first.x) < 2 &&
-        Math.abs(press.clientY - first.y) < 2
+        Math.abs(press.clientX - first.x) < 5 &&
+        Math.abs(press.clientY - first.y) < 5
       if (
         first &&
         event.detail === 2 &&

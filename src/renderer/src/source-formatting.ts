@@ -37,11 +37,13 @@ import {
   formattedSyntaxTree,
 } from './formatted-contributions.ts'
 import {
+  atomBlockAt,
   insertAfterBlock,
   selectBlock,
   selectedBlock,
 } from './formatted-text-end.ts'
 import {
+  blockAt,
   caretMarks,
   formattedStates,
   formattingAt,
@@ -866,13 +868,27 @@ export function sourceFormatting(
     (media && id === 'image') ||
     format === 'markdown' ||
     !!format?.actions.includes(id)
-  const applyEdit = (edit: DocumentEdit) => {
+  const applyEdit = (edit: DocumentEdit, keepBlock = false) => {
     if (!validEdit(edit, view.state.doc.length)) return false
     const start = edit.selection?.from ?? edit.insert.length,
       end = edit.selection?.to ?? start
+    const changes = { from: edit.from, to: edit.to, insert: edit.insert }
+    const block =
+      keepBlock &&
+      atomBlockAt(
+        view.state.update({ changes }).state,
+        edit.from + edit.insert.length,
+      )
     view.dispatch({
-      changes: { from: edit.from, to: edit.to, insert: edit.insert },
-      selection: EditorSelection.single(edit.from + start, edit.from + end),
+      changes,
+      ...(block && block.from >= edit.from
+        ? selectBlock(block.from, block.to)
+        : {
+            selection: EditorSelection.single(
+              edit.from + start,
+              edit.from + end,
+            ),
+          }),
       annotations: [
         Transaction.userEvent.of('input.format'),
         isolateHistory.of('full'),
@@ -1021,6 +1037,19 @@ export function sourceFormatting(
     // As over the rich editor's node selection, a block selected whole
     // takes a divider after it, and stays selected in its quote.
     const held = tree && selectedBlock(view.state)
+    if (
+      held &&
+      (['indent', 'outdent', 'hard-break', 'unlink'].includes(id) ||
+        (id === 'table' &&
+          blockAt(tree, held.from, []).node?.parent?.name === 'Document') ||
+        (['bullet-list', 'numbered-list', 'checklist'].includes(id) &&
+          formattedStates(view.state, tree, range).pressed(id)) ||
+        (id === 'divider' &&
+          blockAt(tree, held.from, []).node?.parent?.name === 'ListItem'))
+    ) {
+      view.focus()
+      return true
+    }
     if (held && id === 'divider') {
       view.dispatch({
         ...insertAfterBlock(view.state, tree, held, true),
@@ -1040,14 +1069,8 @@ export function sourceFormatting(
         listAction(view.state, tree, id) ??
         (id === 'quote' ? quoteAction(view.state, tree) : null))
     if (block) {
-      // A quote adds its marks at line starts: the block's ends keep their
-      // distance from their lines' ends.
-      const after = held && view.state.changes(block.changes).apply(doc)
-      const kept = (at: number) =>
-        after!.line(doc.lineAt(at).number).to - (doc.lineAt(at).to - at)
       view.dispatch({
         ...preserveActionSelection(view.state, tree!, block),
-        ...(held && selectBlock(kept(held.from), kept(held.to))),
         annotations: [
           Transaction.userEvent.of('input.format'),
           isolateHistory.of('full'),
@@ -1306,13 +1329,14 @@ export function sourceFormatting(
           position == null
             ? view.state.selection
             : EditorSelection.single(position)
+      const block = !coords && !!selectedBlock(view.state)
       return {
         text: view.state.sliceDoc(selection.main.from, selection.main.to),
         insertMarkdown(insert: string) {
           if (!view.dom.isConnected || view.state.doc !== doc || !editable())
             return false
           const { from, to } = selection.main
-          return applyEdit({ from, to, insert })
+          return applyEdit({ from, to, insert }, block)
         },
         insertMedia(items: readonly MediaAttachment[]) {
           if (

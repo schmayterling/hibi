@@ -581,12 +581,30 @@ export function formattedStates(
     !!actionNodes[id] && literal.includes(actionNodes[id])
   // A block selected whole, as the rich editor's node selection, takes a
   // quote around it, a divider after it or an image in its place.
-  if (blockSelected(state, range.from, range.to))
+  if (blockSelected(state, range.from, range.to)) {
+    const node = blockAt(tree, range.from, literal).node
+    const item = node?.parent?.name === 'ListItem' ? node.parent : null
     return {
-      pressed: () => false,
+      pressed: (id: string) =>
+        !!item && !unsupported(id) && id === listOf(item),
       disabled: (id: string) =>
-        unsupported(id) || !['quote', 'divider', 'image'].includes(id),
+        unsupported(id) ||
+        !(
+          [
+            'quote',
+            'divider',
+            'image',
+            'hard-break',
+            'unlink',
+            'table',
+          ].includes(id) ||
+          (item &&
+            (lists.includes(id) ||
+              id === 'outdent' ||
+              (id === 'indent' && !!item.prevSibling)))
+        ),
     }
+  }
   // The blocks at the selection's ends, as the rich editor ranges blocks.
   const first = blockAt(tree, range.from, literal)
   const last = range.empty ? first : blockAt(tree, range.to, literal, -1)

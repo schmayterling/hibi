@@ -20,6 +20,7 @@ export const actions = [
   { id: 'save', label: 'Save document', category: 'file', key: 's' },
   { id: 'import', label: 'Import into workspace…', category: 'file', key: '' },
   { id: 'saveAs', label: 'Save as…', category: 'file', key: 'shift+s' },
+  { id: 'export-pdf', label: 'Export as PDF…', category: 'file', key: '' },
   { id: 'history', label: 'Version history', category: 'file', key: '' },
   { id: 'find', label: 'Find in document', category: 'edit', key: 'f' },
   { id: 'settings', label: 'Open settings', category: 'preferences', key: ',' },

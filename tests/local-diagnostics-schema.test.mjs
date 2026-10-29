@@ -55,6 +55,47 @@ const encode = (extra = {}) =>
   })
 
 for (const profile of ['release', 'debug']) {
+  test(`${profile}: startup resources contain only bounded host-owned artifact metadata`, () => {
+    const record = encode({
+      code: 'ASSET_PENDING',
+      moduleId: 100,
+      elapsedMs: 2000,
+      statusCode: 200,
+    })
+    assert.equal(decodeDiagnostic(record, profile)?.moduleId, 100)
+    assert.equal(decodeDiagnostic(record, profile, true), null)
+    for (const extra of [
+      { moduleId: 0 },
+      { moduleId: 4097 },
+      { moduleId: secret },
+      { elapsedMs: -1 },
+      { elapsedMs: 3_600_001 },
+      { elapsedMs: secret },
+      { statusCode: 99 },
+      { statusCode: 600 },
+      { url: secret },
+    ])
+      assert.equal(
+        decodeDiagnostic(encode({ code: 'ASSET_PENDING', ...extra }), profile),
+        null,
+      )
+    assert.equal(decodeDiagnostic(encode({ moduleId: 100 }), profile), null)
+    for (const code of [
+      'RENDERER_PRE_ENTRY',
+      'RENDERER_STARTUP_FAILED',
+      'BACKGROUND_STARTUP_FAILED',
+    ]) {
+      assert.equal(
+        decodeDiagnostic(encode({ code }), profile, true)?.code,
+        code,
+      )
+    }
+    assert.equal(
+      decodeDiagnostic(encode({ code: 'SQLITE_CLOSE_WAITING' }), profile, true),
+      null,
+    )
+  })
+
   test(`${profile}: main-loop stall records use bounded host-only duration buckets`, () => {
     for (const durationBucket of ['1-5s', '5-15s', '15-60s', '60s+']) {
       const wire = encode({

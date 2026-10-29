@@ -27,6 +27,7 @@ let activeStop: (() => void) | null = null
 
 export function installRendererDiagnostics(
   bridge: Bridge | undefined,
+  observeStartup = false,
 ): () => void {
   try {
     activeStop?.()
@@ -132,7 +133,10 @@ export function installRendererDiagnostics(
         // Intrinsic DOM getters reject spoofed objects; never read event targets,
         // error messages, component names, document state or console arguments.
         report(
-          'RENDERER_ERROR',
+          observeStartup &&
+            !performance.getEntriesByName('hibi:renderer-entry').length
+            ? 'RENDERER_STARTUP_FAILED'
+            : 'RENDERER_ERROR',
           errorProperty?.call(event),
           undefined,
           undefined,
@@ -150,7 +154,13 @@ export function installRendererDiagnostics(
     }
     const onRejection = (event: PromiseRejectionEvent) => {
       try {
-        report('RENDERER_REJECTION', reason?.call(event))
+        report(
+          observeStartup &&
+            !performance.getEntriesByName('hibi:renderer-entry').length
+            ? 'RENDERER_STARTUP_FAILED'
+            : 'RENDERER_REJECTION',
+          reason?.call(event),
+        )
       } catch {
         /* No rejection policy change. */
       }

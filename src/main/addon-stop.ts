@@ -5,6 +5,11 @@ export async function stopNativeAddon(
   native: Pick<NativeAddon, 'id' | 'stop'>,
 ) {
   if (!native.stop) return
+  // This built-in owns a durable SQLite worker. A timeout cannot abandon it.
+  if (native.id === 'dictionary') {
+    await native.stop()
+    return
+  }
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([

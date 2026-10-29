@@ -53,6 +53,54 @@ test('native cleanup is awaited, bounded, and late rejection stays handled', asy
   assert.equal(timers.size, 0)
 })
 
+test('a failed storage close prevents quit and permits a later retry', async (t) => {
+  const index = await readFile(
+    new URL('../src/main/index.ts', import.meta.url),
+    'utf8',
+  )
+  const source = index.slice(
+    index.indexOf('let nativeStopping:'),
+    index.indexOf('const openOwnedAddonWindow'),
+  )
+  let handler,
+    attempts = 0,
+    quits = 0
+  t.mock.method(console, 'error', () => {})
+  const event = { preventDefault() {} }
+  const app = {
+    on(_name, listener) {
+      handler = listener
+    },
+    quit() {
+      quits++
+      handler(event)
+    },
+  }
+  const pending = new Function(
+    'app',
+    'stopNativeAddons',
+    'globalShortcuts',
+    'background',
+    stripTypeScriptTypes(source) + '; return () => nativeStopping;',
+  )(
+    app,
+    async () => {
+      if (++attempts === 1) throw new Error('storage still open')
+    },
+    { clear() {} },
+    { dispose() {} },
+  )
+  handler(event)
+  await pending()
+  await new Promise(setImmediate)
+  assert.equal(quits, 0)
+  handler(event)
+  await pending()
+  await new Promise(setImmediate)
+  assert.equal(attempts, 2)
+  assert.equal(quits, 1)
+})
+
 test('quit resumes after a never-resolving native stop reaches its deadline', async (t) => {
   const index = await readFile(
     new URL('../src/main/index.ts', import.meta.url),
@@ -117,6 +165,7 @@ test('quit resumes after a never-resolving native stop reaches its deadline', as
   assert.equal(prevented, 1)
   timer()
   await pending()
+  await new Promise(setImmediate)
   assert.equal(quit, 1)
   assert.equal(cleaned, 2)
 })

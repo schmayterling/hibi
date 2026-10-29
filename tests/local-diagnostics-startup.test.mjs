@@ -1,0 +1,328 @@
+import assert from 'node:assert/strict'
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import test from 'node:test'
+import {
+  electron,
+  startupDiagnostics,
+  waitForDocumentEditor,
+  waitForElectronShutdown,
+} from './electron.mjs'
+import { waitForAsync } from './poll.mjs'
+
+async function records(profile) {
+  const directory = join(profile, 'logs/debug')
+  return (
+    await Promise.all(
+      (
+        await readdir(directory)
+      )
+        .filter((name) => /^segment-\d\.log$/.test(name))
+        .map((name) => readFile(join(directory, name), 'utf8')),
+    )
+  )
+    .join('\n')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+}
+
+async function profile() {
+  await mkdir('.scratch', { recursive: true })
+  return mkdtemp(resolve('.scratch/startup-'))
+}
+
+test('pre-entry import failure retains navigation, resource and original error evidence locally', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await profile()
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  const page = await app.firstWindow()
+  t.after(async () => {
+    // The injected immutable asset may remain in Chromium's code cache.
+    // This fixture has no edits; retire its broken renderer explicitly.
+    const closed = waitForElectronShutdown(
+      app.process(),
+      app.waitForEvent('close'),
+    )
+    await app.evaluate(({ app, BrowserWindow }) => {
+      for (const window of BrowserWindow.getAllWindows()) window.destroy()
+      app.quit()
+    })
+    await closed
+  })
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ app, protocol, net }) => {
+    const fs = process.getBuiltinModule('node:fs/promises')
+    const path = process.getBuiltinModule('node:path')
+    const { pathToFileURL } = process.getBuiltinModule('node:url')
+    let injected = false
+    globalThis.preEntryFaults = 0
+    protocol.unhandle('app')
+    protocol.handle('app', async (request) => {
+      const pathname = new URL(request.url).pathname
+      const file = path.join(
+        app.getAppPath(),
+        'out/renderer',
+        pathname === '/' ? 'index.html' : pathname,
+      )
+      if (!injected && /\/main-[^/]+\.js$/.test(pathname)) {
+        injected = true
+        globalThis.preEntryFaults++
+        const source = await fs.readFile(file, 'utf8')
+        return new Response(
+          `throw new Error('PRIVATE_PRE_ENTRY');\n${source}`,
+          { headers: { 'Content-Type': 'text/javascript' } },
+        )
+      }
+      return net.fetch(pathToFileURL(file).href)
+    })
+  })
+  const session = await page.context().newCDPSession(page)
+  await session.send('Network.setCacheDisabled', { cacheDisabled: true })
+  await page.reload()
+  assert.equal(await app.evaluate(() => globalThis.preEntryFaults), 1)
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () =>
+      (await records(root)).some(
+        (row) => row.code === 'RENDERER_STARTUP_FAILED',
+      ),
+    undefined,
+    { timeout: 4000 },
+  )
+  const rows = await records(root)
+  assert.ok(rows.some((row) => row.code === 'RENDERER_PRE_ENTRY'))
+  const snapshot = await startupDiagnostics(app, page)
+  assert.ok(snapshot.navigation, JSON.stringify(snapshot))
+  assert.ok(snapshot.pageErrors.some((error) => error.stack?.includes('main-')))
+  assert.doesNotMatch(
+    JSON.stringify(rows),
+    /PRIVATE_PRE_ENTRY|startup-|\/Users\//,
+  )
+  assert.equal(
+    await page.evaluate(
+      () => performance.getEntriesByName('hibi:renderer-entry').length,
+    ),
+    0,
+  )
+})
+
+test('pending core asset records its catalog identity, status and elapsed time', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await profile()
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  const page = await app.firstWindow()
+  t.after(async () => {
+    await app.evaluate(() => globalThis.releaseStartupAsset?.())
+    await app.close()
+  })
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ net }) => {
+    const fetch = net.fetch.bind(net)
+    let held = false
+    net.fetch = async (...args) => {
+      if (!held && /\/main-[^/]+\.js$/.test(String(args[0]))) {
+        held = true
+        await new Promise((resolve) => {
+          globalThis.releaseStartupAsset = resolve
+        })
+      }
+      return fetch(...args)
+    }
+  })
+  const session = await page.context().newCDPSession(page)
+  await session.send('Network.setCacheDisabled', { cacheDisabled: true })
+  const catalog = JSON.parse(
+    await readFile('out/renderer/diagnostic-artifacts.json', 'utf8'),
+  )
+  const mainId = catalog.artifacts.find(([name]) => /\/main-/.test(name))?.[1]
+  assert.ok(mainId)
+  const loading = page.reload()
+  try {
+    await waitForAsync(
+      { evaluate: async (fn) => fn() },
+      async () =>
+        (await records(root)).some(
+          (row) => row.code === 'ASSET_PENDING' && row.moduleId === mainId,
+        ),
+      undefined,
+      { timeout: 5000 },
+    )
+    const snapshot = await startupDiagnostics(app, page)
+    assert.ok(snapshot.resources.pending.some((row) => /main-/.test(row.url)))
+  } finally {
+    await app.evaluate(() => globalThis.releaseStartupAsset?.())
+    await loading
+  }
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () =>
+      (await records(root)).some(
+        (row) => row.code === 'ASSET_COMPLETED' && row.moduleId === mainId,
+      ),
+    undefined,
+    { timeout: 4000 },
+  )
+  const record = (await records(root)).find(
+    (row) => row.code === 'ASSET_COMPLETED' && row.moduleId === mainId,
+  )
+  assert.equal(record.statusCode, 200)
+  assert.ok(record.elapsedMs >= 2000)
+  assert.equal(record.moduleId, mainId)
+})
+
+test('ordinary quit waits for overdue sqlite close, preserves its active marker, then reopens cleanly', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await profile()
+  await writeFile(
+    join(root, 'addons.json'),
+    JSON.stringify({ dictionary: true }),
+  )
+  let app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  let child = app.process()
+  t.after(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return
+    await app.evaluate(() => globalThis.releaseSqliteClose?.()).catch(() => {})
+    await app.close()
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() =>
+    window.hibi.queryAddon('dictionary', 'customWordsMetadata'),
+  )
+  await app.evaluate(() => {
+    const threads = process.getBuiltinModule('node:worker_threads')
+    const send = threads.Worker.prototype.postMessage
+    globalThis.sqliteCloseCalls = 0
+    threads.Worker.prototype.postMessage = function (message, ...args) {
+      if (message.method === 'close') {
+        globalThis.sqliteCloseCalls++
+        globalThis.releaseSqliteClose = () => send.call(this, message, ...args)
+        return
+      }
+      return send.call(this, message, ...args)
+    }
+  })
+  t.diagnostic(
+    'body complete; entering graceful cleanup with held sqlite close',
+  )
+  await app.evaluate(({ app }) => {
+    app.quit()
+  })
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () =>
+      (await records(root)).some((row) => row.code === 'SQLITE_CLOSE_WAITING'),
+    undefined,
+    { timeout: 5000 },
+  )
+  assert.equal(child.exitCode, null)
+  assert.equal(
+    JSON.parse(await readFile(join(root, 'logs/debug/run-state.txt'), 'utf8'))
+      .state,
+    'active',
+  )
+  assert.equal(
+    (await records(root)).some((row) => row.code === 'RUN_ENDED'),
+    false,
+  )
+  await app.evaluate(({ app }) => {
+    app.quit()
+    app.quit()
+  })
+  assert.equal(await app.evaluate(() => globalThis.sqliteCloseCalls), 1)
+  const closed = waitForElectronShutdown(child, app.waitForEvent('close'))
+  await app.evaluate(() => globalThis.releaseSqliteClose())
+  await closed
+  assert.equal(child.exitCode, 0)
+  assert.ok((await records(root)).some((row) => row.code === 'SQLITE_CLOSED'))
+  assert.equal(
+    JSON.parse(await readFile(join(root, 'logs/debug/run-state.txt'), 'utf8'))
+      .state,
+    'clean',
+  )
+  t.diagnostic('graceful cleanup complete; reopening same profile')
+  app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  child = app.process()
+  const reopened = await app.firstWindow()
+  await waitForDocumentEditor(app, reopened)
+  assert.equal(
+    (
+      await reopened.evaluate(() =>
+        window.hibi.queryAddon('dictionary', 'customWordsMetadata'),
+      )
+    ).count,
+    0,
+  )
+})
+
+test('background addon failure is recorded without addon identity or error content', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await profile()
+  const folder = join(root, 'installed-addons', 'private-startup')
+  await mkdir(folder, { recursive: true })
+  await writeFile(
+    join(folder, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'private-startup',
+      name: 'PRIVATE_ADDON',
+      description: 'Fixture.',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      defaultEnabled: true,
+      startup: 'background',
+      capabilities: [],
+      authors: [{ displayName: 'Test' }],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(folder, 'index.js'),
+    "export default () => ({ start() { window.backgroundFaultStarted = true; throw new Error('PRIVATE_BACKGROUND') } })",
+  )
+  await writeFile(
+    join(folder, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(root, 'addons.json'),
+    JSON.stringify({ 'private-startup': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  t.after(() => app.close())
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(() => window.backgroundFaultStarted === true)
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () =>
+      (await records(root)).some(
+        (row) => row.code === 'BACKGROUND_STARTUP_FAILED',
+      ),
+    undefined,
+    { timeout: 4000 },
+  )
+  assert.doesNotMatch(
+    JSON.stringify(await records(root)),
+    /PRIVATE_|private-startup/,
+  )
+})

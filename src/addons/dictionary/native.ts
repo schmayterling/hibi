@@ -34,13 +34,23 @@ async function wordStore() {
 }
 function stop() {
   generation++
-  closing = Promise.all([closing, current?.close(), words?.close()])
-    .then(() => {})
-    .catch((error) => console.error('could not close dictionary packs:', error))
-  current = undefined
-  words = undefined
+  const packs = current
+  const customWords = words
+  closing = Promise.all([
+    closing.catch(() => {}),
+    packs?.close(),
+    customWords?.close(),
+  ]).then(() => {
+    if (current === packs) current = undefined
+    if (words === customWords) words = undefined
+  })
+  return closing
 }
-app.on('before-quit', stop)
+app.on('before-quit', () => {
+  void stop().catch((error) =>
+    console.error('could not close dictionary packs:', error),
+  )
+})
 
 const wordQueries = {
   customWords: async (input: unknown) =>

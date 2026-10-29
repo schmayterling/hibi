@@ -664,12 +664,18 @@ let nativeStopped = false
 app.on('will-quit', (event) => {
   if (!nativeStopped) {
     event.preventDefault()
-    nativeStopping ??= stopNativeAddons()
-      .catch(console.error)
-      .finally(() => {
+    if (nativeStopping) return
+    nativeStopping = stopNativeAddons().then(
+      () => {
         nativeStopped = true
-        app.quit()
-      })
+        // Resume after Electron unwinds the prevented will-quit event.
+        setImmediate(() => app.quit())
+      },
+      (error: unknown) => {
+        nativeStopping = undefined
+        console.error('could not finish native shutdown:', error)
+      },
+    )
     return
   }
   globalShortcuts.clear()
@@ -851,7 +857,13 @@ async function readAfterFileOperation<T>(
   return read(window)
 }
 
-async function serveAsset(request: Request): Promise<Response> {
+function serveAsset(request: Request): Promise<Response> {
+  return localDiagnostics.observeAsset(request.url, () =>
+    serveAssetResponse(request),
+  )
+}
+
+async function serveAssetResponse(request: Request): Promise<Response> {
   if (request.method !== 'GET') return new Response(null, { status: 405 })
   try {
     const parsed = new URL(request.url)
@@ -2692,6 +2704,7 @@ if (!app.requestSingleInstanceLock()) {
       startUpdateChecks()
     })
     .catch((error: unknown) => {
+      localDiagnostics.report('MAIN_STARTUP_FAILED', error, { role: 'main' })
       console.error('startup failed:', error)
       showStartupError()
     })

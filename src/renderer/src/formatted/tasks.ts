@@ -153,7 +153,7 @@ export const contribution: FormattedContribution = {
     },
     {
       nodes: ['TaskMarker'],
-      decorate(node, out, { state }) {
+      decorate(node, out, { state, revealed }) {
         // A marker after the item's first block is text, as in GitHub.
         const task = node.node.parent
         const item = task?.parent
@@ -165,16 +165,16 @@ export const contribution: FormattedContribution = {
           return false
         const line = state.doc.lineAt(node.from)
         const rest = state.sliceDoc(node.to, line.to)
-        // The checkbox takes the marker and the space before the task's text.
+        // The hidden marker and following space become the checkbox.
         const space = rest.length - rest.replace(/^[ \t]+/, '').length
-        out.replace(
-          node.from,
-          node.to + space,
-          new TaskWidget(
-            /[xX]/.test(state.sliceDoc(node.from + 1, node.from + 2)),
-            taskText(state, task, node.to),
-          ),
+        const widget = new TaskWidget(
+          /[xX]/.test(state.sliceDoc(node.from + 1, node.from + 2)),
+          taskText(state, task, node.to),
         )
+        if (revealed) {
+          out.syntax(node.from, node.to + space)
+          out.widget(node.from, widget, -1)
+        } else out.replace(node.from, node.to + space, widget)
         return false
       },
     },

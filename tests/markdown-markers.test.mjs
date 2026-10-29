@@ -737,12 +737,19 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
           )
         }
         await page.locator('.editor-cursor').waitFor()
-        await page.evaluate(
-          () =>
-            new Promise((resolve) =>
-              requestAnimationFrame(() => requestAnimationFrame(resolve)),
-            ),
-        )
+        // The cursor overlay measures asynchronously, independently of the input event.
+        await waitForAsync(page, () => {
+          const caret = document.querySelector('.editor-cursor')
+          const mark = document.querySelector(
+            '.rich-pane :is(.hibi-lp-strong, .hibi-lp-code)',
+          )
+          return (
+            !!caret &&
+            !!mark &&
+            caret.getBoundingClientRect().left >=
+              mark.getBoundingClientRect().right - 0.5
+          )
+        })
         const geometry = await page.evaluate(() => {
           const caret = document
             .querySelector('.editor-cursor')
@@ -769,7 +776,7 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
   }
   await replaceSourceText(page, rich, 'hello $\\dfrac{1}{\\dfrac{1}{2}}$')
   await markerSelection(rich, 0)
-  await page.locator('.rich-pane .katex').waitFor()
+  await page.locator('.rich-pane .katex').waitFor({ timeout: 30000 })
   await rich.press('End')
   await page.evaluate(
     () =>
@@ -900,7 +907,10 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
     .click()
   assert.equal(await paragraph.locator('.hibi-lp-marker').count(), 0)
   await rich.locator('.hibi-lp-codeblock').first().click()
-  assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
+  assert.deepEqual(await rich.locator('.hibi-lp-marker').allTextContents(), [
+    '```js',
+    '```',
+  ])
   await markerSelection(rich, to)
   await page.keyboard.insertText('x')
   await waitForAsync(

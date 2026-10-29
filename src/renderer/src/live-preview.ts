@@ -483,13 +483,15 @@ function inline(
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
     reveal.some((range) => range.from <= to && range.to >= from)
-  /** Whether a node shows its source: the delimiters of emphasis, code and strikethrough show for their whole block. */
+  /** Whether a node shows its source, with block-scoped reveal for formatting and task markers. */
   const revealedAt = (node: SyntaxNodeRef) => {
     let block: SyntaxNode | null = blockMarkedNodes.has(node.name)
       ? node.node.parent
       : null
     while (block && !block.type.is('LeafBlock')) block = block.parent
-    return block ? touched(block.from, block.to) : touched(node.from, node.to)
+    return block
+      ? touched(doc.lineAt(block.from).from, block.to)
+      : touched(node.from, node.to)
   }
   /** Contributed container layouts, once per container node and render. */
   const shapeCache = new Map<string, FormattedContainer | undefined>()
@@ -631,6 +633,10 @@ function inline(
       closing?.name === 'CodeMark' &&
       closing.from >= last.from &&
       last.number > first.number
+    if (fenced && touched(node.from, node.to) && !replacedWhole(state, node)) {
+      syntax(node.from, first.to, true)
+      if (closed) syntax(closing.from, last.to, true)
+    }
     const from = fenced ? first.number + 1 : first.number
     const to = closed ? last.number - 1 : last.number
     const visibleFrom = doc.lineAt(range.from).number,
@@ -955,6 +961,10 @@ function inline(
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
+    const showPrefix =
+      touched(at, current.to) &&
+      (info.quoteEnd !== null ||
+        (!!info.item && doc.lineAt(info.item.from).from === at))
     const edges = containers(
       doc,
       at,
@@ -966,12 +976,15 @@ function inline(
       decorations.push(Decoration.widget({ widget: edges, side: -1 }).range(at))
     let prefix = info.quoteEnd ?? at
     if (info.code !== null) prefix = info.code
-    else if (info.item) prefix = itemLine(doc, current, info, prefix, ordinals)
+    else if (info.item)
+      prefix = itemLine(doc, current, info, prefix, ordinals, showPrefix)
     else if (info.leaf !== null) prefix = info.leaf
     // Quote markers, list markers and indentation before the line's
     // content, unless the layout field replaces the whole line.
-    if (!replacedLine(layout, current))
-      hideRange(at, Math.min(prefix, current.to))
+    if (!replacedLine(layout, current)) {
+      if (showPrefix) syntax(at, Math.min(prefix, current.to), true)
+      else hideRange(at, Math.min(prefix, current.to))
+    }
     if (info.gap) info.style.push(`padding-top: ${info.gap}px`)
     decorations.push(
       Decoration.line({
@@ -1175,13 +1188,14 @@ function containers(
   return edges ? new ContainerEdges(edges) : undefined
 }
 
-/** List lines: native markers in the indentation, source markers and continuation indentation hidden. */
+/** List lines: native markers while source is hidden, and continuation indentation. */
 function itemLine(
   doc: Text,
   current: ReturnType<Text['lineAt']>,
   info: LineInfo,
   prefix: number,
   ordinals: Map<number, number[]>,
+  revealed: boolean,
 ) {
   const item = info.item!
   const depth = info.containers.filter(
@@ -1230,6 +1244,7 @@ function itemLine(
     info.style.push(
       `list-style-type: ${['disc', 'circle', 'square'][Math.min(depth, 3) - 1]}`,
     )
+  if (revealed) info.style.push('list-style-type: none')
   return content
 }
 
@@ -1437,6 +1452,8 @@ function chunkLayout(
         if (owned) return
         switch (ref.name) {
           case 'FencedCode': {
+            sensitive = true
+            if (intersects(reveal, ref.from, ref.to)) return false
             const first = doc.lineAt(ref.from)
             if (starts(first.from))
               out.push(hiddenLine.range(first.from - from, first.to - from))
@@ -1627,13 +1644,8 @@ function revealMatters(
   tree: Tree,
   reveal: readonly Revealed[],
 ) {
-  // Only contributed layout views follow the selection, in the chunks
-  // around it.
-  if (
-    !reveal.length ||
-    !state.facet(formattedViews).some((view) => view.layout)
-  )
-    return false
+  // Fences and contributed layout views follow the selection in its chunks.
+  if (!reveal.length) return false
   const cache = cacheFor(state)
   return reveal.some((range) =>
     parsedChunks(tree, range).some(
@@ -1656,17 +1668,18 @@ const focused = StateField.define<boolean>({
 })
 
 /**
- * Selection ranges inside one block. As in the rich editor, a selection
+ * Selection ranges inside one block or its line prefix. A selection
  * across blocks, such as select all, shows no markers, nor does a block
  * selected whole as the rich editor's node selection.
  */
 function inBlocks(state: EditorState, tree: Tree): readonly Revealed[] {
   const ranges: Revealed[] = []
   for (const { from, to } of state.selection.ranges) {
-    let block: SyntaxNode | null = from < to ? tree.resolve(from, 1) : null
+    const line = from < to ? state.doc.lineAt(from) : null
+    let block: SyntaxNode | null = line ? tree.resolve(line.to, -1) : null
     while (block && !block.type.is('LeafBlock')) block = block.parent
     if (
-      (from === to || (block && block.to >= to)) &&
+      (from === to || (block && block.to >= to) || (line && to <= line.to)) &&
       !blockSelected(state, from, to)
     )
       ranges.push({ from, to })

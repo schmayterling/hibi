@@ -264,14 +264,15 @@ export const formattedFollowLink = Facet.define<
 >({ combine: (values) => values.at(-1) ?? null })
 
 /**
- * Formatting whose delimiters show for the whole focused block, as the rich
- * editor's hints do, rather than only where the selection is.
+ * Nodes whose delimiters show for the whole focused block, rather than
+ * only where the selection is.
  */
 export const blockMarkedNodes: ReadonlySet<string> = new Set([
   'Emphasis',
   'StrongEmphasis',
   'InlineCode',
   'Strikethrough',
+  'TaskMarker',
 ])
 
 /** Show the Markdown markers of the formatted text under the selection. */

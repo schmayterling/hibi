@@ -144,6 +144,42 @@ const revealFolds = EditorState.transactionExtender.of((transaction) => {
   return effects.length ? { effects } : null
 })
 
+/**
+ * Backspace or Delete beside a folded body, which would remove its hidden
+ * text or pull the next line into it, shows the body instead, as the caret
+ * reaching a fold does in Obsidian. The next press deletes what shows.
+ */
+const unfoldToDelete = EditorState.transactionFilter.of((transaction) => {
+  const { startState } = transaction
+  const tree =
+    transaction.docChanged &&
+    (transaction.isUserEvent('delete.backward') ||
+      transaction.isUserEvent('delete.forward')) &&
+    startState.selection.ranges.every((range) => range.empty) &&
+    formattedSyntaxTree(startState)
+  if (!tree) return transaction
+  const effects: StateEffect<Fold & { from: number }>[] = []
+  transaction.changes.iterChangedRanges((from, to) => {
+    for (const [pos, side] of [
+      [from - 1, -1],
+      [from, 1],
+      [to, -1],
+    ] as const)
+      for (
+        let node: SyntaxNode | null = tree.resolve(Math.max(0, pos), side);
+        node;
+        node = node.parent
+      ) {
+        const body = node.name === 'Blockquote' && foldedBody(startState, node)
+        if (body && from <= body.to + 1 && to > body.from)
+          effects.push(
+            setFold.of({ from: node.from, fold: body.fold, expanded: true }),
+          )
+      }
+  })
+  return effects.length ? { effects } : transaction
+})
+
 /** Fold or unfold the callout whose title starts where `button` is; folding moves the selection out of it. */
 function toggleFold(view: EditorView, button: HTMLElement) {
   const { state } = view
@@ -237,7 +273,7 @@ export const contribution: FormattedContribution = {
   feature: 'markdown.alerts',
   flavor: 'markdown.github',
   syntax: GithubAlerts,
-  extension: [folds, revealFolds],
+  extension: [folds, revealFolds, unfoldToDelete],
   views: [
     {
       // The alerts.css box: a 3px bar in the alert color over a 6% tint, 12px 16px inside.

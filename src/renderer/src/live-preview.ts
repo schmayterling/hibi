@@ -2227,7 +2227,8 @@ export function livePreview(
     EditorView.atomicRanges.of(hidden),
     EditorView.atomicRanges.of(runs),
     // Lines the layout hides whole, with the line breaks around them, so the
-    // caret never rests on one.
+    // caret never rests on one; lines hidden from the end of the line above,
+    // as a folded callout's body, with the line break after them.
     EditorView.atomicRanges.of((view) => {
       const { doc } = view.state
       const lines: Range<Decoration>[] = []
@@ -2238,6 +2239,13 @@ export function livePreview(
             lines.push(
               hide.range(Math.max(0, a - 1), Math.min(doc.length, b + 1)),
             )
+          else if (
+            value.spec.block &&
+            !value.spec.widget &&
+            a < b &&
+            doc.lineAt(a).to === a
+          )
+            lines.push(hide.range(a, Math.min(doc.length, b + 1)))
         })
       return Decoration.set(lines, true)
     }),

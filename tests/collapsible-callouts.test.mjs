@@ -490,3 +490,70 @@ test('codemirror: a tab keeps its callout folds across tab switches and a reload
   assert.equal(current.markdown, changed)
   assert.equal(current.dirty, false)
 })
+
+test('codemirror: arrows step over a folded body, and Backspace or Delete beside it unfold it first', {
+  timeout: 120000,
+}, async (t) => {
+  const markdown = [
+    'Before paragraph.',
+    '',
+    '> [!note]- Closed title',
+    '> hidden alpha body.',
+    '',
+    'After paragraph.',
+    '',
+  ].join('\n')
+  const { page, pane } = await openNote(t, 'codemirror', markdown)
+  const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
+  const titleEnd = markdown.indexOf('Closed title') + 'Closed title'.length
+  const after = markdown.indexOf('After paragraph.')
+  const place = (at) =>
+    page.evaluate((at) => {
+      const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+        .root
+      view.focus()
+      view.dispatch({ selection: { anchor: at } })
+    }, at)
+  const head = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+          .selection.main.head,
+    )
+  const read = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+
+  await closed.waitFor()
+  await place(titleEnd)
+  // One press each way crosses the fold, as Up and Down do.
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await head(), after)
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await head(), titleEnd)
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+
+  // Delete at the title's end shows the body rather than removing it unseen.
+  await page.keyboard.press('Delete')
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  await pane.getByText('hidden alpha body.', { exact: true }).waitFor()
+  assert.equal(await read(), markdown)
+  assert.equal(await head(), titleEnd)
+
+  // So does Backspace after the fold, which would pull the next line into it.
+  await closed.click()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  await place(after)
+  await page.keyboard.press('Backspace')
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  assert.equal(await read(), markdown)
+  assert.equal(await head(), after)
+
+  // A shown body edits as any text does.
+  await place(titleEnd)
+  await page.keyboard.press('Delete')
+  await waitForAsync(
+    page,
+    async (markdown) => (await window.hibi.getDocument()).markdown !== markdown,
+    markdown,
+  )
+})

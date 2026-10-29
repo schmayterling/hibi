@@ -3,6 +3,7 @@ import { builtInFlavors } from '../../shared/built-in-grammar.ts'
 import { preserveInlineHtml } from '../../shared/markdown-inline-html.ts'
 import { decodeMarkdownEntities } from './markdown-entities.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
+import type { OutlineLabelPart } from './outline-label.ts'
 
 /** Heading text from the source parser's tokens, without an editor schema. */
 export function createOutlineLabelRenderer(flavors: readonly string[]) {
@@ -10,13 +11,16 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
   const version = markdownSyntax.version()
   const github = flavors.includes('markdown.github')
   const extras = flavors.includes('text-extras.text-extras')
-  return (tokens: readonly Token[], level: number): string | null => {
+  return (
+    tokens: readonly Token[],
+    level: number,
+  ): OutlineLabelPart[] | null => {
     if (
       version !== markdownSyntax.version() ||
       !markdownSyntax.enabled(`core.heading-${level}`)
     )
       return null
-    const text: string[] = []
+    const text: OutlineLabelPart[] = []
     const frames = [
       {
         tokens: preserveInlineHtml([...tokens])[Symbol.iterator](),
@@ -47,9 +51,14 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
         frame.html = true
         continue
       }
+      if (token.type === 'inlineMath') {
+        // Disabled math inside a native custom token stays textless, as in rich headings.
+        if (markdownSyntax.enabled('math.inline'))
+          text.push({ latex: String(token.latex ?? '') })
+        continue
+      }
       if (
         (token.type === 'image' && markdownSyntax.enabled('core.images')) ||
-        token.type === 'inlineMath' ||
         token.type === 'br' ||
         (token.type === 'codespan' &&
           !markdownSyntax.enabled('core.inline-code'))
@@ -89,8 +98,6 @@ export function createOutlineLabelRenderer(flavors: readonly string[]) {
       )
         text.push(String(token.text ?? ''))
     }
-    return version === markdownSyntax.version()
-      ? text.join('') || 'Untitled heading'
-      : null
+    return version === markdownSyntax.version() ? text : null
   }
 }

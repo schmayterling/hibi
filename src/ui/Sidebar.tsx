@@ -21,6 +21,8 @@ import { useSidebarWindow } from './useSidebarWindow'
 export type SidebarItem = {
   id: string
   label: string
+  /** Drawn in place of `label`, which stays the row's tooltip. */
+  content?: ReactNode
   icon?: ToolbarItem['icon']
   children?: SidebarItem[]
   /** Optional section label immediately before this row. */
@@ -865,7 +867,9 @@ export function Sidebar({
                         {Icon && (
                           <Icon size={15} strokeWidth={1.5} aria-hidden />
                         )}
-                        <span className="sidebar-label">{item.label}</span>
+                        <span className="sidebar-label">
+                          {item.content ?? item.label}
+                        </span>
                         {dirty && (
                           <span className="sidebar-dirty" aria-hidden="true">
                             ●

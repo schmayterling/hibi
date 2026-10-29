@@ -3,6 +3,8 @@ import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
 
+export { after, before } from './electron-hooks.mjs'
+
 const execute = promisify(execFile)
 
 export async function snapshotElectronProcesses(pid) {
@@ -260,7 +262,16 @@ export const electron = {
       },
       args: [...options.args, '--hibi-test', ...gpuArgs],
     })
-    forwardElectronDiagnostics(application.process().stderr)
+    let quit = false
+    let onQuit
+    forwardElectronDiagnostics(application.process().stderr).on(
+      'line',
+      (line) => {
+        if (line !== 'electron-main-quit') return
+        quit = true
+        onQuit?.()
+      },
+    )
     const close = application.close.bind(application)
     const quitTrace = {
       notInstalled: true,
@@ -329,17 +340,41 @@ export const electron = {
         }, 3000)
         diagnosticTimer.unref()
         const pendingClose = close()
+        let stopped = false
         await Promise.race([
           waitForElectronShutdown(
             child,
             pendingClose,
             process.platform,
             waitForTransport,
-          ),
+          ).catch((error) => {
+            if (!stopped) throw error
+          }),
           new Promise((_, reject) => {
             timer = setTimeout(() => {
               reject(new Error('Electron test cleanup exceeded 20 seconds'))
             }, 20000)
+            // Hibi's quit work is done once `quit` is emitted. Chromium's own
+            // teardown after it can take more than 20 s on a loaded machine; it
+            // waits up to 10 s for the network service alone.
+            onQuit = () => {
+              clearTimeout(timer)
+              timer = setTimeout(() => {
+                console.error(
+                  'electron-shutdown-after-quit: still running 15 s after quit; stopping it',
+                )
+                stopped = true
+                timer = setTimeout(() => {
+                  reject(
+                    new Error(
+                      'Electron post-quit cleanup did not finish within 20 seconds',
+                    ),
+                  )
+                }, 5000)
+                stopElectronTree(child)
+              }, 15000)
+            }
+            if (quit) onQuit()
           }),
         ])
       } catch (error) {
@@ -347,11 +382,17 @@ export const electron = {
         drainElectronStdio(child)
         throw error
       } finally {
+        onQuit = undefined
         clearTimeout(timer)
         clearTimeout(diagnosticTimer)
       }
     }
-    if (diagnostics) await application.evaluate(installElectronDiagnostics)
+    if (diagnostics) {
+      await application.evaluate(installElectronDiagnostics)
+      await application.evaluate(({ app }) =>
+        app.once('quit', () => console.error('electron-main-quit')),
+      )
+    }
     if (showTestWindows) {
       // The inspector may already be closed; keep only validated stdout events.
       let detachQuitTrace

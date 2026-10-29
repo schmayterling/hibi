@@ -8,7 +8,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines,
 } from './formatted-engine.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -107,7 +107,7 @@ test('codemirror: notes open in the formatted view and edit their markdown', {
   // Typing inside formatting edits the source text; undo restores it.
   await page.locator('.rich-pane .hibi-lp-strong').click()
   await page.keyboard.press('End')
-  await page.keyboard.type(' more')
+  await withHeldClock(page, () => page.keyboard.type(' more'))
   await saved('includes', 'A **bold** word. more')
   await pressShortcut(app, `${mod}+z`)
   await saved('endsWith', 'A **bold** word.\n')

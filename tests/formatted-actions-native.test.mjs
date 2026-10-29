@@ -17,7 +17,7 @@ import { parseRow } from '../src/shared/markdown-table-source.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const cases = [
@@ -942,10 +942,13 @@ for (const engine of ['tiptap', 'codemirror'])
           item.nextCharacter || item.cell || item.action === 'table'
             ? 'ZQ'
             : 'Z'
-        if (item.physical) await page.keyboard.type(typedText)
-        else
-          for (const character of typedText)
-            await page.keyboard.insertText(character)
+        // One undo step, however slow the machine.
+        await withHeldClock(page, async () => {
+          if (item.physical) await page.keyboard.type(typedText)
+          else
+            for (const character of typedText)
+              await page.keyboard.insertText(character)
+        })
         await waitForAsync(page, () => {
           const root = document.querySelector(
             '.rich-pane [aria-label="Document editor"]',

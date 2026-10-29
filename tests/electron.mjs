@@ -351,7 +351,18 @@ export const electron = {
         clearTimeout(diagnosticTimer)
       }
     }
-    if (diagnostics) await application.evaluate(installElectronDiagnostics)
+    if (diagnostics) {
+      const report = (page) =>
+        page.on('pageerror', (error) =>
+          console.error(
+            'electron-renderer-uncaught',
+            error.stack ?? String(error),
+          ),
+        )
+      application.context().on('page', report)
+      for (const page of application.windows()) report(page)
+      await application.evaluate(installElectronDiagnostics)
+    }
     if (showTestWindows) {
       // The inspector may already be closed; keep only validated stdout events.
       let detachQuitTrace

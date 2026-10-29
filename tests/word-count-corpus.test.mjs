@@ -722,9 +722,8 @@ async function openCorpus(config, formatted = false) {
       // Use Electron's canonical path for DocumentState.id, including the
       // Windows drive spelling, rather than guessing it in the test process.
       const canonical = choice
-        ? await app.evaluate(async (_electron, file) => {
-            const { realpath } = await import('node:fs/promises')
-            return realpath(file)
+        ? await app.evaluate((_electron, file) => {
+            return process.getBuiltinModule('node:fs/promises').realpath(file)
           }, file)
         : null
       await page.evaluate(

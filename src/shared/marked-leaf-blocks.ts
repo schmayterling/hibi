@@ -13,7 +13,11 @@ const quotes = new WeakMap<object, string>()
 const quoteReaders = new WeakSet<TokenizerExtension['tokenizer']>()
 const active = new WeakMap<Lexer, Map<Token, { type: string; text: unknown }>>()
 
+// Tokens checked for native identity, a deterministic complexity check.
+export const leafBlockCounters = { visits: 0 }
+
 function nativeIdentity<T extends Token>(token: T, lexer: Lexer): T {
+  leafBlockCounters.visits++
   const types = active.get(lexer)
   if (!types || types.has(token)) return token
   if (leaves.has(token) || quotes.has(token)) {
@@ -70,8 +74,11 @@ export function withLeafBlocks<T>(tokenizer: Tokenizer, read: () => T): T {
   const blockTokens = lexer.blockTokens
   const inlineStart = lexer.inlineQueue.length
   lexer.blockTokens = (...args) => {
+    // Quotes re-read each lazy line into the same list; earlier tokens are done.
+    const from = (args[1] as Token[] | undefined)?.length ?? 0
     const tokens = Reflect.apply(blockTokens, lexer, args)
-    for (const token of tokens) nativeIdentity(token, lexer)
+    for (let index = from; index < tokens.length; index++)
+      nativeIdentity(tokens[index]!, lexer)
     return tokens
   }
   try {

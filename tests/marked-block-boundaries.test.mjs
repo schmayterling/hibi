@@ -25,6 +25,7 @@ import {
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
+import { leafBlockCounters } from '../src/shared/marked-leaf-blocks.ts'
 import { defaultNoteSyntax, noteParser } from '../src/shared/note-syntax.ts'
 
 // Compare structure and consumed source, excluding inline token spelling.
@@ -342,6 +343,24 @@ test('container re-reads keep one footnote back-link per reference', () => {
       assert.equal((html.match(/data-footnote-ref\b/g) ?? []).length, 1)
       assert.equal((html.match(/data-footnote-backref\b/g) ?? []).length, 1)
     }
+})
+
+test('lazy quote continuations visit each block once', () => {
+  // Marked re-reads a quote per lazy line into the same token list.
+  const units = 2000
+  const source = '> # h\n> p\nlazy\n'.repeat(units)
+  const parser = new Marked(mathTokens, textExtrasMarkdown, alertMarkdown)
+  leafBlockCounters.visits = 0
+  const [quote] = parser.lexer(source)
+  assert.equal(quote.type, 'blockquote')
+  assert.equal(
+    quote.tokens.filter((token) => token.type === 'heading').length,
+    units,
+  )
+  assert.ok(
+    leafBlockCounters.visits < units * 4,
+    String(leafBlockCounters.visits),
+  )
 })
 
 test('footnote boundary probes do not register inline references', () => {

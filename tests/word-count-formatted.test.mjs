@@ -716,6 +716,34 @@ test('formatted text and counts match the rich view', () => {
   }
 })
 
+test('rich view keeps headings after custom leaves outside containers', () => {
+  // Tiptap copies tokenizer results; leaf identity must survive the copy.
+  for (const source of [
+    '> $$\n> x\n> $$\noutside\n===\n',
+    '> -# small\noutside\n===\n',
+    '- $$\n  x\n  $$\noutside\n===\n',
+    '- -# small\noutside\n===\n',
+    '> > [!NOTE]\n> > ```\n> > x\n> > ```\noutside\n===\n',
+  ]) {
+    const document = nativeDocument(source)
+    const headings = []
+    document.forEach((node) => {
+      if (node.type.name === 'heading') headings.push(node.textContent)
+    })
+    assert.deepEqual(headings, ['outside'], source)
+    assert.equal(
+      richText(source, {
+        ...defaultNoteSyntax,
+        textExtras: true,
+        alerts: true,
+        math: true,
+      }).slice(1),
+      native(source),
+      source,
+    )
+  }
+})
+
 for (const fixture of customBodyBoldCases)
   test(`custom body bold counts: ${fixture.name}`, () => {
     markdownSyntax.setEnabled('core.bold', false)

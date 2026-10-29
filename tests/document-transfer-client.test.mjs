@@ -81,6 +81,31 @@ function fixture(current, baseline = current) {
   }
 }
 
+test('save reports are subscribed before the first source transfer is read', async (t) => {
+  const previous = globalThis.window
+  t.after(() => {
+    if (previous === undefined) delete globalThis.window
+    else globalThis.window = previous
+  })
+  let listener
+  globalThis.window = {
+    hibi: {
+      onDocumentSaved: (callback) => {
+        listener = callback
+      },
+    },
+  }
+  const f = fixture('first editable source')
+  const read = f.native.readDocumentTransfer
+  f.native.readDocumentTransfer = (request) => {
+    assert.equal(typeof listener, 'function')
+    return read(request)
+  }
+  assert.equal(listener, undefined)
+  await f.api.getDocument()
+  assert.equal(typeof listener, 'function')
+})
+
 test('bridge initialization keeps transfer controls private before hydration', async () => {
   const methods = [
     'abortDocumentTransfer',

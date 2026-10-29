@@ -678,6 +678,7 @@ if (process.isMainFrame) {
         ipcRenderer.removeListener(DOCUMENT_CHANNELS.externalPending, listener)
       }
     },
+    onDocumentSaved: (callback) => subscribe(DOCUMENT_CHANNELS.saved, callback),
     newDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.new),
     saveDocument: (saveAs) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.save, saveAs),

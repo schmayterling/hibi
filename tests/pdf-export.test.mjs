@@ -217,7 +217,7 @@ test('exports the active note as a PDF from the palette and the File menu', {
       })
   })
   await page.waitForFunction(() =>
-    ['math', 'mermaid', 'markdown', 'typst'].every(
+    ['math', 'mermaid', 'markdown', 'typst', 'text-extras'].every(
       (id) => performance.getEntriesByName(`hibi:addon:${id}`).length,
     ),
   )

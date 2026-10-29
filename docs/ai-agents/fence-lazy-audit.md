@@ -1,50 +1,67 @@
 # marked block boundary audit
 
-base: `8ffb86cc`. scope: built-in addons and shared marked paths, including export/preview, counts and outline consumers.
+base: `54aa91a6` (merged main, including the pdf export path, electron teardown fixes and legacy footnote-detector correction). scope: every built-in addon and shared marked path used by export, split preview, word counts, references and outline semantics.
 
-fixed: typst emitted `typstBlock` before marked handled its own fences. marked's quote parser only ends lazy continuation after native code/heading/hr/html tokens. typst now leaves native `code` tokens intact, renders closed fences from that token, and consumes the same native tokens in the rich editor and word counter. its detection parser no longer registers export renderers. closed-only detection stays intact. source extraction and serialization reuse the shared native fence helpers. typst now shares marked's closer grammar, including rejecting tab-suffixed and unicode-line-separator false closers.
+## fixes
 
-`tests/marked-block-boundaries.test.mjs` compares raw marked with 13 flavor/consumer configurations over 1,344 cases each: quotes, nested quotes, ordered/unordered lists, mixed containers, lazy lines, setext headings, closed/unclosed backtick/tilde fences, other languages, lf and crlf. it also checks rich typst/mermaid parsing, export through `renderMarkdown`, and diagram word counts. baseline failed in typst, count and combined configurations; the exact reported quote reproduction also failed before the fix.
+- typst leaves marked's native `code` tokens intact. closed-only detection, rich parsing, serialization, export and word counts reuse native fence parsing. mermaid's earlier native-code fix remains intact.
+- math and subtext mark complete custom blocks as leaves. during native container parsing only, the shared adapter gives them native code identity, then restores their public token types. quoted blocks stop lazy continuation through marked's own blockquote code. lists validate continuation against the indentation recorded by marked and re-read only the shortened native list when a complete leaf ends it. incomplete math retains ordinary paragraph behavior.
+- alerts retain native quote text while marked re-reads nested quotes. the registered alert reader is reapplied to the resulting quote, preserving the alert body and the headings after it. tab-normalization wrappers retain reader registration, so tabbed nested alerts keep their styling and literal code bytes.
+- footnote definitions are bounded by marked's native list grammar before the existing footnote renderer stores their content. closed code and other completed blocks cannot absorb a following unindented heading. export, reference detection during rendering and both count paths share the adapter.
+- catalog detection stays lightweight. runtime syntax upgrades the existing math and text-extras detector objects, preserving startup metadata snapshots. container adapters and math paragraph escaping remain behind editor/export loading.
 
-| audited path | result |
+## audit inventory
+
+| path | result |
 | --- | --- |
-| typst `syntax.ts` and `Block.tsx` | fixed: native `code` tokens; no custom block tokenizer or start hint remains |
-| mermaid `markdown.ts`, `Block.tsx`, `index.tsx` | earlier native-code fix intact; export transforms rendered code, no custom marked block tokenizer |
-| math `blockMath`, rich `engine.ts` | fence corpus unchanged; own syntax has unresolved continuation case below |
-| text-extras `subtextToken`, rich `Subtext` | single-line regex and bounded start hint; own syntax has unresolved continuation case below |
-| markdown `alertToken` / `GithubAlert` | outer quote span comes from native tokenizer, but custom token identity still affects nested continuation; see below |
-| markdown footnote export, detector and count wrapper | uses `marked-github-footnote`; native-fence corpus unchanged, definition body continuation unresolved below |
-| markdown `NativeTableKit` | wraps native table tokenizer; bounds start to two lines; no custom fence token identity |
+| typst `syntax.ts`, `markdown.ts`, `Block.tsx` | fixed: native code tokens; no custom fence tokenizer |
+| mermaid `markdown.ts`, `Block.tsx`, `index.tsx` | native-code fix intact; no regression |
+| math `blockMath`, runtime `syntax.ts`, rich `engine.ts` | fixed: native leaf and list continuation boundaries |
+| text-extras `subtextToken`, runtime `syntax.ts`, rich `Subtext` | fixed: native leaf and list continuation boundaries |
+| markdown `alertToken`, `GithubAlert` | fixed: nested native quote continuation and custom body retained |
+| markdown footnote export and count wrappers | fixed: shared `marked-footnotes.ts` bounds definitions with native list grammar |
+| lightweight catalog and shell detectors | boolean probes only; do not publish structural tokens; runtime detectors upgrade in place |
+| markdown `NativeTableKit` | native table tokenizer with a two-line start hint; no custom fence identity |
 | markdown obsidian and shared `noteParser` | wiki links, embeds and highlights are inline only |
-| frontmatter | prefix projection via shared frontmatter reader; no marked block tokenizer; projected body included in corpus |
+| frontmatter | shared prefix projection, not a marked block tokenizer; projected body included in the oracle |
 | graph | no marked block tokenizer; consumes workspace graph data |
-| bbcode / shared format renderer registrations | document-syntax declarations, not marked tokenizer extensions |
-| shared `BlockTokenizer` / `blockMarkdown` | native list, quote, code, fence, definition, setext and paragraph overrides preserve native types; corpus passes |
-| shared semantic/reference parsers | use `BlockTokenizer` plus math/alerts/subtext; native-fence corpus passes |
-| word count | typst custom tokenizer removed; now masks enabled closed typst code blocks; disabled and unclosed cases tested |
-| `_shared/block-start.ts` | already uses marked paragraph interruption grammar; existing bounded-work suite retained |
-| `_shared/fenced-block.ts` | native `Tokenizer.fences`; added closed-fence mode from its own match captures, reused by typst |
+| bbcode and shared format registrations | document-syntax declarations, not marked tokenizers |
+| shared `BlockTokenizer` and `blockMarkdown` | native list, quote, code, fence, definition, setext and paragraph rules; custom boundary adapter shared |
+| shared semantic/reference parsers and word count | consume the same corrected token boundaries |
+| `_shared/block-start.ts` | existing marked paragraph-interruption rules retained; bounded-work tests retained |
+| `_shared/fenced-block.ts` | native `Tokenizer.fences`; closed-fence mode reused by typst |
 
-## evidence
+## oracle and export coverage
 
-- fail-first oracle: 9 passed, 3 failed (typst, counts, combined). exact reported quote: 0 passed, 1 failed.
-- final node gate: 259 passed, 0 failed, 4 explicit todo reproductions. build/typecheck, biome, copy check and docs links passed.
-- typst desktop suite: 2 passed, covering both engines. startup-performance: 10 passed; startup closure 691,804 bytes (170 below the gate). math-rendering: 9 passed.
-- docs-export: 1 passed. site-export: 8 passed. site: 7 passed, 2 failed (one codemirror navigation subtest and its parent); targeted retry: 1 passed, 2 failed. the missing `jump 0` link repeats at `tests/site.test.mjs:522`.
-- markdown-semantics-native: 19 passed, 1 failed in each of two runs. the codemirror reference-url edit does not publish the expected document source within 7 seconds (`tests/markdown-semantics-native.test.mjs:880`). these two desktop gates remain unresolved.
-- selected main runs total 315 passed, 3 failed, 4 todo; retries are recorded separately. large outline/corpus/search and 2,000-formula stress cases were excluded by lane rules.
+`tests/marked-block-boundaries.test.mjs` compares raw marked with 13 flavor/consumer configurations over 1,344 cases each: quotes, nested quotes, ordered/unordered lists, mixed containers, lazy lines, setext headings, closed/unclosed backtick/tilde fences, other languages, lf and crlf. custom math/subtext cases additionally compare native code/heading container shapes. alert and footnote cases compare native quote/code boundaries. incomplete syntax remains literal.
 
-## unresolved
+the four previous todo reproductions are normal passing tests. each appends `\noutside\n===\n\n# real\n` to:
 
-four executable todo cases remain in the boundary suite. each appends `\noutside\n===\n\n# real\n` to the following body and expects top-level headings `outside`, `real`:
+1. math: `> $$\n> x\n> $$`
+2. subtext: `> -# small`
+3. nested alert: `> > [!NOTE]\n> > ` + three backticks + `\n> > x\n> > ` + three backticks
+4. footnote: `[^1]: ` + three backticks + `\n    x\n    ` + three backticks
 
-1. math: `> $$\n> x\n> $$` produces only `real`.
-2. subtext: `> -# small` produces only `real`.
-3. nested alert: `> > [!NOTE]\n> > \x60\x60\x60\n> > x\n> > \x60\x60\x60` produces only `real`.
-4. footnote: `[^1]: \x60\x60\x60\n    x\n    \x60\x60\x60` puts `outside` inside the footnote definition, not at top level.
+the list forms `- $$\n  x\n  $$\noutside\n===` and `- -# small\noutside\n===` also pass. rich typst/mermaid parsing, `renderMarkdown`, flavor detection and word-count behavior are covered. `tests/pdf-export.test.mjs` exports all five corrected cases through `renderExportDocument` and asserts the following headings in the actual print html.
 
-math and subtext also retain an unindented setext heading inside a preceding list item: `- $$\n  x\n  $$\noutside\n===` and `- -# small\noutside\n===`. a quote-only adapter would leave these list boundaries inconsistent. these require a separate container grammar change, rather than extending the diagram fix with another token-type substitution. no temporary parser adapter is retained.
+## local evidence
 
-the existing tiptap code-block handler omits ordinary fences with an indented opener. invalid typst closers now correctly fall back to native code and expose that existing omission too; counts intentionally retain native marked text. the existing explicit omission test covers both ordinary code and typst rather than treating tiptap's omission as the count oracle.
+- original typst fail-first oracle: 9 passed, 3 failed; exact reported quote: 0 passed, 1 failed.
+- follow-up fail-first cases: 128 passed, 44 failed out of 172.
+- expanded boundary suite: 223 passed, 0 failed, 0 todo. further fail-first tests caught extra footnote back-links from discarded quote tokens and inline callbacks in structural probes. both now register each reference once, including plain quotes, alerts and tables.
+- merged node gate: 629 passed, 0 failed, 0 todo. includes touched addon/shared code, semantics, outline, mermaid, math, count, flavor-detection and parser-state/quote regressions.
+- merged build/typecheck, biome, copy and docs-link checks passed. startup closure is 691,878 bytes against the unchanged 691,974-byte limit; full container adapters stay out of startup.
+- final serial desktop/export batch: 99 passed, 3 failed, 0 todo. the three failed results are the two confirmed pre-existing codemirror scenarios below, including the site subtest's parent; no new failure remains.
+- passed on the merged base: startup-performance, typst in both engines, math-rendering, github-alerts, formatted-tab-indent, markdown-footnotes, outline-addon-syntax, pdf-export in both engines, docs-export and site-export. the pdf checks confirm all five following headings remain at document level.
+- the legacy shell-footnote todo was fixed by main #669 and passes on this base.
 
-this checkout predates the pdf lane's `renderExportDocument`; its shared `renderMarkdown` export entry is tested directly. full-repo tests and the large word-count corpus are excluded by lane rules.
+## scope and known baselines
+
+no continuation finding is deferred. the tiptap core omission of ordinary indented fences is deliberately outside this follow-up: the owner requested skipping it while tiptap is being removed.
+
+the two codemirror desktop failures also reproduce on main `01d1913b`, confirmed against the cm-reds lane's local logs:
+
+- `markdown-semantics-native`: 19 passed, 1 failed. editing a reference definition's url times out at the source-publication check. cm-reds identified its inline-input link handling; the fix is in #658.
+- `site`: 7 passed, 2 failed (the missing `jump 0` subtest and its parent). the test inserts multiline markdown as literal formatted text; cm-reds is replacing that with paste.
+
+neither is attributed to these tokenizers or blocks this pr. full-repo, giant/corpus, large outline and 2,000-formula stress runs remain excluded by lane rules.

@@ -12,6 +12,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import { parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
 import { prefixOf } from './formatted-commands.ts'
+import { sourceHistoryEffects } from './source-session.ts'
 
 /** Blocks the rich editor reads; it drops link reference definitions. */
 const isBlock = (node: SyntaxNode) =>
@@ -151,7 +152,7 @@ const openSyntax = Facet.define<OpenSyntax, OpenSyntax | undefined>({
   combine: (values) => values[0],
 })
 
-const select = StateEffect.define<Selected>()
+const select = StateEffect.define<Selected | null>()
 
 /**
  * The selection a note opened with, or a block a press on its drawing
@@ -342,6 +343,7 @@ export function openAtEnd(view: EditorView, later = false) {
 export const openSelection = (syntax: OpenSyntax) => [
   openSyntax.of(syntax),
   selected,
+  sourceHistoryEffects.of((state) => [select.of(state.field(selected))]),
   ViewPlugin.define((view) => ({
     update(update) {
       const value = update.state.field(selected, false)

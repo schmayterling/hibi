@@ -194,6 +194,7 @@ import {
   readDocumentMedia,
   serveDocumentMedia,
 } from './media'
+import { exportPdf } from './pdf-export'
 import {
   getKnownWorkspaces,
   getRecentWorkspaces,
@@ -378,6 +379,7 @@ protocol.registerSchemesAsPrivileged([
     scheme: 'hibi-analysis',
     privileges: { standard: true, secure: true, corsEnabled: true },
   },
+  { scheme: 'hibi-print', privileges: { standard: true, secure: true } },
   {
     scheme: 'app',
     privileges: {
@@ -1263,6 +1265,7 @@ function installMenu(): void {
           accelerator: accelerator(hotkeys.saveAs),
           click: command('saveAs'),
         },
+        { label: 'Export as PDF…', click: command('export-pdf') },
         { type: 'separator' },
         {
           label: 'Close tab',
@@ -2642,6 +2645,11 @@ if (!app.requestSingleInstanceLock()) {
             return result
           })
         },
+      )
+      handle(
+        DOCUMENT_CHANNELS.exportPdf,
+        (event, tabId: unknown, html: unknown) =>
+          runFileOperation(event, (window) => exportPdf(window, tabId, html)),
       )
       handle(DOCUMENT_CHANNELS.rename, (event, name: unknown) =>
         runFileOperation(event, async () => {

@@ -19,12 +19,14 @@ import {
 } from '@codemirror/state'
 import { EditorView, type KeyBinding, ViewPlugin } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import { decodeHTMLStrict } from 'entities'
 import type {
   DocumentEdit,
   DocumentFormat,
   DocumentSelection,
 } from '../../addons/api'
 import { inlineCodeInfo } from '../../shared/formatted-markdown.ts'
+import { markdownLink } from '../../shared/markdown-link.ts'
 import {
   markdownLineStarts,
   markdownLiteral,
@@ -36,6 +38,7 @@ import {
   formattedPrefix,
   formattedSyntaxTree,
 } from './formatted-contributions.ts'
+import { formattedReferences } from './formatted-references.ts'
 import {
   atomBlockAt,
   insertAfterBlock,
@@ -88,7 +91,7 @@ const formatBindings: [string, string][] = [
 export const formattingKeymap = (run: (id: string) => boolean): KeyBinding[] =>
   formatBindings.map(([key, id]) => ({ key, run: () => run(id) }))
 
-export type InsertValues = { url: string; alt: string }
+export type InsertValues = { url: string; alt: string; title?: string | null }
 
 /** A view's table editing: whether the selection is in a table, and the toolbar's table actions. */
 export type TableActions = {
@@ -995,7 +998,8 @@ export function sourceFormatting(
       view.focus()
       return true
     }
-    const inline = tree && inlineAction(view.state, tree, id, values?.url)
+    const inline =
+      tree && inlineAction(view.state, tree, id, values?.url, values?.title)
     if (inline) {
       view.dispatch({
         ...inline,
@@ -1333,17 +1337,29 @@ export function sourceFormatting(
         format === 'markdown' ? formattedSyntaxTree(view.state) : null
       const link =
         tree && formattingAt(view.state, tree, selection.main.from).get('link')
-      const url = link?.name === 'URL' ? link : link?.getChild('URL')
+      const target =
+        link && selection.main.to <= link.to
+          ? markdownLink(view.state.sliceDoc(link.from, link.to), true)
+          : null
+      let title: string | null = null
+      const href =
+        target && 'label' in target
+          ? (view.state
+              .facet(formattedReferences)
+              ?.resolve(target.label, new AbortController().signal)
+              .then((result) => {
+                if (result.status !== 'resolved') return null
+                title = result.value?.title ?? null
+                return result.value?.href ?? null
+              }) ?? null)
+          : target
+            ? decodeHTMLStrict(target.href)
+            : null
       const block = !coords && !!selectedBlock(view.state)
       return {
         text: view.state.sliceDoc(selection.main.from, selection.main.to),
-        /** The destination of the link the selection is in, as the link action edits it; null outside a link. */
-        href:
-          link && selection.main.to <= link.to
-            ? url
-              ? view.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')
-              : ''
-            : null,
+        /** The destination of the captured link; reference links resolve through the host. */
+        href,
         insertMarkdown(insert: string) {
           if (!view.dom.isConnected || view.state.doc !== doc || !editable())
             return false
@@ -1387,7 +1403,7 @@ export function sourceFormatting(
         run(id: string, values: InsertValues) {
           if (!view.dom.isConnected || view.state.doc !== doc) return false
           view.dispatch({ selection })
-          return run(id, values)
+          return run(id, { ...values, title })
         },
       }
     },

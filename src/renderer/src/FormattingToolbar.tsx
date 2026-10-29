@@ -494,7 +494,7 @@ export function useFormattingToolbar(
         const selection = editor?.state.selection
         // With the selection in a link, the action edits that link.
         const href = useSource
-          ? (sourceSelection?.href ?? null)
+          ? ((await sourceSelection?.href) ?? null)
           : editor?.isActive('link')
             ? (editor.getAttributes('link').href ?? '')
             : null

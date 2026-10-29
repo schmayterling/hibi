@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -7,6 +7,18 @@ import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
+
+const addonScheme = {
+  ...bundledColorschemes.find((scheme) => scheme.id === 'hibi-dark'),
+  id: 'review.contrast',
+  name: 'Review contrast',
+  colors: {
+    ...bundledColorschemes.find((scheme) => scheme.id === 'hibi-dark').colors,
+    selection: '#ffffff',
+    'selection-ink': '#000000',
+  },
+}
+const schemes = [...bundledColorschemes, addonScheme]
 
 const luminance = (rgb) =>
   rgb
@@ -112,6 +124,41 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
       '- [ ] a task with a #tag and https://example.org',
     ].join('\n'),
   )
+  const addon = join(folder, 'profile', 'installed-addons', 'review-colors')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'review-colors',
+      name: 'Review colors',
+      description: 'Selection fixture',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      entry: 'index.js',
+      capabilities: [],
+      startup: 'background',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    `export default () => ({
+    start(context) { context.colorschemes.register(${JSON.stringify(addonScheme)}); }
+  });`,
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(folder, 'profile', 'addons.json'),
+    JSON.stringify({ 'review-colors': true }),
+  )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })
@@ -142,6 +189,13 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
     .click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()
+  await source.click()
+  await source.press('Home')
+  await source.press('Shift+End')
+  assert.equal(
+    await page.locator('.hibi-vim-selected, .cm-selectionBackground').count(),
+    0,
+  )
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   if (!(await page.locator('#addon-vim').isChecked()))
@@ -156,7 +210,7 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
       { width: 0, height: 0, deviceScaleFactor: 2, mobile: false },
     )
   const failures = []
-  for (const scheme of bundledColorschemes) {
+  for (const scheme of schemes) {
     if (scheme !== bundledColorschemes[0]) await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
     await page
@@ -173,6 +227,25 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
     )
     await page.getByRole('button', { name: /^back to app$/i }).click()
     await page.locator('.source-pane [data-vim-plugin="true"]').waitFor()
+    const native = await source.evaluate((element) => {
+      const css = getComputedStyle(
+        element.closest('.editor-panes'),
+        '::selection',
+      )
+      const root = getComputedStyle(document.documentElement)
+      return {
+        background: css.backgroundColor,
+        color: css.color,
+        expectedBackground: root.getPropertyValue('--selection').trim(),
+        expectedColor: root.getPropertyValue('--selection-ink').trim(),
+      }
+    })
+    const rgb = (value) =>
+      value.startsWith('#')
+        ? value.toLowerCase()
+        : hex(value.match(/\d+/g).slice(0, 3).map(Number))
+    assert.equal(rgb(native.background), rgb(native.expectedBackground))
+    assert.equal(rgb(native.color), rgb(native.expectedColor))
     await source.click()
     await source.press('Escape')
     for (const [mode, keys] of [
@@ -237,4 +310,18 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
     }
   }
   assert.deepEqual(failures, [])
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
+  await page.locator('#addon-vim').uncheck()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await page
+    .locator('.source-pane [data-vim-plugin="true"]')
+    .waitFor({ state: 'detached' })
+  await source.click()
+  await source.press('Home')
+  await source.press('Shift+End')
+  assert.equal(
+    await page.locator('.hibi-vim-selected, .cm-selectionBackground').count(),
+    0,
+  )
 })

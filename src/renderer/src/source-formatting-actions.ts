@@ -577,6 +577,7 @@ export function inlineAction(
   tree: Tree,
   id: string,
   href?: string,
+  title?: string | null,
 ): TransactionSpec | null {
   const range = state.selection.main
   if (!order.includes(id) || (range.empty && id !== 'link')) return null
@@ -589,7 +590,20 @@ export function inlineAction(
   const link =
     id === 'link' ? formattingAt(state, tree, from).get('link') : null
   if (link && to <= link.to) {
+    const url = link.name === 'Link' && link.getChild('URL')
     const body = formattingText(state, link)
+    // Editing a destination leaves the label, title and surrounding syntax intact.
+    if (url) {
+      const insert = urlSource(href ?? '')
+      return {
+        ...(state.sliceDoc(url.from, url.to) === insert
+          ? {}
+          : { changes: { from: url.from, to: url.to, insert } }),
+        ...(body
+          ? { selection: EditorSelection.single(body.from, body.to) }
+          : {}),
+      }
+    }
     if (body) {
       from = body.from
       to = body.to
@@ -614,7 +628,16 @@ export function inlineAction(
           if (!remove)
             run.marks.push({
               id,
-              ...(id === 'link' ? { href: href ?? '' } : {}),
+              ...(id === 'link'
+                ? {
+                    href: href ?? '',
+                    ...(title
+                      ? {
+                          suffix: `](${urlSource(href ?? '')} "${title.replace(/[\\"]/g, '\\$&')}")`,
+                        }
+                      : {}),
+                  }
+                : {}),
             })
         }
       }

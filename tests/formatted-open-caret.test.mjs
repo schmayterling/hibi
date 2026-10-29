@@ -352,37 +352,53 @@ for (const engine of ['tiptap', 'codemirror'])
       `${mod}+Shift+b`,
       'divider',
     ]
-    const enabled = ['quote', 'divider']
+    const enabled = ['quote enabled', 'divider enabled']
     for (const name of atoms) {
       const kept = notes[name].trimEnd()
       for (const action of actions) {
         await open(`${name}-${action.replace(/\W/g, '')}`, notes[name])
-        if (engine === 'codemirror' && action === actions[0])
-          check(
-            name,
-            await page.evaluate(() =>
-              [
-                ...document.querySelectorAll(
-                  '.editor-toolbar [data-toolbar-id^="format."]',
-                ),
-              ]
-                .filter(
-                  (button) =>
-                    !button.disabled ||
-                    button.getAttribute('aria-pressed') === 'true',
-                )
-                .map((button) => button.dataset.toolbarId.slice(7))
-                .filter((id) => !['undo', 'redo', 'image'].includes(id)),
-            ),
-            enabled,
-          )
+        if (engine === 'codemirror' && action === actions[0]) {
+          // The enabled or pressed actions, or whether they are `want`.
+          const shown = (want) => {
+            const ids = [
+              ...document.querySelectorAll(
+                '.editor-toolbar [data-toolbar-id^="format."]',
+              ),
+            ]
+              .filter(
+                (button) =>
+                  !button.disabled ||
+                  button.getAttribute('aria-pressed') === 'true',
+              )
+              .filter(
+                (button) =>
+                  !['undo', 'redo', 'image'].includes(
+                    button.dataset.toolbarId.slice(7),
+                  ),
+              )
+              .map(
+                (button) =>
+                  `${button.dataset.toolbarId.slice(7)}${button.disabled ? '' : ' enabled'}${button.getAttribute('aria-pressed') === 'true' ? ' pressed' : ''}`,
+              )
+            return want ? JSON.stringify(ids) === JSON.stringify(want) : ids
+          }
+          // The toolbar refreshes after a paint.
+          await page
+            .waitForFunction(shown, enabled, { timeout: 3000 })
+            .catch(() => {})
+          check(name, await page.evaluate(shown, null), enabled)
+        }
         if (action.includes('+')) await pressShortcut(app, action)
         else
           await page
             .locator(`.editor-toolbar [data-toolbar-id="format.${action}"]`)
             .evaluate((button) => {
+              // A disabled action runs nothing either. React keeps the
+              // attribute it last wrote, so it is put back.
+              const disabled = button.disabled
               button.disabled = false
               button.click()
+              button.disabled = disabled
             })
         await page.waitForTimeout(300)
         const quote = action === 'quote' || action === `${mod}+Shift+b`

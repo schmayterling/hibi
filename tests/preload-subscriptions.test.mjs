@@ -59,6 +59,7 @@ for (const [method, channel, arity = 1] of [
   ['onAddonWindowClosed', 'addon-windows:closed', 2],
   ['onOpenSettings', 'background:settings', 0],
   ['onExternalDocuments', 'document:external-pending', 0],
+  ['onDocumentSaved', 'document:saved'],
   ['onStates', 'addon-windows:states-changed'],
 ])
   test(`${method} strips events and disposes only its own subscription`, () => {

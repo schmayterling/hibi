@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
+import { acceptSaved } from '../src/renderer/src/document-saved.ts'
 import { StaleDocumentError } from '../src/renderer/src/document-transfer.ts'
 
 const document = (text, overrides = {}) => ({
@@ -174,6 +175,75 @@ test('inactive sessions stay addressable and accept their own save acknowledgmen
   assert.equal(runtime.get('one').dirty, false)
   assert.equal(runtime.get().tabs.find((tab) => tab.id === 'one').dirty, false)
   assert.deepEqual(notices, ['one', 'one'])
+  runtime.dispose()
+})
+
+test('save prompt receipts name retained tabs and accept only their saved version', () => {
+  const { runtime } = fixture()
+  const tabs = [
+    { id: 'one', name: 'untitled.md', dirty: true },
+    { id: 'two', name: 'two.md', dirty: false },
+  ]
+  runtime.activate(
+    document('draft', {
+      tabs,
+      id: 'draft-one',
+      name: 'untitled.md',
+      savedMarkdown: '',
+      dirty: true,
+      canAutosave: false,
+    }),
+  )
+  const draft = runtime.session()
+  runtime.activate(
+    document('second', {
+      tabId: 'two',
+      id: 'file-two',
+      name: 'two.md',
+      revision: 2,
+      tabs,
+    }),
+  )
+  const shown = []
+  const accept = (next) => shown.push(next.tabs[0])
+  const receive = (saved) =>
+    acceptSaved(
+      runtime,
+      saved,
+      (reply, token, expectedId) =>
+        runtime.acknowledgeSave(reply, token, expectedId),
+      accept,
+    )
+  const { revision, contentVersion } = runtime.get('one')
+  const saved = {
+    tabId: 'one',
+    revision,
+    contentVersion,
+    id: 'file-one',
+    name: 'one.md',
+    ephemeral: false,
+    canAutosave: true,
+  }
+  // A receipt for an older revision of the tab changes nothing.
+  receive({ ...saved, revision: revision - 1 })
+  assert.equal(runtime.get('one').name, 'untitled.md')
+  assert.equal(runtime.get('one').dirty, true)
+  assert.deepEqual(shown, [])
+  receive(saved)
+  const named = runtime.get('one')
+  assert.deepEqual(
+    [named.id, named.name, named.canAutosave, named.dirty, named.savedMarkdown],
+    ['file-one', 'one.md', true, false, 'draft'],
+  )
+  assert.deepEqual(shown, [{ id: 'one', name: 'one.md', dirty: false }])
+  assert.equal(runtime.get().markdown, 'second')
+  assert.equal(runtime.get().tabs[0].name, 'one.md')
+  // Edits after the saved version stay unsaved; the tab still takes the file's name.
+  draft.edit([{ from: 5, to: 5, insert: ' more' }], 'source', 'typing')
+  receive({ ...saved, name: 'renamed.md' })
+  assert.equal(runtime.get('one').dirty, true)
+  assert.equal(runtime.get('one').savedMarkdown, 'draft')
+  assert.equal(runtime.get().tabs[0].name, 'renamed.md')
   runtime.dispose()
 })
 

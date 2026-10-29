@@ -5,7 +5,7 @@ import type { MarkedExtension } from 'marked'
  * editor keeps the raw token as text; formatted views and exports render it.
  */
 export function inlineDisplayMath(source: string) {
-  const match = /^\$\$((?:\\.|[^\\$\n])+?)\$\$(?!\$)/.exec(source)
+  const match = /^\$\$((?:\\.|[^\\$\n])+?)\$\$/.exec(source)
   const body = match?.[1]
   if (!match || !body?.trim() || body.length > 10000) return
   return {

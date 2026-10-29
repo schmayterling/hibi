@@ -307,6 +307,22 @@ test('display math inside a line ends where its expression ends, in linear time'
   for (const perUnit of work) assert.ok(perUnit <= 2, JSON.stringify(work))
 })
 
+test('display math can touch currency or another inline formula', () => {
+  for (const [source, expected] of [
+    ['before $$x$$$5 after', [['display', 'x']]],
+    [
+      '$$a+b$$$c+d$',
+      [
+        ['display', 'a+b'],
+        ['inline', 'c+d'],
+      ],
+    ],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, source)
+    assert.deepEqual(markedMath(source), expected, source)
+  }
+})
+
 test('double dollars respect literal contexts and table cells', () => {
   for (const source of [
     'costs $5 and $10',

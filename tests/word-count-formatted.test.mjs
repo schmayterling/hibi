@@ -277,6 +277,8 @@ test('mid-line display math is excluded from counts while literal dollars stay',
   const syntax = { ...defaultNoteSyntax, math: true }
   for (const [source, text] of [
     ['before $$x+y$$ after', 'before  after'],
+    ['before $$x$$$5 after', 'before $5 after'],
+    ['before $$a+b$$$c+d$ after', 'before  after'],
     ['`$$x+y$$` costs $5 and $10', '$$x+y$$ costs $5 and $10'],
     [String.raw`before \$$x+y$$ after`, 'before $$x+y$$ after'],
   ])

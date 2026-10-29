@@ -104,8 +104,7 @@ export function inlineDisplayMathEnd(
   if (
     at + 1 >= end ||
     text.charCodeAt(at) !== 36 ||
-    text.charCodeAt(at + 1) !== 36 ||
-    (at + 2 < end && text.charCodeAt(at + 2) === 36)
+    text.charCodeAt(at + 1) !== 36
   )
     return -1
   const latex = text.slice(open + 2, at)

@@ -35,7 +35,7 @@ title: Hidden properties
 
 Inline math $e^{i\\pi} + 1 = 0$ sits in a sentence with a footnote[^soil].
 
-Mid-line display $$\\frac{7}{11}$$ stays between these words.
+Mid-line display $$\\frac{7}{11}$$$5 stays between these words.
 
 $$
 \\bar{x} = \\frac{1}{n} \\sum_{i=1}^{n} x_i

@@ -343,3 +343,77 @@ test('fences of other languages are not read', () => {
   }
   assert.equal(fenceWork.lines, 0)
 })
+
+test('an edit dialog follows a cached fence when its source visibility changes', async () => {
+  for (const [revealed, changed] of [
+    [false, false],
+    [true, false],
+    [false, true],
+  ]) {
+    const source = '```typst\nold\n```\n\ntail'
+    let state = EditorState.create({ doc: source })
+    const node = markdown.parse(source).topNode.firstChild
+    let answer
+    const renderer = fencedView({
+      id: 'typst',
+      className: 'typst-block',
+      matches: (info) => info === 'typst',
+      source: dedentedFenceText,
+      indented: () => true,
+      mount: () => ({ update() {}, dispose() {} }),
+      settled: () => true,
+      ask: () =>
+        new Promise((resolve) => {
+          answer = resolve
+        }),
+      blocks: new RenderedBlocks(1),
+    })
+    const widget = (shown) => {
+      let result
+      renderer.layout(
+        { node, from: node.from, to: node.to },
+        {
+          replace: (_from, _to, value) => {
+            result = value
+          },
+          widget: (_at, value) => {
+            result = value
+          },
+        },
+        { state, revealed: shown },
+      )
+      return result
+    }
+    let at = revealed ? node.to : node.from
+    const view = {
+      get state() {
+        return state
+      },
+      posAtDOM: () => at,
+      dispatch: (spec) => {
+        state = state.update(spec).state
+      },
+      focus() {},
+    }
+    const original = widget(revealed)
+    const entry = {
+      owner: { view, widget: original },
+      dom: { isConnected: true },
+    }
+    const editing = original.edit(entry)
+    entry.owner.widget = widget(!revealed)
+    at = revealed ? node.from : node.to
+    if (changed) {
+      const from = source.indexOf('old')
+      state = state.update({
+        changes: { from, to: from + 3, insert: 'own' },
+      }).state
+    }
+    answer('new')
+    await editing
+    assert.equal(
+      state.doc.toString(),
+      source.replace('old', changed ? 'own' : 'new'),
+    )
+  }
+})

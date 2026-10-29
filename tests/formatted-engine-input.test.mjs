@@ -67,7 +67,18 @@ for (const engine of ['tiptap', 'codemirror']) {
     await rich.press('Home')
     for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowRight')
     for (let i = 0; i < 6; i++) await page.keyboard.press('Shift+ArrowRight')
-    assert.equal(await page.evaluate(() => getSelection().toString()), 'chosen')
+    const selected = await rich.evaluate((element) => {
+      const state = element.matches('.cm-content')
+        ? element.cmTile.root.view.state.selection.main
+        : element.editor.state.selection
+      return {
+        text: getSelection().toString(),
+        focus: document.activeElement?.getAttribute('aria-label'),
+        anchor: state.anchor,
+        head: state.head,
+      }
+    })
+    assert.equal(selected.text, 'chosen', JSON.stringify(selected))
     await page.keyboard.insertText('日本語')
     await saved('before 日本語 after 😀')
     await pressShortcut(app, `${mod}+z`)

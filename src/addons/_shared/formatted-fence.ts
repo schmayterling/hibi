@@ -376,7 +376,8 @@ class FenceWidget extends WidgetType {
     if (view.state.readOnly || !view.state.facet(EditorView.editable)) return
     const position = () => {
       const at = view.posAtDOM(entry.dom)
-      return this.after ? at - this.text.length : at
+      const { widget } = entry.owner
+      return widget.after ? at - widget.text.length : at
     }
     const before = position()
     const source = await this.kind.ask(this.source)

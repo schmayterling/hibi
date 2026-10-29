@@ -356,11 +356,10 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
   )
   const typed = (await right.innerText()).split('Z').length - 1
+  const busy = await page.evaluate(() => window.splitKeyBusy)
   assert.ok(
-    typed === 1 ||
-      (typed === 0 &&
-        (await page.evaluate(() => window.splitKeyBusy)) === 'true'),
-    'An immediate keypress must be inserted once or visibly blocked during focus.',
+    typed === 1 || (typed === 0 && busy === 'true'),
+    `An immediate keypress must be inserted once or visibly blocked during focus (typed ${typed}, busy ${busy}).`,
   )
   assert.doesNotMatch(await left.innerText(), /Z/)
   await app.evaluate(

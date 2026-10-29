@@ -59,18 +59,20 @@ async function setup(t, keepAlive = false) {
   await capture
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
-  if (t.formattedEngine === 'codemirror')
-    await capture
-      .locator('.hibi-formatted .cm-content[contenteditable="true"]')
-      .waitFor()
+  const engineEditor =
+    t.formattedEngine === 'tiptap'
+      ? '.tiptap[contenteditable="true"]'
+      : '.hibi-formatted .cm-content[contenteditable="true"]'
+  // A hosted runner saw no editable editor right after one appeared; one must settle.
+  await capture
+    .waitForFunction(
+      (selector) => document.querySelectorAll(selector).length === 1,
+      engineEditor,
+      { timeout: 7000 },
+    )
+    .catch(() => {})
   assert.equal(
-    await capture
-      .locator(
-        t.formattedEngine === 'tiptap'
-          ? '.tiptap[contenteditable="true"]'
-          : '.hibi-formatted .cm-content[contenteditable="true"]',
-      )
-      .count(),
+    await capture.locator(engineEditor).count(),
     1,
     'quick note uses the selected formatted engine',
   )

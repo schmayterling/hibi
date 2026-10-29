@@ -58,6 +58,10 @@ blockquote.github-alert {
 .github-alert-body[hidden] {
   display: none;
 }
+/* A folded callout's box is as tall below its title as above it. */
+.github-alert > .github-alert-title:has(+ .github-alert-body[hidden]) {
+  margin-bottom: 0;
+}
 .github-alert-body > :first-child {
   margin-top: 0;
 }

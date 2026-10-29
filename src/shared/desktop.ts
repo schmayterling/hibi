@@ -37,6 +37,7 @@ export const DOCUMENT_CHANNELS = {
   tabsEnabled: 'document:tabs-enabled',
   rename: 'document:rename',
   exportPdf: 'document:export-pdf',
+  pdfImage: 'document:pdf-image',
   image: 'document:image',
   navigate: 'document:navigate',
   link: 'document:link',
@@ -614,6 +615,7 @@ export type DesktopApi = {
     source: string,
     revision: number,
   ) => Promise<string | null>
+  readPdfImage: (source: string, revision: number) => Promise<string | null>
   /** Save a tab's sanitized print page as a PDF; resolves to the saved path, or null when canceled. */
   exportPdf: (tabId: string, html: string) => Promise<string | null>
   getHotkeys: () => Promise<Hotkeys>

@@ -11,9 +11,9 @@ import { renderExportDocument } from './addons'
 import { documentRuntime } from './document-runtime'
 
 /** Prints use Hibi light whatever the app's appearance. */
-const printColors = bundledColorschemes.find(
+const printTheme = bundledColorschemes.find(
   (scheme) => scheme.id === 'hibi-light',
-)!.colors
+)!
 
 /**
  * Render the active document as exports show it, embed its local images, and
@@ -35,6 +35,7 @@ export async function exportPdf(
       document.name,
       document.id,
       extensions,
+      { theme: printTheme },
     )
     const body = DOMPurify.sanitize(rendered.html, {
       ...renderedHtmlOptions,
@@ -43,10 +44,11 @@ export async function exportPdf(
     await Promise.all(
       [...body.querySelectorAll('img')].map(async (image) => {
         const src = image.getAttribute('src') ?? ''
+        image.removeAttribute('srcset')
         if (src.startsWith('data:')) return
         // The print page loads nothing else; images it cannot embed show their description.
         const data = await window.hibi
-          .readDocumentImage(src, document.revision)
+          .readPdfImage(src, document.revision)
           .catch(() => null)
         if (data) image.src = data
         else image.removeAttribute('src')
@@ -58,7 +60,7 @@ export async function exportPdf(
         title: document.name.replace(/\.[^.]+$/, ''),
         html: body.innerHTML,
         css: rendered.css,
-        colors: printColors,
+        colors: printTheme.colors,
       }),
     )
     if (path)

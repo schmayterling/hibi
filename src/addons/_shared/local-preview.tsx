@@ -13,20 +13,26 @@ import { PreviewActions } from '../../ui/PreviewActions'
 import type {
   AddonContext,
   DocumentPreviewProps,
+  ExportRenderOptions,
   RenderedMarkdown,
 } from '../api'
 
 export function localRender(
   context: AddonContext,
-  render: (source: string, documentId?: string) => string | Promise<string>,
+  render: (
+    source: string,
+    documentId?: string,
+    options?: ExportRenderOptions,
+  ) => string | Promise<string>,
   css: string | (() => string),
 ) {
   return async (
     source: string,
     documentId?: string,
+    options?: ExportRenderOptions,
   ): Promise<RenderedMarkdown> => ({
     html: context.editor.isSyntaxEnabled('preview')
-      ? await render(source, documentId)
+      ? await render(source, documentId, options)
       : `<pre>${source.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</pre>`,
     css: typeof css === 'function' ? css() : css,
   })

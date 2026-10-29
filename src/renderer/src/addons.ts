@@ -277,9 +277,10 @@ export async function renderExportDocument(
   name: string,
   documentId: string | undefined,
   extensions: readonly MarkdownExtension[],
+  options?: import('../../addons/api').ExportRenderOptions,
 ) {
   const format = documentFormats.get(name)
-  if (format?.render) return format.render(source, documentId)
+  if (format?.render) return format.render(source, documentId, options)
   if (format?.editing !== 'markdown')
     throw new Error(
       `Enable the addon for ${name} before exporting this document.`,
@@ -287,6 +288,7 @@ export async function renderExportDocument(
   return renderMarkdownAsync(
     projectMarkdown(source, extensions).content,
     documentId,
+    options,
   )
 }
 
@@ -1824,10 +1826,14 @@ export function useAddons(
                 )
                 return track(remove)
               },
-              renderDocument: (source, name, documentId) =>
-                renderExportDocument(source, name, documentId, [
-                  ...extensions.values(),
-                ]),
+              renderDocument: (source, name, documentId, options) =>
+                renderExportDocument(
+                  source,
+                  name,
+                  documentId,
+                  [...extensions.values()],
+                  options,
+                ),
               registerCodeLanguage(language) {
                 if (disposed) return () => {}
                 const remove = batch.register(`language:${language.id}`, () =>

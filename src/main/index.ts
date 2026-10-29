@@ -194,7 +194,7 @@ import {
   readDocumentMedia,
   serveDocumentMedia,
 } from './media'
-import { exportPdf } from './pdf-export'
+import { exportPdf, readPdfImage } from './pdf-export'
 import {
   getKnownWorkspaces,
   getRecentWorkspaces,
@@ -2144,6 +2144,10 @@ if (!app.requestSingleInstanceLock()) {
           return restoreDocument(window, content)
         }),
       )
+      handle(DOCUMENT_CHANNELS.pdfImage, (event, source, revision) => {
+        trustedWindow(event)
+        return readPdfImage(source, revision)
+      })
       handle(
         DOCUMENT_CHANNELS.image,
         async (event, source: unknown, revision: unknown) => {

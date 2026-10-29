@@ -2129,7 +2129,12 @@ class TableView {
     dragSelection(this.view, event, true)
   }
 
-  /** A click edits the clicked cell at the clicked place; shift-click extends the selection. */
+  /**
+   * A click edits the clicked cell at the clicked place; shift-click extends
+   * the selection. A shift-triple-click from outside the cells selects the
+   * clicked cell's text, as a triple-click does, where the rich editor
+   * selects the clicked cell; from a cell it extends, as a shift-click does.
+   */
   private select = (event: MouseEvent) => {
     if (event.button !== 0 || !this.current || !writable(this.view.state))
       return
@@ -2162,7 +2167,11 @@ class TableView {
       if (caret && at != null && cell.contains(caret.offsetNode))
         offset = at - this.now(source.from + span.from)
     }
-    if (event.shiftKey) {
+    const { anchor } = this.view.state.selection.main
+    if (
+      event.shiftKey &&
+      (event.detail !== 3 || tableAt(this.view, anchor, true))
+    ) {
       const head = span
         ? this.now(
             source.from +
@@ -2170,12 +2179,13 @@ class TableView {
               (offset === 'end' ? span.to - span.from : offset),
           )
         : this.now(source.from + source.text.length)
-      this.view.dispatch({
-        selection: { anchor: this.view.state.selection.main.anchor, head },
-        userEvent: 'select.pointer',
-      })
-      this.view.focus()
+      // Drawn as the page's pick, as a drag into the cell draws it.
+      this.view.plugin(tableEditing)?.select(anchor, head)
       if (event.detail === 1) dragSelection(this.view, event, true)
+      return
+    }
+    if (event.shiftKey) {
+      this.edit(line, column, 0, span ? span.to - span.from : 0)
       return
     }
     if (this.edit(line, column, offset) && event.detail === 1)
@@ -2938,7 +2948,7 @@ function enterTable(view: EditorView, key: 'up' | 'down' | 'left' | 'right') {
  * as the view's own drags do; without Shift it also scrolls sideways, as the
  * rich editor's native drags do. A press that already `placed` the selection,
  * in a cell, extends only once the pointer leaves it; others extend at once,
- * by words for a shift-double-click.
+ * to the pointer for a shift-double-click too, as in the rich editor.
  */
 function dragSelection(view: EditorView, event: MouseEvent, placed = false) {
   const doc = view.dom.ownerDocument
@@ -2951,11 +2961,7 @@ function dragSelection(view: EditorView, event: MouseEvent, placed = false) {
       ? cell.at
       : view.posAtCoords({ x: at.clientX, y: at.clientY })
     if (head === null) return false
-    const word = shift && event.detail === 2 ? view.state.wordAt(head) : null
-    const range = view.state.selection.main.extend(
-      word?.from ?? head,
-      word?.to ?? head,
-    )
+    const range = view.state.selection.main.extend(head)
     if (!moved) {
       if (range.eq(view.state.selection.main)) return true
       moved = true

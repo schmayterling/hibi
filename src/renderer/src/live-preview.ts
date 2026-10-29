@@ -305,14 +305,15 @@ function bottomMargin(node: SyntaxNode): number {
 /**
  * The rich editor's tables keep their margins on the table inside the
  * wrapper that a container's last-child rule clears, so the margin below a
- * table that ends a padded container stays inside it.
+ * table that ends a padded container stays inside it. A table the layout
+ * hides, as in a folded callout, ends before the last shown line `at`.
  */
-function innerBottom(node: SyntaxNode): number {
+function innerBottom(node: SyntaxNode, doc: Text, at: number): number {
   const last = blockChild(node, true)
   if (last?.name === 'Table' && !literalText(last, blocks.literal))
-    return blockSpace(last.name).bottom
+    return doc.lineAt(last.from).from <= at ? blockSpace(last.name).bottom : 0
   return last?.name === 'Blockquote' && !blocks.shapes(last)?.padding?.bottom
-    ? innerBottom(last)
+    ? innerBottom(last, doc, at)
     : 0
 }
 
@@ -1181,7 +1182,7 @@ function containers(
     if (padding) {
       if (first) top += padding.top ?? 0
       if (padding.bottom && lastLine(doc, container, layout) === at)
-        bottom += padding.bottom + innerBottom(container)
+        bottom += padding.bottom + innerBottom(container, doc, at)
       right += padding.right ?? 0
     }
     widths.push(

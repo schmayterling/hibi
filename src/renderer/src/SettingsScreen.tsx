@@ -599,7 +599,7 @@ export function SettingsScreen({
               <SettingRow
                 id="sync-preview-scroll"
                 label="Sync preview scrolling"
-                description="Keep the source and preview aligned in Side-by-side view. Turn off to scroll each pane independently."
+                description="Keep the source and preview aligned while scrolling in Side-by-side view. Turn off to scroll each pane independently. Typing and clicking in either pane still align the other pane."
               >
                 <Toggle
                   id="sync-preview-scroll"

@@ -1056,7 +1056,7 @@
   "b3b8fd86f36e": "Kbsim sounds",
   "5720aebea161": "Keep CSS overrides below 128 KB.",
   "801c0e70112e": "Keep Hibi running in the background",
-  "8681c396860d": "Keep the source and preview aligned in Side-by-side view. Turn off to scroll each pane independently.",
+  "e9b8ad442876": "Keep the source and preview aligned while scrolling in Side-by-side view. Turn off to scroll each pane independently. Typing and clicking in either pane still align the other pane.",
   "566c3a93a25f": "Keep top bar visible",
   "2316810a5de3": "Keyboard",
   "8f27fdcc77ab": "LaTeX",

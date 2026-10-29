@@ -2978,13 +2978,7 @@ export function MarkdownEditor({
     sourceOutline,
   ])
   useEffect(() => {
-    if (
-      !syncPreviewScroll ||
-      paneMode !== 'side-by-side' ||
-      !sourceReady ||
-      !editor
-    )
-      return
+    if (paneMode !== 'side-by-side' || !sourceReady || !editor) return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
     const source = content.current?.querySelector<HTMLElement>('.cm-scroller')
     if (!rich || !source) return
@@ -2995,6 +2989,7 @@ export function MarkdownEditor({
       markdownDocument && !footnoteDocument
         ? { editor, content: geometryContent, positions }
         : undefined,
+      syncPreviewScroll,
     )
   }, [
     content,

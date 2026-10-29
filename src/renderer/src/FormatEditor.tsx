@@ -90,8 +90,7 @@ export function FormatEditor({
     documentProjections.invalidate()
   }, [mode, sourceReady, focused])
   useEffect(() => {
-    if (!syncPreviewScroll || paneMode !== 'side-by-side' || !sourceReady)
-      return
+    if (paneMode !== 'side-by-side' || !sourceReady) return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane'),
       source = content.current?.querySelector<HTMLElement>('.cm-scroller')
     if (!rich || !source) return
@@ -99,6 +98,8 @@ export function FormatEditor({
       rich,
       source,
       source.contains(window.document.activeElement) ? source : rich,
+      undefined,
+      syncPreviewScroll,
     )
   }, [paneMode, sourceReady, content, syncPreviewScroll])
   return (

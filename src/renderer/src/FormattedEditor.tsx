@@ -486,13 +486,7 @@ export function MarkdownEditor({
     view.focus()
   }, [autoFocus, formattedReady, paneMode, content])
   useEffect(() => {
-    if (
-      !syncPreviewScroll ||
-      paneMode !== 'side-by-side' ||
-      !sourceReady ||
-      !formattedReady
-    )
-      return
+    if (paneMode !== 'side-by-side' || !sourceReady || !formattedReady) return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
     const source = content.current?.querySelector<HTMLElement>(
       '.source-pane .cm-scroller',
@@ -503,6 +497,7 @@ export function MarkdownEditor({
       source,
       source.contains(window.document.activeElement) ? source : rich,
       'source',
+      syncPreviewScroll,
     )
   }, [content, paneMode, sourceReady, formattedReady, syncPreviewScroll])
   /**

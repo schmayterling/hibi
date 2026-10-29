@@ -8,6 +8,7 @@ import { GFM, parser } from '@lezer/markdown'
 import { MarkdownManager } from '@tiptap/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
+  blockAtom,
   blockBreak,
   blockText,
   codeIndent,
@@ -105,6 +106,32 @@ test('a triple-click selects the text of its paragraph, task, heading or code bl
   // Blank lines and other blocks have no text to select.
   assert.equal(at('\n\n- [ ]', 1), null)
   assert.equal(at('---'), null)
+})
+
+test('a triple-click selects the source of a block the rich editor draws as one node', () => {
+  const doc =
+    'text ![pic](a.png) more\n\n***\n\n<div>\nhtml\n</div>\n\n<!-- note -->\n\n```mermaid\ngraph\n```\n\nend'
+  const state = EditorState.create({ doc })
+  const tree = markdown.parse(doc)
+  const at = (pos, widget = false) => {
+    const atom = blockAtom(state, tree, pos, widget)
+    return atom && doc.slice(atom.from, atom.to)
+  }
+  // Rules and HTML blocks, wherever the press lands in them.
+  assert.equal(at(doc.indexOf('***') + 1), '***')
+  assert.equal(at(doc.indexOf('html')), '<div>\nhtml\n</div>')
+  assert.equal(at(doc.indexOf('note')), '<!-- note -->')
+  // Images and fences only through the widget that starts or ends there.
+  const image = doc.indexOf('![')
+  assert.equal(at(image + 3), null)
+  assert.equal(at(image, true), '![pic](a.png)')
+  assert.equal(at(doc.indexOf(' more'), true), '![pic](a.png)')
+  const fence = doc.indexOf('```mermaid')
+  assert.equal(at(fence + 12), null)
+  assert.equal(at(fence, true), '```mermaid\ngraph\n```')
+  // Text keeps its block's text selection.
+  assert.equal(at(doc.indexOf('end')), null)
+  assert.equal(at(doc.indexOf('text'), true), null)
 })
 
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {

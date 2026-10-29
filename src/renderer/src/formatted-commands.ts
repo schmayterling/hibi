@@ -508,6 +508,47 @@ export function blockText(state: EditorState, tree: Tree, pos: number) {
   return null
 }
 
+/** Blocks the rich editor draws as one node, whose triple-click selects the node. */
+const atomBlocks = new Set([
+  'HorizontalRule',
+  'HTMLBlock',
+  'CommentBlock',
+  'ProcessingInstructionBlock',
+  'BlockMath',
+])
+/** Nodes drawn as one node only where a widget replaces them. */
+const atomWidgets = new Set(['Image', 'InlineMath', 'FencedCode'])
+
+/**
+ * The source of the block at `pos` that the rich editor draws as one node,
+ * or of the image, formula or rendered fence whose widget starts or ends at
+ * `pos` when `widget`: what its triple-click node-selects, without the line
+ * break after it. Typing over it replaces the block, as over the rich
+ * editor's node selection. Null elsewhere.
+ */
+export function blockAtom(
+  state: EditorState,
+  tree: Tree,
+  pos: number,
+  widget: boolean,
+) {
+  for (const side of [1, -1] as const)
+    for (let node: SyntaxNode | null = tree.resolveInner(pos, side); node; ) {
+      if (
+        atomBlocks.has(node.name) ||
+        (widget &&
+          atomWidgets.has(node.name) &&
+          (node.from === pos || node.to === pos))
+      ) {
+        let to = node.to
+        while (to > node.from && /[\r\n]/.test(state.sliceDoc(to - 1, to))) to--
+        return { from: node.from, to }
+      }
+      node = node.parent
+    }
+  return null
+}
+
 /** The first or last leaf block in `node`. */
 function edgeLeaf(node: SyntaxNode | null, last: boolean) {
   while (node && !node.type.is('LeafBlock')) {

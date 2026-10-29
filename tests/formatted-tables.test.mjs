@@ -730,6 +730,30 @@ test("triple-click selects the clicked block's text, with or without Shift, as i
     [doc.slice(cell.anchor, cell.head), cell.editor],
     ['cell words', 'cell words'],
   )
+  // Presses in the open editor keep it focused and open, so clicks with no
+  // gap between them select the cell's text too, from a rendered cell or
+  // from the open editor.
+  for (const edited of [false, true]) {
+    const start = await at('end words', 1)
+    await harness.mouse.click(start.x, start.y)
+    const { x, y } = await at('cell words', 2)
+    if (edited) await harness.mouse.click(x, y)
+    const editor = await harness.evaluateHandle(() =>
+      document.querySelector('.hibi-lp-cell-editor'),
+    )
+    await harness.mouse.click(x, y, { clickCount: 3 })
+    const tripled = await state()
+    assert.deepEqual(
+      [doc.slice(tripled.anchor, tripled.head), tripled.editor],
+      ['cell words', 'cell words'],
+      edited ? 'edited' : 'rendered',
+    )
+    if (edited)
+      assert.ok(
+        await editor.evaluate((element) => element.isConnected),
+        'the editor stays open',
+      )
+  }
 })
 
 test("a shift-drag from a cell into another table's cells keeps the anchor, as in the rich editor", {

@@ -473,6 +473,41 @@ function textStart(state: EditorState, leaf: SyntaxNode) {
   return spaces < 0 ? null : mark.to + spaces
 }
 
+/**
+ * The text of the paragraph, task, heading or code block at `pos`, which the
+ * rich editor's triple-click selects: without markers, a heading's closing
+ * sequence or the line break after it. Null for other blocks.
+ */
+export function blockText(state: EditorState, tree: Tree, pos: number) {
+  for (const side of [1, -1] as const)
+    for (let node: SyntaxNode | null = tree.resolveInner(pos, side); node; ) {
+      if (node.name === 'FencedCode' || node.name === 'CodeBlock') {
+        const text = node.getChildren('CodeText')
+        const first = text[0],
+          last = text.at(-1)
+        if (!first || !last) return null
+        let to = last.to
+        while (to > first.from && /[\r\n]/.test(state.sliceDoc(to - 1, to)))
+          to--
+        return { from: first.from, to }
+      }
+      const from = textStart(state, node)
+      if (from !== null) {
+        const closing = node.lastChild
+        let to =
+          closing?.name === 'HeaderMark' && closing.from >= from
+            ? node.name.startsWith('Setext')
+              ? state.doc.lineAt(closing.from).from - 1
+              : closing.from
+            : node.to
+        while (to > from && /\s/.test(state.sliceDoc(to - 1, to))) to--
+        return { from, to }
+      }
+      node = node.parent
+    }
+  return null
+}
+
 /** The first or last leaf block in `node`. */
 function edgeLeaf(node: SyntaxNode | null, last: boolean) {
   while (node && !node.type.is('LeafBlock')) {

@@ -418,7 +418,7 @@ export function ToolbarSettings() {
                       className="drag-handle"
                     />
                     <Icon size={16} aria-hidden />
-                    <span>{item.label}</span>
+                    <span>{item.name}</span>
                     {preferences.placements?.[item.id] === 'menu' && (
                       <Ellipsis size={14} aria-hidden />
                     )}
@@ -433,14 +433,14 @@ export function ToolbarSettings() {
           {active && (
             <div className="toolbar-order-footer">
               <p aria-live="polite">
-                {active.label}
+                {active.name}
                 <span>
                   {position + 1} of {items.length}
                 </span>
               </p>
               <div>
                 <Select
-                  aria-label={`Toolbar placement for ${active.label}`}
+                  aria-label={`Toolbar placement for ${active.name}`}
                   value={preferences.placements?.[active.id] ?? 'toolbar'}
                   onChange={(event) =>
                     toolbar.setPreferences({
@@ -459,14 +459,14 @@ export function ToolbarSettings() {
                   <option value="hidden">Hide</option>
                 </Select>
                 <IconButton
-                  aria-label={`Move ${active.label} earlier`}
+                  aria-label={`Move ${active.name} earlier`}
                   disabled={position === 0}
                   onClick={() => move(active.id, -1)}
                 >
                   <ArrowLeft size={16} aria-hidden />
                 </IconButton>
                 <IconButton
-                  aria-label={`Move ${active.label} later`}
+                  aria-label={`Move ${active.name} later`}
                   disabled={position === items.length - 1}
                   onClick={() => move(active.id, 1)}
                 >

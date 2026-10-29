@@ -89,6 +89,7 @@ function load(): ToolbarPreferences {
 }
 let preferences = load()
 type RegisteredToolbarItem = ToolbarItem & {
+  name: string
   onClick: (context?: CommandExecutionContext) => Promise<void>
 }
 const items = new Map<string, RegisteredToolbarItem>()
@@ -208,6 +209,7 @@ export const toolbar = {
         if (!/^[a-z][a-z0-9-]*$/.test(initial.id) || items.has(id))
           throw new Error(`duplicate or invalid toolbar item: ${id}`)
         let active = true
+        const name = initial.label
         let item = initial
         const validate = (next: ToolbarItem) => {
           if (
@@ -224,6 +226,7 @@ export const toolbar = {
           items.set(id, {
             ...item,
             id,
+            name,
             async onClick(context?: CommandExecutionContext) {
               if (!active || disposed || item.disabled) return
               try {

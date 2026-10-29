@@ -327,6 +327,10 @@ test('codemirror: revealed markers are ordinary editable source', {
       )
       await page.keyboard.press('Space')
       assert.equal((await state(rich)).doc, '- [x] buy milk\n- [x] done')
+      // Focus leaving the editor from the checkbox hides the source again.
+      await page.evaluate(() => document.activeElement.blur())
+      await page.evaluate(() => new Promise(requestAnimationFrame))
+      assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
     },
   )
   await t.test(

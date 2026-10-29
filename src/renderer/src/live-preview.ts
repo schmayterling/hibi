@@ -2542,6 +2542,19 @@ export function livePreview(
           view.contentDOM.focus({ preventScroll: true })
         return false
       },
+      // Focus leaving a control in the text for outside the editor hides
+      // the syntax the control kept shown.
+      focusout(event, view) {
+        const next = event.relatedTarget
+        if (
+          event.target !== view.contentDOM &&
+          !(next instanceof Node && view.contentDOM.contains(next))
+        )
+          queueMicrotask(() => {
+            if (view.dom.isConnected) view.dispatch({})
+          })
+        return false
+      },
       beforeinput(event, view) {
         const { selection, readOnly } = view.state
         const hidden = (at: number) => {

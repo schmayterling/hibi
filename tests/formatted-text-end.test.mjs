@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Text } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
-import { formattedOpenSelection } from '../src/renderer/src/formatted-text-end.ts'
+import {
+  formattedOpenSelection,
+  insertAfterBlock,
+  removeBlock,
+} from '../src/renderer/src/formatted-text-end.ts'
 
 const markdown = parser.configure(GFM)
 const text = (source) => Text.of(source.split('\n'))
@@ -108,4 +112,35 @@ test('a fence a renderer draws is selected whole; a tree short of the end gives 
     formattedOpenSelection(text(source), markdown.parse(source)),
     caret(source.length - 5),
   )
+})
+
+test('a selected block takes Backspace, Enter and a divider as the rich editor node selection does', () => {
+  // « and » mark the selected block, ‸ the caret after the edit.
+  const apply = (marked, edit) => {
+    const source = marked.replace(/[«»]/g, '')
+    const block = { from: marked.indexOf('«'), to: marked.indexOf('»') - 1 }
+    const state = EditorState.create({ doc: source })
+    const spec = edit(state, markdown.parse(source), block)
+    const after = state.update(spec).state
+    const at = after.selection.main.head
+    return `${after.sliceDoc(0, at)}‸${after.sliceDoc(at)}`
+  }
+  const remove = (state, tree, block) => removeBlock(tree, block)
+  const paragraph = (state, tree, block) =>
+    insertAfterBlock(state, tree, block, false)
+  const divider = (state, tree, block) =>
+    insertAfterBlock(state, tree, block, true)
+  for (const [marked, edit, expected] of [
+    ['plain\n\n«$$\nx\n$$»\n', remove, 'plain‸\n'],
+    ['plain\n\n«---»\n\nafter\n', remove, 'plain\n\n‸after\n'],
+    ['«<!-- a -->»\n\nafter\n', remove, '‸after\n'],
+    ['> plain\n>\n> «***»\n>\n> after\n', remove, '> plain\n>\n> ‸after\n'],
+    ['plain\n\n«***»\n', paragraph, 'plain\n\n***\n\n‸'],
+    ['plain\n\n«***»\n\nafter\n', paragraph, 'plain\n\n***\n\n‸\n\nafter\n'],
+    ['> «***»\n>\n> after\n', paragraph, '> ***\n>\n> ‸\n>\n> after\n'],
+    ['plain\n\n«***»\n', divider, 'plain\n\n***\n\n---\n\n‸\n'],
+    ['plain\n\n«***»\n\nafter\n', divider, 'plain\n\n***\n\n---\n\n‸after\n'],
+    ['> «***»\n', divider, '> ***\n>\n> ---\n>\n> ‸\n'],
+  ])
+    assert.equal(apply(marked, edit), expected, JSON.stringify(marked))
 })

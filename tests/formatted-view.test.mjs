@@ -1257,6 +1257,38 @@ testFormattedEngines(
       await pressShortcut(app, `${mod}+z`)
       await settled(atomNote)
       assert.equal(await markdown(), atomNote, `${kind} undone`)
+      // One press on a drawing selects the block as well, and Backspace
+      // removes it with the blank line after it. The formatted view shows
+      // HTML as editable source, where a press places the caret; the rich
+      // editor's press on a formula opens its formula dialog.
+      if ((engine === 'tiptap' ? ['math'] : ['html', 'comment']).includes(kind))
+        continue
+      await page
+        .locator('.rich-pane p, .rich-pane .cm-line', { hasText: 'last words' })
+        .last()
+        .click()
+      const press = await point(at)
+      await page.mouse.click(press.x, press.y)
+      assert.equal(
+        await selected(),
+        engine === 'tiptap' ? node : source,
+        `${kind} pressed`,
+      )
+      await page.waitForFunction(() =>
+        document.activeElement?.matches(
+          '.rich-pane [aria-label="Document editor"]',
+        ),
+      )
+      await page.keyboard.press('Backspace')
+      const removed =
+        engine === 'tiptap' && kind === 'rule'
+          ? atomNote
+          : atomNote.replace(`${source}\n\n`, '')
+      await settled(removed)
+      assert.equal(await markdown(), removed, `${kind} removed`)
+      await pressShortcut(app, `${mod}+z`)
+      await settled(atomNote)
+      assert.equal(await markdown(), atomNote, `${kind} restored`)
     }
   },
 )

@@ -264,8 +264,9 @@ export function insertAfterBlock(
       changes: { from: state.doc.length, insert: '\n' },
       selection: { anchor: state.doc.length + 1 },
     }
-  let insert = `${item ? '' : `\n${prefix.includes('>') ? prefix.trimEnd() : ''}`}\n${prefix}`
-  if (divider) insert += end ? `---\n\n${prefix}` : '---'
+  const parted = `${item ? '' : `\n${prefix.includes('>') ? prefix.trimEnd() : ''}`}\n${prefix}`
+  let insert = parted
+  if (divider) insert += end ? `---${parted}` : '---'
   return {
     changes: { from: block.to, insert },
     selection: {
@@ -279,20 +280,28 @@ export function insertAfterBlock(
  * part it from the next block, where the caret goes, or from the block
  * before it when it is the last.
  */
-function deleteBlock(view: EditorView) {
-  const { state } = view
-  const block = selectedBlock(state)
-  const tree = state.facet(openSyntax)?.tree(state)
-  if (!block || !tree) return false
+export function removeBlock(
+  tree: Tree,
+  block: { from: number; to: number },
+): TransactionSpec {
   const node = blockNode(tree, block)
   let next = node.nextSibling,
     previous = node.prevSibling
   while (next && !next.type.is('Block')) next = next.nextSibling
   while (previous && !previous.type.is('Block')) previous = previous.prevSibling
   const from = next ? block.from : (previous?.to ?? block.from)
-  view.dispatch({
+  return {
     changes: { from, to: next ? next.from : block.to },
     selection: { anchor: from },
+  }
+}
+
+function deleteBlock(view: EditorView) {
+  const block = selectedBlock(view.state)
+  const tree = view.state.facet(openSyntax)?.tree(view.state)
+  if (!block || !tree) return false
+  view.dispatch({
+    ...removeBlock(tree, block),
     userEvent: 'delete.selection',
     scrollIntoView: true,
   })

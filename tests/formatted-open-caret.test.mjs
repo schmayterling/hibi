@@ -5,7 +5,9 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
+
+const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
 // A note opens with the caret where the rich editor's Selection.atEnd puts
 // it: the end of its last text block, inside quotes and lists, in a table's
@@ -66,6 +68,7 @@ const notes = {
   mermaid: 'plain\n\n```mermaid\ngraph TD\n  A --> B\n```\n',
   typst: 'plain\n\n```typst\n= last\n```\n',
   rule: 'plain\n\n***\n',
+  divider: 'plain\n\n---\n',
   image: 'plain\n\n![last](missing.png)\n',
   'table-short-row': 'plain\n\n| aa   | bb   |\n| ---- | ---- |\n| cell |\n',
   indented: 'plain\n\n    code\n    last\n',
@@ -91,6 +94,7 @@ const atoms = [
   'mermaid',
   'typst',
   'rule',
+  'divider',
   'image',
 ]
 const accepted = {
@@ -174,7 +178,7 @@ function caret() {
 const native = new Map()
 for (const engine of ['tiptap', 'codemirror'])
   test(`${engine}: a note opens with the caret at the end of its last text`, {
-    timeout: 300000,
+    timeout: 600000,
   }, async (t) => {
     const folder = await mkdtemp(join(tmpdir(), 'hibi-open-caret-'))
     const profile = join(folder, 'profile')
@@ -288,13 +292,17 @@ for (const engine of ['tiptap', 'codemirror'])
       else if (engine === 'codemirror')
         check(name, key(observed), native.get(name))
     }
-    // Typing replaces a selected block, and Enter adds a paragraph after it.
-    // The rich editor's selected divider takes no keys.
+    // Typing replaces a selected block, Enter adds a paragraph after it, and
+    // Backspace or Delete removes it with the blank line before it. The rich
+    // editor's selected rule written other than `---` takes none of them.
     const rendered = { math: 'x^2', mermaid: 'graph TD', typst: '= last' }
+    const markdown = () =>
+      page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+    const inert = (name) => engine === 'tiptap' && name === 'rule'
     for (const name of atoms)
-      for (const press of ['Z', 'Enter']) {
-        const markdown = notes[name]
-        await open(`${name}-${press}`, markdown)
+      for (const press of ['Z', 'Enter', 'Backspace', 'Delete']) {
+        const note = notes[name]
+        await open(`${name}-${press}`, note)
         if (engine === 'codemirror' && rendered[name])
           check(
             name,
@@ -314,23 +322,103 @@ for (const engine of ['tiptap', 'codemirror'])
           )
         await page.keyboard.press(press)
         await page.waitForTimeout(300)
-        const after = await page.evaluate(
-          async () => (await window.hibi.getDocument()).markdown,
-        )
-        const kept = markdown.trimEnd()
-        const want =
-          engine === 'tiptap' && name === 'rule'
-            ? markdown
-            : press === 'Z'
-              ? `${kept.slice(0, kept.lastIndexOf('\n\n') + 2)}Z\n`
-              : `${kept}\n\n`
+        const after = await markdown()
+        const kept = note.trimEnd()
+        const want = inert(name)
+          ? note
+          : press === 'Z'
+            ? 'plain\n\nZ\n'
+            : press === 'Enter'
+              ? `${kept}\n\n`
+              : 'plain\n'
+        check(name, { name, press, after }, { name, press, after: want })
+      }
+    // Formatting acts on a selected block as on the rich editor's node
+    // selection: a quote wraps it and keeps it selected, a divider goes after
+    // it, and the other actions, marks and block types alike, do nothing. The
+    // formatted view's toolbar disables them; the rich editor leaves some
+    // enabled that change nothing.
+    const actions = [
+      'bold',
+      'heading-1',
+      'paragraph',
+      'bullet-list',
+      'code-block',
+      'hard-break',
+      'table',
+      `${mod}+b`,
+      `${mod}+Alt+c`,
+      'quote',
+      `${mod}+Shift+b`,
+      'divider',
+    ]
+    const enabled = ['quote', 'divider']
+    for (const name of atoms) {
+      const kept = notes[name].trimEnd()
+      for (const action of actions) {
+        await open(`${name}-${action.replace(/\W/g, '')}`, notes[name])
+        if (engine === 'codemirror' && action === actions[0])
+          check(
+            name,
+            await page.evaluate(() =>
+              [
+                ...document.querySelectorAll(
+                  '.editor-toolbar [data-toolbar-id^="format."]',
+                ),
+              ]
+                .filter(
+                  (button) =>
+                    !button.disabled ||
+                    button.getAttribute('aria-pressed') === 'true',
+                )
+                .map((button) => button.dataset.toolbarId.slice(7))
+                .filter((id) => !['undo', 'redo', 'image'].includes(id)),
+            ),
+            enabled,
+          )
+        if (action.includes('+')) await pressShortcut(app, action)
+        else
+          await page
+            .locator(`.editor-toolbar [data-toolbar-id="format.${action}"]`)
+            .evaluate((button) => {
+              button.disabled = false
+              button.click()
+            })
+        await page.waitForTimeout(300)
+        const quote = action === 'quote' || action === `${mod}+Shift+b`
+        const changed = inert(name)
+          ? quote
+            ? `plain\n\n> ${kept.slice(7)}\n`
+            : notes[name]
+          : quote
+            ? `plain\n\n${kept
+                .slice(7)
+                .split('\n')
+                .map((line) => `> ${line}`)
+                .join('\n')}\n`
+            : action === 'divider'
+              ? `${kept}\n\n---\n\n\n`
+              : notes[name]
         check(
           name,
-          { name, press, kept: after.startsWith(want) },
-          { name, press, kept: true },
+          { name, action, after: await markdown() },
+          { name, action, after: changed },
         )
-        t.diagnostic(JSON.stringify({ engine, name, press, after }))
+        if (action !== 'quote' && action !== 'divider') continue
+        await page.keyboard.press('Z')
+        await page.waitForTimeout(300)
+        const typed = inert(name)
+          ? changed
+          : action === 'quote'
+            ? 'plain\n\n> Z\n'
+            : `${kept}\n\n---\n\nZ\n`
+        check(
+          name,
+          { name, action, typed: await markdown() },
+          { name, action, typed },
+        )
       }
+    }
     // The formatted view moves the caret where the rich editor puts it once
     // its view reaches a long note's end, unless the user moved it first.
     if (engine === 'codemirror')

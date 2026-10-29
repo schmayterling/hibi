@@ -83,11 +83,7 @@ import {
   referenceLinks,
 } from './formatted-references'
 import type { FormattedSyntax } from './formatted-syntax'
-import {
-  atomBlockAt,
-  blockSelected,
-  openSelection,
-} from './formatted-text-end'
+import { atomBlockAt, blockSelected, openSelection } from './formatted-text-end'
 import { nativeDOMSelection } from './native-dom-selection'
 import './formatted'
 import './live-preview.css'

@@ -37,6 +37,11 @@ import {
   formattedSyntaxTree,
 } from './formatted-contributions.ts'
 import {
+  insertAfterBlock,
+  selectBlock,
+  selectedBlock,
+} from './formatted-text-end.ts'
+import {
   caretMarks,
   formattedStates,
   formattingAt,
@@ -44,11 +49,6 @@ import {
   unfenceChanges,
   unlinkChanges,
 } from './formatted-toolbar-state.ts'
-import {
-  insertAfterBlock,
-  selectBlock,
-  selectedBlock,
-} from './formatted-text-end.ts'
 import {
   blockAction,
   formattedInputError,
@@ -1018,8 +1018,8 @@ export function sourceFormatting(
       view.focus()
       return true
     }
-    // A block selected whole stays selected in its quote, as the rich
-    // editor's node selection.
+    // As over the rich editor's node selection, a block selected whole
+    // takes a divider after it, and stays selected in its quote.
     const held = tree && selectedBlock(view.state)
     if (held && id === 'divider') {
       view.dispatch({

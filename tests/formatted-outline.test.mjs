@@ -216,7 +216,9 @@ test('behind the switch, the formatted view reports, follows and navigates the r
   // A refreshed file revision must discard the previous reference resolution.
   let previous = await page.evaluate(() => window.hibi.getDocument())
   const original = await readFile(file, 'utf8')
-  for (const text of [original.replace('[ref]:', '[gone]:'), original]) {
+  for (let iteration = 0; iteration < 20; iteration++) {
+    const text =
+      iteration % 2 ? original : original.replace('[ref]:', '[gone]:')
     await writeFile(file, text)
     await clickMenu(app, 'Open…')
     await waitForAsync(
@@ -224,6 +226,8 @@ test('behind the switch, the formatted view reports, follows and navigates the r
       async (revision) => (await window.hibi.getDocument()).revision > revision,
       previous.revision,
     )
+    const reopened = await page.evaluate(() => window.hibi.getDocument())
+    assert.equal(reopened.markdown, text, 'Reopened document must match disk.')
     const expected = rich.map((heading) => ({
       ...heading,
       label:

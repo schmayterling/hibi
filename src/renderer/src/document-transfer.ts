@@ -93,17 +93,8 @@ export function documentTransferApi(
   const pending = new Map<string, Promise<DocumentState>>()
   const load = async (wire: DocumentTransfer) => {
     const transfer = { ...wire, documentTransfer: { ...wire.documentTransfer } }
-    const { loadDocumentTransfer, parseTransferHead } = await import(
-      './document-transfer-load.ts'
-    )
-    const head = parseTransferHead(transfer.documentTransfer),
-      previous = pending.get(head.streamId)
-    if (previous) return previous
-    const work = loadDocumentTransfer(native, transfer, loaded).finally(() =>
-      pending.delete(head.streamId),
-    )
-    pending.set(head.streamId, work)
-    return work
+    const { loadDocumentTransfer } = await import('./document-transfer-load.ts')
+    return loadDocumentTransfer(native, transfer, loaded, pending)
   }
   const hydrate = async (value: unknown): Promise<unknown> => {
     if (!value || typeof value !== 'object') return value

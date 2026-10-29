@@ -65,7 +65,12 @@ import {
 import type { DocumentFlavorStatus } from './ActiveDocumentEditor'
 import { AddonPanel } from './AddonPanel'
 import type { AddonRequest } from './AddonSettings'
-import { AddonSidebar, builtInViews, viewShortcut } from './AddonSidebar'
+import {
+  AddonSidebar,
+  builtInViews,
+  leftOnlyViews,
+  viewShortcut,
+} from './AddonSidebar'
 import { AddonTab } from './AddonTab'
 import { AddonViewContent } from './AddonViewContent'
 import { addonRegistry } from './addon-registry'
@@ -1140,8 +1145,11 @@ function App() {
   useEffect(() => {
     if (
       addonHost.allReady &&
-      !['none', 'outline', 'backlinks'].includes(rightSidebarView) &&
-      !addonHost.sidebarViews.some((view) => view.id === rightSidebarView)
+      rightSidebarView !== 'none' &&
+      (leftOnlyViews.includes(rightSidebarView) ||
+        ![...builtInViews, ...addonHost.sidebarViews].some(
+          (view) => view.id === rightSidebarView,
+        ))
     ) {
       setRightSidebarView('none')
       localStorage.setItem('right-sidebar-view', 'none')

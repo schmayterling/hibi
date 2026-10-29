@@ -11,6 +11,8 @@ export const builtInViews = [
   { id: 'outline', label: 'On this page', icon: ListTree },
   { id: 'backlinks', label: 'Backlinks', icon: Link2 },
 ]
+/** The right sidebar offers and keeps every other view. */
+export const leftOnlyViews = ['workspace', 'workspaces']
 
 export function viewShortcut(view: AddonView) {
   return { id: view.id, label: view.label, icon: view.icon ?? PanelLeft }

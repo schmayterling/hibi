@@ -25,6 +25,39 @@ blockquote.github-alert {
   font-weight: 600;
   user-select: none;
 }
+.github-alert-toggle {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-inline-end: var(--space-1);
+  vertical-align: middle;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+.github-alert-toggle::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.github-alert-toggle[aria-expanded="true"]::before {
+  transform: rotate(45deg);
+}
+.github-alert-toggle:hover {
+  background: var(--hover);
+}
+.github-alert-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.github-alert-body[hidden] {
+  display: none;
+}
 .github-alert-body > :first-child {
   margin-top: 0;
 }

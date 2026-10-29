@@ -1,6 +1,7 @@
 import { mergeAttributes, Node } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
 import { alertMarker, alertStart, alertToken, alertType } from './alerts.ts'
+import { calloutToggle, updateCalloutToggle } from './callout-toggle.ts'
 
 export const GithubAlert = Node.create({
   name: 'githubAlert',
@@ -46,6 +47,64 @@ export const GithubAlert = Node.create({
       ],
       ['div', { class: 'github-alert-body' }, 0],
     ]
+  },
+  addNodeView() {
+    return ({ node }) => {
+      const dom = document.createElement('blockquote')
+      dom.className = 'github-alert'
+      const title = document.createElement('p')
+      title.className = 'github-alert-title'
+      title.contentEditable = 'false'
+      const label = document.createElement('span')
+      const contentDOM = document.createElement('div')
+      contentDOM.className = 'github-alert-body'
+      title.append(label)
+      dom.append(title, contentDOM)
+      let current = node
+      let expanded = node.attrs.fold !== '-'
+      let button: HTMLButtonElement | undefined
+      const toggle = () => {
+        expanded = !expanded
+        render()
+      }
+      const render = () => {
+        const type = alertType(current.attrs.alertType) ?? 'note'
+        const text = current.attrs.title || type
+        dom.dataset.alert = type
+        dom.dataset.fold = current.attrs.fold
+        label.textContent = text
+        const foldable = /^[+-]$/.test(current.attrs.fold)
+        contentDOM.hidden = foldable && !expanded
+        if (foldable) {
+          if (!button) {
+            button = calloutToggle(text, expanded, toggle)
+            title.prepend(button)
+          } else updateCalloutToggle(button, text, expanded, toggle)
+        } else {
+          button?.remove()
+          button = undefined
+        }
+      }
+      render()
+      return {
+        dom,
+        contentDOM,
+        update(next) {
+          if (next.type !== current.type) return false
+          if (next.attrs.fold !== current.attrs.fold)
+            expanded = next.attrs.fold !== '-'
+          current = next
+          render()
+          return true
+        },
+        stopEvent: (event) =>
+          button?.contains(event.target as globalThis.Node) ?? false,
+        ignoreMutation: (mutation) =>
+          mutation.type !== 'selection' &&
+          ((mutation.type === 'attributes' && mutation.target === contentDOM) ||
+            !contentDOM.contains(mutation.target)),
+      }
+    }
   },
   markdownTokenName: 'githubAlert',
   markdownTokenizer: {

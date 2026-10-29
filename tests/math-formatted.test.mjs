@@ -307,6 +307,24 @@ test('display math inside a line ends where its expression ends, in linear time'
   for (const perUnit of work) assert.ok(perUnit <= 2, JSON.stringify(work))
 })
 
+test('double dollars respect literal contexts and table cells', () => {
+  for (const source of [
+    'costs $5 and $10',
+    'costs $5.00 or $10.00',
+    String.raw`escaped \$$x$$ and \$5`,
+    '`$$x$$` and ``code ` $$y$$``',
+    '```tex\n$$x$$\n```',
+    '[link](https://example.test/$$x$$)',
+    '| `$$x$$` | \\$$y$$ |\n| --- | --- |',
+  ]) {
+    assert.deepEqual(lezerMath(source), [], source)
+    assert.deepEqual(markedMath(source), [], source)
+  }
+  const source = '| before $$x+1$$ after | `$5` |\n| --- | --- |'
+  assert.deepEqual(lezerMath(source), [['display', 'x+1']])
+  assert.deepEqual(markedMath(source), [['display', 'x+1']])
+})
+
 test('many short formulas on one line cost work linear in its length', () => {
   const work = []
   for (const count of [1000, 2000, 4000, 8000]) {

@@ -446,27 +446,43 @@ test('a one-line display formula or image in a quote keeps one quote indent and 
   )
   // The tops of the numerator's glyphs reach past the formula's box, inside
   // the clip that lets a wide formula scroll sideways.
-  const formula = page.locator('.rich-pane [data-type="block-math"]')
-  const clipped = await formula.screenshot()
-  const unclip = await page.addStyleTag({
-    content: '.katex-display { overflow: visible !important }',
-  })
-  const whole = await formula.screenshot()
-  await unclip.evaluate((style) => style.remove())
-  // Glyph pixels, not the quote paint's dithering.
-  const cut = await app.evaluate(
-    ({ nativeImage }, images) => {
-      const [a, b] = images.map((image) =>
-        nativeImage.createFromBuffer(Buffer.from(image, 'base64')).toBitmap(),
+  for (const cm of [true, false]) {
+    if (!cm) await engine(false)
+    const formula = page.locator('.rich-pane [data-type="block-math"]')
+    await formula.locator('.katex').waitFor()
+    for (const { id } of bundledColorschemes) {
+      await applyPalette(id)
+      const clipped = await formula.screenshot()
+      const unclip = await page.addStyleTag({
+        content: '.katex-display { overflow: visible !important }',
+      })
+      const whole = await formula.screenshot()
+      await unclip.evaluate((style) => style.remove())
+      // Glyph pixels, not the quote paint's dithering.
+      const cut = await app.evaluate(
+        ({ nativeImage }, images) => {
+          const [a, b] = images.map((image) =>
+            nativeImage
+              .createFromBuffer(Buffer.from(image, 'base64'))
+              .toBitmap(),
+          )
+          let changed = 0
+          for (let i = 0; i < a.length; i += 4)
+            if ([0, 1, 2].some((c) => Math.abs(a[i + c] - b[i + c]) > 32))
+              changed++
+          return a.length === b.length ? changed : -1
+        },
+        [clipped, whole].map((image) => image.toString('base64')),
       )
-      let changed = 0
-      for (let i = 0; i < a.length; i += 4)
-        if ([0, 1, 2].some((c) => Math.abs(a[i + c] - b[i + c]) > 32)) changed++
-      return a.length === b.length ? changed : -1
-    },
-    [clipped, whole].map((image) => image.toString('base64')),
-  )
-  assert.equal(cut, 0, 'no part of the formula is cut off')
+      assert.equal(
+        cut,
+        0,
+        `${cm ? 'codemirror' : 'tiptap'} ${id}: no glyph ink is clipped`,
+      )
+    }
+  }
+  await engine(true)
+  await applyPalette('hibi-light')
 })
 
 test('display math inside a heading line draws as display math, in the note and its outline', {

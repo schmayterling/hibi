@@ -21,6 +21,7 @@ import {
   formattedLiteral,
   formattedMarkdown,
 } from './formatted-contributions.ts'
+import { selectBlock, selectedBlock } from './formatted-text-end.ts'
 import {
   blockAt,
   formattedStates,
@@ -368,7 +369,12 @@ function render(
   return { source, spans, unsafe, unsafeLeading, unsafeTrailing }
 }
 
-function leaves(tree: Tree, range: SelectionRange, state: EditorState) {
+function leaves(
+  tree: Tree,
+  range: SelectionRange,
+  state: EditorState,
+  atoms = false,
+) {
   const result: SyntaxNode[] = []
   tree.iterate({
     from: range.from,
@@ -384,7 +390,8 @@ function leaves(tree: Tree, range: SelectionRange, state: EditorState) {
       if (
         node.name === 'TableCell' ||
         (node.type.is('LeafBlock') &&
-          !['HorizontalRule', 'Table'].includes(node.name))
+          node.name !== 'Table' &&
+          (atoms || node.name !== 'HorizontalRule'))
       ) {
         if (!state.facet(formattedLiteral).includes(node.name))
           result.push(node)
@@ -995,7 +1002,11 @@ export function quoteAction(
   const quotes = ancestors(first.parent).filter(
     (node) => node.name === 'Blockquote',
   )
-  if (quotes.length && !formattedStates(state, tree, range).pressed('quote'))
+  if (
+    quotes.length &&
+    !selectedBlock(state) &&
+    !formattedStates(state, tree, range).pressed('quote')
+  )
     return null
   const quote = quotes.find(
     (node) => node.from <= last.from && node.to >= last.to,
@@ -1110,12 +1121,20 @@ function readList(state: EditorState, node: SyntaxNode): ListBlock {
             ),
           )
         : '',
-      blocks: children.map((child) =>
+      blocks: children.map((child, index) =>
         isList(child)
           ? readList(state, child)
           : {
               source: strip(state.sliceDoc(child.from, child.to)),
-              paragraph: child.name === 'Paragraph',
+              // Keep a blank separator when replacing this block with text.
+              paragraph:
+                child.name === 'Paragraph' ||
+                /\n[ \t>]*\n/.test(
+                  state.sliceDoc(
+                    (children[index - 1] ?? first)?.to ?? child.from,
+                    child.from,
+                  ),
+                ),
             },
       ),
     })
@@ -1338,7 +1357,8 @@ export function preserveActionSelection(
     from = Math.min(from, start)
     to = Math.max(to, end)
   })
-  const old = leaves(tree, EditorSelection.range(from, to), state)
+  const held = selectedBlock(state)
+  const old = leaves(tree, EditorSelection.range(from, to), state, !!held)
   if (!old.length) return spec
   const start = transaction.changes.mapPos(from, -1),
     end = transaction.changes.mapPos(to, 1)
@@ -1373,8 +1393,31 @@ export function preserveActionSelection(
     syntax,
     EditorSelection.range(0, next.doc.length),
     next,
+    !!held,
   )
   if (current.length !== old.length) return spec
+  const rawPosition = (at: number) => {
+    const line =
+      offsets.find((line) => line.from <= at && line.to >= at) ??
+      offsets.at(-1)!
+    return line.raw + at - line.from
+  }
+  if (held) {
+    const index = old.findIndex(
+      (node) => node.from === held.from && node.to >= held.to,
+    )
+    const block = current[index]
+    if (block)
+      return {
+        ...spec,
+        ...selectBlock(
+          rawPosition(block.from),
+          rawPosition(
+            block.from + next.sliceDoc(block.from, block.to).trimEnd().length,
+          ),
+        ),
+      }
+  }
   const position = (pos: number) => {
     let index = old.findIndex((node) => node.from <= pos && node.to >= pos)
     if (index < 0) index = pos <= old[0]!.from ? 0 : old.length - 1
@@ -1403,10 +1446,7 @@ export function preserveActionSelection(
       }
       offset -= run.text.length
     }
-    const line =
-      offsets.find((line) => line.from <= at && line.to >= at) ??
-      offsets.at(-1)!
-    return line.raw + at - line.from
+    return rawPosition(at)
   }
   const range = state.selection.main
   return {

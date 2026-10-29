@@ -352,6 +352,7 @@ test('codemirror: Tab preserves paragraph, code, list, table, focus and source b
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: text },
           selection: { anchor, head },
+          scrollIntoView: true,
           userEvent: 'input.fixture',
         })
         return new Promise((resolve) =>

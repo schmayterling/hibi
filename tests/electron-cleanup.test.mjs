@@ -182,7 +182,7 @@ test('hosted visibility policy lets a worker-only fixture launch and close', asy
   )(
     { launch: async () => application },
     true,
-    () => {},
+    () => new EventEmitter(),
     showElectronTestWindows,
     (_child, pending) => pending,
     new URL('./electron.mjs', import.meta.url).href,
@@ -478,4 +478,149 @@ test('dialog and uncaught tracing preserve native results, errors and default ha
   const quiet = { ...dialog, showErrorBox: () => 'shown' }
   installElectronDiagnostics({ dialog: quiet })
   assert.equal(quiet.showErrorBox('title', 'message'), 'shown')
+})
+
+test('cleanup stops Electron 15 s after quit, and still fails a quit that never comes at 20 s', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.mock.method(console, 'error', () => {})
+  const start = async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 1,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    })
+    let exit
+    const result = { child, stopped: 0 }
+    const application = {
+      process: () => child,
+      evaluate: async () => {},
+      close: () => new Promise(() => {}),
+    }
+    const launch = new Function(
+      '_electron',
+      'showTestWindows',
+      'forwardElectronDiagnostics',
+      'waitForElectronShutdown',
+      'stopElectronTree',
+      'drainElectronStdio',
+      'snapshotElectronProcesses',
+      'moduleUrl',
+      `return ({${electron.launch.toString().replace('import.meta.url', 'moduleUrl')}}).launch`,
+    )(
+      { launch: async () => application },
+      false,
+      forwardElectronDiagnostics,
+      () =>
+        new Promise((_, reject) => {
+          exit = reject
+        }),
+      () => {
+        result.stopped++
+        exit(new Error('Electron exited with code null, signal SIGKILL'))
+      },
+      () => {},
+      async () => {},
+      new URL('./electron.mjs', import.meta.url).href,
+    )
+    await launch({ args: [], diagnostics: false })
+    result.closing = application.close()
+    result.exit = (error) => exit(error)
+    return result
+  }
+
+  const quit = await start()
+  quit.child.stderr.write('electron-main-quit\n')
+  await new Promise(setImmediate)
+  t.mock.timers.tick(14999)
+  assert.equal(quit.stopped, 0)
+  t.mock.timers.tick(1)
+  assert.equal(quit.stopped, 1)
+  await quit.closing
+
+  const stuck = await start()
+  t.mock.timers.tick(20000)
+  await assert.rejects(stuck.closing, /exceeded 20 seconds/)
+  assert.equal(stuck.stopped, 1)
+
+  const crashed = await start()
+  crashed.child.stderr.write('electron-main-quit\n')
+  crashed.exit(new Error('Electron exited with code null, signal SIGSEGV'))
+  await assert.rejects(crashed.closing, /SIGSEGV/)
+})
+
+test('teardown waits for setup when a name filter skips every top-level test, and not past its timeout', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-filtered-hooks-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const run = async (name, setup, timeout, teardown = '') => {
+    const file = join(root, `${name}.test.mjs`)
+    await writeFile(
+      file,
+      `import test from 'node:test'
+import { after, before } from ${JSON.stringify(new URL('./electron.mjs', import.meta.url).href)}
+let open
+before(async () => {
+  open = setInterval(() => {}, 1000)
+  ${setup}
+  console.log('set up')
+}, { timeout: ${timeout} })
+after(async () => {
+  console.log('closed')
+  clearInterval(open)
+  ${teardown}
+}, { timeout: ${teardown ? 300 : name === 'slow' ? 100 : 5000} })
+test('parent', async (t) => {
+  await t.test('only a subtest matches', () => {})
+})
+`,
+    )
+    const child = spawn(
+      process.execPath,
+      [
+        '--test-reporter=tap',
+        `--test-name-pattern=${name === 'before-timeout' ? 'parent' : 'only a subtest'}`,
+        file,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    )
+    t.after(() => child.kill('SIGKILL'))
+    let output = ''
+    child.stdout.on('data', (chunk) => {
+      output += chunk
+    })
+    const watchdog = setTimeout(() => child.kill('SIGKILL'), 10000)
+    const [, signal] = await once(child, 'exit')
+    clearTimeout(watchdog)
+    assert.equal(signal, null, output)
+    return output
+  }
+  assert.match(
+    await run(
+      'slow',
+      'await new Promise((resolve) => setTimeout(resolve, 200))',
+      5000,
+    ),
+    /set up[\s\S]*closed/,
+  )
+  assert.match(await run('stuck', 'await new Promise(() => {})', 300), /closed/)
+  assert.match(
+    await run(
+      'infinite',
+      'await new Promise((resolve) => setTimeout(resolve, 200))',
+      'Infinity',
+    ),
+    /set up[\s\S]*closed/,
+  )
+  assert.match(
+    await run('before-timeout', 'await new Promise(() => {})', 100),
+    /test timed out after 100ms/,
+  )
+  assert.match(
+    await run(
+      'after-timeout',
+      '',
+      5000,
+      'await new Promise((resolve) => setTimeout(resolve, 500))',
+    ),
+    /test timed out after 300ms/,
+  )
 })

@@ -1,9 +1,39 @@
 import { execFile, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import test from 'node:test'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
 
 const execute = promisify(execFile)
+
+// When --test-name-pattern skips every top-level test of a file, node:test runs
+// its `after` hooks without waiting for its `before` hooks. Teardown then finds
+// no app, and the app launched later keeps the run open forever. (A pattern has
+// to match a top-level test: node never runs a skipped test's subtests.)
+const setups = []
+export function before(fn, options) {
+  test.before((context) => {
+    const setup = Promise.resolve().then(() => fn(context))
+    const settled = setup.catch(() => {})
+    // A setup that node timed out must not hold teardown back.
+    setups.push(
+      Number.isFinite(options?.timeout)
+        ? Promise.race([
+            settled,
+            new Promise((resolve) =>
+              setTimeout(resolve, options.timeout).unref(),
+            ),
+          ])
+        : settled,
+    )
+    return setup
+  }, options)
+}
+export function after(fn, options) {
+  // Waiting for setup must not consume the teardown hook's own timeout.
+  test.after(() => Promise.all(setups))
+  test.after(fn, options)
+}
 
 export async function snapshotElectronProcesses(pid) {
   if (process.platform === 'win32') return
@@ -260,7 +290,16 @@ export const electron = {
       },
       args: [...options.args, '--hibi-test', ...gpuArgs],
     })
-    forwardElectronDiagnostics(application.process().stderr)
+    let quit = false
+    let onQuit
+    forwardElectronDiagnostics(application.process().stderr).on(
+      'line',
+      (line) => {
+        if (line !== 'electron-main-quit') return
+        quit = true
+        onQuit?.()
+      },
+    )
     const close = application.close.bind(application)
     const quitTrace = {
       notInstalled: true,
@@ -329,17 +368,34 @@ export const electron = {
         }, 3000)
         diagnosticTimer.unref()
         const pendingClose = close()
+        let stopped = false
         await Promise.race([
           waitForElectronShutdown(
             child,
             pendingClose,
             process.platform,
             waitForTransport,
-          ),
+          ).catch((error) => {
+            if (!stopped) throw error
+          }),
           new Promise((_, reject) => {
             timer = setTimeout(() => {
               reject(new Error('Electron test cleanup exceeded 20 seconds'))
             }, 20000)
+            // Hibi's quit work is done once `quit` is emitted. Chromium's own
+            // teardown after it can take more than 20 s on a loaded machine; it
+            // waits up to 10 s for the network service alone.
+            onQuit = () => {
+              clearTimeout(timer)
+              timer = setTimeout(() => {
+                console.error(
+                  'electron-shutdown-after-quit: still running 15 s after quit; stopping it',
+                )
+                stopped = true
+                stopElectronTree(child)
+              }, 15000)
+            }
+            if (quit) onQuit()
           }),
         ])
       } catch (error) {
@@ -347,11 +403,17 @@ export const electron = {
         drainElectronStdio(child)
         throw error
       } finally {
+        onQuit = undefined
         clearTimeout(timer)
         clearTimeout(diagnosticTimer)
       }
     }
-    if (diagnostics) await application.evaluate(installElectronDiagnostics)
+    if (diagnostics) {
+      await application.evaluate(installElectronDiagnostics)
+      await application.evaluate(({ app }) =>
+        app.once('quit', () => console.error('electron-main-quit')),
+      )
+    }
     if (showTestWindows) {
       // The inspector may already be closed; keep only validated stdout events.
       let detachQuitTrace

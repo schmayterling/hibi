@@ -2,8 +2,14 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { after, before, test } from 'node:test'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import { test } from 'node:test'
+import {
+  after,
+  before,
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 let app, page, profile

@@ -47,6 +47,9 @@ $$
 > [!NOTE]
 > Remember to water the seedlings.
 
+> [!TIP]- Folded harvest tip
+> Pick basil before it flowers.
+
 \`\`\`js
 const answer = 42
 \`\`\`
@@ -296,6 +299,8 @@ test('exports the active note as a PDF from the palette and the File menu', {
       'Tomatoes',
       'Basil',
       'Remember to water the seedlings.',
+      'Folded harvest tip',
+      'Pick basil before it flowers.',
       'const answer = 42',
       'Order compost',
       'Plant garlic',
@@ -316,6 +321,11 @@ test('exports the active note as a PDF from the palette and the File menu', {
     for (const rendered of ['Seed', 'Sprout', 'iπ', '∑'])
       assert.ok(result.text.includes(rendered), `${rendered} in ${name} PDF`)
     assert.ok(result.images >= 1, `${result.images} images in ${name} PDF`)
+    // A folded callout prints its body, which the page cannot open.
+    assert.match(
+      html,
+      /<details class="github-alert" data-alert="tip" data-fold="-"><summary class="github-alert-title">Folded harvest tip<\/summary>/,
+    )
     assert.ok(
       html.includes('alt="Typst block preview"'),
       'Typst rendered in dark mode',

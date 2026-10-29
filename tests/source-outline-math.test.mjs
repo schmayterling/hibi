@@ -1,86 +1,92 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { GFM, parser } from '@lezer/markdown'
-import {
-  outlineMathParser,
-  SourceOutlineMathUnavailable,
-  validateOutlineMathCandidate,
-} from '../src/renderer/src/source-outline-math.ts'
+import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
+import { createOutlineLabelRenderer } from '../src/renderer/src/source-outline-label.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
 
-const parse = (source, read = (from, to) => source.slice(from, to)) => {
-  const tree = parser
-    .configure([GFM, outlineMathParser(read, () => source.length)])
-    .parse(source)
-  const headings = [],
-    math = []
-  tree.iterate({
-    enter(node) {
-      if (/Heading/.test(node.name))
-        headings.push(source.slice(node.from, node.to))
-      if (node.name === 'HibiMathBlock') math.push([node.from, node.to])
-    },
+const fixture = readFileSync(
+  new URL('./fixtures/outline-math.md', import.meta.url),
+  'utf8',
+)
+
+function outline(source) {
+  const store = new SourceStore(source, { tabId: 'outline-math', revision: 0 })
+  const model = new SourceOutlineModel(store.snapshot(), {
+    gfm: true,
+    frontmatter: true,
+    alerts: true,
+    math: true,
+    renderLabel: createOutlineLabelRenderer(['markdown.github', 'math.latex']),
   })
-  return { headings, math }
+  try {
+    const work = model.read()
+    for (let i = 0; i < 100_000; i++) {
+      const step = work.next(null)
+      if (step.done) return step.value
+    }
+    assert.fail('Outline work must converge.')
+  } finally {
+    model.dispose()
+  }
 }
 
-test('source outline math keeps confirmed top-level math opaque', () => {
-  const source = '$$\n# inside math\n$$\n\n# real\n'
-  assert.deepEqual(parse(source), {
-    headings: ['# real'],
-    math: [[0, source.indexOf('\n# real')]],
-  })
-  assert.deepEqual(parse('$$x$$\n\n# after\n').headings, ['# after'])
+test('source outline reads synthetic course math in paragraphs, headings and containers', () => {
+  for (const source of [fixture, fixture.replaceAll('\n', '\r\n')]) {
+    const result = outline(source)
+    assert.deepEqual(
+      result.headings.map(({ label, level }) => [label, level]),
+      [
+        ['Course x', 1],
+        ['Formula f(x)', 2],
+        ['Callout a', 3],
+        ['List b', 3],
+        ['Nested c', 4],
+        ['Setext g(x)', 2],
+        ['End', 2],
+      ],
+    )
+    assert.deepEqual(result.headings[1].parts, ['Formula ', { latex: 'f(x)' }])
+    for (let index = 0; index < result.headings.length; index++) {
+      const at = result.position(index)
+      assert.equal(result.at(at), result.headings[index])
+      assert.match(source.slice(at), /^(?:#{1,4} |Setext )/)
+    }
+  }
 })
 
-test('source outline math interrupts paragraphs only with a confirmed native token', () => {
-  assert.deepEqual(parse('text\n$$\n# hidden\n$$\n\n# real').headings, [
-    '# real',
-  ])
-  assert.deepEqual(parse('text\n$$\n---').headings, ['text\n$$\n---'])
+test('source outline leaves incomplete and oversized math as ordinary Markdown', () => {
+  for (const body of [
+    'before $$ math',
+    `$$${'x'.repeat(20_000)}`,
+    `$$x$$${' '.repeat(20_000)}`,
+  ]) {
+    assert.deepEqual(
+      outline(`${body}\n\n# real`).headings.map(({ label }) => label),
+      ['real'],
+    )
+  }
+  assert.deepEqual(
+    outline('text $$x$$\n---\n\n# real').headings.map(({ label }) => label),
+    ['text x', 'real'],
+  )
 })
 
-test('source outline math preserves code blocks and rejects nested containers', () => {
-  assert.deepEqual(parse('```\n$$\n# code\n$$\n```\n\n# real').headings, [
-    '# real',
-  ])
+test('source outline contains math at quote and list boundaries', () => {
   for (const source of [
     '> $$\n> # hidden\n> $$\n\n# real',
     '- $$\n  # hidden\n  $$\n\n# real',
     '1. $$\n   # hidden\n   $$\n\n# real',
+    '> - $$\n>   # hidden\n>   $$\n\n# real',
+    '- > $$\n  > # hidden\n  > $$\n\n# real',
   ])
-    assert.throws(() => parse(source), SourceOutlineMathUnavailable)
-})
-
-test('source outline math never accepts artificial EOF or scans beyond its limit', () => {
-  const source = `$$x$$${' '.repeat(20_000)}\n# real`
-  let maximumRead = 0
-  assert.throws(
-    () =>
-      parse(source, (from, to) => {
-        maximumRead = Math.max(maximumRead, to - from)
-        return source.slice(from, to)
-      }),
-    SourceOutlineMathUnavailable,
-  )
-  assert.equal(maximumRead, 16_384)
-  assert.throws(
-    () => parse(`$$${'x'.repeat(20_000)}\n# real`),
-    SourceOutlineMathUnavailable,
-  )
+    assert.deepEqual(
+      outline(source).headings.map(({ label }) => label),
+      ['real'],
+    )
+  // A closing delimiter outside the container cannot swallow its next heading.
   assert.deepEqual(
-    parse(`$$x$$\n\n# real\n${'tail\n'.repeat(4000)}`).headings,
-    ['# real'],
-  )
-})
-
-test('source outline math paragraph validation refuses ambiguous source', () => {
-  assert.doesNotThrow(() => validateOutlineMathCandidate('ordinary paragraph'))
-  assert.throws(
-    () => validateOutlineMathCandidate('before $$ math'),
-    SourceOutlineMathUnavailable,
-  )
-  assert.throws(
-    () => validateOutlineMathCandidate('uninspected tail', true),
-    SourceOutlineMathUnavailable,
+    outline('> $$\n# visible\n$$\n\n# real').headings.map(({ label }) => label),
+    ['visible', 'real'],
   )
 })

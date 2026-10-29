@@ -18,7 +18,8 @@ import {
 import { containerPrefix, mathInsertion } from '../src/addons/math/insert.ts'
 import { inlineMath, mathTokens } from '../src/addons/math/syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
-import { outlineMathParser } from '../src/renderer/src/source-outline-math.ts'
+import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const formatted = parser.configure([GFM, inlineMathSyntax, blockMathSyntax])
 // `$$…$$` inside a line is display math in the formatted view, not the rich view.
@@ -209,42 +210,38 @@ test('formatted math matches the math tokenizers on the math fixtures', () => {
       }
 })
 
-test('formatted display math matches the source outline on top-level math', () => {
-  const outline = (source) =>
-    parser
-      .configure([
-        GFM,
-        outlineMathParser(
-          (from, to) => source.slice(from, to),
-          () => source.length,
-        ),
-      ])
-      .parse(source)
+test('formatted and source outlines agree around nested and mid-line math', () => {
   for (const fixture of fixtures) {
-    // The outline reads containers as unavailable and `$$` only at a line start.
-    if (/^[ \t]*(?:[->]|\d\.)|^[ \t]+\$\$/m.test(fixture)) continue
     const source = `${fixture}\n\n# after`
-    const a = [],
-      b = []
-    let tree
+    const store = new SourceStore(source, {
+      tabId: 'math-outline',
+      revision: 0,
+    })
+    const model = new SourceOutlineModel(store.snapshot(), {
+      gfm: true,
+      frontmatter: false,
+      math: true,
+    })
     try {
-      tree = outline(source)
-    } catch {
-      continue
+      const work = model.read()
+      let step
+      do {
+        step = work.next(null)
+      } while (!step.done)
+      const expected = []
+      formatted.parse(source).iterate({
+        enter(node) {
+          if (/^(ATX|Setext)Heading/.test(node.name)) expected.push(node.from)
+        },
+      })
+      assert.deepEqual(
+        step.value.headings.map((_, index) => step.value.position(index)),
+        expected,
+        JSON.stringify(source),
+      )
+    } finally {
+      model.dispose()
     }
-    tree.iterate({
-      enter(node) {
-        if (node.name === 'HibiMathBlock') a.push(node.from)
-        if (/Heading/.test(node.name)) a.push(`h${node.from}`)
-      },
-    })
-    formatted.parse(source).iterate({
-      enter(node) {
-        if (node.name === 'BlockMath') b.push(node.from)
-        if (/Heading/.test(node.name)) b.push(`h${node.from}`)
-      },
-    })
-    assert.deepEqual(b, a, JSON.stringify(source))
   }
 })
 

@@ -438,8 +438,8 @@ test('source outline resolves references through its worker and preserves native
   const unavailable = outline.getByText(
     /Source outline could not read this note.*Switch to visual mode/,
   )
-  await unavailable.waitFor()
-  assert.equal(await outline.locator('.sidebar-label').count(), 0)
+  await expectLabels(nativeLabels)
+  assert.equal(await unavailable.count(), 0)
   await replaceSourceText(page, source, original)
   await expectLabels(nativeLabels)
   assert.equal(await unavailable.count(), 0)

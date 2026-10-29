@@ -6,6 +6,7 @@ import {
   type Tree,
   TreeFragment,
 } from '@lezer/common'
+import { readAheadFrom } from './chunked-markdown.ts'
 import {
   acceptedStorageChange,
   type PreparedSourceOperation,
@@ -192,17 +193,41 @@ export class SourceParserSession {
     ranges: readonly ChangedRange[],
     source: SourceSnapshot,
   ) {
-    // All fragments refer to the last completed tree. Mapping another edit
-    // can close an earlier open edge; its tree position still stays fixed.
-    const openStarts = new Set<number>(),
+    // Invalidate earlier decisions that read across an edit, such as an
+    // unmatched math opener whose closing delimiter was just inserted.
+    const decisions = new Set<number>(),
+      openStarts = new Set<number>(),
       openEnds = new Set<number>()
     for (const fragment of this.#fragments) {
       this.#work.fragmentVisits++
       if (fragment.openStart) openStarts.add(fragment.from + fragment.offset)
       if (fragment.openEnd) openEnds.add(fragment.to + fragment.offset)
+      for (const range of ranges)
+        for (const at of readAheadFrom(
+          fragment.tree,
+          range.fromA + fragment.offset,
+        ) ?? []) {
+          const from = at - fragment.offset
+          if (from >= fragment.from && from < fragment.to) decisions.add(from)
+        }
     }
-    this.#work.fragmentVisits += this.#fragments.length
-    const fragments = TreeFragment.applyChanges(this.#fragments, ranges)
+    let fragments = this.#fragments
+    if (decisions.size)
+      fragments = TreeFragment.applyChanges(
+        fragments,
+        [...decisions]
+          .sort((a, b) => a - b)
+          .map((from) => ({
+            fromA: from,
+            toA: from + 1,
+            fromB: from,
+            toB: from + 1,
+          })),
+      )
+    // All fragments refer to the last completed tree. Mapping another edit
+    // can close an earlier open edge; its tree position still stays fixed.
+    this.#work.fragmentVisits += fragments.length
+    fragments = TreeFragment.applyChanges(fragments, ranges)
     // A burst may outgrow useful reuse. Release that table; a background full
     // parse is preferable to retaining an unbounded edit-fragment directory.
     this.#fragments =

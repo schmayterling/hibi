@@ -20,6 +20,67 @@ import {
 import { waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 
+it('enabled math rechecks notes containing only mid-line display math', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-midline-detection-'))
+  await writeFile(join(profile, 'addons.json'), JSON.stringify({ math: false }))
+  const file = join(profile, 'midline.md')
+  await writeFile(file, '# Sample\n\nOnly $$x^2$$ appears in this note.\n')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  const status = page
+    .locator('[data-status-id="flavor"]')
+    .filter({ hasText: /math/i })
+  assert.equal(await status.count(), 0)
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+k' : 'Control+k',
+  )
+  const search = page.getByRole('combobox', { name: 'Search commands' })
+  await search.fill('enable latex')
+  await page.getByRole('option').first().waitFor()
+  await search.press('Enter')
+  await page
+    .getByRole('dialog', { name: /command palette/i })
+    .waitFor({ state: 'hidden' })
+  await status.waitFor({ timeout: 10000 })
+  if (t.formattedEngine === 'codemirror')
+    await page.locator('.rich-pane .katex-display').waitFor()
+  // Detection still ignores double-dollar text in code and escaped delimiters.
+  const source = page.getByRole('textbox', {
+    name: 'Markdown editor',
+    exact: true,
+  })
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+Shift+]' : 'Control+Shift+]',
+  )
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  for (const literal of ['`$$x$$`', '\\$$x$$', '```tex\n$$x$$\n```']) {
+    await replaceSourceText(page, source, `# Sample\n\n${literal}\n`)
+    await page
+      .locator('[data-status-id="flavor"]')
+      .filter({ hasText: /math/i })
+      .waitFor({ state: 'hidden' })
+  }
+})
+
 test('math detection respects code, escaped delimiters, and currency spacing', () => {
   for (const source of ['$x^2$', '$$\nx^2\n$$', '$2+2$'])
     assert.equal(mathFlavor.detect(source), true)

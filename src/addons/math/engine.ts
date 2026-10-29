@@ -18,10 +18,15 @@ import { mathStyles } from './styles'
 import {
   blockMath,
   blockMathStart,
+  detector,
   inlineMath,
   mathFlavor,
   mathTokens,
 } from './syntax'
+
+// Recheck automatic math detection, now including `$$…$$` inside a line, when
+// this lazy runtime registers its flavor.
+detector.use(inlineDisplayMathTokens)
 
 const options = {
   throwOnError: false,

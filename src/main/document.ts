@@ -243,10 +243,8 @@ export async function setTabsEnabled(window: BrowserWindow, enabled: unknown) {
   const closing = enabled
     ? []
     : getOpenDocuments().filter((draft) => draft.tabId !== activeTab)
-  const kept: NonNullable<DocumentState['saved']> = []
   for (const draft of closing)
-    if (!(await confirmTabDiscard(window, draft.tabId, kept)))
-      return Object.assign(getDocument(), { saved: kept })
+    if (!(await confirmTabDiscard(window, draft.tabId))) return getDocument()
   await writeText(tabsPreferencePath(), JSON.stringify(enabled))
   tabsEnabled = enabled
   if (!enabled) {
@@ -293,6 +291,7 @@ function activateTab(id: string) {
   if (draft.source !== source) releaseMaintenance()
   activeTab = id
   ;({ source, saved, path, pendingPath, untitledName, draftId } = draft)
+  // Prompts activate tabs briefly; a retained tab keeps its revision.
   revision = source.snapshot().document.revision
 }
 async function startTab(window: BrowserWindow, reuseEmpty = false) {
@@ -485,24 +484,12 @@ export async function focusDocumentTab(
   }
 }
 
-async function confirmTabDiscard(
-  window: BrowserWindow,
-  id: string,
-  kept?: NonNullable<DocumentState['saved']>,
-) {
+async function confirmTabDiscard(window: BrowserWindow, id: string) {
   storeTab()
   const previous = activeTab
   try {
     activateTab(id)
-    const confirmed = await confirmDiscard(window)
-    const current = source.snapshot()
-    if (kept && confirmed && !pendingPath && !dirty(source, saved))
-      kept.push({
-        tabId: id,
-        revision: current.document.revision,
-        contentVersion: current.version,
-      })
-    return confirmed
+    return await confirmDiscard(window)
   } finally {
     storeTab()
     activateTab(previous)
@@ -573,12 +560,9 @@ export async function closeDocumentTabs(
   const closing = new Set<string>(ids as string[])
   if (typeof preferredTab === 'string' && closing.has(preferredTab))
     throw new Error('The preferred tab must remain open.')
-  // Confirm in visible order; cancelling any prompt closes nothing, but tabs
-  // already saved report their new baselines.
-  const kept: NonNullable<DocumentState['saved']> = []
+  // Confirm in visible order; cancelling any prompt closes nothing.
   for (const id of tabs.keys())
-    if (closing.has(id) && !(await confirmTabDiscard(window, id, kept)))
-      return kept.length ? Object.assign(getDocument(), { saved: kept }) : null
+    if (closing.has(id) && !(await confirmTabDiscard(window, id))) return null
   return removeTabs(
     window,
     closing,

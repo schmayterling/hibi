@@ -7,7 +7,12 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  replaceRichText,
+  splitTab,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('disk refresh after focusing an older tab advances its revision', {
@@ -1193,7 +1198,7 @@ test('context-menu bulk close confirms dirty tabs and cancels as a unit', {
   assert.equal(await app.evaluate(() => globalThis.choices.length), 2)
 })
 
-test('bulk close keeps baselines saved before a later prompt is cancelled', {
+test('bulk close keeps saved retained tabs on their revision when a later prompt cancels', {
   timeout: 40000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-tab-menu-partial-'))
@@ -1268,28 +1273,17 @@ test('bulk close keeps baselines saved before a later prompt is cancelled', {
   const current = await read()
   assert.equal(current.tabId, a.id)
   assert.equal(current.tabs.length, 3)
-  const unsaved = (id) =>
-    page.locator(`[data-tab-id="${id}"]`).getAttribute('aria-description')
-  await page.waitForFunction(
-    (id) =>
-      !document
-        .querySelector(`[data-tab-id="${id}"]`)
-        ?.hasAttribute('aria-description'),
+  // Saving B activated it briefly in main; its retained editor still owns it.
+  await splitTab(app, page, b.id)
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
     b.id,
   )
-  assert.equal(await unsaved(c.id), 'Unsaved changes')
-  await select(b.id)
-  assert.equal((await read()).dirty, false)
-  assert.equal(await unsaved(b.id), null)
-  // The retained editor still records later edits against the saved baseline.
-  await replaceRichText(page, editor, 'dirty b again')
-  await page.waitForFunction(
-    (id) =>
-      document
-        .querySelector(`[data-tab-id="${id}"]`)
-        ?.getAttribute('aria-description') === 'Unsaved changes',
-    b.id,
-  )
+  await page.locator('.editor-page[data-side="right"]').waitFor()
+  const split = await read()
+  assert.equal(split.dirty, false)
+  assert.equal(split.markdown, 'dirty b')
 })
 
 test('middle-click closes tabs without changing the active document', {

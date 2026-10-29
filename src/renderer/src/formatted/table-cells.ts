@@ -773,6 +773,41 @@ export class CellEditor {
             ),
           ),
           keymap.of(defaultKeymap),
+          // A script or assistive tool can select from this cell into
+          // another while the editor keeps focus. A measure that reads the
+          // page before it reports the change draws the editor's caret over
+          // it, with no update for plugins to see; attributes are read in
+          // every update before that draw. The pick goes back on the page
+          // for the formatted view to take.
+          EditorView.contentAttributes.of((view) => {
+            const page = view.dom.ownerDocument.getSelection()
+            const anchor = page?.anchorNode,
+              focus = page?.focusNode
+            if (
+              !page ||
+              !anchor ||
+              !focus ||
+              !view.hasFocus ||
+              view.contentDOM.contains(anchor) ===
+                view.contentDOM.contains(focus) ||
+              !host.main.contentDOM.contains(anchor) ||
+              !host.main.contentDOM.contains(focus)
+            )
+              return null
+            const { anchorOffset, focusOffset } = page
+            queueMicrotask(() => {
+              if (
+                anchor.isConnected &&
+                focus.isConnected &&
+                (page.anchorNode !== anchor ||
+                  page.anchorOffset !== anchorOffset ||
+                  page.focusNode !== focus ||
+                  page.focusOffset !== focusOffset)
+              )
+                page.setBaseAndExtent(anchor, anchorOffset, focus, focusOffset)
+            })
+            return null
+          }),
           // Undo and redo are the formatted view's, through its history; a
           // view that takes no input takes neither, and the browser's own
           // undo of the cell's DOM never runs.

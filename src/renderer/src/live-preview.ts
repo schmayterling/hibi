@@ -83,6 +83,7 @@ import {
   referenceLinks,
 } from './formatted-references'
 import type { FormattedSyntax } from './formatted-syntax'
+import { openedBlock, openSelection } from './formatted-text-end'
 import { nativeDOMSelection } from './native-dom-selection'
 import './formatted'
 import './live-preview.css'
@@ -1656,14 +1657,19 @@ const focused = StateField.define<boolean>({
 
 /**
  * Selection ranges inside one block. As in the rich editor, a selection
- * across blocks, such as select all, shows no markers.
+ * across blocks, such as select all, shows no markers, nor does the block a
+ * note opened with selected.
  */
 function inBlocks(state: EditorState, tree: Tree): readonly Revealed[] {
   const ranges: Revealed[] = []
   for (const { from, to } of state.selection.ranges) {
     let block: SyntaxNode | null = from < to ? tree.resolve(from, 1) : null
     while (block && !block.type.is('LeafBlock')) block = block.parent
-    if (from === to || (block && block.to >= to)) ranges.push({ from, to })
+    if (
+      (from === to || (block && block.to >= to)) &&
+      !openedBlock(state, from, to)
+    )
+      ranges.push({ from, to })
   }
   return ranges
 }
@@ -1681,6 +1687,20 @@ const placed = StateField.define<boolean>({
     return transaction.selection ? true : value
   },
 })
+
+/** Whether a contributed layout draws a node in place of its text while it is not revealed. */
+function replacedWhole(state: EditorState, node: SyntaxNode) {
+  let whole = false
+  const sink = {
+    replace(from: number, to: number) {
+      if (from <= node.from && to >= node.to) whole = true
+    },
+    widget() {},
+  }
+  for (const view of formattedNodeViews(state)(node.type).views)
+    view.layout?.(node, sink, { state, revealed: false, visible: null })
+  return whole
+}
 
 /** The selection while the focused editor shows markers. */
 function revealedIn(state: EditorState, tree: Tree): readonly Revealed[] {
@@ -2126,6 +2146,7 @@ export function livePreview(
     codeIndent,
     focused,
     placed,
+    openSelection({ tree: syntax.tree, replaced: replacedWhole }),
     layout,
     EditorView.decorations.compute([layout, placed, 'selection'], (state) =>
       revealDestinations(state.field(layout), state),

@@ -3,10 +3,11 @@ import test from 'node:test'
 import { Text } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
-import { formattedTextEnd } from '../src/renderer/src/formatted-text-end.ts'
+import { formattedOpenSelection } from '../src/renderer/src/formatted-text-end.ts'
 
 const markdown = parser.configure(GFM)
 const text = (source) => Text.of(source.split('\n'))
+const caret = (at) => ({ anchor: at, head: at })
 
 test('a note opens with the caret at the end of its last text block', () => {
   // ‸ marks the caret.
@@ -40,24 +41,55 @@ test('a note opens with the caret at the end of its last text block', () => {
     '| a |\n| - |\n| c |\n\n‸\n',
   ]) {
     const source = marked.replace('‸', '')
-    assert.equal(
-      formattedTextEnd(text(source), markdown.parse(source)),
-      marked.includes('‸') ? marked.indexOf('‸') : 0,
+    assert.deepEqual(
+      formattedOpenSelection(text(source), markdown.parse(source)),
+      caret(marked.includes('‸') ? marked.indexOf('‸') : 0),
       JSON.stringify(marked),
     )
   }
 })
 
-test('a fence drawn as a widget, or a tree short of the end, keeps the caret at the source end', () => {
+test('a note ending in a block the rich editor draws as one node opens with it selected', () => {
+  // « and » mark the selection.
+  for (const marked of [
+    'plain\n\n«<div>\nlast\n</div>»\n',
+    'plain\n\n«<!-- last -->»\n',
+    'plain\n\n«***»\n',
+    'plain\n\n«![last](missing.png)»\n',
+    '> quoted\n>\n> «***»\n',
+    '- item\n\n  «<!-- last -->»\n',
+  ]) {
+    const source = marked.replace(/[«»]/g, '')
+    const anchor = marked.indexOf('«'),
+      head = marked.indexOf('»') - 1
+    assert.deepEqual(
+      formattedOpenSelection(text(source), markdown.parse(source)),
+      { anchor, head },
+      JSON.stringify(marked),
+    )
+  }
+  // An image beside text is text.
+  const inline = 'plain\n\n![a](a.png) last\n'
+  assert.deepEqual(
+    formattedOpenSelection(text(inline), markdown.parse(inline)),
+    caret(inline.length - 1),
+  )
+})
+
+test('a fence a renderer draws is selected whole; a tree short of the end gives null', () => {
   const fence = 'plain\n\n```mermaid\ngraph TD\n```\n'
   const asked = []
-  const drawn = (pos) => asked.push(pos) && false
-  assert.equal(
-    formattedTextEnd(text(fence), markdown.parse(fence), drawn),
-    fence.length - 1,
+  const replaced = (node) => asked.push(node.name) > 0
+  assert.deepEqual(
+    formattedOpenSelection(text(fence), markdown.parse(fence), replaced),
+    { anchor: 7, head: fence.length - 1 },
   )
-  assert.deepEqual(asked, [fence.indexOf('graph TD') + 'graph TD'.length])
-  // The open caret reads the tree it is given and never parses further.
+  assert.deepEqual(asked, ['FencedCode'])
+  assert.deepEqual(
+    formattedOpenSelection(text(fence), markdown.parse(fence)),
+    caret(fence.indexOf('graph TD') + 'graph TD'.length),
+  )
+  // The open selection reads the tree it is given and never parses further.
   const source = `first\n\n${'old tail\n\n'.repeat(20000)}\`\`\`\ncode\n\`\`\`\n`
   const parse = new ChunkedMarkdownParser(markdown, markdown).startChunkedParse(
     {
@@ -71,9 +103,9 @@ test('a fence drawn as a widget, or a tree short of the end, keeps the caret at 
   )
   let partial = parse.advance()
   while (!partial) partial = parse.advance()
-  assert.equal(formattedTextEnd(text(source), partial), source.length - 1)
-  assert.equal(
-    formattedTextEnd(text(source), markdown.parse(source)),
-    source.length - 5,
+  assert.equal(formattedOpenSelection(text(source), partial), null)
+  assert.deepEqual(
+    formattedOpenSelection(text(source), markdown.parse(source)),
+    caret(source.length - 5),
   )
 })

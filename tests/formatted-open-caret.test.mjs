@@ -72,23 +72,31 @@ const notes = {
   'fenced-empty': 'plain\n\n```\n```\n',
   long: `${'line\n\n'.repeat(20000)}\`\`\`\ncode\nlast\n\`\`\`\n`,
   'long-table': `${'line\n\n'.repeat(20000)}| aa   | bb   |\n| ---- | ---- |\n| cell | tail |\n`,
+  'long-mermaid': `${'line\n\n'.repeat(20000)}\`\`\`mermaid\ngraph TD\n  A --> B\n\`\`\`\n`,
   footnote: 'plain[^1]\n\n[^1]: last\n',
 }
 
 /*
- * Each engine's own outcome for an accepted difference (open-001 to open-004
- * in formatted-engine-gaps.md). 'end' is the end of the note's text, where the
- * formatted view keeps the caret when it cannot match.
+ * Each engine's own outcome where they differ (open-001 to open-004 in
+ * formatted-engine-gaps.md). 'end' is the end of the note's text, where the
+ * formatted view keeps the caret until its view reaches the note's end. A
+ * block the rich editor node-selects is selected whole in the formatted
+ * view: 'block', from its first character to its last.
  */
 const node = { selection: 'node' }
+const atoms = [
+  'html',
+  'html-comment',
+  'math',
+  'mermaid',
+  'typst',
+  'rule',
+  'image',
+]
 const accepted = {
-  html: { native: node, codemirror: 'end' },
-  'html-comment': { native: node, codemirror: 'end' },
-  math: { native: node, codemirror: 'end' },
-  mermaid: { native: node, codemirror: 'end' },
-  typst: { native: node, codemirror: 'end' },
-  rule: { native: node, codemirror: 'end' },
-  image: { native: node, codemirror: 'end' },
+  ...Object.fromEntries(
+    atoms.map((name) => [name, { native: node, codemirror: 'block' }]),
+  ),
   'table-short-row': {
     native: { cell: [1, 1], code: false, text: ['', ''] },
     codemirror: { cell: [1, 0], code: false, text: ['cell', ''] },
@@ -104,6 +112,7 @@ const accepted = {
   // The end may be parsed and drawn by the first paint on a fast machine.
   long: { codemirror: 'end or native' },
   'long-table': { codemirror: 'end or native' },
+  'long-mermaid': { native: node, codemirror: 'end or block' },
   // The rich editor opens a note with footnotes beside its source, read-only.
   footnote: {
     native: { focus: 'source view' },
@@ -157,6 +166,7 @@ function caret() {
     code: !!element?.closest('pre, .hibi-lp-codeblock'),
     text,
     selection: root?.editor?.state.selection.toJSON().type,
+    anchor: root?.cmTile?.root.view.state.selection.main.anchor,
     head: root?.cmTile?.root.view.state.selection.main.head,
   }
 }
@@ -251,25 +261,111 @@ for (const engine of ['tiptap', 'codemirror'])
     const key = ({ focus, cell, code, text }) =>
       focus === 'editor' ? { cell, code, text } : { focus }
     const differences = []
+    const check = (name, actual, want) => {
+      if (JSON.stringify(actual) !== JSON.stringify(want))
+        differences.push(
+          `${name}: ${JSON.stringify(actual)} != ${JSON.stringify(want)}`,
+        )
+    }
     for (const [name, markdown] of Object.entries(notes)) {
       const observed = await open(name, markdown)
       t.diagnostic(JSON.stringify({ engine, name, ...observed }))
       const expected =
         accepted[name]?.[engine === 'tiptap' ? 'native' : 'codemirror']
-      const check = (actual, want) => {
-        if (JSON.stringify(actual) !== JSON.stringify(want))
-          differences.push(
-            `${name}: ${JSON.stringify(actual)} != ${JSON.stringify(want)}`,
-          )
-      }
       const end = markdown.trimEnd().length
+      const block = [markdown.lastIndexOf('\n\n', end) + 2, end]
       if (engine === 'tiptap') native.set(name, key(observed))
-      if (expected === node) check({ selection: observed.selection }, node)
-      else if (expected === 'end') check(observed.head, end)
-      else if (expected === 'end or native') {
-        if (observed.head !== end) check(key(observed), native.get(name))
-      } else if (expected) check(key(observed), expected)
-      else if (engine === 'codemirror') check(key(observed), native.get(name))
+      if (expected === node)
+        check(name, { selection: observed.selection }, node)
+      else if (expected === 'block')
+        check(name, [observed.anchor, observed.head], block)
+      else if (expected === 'end or block') {
+        if (observed.head !== end)
+          check(name, [observed.anchor, observed.head], block)
+      } else if (expected === 'end or native') {
+        if (observed.head !== end) check(name, key(observed), native.get(name))
+      } else if (expected) check(name, key(observed), expected)
+      else if (engine === 'codemirror')
+        check(name, key(observed), native.get(name))
     }
+    // Typing replaces a selected block, and Enter adds a paragraph after it.
+    // The rich editor's selected divider takes no keys.
+    const rendered = { math: 'x^2', mermaid: 'graph TD', typst: '= last' }
+    for (const name of atoms)
+      for (const press of ['Z', 'Enter']) {
+        const markdown = notes[name]
+        await open(`${name}-${press}`, markdown)
+        if (engine === 'codemirror' && rendered[name])
+          check(
+            name,
+            {
+              name,
+              shown: await page.evaluate(
+                (text) =>
+                  // innerText leaves out hidden source.
+                  document
+                    .querySelector('.rich-pane .cm-content')
+                    // biome-ignore lint/performance/useDomNodeTextContent: shown text only.
+                    .innerText.includes(text),
+                rendered[name],
+              ),
+            },
+            { name, shown: false },
+          )
+        await page.keyboard.press(press)
+        await page.waitForTimeout(300)
+        const after = await page.evaluate(
+          async () => (await window.hibi.getDocument()).markdown,
+        )
+        const kept = markdown.trimEnd()
+        const want =
+          engine === 'tiptap' && name === 'rule'
+            ? markdown
+            : press === 'Z'
+              ? `${kept.slice(0, kept.lastIndexOf('\n\n') + 2)}Z\n`
+              : `${kept}\n\n`
+        check(
+          name,
+          { name, press, kept: after.startsWith(want) },
+          { name, press, kept: true },
+        )
+        t.diagnostic(JSON.stringify({ engine, name, press, after }))
+      }
+    // The formatted view moves the caret where the rich editor puts it once
+    // its view reaches a long note's end, unless the user moved it first.
+    if (engine === 'codemirror')
+      for (const [name, moved] of [
+        ['long', false],
+        ['long-table', false],
+        ['long-mermaid', false],
+        ['long', true],
+      ]) {
+        const markdown = notes[name]
+        await open(`${name}-scrolled${moved ? '-moved' : ''}`, markdown)
+        const end = markdown.trimEnd().length
+        if (moved) await page.keyboard.press('ArrowLeft')
+        const before = await page.evaluate(caret)
+        await page.evaluate(() => {
+          const pane = document.querySelector('.rich-pane')
+          pane.scrollTop = pane.scrollHeight
+        })
+        let last = null
+        for (let read = 0; read < 30; read++) {
+          await page.waitForTimeout(100)
+          const now = await page.evaluate(caret)
+          if (JSON.stringify(now) === JSON.stringify(last)) break
+          last = now
+        }
+        t.diagnostic(JSON.stringify({ engine, name, moved, ...last }))
+        if (moved)
+          check(name, { name, head: last.head }, { name, head: before.head })
+        else if (name === 'long-mermaid')
+          check(
+            name,
+            [last.anchor, last.head],
+            [markdown.lastIndexOf('\n\n', end) + 2, end],
+          )
+        else check(name, key(last), native.get(name))
+      }
     assert.deepEqual(differences, [])
   })

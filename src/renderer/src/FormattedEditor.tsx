@@ -24,10 +24,9 @@ import { emitEditorKeyEvent } from './editor-events'
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
-import { formattedSyntaxTree } from './formatted-contributions'
 import type { FormattedHeadingList } from './formatted-headings'
 import { formattedProjectionSource } from './formatted-projection'
-import { drawsText, formattedTextEnd } from './formatted-text-end'
+import { openAtEnd } from './formatted-text-end'
 import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
@@ -472,13 +471,9 @@ export function MarkdownEditor({
         !content.current?.contains(active))
     )
       return
-    // As its Selection.atEnd: the end of the last text. A table there edits
-    // its last cell once the view has focus.
-    const { state } = view
-    const end = formattedTextEnd(state.doc, formattedSyntaxTree(state), (pos) =>
-      drawsText(view, pos),
-    )
-    view.dispatch({ selection: { anchor: end } })
+    // As its Selection.atEnd: the end of the last text, or the last block
+    // selected whole. A table there edits its last cell once the view has focus.
+    openAtEnd(view)
     view.focus()
   }, [autoFocus, formattedReady, paneMode, content])
   useEffect(() => {

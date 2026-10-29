@@ -280,7 +280,7 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
     if (/^https?:/.test(request.url())) external.push(request.url())
   })
   await site.locator('.katex').first().waitFor()
-  assert.equal(await site.locator('.katex').count(), 2)
+  assert.equal(await site.locator('.katex').count(), 4)
   assert.ok(
     await site.evaluate(
       async () =>

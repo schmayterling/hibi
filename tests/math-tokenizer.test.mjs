@@ -5,6 +5,7 @@ import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import { TableKit } from '@tiptap/extension-table'
 import { MarkdownManager } from '@tiptap/markdown'
 import { Marked } from 'marked'
+import { inlineDisplayMathTokens } from '../src/addons/math/inline-display.ts'
 import {
   blockMath,
   inlineMath,
@@ -60,6 +61,11 @@ function mathParser(gfm = false) {
       ({ name }) => name === extension.name,
     )
     return extension.extend({
+      parseMarkdown(token, helpers) {
+        return token.display
+          ? helpers.createTextNode(token.raw ?? '')
+          : this.parent?.(token, helpers)
+      },
       markdownTokenizer: {
         name: syntax.name,
         level: syntax.level,
@@ -74,7 +80,7 @@ function mathParser(gfm = false) {
       id: 'math.latex',
       markedOptions: { gfm },
       richExtensions: [...extensions, ...(gfm ? [TableKit] : [])],
-      export: { extensions: [mathTokens] },
+      export: { extensions: [mathTokens, inlineDisplayMathTokens] },
     },
   ])
   const all = [...core, ...addons]
@@ -215,15 +221,34 @@ test('full and cached math serialization preserve literal dollars and equations'
   }
 })
 
-test('table cells keep literal double dollars without display math escapes', () => {
+test('table cells escape literal double dollars for display-aware exports', () => {
   const { manager, schema } = mathParser(true)
   const doc = schema.nodeFromJSON(
     manager.parse('| \\$$x$$ |\n| --- |\n| $x$ |'),
   )
   for (const blockLocal of [false, true]) {
     const saved = markdownSerializer(manager, blockLocal)(doc).source
-    assert.ok(saved.includes('| $$x$$ |'), saved)
+    assert.ok(saved.includes('| \\$\\$x\\$\\$ |'), saved)
     assert.ok(schema.nodeFromJSON(manager.parse(saved)).eq(doc), saved)
+  }
+})
+
+test('literal double dollars stay literal after rich serialization and export', () => {
+  const { manager, schema } = mathParser(true)
+  const parser = markdownSourceParser({ gfm: true, math: true })
+  for (const source of [
+    String.raw`before \$$x$$ after`,
+    '| \\$$x$$ |\n| --- |',
+  ]) {
+    const doc = schema.nodeFromJSON(manager.parse(source))
+    for (const blockLocal of [false, true]) {
+      const saved = markdownSerializer(manager, blockLocal)(doc).source
+      let formulas = 0
+      parser.walkTokens(parser.lexer(saved), (token) => {
+        if (token.type === 'inlineMath' || token.type === 'blockMath') formulas++
+      })
+      assert.equal(formulas, 0, saved)
+    }
   }
 })
 

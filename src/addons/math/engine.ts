@@ -11,6 +11,7 @@ import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
 import type { MathHost } from './formatted'
+import { inlineDisplayMathTokens } from './inline-display'
 import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
@@ -238,6 +239,11 @@ export function startMath(context: AddonContext) {
       }
     }
   const inline = InlineMath.extend({
+    // The rich editor preserves double-dollar source until it can draw display math inline.
+    parseMarkdown: (token, helpers) =>
+      token.display
+        ? helpers.createTextNode(token.raw ?? '')
+        : helpers.createNode('inlineMath', { latex: token.latex }),
     markdownTokenizer: {
       name: 'inlineMath',
       level: 'inline',
@@ -293,7 +299,10 @@ export function startMath(context: AddonContext) {
     extensions: ['inlineMath', 'blockMath'].map((name) => ({
       name,
       renderer: (token) =>
-        formulas.render(String(token.latex ?? ''), name === 'blockMath'),
+        formulas.render(
+          String(token.latex ?? ''),
+          name === 'blockMath' || token.display === true,
+        ),
     })),
   }
   context.styles.register('math', mathStyles)
@@ -320,7 +329,10 @@ export function startMath(context: AddonContext) {
   context.editor.registerFlavor({
     ...mathFlavor,
     richExtensions: [inline, block],
-    export: { extensions: [mathTokens, renderers], css: mathStyles },
+    export: {
+      extensions: [mathTokens, inlineDisplayMathTokens, renderers],
+      css: mathStyles,
+    },
   })
   for (const block of [false, true]) {
     const id = block ? 'block' : 'inline',

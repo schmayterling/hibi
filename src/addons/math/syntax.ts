@@ -1,6 +1,7 @@
 import { Marked, type MarkedExtension } from 'marked'
 import { blockStart } from '../_shared/block-start.ts'
 import type { MarkdownFlavor, MarkdownParagraphRule } from '../api'
+import { inlineDisplayMath } from './inline-display.ts'
 
 export function inlineMath(source: string) {
   const match = /^\$(?!\$)((?:\\.|[^$\n])+?)\$(?!\$)/.exec(source)
@@ -42,7 +43,10 @@ export const mathParagraphRule: MarkdownParagraphRule = {
           /^ *$/.test(restored.slice(lineStart, index))
             ? blockMath(restored.slice(index))
             : undefined
-        const token = block ?? inlineMath(restored.slice(index))
+        const token =
+          block ??
+          inlineMath(restored.slice(index)) ??
+          inlineDisplayMath(restored.slice(index))
         if (token)
           for (let at = index; at < index + token.raw.length; at++)
             if (dollars.has(at)) escaped.add(at)

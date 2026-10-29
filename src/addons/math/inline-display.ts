@@ -2,8 +2,7 @@ import type { MarkedExtension } from 'marked'
 
 /**
  * `$$…$$` inside a line, which Obsidian draws as display math there. The rich
- * editor reads such a line as text, and its parser shares the math export
- * tokenizers, so only the source and formatted views' parsers read this.
+ * editor keeps the raw token as text; formatted views and exports render it.
  */
 export function inlineDisplayMath(source: string) {
   const match = /^\$\$((?:\\.|[^\\$\n])+?)\$\$(?!\$)/.exec(source)

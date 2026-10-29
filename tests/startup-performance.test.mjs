@@ -64,6 +64,10 @@ test('production entry keeps editor implementations behind demand imports', asyn
   assert.doesNotMatch(initial, /node_modules\/@tiptap\//)
   assert.doesNotMatch(
     initial,
+    /src\/renderer\/src\/OutlineFormula\.tsx|node_modules\/katex\//,
+  )
+  assert.doesNotMatch(
+    initial,
     /src\/renderer\/src\/FormattedEditor\.tsx|node_modules\/@codemirror\//,
   )
   assert.ok(

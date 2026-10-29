@@ -2,11 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { after, before, test } from 'node:test'
+import { test } from 'node:test'
 import { countText } from '../src/addons/word-count/count.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import {
+  after,
+  before,
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'

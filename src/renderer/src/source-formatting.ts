@@ -1306,8 +1306,20 @@ export function sourceFormatting(
           position == null
             ? view.state.selection
             : EditorSelection.single(position)
+      const tree =
+        format === 'markdown' ? formattedSyntaxTree(view.state) : null
+      const link =
+        tree && formattingAt(view.state, tree, selection.main.from).get('link')
+      const url = link?.name === 'URL' ? link : link?.getChild('URL')
       return {
         text: view.state.sliceDoc(selection.main.from, selection.main.to),
+        /** The destination of the link the selection is in, as the link action edits it; null outside a link. */
+        href:
+          link && selection.main.to <= link.to
+            ? url
+              ? view.state.sliceDoc(url.from, url.to).replace(/^<|>$/g, '')
+              : ''
+            : null,
         insertMarkdown(insert: string) {
           if (!view.dom.isConnected || view.state.doc !== doc || !editable())
             return false

@@ -763,11 +763,10 @@ for (const engine of ['tiptap', 'codemirror'])
           await page
             .getByLabel('Link destination', { exact: true })
             .fill('https://example.com')
+          // An existing link opens as "Edit link" with a Save button.
+          await page.getByRole('button', { name: /^(Insert|Save)$/ }).click()
           await page
-            .getByRole('button', { name: 'Insert', exact: true })
-            .click()
-          await page
-            .getByRole('dialog', { name: 'Insert link', exact: true })
+            .getByRole('dialog', { name: /^(Insert|Edit) link$/ })
             .waitFor({ state: 'hidden' })
         }
         await page.evaluate(

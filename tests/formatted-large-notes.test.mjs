@@ -80,8 +80,10 @@ async function launch(t, file, codemirror, boundaryLength) {
           if (message.type === 'load-start')
             this.noteEpoch =
               message.head.length === length ? message.epoch : null
+          // Code extent requests (#590) carry no boundary records.
           if (
             message.type === 'boundaries' &&
+            !message.codeOnly &&
             message.epoch === this.noteEpoch &&
             message.config.syntax.includes('subtext@1')
           ) {

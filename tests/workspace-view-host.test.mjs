@@ -36,7 +36,7 @@ const bundle = await build({
           namespace: 'view-host',
         }))
         build.onResolve({ filter: /^\.\/document$/ }, (args) =>
-          args.importer.endsWith('/src/main/workspace.ts')
+          /[\\/]src[\\/]main[\\/]workspace\.ts$/.test(args.importer)
             ? { path: 'document', namespace: 'view-host' }
             : undefined,
         )

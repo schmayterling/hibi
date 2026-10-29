@@ -135,7 +135,22 @@ class SpaceWidget extends WidgetType {
   }
 }
 const space = Decoration.replace({ widget: new SpaceWidget() })
-const hiddenLine = Decoration.replace({ block: true })
+class HiddenLineWidget extends WidgetType {
+  override get estimatedHeight() {
+    return 0
+  }
+  toDOM() {
+    const line = document.createElement('div')
+    line.style.height = '0'
+    line.setAttribute('aria-hidden', 'true')
+    return line
+  }
+}
+// Keep wrapper bottom gutters on the hidden closing fence, inside its extent.
+const hiddenLine = Decoration.replace({
+  block: true,
+  widget: new HiddenLineWidget(),
+})
 /** Lines of a link reference definition, which exports leave out too. */
 const hiddenDefinition = Decoration.replace({ block: true })
 /** A definition after a list marker, hidden up to the item's next block, which follows the marker. */
@@ -305,14 +320,15 @@ function bottomMargin(node: SyntaxNode): number {
 /**
  * The rich editor's tables keep their margins on the table inside the
  * wrapper that a container's last-child rule clears, so the margin below a
- * table that ends a padded container stays inside it.
+ * table that ends a padded container stays inside it. A table the layout
+ * hides, as in a folded callout, ends before the last shown line `at`.
  */
-function innerBottom(node: SyntaxNode): number {
+function innerBottom(node: SyntaxNode, doc: Text, at: number): number {
   const last = blockChild(node, true)
   if (last?.name === 'Table' && !literalText(last, blocks.literal))
-    return blockSpace(last.name).bottom
+    return doc.lineAt(last.from).from <= at ? blockSpace(last.name).bottom : 0
   return last?.name === 'Blockquote' && !blocks.shapes(last)?.padding?.bottom
-    ? innerBottom(last)
+    ? innerBottom(last, doc, at)
     : 0
 }
 
@@ -1005,7 +1021,9 @@ function inline(
   // A code block scrolls sideways as one box, inside the indentation and
   // paint of the quotes and lists around it, which a box around it keeps.
   for (const { from, to, shown } of codeBlocks.values()) {
-    const end = Math.min(doc.length, to + 1)
+    // Wrappers include blocks at their end. Leave the closing fence outside
+    // so its hidden box receives the bottom gutter before the next paragraph.
+    const end = Math.min(doc.length, Math.max(from + 1, to))
     if (end <= from || shown < 0) continue
     wrappers.push(codeScroll.range(from, end))
     const info = lines.get(shown)
@@ -1181,7 +1199,7 @@ function containers(
     if (padding) {
       if (first) top += padding.top ?? 0
       if (padding.bottom && lastLine(doc, container, layout) === at)
-        bottom += padding.bottom + innerBottom(container)
+        bottom += padding.bottom + innerBottom(container, doc, at)
       right += padding.right ?? 0
     }
     widths.push(

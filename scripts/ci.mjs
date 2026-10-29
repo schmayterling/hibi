@@ -292,10 +292,17 @@ function runCI() {
       )
     npm('run', 'build:app')
   }
-  if (unitTests.length) run(['--test', '--test-concurrency=4', ...unitTests])
+  // TAP prints each failure's details immediately; spec defers them to the end.
+  if (unitTests.length)
+    run(['--test', '--test-reporter=tap', '--test-concurrency=4', ...unitTests])
   const serialTests = selected.filter((test) => !unitTests.includes(test))
   if (serialTests.length)
-    run(['--test', '--test-concurrency=1', ...serialTests])
+    run([
+      '--test',
+      '--test-reporter=tap',
+      '--test-concurrency=1',
+      ...serialTests,
+    ])
   const sha = git(root, 'rev-parse', 'HEAD')
   // Never certify a dirty checkout as the committed revision.
   if (

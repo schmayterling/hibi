@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   electron,
   waitForAppState,
+  waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
 
@@ -183,5 +184,31 @@ test('editor readiness requires settled app, addons and editable active pane', {
   await assert.rejects(
     waitForDocumentEditor(app, page),
     /Timeout 50ms exceeded/,
+  )
+  page.setDefaultTimeout(7000)
+  await t.test(
+    'renderer failures print before cleanup with timeout context',
+    async () => {
+      const uncaught = page.waitForEvent('pageerror')
+      await page.evaluate(() => {
+        setTimeout(() => {
+          throw new Error('renderer diagnostic probe')
+        }, 0)
+      })
+      await uncaught
+      assert.ok(
+        errors.mock.calls.some(
+          ({ arguments: args }) =>
+            args[0] === 'electron-renderer-uncaught' &&
+            args[1].includes('renderer diagnostic probe'),
+        ),
+      )
+      await assert.rejects(
+        waitForAsync(page, () => false, undefined, { timeout: 10 }),
+        (error) =>
+          error.message.includes('"viewport":') &&
+          error.message.includes('"focus":'),
+      )
+    },
   )
 })

@@ -80,8 +80,10 @@ async function launch(t, file, codemirror, boundaryLength) {
           if (message.type === 'load-start')
             this.noteEpoch =
               message.head.length === length ? message.epoch : null
+          // Code extent requests (#590) carry no boundary records.
           if (
             message.type === 'boundaries' &&
+            !message.codeOnly &&
             message.epoch === this.noteEpoch &&
             message.config.syntax.includes('subtext@1')
           ) {
@@ -133,7 +135,13 @@ for (const size of [2, 50])
     assert.equal(boundaries.length, size * 1024 * 1024)
     assert.ok(boundaries.records > 0)
     const chunks = Math.ceil(boundaries.length / 4096)
-    assert.ok(boundaries.records <= chunks + Math.ceil(chunks / 64) + 8)
+    // Boundary scans read windows of two chunks, which keep replay points for
+    // literal edit proofs (#563); each window also ends a chunk at its last
+    // block start, so this note has about a sixteenth more chunks than 4 KiB.
+    assert.ok(
+      boundaries.records <= chunks + Math.ceil(chunks / 16) + 8,
+      JSON.stringify({ chunks, records: boundaries.records }),
+    )
     assert.equal(boundaries.pages, Math.ceil(boundaries.records / 128))
     assert.ok(boundaries.maxRecords <= 128)
     assert.ok(boundaries.syntax.includes('subtext@1'))

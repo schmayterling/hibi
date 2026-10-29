@@ -10,6 +10,8 @@ import {
   SourceTransferReceiver,
 } from '../../shared/source-transfer.ts'
 import { sourceDocument } from './document-transfer.ts'
+// Every retained source arrives through here first, so save reports start with it.
+import './document-saved.ts'
 
 export { parseTransferHead }
 

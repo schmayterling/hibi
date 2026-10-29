@@ -388,6 +388,15 @@ export const electron = {
       }
     }
     if (diagnostics) {
+      const report = (page) =>
+        page.on('pageerror', (error) =>
+          console.error(
+            'electron-renderer-uncaught',
+            error.stack ?? String(error),
+          ),
+        )
+      application.context().on('page', report)
+      for (const page of application.windows()) report(page)
       await application.evaluate(installElectronDiagnostics)
       await application.evaluate(({ app }) =>
         app.once('quit', () => console.error('electron-main-quit')),
@@ -977,6 +986,49 @@ export async function waitForAsync(
         expired,
       ])
     }
+  } catch (error) {
+    // Most conditions read the document; its state says why one did not settle.
+    if (
+      error?.message?.startsWith('async condition did not settle') &&
+      typeof page.isClosed === 'function' &&
+      !page.isClosed()
+    ) {
+      const { message } = error
+      error.message += ` (page: ${JSON.stringify(
+        await Promise.race([
+          page
+            .evaluate(async () => {
+              const current = await window.hibi?.getDocument?.()
+              const focus = document.activeElement
+              return {
+                document: current && [
+                  current.name,
+                  current.markdown?.slice(0, 300),
+                ],
+                viewport: [innerWidth, innerHeight, devicePixelRatio],
+                focus: focus && {
+                  tag: focus.tagName,
+                  label: focus.getAttribute('aria-label'),
+                  editable: focus.isContentEditable,
+                },
+                editors: [...document.querySelectorAll('.cm-content, .tiptap')]
+                  .slice(0, 4)
+                  .map((editor) => ({
+                    label: editor.getAttribute('aria-label'),
+                    editable: editor.isContentEditable,
+                    readOnly: editor.getAttribute('aria-readonly'),
+                  })),
+              }
+            })
+            .catch(() => null),
+          new Promise((resolve) => setTimeout(resolve, 1000, null)),
+        ]),
+      )})`
+      // V8 formats a stack read only after this with the new message already.
+      if (!error.stack?.includes(error.message))
+        error.stack = error.stack?.replace(message, () => error.message)
+    }
+    throw error
   } finally {
     clearTimeout(deadlineTimer)
     clearTimeout(pollTimer)

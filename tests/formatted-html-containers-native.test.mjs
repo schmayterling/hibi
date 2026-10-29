@@ -157,7 +157,11 @@ test('skipped inline nodes and disabled html keep quote prefixes hidden', {
     assert.ok(lines.includes('a code span b'))
     assert.ok(lines.includes('![*alt text*](u.png)'))
     assert.ok(lines.includes('before <span class="x">t</span>'))
-    assert.ok(lines.includes('/url'))
+    // A reference definition takes no lines in the formatted view, quoted too.
+    assert.ok(
+      !lines.some((line) => /\[a\]:|\/url/.test(line)),
+      JSON.stringify(lines),
+    )
     await page.evaluate(() =>
       localStorage.setItem(
         'hibi:markdown-syntax-disabled',

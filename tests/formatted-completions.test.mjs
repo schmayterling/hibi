@@ -169,12 +169,23 @@ test('formatted completions keep exact source, history, composition, privacy and
       pane === 'source' ? page.locator('.source-pane .cm-content') : rich
     const snapshot = () =>
       content.evaluate(async (dom) => {
+        // Native composition can update selection while the document IPC yields.
+        const { markdown } = await window.hibi.getDocument()
         const cm = dom.matches('.cm-content')
         const view = cm ? dom.cmTile.root.view : dom.editor.view
         const selection = cm ? view.state.selection.main : view.state.selection
         const event = window.formattedCompletion.lastKey
+        const native = dom.ownerDocument.getSelection()
         return {
-          markdown: (await window.hibi.getDocument()).markdown,
+          domAnchor:
+            native?.anchorNode && dom.contains(native.anchorNode)
+              ? view.posAtDOM(native.anchorNode, native.anchorOffset)
+              : null,
+          domHead:
+            native?.focusNode && dom.contains(native.focusNode)
+              ? view.posAtDOM(native.focusNode, native.focusOffset)
+              : null,
+          markdown,
           anchor: selection.anchor,
           head: selection.head,
           started: cm ? view.compositionStarted : view.composing,
@@ -255,8 +266,9 @@ test('formatted completions keep exact source, history, composition, privacy and
             assert.equal(after.armed, false)
             assert.equal(await accepted(), beforeAccepted)
             if (key === 'Tab' || key === 'Escape') {
-              assert.equal(after.anchor, before.anchor)
-              assert.equal(after.head, before.head)
+              const state = JSON.stringify({ pane, key, before, after })
+              assert.equal(after.anchor, before.anchor, state)
+              assert.equal(after.head, before.head, state)
             }
           } finally {
             await content.focus()

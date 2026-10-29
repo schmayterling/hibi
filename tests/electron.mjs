@@ -364,6 +364,13 @@ export const electron = {
                   'electron-shutdown-after-quit: still running 15 s after quit; stopping it',
                 )
                 stopped = true
+                timer = setTimeout(() => {
+                  reject(
+                    new Error(
+                      'Electron post-quit cleanup did not finish within 20 seconds',
+                    ),
+                  )
+                }, 5000)
                 stopElectronTree(child)
               }, 15000)
             }

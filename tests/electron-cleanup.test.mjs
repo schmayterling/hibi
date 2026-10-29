@@ -483,7 +483,7 @@ test('dialog and uncaught tracing preserve native results, errors and default ha
 test('cleanup stops Electron 15 s after quit, and still fails a quit that never comes at 20 s', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   t.mock.method(console, 'error', () => {})
-  const start = async () => {
+  const start = async (killExits = true) => {
     const child = Object.assign(new EventEmitter(), {
       pid: 1,
       stdout: new PassThrough(),
@@ -516,7 +516,8 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
         }),
       () => {
         result.stopped++
-        exit(new Error('Electron exited with code null, signal SIGKILL'))
+        if (killExits)
+          exit(new Error('Electron exited with code null, signal SIGKILL'))
       },
       () => {},
       async () => {},
@@ -546,6 +547,13 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
   crashed.child.stderr.write('electron-main-quit\n')
   crashed.exit(new Error('Electron exited with code null, signal SIGSEGV'))
   await assert.rejects(crashed.closing, /SIGSEGV/)
+
+  const transport = await start(false)
+  transport.child.stderr.write('electron-main-quit\n')
+  t.mock.timers.tick(15000)
+  assert.equal(transport.stopped, 1)
+  t.mock.timers.tick(5000)
+  await assert.rejects(transport.closing, /post-quit cleanup did not finish/)
 })
 
 test('teardown waits for setup when a name filter skips every top-level test, and not past its timeout', async (t) => {

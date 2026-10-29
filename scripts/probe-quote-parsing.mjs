@@ -33,6 +33,8 @@ const shapes = {
   giant: '> a\n> $$\n> x\n> $$\n> -# s\n',
   lazy: '> # h\n> p\nlazy\n',
   paragraph: '> p\nlazy\n',
+  code: '> p\n    lazy\n',
+  list: '> - a\nlazy\n',
 }
 const chosenShape = process.argv[4]
 const chosenOperation = process.argv[5]
@@ -41,7 +43,10 @@ if (chosenShape && !(chosenShape in shapes))
 if (chosenOperation && !['export', 'count'].includes(chosenOperation))
   throw new Error('Unknown operation')
 for (const [shape, unit] of Object.entries(shapes)) {
-  if (chosenShape && chosenShape !== shape) continue
+  if (
+    chosenShape ? chosenShape !== shape : shape === 'code' || shape === 'list'
+  )
+    continue
   const source = unit.repeat(Math.ceil((size * 1024 * 1024) / unit.length))
   for (const operation of ['export', 'count']) {
     if (chosenOperation && chosenOperation !== operation) continue

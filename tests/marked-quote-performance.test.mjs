@@ -45,6 +45,8 @@ const syntax = {
 const giant = '> a\n> $$\n> x\n> $$\n> -# s\n'
 const lazy = '> # h\n> p\nlazy\n'
 const paragraph = '> p\nlazy\n'
+const code = '> p\n    lazy\n'
+const list = '> - a\nlazy\n'
 
 test('empty quote markers retain native lazy-line boundaries', () => {
   for (const first of ['>', '> ', '>  ', ' >', '  > ', '> p']) {
@@ -150,7 +152,116 @@ test('one lazy paragraph does not repeatedly inspect its growing raw text', () =
   assert.ok(units < source.length * 10, String(units))
 })
 
-for (const [shape, unit] of Object.entries({ giant, lazy, paragraph })) {
+test('block extensions observe original tokens during lazy merges', () => {
+  const source = '> p\n    lazy\n> next\n[ref]: /x\n> more\ntext\n'
+  const run = (blocks) => {
+    const seen = []
+    const inspect = {
+      extensions: [
+        {
+          name: 'inspect',
+          level: 'block',
+          tokenizer(source, tokens) {
+            const last = tokens.at(-1)
+            seen.push([source, last?.type, last?.raw, last?.text])
+          },
+        },
+      ],
+    }
+    const parser = new Marked(...(blocks ? [blockMarkdown] : []), inspect)
+    const html = parser.parse(source)
+    return { html, seen }
+  }
+  assert.deepEqual(run(true), run(false))
+})
+
+test('custom paragraph raw spelling keeps native merge behavior', () => {
+  const source = '> @p\nlazy\n> next\nlazy'
+  const read = (blocks) => {
+    const extension = {
+      extensions: [
+        {
+          name: 'rewrittenParagraph',
+          level: 'block',
+          tokenizer(source) {
+            if (!source.startsWith('@p')) return
+            return {
+              type: 'paragraph',
+              raw: '@\n',
+              text: 'p',
+              tokens: this.lexer.inline('p'),
+            }
+          },
+        },
+      ],
+    }
+    const parser = new Marked(...(blocks ? [blockMarkdown] : []), extension)
+    return JSON.parse(JSON.stringify(parser.lexer(source)))
+  }
+  assert.deepEqual(read(true), read(false))
+})
+
+test('lazy quoted lists do not copy the document tail or accumulated prefix', () => {
+  const source = '> - a\nlazy\n'.repeat(2000)
+  const slice = Array.prototype.slice
+  const join = Array.prototype.join
+  let work = 0
+  const count = (lines) => {
+    if (
+      typeof lines[0] === 'string' &&
+      (lines[0].includes('- a') || lines[0] === 'lazy' || lines[1] === '> - a')
+    )
+      work += lines.length
+  }
+  Array.prototype.slice = function (...args) {
+    count(this)
+    return slice.apply(this, args)
+  }
+  Array.prototype.join = function (...args) {
+    count(this)
+    return join.apply(this, args)
+  }
+  let tokens
+  try {
+    tokens = parser().lexer(source)
+  } finally {
+    Array.prototype.slice = slice
+    Array.prototype.join = join
+  }
+  assert.equal(
+    tokens[0].tokens.filter((token) => token.type === 'list').length,
+    2000,
+  )
+  assert.ok(work < 2000 * 100, String(work))
+})
+
+test('code and definition continuations bound paragraph merge work', () => {
+  for (const unit of ['> p\n    lazy\n', '> p\n[ref]: /x\n']) {
+    const source = unit.repeat(2000)
+    const endsWith = String.prototype.endsWith
+    let units = 0
+    String.prototype.endsWith = function (suffix, ...args) {
+      if (suffix === '\n') units += this.length
+      return endsWith.call(this, suffix, ...args)
+    }
+    let tokens
+    try {
+      tokens = parser().lexer(source)
+    } finally {
+      String.prototype.endsWith = endsWith
+    }
+    assert.equal(tokens[0].tokens.length, 1)
+    assert.ok(units < source.length * 10, `${JSON.stringify(unit)}: ${units}`)
+  }
+})
+
+for (const [shape, unit] of Object.entries({
+  giant,
+  lazy,
+  paragraph,
+  code,
+  list,
+})) {
   const source = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
   for (const operation of ['export', 'count']) {
     test(`one MiB ${shape} quote ${operation} stays under 20 seconds`, () => {
@@ -163,10 +274,16 @@ for (const [shape, unit] of Object.entries({ giant, lazy, paragraph })) {
       const units = source.length / unit.length
       if (operation === 'export') {
         const pattern =
-          shape === 'giant' ? /<m>/g : shape === 'lazy' ? /<h1>/g : /<p>/g
+          shape === 'giant'
+            ? /<m>/g
+            : shape === 'lazy'
+              ? /<h1>/g
+              : shape === 'list'
+                ? /<ul>/g
+                : /<p>/g
         assert.equal(
           (result.match(pattern) ?? []).length,
-          shape === 'paragraph' ? 1 : units,
+          shape === 'paragraph' || shape === 'code' ? 1 : units,
         )
       } else assert.equal(result.words, units * (shape === 'lazy' ? 3 : 2))
       assert.ok(elapsed < 20000, `${operation}: ${elapsed.toFixed(0)}ms`)

@@ -98,6 +98,47 @@ function withQuoteScan<T>(tokenizer: Tokenizer, read: () => T): T {
   }
 }
 
+// Replace the final characters without joining the already parsed quote.
+function replaceQuoteTail(parts: string[], count: number, value: string) {
+  while (parts.length) {
+    const last = parts.pop()!
+    if (count <= last.length) {
+      parts.push(last.slice(0, last.length - count) + value)
+      return
+    }
+    count -= last.length + 1
+  }
+  parts.push(value)
+}
+
+// Find the native list boundary without running child tokenizers or inline
+// callbacks. Grow only while the prefix ends before a real stopping line.
+function quoteListInput(
+  tokenizer: Tokenizer,
+  prefix: string,
+  count: number,
+  line: (index: number) => string,
+) {
+  const lexer = tokenizer.lexer
+  const read = lexer.blockTokens
+  const top = lexer.state.top
+  lexer.blockTokens = () => Object.assign([], { links: lexer.tokens.links })
+  try {
+    for (let size = Math.min(8, count); ; size = Math.min(size * 2, count)) {
+      const input =
+        prefix +
+        '\n' +
+        Array.from({ length: size }, (_, index) => line(index)).join('\n')
+      const list = Tokenizer.prototype.list.call(tokenizer, input)
+      if (!list || size === count || /\S/.test(input.slice(list.raw.length)))
+        return input
+    }
+  } finally {
+    lexer.blockTokens = read
+    lexer.state.top = top
+  }
+}
+
 // Marked's quote algorithm, with a cursor instead of copying the unconsumed
 // line array at every lazy continuation. Keep its block and re-read decisions.
 function readQuote(
@@ -106,82 +147,136 @@ function readQuote(
 ): Tokens.Blockquote | undefined {
   const match = quoteMatch(this, source)
   if (!match) return
-  let lines = match[0].replace(/\n+$/, '').split('\n')
+  const lines = match[0].replace(/\n+$/, '').split('\n')
   let from = 0
-  let raw: string[] = []
-  let text: string[] = []
+  let front: string[] = []
+  let frontAt = 0
+  const countLines = () => front.length - frontAt + lines.length - from
+  const lineAt = (index = 0) =>
+    frontAt + index < front.length
+      ? front[frontAt + index]!
+      : lines[from + frontAt + index - front.length]!
+  const takeLine = () =>
+    frontAt < front.length ? front[frontAt++]! : lines[from++]!
+  const firstLine = (value: string) => {
+    if (frontAt < front.length) front[frontAt] = value
+    else lines[from] = value
+  }
+  const remainingLines = (count = countLines()) =>
+    Array.from({ length: count }, (_, index) => lineAt(index))
+  const raw: string[] = []
+  const text: string[] = []
   const tokens: Token[] = []
+  const nativeParagraphs = new WeakSet<Token>()
   let paragraphTail:
     | { token: Token; length: number; newline: boolean }
     | undefined
-  while (from < lines.length) {
-    const start = from
+  while (countLines()) {
+    const chunkLines: string[] = []
     let quoted = false
-    for (; from < lines.length; from++) {
+    while (countLines()) {
       blockScanCounters.quoteLines++
-      if (this.rules.other.blockquoteStart.test(lines[from]!)) quoted = true
+      if (this.rules.other.blockquoteStart.test(lineAt())) quoted = true
       else if (quoted) break
+      chunkLines.push(takeLine())
     }
-    const chunk = lines.slice(start, from).join('\n')
+    const chunk = chunkLines.join('\n')
     const body = chunk
       .replace(this.rules.other.blockquoteSetextReplace, '\n    $1')
       .replace(this.rules.other.blockquoteSetextReplace2, '')
     raw.push(chunk)
     text.push(body)
-    const previous = tokens.at(-1)
-    const paragraph = this.paragraph
-    const parent = setextFrames.get(this)
-    let continuation: Tokens.Paragraph | undefined
-    if (previous?.type === 'paragraph' && paragraphTail?.token === previous) {
-      const length = paragraphTail.length
-      this.paragraph = function (input) {
-        const token = paragraph.call(this, input)
-        if (
-          token &&
-          input.length === body.length &&
-          token.raw.length === input.length &&
-          tokens.at(-1) === previous &&
-          previous.raw.length === length &&
-          setextFrames.get(this)?.parent === parent
-        ) {
-          // Let Marked finish this chunk without flattening the growing raw
-          // string in its paragraph merge's endsWith check. Rejoin below.
-          ;(previous as Token).type = 'text'
-          continuation = token
-        }
-        return token
-      }
+    const readers = {
+      code: this.code,
+      def: this.def,
+      paragraph: this.paragraph,
     }
+    const parent = setextFrames.get(this)
+    let remaining = body.length
+    let merge = false
+    const arm = <T>(token: T) => {
+      if (setextFrames.get(this)?.parent === parent && !this.options.pedantic)
+        merge = !!token
+      return token
+    }
+    this.code = function (input) {
+      if (setextFrames.get(this)?.parent === parent) remaining = input.length
+      return arm(readers.code.call(this, input))
+    }
+    this.def = function (input) {
+      return arm(readers.def.call(this, input))
+    }
+    this.paragraph = function (input) {
+      const token = readers.paragraph.call(this, input)
+      if (token) nativeParagraphs.add(token)
+      return arm(token)
+    }
+    const at = tokens.at
+    const descriptor = Object.getOwnPropertyDescriptor(tokens, 'at')
+    Object.defineProperty(tokens, 'at', {
+      configurable: true,
+      value: (index: number) => {
+        const token = at.call(tokens, index)
+        const pending = merge
+        merge = false
+        if (
+          !pending ||
+          index !== -1 ||
+          !token ||
+          !nativeParagraphs.has(token) ||
+          (token.type !== 'paragraph' && token.type !== 'text')
+        )
+          return token
+        const offset = body.length - remaining
+        const newline =
+          offset > 0
+            ? body.charCodeAt(offset - 1) === 10
+            : offset === 0 &&
+                paragraphTail?.token === token &&
+                paragraphTail.length === token.raw.length
+              ? paragraphTail.newline
+              : undefined
+        if (newline === undefined) return token
+        // Only Marked's immediate merge sees this view. Addons see the actual
+        // tokens. Appending to raw must not flatten its growing prefix to test
+        // its last character; all other fields and inline work stay native.
+        const prefix = newline ? '\n' : ''
+        return new Proxy(token, {
+          get(target, key) {
+            return key === 'raw' ? prefix : Reflect.get(target, key)
+          },
+          set(target, key, value) {
+            if (key !== 'raw') return Reflect.set(target, key, value)
+            target.raw += String(value).slice(prefix.length)
+            return true
+          },
+        })
+      },
+    })
     const top = this.lexer.state.top
     this.lexer.state.top = true
     try {
       this.lexer.blockTokens(body, tokens, true)
     } finally {
-      this.paragraph = paragraph
-      if (continuation) previous!.type = 'paragraph'
+      Object.assign(this, readers)
+      if (descriptor) Object.defineProperty(tokens, 'at', descriptor)
+      else Reflect.deleteProperty(tokens, 'at')
       this.lexer.state.top = top
-    }
-    if (continuation && previous?.type === 'paragraph') {
-      tokens.pop()
-      previous.raw += (paragraphTail!.newline ? '' : '\n') + continuation.raw
-      previous.text += '\n' + continuation.text
-      this.lexer.inlineQueue.pop()
-      this.lexer.inlineQueue.at(-1)!.src = previous.text
     }
     const last = tokens.at(-1)
     if (body.length)
       paragraphTail =
-        last?.type === 'paragraph'
+        last && (last.type === 'paragraph' || last.type === 'text')
           ? {
               token: last,
               length: last.raw.length,
               newline: body.endsWith('\n'),
             }
           : undefined
-    if (from === lines.length) break
+    if (!countLines()) break
     if (last && ['code', 'heading', 'hr', 'html'].includes(last.type)) break
     if (last?.type === 'blockquote') {
-      const rest = lines.slice(from).join('\n')
+      const rest = remainingLines().join('\n')
       const input =
         last.raw +
         '\n' +
@@ -190,30 +285,29 @@ function readQuote(
       tokens[tokens.length - 1] = quote
       const remaining = input.substring(quote.raw.length).replace(/^\n/, '')
       const count = remaining ? remaining.split('\n').length : 0
-      const end = count ? lines.length - count : lines.length
-      if (end > from) raw.push(lines.slice(from, end).join('\n'))
-      const previous = text.join('\n')
-      text = [
-        previous.substring(0, previous.length - last.text.length) + quote.text,
-      ]
+      const used = countLines() - count
+      if (used > 0) raw.push(remainingLines(used).join('\n'))
+      replaceQuoteTail(text, last.text.length, quote.text)
       break
     }
     if (last?.type === 'list') {
-      const input = last.raw + '\n' + lines.slice(from).join('\n')
+      const input = quoteListInput(this, last.raw, countLines(), lineAt)
       const list = this.list(input)!
       tokens[tokens.length - 1] = list
-      const previousRaw = raw.join('\n')
-      raw = [
-        previousRaw.substring(0, previousRaw.length - last.raw.length) +
-          list.raw,
-      ]
-      const previousText = text.join('\n')
-      text = [
-        previousText.substring(0, previousText.length - last.raw.length) +
-          list.raw,
-      ]
-      lines = input.substring(list.raw.length).split('\n')
-      from = 0
+      replaceQuoteTail(raw, last.raw.length, list.raw)
+      replaceQuoteTail(text, last.raw.length, list.raw)
+      let consumed = list.raw.length - last.raw.length - 1
+      if (consumed < 0) {
+        front = last.raw
+          .slice(list.raw.length)
+          .split('\n')
+          .concat(front.slice(frontAt))
+        frontAt = 0
+      } else {
+        while (countLines() && consumed > lineAt().length)
+          consumed -= takeLine().length + 1
+        if (countLines()) firstLine(lineAt().slice(consumed))
+      }
     }
   }
   return {

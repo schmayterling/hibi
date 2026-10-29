@@ -1179,17 +1179,25 @@ testFormattedEngines(
         { timeout: 3000 },
       ).catch(() => {})
     /** A point in the block: on its text for HTML, else on its drawing. */
+    /** A point in the block, once scrolled to it: on its text for HTML, else on its drawing. */
     const point = (at) =>
-      page.evaluate((at) => {
+      page.evaluate(async (at) => {
+        const frames = async () => {
+          for (let frame = 0; frame < 3; frame++)
+            await new Promise(requestAnimationFrame)
+        }
+        await frames()
         const root = document.querySelector(
           '.rich-pane [aria-label="Document editor"]',
         )
-        if (/^[a-z]+word$/.test(at)) {
-          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+        const box = (element) => {
+          const walker = document.createTreeWalker(
+            element,
+            NodeFilter.SHOW_TEXT,
+          )
           while (walker.nextNode()) {
             const index = walker.currentNode.data.indexOf(at)
             if (index < 0) continue
-            walker.currentNode.parentElement.scrollIntoView({ block: 'center' })
             const range = document.createRange()
             range.setStart(walker.currentNode, index + 2)
             range.setEnd(walker.currentNode, index + 3)
@@ -1198,13 +1206,24 @@ testFormattedEngines(
           }
           return null
         }
-        const element = root.querySelector(at)
-        element.scrollIntoView({ block: 'center' })
-        const { left, top, width, height } = element.getBoundingClientRect()
+        if (/^[a-z]+word$/.test(at)) {
+          ;[...root.querySelectorAll('*')]
+            .findLast((element) => element.textContent.includes(at))
+            .scrollIntoView({ block: 'center' })
+          await frames()
+          return box(root)
+        }
+        root.querySelector(at).scrollIntoView({ block: 'center' })
+        await frames()
+        const { left, top, width, height } = root
+          .querySelector(at)
+          .getBoundingClientRect()
         return { x: left + Math.min(20, width / 2), y: top + height / 2 }
       }, at)
     const selected = () =>
-      page.evaluate(() => {
+      page.evaluate(async () => {
+        for (let frame = 0; frame < 2; frame++)
+          await new Promise(requestAnimationFrame)
         const root = document.querySelector(
           '.rich-pane [aria-label="Document editor"]',
         )
@@ -1221,6 +1240,12 @@ testFormattedEngines(
       const { x, y } = await point(at)
       await page.mouse.click(x, y, { clickCount: 3 })
       assert.equal(await selected(), engine === 'tiptap' ? node : source, kind)
+      // Focus leaves the rich editor for a moment after presses on a formula.
+      await page.waitForFunction(() =>
+        document.activeElement?.matches(
+          '.rich-pane [aria-label="Document editor"]',
+        ),
+      )
       await page.keyboard.type('Z')
       // The rich editor takes no text over a selected rule.
       const replaced =

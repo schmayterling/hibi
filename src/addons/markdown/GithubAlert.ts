@@ -1,5 +1,6 @@
 import { mergeAttributes, Node } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
+import { quoteBlock } from '../../shared/marked-leaf-blocks.ts'
 import { alertMarker, alertStart, alertToken, alertType } from './alerts.ts'
 
 export const GithubAlert = Node.create({
@@ -54,7 +55,11 @@ export const GithubAlert = Node.create({
     start: alertStart,
     tokenize(source, _tokens, lexer) {
       const token = alertToken(source)
-      if (token) return { ...token, tokens: lexer.blockTokens(token.text) }
+      if (token)
+        return quoteBlock(
+          { ...token, tokens: lexer.blockTokens(token.text) },
+          token,
+        )
     },
   },
   parseMarkdown: (token, helpers) => {

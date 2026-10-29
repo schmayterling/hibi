@@ -1,10 +1,10 @@
 import type { MarkdownConfig } from '@lezer/markdown'
 import { Lexer, type TokenizerExtension } from 'marked'
-import { markedGithubFootnote } from 'marked-github-footnote'
 import {
   BlockTokenizer,
   endsReferenceTitle,
 } from '../../shared/marked-blocks.ts'
+import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
 import { typstBlock } from '../typst/syntax.ts'
 import type { CountSyntax } from './formatted-text.ts'
 

@@ -6,7 +6,6 @@ import { MarkdownManager } from '@tiptap/markdown'
 import { StarterKit } from '@tiptap/starter-kit'
 import { build } from 'esbuild'
 import { Marked } from 'marked'
-import { markedGithubFootnote } from 'marked-github-footnote'
 import { parseFrontmatter } from '../src/addons/frontmatter/markdown.ts'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
 import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
@@ -25,6 +24,7 @@ import {
 } from '../src/addons/word-count/formatted-text.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
+import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 import { defaultNoteSyntax, noteParser } from '../src/shared/note-syntax.ts'
 
 // Compare structure and consumed source, excluding inline token spelling.
@@ -43,6 +43,39 @@ function boundaries(tokens) {
     if (type === 'blockquote') result.tokens = boundaries(token.tokens)
     return result
   })
+}
+
+function containerBoundaries(tokens) {
+  return tokens
+    .filter((token) => token.type !== 'space')
+    .map((token) => {
+      const leaf =
+        ['blockMath', 'subtext', 'footnoteDef', 'code'].includes(token.type) ||
+        (token.type === 'heading' && token.text === 'small')
+      const result = {
+        type: leaf
+          ? 'leaf'
+          : token.type === 'githubAlert'
+            ? 'blockquote'
+            : token.type,
+        lines: token.raw.trimEnd().split('\n').length,
+      }
+      if (token.type === 'heading' && !leaf) result.text = token.text
+      if (['blockquote', 'githubAlert'].includes(token.type)) {
+        const children =
+          token.type === 'blockquote' &&
+          ['paragraph', 'text'].includes(token.tokens[0]?.type) &&
+          token.tokens[0]?.text?.startsWith('[!')
+            ? token.tokens.slice(1)
+            : token.tokens
+        result.tokens = containerBoundaries(children)
+      }
+      if (token.type === 'list')
+        result.items = token.items.map((item) =>
+          containerBoundaries(item.tokens),
+        )
+      return result
+    })
 }
 
 const containers = {
@@ -186,16 +219,14 @@ test('closed typst detection uses native fence grammar and body indentation', ()
   }
 })
 
-// Known audit failures remain executable. See docs/ai-agents/fence-lazy-audit.md.
+// Each leaf has the same container boundary as a native code or heading block.
 for (const [name, extension, body] of [
   ['math', mathTokens, '> $$\n> x\n> $$'],
   ['subtext', textExtrasMarkdown, '> -# small'],
   ['alert', alertMarkdown, '> > [!NOTE]\n> > ```\n> > x\n> > ```'],
   ['footnote', markedGithubFootnote(), '[^1]: ```\n    x\n    ```'],
 ])
-  test(`${name} preserves the following top-level heading`, {
-    todo: 'audit follow-up: custom block continuation grammar',
-  }, () => {
+  test(`${name} preserves the following top-level heading`, () => {
     const source = `${body}\noutside\n===\n\n# real\n`
     assert.deepEqual(
       new Marked(extension)
@@ -205,6 +236,96 @@ for (const [name, extension, body] of [
       ['outside', 'real'],
     )
   })
+
+for (const [name, extension, body, nativeBody] of [
+  ['math', mathTokens, '$$\nx\n$$', '```math\nx\n```'],
+  ['subtext', textExtrasMarkdown, '-# small', '# small'],
+]) {
+  for (const [container, wrap] of Object.entries(containers))
+    for (const tail of tails)
+      for (const eol of ['\n', '\r\n'])
+        test(`${name} native boundary: ${container} ${JSON.stringify(tail)} ${JSON.stringify(eol)}`, () => {
+          const source = `${wrap(body)}\n${tail}`.replaceAll('\n', eol)
+          const oracle = `${wrap(nativeBody)}\n${tail}`.replaceAll('\n', eol)
+          const headings = (parser, text) => {
+            const result = []
+            const visit = (tokens, parents = []) => {
+              for (const token of tokens) {
+                if (token.type === 'heading' && token.text !== 'small')
+                  result.push([...parents, token.text])
+                if (token.type === 'blockquote')
+                  visit(token.tokens, [...parents, 'quote'])
+                if (token.type === 'list')
+                  for (const item of token.items)
+                    visit(item.tokens, [...parents, 'list'])
+              }
+            }
+            visit(parser.lexer(text))
+            return result
+          }
+          assert.deepEqual(
+            headings(new Marked(extension), source),
+            headings(new Marked(), oracle),
+            source,
+          )
+          assert.deepEqual(
+            containerBoundaries(new Marked(extension).lexer(source)),
+            containerBoundaries(new Marked().lexer(oracle)),
+            source,
+          )
+        })
+}
+
+test('incomplete math keeps native paragraphs and list continuations', () => {
+  for (const source of [
+    '- $$unfinished\noutside\n===',
+    '> $$unfinished\noutside\n===',
+    '- $$\n  missing closer\noutside\n===',
+    '> $$\n> missing closer\noutside\n===',
+    '-#no space\noutside\n===',
+  ])
+    assert.deepEqual(
+      boundaries(new Marked(mathTokens, textExtrasMarkdown).lexer(source)),
+      boundaries(new Marked().lexer(source)),
+      source,
+    )
+})
+
+for (const [name, extension, body] of [
+  ['alert', alertMarkdown, '> [!NOTE]\n> ```\n> x\n> ```'],
+  ['footnote', markedGithubFootnote(), '[^1]: ```\n    x\n    ```'],
+]) {
+  for (const [container, wrap] of Object.entries(containers))
+    for (const eol of ['\n', '\r\n'])
+      test(`${name} closed code boundaries in ${container} ${JSON.stringify(eol)}`, () => {
+        const source = `${wrap(body)}\noutside\n===\n\n# real\n`.replaceAll(
+          '\n',
+          eol,
+        )
+        const tokens = new Marked(extension).lexer(source)
+        const nativeBody = name === 'footnote' ? '```\nx\n```' : body
+        const oracleSource =
+          `${wrap(nativeBody)}\noutside\n===\n\n# real\n`.replaceAll('\n', eol)
+        const oracle = new Marked().lexer(oracleSource)
+        const headings = (tokens) =>
+          tokens
+            .filter((token) => token.type === 'heading')
+            .map((token) => token.text)
+        assert.deepEqual(headings(tokens), headings(oracle))
+        assert.deepEqual(
+          containerBoundaries(tokens),
+          containerBoundaries(oracle),
+        )
+        if (
+          oracle.map((token) => token.raw).join('') ===
+          oracleSource.replaceAll('\r\n', '\n')
+        )
+          assert.equal(
+            tokens.map((token) => token.raw).join(''),
+            source.replaceAll('\r\n', '\n'),
+          )
+      })
+}
 
 const flavors = {
   typst: () => new Marked(typstTokens),

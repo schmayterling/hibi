@@ -1,4 +1,5 @@
 import { Mark, markInputRule, Node, textblockTypeInputRule } from '@tiptap/core'
+import { leafBlock } from '../../shared/marked-leaf-blocks.ts'
 import { subscriptToken, subtextStart, subtextToken } from './syntax.ts'
 
 export const Subscript = Mark.create({
@@ -43,7 +44,8 @@ export const Subtext = Node.create({
     start: subtextStart,
     tokenize(source, _tokens, lexer) {
       const token = subtextToken(source)
-      if (token) return { ...token, tokens: lexer.inlineTokens(token.text) }
+      if (token)
+        return leafBlock({ ...token, tokens: lexer.inlineTokens(token.text) })
     },
   },
   parseMarkdown: (token, helpers) =>

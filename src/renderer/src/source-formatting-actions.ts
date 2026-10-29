@@ -432,6 +432,8 @@ export function inlineInput(
     !leaf ||
     leaf.name === 'FencedCode' ||
     leaf.name === 'CodeBlock' ||
+    // A definition's destination is a URL node, not linked text.
+    leaf.name === 'LinkReference' ||
     from < leaf.from ||
     to > leaf.to
   )

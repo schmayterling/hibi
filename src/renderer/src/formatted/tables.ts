@@ -569,18 +569,7 @@ class TableView {
    */
   private regain() {
     const { view } = this
-    const page = view.dom.ownerDocument
-    queueMicrotask(() => {
-      if (
-        !view.dom.isConnected ||
-        !page.hasFocus() ||
-        page.activeElement !== page.body
-      )
-        return
-      const { main } = view.state.selection
-      if (!tableAt(view, main.head, true)?.editAt(main.anchor, main.head))
-        view.focus()
-    })
+    queueMicrotask(() => regain(view))
   }
 
   private spacer() {
@@ -1661,11 +1650,11 @@ class TableView {
         if (table.edit(cell.line, lost.column, 'end')) return true
         break
       }
-      view.focus()
+      refocus(view)
       return true
     }
     if (!this.dom.isConnected) {
-      view.focus()
+      refocus(view)
       return true
     }
     if (!this.current) return false
@@ -1682,7 +1671,7 @@ class TableView {
     }
     if (!this.editAt(anchor, head)) {
       this.stopEditing()
-      this.view.focus()
+      refocus(view)
     }
     return true
   }
@@ -2361,6 +2350,38 @@ function tableAt(view: EditorView, pos: number, strict = false) {
   return null
 }
 
+/** Views that dropped a focused cell editor while taking no input, to take focus back once they do. */
+const regaining = new WeakSet<EditorView>()
+
+/**
+ * With focus on the page after a dropped cell editor, edit the cell at the
+ * formatted view's selection or focus the view, which neither can do while
+ * the view takes no input: then once it does, as the rich editor keeps its
+ * focus and selection through a read-only period.
+ */
+function regain(view: EditorView) {
+  const page = view.dom.ownerDocument
+  if (
+    !view.dom.isConnected ||
+    !page.hasFocus() ||
+    page.activeElement !== page.body
+  )
+    return
+  if (!writable(view.state)) {
+    regaining.add(view)
+    return
+  }
+  const { main } = view.state.selection
+  if (!tableAt(view, main.head, true)?.editAt(main.anchor, main.head))
+    view.focus()
+}
+
+/** Focus the formatted view for a dropped cell editor, once it takes input. */
+function refocus(view: EditorView) {
+  if (writable(view.state)) view.focus()
+  else regain(view)
+}
+
 type InputStart = KeyboardEvent | InputEvent | CompositionEvent
 
 /** Whether input that is not composing goes to the writable formatted view, at one selection. */
@@ -2857,6 +2878,8 @@ const tableEditing = ViewPlugin.fromClass(
         for (const table of tables) table.scrolled()
       if (writable(update.startState) !== writable(update.state))
         for (const table of tables) table.reconfigure()
+      if (writable(update.state) && regaining.delete(this.view))
+        queueMicrotask(() => regain(this.view))
       // The cell at the selection is found once tables have redrawn, from the
       // selection then: until the redraw, tables are where they were before
       // this update, and it may remove them.

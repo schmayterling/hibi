@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForAsync } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('vim block visual draws and edits every line without adding mouse cursors', {
@@ -51,7 +51,8 @@ test('vim block visual draws and edits every line without adding mouse cursors',
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
   assert.equal(await read(), 'pha\navo\narlie\n')
   await source.press('u')
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async (original) => (await window.hibi.getDocument()).markdown === original,
     original,
   )

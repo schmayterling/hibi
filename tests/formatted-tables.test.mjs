@@ -2446,6 +2446,58 @@ test('a read-only double-click pick outlasts a measure that reads it first', {
   assert.deepEqual([moved.anchor, moved.head], [0, 0])
 })
 
+test('a script pick across cells outlasts a cell editor measure that reads it first', {
+  timeout: 30000,
+}, async () => {
+  const doc = 'before\n\n| h | other |\n| - | - |\n| alpha | beta |\n\nafter'
+  // The anchor at the cell editor's caret, which the measure finds unchanged,
+  // and elsewhere in its text, which it reads as a new selection.
+  for (const offset of [0, 2]) {
+    await mount(doc)
+    await harness.locator('.hibi-lp-table td', { hasText: 'alpha' }).click()
+    await harness.waitForFunction(() =>
+      document.activeElement?.closest('.hibi-lp-cell-editor'),
+    )
+    await harness.evaluate((offset) => {
+      const editor = document.querySelector('.hibi-lp-cell-editor .cm-content')
+        .cmTile.root.view
+      editor.dispatch({ selection: { anchor: 0 } })
+      const text = (root, value) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode())
+          if (walker.currentNode.data === value) return walker.currentNode
+      }
+      const cell = [...document.querySelectorAll('.hibi-lp-table td')].find(
+        (cell) => cell.textContent === 'beta',
+      )
+      // An assistive tool or script selects from the edited cell into the
+      // next while the cell editor keeps focus, and a measure frame comes
+      // before the page reports the change.
+      getSelection().setBaseAndExtent(
+        text(editor.contentDOM, 'alpha'),
+        offset,
+        text(cell, 'beta'),
+        4,
+      )
+      editor.observer.forceFlush()
+    }, offset)
+    await harness.evaluate(() => window.tables.settle())
+    const picked = await state()
+    assert.deepEqual(
+      [picked.anchor, picked.head],
+      [doc.indexOf('alpha') + offset, doc.indexOf('beta') + 4],
+      `offset ${offset}`,
+    )
+    assert.equal(
+      (await harness.evaluate(() => getSelection().toString())).replace(
+        /\s/g,
+        '',
+      ),
+      `${'alpha'.slice(offset)}beta`,
+    )
+  }
+})
+
 test('a read-only pick outlasts a view update before its selection change', {
   timeout: 30000,
 }, async () => {

@@ -977,6 +977,30 @@ export async function waitForAsync(
         expired,
       ])
     }
+  } catch (error) {
+    // Most conditions read the document; its state says why one did not settle.
+    if (
+      error?.message?.startsWith('async condition did not settle') &&
+      typeof page.isClosed === 'function' &&
+      !page.isClosed()
+    ) {
+      const { message } = error
+      error.message += ` (document: ${JSON.stringify(
+        await Promise.race([
+          page
+            .evaluate(async () => {
+              const current = await window.hibi?.getDocument?.()
+              return current && [current.name, current.markdown?.slice(0, 300)]
+            })
+            .catch(() => null),
+          new Promise((resolve) => setTimeout(resolve, 1000, null)),
+        ]),
+      )})`
+      // V8 formats a stack read only after this with the new message already.
+      if (!error.stack?.includes(error.message))
+        error.stack = error.stack?.replace(message, () => error.message)
+    }
+    throw error
   } finally {
     clearTimeout(deadlineTimer)
     clearTimeout(pollTimer)

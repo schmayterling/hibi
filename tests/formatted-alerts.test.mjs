@@ -146,6 +146,39 @@ test('the title line shows the type or its title, and its source while revealed'
   ])
 })
 
+test('only minus callouts hide their bodies by default, leaving title lines intact', () => {
+  const [box] = contribution.views
+  for (const fold of ['-', '+', '']) {
+    const doc = `> [!note]${fold} Title\n> body\n>\n> - item`
+    const state = EditorState.create({
+      doc,
+      extensions: contribution.extension,
+    })
+    const hidden = []
+    markdown.parse(doc).iterate({
+      enter(node) {
+        if (node.name === 'Blockquote')
+          return box.layout(
+            node,
+            {
+              replace: (from, to, _widget, options) =>
+                hidden.push({
+                  text: state.sliceDoc(from, to),
+                  block: options?.block,
+                }),
+            },
+            { state },
+          )
+      },
+    })
+    assert.deepEqual(
+      hidden,
+      fold === '-' ? [{ text: '\n> body\n>\n> - item', block: true }] : [],
+    )
+    assert.equal(state.doc.toString(), doc)
+  }
+})
+
 test('alert quotes lay out as the alerts.css box; other quotes keep their bar', () => {
   const [box] = contribution.views
   const shape = (doc) => {

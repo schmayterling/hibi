@@ -379,35 +379,45 @@ for (const size of sizes)
       assert.ok(await page.evaluate(() => window.scaleRichUnits <= 4096))
     }
     if (size === 50 && !baseline) {
-      const statuses = await page.evaluate(() => {
+      const statuses = await page.evaluate(async () => {
         const { context, sdk } = window.scaleReview
         const document = context.editor.getDocument()
         const prototype = sdk.codeMirror.state.Text.prototype
         const original = prototype.toString
-        prototype.toString = function () {
-          if (this.length > 4096)
-            throw new Error('addon edit flattened complete native text')
-          return original.call(this)
+        const apply = async (request) => {
+          // The formatted view answers busy until its index has the last edit.
+          for (let attempt = 0; ; attempt++) {
+            prototype.toString = function () {
+              if (this.length > 4096)
+                throw new Error('addon edit flattened complete native text')
+              return original.call(this)
+            }
+            let result
+            try {
+              result = context.editor.applySourceEdits(request)
+            } finally {
+              prototype.toString = original
+            }
+            if (result.status !== 'busy' || attempt === 100) return result
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          }
         }
-        try {
-          const first = context.editor.applySourceEdits({
-            requestId: 'scale:first',
-            tabId: document.tabId,
-            revision: document.revision,
-            contentVersion: document.contentVersion,
-            changes: [{ from: 0, to: 1, insert: 'Q', expectedText: '#' }],
-          })
-          const second = context.editor.applySourceEdits({
-            requestId: 'scale:restore',
-            tabId: document.tabId,
-            revision: document.revision,
-            contentVersion: first.contentVersion,
-            changes: [{ from: 0, to: 1, insert: '#', expectedText: 'Q' }],
-          })
-          return [first.status, second.status]
-        } finally {
-          prototype.toString = original
-        }
+        const first = await apply({
+          requestId: 'scale:first',
+          tabId: document.tabId,
+          revision: document.revision,
+          contentVersion: document.contentVersion,
+          // Formatted corrections must be literal text (#563), so not the heading marker.
+          changes: [{ from: 2, to: 3, insert: 'Q', expectedText: 's' }],
+        })
+        const second = await apply({
+          requestId: 'scale:restore',
+          tabId: document.tabId,
+          revision: document.revision,
+          contentVersion: first.contentVersion,
+          changes: [{ from: 2, to: 3, insert: 's', expectedText: 'Q' }],
+        })
+        return [first.status, second.status]
       })
       assert.deepEqual(statuses, ['applied', 'applied'])
       await page.evaluate(() => window.hibi.flushDocumentChanges())

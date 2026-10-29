@@ -1,4 +1,9 @@
-import { drawSelection, EditorView, ViewPlugin } from '@codemirror/view'
+import {
+  Decoration,
+  drawSelection,
+  EditorView,
+  ViewPlugin,
+} from '@codemirror/view'
 import { CodeMirror, getCM, Vim, vim } from '@replit/codemirror-vim'
 import type { AddonContext, StatusHandle } from '../api'
 import { vimPreferences } from './preferences'
@@ -54,10 +59,42 @@ Vim.defineEx('enew', 'ene', (cm) => {
   void contexts.get(cm.cm6)?.editor.runCommand('new')
 })
 
+// Vim draws its selection and cursor behind and over the text, where the
+// native selection's colors do not reach: give them the theme's colors.
+const selected = Decoration.mark({ class: 'hibi-vim-selected' })
+const selectionColors = [
+  EditorView.decorations.compute(['selection'], (state) =>
+    Decoration.set(
+      state.selection.ranges
+        .filter((range) => !range.empty)
+        .map((range) => selected.range(range.from, range.to)),
+      true,
+    ),
+  ),
+  EditorView.theme({
+    '.cm-selectionLayer .cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground':
+      { background: 'var(--selection)' },
+    '.hibi-vim-selected, .hibi-vim-selected *': {
+      color: 'var(--selection-ink)',
+    },
+    '&.cm-focused .cm-cursorLayer .cm-fat-cursor': {
+      background: 'var(--caret)',
+    },
+    // The engine hides the letter of a partial (pending or overwrite) cursor.
+    '&.cm-focused .cm-cursorLayer .cm-fat-cursor:not([style*="transparent"])': {
+      color: 'var(--background) !important',
+    },
+    '&:not(.cm-focused) .cm-cursorLayer .cm-fat-cursor': {
+      outlineColor: 'var(--caret)',
+    },
+  }),
+]
+
 export function createVim(context: AddonContext) {
   return [
     vim(),
     drawSelection(),
+    selectionColors,
     EditorView.editorAttributes.of({ 'data-vim-plugin': 'true' }),
     ViewPlugin.fromClass(
       class {

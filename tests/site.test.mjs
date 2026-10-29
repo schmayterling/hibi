@@ -8,7 +8,6 @@ import {
   testFormattedEngines as it,
   selectFormattedEngine,
 } from './formatted-engine.mjs'
-import { replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 async function openSite(t, folder, snapshot) {
@@ -405,7 +404,13 @@ it('app and exported site share heading destinations and retain legacy links', {
   })
   const markdown = `[${anchors.map((anchor, index) => `jump ${index}](#${encodeURIComponent(anchor)})`).join(' [')} [legacy jump](#apiv2)\n\n${texts.map((text) => `## ${text}`).join('\n\n')}`
   if (t.formattedEngine === 'codemirror')
-    await replaceRichText(desktop, rich, markdown)
+    // Typing over a formatted selection is literal text, so write the source.
+    await rich.evaluate((element, markdown) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: markdown },
+      })
+    }, markdown)
   else
     await rich.evaluate(
       (element, html) => {

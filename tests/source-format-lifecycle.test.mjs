@@ -248,7 +248,9 @@ test('standalone source skips rich attachment and hidden previews while preservi
   if (t.formattedEngine === 'tiptap')
     await page.waitForFunction(() => window.sourceFormatFixture?.rich === 1)
   else {
-    // Legacy rich attachments stay inert on the formatted engine.
+    // Legacy rich attachments stay inert on the formatted engine, once the
+    // addon has started after the engine's reload.
+    await page.waitForFunction(() => window.sourceFormatFixture)
     assert.equal(await page.evaluate(() => window.sourceFormatFixture.rich), 0)
     assert.equal(await page.locator('.tiptap').count(), 0)
   }

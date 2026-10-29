@@ -302,6 +302,20 @@ function bottomMargin(node: SyntaxNode): number {
   return Math.max(margins(node).bottom, last ? bottomMargin(last) : 0)
 }
 
+/**
+ * The rich editor's tables keep their margins on the table inside the
+ * wrapper that a container's last-child rule clears, so the margin below a
+ * table that ends a padded container stays inside it.
+ */
+function innerBottom(node: SyntaxNode): number {
+  const last = blockChild(node, true)
+  if (last?.name === 'Table' && !literalText(last, blocks.literal))
+    return blockSpace(last.name).bottom
+  return last?.name === 'Blockquote' && !blocks.shapes(last)?.padding?.bottom
+    ? innerBottom(last)
+    : 0
+}
+
 /** Whether a layout block replace hides the whole line. */
 function replacedLine(
   layout: DecorationSet,
@@ -424,6 +438,8 @@ type LineInfo = {
   gap: number
   /** The line only holds the space between two blocks. */
   margin: boolean
+  /** Classes of contributed containers around the line, whose paint can use them. */
+  nest: string[]
 }
 
 /** Item start offsets per immutable list tree, so ordinals need no sibling walk. */
@@ -542,6 +558,7 @@ function inline(
         attributes: {},
         gap: 0,
         margin: false,
+        nest: [],
       }
       lines.set(pos, info)
     }
@@ -991,18 +1008,21 @@ function inline(
     const end = Math.min(doc.length, to + 1)
     if (end <= from || shown < 0) continue
     wrappers.push(codeScroll.range(from, end))
-    const style = lines
-      .get(shown)
-      ?.style.filter(
-        (entry) =>
-          entry.startsWith('--hibi-indent:') ||
-          entry.startsWith('--hibi-paint:'),
-      )
+    const info = lines.get(shown)
+    const style = info?.style.filter(
+      (entry) =>
+        entry.startsWith('--hibi-indent:') ||
+        entry.startsWith('--hibi-paint:') ||
+        entry.startsWith('padding-right:'),
+    )
     if (style?.length)
       wrappers.push(
         BlockWrapper.create({
           tagName: 'div',
-          attributes: { class: 'hibi-lp-codenest', style: style.join('; ') },
+          attributes: {
+            class: ['hibi-lp-codenest', ...(info?.nest ?? [])].join(' '),
+            style: style.join('; '),
+          },
           rank: 60,
         }).range(from, end),
       )
@@ -1063,9 +1083,18 @@ function nameHeadings(view: EditorView) {
 /** Where a container's last line that the layout does not hide starts. */
 function lastLine(doc: Text, node: SyntaxNode, layout: DecorationSet) {
   let last = doc.lineAt(node.to)
-  while (last.from > node.from && replacedLine(layout, last))
-    last = doc.line(last.number - 1)
-  return last.from
+  for (;;) {
+    // A replacement across line breaks, such as a table in a quote, is drawn on the line it starts on.
+    let start = last.from
+    layout.between(last.from, last.from, (from, to, value) => {
+      if (value.point && from < start && from >= node.from && to >= last.from)
+        start = from
+    })
+    if (start < last.from) last = doc.lineAt(start)
+    else if (last.from > node.from && replacedLine(layout, last))
+      last = doc.line(last.number - 1)
+    else return last.from
+  }
 }
 
 /** Invisible anchors let overlays measure each rendered container's actual edge. */
@@ -1131,7 +1160,10 @@ function containers(
       edges?.push([key, left])
     const first = shownLine(doc, container).from === at
     const offset = `${first ? info.gap + top : 0}px`
-    if (shape?.class) info.classes.push(shape.class)
+    if (shape?.class) {
+      info.classes.push(shape.class)
+      info.nest.push(shape.class)
+    }
     if (shape?.paint) paint.push(shape.paint(left, offset))
     else if (container.name === 'Blockquote') {
       info.classes.push('hibi-lp-quote')
@@ -1149,7 +1181,7 @@ function containers(
     if (padding) {
       if (first) top += padding.top ?? 0
       if (padding.bottom && lastLine(doc, container, layout) === at)
-        bottom += padding.bottom
+        bottom += padding.bottom + innerBottom(container)
       right += padding.right ?? 0
     }
     widths.push(

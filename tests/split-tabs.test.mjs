@@ -345,6 +345,10 @@ test('split panes keep both editors mounted, edit both files, and share one docu
             target: event.target.tagName,
             active: document.activeElement?.tagName,
             editable: event.target.isContentEditable,
+            focused: document.hasFocus(),
+            editorEditable: document.querySelector(
+              '.editor-page[data-active="true"] .rich-pane [aria-label="Document editor"]',
+            )?.isContentEditable,
           }
         }
       },

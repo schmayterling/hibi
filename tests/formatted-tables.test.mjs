@@ -1976,6 +1976,97 @@ test('cell editors move with tab and arrows and leave with escape', {
   assert.match((await state()).doc, /\| e \|\n\| {2}\| {2}\|\n\nafter/)
 })
 
+/** The text of the cell that holds the page selection's head, and the selected text. */
+const tabbed = (target) =>
+  target.evaluate(async () => {
+    for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame)
+    const selection = getSelection()
+    const node = selection.focusNode
+    const element = node?.nodeType === 1 ? node : node?.parentElement
+    return [
+      element?.closest('td, th')?.textContent.trim(),
+      selection.toString(),
+    ]
+  })
+
+test('tab and shift-tab select the text of the cell they move to, as in the rich editor', {
+  timeout: 30000,
+}, async () => {
+  const keys = [
+    ...[
+      'Tab',
+      'Tab',
+      'Tab',
+      'Shift+Tab',
+      'Shift+Tab',
+      'Shift+Tab',
+      'Shift+Tab',
+    ],
+    ...['Tab', 'ArrowLeft', 'Shift+Tab', 'ArrowRight', 'Shift+Tab', 'Tab'],
+    'ArrowDown',
+  ]
+  const expected = [
+    ['b', 'b'],
+    ['c', 'c'],
+    ['d', 'd'],
+    ['c', 'c'],
+    ['b', 'b'],
+    ['a', 'a'],
+    // Shift+Tab in the first cell goes nowhere.
+    ['a', 'a'],
+    // Sideways arrows move from the selection's head: Left collapses it to
+    // the cell's start, Right at the cell's end goes to the next cell.
+    ['b', 'b'],
+    ['b', ''],
+    ['a', 'a'],
+    ['b', ''],
+    ['a', 'a'],
+    ['b', 'b'],
+  ]
+  // table-tab-001: down from a selection, the rich editor takes the
+  // browser's line move through the cells in document order; the formatted
+  // view moves to the cell below, as from a caret.
+  const down = { rich: ['c', ''], formatted: ['d', ''] }
+  // The rich editor's copy of the note has this table in its list item.
+  const richDoc = () =>
+    page.evaluate(() => document.querySelector('.tiptap').editor.getJSON())
+  const before = await richDoc()
+  await richCaret('a', 0)
+  const rich = []
+  for (const key of keys) {
+    await page.keyboard.press(key)
+    rich.push(await tabbed(page))
+  }
+  assert.deepEqual(rich, [...expected, down.rich])
+  // Shift+Tab in the first cell does not outdent the list item either.
+  assert.deepEqual(await richDoc(), before)
+  const doc = '- item\n\n  | a | b |\n  | - | - |\n  | c | d |\n\nafter'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table th', { hasText: 'a' }).click()
+  const formatted = []
+  for (const key of keys) {
+    await harness.keyboard.press(key)
+    formatted.push(await tabbed(harness))
+  }
+  assert.deepEqual(formatted, [...expected, down.formatted])
+  // Typing replaces the selected text, which is the cell's source.
+  await mount(doc)
+  await harness.locator('.hibi-lp-table th', { hasText: 'a' }).click()
+  await harness.keyboard.press('Tab')
+  await harness.keyboard.type('Y')
+  assert.equal((await state()).doc, doc.replace('| b |', '| Y |'))
+  await harness.keyboard.press('Shift+Tab')
+  await harness.keyboard.type('X')
+  assert.equal((await state()).doc, doc.replace('| a | b |', '| X | Y |'))
+  // A cell's formatting is part of its selected source.
+  const marked = '| a | b |\n| - | - |\n| **c** d | e |'
+  await mount(marked)
+  await harness.locator('.hibi-lp-table td', { hasText: 'e' }).click()
+  await harness.keyboard.press('Shift+Tab')
+  const { anchor, head } = await state()
+  assert.equal(marked.slice(anchor, head), '**c** d')
+})
+
 const undoKey = process.platform === 'darwin' ? 'Meta+z' : 'Control+z'
 
 test('enter, shift-enter and mod-enter break the line in a cell, as in the rich editor', {

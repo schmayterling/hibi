@@ -621,8 +621,18 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
             const figures = [
               ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
             ]
+            const pane = document.querySelector('.rich-pane')
+            const view = pane.querySelector('.cm-content')?.cmTile.root.view
             return {
               phase,
+              viewport: [innerWidth, innerHeight, devicePixelRatio],
+              editor: view && {
+                head: view.state.selection.main.head,
+                visible: view.visibleRanges,
+                target: view.coordsAtPos(view.state.selection.main.head),
+                scroll: [pane.scrollTop, pane.scrollHeight],
+                pane: pane.getBoundingClientRect(),
+              },
               heldFrames: window.heldFrames.length,
               heldIdle: window.heldIdle.length,
               pending: window.pendingDiagrams(true).length,
@@ -650,13 +660,16 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
       const view = element.cmTile.root.view
       const closes = [...view.state.doc.toString().matchAll(/\n```\n/g)]
       const gap = closes[index - 1].index + 5
-      view.dispatch({ selection: { anchor: gap }, scrollIntoView: true })
+      view.dispatch({
+        selection: { anchor: gap },
+        effects: view.constructor.scrollIntoView(gap, { y: 'center' }),
+      })
       return gap
     }, index)
     try {
       await waitForAsync(
         page,
-        async ({ fresh, gap }) => {
+        ({ fresh, gap }) => {
           const ready = () => {
             const root = document.querySelector('.rich-pane .cm-content')
             const view = root.cmTile.root.view
@@ -681,8 +694,7 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
               window.heldFrames.length > 0
             )
           }
-          if (ready()) return true
-          await window.releaseDiagramFrame()
+          // Keep drawings queued while CodeMirror settles the native scroll.
           return ready()
         },
         { fresh, gap },

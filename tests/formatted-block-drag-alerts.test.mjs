@@ -56,6 +56,12 @@ async function open(name, doc, token) {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async (name) => (await window.hibi.getDocument()).name === name,
+    name,
+  )
+  await waitForDocumentEditor(app, page)
   await page.locator('.rich-pane .cm-line', { hasText: token }).waitFor()
 }
 async function menu(token) {

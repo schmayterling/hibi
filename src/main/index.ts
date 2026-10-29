@@ -665,17 +665,13 @@ app.on('will-quit', (event) => {
   if (!nativeStopped) {
     event.preventDefault()
     if (nativeStopping) return
-    nativeStopping = stopNativeAddons().then(
-      () => {
+    nativeStopping = stopNativeAddons()
+      .catch(console.error)
+      .finally(() => {
         nativeStopped = true
         // Resume after Electron unwinds the prevented will-quit event.
         setImmediate(() => app.quit())
-      },
-      (error: unknown) => {
-        nativeStopping = undefined
-        console.error('could not finish native shutdown:', error)
-      },
-    )
+      })
     return
   }
   globalShortcuts.clear()

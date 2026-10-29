@@ -5,6 +5,7 @@ import test from 'node:test'
 import {
   electron,
   startupDiagnostics,
+  stopElectronTree,
   waitForDocumentEditor,
   waitForElectronShutdown,
 } from './electron.mjs'
@@ -371,6 +372,167 @@ test('ordinary quit waits for overdue sqlite close, preserves its active marker,
       )
     ).count,
     0,
+  )
+})
+
+// The real worker keeps its database open; each close request reports failure.
+function failSqliteClose() {
+  const threads = process.getBuiltinModule('node:worker_threads')
+  const send = threads.Worker.prototype.postMessage
+  globalThis.sqliteCloseCalls = 0
+  threads.Worker.prototype.postMessage = function (message, ...args) {
+    if (message?.method !== 'close') return send.call(this, message, ...args)
+    globalThis.sqliteCloseCalls++
+    setImmediate(() =>
+      this.emit('message', { seq: message.seq, error: 'PRIVATE_CLOSE_ERROR' }),
+    )
+  }
+}
+
+test('a sqlite close that keeps failing is recorded and cannot keep Hibi from quitting', {
+  timeout: 45000,
+}, async (t) => {
+  const root = await profile()
+  await writeFile(
+    join(root, 'addons.json'),
+    JSON.stringify({ dictionary: true }),
+  )
+  let app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  let child = app.process()
+  let quitting = false
+  t.after(async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return
+    // A blocked quit has already closed every window; nothing can retry it.
+    if (quitting) stopElectronTree(child)
+    else await app.close()
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(async () => {
+    const call = (input) =>
+      window.hibi.invokeAddonProfile('dictionary', 'changeCustomWords', input)
+    const { revision } = await window.hibi.invokeAddonProfile(
+      'dictionary',
+      'customWordsMetadata',
+    )
+    const { token } = await call({ type: 'begin', revision })
+    await call({
+      type: 'stage',
+      token,
+      upsert: [{ id: 'kept', word: 'durable' }],
+      remove: [],
+    })
+    await call({ type: 'commit', token })
+  })
+  await app.evaluate(failSqliteClose)
+  quitting = true
+  const closed = waitForElectronShutdown(child, app.waitForEvent('close'))
+  await app.evaluate(({ app }) => {
+    app.quit()
+  })
+  let timer
+  await Promise.race([
+    closed,
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error('Hibi kept running after its sqlite close failed')),
+        10000,
+      )
+    }),
+  ]).finally(() => clearTimeout(timer))
+  assert.equal(child.exitCode, 0)
+  const rows = await records(root)
+  assert.ok(rows.some((row) => row.code === 'SQLITE_CLOSE_FAILED'))
+  assert.doesNotMatch(JSON.stringify(rows), /PRIVATE_CLOSE_ERROR/)
+  t.diagnostic('quit after failed close; reopening same profile')
+  quitting = false
+  app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  child = app.process()
+  const reopened = await app.firstWindow()
+  await waitForDocumentEditor(app, reopened)
+  const { words } = await reopened.evaluate(() =>
+    window.hibi.invokeAddonProfile('dictionary', 'customWords', {}),
+  )
+  assert.deepEqual(
+    words.map((word) => word.word),
+    ['durable'],
+  )
+})
+
+test('disabling the dictionary neither waits on nor fails with its sqlite close', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await profile()
+  await writeFile(
+    join(root, 'addons.json'),
+    JSON.stringify({ dictionary: true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${root}`],
+  })
+  t.after(async () => {
+    await app.evaluate(() => globalThis.releaseSqliteClose?.()).catch(() => {})
+    await app.close()
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  const enabled = () =>
+    page.evaluate(() =>
+      window.hibi.invokeAddonProfile('dictionary', 'customWordsMetadata'),
+    )
+  await enabled()
+  await app.evaluate(() => {
+    const threads = process.getBuiltinModule('node:worker_threads')
+    const send = threads.Worker.prototype.postMessage
+    globalThis.sqliteCloseCalls = 0
+    threads.Worker.prototype.postMessage = function (message, ...args) {
+      if (message?.method !== 'close') return send.call(this, message, ...args)
+      globalThis.sqliteCloseCalls++
+      globalThis.releaseSqliteClose = () => send.call(this, message, ...args)
+    }
+  })
+  const toggle = (enabled) =>
+    page.evaluate(
+      (enabled) => window.hibi.setAddonEnabled('dictionary', enabled),
+      enabled,
+    )
+  let timer
+  const states = await Promise.race([
+    toggle(false),
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('disabling waited for the held sqlite close')),
+        8000,
+      )
+    }),
+  ]).finally(() => clearTimeout(timer))
+  assert.equal(
+    states.find((state) => state.id === 'dictionary')?.enabled,
+    false,
+  )
+  assert.equal(await app.evaluate(() => globalThis.sqliteCloseCalls), 1)
+  // The close keeps running; re-enabling waits for it instead of opening twice.
+  await toggle(true)
+  const reopened = enabled()
+  await app.evaluate(() => globalThis.releaseSqliteClose())
+  assert.equal((await reopened).count, 0)
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () =>
+      (await records(root)).some((row) => row.code === 'SQLITE_CLOSED'),
+    undefined,
+    { timeout: 4000 },
+  )
+  await app.evaluate(failSqliteClose)
+  const failed = await toggle(false)
+  assert.equal(
+    failed.find((state) => state.id === 'dictionary')?.enabled,
+    false,
   )
 })
 

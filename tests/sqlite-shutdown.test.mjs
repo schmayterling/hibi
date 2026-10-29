@@ -9,7 +9,9 @@ import { stopNativeAddon } from '../src/main/addon-stop.ts'
 import { installOwnedFailureReporter } from '../src/main/local-diagnostics/owned.ts'
 import { waitForAsync } from './poll.mjs'
 
-test('dictionary cleanup never abandons durable close at the generic deadline', async (t) => {
+test('dictionary cleanup never abandons durable close at the generic deadline', {
+  timeout: 10000,
+}, async (t) => {
   const timers = []
   t.mock.method(globalThis, 'setTimeout', (callback) => {
     timers.push(callback)
@@ -22,19 +24,42 @@ test('dictionary cleanup never abandons durable close at the generic deadline', 
   const close = new Promise((resolve) => {
     release = resolve
   })
-  const stopping = stopNativeAddon({
-    id: 'dictionary',
-    stop: () => close,
-  }).then(() => {
+  const stopping = stopNativeAddon(
+    {
+      id: 'dictionary',
+      stop: () => close,
+    },
+    true,
+  ).then(() => {
     finished = true
   })
   await Promise.resolve()
   for (const timer of timers) timer()
   await new Promise(setImmediate)
   const abandoned = finished
+  // Disabling stops waiting at the deadline; the close itself keeps running.
+  const disabling = stopNativeAddon({ id: 'dictionary', stop: () => close })
+  await Promise.resolve()
+  for (const timer of timers) timer()
+  await disabling
   release()
   await stopping
   assert.equal(abandoned, false)
+})
+
+test('a failed dictionary close is reported without holding quit or addon changes open', async (t) => {
+  const logs = []
+  t.mock.method(console, 'error', (...args) => logs.push(args))
+  for (const quitting of [true, false])
+    await stopNativeAddon(
+      {
+        id: 'dictionary',
+        stop: () => Promise.reject(new Error('PRIVATE_CLOSE_ERROR')),
+      },
+      quitting,
+    )
+  assert.equal(logs.length, 2)
+  assert.match(logs[0][0], /dictionary/)
 })
 
 async function fixture(t) {

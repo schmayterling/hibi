@@ -53,7 +53,7 @@ test('native cleanup is awaited, bounded, and late rejection stays handled', asy
   assert.equal(timers.size, 0)
 })
 
-test('a failed storage close prevents quit and permits a later retry', async (t) => {
+test('a failed native stop is reported and cannot cancel the quit', async (t) => {
   const index = await readFile(
     new URL('../src/main/index.ts', import.meta.url),
     'utf8',
@@ -65,7 +65,9 @@ test('a failed storage close prevents quit and permits a later retry', async (t)
   let handler,
     attempts = 0,
     quits = 0
-  t.mock.method(console, 'error', () => {})
+  const failure = new Error('storage still open')
+  const logs = []
+  t.mock.method(console, 'error', (...args) => logs.push(args))
   const event = { preventDefault() {} }
   const app = {
     on(_name, listener) {
@@ -85,7 +87,8 @@ test('a failed storage close prevents quit and permits a later retry', async (t)
   )(
     app,
     async () => {
-      if (++attempts === 1) throw new Error('storage still open')
+      attempts++
+      throw failure
     },
     { clear() {} },
     { dispose() {} },
@@ -93,12 +96,10 @@ test('a failed storage close prevents quit and permits a later retry', async (t)
   handler(event)
   await pending()
   await new Promise(setImmediate)
-  assert.equal(quits, 0)
-  handler(event)
-  await pending()
-  await new Promise(setImmediate)
-  assert.equal(attempts, 2)
+  // Every window is already closed at will-quit; nothing is left to request a retry.
+  assert.equal(attempts, 1)
   assert.equal(quits, 1)
+  assert.ok(logs.some((args) => args.includes(failure)))
 })
 
 test('quit resumes after a never-resolving native stop reaches its deadline', async (t) => {

@@ -253,6 +253,10 @@ export class AlertTitleWidget extends WidgetType {
   }
 }
 
+/** A callout type's color, its own inside another callout's too. */
+const alertColor = (type: string) =>
+  `var(--hibi-alert-${type}, var(--status-info))`
+
 /** The alert type of a title line's source. */
 export function titleOf(source: string) {
   const marker = alertMarker(source)
@@ -287,14 +291,17 @@ export const contribution: FormattedContribution = {
       container(node, { state }) {
         const title = firstBlock(node.node)
         if (title?.name !== 'AlertTitle') return undefined
-        const type = titleOf(state.sliceDoc(title.from, title.to))?.type
+        const type =
+          titleOf(state.sliceDoc(title.from, title.to))?.type ?? 'note'
+        const color = alertColor(type)
+        const tint = `color-mix(in srgb, ${color} 6%, transparent)`
         return {
           width: '19px',
-          class: `hibi-lp-alert hibi-lp-alert-${type ?? 'note'}`,
-          paint: (left, top) =>
+          class: `hibi-lp-alert hibi-lp-alert-${type}`,
+          paint: (left, top, right, bottom) =>
             [
-              `linear-gradient(var(--alert-color), var(--alert-color)) ${left} ${top} / 3px calc(100% - ${top}) no-repeat`,
-              `linear-gradient(var(--alert-tint), var(--alert-tint)) ${left} ${top} / calc(100% - ${left}) calc(100% - ${top}) no-repeat`,
+              `linear-gradient(${color}, ${color}) ${left} ${top} / 3px calc(100% - ${top} - ${bottom}) no-repeat`,
+              `linear-gradient(${tint}, ${tint}) ${left} ${top} / calc(100% - ${left} - ${right}) calc(100% - ${top} - ${bottom}) no-repeat`,
             ].join(', '),
           padding: { top: 12, bottom: 12, right: 16 },
         }
@@ -309,6 +316,7 @@ export const contribution: FormattedContribution = {
         if (!title) return false
         out.line(state.doc.lineAt(node.from).from, {
           class: 'hibi-lp-alert-title',
+          style: `color: ${alertColor(title.type)}`,
         })
         const mark = node.node.getChild('AlertMark')
         if (revealed) {

@@ -58,6 +58,19 @@ const note = `# Callouts
 >
 > after other blocks
 
+> [!note] Nested last
+> Outer text.
+>
+> > [!tip] Inner last
+> > Inner text.
+
+> [!tip] Code last
+> Before code.
+>
+> \`\`\`js
+> let last = 1
+> \`\`\`
+
 > plain quote
 >
 > | a | b |
@@ -110,8 +123,8 @@ async function measure(engine, measureView) {
           engine === 'tiptap' ? '.github-alert pre' : '.hibi-lp-codenest',
         )
         .count(),
-      2,
-      'both fenced code blocks are rendered',
+      3,
+      'the fenced code blocks are rendered',
     )
     assert.equal(
       await page
@@ -139,11 +152,68 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
       const box = alert.getBoundingClientRect()
       const tables = alert.querySelectorAll('table')
       const last = tables[tables.length - 1]?.getBoundingClientRect()
-      return { below: last ? box.bottom - last.bottom : null }
+      const outer = alert.parentElement
+        .closest('.github-alert')
+        ?.getBoundingClientRect()
+      const code = alert
+        .querySelector(':scope > .github-alert-body > pre:last-child')
+        ?.getBoundingClientRect()
+      return {
+        title: alert.querySelector('.github-alert-title').textContent,
+        bar: getComputedStyle(alert).borderLeftColor,
+        below: last ? box.bottom - last.bottom : null,
+        // Where a nested callout's box ends inside its parent's.
+        inset: outer && {
+          right: outer.right - box.right,
+          bottom: outer.bottom - box.bottom,
+        },
+        code: code && { height: code.height, below: box.bottom - code.bottom },
+      }
     }),
   )
   const formatted = await measure('codemirror', () => {
     const content = document.querySelector('.rich-pane .cm-content')
+    // Lengths of the paint, which can be relative to the box it paints.
+    const host = document.createElement('div')
+    const probe = host.appendChild(document.createElement('div'))
+    host.style.cssText = 'position: absolute; visibility: hidden'
+    document.body.append(host)
+    const px = (length, size) => {
+      host.style.width = `${size}px`
+      probe.style.width = length
+      return probe.getBoundingClientRect().width
+    }
+    /** Splits a computed list at separators outside parentheses. */
+    const split = (value, separator) => {
+      const parts = []
+      let depth = 0,
+        start = 0
+      for (let at = 0; at < value.length; at++)
+        if (value[at] === '(') depth++
+        else if (value[at] === ')') depth--
+        else if (!depth && value[at] === separator) {
+          parts.push(value.slice(start, at).trim())
+          start = at + 1
+        }
+      return [...parts, value.slice(start).trim()].filter(Boolean)
+    }
+    /** The box of each paint layer: a container's bar or tint. */
+    const layers = (rect, before) => {
+      const left = rect.left + Number.parseFloat(before.left)
+      const positions = split(before.backgroundPosition, ',')
+      return split(before.backgroundSize, ',').map((size, index) => {
+        const [width, height] = split(size, ' ')
+        const [x, y] = split(positions[index], ' ')
+        const from = left + px(x, rect.right - left),
+          top = rect.top + px(y, rect.height)
+        return {
+          left: from,
+          top,
+          right: from + px(width, rect.right - left),
+          bottom: top + px(height, rect.height),
+        }
+      })
+    }
     // Each run of painted blocks: lines and boxes around code, top level in the content.
     const runs = []
     let run = null
@@ -170,7 +240,21 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
         left,
         right: rect.right,
         image: before.backgroundImage,
+        layers: layers(rect, before),
+        // Each layer's color: the first stop of its gradient.
+        colors: split(before.backgroundImage, ',').map(
+          (layer) =>
+            split(
+              layer.slice(layer.indexOf('(') + 1, layer.lastIndexOf(')')),
+              ',',
+            )[0],
+        ),
       }
+      const code = element
+        .querySelector(':scope > .hibi-lp-codescroll')
+        ?.getBoundingClientRect()
+      if (code)
+        block.code = { height: code.height, below: rect.bottom - code.bottom }
       if (!run || run.kind !== block.kind) {
         run = { kind: block.kind, blocks: [], tables: [] }
         runs.push(run)
@@ -186,6 +270,7 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
         })
       }
     }
+    host.remove()
     return runs
   })
 
@@ -193,6 +278,8 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
     formatted.map((run) => [run.kind, run.tables.length]),
     [
       ['alert', 3],
+      ['alert', 0],
+      ['alert', 0],
       ['alert', 0],
       ['alert', 0],
       ['alert', 0],
@@ -237,5 +324,51 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
         rich[0].below,
     ) < 0.5,
     `space below the callout's last table: ${practice.blocks[practice.blocks.length - 1].bottom - last.bottom}`,
+  )
+  // A nested callout that ends its parent ends inside the parent's padding:
+  // its bar and tint stop short of the parent's right and bottom edges.
+  const inner = rich.find((alert) => alert.title === 'Inner last')
+  assert.deepEqual(inner.inset, { right: 16, bottom: 12 })
+  const nested = formatted[4].blocks.filter(
+    (block) => block.layers.length === 4,
+  )
+  assert.deepEqual(
+    nested.map((block) => block.text),
+    ['Inner last', 'Inner text.'],
+  )
+  // Each callout keeps its own color, the outer one beside the inner too.
+  const outerBar = rich.find((alert) => alert.title === 'Nested last').bar
+  assert.notEqual(outerBar, inner.bar)
+  for (const { text, colors } of nested)
+    assert.deepEqual(
+      [colors[0], colors[2]],
+      [outerBar, inner.bar],
+      `${text}: bar colors`,
+    )
+  for (const [at, { text, layers }] of nested.entries()) {
+    const [, outer, bar, tint] = layers
+    const bottom = at === nested.length - 1 ? inner.inset.bottom : 0
+    assert.ok(
+      Math.abs(outer.right - tint.right - inner.inset.right) < 0.5,
+      `${text}: the inner tint ends ${outer.right - tint.right}px left of the outer one`,
+    )
+    for (const [name, layer] of [
+      ['bar', bar],
+      ['tint', tint],
+    ])
+      assert.ok(
+        Math.abs(outer.bottom - layer.bottom - bottom) < 0.5,
+        `${text}: the inner ${name} ends ${outer.bottom - layer.bottom}px above the outer tint`,
+      )
+  }
+  // A callout that ends in code keeps its padding below the code's box.
+  const code = rich.find((alert) => alert.title === 'Code last').code
+  assert.deepEqual(code, { height: 60, below: 12 })
+  const box = formatted[5].blocks.at(-1)
+  assert.equal(box.text, 'let last = 1')
+  assert.ok(
+    Math.abs(box.code.height - code.height) < 0.5 &&
+      Math.abs(box.code.below - code.below) < 0.5,
+    `code box ${JSON.stringify(box.code)} in the callout's paint`,
   )
 })

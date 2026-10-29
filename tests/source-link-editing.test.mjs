@@ -23,6 +23,23 @@ test('a hovered link edits its captured target instead of the current caret', as
   )
 })
 
+for (const source of [
+  'https://example.com/a',
+  'www.example.com/path',
+  'person@example.com',
+]) {
+  test(`removing a detected link keeps its text unlinked: ${source}`, () => {
+    const target = view(source, source.slice(0, 3))
+    assert.equal(sourceFormatting(target).run('unlink'), true)
+    assert.doesNotMatch(
+      markdown.parse(target.state.doc.toString()).toString(),
+      /(?:Link|URL)\(/,
+    )
+    assert.equal(undo(target), true)
+    assert.equal(target.state.doc.toString(), source)
+  })
+}
+
 test('a captured link cannot overwrite a newer document', () => {
   const source = '[first](one.md) and [second](two.md)'
   const target = view(source, 'first')

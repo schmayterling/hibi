@@ -8,7 +8,7 @@ import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const note =
-  'See [docs](https://old.example "Keep title") here.\n\n| name |\n| --- |\n| [&amp;](https://cell.example) |\n'
+  'See [docs](https://old.example "Keep title") here. Bare https://bare.example/path.\n\n| name |\n| --- |\n| [&amp;](https://cell.example) |\n'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 async function open(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-link-controls-'))
@@ -93,6 +93,22 @@ test('codemirror link hover offers URL, edit, open, copy and remove', {
     async (note) => (await window.hibi.getDocument()).markdown === note,
     note,
   )
+})
+
+test('codemirror removes a detected URL without changing its visible text', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, panel, read } = await open(t)
+  const link = page.getByRole('link', {
+    name: 'https://bare.example/path',
+    exact: true,
+  })
+  await link.hover()
+  await panel.getByRole('button', { name: 'Remove link', exact: true }).click()
+  await link.waitFor({ state: 'detached' })
+  assert.ok((await read()).includes('https\\\\://bare.example/path'))
+  await pressShortcut(app, `${mod}+z`)
+  await link.waitFor()
 })
 
 test('codemirror caret actions and context edit are keyboard reachable', {

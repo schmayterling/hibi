@@ -42,6 +42,7 @@ import { codeHighlighter } from './code-languages'
 import { codePlaceholders } from './code-placeholders'
 import {
   blockBreak,
+  blockText,
   codeIndent,
   deleteBackward,
   deleteForward,
@@ -2253,6 +2254,26 @@ export function livePreview(
         { key: 'ArrowRight', run: arrow(true) },
       ]),
     ),
+    // A triple-click selects the clicked block's text, as in the rich editor:
+    // not its markers or the line break after it, and not extended from the
+    // selection with Shift. Dragging on does not extend it either.
+    EditorView.mouseSelectionStyle.of((view, event) => {
+      if (event.button !== 0 || event.detail !== 3) return null
+      let at = view.posAtCoords({ x: event.clientX, y: event.clientY })
+      const text = () =>
+        at === null ? null : blockText(view.state, syntax.tree(view.state), at)
+      const block = text()
+      if (!block) return null
+      return {
+        get: () => {
+          const { from, to } = text() ?? block
+          return EditorSelection.single(from, to)
+        },
+        update: (update) => {
+          if (at !== null) at = update.changes.mapPos(at)
+        },
+      }
+    }),
     // The page cannot select hidden lines at the note's ends, so a key typed
     // over the whole note would replace only what shows: replace it all, with
     // input handlers seeing the whole range as for any typed text. Text with

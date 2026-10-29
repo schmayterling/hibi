@@ -477,6 +477,36 @@ const shifted = async (run) => {
   return state()
 }
 
+/** The page point inside the character after the `offset`th of `word`, in lines or cells. */
+const at = (word, offset) =>
+  harness.evaluate(
+    ({ word, offset }) => {
+      const walker = document.createTreeWalker(
+        window.tables.view().contentDOM,
+        NodeFilter.SHOW_TEXT,
+      )
+      while (walker.nextNode()) {
+        const i = walker.currentNode.data.indexOf(word)
+        if (i < 0) continue
+        const range = document.createRange()
+        range.setStart(walker.currentNode, i + offset)
+        range.setEnd(walker.currentNode, i + offset + 1)
+        const { left, top, height } = range.getBoundingClientRect()
+        return { x: left + 1, y: top + height / 2 }
+      }
+    },
+    { word, offset },
+  )
+
+/** The text of the cells that hold the page selection's ends, after the view draws. */
+const pick = () =>
+  harness.evaluate(async () => {
+    for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame)
+    const selection = getSelection()
+    const cell = (node) => node?.parentElement?.closest('td, th')?.textContent
+    return [cell(selection.anchorNode), cell(selection.focusNode)]
+  })
+
 test('arrow keys enter the nearest cells of an adjacent table and shift-click extends the selection', {
   timeout: 30000,
 }, async () => {
@@ -580,33 +610,6 @@ test('a shift-drag from an edited cell back over the table picks across cells, a
     'one two three\n\n| a | bb |\n| --- | --- |\n| cell | tail |\n\nfour five six'
   const cell = doc.indexOf('cell') + 4
   await mount(doc)
-  /** The page point inside the character after the `offset`th of `word`, in lines or cells. */
-  const at = (word, offset) =>
-    harness.evaluate(
-      ({ word, offset }) => {
-        const walker = document.createTreeWalker(
-          window.tables.view().contentDOM,
-          NodeFilter.SHOW_TEXT,
-        )
-        while (walker.nextNode()) {
-          const i = walker.currentNode.data.indexOf(word)
-          if (i < 0) continue
-          const range = document.createRange()
-          range.setStart(walker.currentNode, i + offset)
-          range.setEnd(walker.currentNode, i + offset + 1)
-          const { left, top, height } = range.getBoundingClientRect()
-          return { x: left + 1, y: top + height / 2 }
-        }
-      },
-      { word, offset },
-    )
-  const pick = () =>
-    harness.evaluate(async () => {
-      for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame)
-      const selection = getSelection()
-      const cell = (node) => node?.parentElement?.closest('td, th')?.textContent
-      return [cell(selection.anchorNode), cell(selection.focusNode)]
-    })
   await harness.locator('.hibi-lp-table td', { hasText: 'cell' }).click()
   await harness.keyboard.press('End')
   assert.equal((await state()).editor, 'cell')
@@ -657,7 +660,7 @@ test('shift-triple-click from an edited cell selects the clicked paragraph, as i
       return { x: left + 1, y: (top + bottom) / 2 }
     }, pos)
   for (const [word, range] of [
-    ['two', [0, doc.indexOf('\n') + 1]],
+    ['two', [0, doc.indexOf('\n')]],
     ['five', [doc.indexOf('four'), doc.length]],
   ]) {
     await harness.locator('.hibi-lp-table td', { hasText: 'x' }).click()
@@ -673,6 +676,276 @@ test('shift-triple-click from an edited cell selects the clicked paragraph, as i
       word,
     )
   }
+})
+
+test("triple-click selects the clicked block's text, with or without Shift, as in the rich editor", {
+  timeout: 30000,
+}, async () => {
+  const doc =
+    'alpha line\nbeta line\n\n- item words\n- [ ] task words\n  - nested words\n\n> qa line\n> qb line\n\n## heading words ##\n\n```\ncode one\ncode two\n```\n\n| aa | bb |\n| --- | --- |\n| cell words | tail |\n\nend words there'
+  await mount(doc)
+  // A paragraph's lines, a heading's or item's text without its markers, and
+  // a code block's lines: never the line break after them.
+  const blocks = [
+    ['alpha', 'alpha line\nbeta line'],
+    ['beta', 'alpha line\nbeta line'],
+    ['item words', 'item words'],
+    ['task words', 'task words'],
+    ['nested words', 'nested words'],
+    ['qb line', 'qa line\n> qb line'],
+    ['heading words', 'heading words'],
+    ['code two', 'code one\ncode two'],
+    ['end words', 'end words there'],
+  ]
+  const tripled = async (word, shift) => {
+    const start = await at(word === 'end words' ? 'alpha' : 'end words', 1)
+    await harness.mouse.click(start.x, start.y)
+    const { x, y } = await at(word, 2)
+    const click = () => harness.mouse.click(x, y, { clickCount: 3 })
+    if (!shift) await click()
+    const { anchor, head, editor } = shift
+      ? await shifted(click)
+      : await state()
+    return [doc.slice(anchor, head), editor]
+  }
+  for (const shift of [false, true])
+    for (const [word, text] of blocks)
+      assert.deepEqual(
+        await tripled(word, shift),
+        [text, null],
+        `${shift ? 'shift ' : ''}${word}`,
+      )
+  // In a cell, at a person's pace, the cell's editor selects the cell's text.
+  const start = await at('end words', 1)
+  await harness.mouse.click(start.x, start.y)
+  const { x, y } = await at('cell words', 2)
+  await harness.mouse.move(x, y)
+  for (let clickCount = 1; clickCount <= 3; clickCount++) {
+    await harness.mouse.down({ clickCount })
+    await harness.mouse.up({ clickCount })
+    await harness.evaluate(() => new Promise((done) => setTimeout(done, 100)))
+  }
+  const cell = await state()
+  assert.deepEqual(
+    [doc.slice(cell.anchor, cell.head), cell.editor],
+    ['cell words', 'cell words'],
+  )
+})
+
+test("a shift-drag from a cell into another table's cells keeps the anchor, as in the rich editor", {
+  timeout: 30000,
+}, async () => {
+  const doc =
+    'one two\n\n| a1 | b1 |\n| --- | --- |\n| first cell | first tail |\n\nbetween words here\n\n| a2 | b2 |\n| --- | --- |\n| second cell | second tail |\n\nend words'
+  const anchor = doc.indexOf('first cell') + 3
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td', { hasText: 'first cell' }).click()
+  await harness.keyboard.press('Home')
+  for (let i = 0; i < 3; i++) await harness.keyboard.press('ArrowRight')
+  assert.equal((await state()).editor, 'first cell')
+  const from = await at('between', 2)
+  const into = await at('second cell', 8)
+  const next = await at('second tail', 4)
+  const steps = []
+  const end = await shifted(async () => {
+    await harness.mouse.move(from.x, from.y)
+    await harness.mouse.down()
+    await harness.mouse.move(into.x, into.y, { steps: 5 })
+    steps.push([await state(), await pick()])
+    await harness.mouse.move(next.x, next.y, { steps: 5 })
+    steps.push([await state(), await pick()])
+    await harness.mouse.move(into.x, into.y, { steps: 5 })
+    await harness.mouse.up()
+  })
+  // The head follows the pointer through the other table's cell text.
+  assert.deepEqual(
+    steps.map(([{ anchor, head }, cells]) => [anchor, head, cells]),
+    [
+      [anchor, doc.indexOf('second cell') + 8, ['first cell', 'second cell']],
+      [anchor, doc.indexOf('second tail') + 4, ['first cell', 'second tail']],
+    ],
+  )
+  assert.deepEqual(
+    [end.anchor, end.head, end.editor],
+    [anchor, doc.indexOf('second cell') + 8, null],
+  )
+})
+
+test("a shift-press in another table's cell extends the selection there; the rich editor selects the anchor's cell", {
+  timeout: 30000,
+}, async () => {
+  // The rich editor's cell selection cannot span two tables: a shift-press on
+  // another table's text leaves the selection in the anchor's cell, and a
+  // drag from it changes nothing.
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const richCell = (text) =>
+    page.locator('.tiptap td').filter({ hasText: new RegExp(`^${text}$`) })
+  await richCell('one').click()
+  const text = (cell) =>
+    page.evaluate((cell) => {
+      const node = [...document.querySelectorAll('.tiptap td p')].find(
+        (p) => p.textContent === cell,
+      ).firstChild
+      const range = document.createRange()
+      range.setStart(node, 2)
+      range.setEnd(node, 3)
+      const { left, top, height } = range.getBoundingClientRect()
+      return { x: left + 1, y: top + height / 2 }
+    }, cell)
+  const target = await text('value 1')
+  const further = await text('value 3')
+  await page.keyboard.down('Shift')
+  try {
+    await page.mouse.move(target.x, target.y)
+    await page.mouse.down()
+    await page.mouse.move(further.x, further.y, { steps: 4 })
+    await page.mouse.up()
+  } finally {
+    await page.keyboard.up('Shift')
+  }
+  const rich = await page.evaluate(() => {
+    const { $from, $to } =
+      document.querySelector('.tiptap').editor.state.selection
+    const cell = ($pos) => {
+      for (let depth = $pos.depth; depth > 0; depth--)
+        if (/cell|header/i.test($pos.node(depth).type.name))
+          return $pos.node(depth).textContent
+      return null
+    }
+    return [cell($from), cell($to)]
+  })
+  await page.locator('.tiptap p', { hasText: 'A paragraph before' }).click()
+  assert.deepEqual(rich, ['one', 'one'])
+  // The formatted view keeps the anchor in its cell, and the head follows
+  // the pointer through the other table's cells, as from outside the tables.
+  const doc =
+    'one two\n\n| a1 | b1 |\n| --- | --- |\n| first cell | first tail |\n\nbetween words here\n\n| a2 | b2 |\n| --- | --- |\n| second cell | second tail |\n\nend words'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td', { hasText: 'first cell' }).click()
+  await harness.keyboard.press('Home')
+  for (let i = 0; i < 3; i++) await harness.keyboard.press('ArrowRight')
+  const from = await at('second cell', 2)
+  const next = await at('second tail', 4)
+  const end = await shifted(async () => {
+    await harness.mouse.move(from.x, from.y)
+    await harness.mouse.down()
+    await harness.mouse.move(next.x, next.y, { steps: 5 })
+    await harness.mouse.up()
+  })
+  assert.deepEqual(
+    [end.anchor, end.head, end.editor],
+    [doc.indexOf('first cell') + 3, doc.indexOf('second tail') + 4, null],
+  )
+  assert.deepEqual(await pick(), ['first cell', 'second tail'])
+})
+
+test('a drag from a cell selects its text and picks across cells, as in the rich editor', {
+  timeout: 30000,
+}, async () => {
+  const doc =
+    'one two\n\n| a | bb |\n| --- | --- |\n| cell words | tail end |\n\nfour five'
+  const cell = doc.indexOf('cell words')
+  await mount(doc)
+  // From a cell as it shows and from the cell's open editor.
+  for (const open of [false, true]) {
+    const away = await at('five', 1)
+    await harness.mouse.click(away.x, away.y)
+    if (open)
+      await harness.locator('.hibi-lp-table td', { hasText: 'cell' }).click()
+    const from = await at('cell words', 1)
+    const within = await at('cell words', 7)
+    const across = await at('tail end', 3)
+    const steps = []
+    await harness.mouse.move(from.x, from.y)
+    await harness.mouse.down()
+    await harness.mouse.move(within.x, within.y, { steps: 5 })
+    steps.push(await state())
+    await harness.mouse.move(across.x, across.y, { steps: 5 })
+    steps.push(await state())
+    const cells = await pick()
+    await harness.mouse.move(within.x, within.y, { steps: 5 })
+    await harness.mouse.up()
+    const end = await state()
+    assert.deepEqual(
+      steps.map(({ anchor, head }) => [anchor, head]),
+      [
+        [cell + 1, cell + 7],
+        [cell + 1, doc.indexOf('tail end') + 3],
+      ],
+      `open ${open}`,
+    )
+    assert.deepEqual(cells, ['cell words', 'tail end'], `open ${open}`)
+    // The drag ends with the cell's editor selecting the dragged text.
+    assert.deepEqual(
+      [end.anchor, end.head, end.editor],
+      [cell + 1, cell + 7, 'cell words'],
+      `open ${open}`,
+    )
+    assert.equal(
+      await harness.evaluate(() => getSelection().toString()),
+      'ell wo',
+    )
+  }
+})
+
+test('a drag from a cell scrolls a wide table sideways at the pane edges, as in the rich editor; a shift-drag does not', {
+  timeout: 30000,
+}, async () => {
+  const columns = Array.from({ length: 30 }, (_, i) => i)
+  const doc = `| ${columns.map((i) => `col ${i}`).join(' | ')} |\n| ${columns.map(() => '---').join(' | ')} |\n| ${columns.map((i) => `value ${i}`).join(' | ')} |\n\nafter`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(doc, { width: 600, height: 400 }, { editable: true }),
+    doc,
+  )
+  const pane = () =>
+    harness.evaluate(() => {
+      const pane = document.querySelector('.rich-pane')
+      const { left, right } = pane.getBoundingClientRect()
+      return {
+        left,
+        right,
+        scrollLeft: pane.scrollLeft,
+        wide: pane.scrollWidth > pane.clientWidth,
+      }
+    })
+  const wait = () =>
+    harness.evaluate(() => new Promise((done) => setTimeout(done, 400)))
+  const box = await pane()
+  assert.ok(box.wide, JSON.stringify(box))
+  const from = await at('value 1', 2)
+  const over = await at('value 2', 2)
+  await harness.mouse.move(from.x, from.y)
+  await harness.mouse.down()
+  await harness.mouse.move(over.x, over.y, { steps: 4 })
+  const before = await state()
+  // Held right of the pane, the drag scrolls it and the head follows.
+  await harness.mouse.move(box.right + 20, over.y, { steps: 4 })
+  await wait()
+  const held = [await pane(), await state()]
+  await harness.mouse.up()
+  const stopped = (await pane()).scrollLeft
+  await wait()
+  assert.ok(held[0].scrollLeft > 0, JSON.stringify(held[0]))
+  assert.equal(held[1].anchor, doc.indexOf('value 1') + 2)
+  assert.ok(held[1].head > before.head, JSON.stringify([held[1], before]))
+  assert.equal((await pane()).scrollLeft, stopped)
+  // A shift-drag from an edited cell follows the pointer without scrolling sideways.
+  await harness.evaluate(() => {
+    document.querySelector('.rich-pane').scrollLeft = 0
+  })
+  await harness.locator('.hibi-lp-table td', { hasText: 'value 0' }).click()
+  const shift = await shifted(async () => {
+    await harness.mouse.move(from.x, from.y)
+    await harness.mouse.down()
+    await harness.mouse.move(over.x, over.y, { steps: 4 })
+    await harness.mouse.move(box.right + 20, over.y, { steps: 4 })
+    await wait()
+    await harness.mouse.up()
+  })
+  assert.equal((await pane()).scrollLeft, 0)
+  assert.ok(shift.head > doc.indexOf('value 2'), JSON.stringify(shift))
 })
 
 test('a shift-drag from an edited cell scrolls at the pane edges', {

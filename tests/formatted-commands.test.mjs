@@ -9,6 +9,7 @@ import { MarkdownManager } from '@tiptap/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
   blockBreak,
+  blockText,
   codeIndent,
   deleteBackward,
   deleteForward,
@@ -82,6 +83,29 @@ const typing = (text) => (state, tree) => {
   const { from, to } = state.selection.main
   return lineInput(state, tree, from, to, text)
 }
+
+test('a triple-click selects the text of its paragraph, task, heading or code block, like the rich editor', () => {
+  const doc =
+    'alpha line\nbeta line\n\n- [ ] task words\n\n> qa\n> qb\n\n## heading words ##  \n\nSetext words\n===\n\n```js\ncode one\ncode two\n```\n\n    indented one\n    indented two\n\n---'
+  const state = EditorState.create({ doc })
+  const tree = markdown.parse(doc)
+  const at = (word, offset = 1) => {
+    const block = blockText(state, tree, doc.indexOf(word) + offset)
+    return block && doc.slice(block.from, block.to)
+  }
+  assert.equal(at('beta'), 'alpha line\nbeta line')
+  assert.equal(at('alpha', 0), 'alpha line\nbeta line')
+  assert.equal(at('beta line', 9), 'alpha line\nbeta line')
+  assert.equal(at('task'), 'task words')
+  assert.equal(at('qb'), 'qa\n> qb')
+  assert.equal(at('heading'), 'heading words')
+  assert.equal(at('Setext'), 'Setext words')
+  assert.equal(at('code two'), 'code one\ncode two')
+  assert.equal(at('indented two'), 'indented one\n    indented two')
+  // Blank lines and other blocks have no text to select.
+  assert.equal(at('\n\n- [ ]', 1), null)
+  assert.equal(at('---'), null)
+})
 
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {
   assert.equal(run('hello| world', blockBreak), 'hello\n\n| world')

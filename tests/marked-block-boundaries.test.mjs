@@ -96,6 +96,12 @@ const containers = {
   quoteList: (body) => `> - ${body.replaceAll('\n', '\n>   ')}`,
   listQuote: (body) => `- > ${body.replaceAll('\n', '\n  > ')}`,
 }
+// Marked ends a lazy item after a nested leaf only within its begin-rule indent.
+const nestedContainers = {
+  nestedList: (body) => `1. - ${body.replaceAll('\n', '\n     ')}`,
+  deepList: (body) => `- 1. ${body.replaceAll('\n', '\n     ')}`,
+  quoteNestedList: (body) => `> 1. * ${body.replaceAll('\n', '\n>      ')}`,
+}
 const tails = [
   'outside\n===\n\n# real\n',
   'outside\n---\n\n# real\n',
@@ -242,7 +248,10 @@ for (const [name, extension, body, nativeBody] of [
   ['math', mathTokens, '$$\nx\n$$', '```math\nx\n```'],
   ['subtext', textExtrasMarkdown, '-# small', '# small'],
 ]) {
-  for (const [container, wrap] of Object.entries(containers))
+  for (const [container, wrap] of Object.entries({
+    ...containers,
+    ...nestedContainers,
+  }))
     for (const tail of tails)
       for (const eol of ['\n', '\r\n'])
         test(`${name} native boundary: ${container} ${JSON.stringify(tail)} ${JSON.stringify(eol)}`, () => {
@@ -276,6 +285,18 @@ for (const [name, extension, body, nativeBody] of [
           )
         })
 }
+
+test('tab-indented item lines after math stay in the item', () => {
+  for (const source of [
+    '1. > -\t$$\n   > \tx\n   > \t$$\n   > \tpara\n\n# real\n',
+    '- \t$$\n  \tx\n  \t$$\n  \tpara\nlazy\n',
+  ])
+    assert.deepEqual(
+      containerBoundaries(new Marked(mathTokens).lexer(source)),
+      containerBoundaries(new Marked().lexer(source.replaceAll('$$', '```'))),
+      source,
+    )
+})
 
 test('incomplete math keeps native paragraphs and list continuations', () => {
   for (const source of [

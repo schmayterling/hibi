@@ -121,6 +121,17 @@ export function withLeafBlocks<T>(tokenizer: Tokenizer, read: () => T): T {
   }
 }
 
+function endsWithLeaf(token: Token): boolean {
+  if (leaves.has(token)) return true
+  const last =
+    token.type === 'list'
+      ? (token as Tokens.List).items
+          .at(-1)
+          ?.tokens.findLast((child) => child.type !== 'space')
+      : undefined
+  return !!last && endsWithLeaf(last)
+}
+
 /** A list's unindented continuation must follow a paragraph, not a custom leaf. */
 export function leafListEnd(
   list: Tokens.List,
@@ -136,7 +147,7 @@ export function leafListEnd(
       rawFrom = itemFrom
     for (const token of item.tokens) {
       textEnd += token.raw.length
-      if (!leaves.has(token)) continue
+      if (!endsWithLeaf(token)) continue
       const next =
         item.text[textEnd - 1] === '\n'
           ? textEnd
@@ -147,13 +158,24 @@ export function leafListEnd(
           rawFrom = source.indexOf('\n', rawFrom) + 1
       const end = source.indexOf('\n', rawFrom)
       const line = source.slice(rawFrom, end < 0 ? undefined : end)
-      let column = base
-      for (const char of line) {
-        if (char === ' ') column++
-        else if (char === '\t') column += 4 - (column % 4)
-        else break
-      }
-      if (line.trim() && column < indents[index]!) return rawFrom
+      // Marked removes the item indent from its own lines but keeps lazy ones.
+      const stop = item.text.indexOf('\n', next)
+      if (
+        !line.trim() ||
+        item.text.slice(next, stop < 0 ? undefined : stop) !== line
+      )
+        continue
+      // Marked's fence and heading checks on the item line before a lazy one.
+      const last = item.text.slice(
+        item.text.lastIndexOf('\n', next - 2) + 1,
+        next - 1,
+      )
+      const spaces = /^ */.exec(last)![0].length
+      if (
+        spaces <= Math.min(3, indents[index]! - base - 1) &&
+        !/^(?:[*+-]|\d{1,9}[.)])(?:[ \t]|$)/.test(last.slice(spaces))
+      )
+        return rawFrom
     }
     itemFrom += item.raw.length
   }

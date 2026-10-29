@@ -59,7 +59,7 @@ async function open(t, engine) {
   })
   cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  return { app, page, rich }
+  return { app, page, rich, cdp }
 }
 
 const state = (rich) =>
@@ -120,7 +120,7 @@ async function clickAt(rich, pos, clickCount = 1) {
 test('codemirror: revealed markers are ordinary editable source', {
   timeout: 300000,
 }, async (t) => {
-  const { page, rich } = await open(t, 'codemirror')
+  const { page, rich, cdp } = await open(t, 'codemirror')
   assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -333,6 +333,118 @@ test('codemirror: revealed markers are ordinary editable source', {
       )
       assert.equal((await state(cell)).head, from)
       assert.ok((await state(rich)).doc.includes('*word**'))
+    },
+  )
+  // The first click of a double-click puts the caret in the block, which
+  // shows its syntax and moves the text under the pointer.
+  for (const [name, doc, word] of [
+    ['code', 'para\n\n```js\nalpha beta\ngamma delta\n```', 'delta'],
+    ['task', 'para\n\n- [ ] alpha beta', 'alpha'],
+    ['quote', 'para\n\n> alpha beta', 'alpha'],
+    ['heading', 'para\n\n## alpha beta', 'alpha'],
+    ['emphasis', 'para\n\nx **bold** alpha', 'alpha'],
+  ])
+    await t.test(
+      `a double-click selects the word its first click hit: ${name}`,
+      async () => {
+        await source(rich, `${doc}\n\nend`, 2)
+        const at = doc.indexOf(word) + 1
+        const point = await rich.evaluate((element, at) => {
+          const view = element.cmTile.root.view
+          const a = view.coordsAtPos(at, 1)
+          const b = view.coordsAtPos(at + 1, -1)
+          const x = (a.left + b.left) / 2
+          const y = (a.top + a.bottom) / 2
+          return { x, y, hit: view.posAtCoords({ x, y }) }
+        }, at)
+        assert.ok(point.hit === at || point.hit === at + 1)
+        await page.mouse.dblclick(point.x, point.y)
+        const { doc: text, anchor, head } = await state(rich)
+        assert.equal(
+          text.slice(Math.min(anchor, head), Math.max(anchor, head)),
+          word,
+        )
+      },
+    )
+  await t.test(
+    'vertical arrows keep the caret column as prefixes show',
+    async () => {
+      for (const doc of [
+        '- hello\n- world\n- again',
+        '12. hello\n13. world\n14. again',
+        '- [ ] hello\n- [ ] world\n- [ ] again',
+        '> hello\n>\n> world',
+      ]) {
+        const start = doc.indexOf('hello') + 3
+        await source(rich, `${doc}\n\nend`, start)
+        const goal = await rich.evaluate(
+          (element, start) => element.cmTile.root.view.coordsAtPos(start).left,
+          start,
+        )
+        for (const key of ['ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowUp']) {
+          await page.keyboard.press(key)
+          // No other position on the line is nearer the starting column.
+          const off = await rich.evaluate((element, goal) => {
+            const { view } = element.cmTile.root
+            const { head } = view.state.selection.main
+            const line = view.state.doc.lineAt(head)
+            const off = (pos) =>
+              pos < line.from || pos > line.to
+                ? Number.POSITIVE_INFINITY
+                : Math.abs(view.coordsAtPos(pos).left - goal)
+            return line.length > 3
+              ? [off(head - 1), off(head), off(head + 1)]
+              : [1, 0, 1]
+          }, goal)
+          assert.ok(
+            off[1] <= Math.min(off[0], off[2]) + 0.5,
+            `${doc}: ${key} ${off}`,
+          )
+        }
+        assert.equal((await state(rich)).head, start, doc)
+      }
+    },
+  )
+  // An input method's text replaces its earlier candidates even where it
+  // turns the block into another, which moves its line out of a heading.
+  for (const [name, doc, at] of [
+    ['heading', '## word', 1],
+    ['link', 'lead [word](https://example.com) tail', 11],
+    ['fence', '```js\nword\n```', 1],
+    ['bullet', '- word', 1],
+    ['strong', 'lead **word** tail', 6],
+  ])
+    await t.test(`composition inside revealed markers: ${name}`, async () => {
+      await source(rich, `${doc}\n\nend`, at)
+      for (const text of ['k', 'か'])
+        await cdp.send('Input.imeSetComposition', {
+          text,
+          selectionStart: 1,
+          selectionEnd: 1,
+        })
+      await cdp.send('Input.insertText', { text: 'か' })
+      await page.evaluate(() => new Promise(requestAnimationFrame))
+      assert.deepEqual(await state(rich), {
+        doc: `${doc.slice(0, at)}か${doc.slice(at)}\n\nend`,
+        anchor: at + 1,
+        head: at + 1,
+      })
+    })
+  await t.test(
+    'a quoted paragraph shows no prefix inside its flowed lines',
+    async () => {
+      const doc = '> hello\n> world'
+      await source(rich, `${doc}\n\nend`, 5)
+      const heads = []
+      for (let i = 0; i < 5; i++) {
+        await page.keyboard.press('ArrowRight')
+        heads.push((await state(rich)).head)
+        assert.equal(
+          await rich.locator('.cm-line').first().textContent(),
+          heads.at(-1) < 8 ? '> hello world' : 'hello world',
+        )
+      }
+      assert.deepEqual(heads, [6, 7, 10, 11, 12])
     },
   )
   await t.test(

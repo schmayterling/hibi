@@ -4,6 +4,7 @@ import {
   EditorState,
   type Extension,
   Facet,
+  findClusterBreak,
   Prec,
   type Range,
   RangeSet,
@@ -13,6 +14,7 @@ import {
   type TransactionSpec,
 } from '@codemirror/state'
 import {
+  BlockType,
   BlockWrapper,
   Decoration,
   type DecorationSet,
@@ -113,6 +115,38 @@ type Revealed = { from: number; to: number }
 
 /** Where the widget under the first press of a click sequence starts. */
 const pressedWidget = new WeakMap<EditorView, number | null>()
+/**
+ * Where the first press of a click sequence hit the text. The caret it
+ * places can show syntax that moves the text before the next press.
+ */
+const pressedText = new WeakMap<
+  EditorView,
+  { x: number; y: number; doc: Text; pos: number; assoc: -1 | 1 }
+>()
+
+/** The run of word, space or other characters a double-click selects, as the editor's own. */
+function groupAt(state: EditorState, pos: number, assoc: number) {
+  const line = state.doc.lineAt(pos)
+  const { text } = line
+  let from = pos - line.from,
+    to = from
+  if (from === text.length || (from > 0 && assoc < 0))
+    from = findClusterBreak(text, from, false)
+  else to = findClusterBreak(text, to)
+  const categorize = state.charCategorizer(pos)
+  const category = categorize(text.slice(from, to))
+  while (from > 0) {
+    const before = findClusterBreak(text, from, false)
+    if (categorize(text.slice(before, from)) !== category) break
+    from = before
+  }
+  while (to < text.length) {
+    const after = findClusterBreak(text, to)
+    if (categorize(text.slice(to, after)) !== category) break
+    to = after
+  }
+  return { from: line.from + from, to: line.from + to }
+}
 
 /** A range over the whole note, or all its text after metadata the view keeps hidden. */
 function selectsWholeNote(state: EditorState, range: Revealed) {
@@ -978,8 +1012,15 @@ function inline(
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
+    // A line its paragraph flows onto from the line before keeps its prefix
+    // hidden: shown, it would sit inside the text.
+    let flowed = false
+    layout.between(at - 1, at, (_, to, value) => {
+      if (value === space && to === at) flowed = true
+    })
     const showPrefix =
       touched(at, current.to) &&
+      !flowed &&
       (info.quoteEnd !== null ||
         (!!info.item && doc.lineAt(info.item.from).from === at))
     const edges = containers(
@@ -1860,6 +1901,8 @@ export function livePreview(
       /** Decorated columns of long code lines by line start; null where a line wraps. */
       columns = new Map<number, Revealed | null>()
       long: readonly LongLine[] = []
+      /** Wrappers kept as they were while an input method composes. */
+      held = false
       destroyed = false
       readonly measure = {
         key: this,
@@ -2019,6 +2062,7 @@ export function livePreview(
         } else if (
           update.docChanged ||
           update.viewportChanged ||
+          this.held ||
           update.state.facet(formattedBlockEdges) !==
             update.startState.facet(formattedBlockEdges) ||
           changedReveal ||
@@ -2037,6 +2081,7 @@ export function livePreview(
             ),
           )
         ) {
+          const { wrappers } = this
           ;({
             decorations: this.decorations,
             groupMarks: this.groupMarks,
@@ -2054,9 +2099,54 @@ export function livePreview(
             update.state.field(layout),
             this.columns,
           ))
+          // A line moved into or out of a wrapper, as when composed text
+          // turns a heading into a paragraph, loses its composition.
+          this.held = update.view.composing
+          if (this.held) this.wrappers = wrappers.map(update.changes)
           if (this.long.length) update.view.requestMeasure(this.measure)
+          if (changedReveal && !update.docChanged) this.keepColumn(update)
         } else if (update.geometryChanged && this.long.length)
           update.view.requestMeasure(this.measure)
+      }
+      /**
+       * A vertical move keeps its column on a line that shows its syntax
+       * once the caret is in it, though the syntax moves the line's text.
+       */
+      keepColumn(update: ViewUpdate) {
+        const { selection } = update.state
+        const { head, assoc, goalColumn } = selection.main
+        if (
+          !update.selectionSet ||
+          goalColumn === undefined ||
+          !selection.main.empty ||
+          selection.ranges.length > 1
+        )
+          return
+        queueMicrotask(() => {
+          const { view } = update
+          if (this.destroyed || view.state.selection !== selection) return
+          // Only text moves: the caret stays beside a block widget.
+          const line = view.lineBlockAt(head)
+          const caret = view.coordsAtPos(head, assoc || 1)
+          if (line.type !== BlockType.Text || !caret) return
+          const at = view.posAndSideAtCoords(
+            {
+              x: view.contentDOM.getBoundingClientRect().left + goalColumn,
+              y: (caret.top + caret.bottom) / 2,
+            },
+            false,
+          )
+          if (at.pos !== head && at.pos >= line.from && at.pos <= line.to)
+            view.dispatch({
+              selection: EditorSelection.cursor(
+                at.pos,
+                at.assoc,
+                undefined,
+                goalColumn,
+              ),
+              userEvent: 'select',
+            })
+        })
       }
     },
     { decorations: (plugin) => plugin.decorations },
@@ -2339,8 +2429,14 @@ export function livePreview(
         widget && view.contentDOM.contains(widget)
           ? view.posAtDOM(widget)
           : null
+      const point = { x: event.clientX, y: event.clientY }
       if (event.detail === 1) {
         pressedWidget.set(view, under)
+        pressedText.set(view, {
+          ...point,
+          doc: view.state.doc,
+          ...view.posAndSideAtCoords(point, false),
+        })
         // A press on the drawing of a block the rich editor draws as one
         // node selects its source, as the rich editor node-selects it.
         const atom =
@@ -2357,9 +2453,47 @@ export function livePreview(
           },
         }
       }
+      // Later presses on the spot where the first one hit text select around
+      // that text, wherever the syntax its caret shows moved it.
+      const first = pressedText.get(view)
+      const onFirst = (press: MouseEvent) =>
+        !!first &&
+        first.doc === view.state.doc &&
+        pressedWidget.get(view) === null &&
+        Math.abs(press.clientX - first.x) < 2 &&
+        Math.abs(press.clientY - first.y) < 2
+      if (
+        first &&
+        event.detail === 2 &&
+        onFirst(event) &&
+        !(event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) &&
+        view.posAtCoords(point, false) !== first.pos
+      ) {
+        // As the editor's own double-click, dragging on extends by words.
+        let start = first.pos
+        return {
+          get: (current) => {
+            const word = groupAt(view.state, start, first.assoc)
+            const at = onFirst(current)
+              ? null
+              : view.posAndSideAtCoords(
+                  { x: current.clientX, y: current.clientY },
+                  false,
+                )
+            const to = at ? groupAt(view.state, at.pos, at.assoc) : word
+            return to.from < word.from
+              ? EditorSelection.single(word.to, to.from)
+              : EditorSelection.single(word.from, Math.max(word.to, to.to))
+          },
+          update: (update) => {
+            start = update.changes.mapPos(start)
+          },
+        }
+      }
       if (event.detail !== 3) return null
       let drawn = pressedWidget.get(view) ?? under
-      let at = view.posAtCoords({ x: event.clientX, y: event.clientY })
+      let at = view.posAtCoords(point)
+      if (at !== null && first && onFirst(event)) at = first.pos
       const text = () => {
         const tree = syntax.tree(view.state)
         const pos = drawn ?? at

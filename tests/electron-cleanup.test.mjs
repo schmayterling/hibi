@@ -556,7 +556,7 @@ test('teardown waits for setup when a name filter skips every top-level test, an
     await writeFile(
       file,
       `import test from 'node:test'
-import { after, before } from ${JSON.stringify(new URL('./electron.mjs', import.meta.url).href)}
+import { after, before } from ${JSON.stringify(new URL('./electron-hooks.mjs', import.meta.url).href)}
 let open
 before(async () => {
   open = setInterval(() => {}, 1000)
@@ -588,7 +588,7 @@ test('parent', async (t) => {
       output += chunk
     })
     const watchdog = setTimeout(() => child.kill('SIGKILL'), 10000)
-    const [, signal] = await once(child, 'exit')
+    const [, signal] = await once(child, 'close')
     clearTimeout(watchdog)
     assert.equal(signal, null, output)
     return output

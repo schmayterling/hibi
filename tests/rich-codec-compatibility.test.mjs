@@ -8,7 +8,7 @@ import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('rich codec attachments invalidate plain certificates and source outline assumptions', {
+test('rich codec attachments invalidate plain certificates but not the source outline', {
   timeout: 40000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-codec-'))
@@ -217,9 +217,8 @@ test('rich codec attachments invalidate plain certificates and source outline as
   const outline = page.locator(
     '.outline-sidebar[data-side="right"][data-open="true"]',
   )
-  await outline
-    .getByText(/source outline is unavailable for the active addon syntax/i)
-    .waitFor()
+  // Rich attachments cannot change how the source is parsed.
+  await outline.getByRole('treeitem', { name: 'title', exact: true }).waitFor()
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   assert.equal(await page.locator('#addon-codec-fixture').isChecked(), true)
@@ -435,10 +434,10 @@ test('codemirror: legacy rich codecs stay inert while native edits and source sa
     }),
   )
   await t.test(
-    'source outline keeps the legacy syntax guard until the addon is disabled',
+    'source outline keeps its headings while the inert codec is on',
     async () => {
       await outline
-        .getByText(/source outline is unavailable for the active addon syntax/i)
+        .getByRole('treeitem', { name: 'title', exact: true })
         .waitFor()
     },
   )

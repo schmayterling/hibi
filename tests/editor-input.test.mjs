@@ -2643,6 +2643,16 @@ const acceptedInput = (page) =>
     return window.hibi.getDocument()
   })
 
+const waitForInputSource = (page, markdown) =>
+  waitForAsync(
+    page,
+    async (markdown) => {
+      await window.hibi.flushDocumentChanges()
+      return (await window.hibi.getDocument()).markdown === markdown
+    },
+    markdown,
+  )
+
 const cmCaretText = (rich) =>
   rich.evaluate((element) => {
     const selection = getSelection()
@@ -2934,12 +2944,12 @@ for (const [what, , text, select] of multilineInputCases) {
           app,
           process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
         )
-        assert.equal((await acceptedInput(page)).markdown, before.markdown)
+        await waitForInputSource(page, before.markdown)
         await pressShortcut(
           app,
           process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
         )
-        assert.equal((await acceptedInput(page)).markdown, actual.markdown)
+        await waitForInputSource(page, actual.markdown)
       },
     )
   })
@@ -3251,12 +3261,12 @@ for (const all of [false, true]) {
             app,
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
-          assert.equal((await acceptedInput(page)).markdown, before.markdown)
+          await waitForInputSource(page, before.markdown)
           await pressShortcut(
             app,
             process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
           )
-          assert.equal((await acceptedInput(page)).markdown, actual.markdown)
+          await waitForInputSource(page, actual.markdown)
         },
       )
       await fixture.close()

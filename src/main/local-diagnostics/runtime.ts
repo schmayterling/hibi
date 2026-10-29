@@ -52,6 +52,7 @@ export class LocalDiagnostics {
   private sink: LocalDiagnosticSink | null = null
   private started = false
   private finishing = false
+  private pendingAssets = 0
   private finished = false
   private stallTimer: ReturnType<typeof setInterval> | undefined
 
@@ -93,7 +94,13 @@ export class LocalDiagnostics {
     error?: unknown,
     metadata: Pick<
       SafeDiagnostic,
-      'role' | 'reason' | 'exitCode' | 'durationBucket'
+      | 'role'
+      | 'reason'
+      | 'exitCode'
+      | 'durationBucket'
+      | 'moduleId'
+      | 'elapsedMs'
+      | 'statusCode'
     > = {},
   ) {
     try {
@@ -153,6 +160,7 @@ export class LocalDiagnostics {
       )
       while (this.beforeStart.size.records)
         for (const wire of this.beforeStart.take()) this.sink.enqueue(wire)
+      this.catalog.set(options.rendererUrl, 8)
       this.artifactsReady = this.loadArtifacts(options.rendererUrl).catch(
         () => {},
       )
@@ -317,7 +325,7 @@ export class LocalDiagnostics {
   }
 
   private async finishBeforeQuit(event: Electron.Event) {
-    if (this.finished) return
+    if (this.finished || event.defaultPrevented) return
     event.preventDefault()
     if (this.finishing) return
     this.finishing = true
@@ -358,6 +366,7 @@ export class LocalDiagnostics {
         'src/document-worker-client.ts',
         'src/document.worker.ts',
       ].map((path, index) => [new URL(path, rendererUrl).href, index + 1000])
+      for (const [url, id] of this.rendererArtifacts) this.catalog.set(url, id)
       return
     }
     const handle = await open(
@@ -387,8 +396,56 @@ export class LocalDiagnostics {
             entry[1],
           ])
       }
+      for (const [url, id] of this.rendererArtifacts) this.catalog.set(url, id)
     } finally {
       await handle.close()
+    }
+  }
+
+  async observeAsset(
+    url: string,
+    load: () => Promise<Response>,
+  ): Promise<Response> {
+    const moduleId = this.catalog.get(url)
+    if (!moduleId || this.pendingAssets >= 32) return load()
+    this.pendingAssets++
+    const started = performance.now()
+    const elapsedMs = () =>
+      Math.min(3_600_000, Math.round(performance.now() - started))
+    let pending = false
+    const timer = setTimeout(() => {
+      pending = true
+      this.report('ASSET_PENDING', undefined, {
+        moduleId,
+        elapsedMs: elapsedMs(),
+        role: 'main',
+      })
+    }, 2000)
+    timer.unref()
+    try {
+      const response = await load()
+      if (!response.ok || pending)
+        this.report(
+          response.ok ? 'ASSET_COMPLETED' : 'ASSET_FAILED',
+          undefined,
+          {
+            moduleId,
+            elapsedMs: elapsedMs(),
+            statusCode: response.status,
+            role: 'main',
+          },
+        )
+      return response
+    } catch (error) {
+      this.report('ASSET_FAILED', error, {
+        moduleId,
+        elapsedMs: elapsedMs(),
+        role: 'main',
+      })
+      throw error
+    } finally {
+      clearTimeout(timer)
+      this.pendingAssets--
     }
   }
 
@@ -402,10 +459,36 @@ export class LocalDiagnostics {
         this.generations.delete(contents)
         this.epochs.set(contents, (this.epochs.get(contents) ?? 0) + 1)
       }
+      let navigationStarted = performance.now()
+      const navigation = (code: DiagnosticCode, url: string) => {
+        const moduleId = this.catalog.get(url)
+        this.report(code, undefined, {
+          role: 'renderer',
+          ...(moduleId ? { moduleId } : {}),
+          elapsedMs: Math.min(
+            3_600_000,
+            Math.round(performance.now() - navigationStarted),
+          ),
+        })
+      }
       const navigating = (
         event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
       ) => {
-        if (event.isMainFrame && !event.isSameDocument) revoke()
+        if (event.isMainFrame && !event.isSameDocument) {
+          revoke()
+          navigationStarted = performance.now()
+          navigation('NAVIGATION_STARTED', event.url)
+        }
+      }
+      const loaded = () => navigation('NAVIGATION_FINISHED', contents.getURL())
+      const failed = (
+        _event: Electron.Event,
+        _code: number,
+        _description: string,
+        url: string,
+        mainFrame: boolean,
+      ) => {
+        if (mainFrame) navigation('NAVIGATION_FAILED', url)
       }
       const preload = (_event: Electron.Event, _path: string, error: Error) =>
         this.report('PRELOAD_ERROR', error, { role: 'preload' })
@@ -428,6 +511,8 @@ export class LocalDiagnostics {
       const responsive = () =>
         this.report('WINDOW_RESPONSIVE', undefined, { role: 'renderer' })
       contents.on('did-start-navigation', navigating)
+      contents.on('did-finish-load', loaded)
+      contents.on('did-fail-load', failed)
       contents.on('preload-error', preload)
       contents.on('render-process-gone', gone)
       window.on('unresponsive', unresponsive)
@@ -435,6 +520,8 @@ export class LocalDiagnostics {
       window.once('closed', () => {
         revoke()
         contents.removeListener('did-start-navigation', navigating)
+        contents.removeListener('did-finish-load', loaded)
+        contents.removeListener('did-fail-load', failed)
         contents.removeListener('preload-error', preload)
         contents.removeListener('render-process-gone', gone)
         window.removeListener('unresponsive', unresponsive)

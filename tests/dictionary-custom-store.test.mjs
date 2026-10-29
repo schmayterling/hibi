@@ -16,6 +16,11 @@ test('a queued profile commit rechecks its activation before reaching the worker
     let held
     const methods = []
     parentPort.on('message', (job) => {
+      if (job.method === 'close') {
+        parentPort.postMessage({ seq: job.seq, result: null })
+        parentPort.close()
+        return
+      }
       if (job.release) { parentPort.postMessage({ seq: held.seq, result: methods }); return }
       methods.push(job.method)
       if (job.input?.hold) held = job

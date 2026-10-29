@@ -8,6 +8,49 @@ import { formattedReferences } from '../src/renderer/src/formatted-references.ts
 import { sourceFormatting } from '../src/renderer/src/source-formatting.ts'
 
 const markdown = parser.configure(GFM)
+
+test('a hovered link edits its captured target instead of the current caret', async () => {
+  const source = '[first](one.md) and [second](two.md)'
+  const target = view(source, 'first')
+  const captured = sourceFormatting(target).capture(
+    source.indexOf('second') + 2,
+  )
+  assert.equal(await captured.href, 'two.md')
+  assert.equal(captured.run('link', { url: 'new.md', alt: '' }), true)
+  assert.equal(
+    target.state.doc.toString(),
+    '[first](one.md) and [second](new.md)',
+  )
+})
+
+for (const source of [
+  'https://example.com/a',
+  'www.example.com/path',
+  'person@example.com',
+]) {
+  test(`removing a detected link keeps its text unlinked: ${source}`, () => {
+    const target = view(source, source.slice(0, 3))
+    assert.equal(sourceFormatting(target).run('unlink'), true)
+    assert.doesNotMatch(
+      markdown.parse(target.state.doc.toString()).toString(),
+      /(?:Link|URL)\(/,
+    )
+    assert.equal(undo(target), true)
+    assert.equal(target.state.doc.toString(), source)
+  })
+}
+
+test('a captured link cannot overwrite a newer document', () => {
+  const source = '[first](one.md) and [second](two.md)'
+  const target = view(source, 'first')
+  const captured = sourceFormatting(target).capture(
+    source.indexOf('second') + 2,
+  )
+  target.dispatch({ changes: { from: 0, insert: 'New: ' } })
+  assert.equal(captured.run('link', { url: 'new.md', alt: '' }), false)
+  assert.equal(target.state.doc.toString(), 'New: ' + source)
+})
+
 function view(doc, text, reference = null) {
   const target = {
     dom: { isConnected: true },

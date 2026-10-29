@@ -121,9 +121,9 @@ if (!codemirrorFormattedView) {
   legacySdk.rich = () => import('@tiptap/core')
 }
 
+startupMark('renderer-entry')
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
 import.meta.hot?.dispose(stopLocalDiagnostics)
-startupMark('renderer-entry')
 // Only the app writes default-view, so its absence marks a profile's first launch.
 // The introduction stays pending until a launch without files can show it.
 if (localStorage.getItem('introduction') === null)

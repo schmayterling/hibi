@@ -314,7 +314,8 @@ testFormattedEngines(
       async (text) => (await window.hibi.getDocument()).markdown === text,
       `${prefix}Unsaved body`,
     )
-    await bodyEditor.press('ControlOrMeta+Shift+z')
+    // Shift produces uppercase Z; a synthetic Ctrl+Shift+z runs undo in CM.
+    await bodyEditor.press('ControlOrMeta+Shift+Z')
     await waitForAsync(
       page,
       async (text) => (await window.hibi.getDocument()).markdown === text,

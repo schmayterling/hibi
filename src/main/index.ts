@@ -664,11 +664,13 @@ let nativeStopped = false
 app.on('will-quit', (event) => {
   if (!nativeStopped) {
     event.preventDefault()
-    nativeStopping ??= stopNativeAddons()
+    if (nativeStopping) return
+    nativeStopping = stopNativeAddons()
       .catch(console.error)
       .finally(() => {
         nativeStopped = true
-        app.quit()
+        // Resume after Electron unwinds the prevented will-quit event.
+        setImmediate(() => app.quit())
       })
     return
   }
@@ -851,7 +853,13 @@ async function readAfterFileOperation<T>(
   return read(window)
 }
 
-async function serveAsset(request: Request): Promise<Response> {
+function serveAsset(request: Request): Promise<Response> {
+  return localDiagnostics.observeAsset(request.url, () =>
+    serveAssetResponse(request),
+  )
+}
+
+async function serveAssetResponse(request: Request): Promise<Response> {
   if (request.method !== 'GET') return new Response(null, { status: 405 })
   try {
     const parsed = new URL(request.url)
@@ -2692,6 +2700,7 @@ if (!app.requestSingleInstanceLock()) {
       startUpdateChecks()
     })
     .catch((error: unknown) => {
+      localDiagnostics.report('MAIN_STARTUP_FAILED', error, { role: 'main' })
       console.error('startup failed:', error)
       showStartupError()
     })

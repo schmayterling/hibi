@@ -755,10 +755,13 @@ export function unlinkChanges(
         ? { from, insert: '\\' }
         : { from, to: from + char.length, insert: reference(char) }
   const unlink = (node: SyntaxNode) => {
-    // A bare web address links itself, as it does in the rich editor after a reload.
-    if (node.name === 'URL') return
-    const autolink = node.name === 'Autolink'
-    const text = autolink ? node.getChild('URL') : formattingText(state, node)
+    const bare = node.name === 'URL'
+    const autolink = bare || node.name === 'Autolink'
+    const text = bare
+      ? node
+      : autolink
+        ? node.getChild('URL')
+        : formattingText(state, node)
     if (!text) return
     // An autolink's address is literal text. As Markdown text it needs its
     // Markdown characters escaped. Text no longer linked also needs escaped
@@ -850,7 +853,11 @@ export function unlinkChanges(
     const tail = state.sliceDoc(text.to, node.to)
     const url = state.sliceDoc(text.from, text.to)
     const href = (
-      /^[a-z][a-z\d+.-]{1,31}:/i.test(url) ? url : `mailto:${url}`
+      /^[a-z][a-z\d+.-]{1,31}:/i.test(url)
+        ? url
+        : /^www\./i.test(url)
+          ? `http://${url}`
+          : `mailto:${url}`
     ).replace(/[\\`*_~[\]&$^=|!]/g, (char) =>
       char === '&' ? '&amp;' : escapes ? `\\${char}` : reference(char),
     )

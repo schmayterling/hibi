@@ -1,3 +1,4 @@
+import { EditorState } from '@codemirror/state'
 import {
   Decoration,
   drawSelection,
@@ -93,6 +94,9 @@ const selectionColors = [
 export function createVim(context: AddonContext) {
   return [
     vim(),
+    // A block needs one range per line; mouse clicks still place one caret.
+    EditorState.allowMultipleSelections.of(true),
+    EditorView.clickAddsSelectionRange.of(() => false),
     drawSelection(),
     selectionColors,
     EditorView.editorAttributes.of({ 'data-vim-plugin': 'true' }),

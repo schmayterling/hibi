@@ -1,5 +1,5 @@
 import type { MarkdownFlavor } from '../api'
-import { detectTextExtras } from './syntax'
+import { detectTextExtras } from './grammar.ts'
 
 export const flavorInfo: MarkdownFlavor = {
   id: 'text-extras',

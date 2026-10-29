@@ -1,8 +1,8 @@
 import { decodeHTMLStrict } from 'entities'
 import type { Marked, Token, TokenizerExtension, Tokens } from 'marked'
-import { markedGithubFootnote } from 'marked-github-footnote'
 import { customBodyFeatures } from '../../shared/formatted-custom-body.ts'
 import { BlockTokenizer } from '../../shared/marked-blocks.ts'
+import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
 import {
   disabledToken,
   type NoteSyntax,
@@ -12,7 +12,7 @@ import type { ReferenceDefinitions } from '../../shared/source-references.ts'
 import { alertMarkdown } from '../markdown/alerts.ts'
 import { mathTokens } from '../math/syntax.ts'
 import { textExtrasMarkdown } from '../text-extras/syntax.ts'
-import { typstTokens } from '../typst/syntax.ts'
+import { typstBlock } from '../typst/syntax.ts'
 
 export type CountSyntax = NoteSyntax & {
   alerts?: boolean
@@ -43,7 +43,6 @@ export function countParser(syntax: CountSyntax) {
     if (syntax.alerts) parser.use(alertMarkdown)
     if (syntax.textExtras) parser.use(textExtrasMarkdown)
     if (syntax.math) parser.use(mathTokens)
-    if (syntax.typst) parser.use(typstTokens)
     // Custom tokenizers own child traversal; body masking below keeps the view's scope.
     const children = parser.defaults.extensions?.childTokens
     if (children) {
@@ -125,7 +124,6 @@ const extraFeatures: Record<string, string> = {
   inlineMath: 'math.inline',
   blockMath: 'math.block',
   githubAlert: 'markdown.alerts',
-  typstBlock: 'typst.blocks',
 }
 const blockTypes = new Set([
   'heading',
@@ -137,7 +135,6 @@ const blockTypes = new Set([
   'subtext',
   'blockMath',
   'githubAlert',
-  'typstBlock',
 ])
 function maskDisabled(tokens: Token[], syntax: CountSyntax) {
   if (!syntax.disabledFeatures.length) return
@@ -427,14 +424,16 @@ function block(token: Token, syntax: ProjectionSyntax, out: string[]) {
       out.push(
         '\n',
         token.type === 'code' &&
-          syntax.mermaid &&
-          token.lang?.toLowerCase() === 'mermaid' &&
-          !syntax.disabledFeatures.includes('mermaid.blocks')
+          ((syntax.mermaid &&
+            token.lang?.toLowerCase() === 'mermaid' &&
+            !syntax.disabledFeatures.includes('mermaid.blocks')) ||
+            (syntax.typst &&
+              !!typstBlock(token.raw) &&
+              !syntax.disabledFeatures.includes('typst.blocks')))
           ? ''
           : token.text,
       )
       return
-    case 'typstBlock':
     case 'hr':
       out.push('\n')
       return

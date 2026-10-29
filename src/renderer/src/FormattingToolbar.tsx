@@ -454,6 +454,28 @@ export function useFormattingToolbar(
     },
     [toasts],
   )
+  const linkDialog = useCallback(
+    (href: string | null, text: string) =>
+      latest.current.dialogs.open<LinkResult>({
+        title: href === null ? 'Insert link' : 'Edit link',
+        content: ({ close }) => (
+          <InsertForm
+            editing={href !== null}
+            initial={{ url: href ?? '', alt: text }}
+            close={close}
+          />
+        ),
+      }).result,
+    [],
+  )
+  const editLink = useCallback(
+    async (captured: ReturnType<SourceFormatting['capture']>) => {
+      if (latest.current.disabled) return
+      const result = await linkDialog(await captured.href, captured.text)
+      if (result) captured.run(result.remove ? 'unlink' : 'link', result)
+    },
+    [linkDialog],
+  )
   const refresh = useRef(() => {})
   const scheduleRefresh = useRef(() => {})
   const attachRich = useCallback((value: SourceFormatting | null) => {
@@ -481,7 +503,7 @@ export function useFormattingToolbar(
       (latest.current.mode === 'side-by-side' &&
         latest.current.focusedPane === 'source')
     async function run(action: Action) {
-      const { editor, dialogs, disabled } = latest.current
+      const { editor, disabled } = latest.current
       if (disabled) return
       const codeMirror = inSource() ? source.current : rich.current
       const useSource = inSource() || !!codeMirror
@@ -489,37 +511,23 @@ export function useFormattingToolbar(
       if (action.id === 'image') {
         await attachFiles(null)
       } else if (action.id === 'link') {
-        const sourceSelection = useSource ? codeMirror?.capture() : null
-        const document = editor?.state.doc
-        const selection = editor?.state.selection
-        // With the selection in a link, the action edits that link.
-        const href = useSource
-          ? ((await sourceSelection?.href) ?? null)
-          : editor?.isActive('link')
-            ? (editor.getAttributes('link').href ?? '')
-            : null
-        const result = await dialogs.open<LinkResult>({
-          title: href === null ? 'Insert link' : 'Edit link',
-          content: ({ close }) => (
-            <InsertForm
-              editing={href !== null}
-              initial={{
-                url: href ?? '',
-                alt:
-                  sourceSelection?.text ??
-                  (editor && selection
-                    ? editor.state.doc.textBetween(selection.from, selection.to)
-                    : ''),
-              }}
-              close={close}
-            />
-          ),
-        }).result
-        if (!result) return
         if (useSource) {
-          sourceSelection?.run(result.remove ? 'unlink' : action.id, result)
+          const captured = codeMirror?.capture()
+          if (captured) await editLink(captured)
           return
         }
+        const document = editor?.state.doc
+        const selection = editor?.state.selection
+        const href = editor?.isActive('link')
+          ? (editor.getAttributes('link').href ?? '')
+          : null
+        const result = await linkDialog(
+          href,
+          editor && selection
+            ? editor.state.doc.textBetween(selection.from, selection.to)
+            : '',
+        )
+        if (!result) return
         if (
           !editor ||
           editor.isDestroyed ||
@@ -607,7 +615,7 @@ export function useFormattingToolbar(
       refresh.current = () => {}
       scope.dispose()
     }
-  }, [attachFiles, active])
+  }, [attachFiles, active, editLink, linkDialog])
   useLayoutEffect(() => {
     let frame = 0
     // Capability checks run after the frame paints, so typed text is not delayed by them.
@@ -649,5 +657,5 @@ export function useFormattingToolbar(
     // Tiptap's focus command defers to a frame and can override a newer click into source.
     else if (editor && !editor.isDestroyed) editor.view.focus()
   }, [mode, focusedPane, editor, markdownMode, focusOwnedByEditor])
-  return { attachSource, attachRich, attachFiles }
+  return { attachSource, attachRich, attachFiles, editLink }
 }

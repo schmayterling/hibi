@@ -334,65 +334,98 @@ for (const item of cases)
     await cdp.detach()
   })
 
-test('typing joins only where the edit before it left off, as in CM and PM history', {
-  timeout: 60000,
-}, async (t) => {
-  const engine = t.formattedEngine
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-adjacent-'))
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
+// Like PM history, typing joins only the edit right before it.
+const adjacency = [
+  {
+    name: 'typing joins only where the edit before it left off, as in CM and PM history',
+    // An extension types in two places at once, with no selection between.
+    edits: [
+      [1, 'X'],
+      [15, 'Y'],
+    ],
+    after: 'aXlpha bravo chYarlie\n',
+    undone: ['aXlpha bravo charlie\n', 'alpha bravo charlie\n'],
+  },
+  {
+    name: 'typing next to an earlier edit of its group but not the last one starts a new step',
+    // B touches A's end; C touches A's start but not B.
+    edits: [
+      [1, 'X'],
+      [2, 'Y'],
+      [1, 'Z'],
+    ],
+    after: 'aZXYlpha bravo charlie\n',
+    undone: ['aXYlpha bravo charlie\n', 'alpha bravo charlie\n'],
+  },
+]
+
+for (const item of adjacency)
+  test(item.name, { timeout: 60000 }, async (t) => {
+    const engine = t.formattedEngine
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-history-adjacent-'))
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
     })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, engine)
-  const file = join(profile, 'note.md')
-  await writeFile(file, 'alpha bravo charlie\n')
-  await app.evaluate(({ dialog }, file) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
-  }, file)
-  await clickMenu(app, 'Open…')
-  await waitForDocumentEditor(app, page)
-  const saved = (text) =>
-    waitForAsync(
-      page,
-      async (text) => {
-        await window.hibi.flushDocumentChanges()
-        return (await window.hibi.getDocument()).markdown === text
-      },
-      text,
+    t.after(async () => {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, engine)
+    const file = join(profile, 'note.md')
+    await writeFile(file, 'alpha bravo charlie\n')
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForDocumentEditor(app, page)
+    const saved = (text) =>
+      waitForAsync(
+        page,
+        async (text) => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown === text
+        },
+        text,
+      )
+    await saved('alpha bravo charlie\n')
+    const root = page.locator('.rich-pane [aria-label="Document editor"]')
+    await root.focus()
+    await withHeldClock(page, () =>
+      root.evaluate(
+        (element, { engine, edits }) => {
+          if (engine === 'codemirror') {
+            const { view } = element.cmTile.root
+            view.dispatch({ selection: { anchor: edits[0][0] } })
+            for (const [from, insert] of edits)
+              view.dispatch({
+                changes: { from, insert },
+                userEvent: 'input.type',
+              })
+          } else {
+            const { view } = element.editor
+            // One paragraph: its text starts one position into the document.
+            element.editor.commands.setTextSelection(edits[0][0] + 1)
+            for (const [from, insert] of edits)
+              view.dispatch(view.state.tr.insertText(insert, from + 1))
+          }
+        },
+        { engine, edits: item.edits },
+      ),
     )
-  await saved('alpha bravo charlie\n')
-  const root = page.locator('.rich-pane [aria-label="Document editor"]')
-  await root.focus()
-  // An extension types in two places at once, with no selection between.
-  await root.evaluate((element, engine) => {
-    if (engine === 'codemirror') {
-      const { view } = element.cmTile.root
-      view.dispatch({ selection: { anchor: 1 } })
-      view.dispatch({
-        changes: { from: 1, insert: 'X' },
-        userEvent: 'input.type',
-      })
-      view.dispatch({
-        changes: { from: 15, insert: 'Y' },
-        userEvent: 'input.type',
-      })
-    } else {
-      const { view } = element.editor
-      element.editor.commands.setTextSelection(2)
-      view.dispatch(view.state.tr.insertText('X', 2))
-      view.dispatch(view.state.tr.insertText('Y', 16))
+    await saved(item.after)
+    for (const text of item.undone) {
+      await pressShortcut(app, `${mod}+z`)
+      await saved(text)
     }
-  }, engine)
-  await saved('aXlpha bravo chYarlie\n')
-  await pressShortcut(app, `${mod}+z`)
-  await saved('aXlpha bravo charlie\n')
-  await pressShortcut(app, `${mod}+z`)
-  await saved('alpha bravo charlie\n')
-})
+    for (const text of [...item.undone.slice(0, -1).reverse(), item.after]) {
+      await pressShortcut(app, redo)
+      await saved(text)
+    }
+  })

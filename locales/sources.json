@@ -742,7 +742,8 @@
     "src/main/workspace-files.ts"
   ],
   "9c47b4fb088f": [
-    "src/main/addons.ts"
+    "src/main/addons.ts",
+    "src/main/pdf-export.ts"
   ],
   "4f06af701050": [
     "src/main/workspace-actions.ts"
@@ -1338,6 +1339,12 @@
   ],
   "88ad63a0a663": [
     "src/addons/typst/BlockContent.tsx"
+  ],
+  "5b1010d800e5": [
+    "src/renderer/src/pdf-export.ts"
+  ],
+  "5b00df1b2d15": [
+    "src/main/pdf-export.ts"
   ],
   "9a19e86ea92a": [
     "src/addons/_shared/local-format-native.ts"
@@ -2340,6 +2347,13 @@
   "94b16a7c8bcf": [
     "src/addons/typst/BlockContent.tsx"
   ],
+  "1bf7868792f8": [
+    "src/main/pdf-export.ts"
+  ],
+  "95fbb41bf5a3": [
+    "src/main/index.ts",
+    "src/shared/hotkeys.ts"
+  ],
   "f7b99930dd65": [
     "src/addons/dictionary/CustomWords.tsx"
   ],
@@ -2371,6 +2385,9 @@
   ],
   "e79bf6ba8cdf": [
     "src/addons/documentation/index.tsx"
+  ],
+  "b2dce75152af": [
+    "src/renderer/src/pdf-export.ts"
   ],
   "a2dd9cbb7013": [
     "src/addons/documentation/ExportDialog.tsx"
@@ -4261,6 +4278,9 @@
   "1d393b0081b6": [
     "src/addons/_shared/format-renderer.tsx"
   ],
+  "e14fe9b017d4": [
+    "src/main/pdf-export.ts"
+  ],
   "52278a0943b3": [
     "src/addons/_shared/FormatPdf.tsx"
   ],
@@ -5916,6 +5936,9 @@
   "364e042318da": [
     "src/main/media.ts"
   ],
+  "4657f06ccb7d": [
+    "src/main/pdf-export.ts"
+  ],
   "8a9c263a360f": [
     "src/renderer/src/SourceEditor.tsx"
   ],
@@ -6064,6 +6087,18 @@
   ],
   "95e4db0dfa62": [
     "src/main/workspace-settings.ts"
+  ],
+  "c8fa215aa9a8": [
+    "src/renderer/src/use-source-outline.ts"
+  ],
+  "17548c2f4fb9": [
+    "src/renderer/src/use-source-outline.ts"
+  ],
+  "44493859a59f": [
+    "src/renderer/src/use-source-outline.ts"
+  ],
+  "189712a84626": [
+    "src/renderer/src/use-source-outline.ts"
   ],
   "a3a83b5e3ed9": [
     "src/addons/_shared/format-native.ts"

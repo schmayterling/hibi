@@ -10,7 +10,12 @@ import {
   testFormattedEngines as it,
   selectFormattedEngine,
 } from './formatted-engine.mjs'
-import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import {
+  clickMenu,
+  replaceRichText,
+  replaceSourceText,
+  withHeldClock,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('slash search matches labels, descriptions, and extension keywords without case sensitivity', () => {
@@ -263,7 +268,7 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
   await replaceSourceText(page, source, '/code')
   await menu.waitFor()
   await source.press('Enter')
-  await source.pressSequentially('sample')
+  await withHeldClock(page, () => source.pressSequentially('sample'))
   assert.equal(await read(), '```\nsample\n```')
   await source.press(undo)
   await source.press(undo)

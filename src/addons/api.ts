@@ -576,9 +576,12 @@ export type MarkdownFlavor = {
       rendered: RenderedMarkdown,
       source: string,
       documentId?: string,
+      options?: ExportRenderOptions,
     ) => Promise<RenderedMarkdown>
   }
 }
+/** Appearance for static rendering; omitted options keep the active app theme. */
+export type ExportRenderOptions = { theme?: Colorscheme }
 export type RenderedMarkdown = { html: string; css: string }
 export type SiteExportPage = {
   path: string
@@ -707,7 +710,11 @@ export type DocumentFormat = {
   insertMedia?: (
     attachments: readonly import('../shared/media').MediaAttachment[],
   ) => string
-  render?: (source: string, documentId?: string) => Promise<RenderedMarkdown>
+  render?: (
+    source: string,
+    documentId?: string,
+    options?: ExportRenderOptions,
+  ) => Promise<RenderedMarkdown>
 }
 export type MarkdownExtension = {
   id: string
@@ -950,6 +957,7 @@ export type AddonContext = {
       source: string,
       name: string,
       documentId?: string,
+      options?: ExportRenderOptions,
     ) => Promise<RenderedMarkdown>
     /** Register or override fenced-code highlighting; restored automatically on addon stop. */
     registerCodeLanguage: (language: CodeLanguage) => () => void

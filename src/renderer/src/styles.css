@@ -63,6 +63,32 @@ body {
   background: var(--background);
   color: var(--ink);
 }
+/* Chrome stays unselectable, including controls inside document previews. */
+:where(body, button, [role="toolbar"], [role="menu"], [role="listbox"]) {
+  user-select: none;
+}
+:where(
+  input,
+  textarea,
+  [contenteditable]:not([contenteditable="false"]),
+  .cm-content,
+  .tiptap,
+  .rich-pane,
+  .format-content,
+  .plain-text-preview,
+  .addon-readme,
+  .document-notice p,
+  .ui-panel-message p,
+  [role="alert"],
+  .toast-copy,
+  .dialog-description,
+  dialog :is(pre, code),
+  .hibi-identity,
+  .hibi-credit,
+  .settings-versions
+) {
+  user-select: text;
+}
 button,
 summary {
   font: inherit;

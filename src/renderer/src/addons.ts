@@ -271,6 +271,27 @@ export function useEditorAddons(
 const activationOf = (states: readonly AddonState[], id: string) =>
   states.find((state) => state.id === id)?.activation
 
+/** Render a document as exports show it: through its format, or as Markdown with the enabled flavors. */
+export async function renderExportDocument(
+  source: string,
+  name: string,
+  documentId: string | undefined,
+  extensions: readonly MarkdownExtension[],
+  options?: import('../../addons/api').ExportRenderOptions,
+) {
+  const format = documentFormats.get(name)
+  if (format?.render) return format.render(source, documentId, options)
+  if (format?.editing !== 'markdown')
+    throw new Error(
+      `Enable the addon for ${name} before exporting this document.`,
+    )
+  return renderMarkdownAsync(
+    projectMarkdown(source, extensions).content,
+    documentId,
+    options,
+  )
+}
+
 export function useAddons(
   environment: Environment,
   documentName?: string,
@@ -1805,18 +1826,14 @@ export function useAddons(
                 )
                 return track(remove)
               },
-              async renderDocument(source, name, documentId) {
-                const format = documentFormats.get(name)
-                if (format?.render) return format.render(source, documentId)
-                if (format?.editing !== 'markdown')
-                  throw new Error(
-                    `Enable the addon for ${name} before exporting this document.`,
-                  )
-                return renderMarkdownAsync(
-                  projectMarkdown(source, [...extensions.values()]).content,
+              renderDocument: (source, name, documentId, options) =>
+                renderExportDocument(
+                  source,
+                  name,
                   documentId,
-                )
-              },
+                  [...extensions.values()],
+                  options,
+                ),
               registerCodeLanguage(language) {
                 if (disposed) return () => {}
                 const remove = batch.register(`language:${language.id}`, () =>

@@ -17,6 +17,26 @@ import {
 } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
+unit(
+  'image references include Markdown and HTML images but exclude code examples',
+  () => {
+    const sources = imageSources(
+      [
+        '![garden](pixel.png)',
+        '<img src="nested/pixel.png?x=1&amp;y=2">',
+        '`![example](secret.png)`',
+        '```html',
+        '<img src="secret.png">',
+        '```',
+      ].join('\n\n'),
+    )
+    assert.deepEqual([...sources].sort(), [
+      'nested/pixel.png?x=1&y=2',
+      'pixel.png',
+    ])
+  },
+)
+
 const png = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=',
   'base64',

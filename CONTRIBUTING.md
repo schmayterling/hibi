@@ -14,9 +14,11 @@ hibi is a passion project and a hobby. feature requests and prs are welcome, but
 
 you can fix bugs, improve performance, write or correct documentation, build addons, improve accessibility, or help reproduce issues. you don't need to contribute code to be useful.
 
-website contributions belong in the [website repository](https://github.com/hibigarden/site). app changes belong here.
+website contributions belong in the [website repository](https://github.com/hibigarden/site). public user help and contributor guides belong in the [documentation repository](https://github.com/hibigarden/docs). app changes belong here.
 
 ### bugs and feature requests
+
+report security vulnerabilities privately using the [security policy](SECURITY.md), rather than opening a public issue.
 
 search the [issues](https://github.com/schmayterling/hibi/issues) before opening a new one. for a bug, include:
 
@@ -47,15 +49,19 @@ if you don't use nvm, install the matching node version with your preferred tool
 
 keep each pr focused on one problem. follow nearby code and reuse existing helpers before adding new dependencies or abstractions. keep core code, the renderer, shared ui, and addons separate. preserve unsaved edits, external-file change checks, and path validation in the main process. workspace files must never be executed as addon code.
 
-update documentation when behavior changes. user help belongs in `docs/`, contributor guides in `docs/development/`, and every addon needs a user-facing `README.md`. keep personal notes, private addons, and secrets out of commits.
+update documentation when behavior changes. public user help and contributor guides are maintained in `hibigarden/docs`; this repository's `docs-revision` pins an ignored local snapshot under `docs/`. run `npm run docs` to prepare that snapshot before reading it offline. edit public guides in the documentation repository, not the snapshot. set `HIBI_DOCS_SOURCE` to an absolute docs checkout path to preview local guide changes, then update `docs-revision` to the matching merged documentation commit.
+
+keep internal development instructions in `docs/ai-agents/` and each addon's user-facing `README.md` with its code. keep personal notes, private addons, and secrets out of commits.
 
 ## building addons
 
 start with [creating your first addon](https://docs.hibi.garden/#page=development%2Faddons%2Fcreating-your-first-addon.md), then use the [addon guides](https://docs.hibi.garden/#page=development%2Faddons%2FREADME.md) and [api reference](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md).
 
-you can submit an addon directly to this repository if you want it included in hibi; you don't need to maintain it in your own repository first. include its readme, explain what it does, and test enabling, using, and disabling it. see [testing your addon](https://docs.hibi.garden/#page=development%2Faddons%2Ftesting-your-addon.md).
+changes to bundled addons belong in this repository. include the addon's readme, explain what it does, and test enabling, using, and disabling it. see [testing your addon](https://docs.hibi.garden/#page=development%2Faddons%2Ftesting-your-addon.md).
 
-preserve public api compatibility where possible. a breaking sdk change needs an api version bump and addon migrations. explain the breakage and migration in the pr. after changing a public api, update its source documentation and regenerate the reference:
+for an independently distributed addon, follow [publishing to the hibi garden](https://docs.hibi.garden/#page=development%2Faddons%2Fpublishing-to-the-garden.md) and submit its catalog entry to [hibigarden/addons-repository](https://github.com/hibigarden/addons-repository). the garden can distribute accepted addons without a new hibi release.
+
+preserve public api compatibility where possible. a breaking sdk change needs an api version bump and addon migrations. explain the breakage and migration in the pr. after changing a public api, update its source documentation and the explanatory guides in `hibigarden/docs`, then regenerate the reference. api reference pages are generated output; do not edit them directly:
 
 ```sh
 npm run docs
@@ -73,6 +79,10 @@ npm run check
 this checks formatting, generated references, documentation links, ui copy, types, production builds, and tests. the [testing guide](https://docs.hibi.garden/#page=development%2Fcore%2Ftesting-changes.md) covers focused checks and interface verification.
 
 performance and code quality matter in pr review. for changes affecting core code or default-enabled addons, run `npm run bench` and include relevant before-and-after results. for startup, typing, or other desktop behavior, follow the [performance guide](https://docs.hibi.garden/#page=development%2Fcore%2Fmeasuring-performance.md) and use the relevant desktop benchmarks. describe your machine, workload, and measurement method so results can be compared.
+
+rebuild app changes before running focused desktop tests; those tests load production output from `out/`. use the shared launcher in `tests/electron.mjs`, temporary profiles, and fixture documents. never point a test at your working notes or normal profile.
+
+for formatted-editor changes, check both engines using **settings → editor → enable exotic butter (experimental)**. enabling it selects codemirror; disabling it selects tiptap/prosemirror. switching reloads the window after preserving pending edits.
 
 for interface changes, try the affected flow in the app and include screenshots or a short recording when useful. state which checks you ran and what you couldn't verify. don't present an untested change or a single timing sample as proof that everything works or got faster.
 

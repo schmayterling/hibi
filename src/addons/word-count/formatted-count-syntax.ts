@@ -1,10 +1,10 @@
 import type { MarkdownConfig } from '@lezer/markdown'
 import { Lexer, type TokenizerExtension } from 'marked'
-import { markedGithubFootnote } from 'marked-github-footnote'
 import {
   BlockTokenizer,
   endsReferenceTitle,
 } from '../../shared/marked-blocks.ts'
+import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
 import { typstBlock } from '../typst/syntax.ts'
 import type { CountSyntax } from './formatted-text.ts'
 
@@ -90,7 +90,7 @@ export function countMarkdownSyntax(
             )
               continue
             // Probe native termination only at plausible closers. In particular,
-            // Marked rejects tab suffixes that Lezer accepts; Typst accepts them.
+            // Marked rejects tab suffixes that Lezer accepts, including for Typst.
             const probe = `${opener}${line.text}\nafter`
             const token = typst
               ? typstBlock(probe)

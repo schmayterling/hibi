@@ -1,11 +1,11 @@
 import { Marked } from 'marked'
-import { markedGithubFootnote } from 'marked-github-footnote'
 import { parser as github } from '../../addons/markdown/github-flavor-info.ts'
 import { detector as math } from '../../addons/math/syntax.ts'
 import { detector as textExtras } from '../../addons/text-extras/syntax.ts'
 import { detector as typst } from '../../addons/typst/syntax.ts'
 import { footnoteGrammar } from '../../shared/markdown-footnotes.ts'
 import { BlockTokenizer, blockMarkdown } from '../../shared/marked-blocks.ts'
+import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
 
 footnoteGrammar.push(blockMarkdown)
 

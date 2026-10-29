@@ -1,2 +1,2 @@
-import { mathFlavor } from './syntax'
+import { mathFlavor } from './grammar.ts'
 export default [mathFlavor]

@@ -3366,7 +3366,7 @@
     "src/addons/math/hibi-addon.json"
   ],
   "eed0e6220f2f": [
-    "src/addons/math/syntax.ts"
+    "src/addons/math/grammar.ts"
   ],
   "52a6b0babfd5": [
     "src/addons/math/PackageSettings.tsx"

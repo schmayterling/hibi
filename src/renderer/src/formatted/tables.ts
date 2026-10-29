@@ -939,11 +939,11 @@ class TableView {
     }
   }
 
-  /** Edit a cell, with the caret at its content's start or end or at an offset in its text. */
+  /** Edit a cell, with the caret at its content's start or end or at an offset in its text, or its content selected. */
   edit(
     line: number,
     column: number,
-    at: 'start' | 'end' | number,
+    at: 'start' | 'end' | 'all' | number,
     head?: number,
   ) {
     if (line === 1) line = 0
@@ -968,14 +968,15 @@ class TableView {
     // The caret goes in the content, not the padding around it.
     const { start, end } = padding(text)
     const clamp = (pos: number) => Math.max(start, Math.min(pos, end))
-    const anchor = at === 'start' ? start : at === 'end' ? end : clamp(at)
+    const anchor =
+      at === 'start' || at === 'all' ? start : at === 'end' ? end : clamp(at)
     paragraph.replaceChildren()
     const editor = new CellEditor(
       this.host(),
       paragraph,
       text,
       anchor,
-      head === undefined ? anchor : clamp(head),
+      at === 'all' ? end : head === undefined ? anchor : clamp(head),
     )
     const source = this.widget.line(line)
     this.editing = {
@@ -1284,19 +1285,22 @@ class TableView {
       columns = this.aligned.length
     const below = line === 0 ? 2 : line + 1,
       above = line === 2 ? 0 : line - 1
+    // Tab selects the text of the cell it moves to, as in the rich editor.
+    const tab = move === 'next' || move === 'previous'
     switch (move) {
       case 'next':
       case 'right':
-        if (column + 1 < columns) return this.edit(line, column + 1, 'start')
-        if (line < last) return this.edit(below, 0, 'start')
+        if (column + 1 < columns)
+          return this.edit(line, column + 1, tab ? 'all' : 'start')
+        if (line < last) return this.edit(below, 0, tab ? 'all' : 'start')
         // Tab in the last cell adds a row, as in the rich editor.
         if (move === 'next' && this.run('row-after')) return true
         this.leave(true)
         return true
       case 'previous':
       case 'left':
-        if (column > 0) return this.edit(line, column - 1, 'end')
-        if (line > 0) return this.edit(above, columns - 1, 'end')
+        if (column > 0) return this.edit(line, column - 1, tab ? 'all' : 'end')
+        if (line > 0) return this.edit(above, columns - 1, tab ? 'all' : 'end')
         if (move === 'left') this.leave(false)
         return true
       case 'down':

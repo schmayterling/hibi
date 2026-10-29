@@ -583,9 +583,11 @@ export class CellEditor {
           ),
       },
     )
+    // Arrows leave the cell from the selection's head, so a cell Tab selected
+    // is left with one press. Sideways that is the rich editor's tables' rule;
+    // up and down it is the caret's (table-tab-001).
     const visualLine = (view: EditorView, end: boolean) => {
-      const { head, empty } = view.state.selection.main
-      if (!empty) return false
+      const { head } = view.state.selection.main
       const at = view.coordsAtPos(head),
         edge = view.coordsAtPos(end ? view.state.doc.length : 0)
       return !at || !edge || Math.abs(at.top - edge.top) < 2
@@ -756,16 +758,14 @@ export class CellEditor {
               {
                 key: 'ArrowLeft',
                 run: (view) =>
-                  (view.state.selection.main.empty &&
-                    view.state.selection.main.head <= content(view).start &&
+                  (view.state.selection.main.head <= content(view).start &&
                     host.move('left')) ||
                   overRun(view, false),
               },
               {
                 key: 'ArrowRight',
                 run: (view) =>
-                  (view.state.selection.main.empty &&
-                    view.state.selection.main.head >= content(view).end &&
+                  (view.state.selection.main.head >= content(view).end &&
                     host.move('right')) ||
                   overRun(view, true),
               },

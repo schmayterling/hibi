@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { bundledColorschemes } from '../src/shared/color-palettes.ts'
+import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
   selectFormattedEngine,
@@ -24,6 +26,12 @@ $$x\\bar y+\\bar x y⧦s$$
 > &⧦x\\bar y+\\bar x y⧦s.
 > \\end{aligned}$$
 > Hats $\\hat x \\vec v \\tilde n \\dot y$.
+
+Plain \`code\` and [link](https://example.test).
+
+| table |
+| --- |
+| cell |
 `
 
 /**
@@ -226,5 +234,58 @@ testFormattedEngines(
         `selected base ${index} keeps its ink: ${ink} of ${plain[index].ink} (${JSON.stringify(selected)})`,
       )
     }
+    const palettes = bundledColorschemes.map((scheme) => ({
+      id: scheme.id,
+      css: `:root { color-scheme: ${scheme.appearance}; ${COLOR_TOKENS.map((key) => `--${key}: ${scheme.colors[key]};`).join(' ')} }`,
+    }))
+    const failures = await page.evaluate((palettes) => {
+      const style = document.createElement('style')
+      document.head.append(style)
+      const root = document.querySelector(
+        '.rich-pane [aria-label="Document editor"]',
+      )
+      const ordinary = [
+        root.querySelector('code, .hibi-lp-code'),
+        root.querySelector('a, .hibi-lp-link'),
+        root.querySelector('td'),
+        root.querySelector('.katex .mord'),
+      ]
+      const overlay = root.querySelector('.accent-body span')
+      const failures = []
+      try {
+        for (const palette of palettes) {
+          style.textContent = palette.css
+          const expected = getComputedStyle(root, '::selection')
+          if (!overlay || ordinary.some((node) => !node)) {
+            failures.push(`${palette.id}: missing selection probe`)
+            break
+          }
+          for (const node of ordinary) {
+            const selected = getComputedStyle(node, '::selection')
+            if (
+              selected.backgroundColor !== expected.backgroundColor ||
+              selected.color !== expected.color
+            )
+              failures.push(`${palette.id}: ${node.className || node.tagName}`)
+          }
+          if (
+            getComputedStyle(overlay, '::selection').backgroundColor !==
+            'rgba(0, 0, 0, 0)'
+          )
+            failures.push(`${palette.id}: opaque overlay`)
+        }
+      } finally {
+        style.remove()
+      }
+      return failures
+    }, palettes)
+    assert.deepEqual(
+      failures,
+      [],
+      'all bundled palettes preserve ordinary selection',
+    )
+    t.diagnostic(
+      `${palettes.length} palettes: code, links, tables, math bases and accents`,
+    )
   },
 )

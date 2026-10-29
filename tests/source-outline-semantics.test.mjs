@@ -417,6 +417,33 @@ test('source and rich outline labels keep heading formulas as their LaTeX and as
   assert.equal(plain.parts, undefined)
 })
 
+test('large math outlines retain label parts and reuse them across body edits', () => {
+  const count = 1200
+  const source = Array.from(
+    { length: count },
+    (_, index) => `## Heading ${index} $x_{${index}}$\n\nbody ${index}\n\n`,
+  ).join('')
+  const { store, model } = setup(source, { math: true })
+  try {
+    const before = finish(model.read(), referenceOracle(source))
+    assert.equal(before.length, count)
+    assert.deepEqual(before.at(-1).parts, [
+      'Heading 1199 ',
+      { latex: 'x_{1199}' },
+    ])
+    model.counters(true)
+    const from = source.indexOf('body 600')
+    edit(store, model, [{ from, to: from + 1, insert: 'B' }])
+    const after = finish(model.read(), referenceOracle(source))
+    assert.equal(after, before)
+    assert.equal(model.counters().labelsRead, 0)
+    assert.ok(model.counters().indexVisits < 100)
+    assert.equal(store.counters().materializations, 0)
+  } finally {
+    model.dispose()
+  }
+})
+
 test('deferred labels preserve complete native formatting, references, math and disabled syntax', () => {
   const padding = 'heading '.repeat(90)
   const fixtures = [

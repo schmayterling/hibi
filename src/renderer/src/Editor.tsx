@@ -311,11 +311,17 @@ export function MarkdownEditor({
   const exactHistory = useRef(
     new WeakMap<Editor, Map<string, { source: string; document: RichNode }>>(),
   )
-  // The caret each rich edit started from and left, by the session history
-  // state it started from (undo) and reached (redo).
+  // The text selection each rich edit started from and left, by the session
+  // history state it started from (undo) and reached (redo).
   const historyCarets = useRef({
-    undo: new WeakMap<object, { document: RichNode; head: number }>(),
-    redo: new WeakMap<object, { document: RichNode; head: number }>(),
+    undo: new WeakMap<
+      object,
+      { document: RichNode; anchor: number; head: number }
+    >(),
+    redo: new WeakMap<
+      object,
+      { document: RichNode; anchor: number; head: number }
+    >(),
   })
   const serializers = useRef(
     new WeakMap<Editor, ReturnType<typeof markdownSerializer>>(),
@@ -518,6 +524,7 @@ export function MarkdownEditor({
             before = session?.historyIdentity()
           const accepted = prepareRichRef.current(event)
           if (accepted && session && before)
+            // Ranges that touch a table cell keep mapping to a caret.
             for (const [carets, identity, { doc, selection }] of [
               [historyCarets.current.undo, before, event.editor.state],
               [
@@ -526,8 +533,18 @@ export function MarkdownEditor({
                 event.nextState,
               ],
             ] as const)
-              if (selection.empty)
-                carets.set(identity, { document: doc, head: selection.head })
+              if (
+                selection.empty ||
+                (selection instanceof TextSelection &&
+                  ![selection.$anchor, selection.$head].some(($pos) =>
+                    /cell/.test(String($pos.node(-1).type.spec.tableRole)),
+                  ))
+              )
+                carets.set(identity, {
+                  document: doc,
+                  anchor: selection.anchor,
+                  head: selection.head,
+                })
               else carets.delete(identity)
           return accepted
         },
@@ -2133,15 +2150,15 @@ export function MarkdownEditor({
         ],
       )
     }
-    // History puts back the caret its edit started from or left, in the
-    // document that caret was taken in.
+    // History puts back the selection its edit started from or left, in the
+    // document that selection was taken in.
     const historyCaret = (origin: string, tr: Transaction) => {
       const caret =
         origin === 'undo' || origin === 'redo'
           ? historyCarets.current[origin].get(session.historyIdentity())
           : undefined
       if (caret?.document.eq(tr.doc))
-        tr.setSelection(TextSelection.create(tr.doc, caret.head))
+        tr.setSelection(TextSelection.create(tr.doc, caret.anchor, caret.head))
     }
     const sync = (origin?: string) => {
       clearTimeout(timer)

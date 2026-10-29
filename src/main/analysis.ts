@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import bundles from 'virtual:hibi-analysis'
 import {
   app,
-  BrowserWindow,
+  type BrowserWindow,
   type IpcMainEvent,
   ipcMain,
   session,
@@ -21,6 +21,7 @@ import { getAddonActivationGeneration } from './addons'
 import { getDocument } from './document'
 import { reportAnalysisProcessFailure } from './local-diagnostics/owned'
 import { installedAddons, installedDocumentationPath } from './sideload'
+import { createBrowserWindow } from './window-creation'
 
 const CSP =
   "default-src 'none'; script-src 'self'; connect-src 'none'; style-src 'none'; img-src 'none'; worker-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
@@ -152,7 +153,7 @@ async function start(runtime: Runtime) {
         },
       })
     })
-    const window = new BrowserWindow({
+    const window = createBrowserWindow({
       show: false,
       width: 1,
       height: 1,

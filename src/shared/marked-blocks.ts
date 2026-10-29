@@ -2,6 +2,7 @@ import { type MarkedExtension, marked, type Token, Tokenizer } from 'marked'
 import {
   extendQuote,
   leafListEnd,
+  quoteReader,
   withLeafBlocks,
 } from './marked-leaf-blocks.ts'
 
@@ -503,35 +504,34 @@ export class BlockTokenizer extends Tokenizer {
           ...options,
           extensions: {
             ...options.extensions,
-            block: options.extensions.block.map(
-              (read) =>
-                function (
-                  this: ThisParameterType<typeof read>,
-                  source: string,
-                  tokens: Token[],
-                ) {
-                  const previous = state.extension
-                  const line = quoteOrigin(state, source)
-                  state.extension = { source, line }
-                  const input = quoteExtensionInput(
-                    tokenizer,
-                    state,
-                    source,
-                    line,
-                  )
-                  try {
-                    const token = read.call(this, input.text, tokens)
-                    if (token && input.offsets.length)
-                      token.raw = quoteRaw(
-                        source,
-                        token.raw.length,
-                        input.offsets,
-                      )
-                    return token
-                  } finally {
-                    state.extension = previous
-                  }
-                },
+            block: options.extensions.block.map((read) =>
+              quoteReader(function (
+                this: ThisParameterType<typeof read>,
+                source: string,
+                tokens: Token[],
+              ) {
+                const previous = state.extension
+                const line = quoteOrigin(state, source)
+                state.extension = { source, line }
+                const input = quoteExtensionInput(
+                  tokenizer,
+                  state,
+                  source,
+                  line,
+                )
+                try {
+                  const token = read.call(this, input.text, tokens)
+                  if (token && input.offsets.length)
+                    token.raw = quoteRaw(
+                      source,
+                      token.raw.length,
+                      input.offsets,
+                    )
+                  return token
+                } finally {
+                  state.extension = previous
+                }
+              }, read),
             ),
           },
         }

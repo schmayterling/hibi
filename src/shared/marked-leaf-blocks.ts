@@ -35,8 +35,11 @@ export function quoteBlock<T extends BlockToken>(
 }
 
 /** Reapply a quote extension after Marked re-reads a nested quote itself. */
-export function quoteReader(read: TokenizerExtension['tokenizer']) {
-  quoteReaders.add(read)
+export function quoteReader(
+  read: TokenizerExtension['tokenizer'],
+  original = read,
+) {
+  if (read === original || quoteReaders.has(original)) quoteReaders.add(read)
   return read
 }
 

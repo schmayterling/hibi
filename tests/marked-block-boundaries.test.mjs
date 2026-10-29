@@ -353,6 +353,23 @@ test('footnote boundary probes do not register inline references', () => {
   assert.equal((html.match(/data-footnote-backref\b/g) ?? []).length, 2)
 })
 
+test('tabbed nested alerts retain their renderer after native continuation', () => {
+  for (const eol of ['\n', '\r\n']) {
+    const source =
+      '> > [!NOTE]\n> > ```\n> > \tx\n> > ```\noutside\n===\n'.replaceAll(
+        '\n',
+        eol,
+      )
+    const html = new Marked(alertMarkdown).parse(source)
+    assert.match(html, /data-alert="note"/)
+    assert.match(html, /<h1>outside<\/h1>/)
+    assert.equal(
+      html.match(/<pre><code>([\s\S]*?)<\/code>/)?.[1],
+      new Marked().parse(source).match(/<pre><code>([\s\S]*?)<\/code>/)?.[1],
+    )
+  }
+})
+
 const flavors = {
   typst: () => new Marked(typstTokens),
   frontmatter: () => ({

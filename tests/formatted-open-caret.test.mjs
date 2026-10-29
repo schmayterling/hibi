@@ -335,9 +335,8 @@ for (const engine of ['tiptap', 'codemirror'])
       }
     // Formatting acts on a selected block as on the rich editor's node
     // selection: a quote wraps it and keeps it selected, a divider goes after
-    // it, and the other actions, marks and block types alike, do nothing. The
-    // formatted view's toolbar disables them; the rich editor leaves some
-    // enabled that change nothing.
+    // it, and the other actions, marks and block types alike, do nothing.
+    // Both engines leave the same no-op actions enabled.
     const actions = [
       'bold',
       'heading-1',
@@ -352,7 +351,13 @@ for (const engine of ['tiptap', 'codemirror'])
       `${mod}+Shift+b`,
       'divider',
     ]
-    const enabled = ['quote enabled', 'divider enabled']
+    const enabled = [
+      'quote enabled',
+      'divider enabled',
+      'hard-break enabled',
+      'unlink enabled',
+      'table enabled',
+    ]
     for (const name of atoms) {
       const kept = notes[name].trimEnd()
       for (const action of actions) {

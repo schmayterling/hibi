@@ -156,8 +156,10 @@
 .hibi-formatted .hibi-lp-codenest > .hibi-lp-codescroll {
   margin-left: var(--hibi-indent);
 }
+/* A gap line keeps its height, but not its width: container bars and paint
+   lie in the indentation to its left. */
 .hibi-formatted .cm-line.hibi-lp-gap {
-  overflow: hidden;
+  overflow: visible clip;
 }
 /* A rule's line is as tall as the rule, as an hr with its margins as line spacing. */
 .hibi-formatted .cm-line.hibi-lp-rule-line {

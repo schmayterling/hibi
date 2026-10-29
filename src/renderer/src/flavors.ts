@@ -1,10 +1,14 @@
-import type { MarkdownFlavor } from '../../addons/api'
+import type { ExportRenderOptions, MarkdownFlavor } from '../../addons/api'
 import { validatePreservation } from '../../shared/preservation'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { codeLanguages } from './code-languages'
 import { flavorRegistrations } from './flavor-registrations'
 
-export async function renderMarkdownAsync(source: string, documentId?: string) {
+export async function renderMarkdownAsync(
+  source: string,
+  documentId?: string,
+  options?: ExportRenderOptions,
+) {
   const { renderMarkdown } = await import('./render-markdown')
   const version = codeLanguages.version()
   let rendered = renderMarkdown(source, documentId)
@@ -16,7 +20,12 @@ export async function renderMarkdownAsync(source: string, documentId?: string) {
     flavors.snapshot(),
   )) {
     if (flavor.export?.transform && flavorMatches(flavor, source))
-      rendered = await flavor.export.transform(rendered, source, documentId)
+      rendered = await flavor.export.transform(
+        rendered,
+        source,
+        documentId,
+        options,
+      )
   }
   return rendered
 }

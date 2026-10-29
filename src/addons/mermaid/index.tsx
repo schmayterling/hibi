@@ -71,7 +71,11 @@ export default defineAddon({
     })
     const render = localRender(
       context,
-      (source) => renderDiagram(source, context.colorschemes.getActive()),
+      (source, _documentId, options) =>
+        renderDiagram(
+          source,
+          options?.theme ?? context.colorschemes.getActive(),
+        ),
       previewCss,
     )
     context.editor.registerDocumentFormat({
@@ -107,7 +111,7 @@ export default defineAddon({
       detect: (source) => /^ {0,3}(?:`{3,}|~{3,})mermaid\s*$/im.test(source),
       richExtensions: [mermaidNode(context)],
       export: {
-        async transform(rendered) {
+        async transform(rendered, _source, _documentId, options) {
           if (!context.editor.isSyntaxEnabled('blocks')) return rendered
           const document = new DOMParser().parseFromString(
             rendered.html,
@@ -119,7 +123,7 @@ export default defineAddon({
             if (code.parentElement)
               code.parentElement.outerHTML = await renderDiagram(
                 code.textContent ?? '',
-                context.colorschemes.getActive(),
+                options?.theme ?? context.colorschemes.getActive(),
               )
           }
           return { ...rendered, html: document.body.innerHTML }

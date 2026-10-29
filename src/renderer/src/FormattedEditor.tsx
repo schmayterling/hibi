@@ -35,7 +35,7 @@ import type { OutlineHeading } from './OutlineSidebar'
 import { SourceEditor, sourceAfter } from './SourceEditor'
 import { editorPosition, revealSourcePosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
-import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
+import { useSourceOutline } from './use-source-outline'
 
 const MarkdownSourceEditor = lazy(() =>
   import('./MarkdownSourceEditor').then((module) => ({
@@ -74,7 +74,6 @@ export function MarkdownEditor({
   markdownExtensions,
   sourceExtensions,
   formattedExtensions = noFormattedExtensions,
-  richExtensions,
   cursorSettings,
   showLineNumbers,
   spellCheck,
@@ -235,11 +234,6 @@ export function MarkdownEditor({
     onOutline([])
     onActiveOutline(null)
   }, [onOutline, onActiveOutline])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates the current registry preferences.
-  const outlineSyntax = useMemo(
-    () => sourceOutlineSyntax(flavors, markdownExtensions, richExtensions),
-    [flavors, markdownExtensions, richExtensions, syntaxVersion],
-  )
   // The source outline also gives assistive technology the headings the
   // formatted view does not draw, so it is read while a screen reader is on,
   // with the sidebar closed too, and reported to the sidebar while it is open.
@@ -319,7 +313,9 @@ export function MarkdownEditor({
     tabId: documentState.tabId,
     revision: documentState.revision,
     flavors,
-    outlineSyntax,
+    markdownExtensions,
+    referenceSyntax,
+    legacy: false,
     view: () => {
       const pane = (selector: string) => {
         const element = content.current?.querySelector<HTMLElement>(

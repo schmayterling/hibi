@@ -140,7 +140,7 @@ import { revealSourcePosition, sourcePosition, sourceView } from './source-view'
 import { tableLayout } from './table-layout'
 import { textProjection } from './text-projection'
 import { useEditorPanes } from './use-editor-panes'
-import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
+import { builtInMarkdownSyntax, useSourceOutline } from './use-source-outline'
 
 const SourceEditor = lazy(() =>
   import('./MarkdownSourceEditor').then((module) => ({
@@ -428,8 +428,8 @@ export function MarkdownEditor({
     }
   }, [flavors, markdownExtensions, syntaxVersion])
   // biome-ignore lint/correctness/useExhaustiveDependencies: registry preferences invalidate outline grammar ownership.
-  const outlineSyntax = useMemo(
-    () => sourceOutlineSyntax(flavors, markdownExtensions, richExtensions),
+  const builtInSyntax = useMemo(
+    () => builtInMarkdownSyntax(flavors, markdownExtensions, richExtensions),
     [
       flavors,
       markdownExtensions,
@@ -1871,7 +1871,7 @@ export function MarkdownEditor({
     const original = projection.content
     const local =
       typing &&
-      outlineSyntax?.math &&
+      builtInSyntax?.math &&
       markdownSyntax.version() === syntaxVersion &&
       paragraphProof.current?.matches(original, editor.state.doc)
         ? paragraphProof.current.plan(
@@ -2085,7 +2085,7 @@ export function MarkdownEditor({
       // Only visual editing uses this proof; the read-only split preview never does.
       if (
         paneMode === 'normal' &&
-        outlineSyntax?.math &&
+        builtInSyntax?.math &&
         editor.markdown &&
         markdownSyntax.version() === syntaxVersion
       ) {
@@ -2516,7 +2516,7 @@ export function MarkdownEditor({
     paneMode,
     footnoteDocument,
     plainSyncEligible,
-    outlineSyntax,
+    builtInSyntax,
     projectionReadOnly,
     disabled,
     richExtensionError,
@@ -2793,7 +2793,9 @@ export function MarkdownEditor({
     tabId: documentState.tabId,
     revision: documentState.revision,
     flavors,
-    outlineSyntax,
+    markdownExtensions,
+    referenceSyntax,
+    legacy: true,
     view: () => {
       const element = content.current?.querySelector<HTMLElement>('.cm-content')
       return element && sourceView(element)

@@ -22,6 +22,11 @@ import {
   formattedLiteral,
   formattedTree,
 } from '../src/renderer/src/formatted-contributions.ts'
+import {
+  openAtEnd,
+  openSelection,
+  selectedBlock,
+} from '../src/renderer/src/formatted-text-end.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { markdownSerializer } from '../src/renderer/src/markdown-serialization.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
@@ -2884,6 +2889,123 @@ test('formatting a table caret or a neighboring block reads no other table rows'
   }
   for (const cell of [false, true])
     assert.deepEqual(work(200, cell), work(2, cell))
+})
+
+function selectedAtom(source) {
+  const tree = (state) => markdown.parse(state.doc.toString())
+  const target = {
+    state: EditorState.create({
+      doc: source,
+      extensions: [
+        formattedTree.of(tree),
+        openSelection({ tree, replaced: () => true }),
+      ],
+    }),
+    dom: { isConnected: true },
+    dispatch(spec) {
+      this.state = this.state.update(spec).state
+    },
+    focus() {},
+  }
+  openAtEnd(target)
+  return target
+}
+
+test('a selected atom exposes its list actions and keeps its block through conversion', () => {
+  for (const [action, expected] of [
+    ['checklist', '- [ ] item\n\n  ---\n'],
+    ['numbered-list', '1. item\n\n   ---\n'],
+  ]) {
+    const target = selectedAtom('- item\n\n  ---\n')
+    assert.deepEqual(
+      states(target, ['bullet-list', 'numbered-list', 'checklist', 'outdent']),
+      {
+        'bullet-list': 'pressed ',
+        'numbered-list': '',
+        checklist: '',
+        outdent: '',
+      },
+    )
+    assert.ok(sourceFormatting(target).run(action))
+    assert.equal(target.state.doc.toString(), expected)
+    const { from, to } = target.state.selection.main
+    assert.equal(target.state.sliceDoc(from, to), '---')
+  }
+})
+
+test('list conversion keeps a selected preview separate when an image replaces it', () => {
+  const target = selectedAtom('- item\n\n  ```mermaid\n  graph TD\n  ```\n')
+  assert.ok(sourceFormatting(target).run('numbered-list'))
+  assert.equal(
+    target.state.doc.toString(),
+    '1. item\n\n   ```mermaid\n   graph TD\n   ```\n',
+  )
+  assert.ok(
+    sourceFormatting(target).capture().insertMarkdown('![new](new.png)'),
+  )
+  assert.equal(target.state.doc.toString(), '1. item\n\n   ![new](new.png)\n')
+  const block = selectedBlock(target.state)
+  assert.ok(block)
+  assert.equal(target.state.sliceDoc(block.from, block.to), '![new](new.png)')
+})
+
+test('a captured image replacement keeps a selected atom selected', () => {
+  for (const source of [
+    'plain\n\n---\n',
+    '- item\n\n  ---\n',
+    '> quoted\n>\n> ---\n',
+  ]) {
+    const target = selectedAtom(source)
+    const before = target.state.selection.main
+    const image = '![new](new.png)'
+    assert.equal(source.slice(before.from, before.to), '---')
+    assert.ok(sourceFormatting(target).capture().insertMarkdown(image))
+    const range = target.state.selection.main
+    assert.equal(target.state.sliceDoc(range.from, range.to), image)
+    assert.equal(sourceFormatting(target).state('bold').disabled, true)
+  }
+})
+
+test('image history restores the selected block and its toolbar state', (t) => {
+  const source = '> quoted\n>\n> ---\n'
+  const target = selectedAtom(source)
+  const session = new DocumentSession(
+    source,
+    { tabId: 'atom', revision: 0 },
+    0,
+    {
+      enqueue() {},
+      onError(error) {
+        throw error
+      },
+    },
+  )
+  const bridge = createSourceSession(session, 'formatted')
+  target.update = (transactions) => {
+    for (const transaction of transactions) target.state = transaction.state
+  }
+  target.dispatch = (spec) =>
+    bridge.dispatch([target.state.update(spec)], target)
+  const detach = bridge.attach(target)
+  t.after(() => {
+    detach()
+    session.dispose()
+  })
+  openAtEnd(target)
+  const formatting = sourceFormatting(target)
+  assert.ok(formatting.capture().insertMarkdown('![new](new.png)'))
+  const after = target.state.doc.toString()
+  for (const redo of [false, true]) {
+    assert.ok(redo ? session.redo() : session.undo())
+    assert.equal(target.state.doc.toString(), redo ? after : source)
+    const block = selectedBlock(target.state)
+    assert.ok(block)
+    assert.equal(
+      target.state.sliceDoc(block.from, block.to),
+      redo ? '![new](new.png)' : '---',
+    )
+    assert.equal(formatting.state('bold').disabled, true)
+  }
 })
 
 test('stored marks drop when the caret moves or the text has lines', () => {

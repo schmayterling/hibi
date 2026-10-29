@@ -2196,6 +2196,11 @@ function App() {
       case 'open-workspace':
         void openFolder()
         break
+      case 'export-pdf':
+        void import('./pdf-export').then(({ exportPdf }) =>
+          exportPdf(addonHost.markdownExtensions, toasts, setError),
+        )
+        break
       case 'import':
         void import('./ImportDialog').then(({ openImportDialog }) =>
           openImportDialog(dialogs, () => openSetting('workspace')),

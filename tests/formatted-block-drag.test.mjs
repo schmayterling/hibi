@@ -2,10 +2,16 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test, { after, before } from 'node:test'
+import test from 'node:test'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import {
+  after,
+  before,
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'

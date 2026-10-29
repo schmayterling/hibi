@@ -695,6 +695,10 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(DOCUMENT_CHANNELS.rename, name),
     readDocumentImage: (source, revision) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.image, source, revision),
+    readPdfImage: (source, revision) =>
+      ipcRenderer.invoke(DOCUMENT_CHANNELS.pdfImage, source, revision),
+    exportPdf: (tabId, html) =>
+      ipcRenderer.invoke(DOCUMENT_CHANNELS.exportPdf, tabId, html),
     getHotkeys: () => ipcRenderer.invoke(HOTKEY_CHANNELS.get),
     getAddonHotkeys: () => ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.get),
     registerAddonHotkey: (registration) =>

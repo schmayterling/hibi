@@ -1,9 +1,20 @@
 import { ChangeSet } from '@codemirror/state'
 import { NodeWeakMap, type SyntaxNode, type Tree } from '@lezer/common'
-import { GFM, type MarkdownParser, parser } from '@lezer/markdown'
+import {
+  GFM,
+  type MarkdownConfig,
+  type MarkdownParser,
+  parser,
+} from '@lezer/markdown'
 import { decodeHTML } from 'entities'
 import type { Token } from 'marked'
+import type { MarkdownExtension, MarkdownFlavor } from '../../addons/api'
+import {
+  builtInFlavors,
+  fencedCodeFlavors,
+} from '../../shared/built-in-grammar.ts'
 import { FrontmatterParser } from '../../shared/frontmatter-parser.ts'
+import { protectMarkdownParser } from '../../shared/markdown-flavor-guard.ts'
 import { markdownSourceParser } from '../../shared/markdown-source-references.ts'
 import type {
   PreparedSourceOperation,
@@ -19,6 +30,7 @@ import { SourceOwners } from '../../shared/source-owners.ts'
 import { SourceParserSession } from '../../shared/source-parser.ts'
 import { normalizedSource } from '../../shared/source-projection.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
+import { type OutlineLabelPart, outlineLabel } from './outline-label.ts'
 import {
   outlineMathParser,
   validateOutlineMathCandidate,
@@ -27,6 +39,7 @@ import {
 export type SourceOutlineHeading = Readonly<{
   id: string
   label: string
+  parts?: readonly OutlineLabelPart[]
   level: number
 }>
 export type SourceOutline = Readonly<{
@@ -42,6 +55,7 @@ export type SourceOutlineLabelRequest = {
 }
 export type SourceOutlineLabelResult = {
   label: string | null
+  parts?: readonly OutlineLabelPart[]
   references: string[]
   missing: string[]
 }
@@ -51,11 +65,100 @@ export type SourceOutlineInput =
   | null
   | undefined
 
+type LabelRenderer = (
+  tokens: readonly Token[],
+  level: number,
+) => string | readonly OutlineLabelPart[] | null
+
+type Owned = { addonId?: string }
+type LegacyExtension = {
+  config?: { markdownTokenizer?: { level?: string } }
+  parent?: LegacyExtension | null
+}
+
+/** Marked or Tiptap tokenizers that can start blocks only the visual editor reads. */
+function legacyBlocks(flavor: MarkdownFlavor) {
+  return (
+    !!flavor.export?.extensions?.some(
+      (extension) =>
+        extension.tokenizer ||
+        extension.hooks ||
+        extension.extensions?.some(
+          (entry) => 'level' in entry && entry.level !== 'inline',
+        ),
+    ) ||
+    !!flavor.richExtensions?.some((extension) => {
+      let entry = extension as LegacyExtension | null | undefined
+      while (entry && !entry.config?.markdownTokenizer) entry = entry.parent
+      const level = entry?.config?.markdownTokenizer?.level
+      return level !== undefined && level !== 'inline'
+    })
+  )
+}
+
+/**
+ * The outline grammar for the selected flavors and projections. Built-in
+ * flavors the model was audited for set its options; other flavors' Lezer
+ * syntax extends its parser, as in the source view. Inline syntax changes only
+ * labels, which keep their Markdown text. `blocked` lists the addons whose
+ * block structure the outline cannot follow: projections other than built-in
+ * frontmatter and, with `legacy`, block syntax only the visual editor reads.
+ */
+export function sourceOutlineGrammar(
+  flavors: readonly (MarkdownFlavor & Owned)[],
+  projections: readonly (MarkdownExtension & Owned)[],
+  { origin, legacy }: { origin: (addonId: string) => string; legacy: boolean },
+) {
+  const owned = (owner: string | undefined, addonId: string | undefined) =>
+    owner !== undefined && owner === addonId && origin(owner) === 'built-in'
+  const modeled = flavors.filter((flavor) =>
+      owned(builtInFlavors.get(flavor.id)?.owner, flavor.addonId),
+    ),
+    ids = modeled.map((flavor) => flavor.id),
+    blocked = new Set<string>()
+  for (const flavor of flavors)
+    if (
+      legacy &&
+      !modeled.includes(flavor) &&
+      !flavor.syntax &&
+      !owned(fencedCodeFlavors.get(flavor.id), flavor.addonId) &&
+      legacyBlocks(flavor)
+    )
+      blocked.add(flavor.addonId ?? flavor.id)
+  for (const projection of projections)
+    if (
+      projection.id !== 'frontmatter.metadata' ||
+      !owned('frontmatter', projection.addonId)
+    )
+      blocked.add(projection.addonId ?? projection.id)
+  return {
+    options: {
+      gfm: Object.assign(
+        { gfm: false },
+        ...flavors.map((flavor) => flavor.markedOptions),
+      ).gfm as boolean,
+      alerts: ids.includes('markdown.github'),
+      textExtras: ids.includes('text-extras.text-extras'),
+      math: ids.includes('math.latex'),
+      frontmatter: projections.some(
+        (projection) => projection.id === 'frontmatter.metadata',
+      ),
+    },
+    /** Flavors whose label syntax the label renderer models. */
+    labels: ids,
+    /** Flavors whose Lezer syntax the source view also parses with. */
+    syntax: flavors.filter(
+      (flavor) => !modeled.includes(flavor) && flavor.syntax,
+    ),
+    blocked: [...blocked],
+  }
+}
+
 /** The identical lexical read runs locally for short labels and in a worker for long ones. */
 export function readSourceOutlineLabel(
   request: SourceOutlineLabelRequest,
   parser: ReturnType<typeof markdownSourceParser>,
-  render: (tokens: readonly Token[], level: number) => string | null,
+  render: LabelRenderer,
 ): SourceOutlineLabelResult {
   const references = request.references,
     used = new Set<string>(),
@@ -70,8 +173,11 @@ export function readSourceOutlineLabel(
     },
   })
   const tokens = lexer.inlineTokens(request.text)
+  const rendered = missing.size ? null : render(tokens, request.level)
   return {
-    label: missing.size ? null : render(tokens, request.level),
+    label: null,
+    ...(rendered !== null &&
+      outlineLabel(typeof rendered === 'string' ? [rendered] : rendered)),
     references: [...used],
     missing: [...missing],
   }
@@ -124,10 +230,7 @@ export class SourceOutlineModel {
   readonly #disabled: ReadonlySet<string>
   readonly #labels: ReturnType<typeof markdownSourceParser>
   readonly #deferLabels: boolean
-  readonly #renderLabel: (
-    tokens: readonly Token[],
-    level: number,
-  ) => string | null
+  readonly #renderLabel: LabelRenderer
   #frontmatterRead: FrontmatterRead | null = null
   #contentFrom = 0
   #epoch = 0
@@ -154,7 +257,9 @@ export class SourceOutlineModel {
       textExtras?: boolean
       math?: boolean
       deferLabels?: boolean
-      renderLabel?: (tokens: readonly Token[], level: number) => string | null
+      renderLabel?: LabelRenderer
+      /** Addon Lezer syntax, so blocks it adds hide the `#` lines they contain. */
+      syntax?: readonly MarkdownConfig[]
     },
   ) {
     this.#deferLabels = options.deferLabels ?? false
@@ -168,7 +273,7 @@ export class SourceOutlineModel {
       math: options.math ?? false,
     })
     this.#renderLabel = options.renderLabel ?? ((tokens) => plainText(tokens))
-    this.#markdown = parser.configure([
+    const markdown = parser.configure([
       ...(options.gfm ? GFM : []),
       ...(this.#math
         ? [
@@ -199,6 +304,10 @@ export class SourceOutlineModel {
         ],
       },
     ])
+    // Added after OutlineText, addon inline parsers never run here.
+    this.#markdown = options.syntax?.length
+      ? protectMarkdownParser(markdown, options.syntax)
+      : markdown
     this.#session = new SourceParserSession(
       source,
       this.#markdown,
@@ -308,6 +417,8 @@ export class SourceOutlineModel {
           (name === 'Blockquote' && this.#disabled.has('core.quotes')) ||
           (name === 'BulletList' && this.#disabled.has('core.bullet-lists')) ||
           (name === 'OrderedList' && this.#disabled.has('core.numbered-lists'))
+      if (!heading && cursor.type.is('Heading'))
+        throw new Error('Source outline cannot represent the active syntax.')
       if (
         this.#math &&
         (name === 'Paragraph' || name.startsWith('SetextHeading'))
@@ -335,7 +446,7 @@ export class SourceOutlineModel {
           const text = headingText(source, cursor.node),
             used = new Set<string>(),
             level = Number(heading[1])
-          let label: string | null
+          let label: string | null, parts: SourceOutlineHeading['parts']
           for (;;) {
             const request = { text, level, references },
               result =
@@ -350,6 +461,7 @@ export class SourceOutlineModel {
             for (const reference of result.references) used.add(reference)
             if (!result.missing.length) {
               label = result.label
+              parts = result.parts
               break
             }
             for (const reference of result.missing) {
@@ -367,6 +479,7 @@ export class SourceOutlineModel {
             heading: Object.freeze({
               id: `source:${this.#nextId++}`,
               label: label.replace(/\s+/g, ' ').trim() || 'Untitled heading',
+              ...(parts && { parts }),
               level,
             }),
             references: [...used],

@@ -3,6 +3,7 @@ import { lstat, open, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
+import sanitizeHtml from 'sanitize-html'
 import { lexMarkdown } from '../shared/marked-blocks.ts'
 import { isPathInside } from './workspace-paths.ts'
 
@@ -36,6 +37,15 @@ export function imageSources(markdown: string): Set<string> {
   const sources = new Set<string>()
   marked.walkTokens(lexMarkdown(markdown), (token) => {
     if (token.type === 'image') sources.add(token.href)
+    if (token.type === 'html')
+      sanitizeHtml(token.text, {
+        transformTags: {
+          img: (tagName, attribs) => {
+            if (attribs.src) sources.add(attribs.src)
+            return { tagName, attribs }
+          },
+        },
+      })
   })
   return sources
 }

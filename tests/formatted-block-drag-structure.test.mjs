@@ -2,8 +2,14 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test, { after, before } from 'node:test'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
+import {
+  after,
+  before,
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'

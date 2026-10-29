@@ -1,7 +1,31 @@
 import { mergeAttributes, Node } from '@tiptap/core'
-import { TextSelection } from '@tiptap/pm/state'
+import { Plugin, TextSelection } from '@tiptap/pm/state'
+import type { EditorView } from '@tiptap/pm/view'
 import { alertMarker, alertStart, alertToken, alertType } from './alerts.ts'
 import { calloutToggle, updateCalloutToggle } from './callout-toggle.ts'
+
+/** Unfolds a callout, by its node view's element. */
+const unfolds = new WeakMap<globalThis.Node, () => void>()
+
+/**
+ * A selection end inside a folded callout shows it, as find, the outline
+ * and undo place one there. Plugin views update before the view scrolls to
+ * the selection.
+ */
+const revealFolds = new Plugin({
+  view: () => ({
+    update(view: EditorView, previous) {
+      const { doc, selection } = view.state
+      if (doc === previous.doc && selection.eq(previous.selection)) return
+      for (const $pos of [selection.$anchor, selection.$head])
+        for (let depth = $pos.depth; depth > 0; depth--)
+          if ($pos.node(depth).type.name === 'githubAlert') {
+            const dom = view.nodeDOM($pos.before(depth))
+            if (dom) unfolds.get(dom)?.()
+          }
+    },
+  }),
+})
 
 export const GithubAlert = Node.create({
   name: 'githubAlert',
@@ -86,6 +110,11 @@ export const GithubAlert = Node.create({
         }
       }
       render()
+      unfolds.set(dom, () => {
+        if (expanded) return
+        expanded = true
+        render()
+      })
       return {
         dom,
         contentDOM,
@@ -106,6 +135,7 @@ export const GithubAlert = Node.create({
       }
     }
   },
+  addProseMirrorPlugins: () => [revealFolds],
   markdownTokenName: 'githubAlert',
   markdownTokenizer: {
     name: 'githubAlert',

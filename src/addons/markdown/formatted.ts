@@ -1,5 +1,6 @@
 import {
-  type EditorState,
+  EditorSelection,
+  EditorState,
   MapMode,
   StateEffect,
   StateField,
@@ -9,6 +10,7 @@ import type { SyntaxNode } from '@lezer/common'
 import {
   type FormattedContribution,
   formattedRenderInputs,
+  formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
 import { formattedAlertText } from '../../shared/formatted-text-rules.ts'
 import { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
@@ -20,78 +22,128 @@ export { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
 
 type Fold = { fold: string; expanded: boolean }
 const setFold = StateEffect.define<Fold & { from: number }>()
-const folds = StateField.define<ReadonlyMap<number, Fold>>({
-  create: () => new Map(),
+/**
+ * Fold states set by the reader, by callout start. Renderers read `key`,
+ * which only a toggle replaces, so edits that move callouts keep cached
+ * layout and table cells.
+ */
+const folds = StateField.define<{
+  at: ReadonlyMap<number, Fold>
+  key: object
+}>({
+  create: () => ({ at: new Map(), key: {} }),
   update(value, transaction) {
-    if (
-      !transaction.docChanged &&
-      !transaction.effects.some((effect) => effect.is(setFold))
-    )
-      return value
-    let next: Map<number, Fold> | undefined
-    if (transaction.docChanged && value.size) {
+    let { at, key } = value
+    if (transaction.docChanged && at.size) {
       const mapped = new Map<number, Fold>()
-      let moved = false
-      for (const [from, fold] of value) {
-        const at = transaction.changes.mapPos(from, 1, MapMode.TrackDel)
-        if (at !== null) mapped.set(at, fold)
-        if (at !== from) moved = true
+      for (const [from, fold] of at) {
+        // A callout whose first character goes takes its state with it.
+        const pos = transaction.changes.mapPos(from, 1, MapMode.TrackAfter)
+        if (pos !== null) mapped.set(pos, fold)
       }
-      if (moved) next = mapped
+      at = mapped
     }
     for (const effect of transaction.effects)
       if (effect.is(setFold)) {
-        next ??= new Map(value)
-        next.set(effect.value.from, effect.value)
+        at = new Map(at).set(effect.value.from, effect.value)
+        key = {}
       }
-    return next ?? value
+    return at === value.at ? value : { at, key }
   },
-  provide: (field) => formattedRenderInputs.from(field),
+  provide: (field) =>
+    formattedRenderInputs.compute([field], (state) => state.field(field).key),
 })
 
 function expandedAt(state: EditorState, from: number, fold: string) {
-  const saved = state.field(folds, false)?.get(from)
+  const saved = state.field(folds, false)?.at.get(from)
   return saved?.fold === fold ? saved.expanded : fold !== '-'
 }
 
+/** What a folded callout hides: from the end of its title line to its end. */
+function foldedBody(state: EditorState, quote: SyntaxNode) {
+  const title = firstBlock(quote)
+  if (title?.name !== 'AlertTitle') return null
+  const fold = titleOf(state.sliceDoc(title.from, title.to))?.fold
+  if (!fold || expandedAt(state, quote.from, fold)) return null
+  const from = state.doc.lineAt(title.to).to
+  return from < quote.to ? { from, to: quote.to, fold } : null
+}
+
+/**
+ * A selection end inside a folded body shows it, as find, the outline and
+ * undo place one there.
+ */
+const revealFolds = EditorState.transactionExtender.of((transaction) => {
+  const { state } = transaction
+  const tree = formattedSyntaxTree(state)
+  if (!tree) return null
+  const effects: StateEffect<Fold & { from: number }>[] = []
+  for (const range of state.selection.ranges)
+    for (const pos of [range.anchor, range.head])
+      for (
+        let node: SyntaxNode | null = tree.resolve(pos, 1);
+        node;
+        node = node.parent
+      ) {
+        const body = node.name === 'Blockquote' && foldedBody(state, node)
+        if (body && body.from < pos && pos < body.to)
+          effects.push(
+            setFold.of({ from: node.from, fold: body.fold, expanded: true }),
+          )
+      }
+  return effects.length ? { effects } : null
+})
+
+/** Fold or unfold the callout whose title starts where `button` is; folding moves the selection out of it. */
+function toggleFold(view: EditorView, button: HTMLElement) {
+  const { state } = view
+  const at = view.posAtDOM(button)
+  let quote = formattedSyntaxTree(state)?.resolve(at, 1) ?? null
+  while (quote && quote.name !== 'Blockquote') quote = quote.parent
+  const title = quote && firstBlock(quote)
+  const fold =
+    title?.from === at && titleOf(state.sliceDoc(title.from, title.to))?.fold
+  if (!quote || !title || !fold) return
+  const expanded = !expandedAt(state, quote.from, fold)
+  const end = state.doc.lineAt(title.to).to
+  const to = quote.to
+  const out = (pos: number) => (pos > end && pos <= to ? end : pos)
+  view.dispatch({
+    effects: setFold.of({ from: quote.from, fold, expanded }),
+    selection: expanded
+      ? undefined
+      : EditorSelection.create(
+          state.selection.ranges.map((range) =>
+            EditorSelection.range(out(range.anchor), out(range.head)),
+          ),
+          state.selection.mainIndex,
+        ),
+  })
+}
+
 class FoldToggleWidget extends WidgetType {
-  readonly from: number
   readonly title: string
-  readonly fold: string
   readonly expanded: boolean
-  constructor(from: number, title: string, fold: string, expanded: boolean) {
+  constructor(title: string, expanded: boolean) {
     super()
-    this.from = from
     this.title = title
-    this.fold = fold
     this.expanded = expanded
   }
   override eq(other: FoldToggleWidget) {
-    return (
-      this.from === other.from &&
-      this.title === other.title &&
-      this.fold === other.fold &&
-      this.expanded === other.expanded
-    )
-  }
-  private toggle(view: EditorView) {
-    view.dispatch({
-      effects: setFold.of({
-        from: this.from,
-        fold: this.fold,
-        expanded: !this.expanded,
-      }),
-    })
+    return this.title === other.title && this.expanded === other.expanded
   }
   toDOM(view: EditorView) {
-    return calloutToggle(this.title, this.expanded, () => this.toggle(view))
+    const button = calloutToggle(this.title, this.expanded, () =>
+      toggleFold(view, button),
+    )
+    return button
   }
   override updateDOM(dom: HTMLElement, view: EditorView) {
     updateCalloutToggle(
       dom as HTMLButtonElement,
       this.title,
       this.expanded,
-      () => this.toggle(view),
+      () => toggleFold(view, dom),
     )
     return true
   }
@@ -135,19 +187,15 @@ export const contribution: FormattedContribution = {
   feature: 'markdown.alerts',
   flavor: 'markdown.github',
   syntax: GithubAlerts,
-  extension: folds,
+  extension: [folds, revealFolds],
   views: [
     {
       // The alerts.css box: a 3px bar in the alert color over a 6% tint, 12px 16px inside.
       nodes: ['Blockquote'],
       layout(node, out, { state }) {
-        const title = firstBlock(node.node)
-        if (title?.name !== 'AlertTitle') return
-        const fold = titleOf(state.sliceDoc(title.from, title.to))?.fold
-        if (!fold || expandedAt(state, node.from, fold)) return
-        const from = state.doc.lineAt(title.to).to
-        if (from < node.to)
-          out.replace(from, node.to, undefined, { block: true })
+        const body = foldedBody(state, node.node)
+        if (!body) return
+        out.replace(body.from, body.to, undefined, { block: true })
         return false
       },
       container(node, { state }) {
@@ -185,9 +233,7 @@ export const contribution: FormattedContribution = {
           out.widget(
             node.from,
             new FoldToggleWidget(
-              quote.from,
               title.text,
-              title.fold,
               expandedAt(state, quote.from, title.fold),
             ),
             -1,

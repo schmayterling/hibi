@@ -340,8 +340,9 @@ export function Titlebar({
                         label: 'No view',
                         onSelect: () => onRightSidebarView('none'),
                       },
+                      // Workspace views open only on the left.
                       ...sidebarViews
-                        .filter((view) => view.id !== 'workspace')
+                        .filter((view) => !/^workspaces?$/.test(view.id))
                         .map((view, index) => ({
                           ...view,
                           separatorBefore: index === 0,

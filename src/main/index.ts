@@ -228,6 +228,7 @@ import {
   setUpdateStartupCheck,
   startUpdateChecks,
 } from './updates'
+import { createBrowserWindow } from './window-creation'
 import {
   cancelWorkspaceSelection,
   currentWorkspaceTarget,
@@ -905,7 +906,7 @@ function createWindow(): void {
   if (!windowSetupReady) return
   closing = false
   startupMark('window-start')
-  const window = new BrowserWindow({
+  const window = createBrowserWindow({
     width: 1000,
     height: 720,
     minWidth: 480,

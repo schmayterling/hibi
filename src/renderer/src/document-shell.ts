@@ -1,5 +1,8 @@
 import type { DocumentState } from '../../shared/desktop.ts'
-import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
+import {
+  footnoteGrammar,
+  hasFootnoteDefinitions,
+} from '../../shared/markdown-footnotes.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { DocumentRuntime } from './document-runtime.ts'
 import { codemirrorFormattedView } from './formatted-engine.ts'
@@ -127,8 +130,11 @@ export function hasDocumentFootnotes(
   const source = runtime.sourceFor(document)
   let found = source && footnoteSources.get(source)
   if (found === undefined) {
-    found = hasFootnoteDefinitions(document.markdown)
-    if (source) footnoteSources.set(source, found)
+    // Until the lazy block grammar loads, possible definitions keep the
+    // legacy rich view closed and are checked again.
+    const loaded = footnoteGrammar.length > 0
+    found = hasFootnoteDefinitions(document.markdown, !loaded)
+    if (source && loaded) footnoteSources.set(source, found)
   }
   return found
 }

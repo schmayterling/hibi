@@ -28,6 +28,7 @@ import { documentRuntime } from './document-runtime'
 import { largeOpening, largeSource } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
+import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
@@ -131,6 +132,9 @@ export function MarkdownEditor({
   outlineActive,
 }: MarkdownEditorProps) {
   const markdownDocument = format?.editing === 'markdown'
+  const [syncPreviewScroll] = useEditorPreference(
+    editorPreferences.syncPreviewScroll,
+  )
   const showProperties =
     markdownDocument &&
     markdownExtensions.some(
@@ -529,7 +533,13 @@ export function MarkdownEditor({
     view.focus()
   }, [autoFocus, formattedReady, paneMode, content])
   useEffect(() => {
-    if (paneMode !== 'side-by-side' || !sourceReady || !formattedReady) return
+    if (
+      !syncPreviewScroll ||
+      paneMode !== 'side-by-side' ||
+      !sourceReady ||
+      !formattedReady
+    )
+      return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
     const source = content.current?.querySelector<HTMLElement>(
       '.source-pane .cm-scroller',
@@ -541,7 +551,7 @@ export function MarkdownEditor({
       source.contains(window.document.activeElement) ? source : rich,
       'source',
     )
-  }, [content, paneMode, sourceReady, formattedReady])
+  }, [content, paneMode, sourceReady, formattedReady, syncPreviewScroll])
   /**
    * Properties editors above the text return the whole source, as in the
    * rich editor; their change goes to the formatted view as one minimal edit

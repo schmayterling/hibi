@@ -1,0 +1,7 @@
+diff --git a/docs/guides/editing.md b/docs/guides/editing.md
+index 75c34e7..c64ebae 100644
+--- a/docs/guides/editing.md
++++ b/docs/guides/editing.md
+@@ -10,0 +11,2 @@ While you type in the source pane, the formatted pane may catch up shortly after
++Side-by-side view keeps the source and preview aligned as you scroll. To keep the preview at a reading position while you move through the source, turn off **Settings → Editor → Layout → Sync preview scrolling**. Both panes then scroll independently. This setting also applies to other format previews and is remembered when you restart Hibi.
++

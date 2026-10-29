@@ -48,6 +48,8 @@ import { CodeSyntaxSettings } from './CodeSyntaxSettings'
 import { colorschemes } from './colorschemes'
 import { DependencySettings } from './DependencySettings'
 import type { CursorSettings } from './EditorCursor'
+import { ToolbarSettings } from './EditorToolbar'
+import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { FormatsSettings } from './FormatsSettings'
 import { HibiSettings } from './HibiSettings'
 import { HotkeySettings } from './HotkeySettings'
@@ -226,6 +228,9 @@ export function SettingsScreen({
     if (open) void addonRegistry.loadDetails().catch(console.error)
   }, [open])
   const screen = useRef<HTMLElement>(null)
+  const [syncPreviewScroll, setSyncPreviewScroll] = useEditorPreference(
+    editorPreferences.syncPreviewScroll,
+  )
   const openReadme = useAddonReadme()
   const wasOpen = useRef(false)
   const search = useRef<HTMLInputElement>(null)
@@ -551,6 +556,20 @@ export function SettingsScreen({
                   <option value="side-by-side">Side-by-side</option>
                   <option value="markdown">Source view</option>
                 </Select>
+              </SettingRow>
+              <SettingRow
+                id="sync-preview-scroll"
+                label="Sync preview scrolling"
+                description="Keep the source and preview aligned in Side-by-side view. Turn off to scroll each pane independently."
+              >
+                <Toggle
+                  id="sync-preview-scroll"
+                  aria-describedby="sync-preview-scroll-description"
+                  checked={syncPreviewScroll}
+                  onChange={(event) =>
+                    setSyncPreviewScroll(event.target.checked)
+                  }
+                />
               </SettingRow>
               <SettingRow id="editor-padding" label="Content padding">
                 <div className="setting-controls">

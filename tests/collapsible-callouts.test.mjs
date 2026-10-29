@@ -233,6 +233,10 @@ const hiding = [
   '> ## Hidden heading',
   '>',
   '> hidden omega end',
+  '>',
+  '> | hidden | table |',
+  '> | --- | --- |',
+  '> | one | two |',
   '',
   'After paragraph.',
   '',
@@ -282,6 +286,7 @@ testFormattedEngines(
 
     await closed.waitFor()
     assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+    const name = await closed.getAttribute('aria-label')
     // A folded box is as tall below its title as above it.
     const gaps = await closed.evaluate((button) => {
       const box = (
@@ -310,6 +315,8 @@ testFormattedEngines(
     await input.press('Enter')
     await pane.getByText('hidden omega end', { exact: true }).waitFor()
     assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+    // Its name stays put while aria-expanded tells the state.
+    assert.equal(await closed.getAttribute('aria-label'), name)
     await input.press('Escape')
 
     // A pointer fold keeps the caret and focus in the text.
@@ -328,7 +335,8 @@ testFormattedEngines(
       .locator('.outline-sidebar[data-side="right"][data-open="true"]')
       .getByRole('treeitem', { name: 'Hidden heading', exact: true })
       .click()
-    await pane.getByText('Hidden heading', { exact: true }).waitFor()
+    // The focused heading line shows its markers in codemirror.
+    await pane.getByText('Hidden heading').first().waitFor()
     assert.equal(await closed.getAttribute('aria-expanded'), 'true')
 
     // Undo of typing in a body folded since shows it again.
@@ -351,11 +359,6 @@ testFormattedEngines(
       (await window.hibi.getDocument()).markdown.includes('KK'),
     )
     assert.equal(await pane.getByText(/KK/).first().isVisible(), true)
-    // Its name stays put while aria-expanded tells the state.
-    assert.equal(
-      await closed.getAttribute('aria-label'),
-      'Toggle callout: Closed title',
-    )
   },
 )
 

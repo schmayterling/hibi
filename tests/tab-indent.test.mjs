@@ -193,7 +193,8 @@ test('Tab indents source and code, keeps lists and tables, and Escape then Tab l
     rich.evaluate(
       (element) => element.editor.state.selection.$from.parent.textContent,
     )
-  await setRich('<table><tr><td><p>a</p></td><td><p>b</p></td></tr></table>', 4)
+  // A table without a header row gains an empty one, as Markdown requires.
+  await setRich('<table><tr><th><p>a</p></th><th><p>b</p></th></tr></table>', 4)
   await page.keyboard.press('Tab')
   assert.equal(await cell(), 'b')
   await page.keyboard.press('Shift+Tab')

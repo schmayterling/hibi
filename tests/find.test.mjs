@@ -503,7 +503,8 @@ test('find in document searches rich text and offscreen markdown without editing
     `pin${dense.slice(6)}`,
   )
   await rich.evaluate((element) => element.editor.commands.undo())
-  await waitForCount('0/10000')
+  // Undo restores the replaced match's selection (#648), so it is current.
+  await waitForCount('1/10000')
   await waitForAsync(
     page,
     async (expected) => (await window.hibi.getDocument()).markdown === expected,

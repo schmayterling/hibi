@@ -76,18 +76,18 @@ test('a note ending in a block the rich editor draws as one node opens with it s
   )
 })
 
-test('a fence drawn as a widget is selected whole; one not drawn yet, or a tree short of the end, waits', () => {
+test('a fence a renderer draws is selected whole; a tree short of the end gives null', () => {
   const fence = 'plain\n\n```mermaid\ngraph TD\n```\n'
   const asked = []
-  const drawn = (pos) => asked.push(pos) && false
+  const replaced = (node) => asked.push(node.name) > 0
   assert.deepEqual(
-    formattedOpenSelection(text(fence), markdown.parse(fence), drawn),
+    formattedOpenSelection(text(fence), markdown.parse(fence), replaced),
     { anchor: 7, head: fence.length - 1 },
   )
-  assert.deepEqual(asked, [fence.indexOf('graph TD') + 'graph TD'.length])
-  assert.equal(
-    formattedOpenSelection(text(fence), markdown.parse(fence), () => undefined),
-    null,
+  assert.deepEqual(asked, ['FencedCode'])
+  assert.deepEqual(
+    formattedOpenSelection(text(fence), markdown.parse(fence)),
+    caret(fence.indexOf('graph TD') + 'graph TD'.length),
   )
   // The open selection reads the tree it is given and never parses further.
   const source = `first\n\n${'old tail\n\n'.repeat(20000)}\`\`\`\ncode\n\`\`\`\n`

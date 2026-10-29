@@ -1684,6 +1684,20 @@ const placed = StateField.define<boolean>({
   },
 })
 
+/** Whether a contributed layout draws a node in place of its text while it is not revealed. */
+function replacedWhole(state: EditorState, node: SyntaxNode) {
+  let whole = false
+  const sink = {
+    replace(from: number, to: number) {
+      if (from <= node.from && to >= node.to) whole = true
+    },
+    widget() {},
+  }
+  for (const view of formattedNodeViews(state)(node.type).views)
+    view.layout?.(node, sink, { state, revealed: false, visible: null })
+  return whole
+}
+
 /** The selection while the focused editor shows markers. */
 function revealedIn(state: EditorState, tree: Tree): readonly Revealed[] {
   if (!state.field(focused, false) || !state.facet(showMarkdownMarkers))
@@ -2128,7 +2142,7 @@ export function livePreview(
     codeIndent,
     focused,
     placed,
-    openSelection(syntax.tree),
+    openSelection({ tree: syntax.tree, replaced: replacedWhole }),
     layout,
     EditorView.decorations.compute([layout, placed, 'selection'], (state) =>
       revealDestinations(state.field(layout), state),

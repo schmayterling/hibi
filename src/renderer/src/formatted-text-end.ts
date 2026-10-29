@@ -1,11 +1,12 @@
 import {
   type EditorState,
+  Facet,
   Prec,
   StateEffect,
   StateField,
   type Text,
 } from '@codemirror/state'
-import { EditorView, keymap, ViewPlugin } from '@codemirror/view'
+import { type EditorView, keymap, ViewPlugin } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
@@ -61,15 +62,14 @@ type Opening = { anchor: number; head: number }
  * editor takes; in code, the code's end before its closing fence. Blank
  * lines after the last block that show an empty paragraph hold it instead.
  * A last block the rich editor draws as one node, such as a divider, a
- * block image or a fence a renderer draws in place of its text, is selected
- * whole, so typing replaces it. Null while the syntax tree does not reach
- * the note's end, or `drawn` cannot tell yet whether a fence shows its text.
+ * block image or a fence `replaced` says a renderer draws in place of its
+ * text, is selected whole, so typing replaces it. Null while the syntax tree
+ * does not reach the note's end.
  */
 export function formattedOpenSelection(
   doc: Text,
   tree: Tree | null,
-  /** Whether the view draws a position's text; undefined while it is not drawn. */
-  drawn: (pos: number) => boolean | undefined = () => true,
+  replaced: (node: SyntaxNode) => boolean = () => false,
 ): Opening | null {
   const end = trimmed(doc, doc.length)
   const caret = (at: number) => ({ anchor: at, head: at })
@@ -99,6 +99,7 @@ export function formattedOpenSelection(
   const image = node.firstChild
   if (
     atoms.has(node.name) ||
+    (node.name === 'FencedCode' && replaced(node)) ||
     (node.name === 'Paragraph' &&
       image?.name === 'Image' &&
       image.from === node.from &&
@@ -114,9 +115,7 @@ export function formattedOpenSelection(
     // An unclosed fence's text holds the note's last line breaks.
     let at = text.to
     while (at > text.from && /[\r\n]/.test(doc.sliceString(at - 1, at))) at--
-    if (node.name === 'CodeBlock') return caret(at)
-    const shown = drawn(at)
-    return shown === undefined ? null : shown ? caret(at) : whole
+    return caret(at)
   }
   // A heading's text ends before its closing marks or setext underline.
   const mark = node.lastChild
@@ -129,33 +128,10 @@ export function formattedOpenSelection(
   return caret(trimmed(doc, at, node.from))
 }
 
-/**
- * Whether the view draws a position's text, not a widget that replaces it,
- * such as a rendered fence's; undefined outside the drawn ranges.
- */
-const drawsText = (view: EditorView, pos: number) =>
-  !view.visibleRanges.some(({ from, to }) => from <= pos && pos <= to)
-    ? undefined
-    : view.state.facet(EditorView.decorations).every((source) => {
-        let replaced = false
-        ;(typeof source === 'function' ? source(view) : source).between(
-          pos,
-          pos,
-          (from, to, value) => {
-            if (value.point && from < pos && pos < to) replaced = true
-          },
-        )
-        return !replaced
-      })
+const open = StateEffect.define<Opening>()
 
-const open = StateEffect.define<Opening & { known: boolean }>()
-
-/**
- * The selection a note opened with, until the user moves it or edits.
- * `known` once it is where the rich editor puts it, not the source end it
- * held while the tree or the view did not reach the note's end.
- */
-const opened = StateField.define<(Opening & { known: boolean }) | null>({
+/** The selection a note opened with, until the user moves it or edits. */
+const opened = StateField.define<Opening | null>({
   create: () => null,
   update(value, transaction) {
     for (const effect of transaction.effects)
@@ -180,48 +156,61 @@ export const openedBlock = (state: EditorState, from: number, to: number) => {
   )
 }
 
+type OpenSyntax = {
+  tree: (state: EditorState) => Tree | null
+  /** Whether a renderer draws a block in place of its text while it is not revealed. */
+  replaced: (state: EditorState, node: SyntaxNode) => boolean
+}
+const openSyntax = Facet.define<OpenSyntax, OpenSyntax | undefined>({
+  combine: (values) => values[0],
+})
+
 /**
  * Selects where the rich editor's Selection.atEnd puts a note's selection.
- * A long note whose end the first paint does not parse or draw opens at its
- * source end, and moves there once the view reaches it, while the user has
- * neither moved the selection nor edited.
+ * A long note whose end the first paint does not parse opens at its source
+ * end. Until the user moves the selection or edits, it moves where the
+ * rich editor puts it once the parse reaches the end or a renderer that
+ * draws the last block loads.
  */
-export function openAtEnd(
-  view: EditorView,
-  tree: (state: EditorState) => Tree | null,
-  later = false,
-) {
+export function openAtEnd(view: EditorView, later = false) {
   const { state } = view
-  const selection = formattedOpenSelection(state.doc, tree(state), (pos) =>
-    drawsText(view, pos),
+  const syntax = state.facet(openSyntax)
+  if (!syntax) return
+  const selection = formattedOpenSelection(
+    state.doc,
+    syntax.tree(state),
+    (node) => syntax.replaced(state, node),
   )
-  if (!selection && later) return
+  const value = state.field(opened, false)
+  if (
+    later &&
+    (!selection ||
+      (selection.anchor === value?.anchor && selection.head === value.head))
+  )
+    return
   const end = trimmed(state.doc, state.doc.length)
   const at = selection ?? { anchor: end, head: end }
   view.dispatch({
     selection: at,
-    effects: open.of({ ...at, known: !!selection }),
+    effects: open.of(at),
   })
 }
 
-export const openSelection = (tree: (state: EditorState) => Tree | null) => [
+export const openSelection = (syntax: OpenSyntax) => [
+  openSyntax.of(syntax),
   opened,
   ViewPlugin.define((view) => ({
     update(update) {
       const value = update.state.field(opened, false)
       if (
         !value ||
-        value.known ||
-        !(
-          update.viewportChanged ||
-          tree(update.state) !== tree(update.startState)
-        )
+        (syntax.tree(update.state) === syntax.tree(update.startState) &&
+          !update.transactions.some((transaction) => transaction.reconfigured))
       )
         return
-      // The drawn decorations are read after the update.
+      // A view cannot dispatch during its update.
       queueMicrotask(() => {
-        if (view.state.field(opened, false) === value)
-          openAtEnd(view, tree, true)
+        if (view.state.field(opened, false) === value) openAtEnd(view, true)
       })
     },
   })),

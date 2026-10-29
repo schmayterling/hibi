@@ -12,9 +12,17 @@ let current: PackStore | undefined
 let words: CustomWordStore | undefined
 let closing = Promise.resolve()
 let generation = 0
+async function waitForClose(captured: number) {
+  // Retain the old stores until their close succeeds, sharing any retry.
+  const previous = closing
+  await previous.catch(() => {
+    if (captured === generation)
+      return closing === previous ? closeStores() : closing
+  })
+}
 async function store() {
   const captured = generation
-  await closing
+  await waitForClose(captured)
   if (captured !== generation) throw new Error('Dictionary packs are closed.')
   current ??= new PackStore(
     join(app.getPath('userData'), 'dictionary-packs'),
@@ -24,7 +32,7 @@ async function store() {
 }
 async function wordStore() {
   const captured = generation
-  await closing
+  await waitForClose(captured)
   if (captured !== generation) throw new Error('Dictionary packs are closed.')
   words ??= new CustomWordStore(
     join(app.getAppPath(), 'out/main/dictionary-custom-words-worker.js'),
@@ -32,8 +40,7 @@ async function wordStore() {
   )
   return words
 }
-function stop() {
-  generation++
+function closeStores() {
   const packs = current
   const customWords = words
   closing = Promise.all([
@@ -45,6 +52,10 @@ function stop() {
     if (words === customWords) words = undefined
   })
   return closing
+}
+function stop() {
+  generation++
+  return closeStores()
 }
 app.on('before-quit', () => {
   void stop().catch((error) =>

@@ -18,6 +18,8 @@ function nativeAddon(t) {
   const stores = []
   class PackStore {
     lists = 0
+    closeCalls = 0
+    closeError
     closed = false
     closingStarted = false
     constructor() {
@@ -34,7 +36,9 @@ function nativeAddon(t) {
       return []
     }
     close() {
+      this.closeCalls++
       this.closingStarted = true
+      if (this.closeError) return Promise.reject(this.closeError)
       return this.closing
     }
   }
@@ -74,9 +78,11 @@ function nativeAddon(t) {
     module.exports,
   )
   const addon = module.exports.default
-  t.after(() => {
-    addon.stop()
+  t.after(async () => {
+    for (const store of stores) store.closeError = undefined
+    const stopping = addon.stop()
     for (const store of stores) store.finishClose()
+    await stopping
   })
   return { addon, stores }
 }
@@ -133,6 +139,68 @@ test('disable during a waiting custom-word request cannot resurrect its storage 
   assert.equal(stores.length, 1)
   await addon.queries.customWords({})
   assert.equal(stores.length, 2)
+})
+
+test('the next open retries failed dictionary close once for concurrent pack and word callers', async (t) => {
+  const { addon, stores } = nativeAddon(t)
+  await addon.queries.packs()
+  await addon.queries.customWords({})
+  const [packs, words] = stores
+  words.closeError = new Error('close failed')
+  packs.finishClose()
+  await assert.rejects(addon.stop(), /close failed/)
+  assert.equal(words.closeCalls, 1)
+
+  words.closeError = undefined
+  const reopened = Promise.all([
+    addon.queries.packs(),
+    addon.queries.customWords({}),
+    addon.queries.customWords({}),
+  ])
+  void reopened.catch(() => {})
+  await setImmediate()
+  assert.equal(words.closeCalls, 2)
+  assert.equal(stores.length, 2, 'no new worker before the old close finishes')
+  words.finishClose()
+  await reopened
+  assert.equal(stores.length, 4, 'one replacement per store')
+  assert.equal(words.closed, true)
+})
+
+test('a persistent close failure keeps storage for later recovery without opening twice', async (t) => {
+  const { addon, stores } = nativeAddon(t)
+  await addon.queries.customWords({})
+  const [words] = stores
+  words.closeError = new Error('close failed')
+  await assert.rejects(addon.stop(), /close failed/)
+  await assert.rejects(addon.queries.customWords({}), /close failed/)
+  assert.equal(words.closeCalls, 2)
+  assert.equal(stores.length, 1)
+  words.closeError = undefined
+  const reopened = addon.queries.customWords({})
+  words.finishClose()
+  await reopened
+  assert.equal(words.closeCalls, 3)
+  assert.equal(stores.length, 2)
+})
+
+test('disable during close recovery invalidates the waiting open', async (t) => {
+  const { addon, stores } = nativeAddon(t)
+  await addon.queries.customWords({})
+  const [words] = stores
+  words.closeError = new Error('close failed')
+  await assert.rejects(addon.stop(), /close failed/)
+  words.closeError = undefined
+  const stale = assert.rejects(
+    addon.queries.customWords({}),
+    /Dictionary packs are closed/,
+  )
+  void stale.catch(() => {})
+  await setImmediate()
+  const stopped = addon.stop()
+  words.finishClose()
+  await Promise.all([stale, stopped])
+  assert.equal(stores.length, 1)
 })
 
 test('stop invalidates a waiting first caller when no store exists', async (t) => {

@@ -65,13 +65,42 @@ export function withLeafBlocks<T>(tokenizer: Tokenizer, read: () => T): T {
   const types = new Map<Token, { type: string; text: unknown }>()
   active.set(lexer, types)
   const blockTokens = lexer.blockTokens
+  const inlineStart = lexer.inlineQueue.length
   lexer.blockTokens = (...args) => {
     const tokens = Reflect.apply(blockTokens, lexer, args)
     for (const token of tokens) nativeIdentity(token, lexer)
     return tokens
   }
   try {
-    return read()
+    const token = read()
+    if (types.size) {
+      // Native quote/list re-reads leave queued inline work for discarded tokens.
+      const reachable = new Set<object>()
+      const pending: unknown[] = [token]
+      while (pending.length) {
+        const value = pending.pop()
+        if (!value || typeof value !== 'object' || reachable.has(value))
+          continue
+        reachable.add(value)
+        if (Array.isArray(value)) {
+          for (const child of value) pending.push(child)
+        } else {
+          const node = value as Tokens.Generic
+          const type = types.get(node)?.type ?? node.type
+          for (const key of [
+            'tokens',
+            'items',
+            'header',
+            'rows',
+            ...(lexer.options.extensions?.childTokens?.[type] ?? []),
+          ])
+            pending.push(node[key])
+        }
+      }
+      for (const work of lexer.inlineQueue.splice(inlineStart))
+        if (reachable.has(work.tokens)) lexer.inlineQueue.push(work)
+    }
+    return token
   } finally {
     lexer.blockTokens = blockTokens
     for (const [token, { type, text }] of types) {

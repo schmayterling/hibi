@@ -327,6 +327,21 @@ for (const [name, extension, body] of [
       })
 }
 
+test('nested alert re-reads keep one footnote back-link per reference', () => {
+  for (const body of [
+    '> > [!NOTE]\n> > body[^a]\nlazy',
+    '> > [!NOTE]\n> > body[^a]\n> > ```\n> > x\n> > ```\noutside\n===',
+    '| cell |\n| --- |\n| ref[^a] |',
+    '> > [!NOTE]\n> > | cell |\n> > | --- |\n> > | ref[^a] |',
+  ]) {
+    const html = new Marked(alertMarkdown, markedGithubFootnote()).parse(
+      `${body}\n\n[^a]: note`,
+    )
+    assert.equal((html.match(/data-footnote-ref\b/g) ?? []).length, 1)
+    assert.equal((html.match(/data-footnote-backref\b/g) ?? []).length, 1)
+  }
+})
+
 const flavors = {
   typst: () => new Marked(typstTokens),
   frontmatter: () => ({

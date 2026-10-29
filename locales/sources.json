@@ -3335,6 +3335,9 @@
   "801c0e70112e": [
     "src/renderer/src/HibiSettings.tsx"
   ],
+  "8681c396860d": [
+    "src/renderer/src/SettingsScreen.tsx"
+  ],
   "566c3a93a25f": [
     "src/renderer/src/main.tsx"
   ],
@@ -5545,6 +5548,9 @@
   ],
   "5d04fcd66b47": [
     "src/main/workspace.ts"
+  ],
+  "7a45e90aff81": [
+    "src/renderer/src/SettingsScreen.tsx"
   ],
   "181e7ec5a25b": [
     "src/addons/dictionary/SideView.tsx",

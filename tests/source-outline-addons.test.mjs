@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { NodeProp } from '@lezer/common'
 import { typstFlavor, typstTokens } from '../src/addons/typst/syntax.ts'
 import {
   SourceOutlineModel,
@@ -78,6 +79,72 @@ test('addon block syntax hides the # lines its blocks contain', () => {
   assert.deepEqual(finish(model.read()), ['1:Top'])
   edit(store, model, [{ from: close, to: close, insert: ':::\n' }])
   assert.deepEqual(finish(model.read()), ['1:Top', '2:After'])
+})
+
+test('addon heading rules replace or remove the built-in heading syntax', () => {
+  const source = '# ordinary text\n\n! alternate\n\nunderlined\n===\n'
+  const read = (syntax) => {
+    const store = new SourceStore(source, { tabId: 'headings', revision: 0 })
+    const model = new SourceOutlineModel(store.snapshot(), {
+      gfm: true,
+      frontmatter: false,
+      syntax,
+    })
+    try {
+      return finish(model.read())
+    } finally {
+      model.dispose()
+    }
+  }
+  assert.deepEqual(read([{ remove: ['ATXHeading'] }]), ['1:underlined'])
+  assert.deepEqual(
+    read([
+      {
+        parseBlock: [
+          {
+            name: 'ATXHeading',
+            parse(cx, line) {
+              if (!line.text.startsWith('! ')) return false
+              const from = cx.lineStart
+              cx.addElement(
+                cx.elt('ATXHeading1', from, from + line.text.length, [
+                  cx.elt('HeaderMark', from, from + 1),
+                ]),
+              )
+              cx.nextLine()
+              return true
+            },
+          },
+        ],
+      },
+    ]),
+    ['1:alternate', '1:underlined'],
+  )
+})
+
+test('outline refuses addon heading nodes it cannot represent', () => {
+  const store = new SourceStore(':::note\ncustom heading\n:::\n', {
+    tabId: 'custom-heading',
+    revision: 0,
+  })
+  const model = new SourceOutlineModel(store.snapshot(), {
+    gfm: true,
+    frontmatter: false,
+    syntax: [
+      {
+        ...noteBlock,
+        props: [NodeProp.group.add({ FixtureNote: ['Block', 'Heading'] })],
+      },
+    ],
+  })
+  try {
+    assert.throws(
+      () => finish(model.read()),
+      /cannot represent the active syntax/,
+    )
+  } finally {
+    model.dispose()
+  }
 })
 
 test('outline grammar follows addon syntax and refuses only block syntax it cannot read', () => {

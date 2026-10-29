@@ -409,6 +409,8 @@ export class SourceOutlineModel {
           (name === 'Blockquote' && this.#disabled.has('core.quotes')) ||
           (name === 'BulletList' && this.#disabled.has('core.bullet-lists')) ||
           (name === 'OrderedList' && this.#disabled.has('core.numbered-lists'))
+      if (!heading && cursor.type.is('Heading'))
+        throw new Error('Source outline cannot represent the active syntax.')
       if (
         this.#math &&
         (name === 'Paragraph' || name.startsWith('SetextHeading'))

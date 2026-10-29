@@ -7,7 +7,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -298,16 +298,19 @@ for (const item of cases)
         })
       await cdp.send('Input.insertText', { text: item.composed.at(-1) })
       length = item.composed.at(-1).length
-    } else {
-      for (const typed of item.typed) {
-        await page.keyboard.insertText(typed)
-        length += typed.length
-      }
-      for (let left = item.deleted ?? 0; left; left--) {
-        await page.keyboard.press('Backspace')
-        length--
-      }
     }
+    // Keys within the grouping window are one step, however slow the machine.
+    else
+      await withHeldClock(page, async () => {
+        for (const typed of item.typed) {
+          await page.keyboard.insertText(typed)
+          length += typed.length
+        }
+        for (let left = item.deleted ?? 0; left; left--) {
+          await page.keyboard.press('Backspace')
+          length--
+        }
+      })
     await saved(item.after)
     // Typing leaves a caret after its text; formatting keeps the range.
     const left = item.action ? [anchor, head] : [from + length, from + length]
@@ -330,3 +333,66 @@ for (const item of cases)
     assert.deepEqual([redone.anchor, redone.head], reached ?? left, 'redo')
     await cdp.detach()
   })
+
+test('typing joins only where the edit before it left off, as in CM and PM history', {
+  timeout: 60000,
+}, async (t) => {
+  const engine = t.formattedEngine
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-adjacent-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, engine)
+  const file = join(profile, 'note.md')
+  await writeFile(file, 'alpha bravo charlie\n')
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  const saved = (text) =>
+    waitForAsync(
+      page,
+      async (text) => {
+        await window.hibi.flushDocumentChanges()
+        return (await window.hibi.getDocument()).markdown === text
+      },
+      text,
+    )
+  await saved('alpha bravo charlie\n')
+  const root = page.locator('.rich-pane [aria-label="Document editor"]')
+  await root.focus()
+  // An extension types in two places at once, with no selection between.
+  await root.evaluate((element, engine) => {
+    if (engine === 'codemirror') {
+      const { view } = element.cmTile.root
+      view.dispatch({ selection: { anchor: 1 } })
+      view.dispatch({
+        changes: { from: 1, insert: 'X' },
+        userEvent: 'input.type',
+      })
+      view.dispatch({
+        changes: { from: 15, insert: 'Y' },
+        userEvent: 'input.type',
+      })
+    } else {
+      const { view } = element.editor
+      element.editor.commands.setTextSelection(2)
+      view.dispatch(view.state.tr.insertText('X', 2))
+      view.dispatch(view.state.tr.insertText('Y', 16))
+    }
+  }, engine)
+  await saved('aXlpha bravo chYarlie\n')
+  await pressShortcut(app, `${mod}+z`)
+  await saved('aXlpha bravo charlie\n')
+  await pressShortcut(app, `${mod}+z`)
+  await saved('alpha bravo charlie\n')
+})

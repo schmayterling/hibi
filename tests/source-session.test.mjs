@@ -419,6 +419,23 @@ test('typing and the deletions right after it share one undo group, as in the ri
   f.session.dispose()
 })
 
+test('typing joins only where the edit before it left off, as in CM history', () => {
+  const f = fixture('alpha bravo'),
+    view = f.attach('formatted')
+  // No selection of its own between them, as when an extension types.
+  view.dispatch(type(1, 'X', 0))
+  view.dispatch(type(9, 'Y', 100))
+  view.dispatch(type(10, 'Z', 200))
+  view.dispatch(backspace(11, 300))
+  assert.equal(view.view.state.doc.toString(), 'aXlpha brYavo')
+  assert.deepEqual(f.session.historyDepth(), { undo: 2, redo: 0 })
+  assert.equal(view.bridge.undo(), true)
+  assert.equal(view.view.state.doc.toString(), 'aXlpha bravo')
+  assert.deepEqual(f.errors, [])
+  view.dispose()
+  f.session.dispose()
+})
+
 test('a group that takes its typing back keeps the redo effects of the edit before it', () => {
   const setMark = StateEffect.define()
   const mark = StateField.define({

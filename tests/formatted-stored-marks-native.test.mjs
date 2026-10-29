@@ -12,7 +12,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const nativeDocuments = new Map()
@@ -267,7 +267,7 @@ test('stored mark review cases through native input and toolbar', {
     await t.test(item.name, async () => {
       await open(item.name, item.source, item.raw, item.pm)
       for (const id of item.actions) await action(id)
-      await page.keyboard.type(item.text)
+      await withHeldClock(page, () => page.keyboard.type(item.text))
       const typed = await snapshot()
       await compareNative(item.name, typed)
       await history(item.source, typed)
@@ -278,7 +278,7 @@ test('stored mark review cases through native input and toolbar', {
     await open('undo-retype-code', source, 5, 4)
     await action('inline-code')
     await action('inline-code')
-    await page.keyboard.type('x`y')
+    await withHeldClock(page, () => page.keyboard.type('x`y'))
     const typed = await snapshot()
     assert.equal(marked.parseInline(typed), marked.parseInline('a ``bx`y``'))
     await history(source, typed)
@@ -384,7 +384,7 @@ test('stored mark review cases through native input and toolbar', {
       await open('redo-code', 'a `b`', 5, 4)
       await action('inline-code')
       await action('inline-code')
-      await page.keyboard.type('x`y')
+      await withHeldClock(page, () => page.keyboard.type('x`y'))
       const typed = await snapshot()
       await history('a `b`', typed)
       await page.keyboard.type('Z')
@@ -400,6 +400,53 @@ test('stored mark review cases through native input and toolbar', {
       await compareNative('moved-selection', await snapshot())
     },
   )
+
+  for (const detour of [false, true])
+    await t.test(
+      `redo restores pending bold${detour ? ' past a later group that took its typing back' : ''}`,
+      async () => {
+        const name = `redo-pending-${detour}`
+        await open(name, 'plain end', 9, 10)
+        await action('bold')
+        await withHeldClock(page, () => page.keyboard.type('X '))
+        const typed = await snapshot()
+        if (detour) {
+          await rich.evaluate((element, engine) => {
+            if (engine === 'codemirror')
+              element.cmTile.root.view.dispatch({ selection: { anchor: 0 } })
+            else element.editor.commands.setTextSelection(1)
+          }, engine)
+          await withHeldClock(page, async () => {
+            await page.keyboard.type('Q')
+            await page.keyboard.press('Backspace')
+          })
+          assert.equal(await snapshot(), typed)
+        }
+        await history('plain end', typed)
+        await page.keyboard.type('Z')
+        const continued = await snapshot()
+        await compareNative(name, continued)
+        assert.equal(
+          marked.parseInline(continued),
+          marked.parseInline('plain end**X Z**'),
+        )
+      },
+    )
+
+  await t.test('undo restores pending bold', async () => {
+    await open('undo-pending', 'plain end', 9, 10)
+    await action('bold')
+    await page.keyboard.type('X')
+    await pressShortcut(app, `${mod}+z`)
+    assert.equal(await snapshot(), 'plain end')
+    await page.keyboard.type('Y')
+    const typed = await snapshot()
+    await compareNative('undo-pending', typed)
+    assert.equal(
+      marked.parseInline(typed),
+      marked.parseInline('plain end**Y**'),
+    )
+  })
 
   if (engine === 'codemirror')
     await t.test(

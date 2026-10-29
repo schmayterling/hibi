@@ -406,7 +406,10 @@ export function createSourceSession(
   const lineBreak = preferredLineBreak(snapshot)
   let group = '',
     lastEvent = '',
-    lastTime = -Infinity
+    lastTime = -Infinity,
+    // The text the group's last edit left and the ranges it touched there.
+    lastDoc: Text | null = null,
+    lastRanges: [number, number][] = []
   // A hidden view keeps one composed echo until it is shown or read.
   let visible = true,
     pending: ChangeSet | null = null,
@@ -490,13 +493,19 @@ export function createSourceSession(
     // Candidate changes belong to one composition, even across long pauses.
     // Typing and deleting join, as in the rich view and CM and PM history.
     const eventGroup = composing ? 'input.type.compose' : 'input.type'
+    // Like CM history, typing joins only where the edit before it left off.
+    let adjacent = false
+    if (lastDoc === view.state.doc)
+      combined.iterChangedRanges((from, to) => {
+        adjacent ||= lastRanges.some(([a, b]) => from <= b && to >= a)
+      })
     if (
       !group ||
       isolated ||
       !typing ||
       compositionStart ||
       eventGroup !== lastEvent ||
-      (!composing && time - lastTime > 500)
+      (!composing && (time - lastTime > 500 || !adjacent))
     )
       group = crypto.randomUUID()
     session.select(
@@ -531,6 +540,11 @@ export function createSourceSession(
     )
     lastEvent = eventGroup
     lastTime = time
+    lastDoc = state.doc
+    lastRanges = []
+    combined.iterChangedRanges((_fromA, _toA, from, to) =>
+      lastRanges.push([from, to]),
+    )
     if (isolated || !typing) group = ''
   }
   return {

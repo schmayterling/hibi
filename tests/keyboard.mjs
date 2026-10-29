@@ -89,3 +89,25 @@ export async function pressPastCompletionDelay(page, key) {
     await page.evaluate(() => window.restoreNow())
   }
 }
+
+// History joins typing and deletion that follow within 500 ms, by the page
+// clocks (CodeMirror's Date.now, the rich view's performance.now). Hold both
+// for keys that make one step, so a loaded machine cannot split it.
+export async function withHeldClock(page, keys) {
+  await page.evaluate(() => {
+    const now = Date.now,
+      date = now(),
+      time = performance.now()
+    Date.now = () => date
+    performance.now = () => time
+    window.releaseClock = () => {
+      Date.now = now
+      delete performance.now
+    }
+  })
+  try {
+    await keys()
+  } finally {
+    await page.evaluate(() => window.releaseClock())
+  }
+}

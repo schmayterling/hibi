@@ -59,8 +59,23 @@ All Electron suites ran serially with `HIBI_EXPECT_FORMATTED_GAPS=0`, through `i
 
 Local run artifacts: `.scratch/before.json`, `.scratch/after-retry.json`, `.scratch/fail-first-retry.log`, `.scratch/gates/final-status.tsv`, and `.scratch/gates/final-*.log`. Only these evidence notes changed after the final code validation.
 
-Unresolved: none.
+Unresolved at that point: none. The review below found more.
 
 Public guide commit: [98efba0](https://github.com/hibigarden/docs/commit/98efba08b3aa81f66f67cbad5a1fc5809ce1fba0), based on the previously pinned docs revision. The app pins that commit; no second PR was opened.
 
 The full-repository `npm run check` aggregate is excluded by the lane rules. Validation uses the requested suites and touched-source checks instead.
+
+## Review, 2026-10-30
+
+An adversarial review merged main up to `1b0f6518` (conflicts in `tests/formatted-engine.mjs` and `tests/markdown-markers.test.mjs` resolved to main's helpers) and compared probes against main builds at `93cf4d4e` and `1b0f6518`. Each fix has a fail-first case in `tests/formatted-marker-edit.test.mjs`.
+
+- **Double-click after a reveal.** The first click of a double-click puts the caret in the block, which shows its syntax and moves the text under the pointer. The second press then selected other text: `beta` for `delta` in a code block (the opening fence pushed the code down a line), `[` in a task, a space in a quote, `##` in a heading and `**` beside bold text. Main got the code, task and quote cases right; headings and emphasis were already wrong there. Later presses on the first press's spot now select around the text it hit, dragging on by words as the editor does. A triple-click uses the same position.
+- **Vertical goal column.** A vertical move measured its column on the revealed line and landed on a line that only showed its prefix afterwards: `- hel|lo` went down to `- worl|d`, and down, down, up, up ended one character right of the start (bullets, ordered items, tasks and quotes; main 12, 20, 12, 5, the PR 14, 22, 14, 6). After the landed line reveals, the caret moves back to its goal column on that line. Lines with block widgets are left alone.
+- **Flowed quote lines.** In `> hello\n> world` the second line flows onto the first, so its revealed `> ` showed inside the text (`hello > world`). Prefixes of lines a paragraph flows onto stay hidden.
+- **Composition in heading markers.** Composing inside `##` left the first candidate behind (`#kか# word`; main has the same). The composed text turns the heading into a paragraph, and moving the composing line out of the heading's wrapper ended the composition. Block wrappers now stay as they were until the composition ends. Compositions in list, quote, task, fence, link and strong markers already committed once.
+- **Checkbox focus.** Focusing the checkbox of the task holding the caret redrew the task without its source, so the checkbox lost focus and Space did nothing (main keeps the focus). A control in the text now keeps what shows; focus leaving it for outside the editor hides the syntax again.
+- `tests/formatted-blocks.test.mjs` was not in the original gates. It failed because the opening caret now shows its task's source; that expectation now includes `- [ ]` on the caret's line.
+
+Checked without defects: undo and redo across list, quote, fence, task and strong edits; checkboxes after typing `x` into `[ ]`, changing `-` to `*`, removing and re-adding the space, and in a quote; changing a fence's language, and unclosing and closing a fence; copying selections that start in a prefix (`- wo`), a whole fence and part of a delimiter (`*wor`), which put exact Markdown on the clipboard; heading and checkbox accessible names; links in table cells. On a 50 MiB note with about 240,000 fences, caret moves, a language edit and unclosing a fence cost the same as on main in two runs each, with no runaway rendering.
+
+Startup: main `1b0f6518` and this branch both load 691,974 startup bytes, with identical startup modules.

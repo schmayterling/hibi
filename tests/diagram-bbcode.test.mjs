@@ -694,19 +694,29 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
               window.heldFrames.length > 0
             )
           }
-          // Keep drawings queued while CodeMirror settles the native scroll.
-          return ready()
+          // Held diagram mounts change the height estimates after the first scroll.
+          if (!ready()) {
+            const view = document.querySelector('.rich-pane .cm-content').cmTile
+              .root.view
+            view.dispatch({
+              effects: view.constructor.scrollIntoView(gap, { y: 'center' }),
+            })
+            return false
+          }
+          // Capture these exact targets before another layout can replace them.
+          window.diagramPendingSnapshot = window.watchPendingDiagrams(fresh)
+          return true
         },
         { fresh, gap },
         { timeout: 15000 },
       )
+      return page.evaluate(() => window.diagramPendingSnapshot)
     } catch (error) {
       await diagnose(fresh ? 'cancellation pending' : 'positive pending')
       throw error
     }
   }
-  await waitForPending(80)
-  const control = await page.evaluate(() => window.watchPendingDiagrams())
+  const control = await waitForPending(80)
   assert.ok(control.pending > 0 && control.held > 0, JSON.stringify(control))
   await page.evaluate(() => {
     window.diagramControlTargets = window.diagramProbe.targets
@@ -748,8 +758,7 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
   )
 
   // Another untouched region must expose actual pending targets before disable.
-  await waitForPending(40, true)
-  const pending = await page.evaluate(() => window.watchPendingDiagrams(true))
+  const pending = await waitForPending(40, true)
   assert.ok(pending.pending > 0 && pending.held > 0, JSON.stringify(pending))
   t.diagnostic('diagram frame cancellation: ' + JSON.stringify(pending))
   const draws = await page.evaluate(() => window.diagramDraws)

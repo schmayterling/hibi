@@ -650,6 +650,8 @@ test('notes end as in the rich view, so both views scroll alike', {
     quoteBlank: '> tail\n\n',
     list: '- tail',
     fence: '```js\nconst tail = 1\n```',
+    fenceBlankEnd: '```js\nconst tail = 1\n\n```',
+    indented: '    const tail = 1',
     open: '```js\nconst tail = 1',
     table: '| tail | b |\n| - | - |\n| c | d |',
   }
@@ -805,8 +807,12 @@ test('scrolling up through known code blocks keeps the scroll position and full 
           await scroll(target)
         // Draw the tail too: the last step can stop before its empty paragraph.
         await scroll(pane.scrollHeight - pane.clientHeight)
-        if (pane.scrollTop !== pane.scrollHeight - pane.clientHeight)
-          throw new Error('the downward pass must reach the bottom')
+        // CSSOM rounds heights to pixels but preserves subpixel scrollTop.
+        const bottom = pane.scrollHeight - pane.clientHeight - pane.scrollTop
+        if (Math.abs(bottom) > 1)
+          throw new Error(
+            `${known ? 'known' : 'plain'} downward pass stopped ${bottom}px from the bottom`,
+          )
         const moved = []
         for (
           let target = pane.scrollHeight - pane.clientHeight;
@@ -814,7 +820,7 @@ test('scrolling up through known code blocks keeps the scroll position and full 
           target -= step
         )
           moved.push(await scroll(target))
-        return { moved, height: pane.scrollHeight }
+        return { moved, height: pane.scrollHeight, bottom }
       },
       { doc, known },
     )
@@ -834,6 +840,13 @@ test('scrolling up through known code blocks keeps the scroll position and full 
           if (style) await harness.evaluate(() => window.livePreview.settle())
           const plain = await scrollUp(false)
           const known = await scrollUp(true)
+          t.diagnostic(
+            `scroll bottom rounding: ${JSON.stringify({
+              classic,
+              plain: plain.bottom,
+              known: known.bottom,
+            })}`,
+          )
           if (classic)
             assert.equal(
               await harness

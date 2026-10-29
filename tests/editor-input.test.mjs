@@ -20,7 +20,7 @@ import {
   testFormattedEngines as it,
   selectFormattedEngine,
 } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
 const inputFixtureCapture = process.env.HIBI_CAPTURE_TIPTAP_INPUT === '1'
@@ -1993,10 +1993,13 @@ for (const spaces of [1, 2]) {
       'pre-wrap',
     )
     await rich.click()
-    await page.keyboard.type('hi')
-    for (let index = 0; index < spaces; index++)
-      await page.keyboard.press('Space')
-    await page.keyboard.type('x')
+    // One undo step, however slow the machine.
+    await withHeldClock(page, async () => {
+      await page.keyboard.type('hi')
+      for (let index = 0; index < spaces; index++)
+        await page.keyboard.press('Space')
+      await page.keyboard.type('x')
+    })
     const expected = `hi${' '.repeat(spaces)}x`
     await waitForAsync(
       page,
@@ -3341,9 +3344,12 @@ for (const spaces of [1, 2]) {
       if (/white-space/.test(message.text())) warnings.push(message.text())
     })
     await rich.focus()
-    await page.keyboard.type('hi')
-    for (let i = 0; i < spaces; i++) await page.keyboard.press('Space')
-    await page.keyboard.type('x')
+    // One undo step, however slow the machine.
+    await withHeldClock(page, async () => {
+      await page.keyboard.type('hi')
+      for (let i = 0; i < spaces; i++) await page.keyboard.press('Space')
+      await page.keyboard.type('x')
+    })
     const expected = 'hi' + ' '.repeat(spaces) + 'x'
     assert.equal((await acceptedInput(page)).markdown, expected)
     assert.doesNotMatch((await acceptedInput(page)).markdown, /&nbsp;|\u00a0/)

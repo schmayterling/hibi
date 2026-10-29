@@ -26,6 +26,14 @@ export const builtInFlavors: ReadonlyMap<
   ['mermaid.blocks', { owner: 'mermaid' }],
 ])
 
+/**
+ * Built-in flavors whose Marked blocks are fenced code blocks with a language,
+ * which the core grammar already reads with the same boundaries.
+ */
+export const fencedCodeFlavors: ReadonlyMap<string, string> = new Map([
+  ['typst.blocks', 'typst'],
+])
+
 /** Syntax features the workspace metadata parser models. */
 export const builtInFeatures =
   /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext)|mermaid\.(?:blocks|preview))$/

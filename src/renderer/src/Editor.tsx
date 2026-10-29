@@ -141,7 +141,7 @@ import { revealSourcePosition, sourcePosition, sourceView } from './source-view'
 import { tableLayout } from './table-layout'
 import { textProjection } from './text-projection'
 import { useEditorPanes } from './use-editor-panes'
-import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
+import { builtInMarkdownSyntax, useSourceOutline } from './use-source-outline'
 
 const SourceEditor = lazy(() =>
   import('./MarkdownSourceEditor').then((module) => ({
@@ -268,6 +268,7 @@ type HistoryCaret = {
   head: number
   marks: readonly Mark[] | null
 }
+type Serialize = ReturnType<typeof markdownSerializer>
 
 export function MarkdownEditor({
   document: documentState,
@@ -353,6 +354,14 @@ export function MarkdownEditor({
   const serializers = useRef(
     new WeakMap<Editor, ReturnType<typeof markdownSerializer>>(),
   )
+  // Whether a history caret's document spells the same source as the
+  // re-projection it was last compared with, by the serializer that compared.
+  const historySpellings = useRef(
+    new WeakMap<
+      HistoryCaret,
+      { serialize: Serialize; document: RichNode; same: boolean }
+    >(),
+  )
   const provenSources = useRef(
     new WeakMap<Editor, { source: string; document: RichNode }>(),
   )
@@ -420,8 +429,8 @@ export function MarkdownEditor({
     }
   }, [flavors, markdownExtensions, syntaxVersion])
   // biome-ignore lint/correctness/useExhaustiveDependencies: registry preferences invalidate outline grammar ownership.
-  const outlineSyntax = useMemo(
-    () => sourceOutlineSyntax(flavors, markdownExtensions, richExtensions),
+  const builtInSyntax = useMemo(
+    () => builtInMarkdownSyntax(flavors, markdownExtensions, richExtensions),
     [
       flavors,
       markdownExtensions,
@@ -1863,7 +1872,7 @@ export function MarkdownEditor({
     const original = projection.content
     const local =
       typing &&
-      outlineSyntax?.math &&
+      builtInSyntax?.math &&
       markdownSyntax.version() === syntaxVersion &&
       paragraphProof.current?.matches(original, editor.state.doc)
         ? paragraphProof.current.plan(
@@ -2077,7 +2086,7 @@ export function MarkdownEditor({
       // Only visual editing uses this proof; the read-only split preview never does.
       if (
         paneMode === 'normal' &&
-        outlineSyntax?.math &&
+        builtInSyntax?.math &&
         editor.markdown &&
         markdownSyntax.version() === syntaxVersion
       ) {
@@ -2208,13 +2217,28 @@ export function MarkdownEditor({
       // Marks the source spells the same, as bold over a trailing space, come
       // back as the edit had them, like the formatted view's stored marks.
       const serialize = serializers.current.get(editor)
+      // Undoing and redoing one step again re-projects equal documents; their
+      // comparison holds without serializing both again.
+      const sameSource = (caret: HistoryCaret, serialize: Serialize) => {
+        const known = historySpellings.current.get(caret)
+        if (known?.serialize === serialize && known.document.eq(tr.doc))
+          return known.same
+        const same =
+          serialize(caret.document).source === serialize(tr.doc).source
+        historySpellings.current.set(caret, {
+          serialize,
+          document: tr.doc,
+          same,
+        })
+        return same
+      }
       if (
         caret &&
         serialize &&
         !caret.document.eq(tr.doc) &&
         caret.document.type.schema === tr.doc.type.schema &&
         sameUnmarked(caret.document, tr.doc) &&
-        serialize(caret.document).source === serialize(tr.doc).source
+        sameSource(caret, serialize)
       )
         tr.replaceWith(0, tr.doc.content.size, caret.document.content)
       if (caret?.document.eq(tr.doc))
@@ -2493,7 +2517,7 @@ export function MarkdownEditor({
     paneMode,
     footnoteDocument,
     plainSyncEligible,
-    outlineSyntax,
+    builtInSyntax,
     projectionReadOnly,
     disabled,
     richExtensionError,
@@ -2770,7 +2794,9 @@ export function MarkdownEditor({
     tabId: documentState.tabId,
     revision: documentState.revision,
     flavors,
-    outlineSyntax,
+    markdownExtensions,
+    referenceSyntax,
+    legacy: true,
     view: () => {
       const element = content.current?.querySelector<HTMLElement>('.cm-content')
       return element && sourceView(element)

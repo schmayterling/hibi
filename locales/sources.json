@@ -6061,6 +6061,18 @@
   "95e4db0dfa62": [
     "src/main/workspace-settings.ts"
   ],
+  "c8fa215aa9a8": [
+    "src/renderer/src/use-source-outline.ts"
+  ],
+  "17548c2f4fb9": [
+    "src/renderer/src/use-source-outline.ts"
+  ],
+  "44493859a59f": [
+    "src/renderer/src/use-source-outline.ts"
+  ],
+  "189712a84626": [
+    "src/renderer/src/use-source-outline.ts"
+  ],
   "a3a83b5e3ed9": [
     "src/addons/_shared/format-native.ts"
   ],

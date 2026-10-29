@@ -161,6 +161,24 @@ test('undo and redo keep opposite caret states at a shared text boundary', (t) =
   assert.equal(f.type('Z'), 'plain end**XZ**')
 })
 
+test('redo restores stored marks past a later group that took its typing back', (t) => {
+  const f = fixture(t, 'plain end')
+  f.formatting.run('bold')
+  assert.equal(f.type('X '), 'plain end**X** ')
+  f.view.dispatch({ selection: { anchor: 0 } })
+  f.type('Q')
+  f.view.dispatch({
+    changes: { from: 0, to: 1 },
+    selection: { anchor: 0 },
+    userEvent: 'delete.backward',
+  })
+  assert.deepEqual(f.session.historyDepth(), { undo: 1, redo: 0 })
+  assert.equal(f.bridge.undo(), true)
+  assert.equal(f.bridge.redo(), true)
+  assert.equal(f.view.state.doc.toString(), 'plain end**X** ')
+  assert.equal(f.type('Z'), 'plain end**X Z**')
+})
+
 test('retained opaque input edges keep exact source history and one version per glyph', (t) => {
   for (const body of ['[ell](https://e.test)', '`ell`']) {
     for (const leading of [true, false]) {

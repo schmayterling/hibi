@@ -387,6 +387,68 @@ test('history selection effects stay local to the view that captured them', () =
   f.session.dispose()
 })
 
+const backspace = (from, time) => ({
+  changes: { from: from - 1, to: from },
+  selection: { anchor: from - 1 },
+  annotations: [
+    Transaction.userEvent.of('delete.backward'),
+    Transaction.time.of(time),
+  ],
+})
+
+test('typing and the deletions right after it share one undo group, as in the rich view', () => {
+  const f = fixture('abcd'),
+    view = f.attach('formatted')
+  view.dispatch(type(1, 'XY', 0))
+  view.dispatch(backspace(3, 100))
+  assert.equal(view.view.state.doc.toString(), 'aXbcd')
+  assert.deepEqual(f.session.historyDepth(), { undo: 1, redo: 0 })
+  assert.equal(view.bridge.undo(), true)
+  assert.equal(view.view.state.doc.toString(), 'abcd')
+  // A group that takes its typing back leaves no step; a pause still splits.
+  view.dispatch(type(1, 'X', 1000))
+  view.dispatch(backspace(2, 1100))
+  assert.deepEqual(f.session.historyDepth(), { undo: 0, redo: 0 })
+  view.dispatch(type(1, 'X', 2000))
+  view.dispatch(backspace(2, 2600))
+  assert.deepEqual(f.session.historyDepth(), { undo: 2, redo: 0 })
+  assert.equal(view.bridge.undo(), true)
+  assert.equal(view.view.state.doc.toString(), 'aXbcd')
+  assert.deepEqual(f.errors, [])
+  view.dispose()
+  f.session.dispose()
+})
+
+test('a group that takes its typing back keeps the redo effects of the edit before it', () => {
+  const setMark = StateEffect.define()
+  const mark = StateField.define({
+    create: () => null,
+    update: (value, transaction) =>
+      transaction.effects.find((effect) => effect.is(setMark))?.value ??
+      (transaction.docChanged ? null : value),
+  })
+  const f = fixture('abcd', {}, [
+      mark,
+      sourceHistoryEffects.of((state) => [setMark.of(state.field(mark))]),
+    ]),
+    view = f.attach('formatted')
+  // Like stored marks, the edit leaves view state the next typing uses.
+  view.dispatch({ ...type(1, 'X', 0), effects: setMark.of('bold') })
+  assert.equal(view.view.state.field(mark), 'bold')
+  view.dispatch(type(2, 'Y', 1000))
+  view.dispatch(backspace(3, 1100))
+  assert.equal(view.view.state.field(mark), null)
+  assert.deepEqual(f.session.historyDepth(), { undo: 1, redo: 0 })
+  assert.equal(view.bridge.undo(), true)
+  assert.equal(view.view.state.doc.toString(), 'abcd')
+  assert.equal(view.bridge.redo(), true)
+  assert.equal(view.view.state.doc.toString(), 'aXbcd')
+  assert.equal(view.view.state.field(mark), 'bold')
+  assert.deepEqual(f.errors, [])
+  view.dispose()
+  f.session.dispose()
+})
+
 test('a read-only view takes no undo or redo by any route and keeps the history', () => {
   const lock = new Compartment()
   const f = fixture('abcd', {}, [lock.of([])])

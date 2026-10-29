@@ -488,7 +488,8 @@ export function createSourceSession(
     const compositionStart = event === 'input.type.compose.start'
     const composing = compositionStart || event === 'input.type.compose'
     // Candidate changes belong to one composition, even across long pauses.
-    const eventGroup = composing ? 'input.type.compose' : event
+    // Typing and deleting join, as in the rich view and CM and PM history.
+    const eventGroup = composing ? 'input.type.compose' : 'input.type'
     if (
       !group ||
       isolated ||
@@ -515,10 +516,11 @@ export function createSourceSession(
       group,
       (prepared) => {
         historyEffects.undo.set(beforeIdentity, beforeEffects)
-        historyEffects.redo.set(
-          session.historyIdentity(),
-          captureHistory(state),
-        )
+        // A group that returns to the text it started from reaches a known
+        // identity, whose redo effects belong to the edit before.
+        const identity = session.historyIdentity()
+        if (!historyEffects.undo.has(identity))
+          historyEffects.redo.set(identity, captureHistory(state))
         snapshot = prepared.after
         bindSourceText(state.doc, snapshot)
         rememberSourceHistory(state, session.historyDepth(), history)

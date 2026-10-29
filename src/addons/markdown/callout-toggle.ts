@@ -6,10 +6,8 @@ export function updateCalloutToggle(
   toggle: () => void,
 ) {
   button.setAttribute('aria-expanded', String(expanded))
-  button.setAttribute(
-    'aria-label',
-    `${expanded ? 'Collapse' : 'Expand'} callout: ${title}`,
-  )
+  // The name stays put while aria-expanded announces the state.
+  button.setAttribute('aria-label', `Toggle callout: ${title}`)
   button.onclick = toggle
 }
 
@@ -22,6 +20,8 @@ export function calloutToggle(
   button.type = 'button'
   button.className = 'github-alert-toggle'
   button.contentEditable = 'false'
+  // Keep the caret and focus in the text, like a task checkbox.
+  button.addEventListener('mousedown', (event) => event.preventDefault())
   updateCalloutToggle(button, title, expanded, toggle)
   return button
 }

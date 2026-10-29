@@ -755,11 +755,11 @@ test('blank lines after the last block are laid out only where the view shows th
   assert.deepEqual(heights, [16, 28, 16, 28])
 })
 
-test('scrolling up through known code blocks keeps the scroll position as without them', {
+test('scrolling up through known code blocks keeps the scroll position and full height', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
   const code = `const value = ${'"x" + '.repeat(163)}"end";\n`
-  let doc = '# Long code lines\n\n'
+  let doc = ''
   for (let block = 0; block < 40; block++)
     doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${code.repeat(5)}\`\`\`\n\n`
   const session = await harness.context().newCDPSession(harness)
@@ -768,6 +768,8 @@ test('scrolling up through known code blocks keeps the scroll position as withou
   const scrollUp = (known) =>
     harness.evaluate(
       async ({ doc, known }) => {
+        const pane = document.querySelector('.rich-pane')
+        pane.scrollTop = 0
         await window.livePreview.mount(
           doc,
           { width: 900, height: 600 },
@@ -778,7 +780,6 @@ test('scrolling up through known code blocks keeps the scroll position as withou
         view.focus()
         if (known) window.livePreview.knowCode()
         await window.livePreview.settle()
-        const pane = document.querySelector('.rich-pane')
         const frame = () => new Promise(requestAnimationFrame)
         const scroll = async (target) => {
           pane.scrollTop = target
@@ -813,18 +814,46 @@ test('scrolling up through known code blocks keeps the scroll position as withou
           target -= step
         )
           moved.push(await scroll(target))
-        return moved
+        return { moved, height: pane.scrollHeight }
       },
       { doc, known },
     )
-  const plain = await scrollUp(false)
-  const known = await scrollUp(true)
+  for (const classic of [false, true])
+    await t.test(
+      classic ? '15px scrollbars' : 'native scrollbars',
+      async () => {
+        await harness.reload()
+        await harness.waitForFunction(() => !!window.livePreview)
+        const style = classic
+          ? await harness.addStyleTag({
+              content:
+                '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 15px !important; height: 15px !important; }',
+            })
+          : null
+        try {
+          if (style) await harness.evaluate(() => window.livePreview.settle())
+          const plain = await scrollUp(false)
+          const known = await scrollUp(true)
+          if (classic)
+            assert.equal(
+              await harness
+                .locator('.hibi-lp-codescroll')
+                .first()
+                .evaluate((box) => box.offsetHeight - box.clientHeight),
+              15,
+            )
+          assert.ok(plain.moved.length > 15, JSON.stringify(plain))
+          assert.equal(known.height, plain.height)
+          assert.equal(known.moved.length, plain.moved.length)
+          // Known blocks keep their position even while the reference view
+          // has transient movement from parsing and measuring code.
+          assert.deepEqual(known.moved, Array(known.moved.length).fill(0))
+        } finally {
+          if (style) await style.evaluate((node) => node.remove())
+        }
+      },
+    )
   await session.detach()
-  assert.ok(plain.length > 15, JSON.stringify(plain))
-  // Before, each placeholder turned into lines in an update the editor had
-  // not measured when the next update came, so it kept the text at the top
-  // by estimated heights and scrolled up the note a few hundred pixels.
-  assert.deepEqual(known, plain)
 })
 
 test('stepping up after a jump to the end, known code blocks never draw as plain text', {

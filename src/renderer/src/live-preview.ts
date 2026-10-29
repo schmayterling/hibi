@@ -135,7 +135,22 @@ class SpaceWidget extends WidgetType {
   }
 }
 const space = Decoration.replace({ widget: new SpaceWidget() })
-const hiddenLine = Decoration.replace({ block: true })
+class HiddenLineWidget extends WidgetType {
+  override get estimatedHeight() {
+    return 0
+  }
+  toDOM() {
+    const line = document.createElement('div')
+    line.style.height = '0'
+    line.setAttribute('aria-hidden', 'true')
+    return line
+  }
+}
+// Keep wrapper bottom gutters on the hidden closing fence, inside its extent.
+const hiddenLine = Decoration.replace({
+  block: true,
+  widget: new HiddenLineWidget(),
+})
 /** Lines of a link reference definition, which exports leave out too. */
 const hiddenDefinition = Decoration.replace({ block: true })
 /** A definition after a list marker, hidden up to the item's next block, which follows the marker. */
@@ -1006,7 +1021,9 @@ function inline(
   // A code block scrolls sideways as one box, inside the indentation and
   // paint of the quotes and lists around it, which a box around it keeps.
   for (const { from, to, shown } of codeBlocks.values()) {
-    const end = Math.min(doc.length, to + 1)
+    // Wrappers include blocks at their end. Leave the closing fence outside
+    // so its hidden box receives the bottom gutter before the next paragraph.
+    const end = Math.min(doc.length, Math.max(from + 1, to))
     if (end <= from || shown < 0) continue
     wrappers.push(codeScroll.range(from, end))
     const info = lines.get(shown)

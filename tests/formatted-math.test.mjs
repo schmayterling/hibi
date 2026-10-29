@@ -24,7 +24,7 @@ $$
 \\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}
 $$
 
-After the block, $$\\alpha$$ stays text.
+After the block, $5 and $$10 stay text.
 
 $$\\int_0^1 x\\,dx$$
 
@@ -198,7 +198,7 @@ test('formulas render in the formatted view as in the rich view, in light and da
       error: document.querySelector('.hibi-formatted .katex-error')
         ?.textContent,
       literal: [...document.querySelectorAll('.hibi-formatted .cm-line')].some(
-        (line) => line.textContent.includes('$$\\alpha$$ stays text'),
+        (line) => line.textContent.includes('$5 and $$10 stay text'),
       ),
     })),
     { inline: 6, block: 3, error: '\\frac{1', literal: true },
@@ -456,6 +456,44 @@ test('a one-line display formula or image in a quote keeps one quote indent and 
     [clipped, whole].map((image) => image.toString('base64')),
   )
   assert.equal(cut, 0, 'no part of the formula is cut off')
+})
+
+test('display math inside a heading line draws as display math, in the note and its outline', {
+  timeout: 90000,
+}, async () => {
+  // Obsidian draws `$$…$$` inside a line as display math there; the rich
+  // editor keeps it as text (math-001).
+  const latex = 'f(x,y)\\in C^{k+1}'
+  await writeFile(
+    join(folder, 'notes', 'heading-display.md'),
+    `# If $$ ${latex} $$ at each point\n\nlast\n`,
+  )
+  await open('heading-display.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
+  const formula = page.locator(
+    '.rich-pane .hibi-lp-h1 [data-type="block-math"] .katex-display',
+  )
+  await formula.waitFor()
+  assert.equal(
+    await formula.evaluate((element) =>
+      element.closest('[data-latex]').getAttribute('data-latex'),
+    ),
+    latex,
+  )
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  const row = page.locator(
+    '.outline-sidebar[data-side="right"][data-open="true"] [role="treeitem"]',
+  )
+  await row.locator('.outline-math .katex').waitFor()
+  assert.equal(
+    await row.getAttribute('data-tooltip'),
+    `If ${latex} at each point`,
+  )
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
 })
 
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {

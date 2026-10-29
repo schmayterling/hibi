@@ -18,14 +18,14 @@ import { markdownSourceParser } from '../src/shared/markdown-source-references.t
 
 const fixtures = [
   ['$$x$$', 1],
-  ['text $$x$$', 0],
-  ['text $$x$$ more', 0],
-  ['x$$x$$', 0],
-  ['text $$x$$\nmore', 0],
-  ['$$x$$ more', 0],
-  ['text\n$$x$$ more', 0],
-  ['text\n   $$x$$ more', 0],
-  ['text\n$$x$$ more\n$$y$$', 1],
+  ['text $$x$$', 0, 1],
+  ['text $$x$$ more', 0, 1],
+  ['x$$x$$', 0, 1],
+  ['text $$x$$\nmore', 0, 1],
+  ['$$x$$ more', 0, 1],
+  ['text\n$$x$$ more', 0, 1],
+  ['text\n   $$x$$ more', 0, 1],
+  ['text\n$$x$$ more\n$$y$$', 1, 1],
   ['text\n$$x$$', 1],
   ['$$\nx\n$$', 1],
   [' $$x$$', 1],
@@ -35,17 +35,17 @@ const fixtures = [
   ['   $$\nx\n   $$', 1],
   ['    $$x$$', 0],
   ['\t$$x$$', 0],
-  ['text\n    $$x$$', 0],
+  ['text\n    $$x$$', 0, 1],
   ['- item\n\n  $$x$$', 1],
   ['- text\n  $$x$$', 1],
-  ['- text $$x$$', 0],
-  ['- text $$x$$ more', 0],
+  ['- text $$x$$', 0, 1],
+  ['- text $$x$$ more', 0, 1],
   ['- item\n\n  $$\n  x\n  $$', 1],
   ['> $$x$$', 1],
   ['> text\n> $$x$$', 1],
   ['> $$\n> x\n> $$', 1],
-  ['> text $$x$$', 0],
-  ['> text $$x$$ more', 0],
+  ['> text $$x$$', 0, 1],
+  ['> text $$x$$ more', 0, 1],
   ['$5 and $$10', 0],
   ['\\$$', 0],
   ['\\$$x$$', 0],
@@ -88,21 +88,26 @@ function mathParser(gfm = false) {
   }
 }
 
-test('display math starts only at line boundaries in visual and source tokenizers', () => {
+test('display math blocks start only at line boundaries in visual and source tokenizers', () => {
+  const visual = new Marked(mathTokens)
   const parsers = [
-    new Marked(mathTokens),
+    visual,
     markdownSourceParser({ gfm: false, math: true }),
     markdownSourceParser({ gfm: true, math: true }),
   ]
   for (const parser of parsers) {
-    for (const [source, expected] of fixtures) {
+    for (const [source, expected, inline = 0] of fixtures) {
       const tokens = parser.lexer(source)
-      let blocks = 0
+      let blocks = 0,
+        display = 0
       parser.walkTokens(tokens, (token) => {
         if (token.type === 'blockMath') blocks++
-        assert.notEqual(token.type, 'inlineMath', source)
+        if (token.type === 'inlineMath') display++
       })
       assert.equal(blocks, expected, source)
+      // `$$…$$` inside a line is display math there, as Obsidian draws it,
+      // except in the rich editor, which reads it as text.
+      assert.equal(display, parser === visual ? 0 : inline, source)
       assert.equal(tokens.map(({ raw }) => raw).join(''), source, source)
       assert.equal(mathFlavor.detect(source), expected > 0, source)
     }

@@ -314,20 +314,25 @@ export function mathContributions(host: MathHost) {
   const inline: FormattedNodeView = {
     nodes: ['InlineMath'],
     decorate(node, out, { state, revealed }) {
+      // `$$…$$` inside a line is display math there, as Obsidian draws it.
+      const mark = (node.node.firstChild?.to ?? node.from + 1) - node.from
       if (revealed) {
-        out.syntax(node.from, node.from + 1)
-        out.syntax(node.to - 1, node.to)
-        out.mark(node.from + 1, node.to - 1, { class: 'hibi-lp-math-source' })
+        out.syntax(node.from, node.from + mark)
+        out.syntax(node.to - mark, node.to)
+        out.mark(node.from + mark, node.to - mark, {
+          class: 'hibi-lp-math-source',
+        })
       } else {
         const source = state.sliceDoc(node.from, node.to)
+        const body = source.slice(mark, -mark)
         out.replace(
           node.from,
           node.to,
           new FormulaWidget(
             source,
-            source.slice(1, -1),
-            false,
-            { from: 1, to: source.length - 1 },
+            mark > 1 ? body.trim() : body,
+            mark > 1,
+            { from: mark, to: source.length - mark },
             host,
           ),
         )

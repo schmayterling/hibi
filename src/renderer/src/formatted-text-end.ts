@@ -5,11 +5,13 @@ import {
   StateEffect,
   StateField,
   type Text,
+  type TransactionSpec,
 } from '@codemirror/state'
 import { type EditorView, keymap, ViewPlugin } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
+import { prefixOf } from './formatted-commands.ts'
 
 /** Blocks the rich editor reads; it drops link reference definitions. */
 const isBlock = (node: SyntaxNode) =>
@@ -56,6 +58,27 @@ const atoms = new Set([
 type Opening = { anchor: number; head: number }
 
 /**
+ * The source of `node` when the rich editor draws it as one node: from its
+ * first character to its last.
+ */
+function atomRange(
+  doc: Text,
+  node: SyntaxNode,
+  replaced: (node: SyntaxNode) => boolean,
+) {
+  const to = trimmed(doc, node.to, node.from)
+  const image = node.firstChild
+  return atoms.has(node.name) ||
+    (node.name === 'FencedCode' && replaced(node)) ||
+    (node.name === 'Paragraph' &&
+      image?.name === 'Image' &&
+      image.from === node.from &&
+      image.to === to)
+    ? { from: node.from, to }
+    : null
+}
+
+/**
  * Where the rich editor's Selection.atEnd puts the selection, in the
  * formatted view's text: the end of the last text block, inside quotes and
  * lists. In a table that is its last cell's text, which the table's cell
@@ -95,17 +118,8 @@ export function formattedOpenSelection(
   if (paragraph >= 0) return caret(paragraph)
   for (let inner = lastBlock(node); inner; inner = lastBlock(inner))
     node = inner
-  const whole = { anchor: node.from, head: trimmed(doc, node.to, node.from) }
-  const image = node.firstChild
-  if (
-    atoms.has(node.name) ||
-    (node.name === 'FencedCode' && replaced(node)) ||
-    (node.name === 'Paragraph' &&
-      image?.name === 'Image' &&
-      image.from === node.from &&
-      image.to === whole.head)
-  )
-    return whole
+  const whole = atomRange(doc, node, replaced)
+  if (whole) return { anchor: whole.from, head: whole.to }
   if (node.name === 'Table') return caret(tableEnd(doc, node))
   if (node.name === 'FencedCode' || node.name === 'CodeBlock') {
     let text = node.lastChild
@@ -128,34 +142,6 @@ export function formattedOpenSelection(
   return caret(trimmed(doc, at, node.from))
 }
 
-const open = StateEffect.define<Opening>()
-
-/** The selection a note opened with, until the user moves it or edits. */
-const opened = StateField.define<Opening | null>({
-  create: () => null,
-  update(value, transaction) {
-    for (const effect of transaction.effects)
-      if (effect.is(open)) return effect.value
-    const main = transaction.selection?.main
-    return !value ||
-      transaction.docChanged ||
-      (main && (main.anchor !== value.anchor || main.head !== value.head))
-      ? null
-      : value
-  },
-})
-
-/** Whether a range is the block a note opened with selected, which shows as the rich editor's node selection: without its source. */
-export const openedBlock = (state: EditorState, from: number, to: number) => {
-  const value = state.field(opened, false)
-  return (
-    !!value &&
-    from < to &&
-    from === Math.min(value.anchor, value.head) &&
-    to === Math.max(value.anchor, value.head)
-  )
-}
-
 type OpenSyntax = {
   tree: (state: EditorState) => Tree | null
   /** Whether a renderer draws a block in place of its text while it is not revealed. */
@@ -164,6 +150,154 @@ type OpenSyntax = {
 const openSyntax = Facet.define<OpenSyntax, OpenSyntax | undefined>({
   combine: (values) => values[0],
 })
+
+const select = StateEffect.define<Selected>()
+
+/**
+ * The selection a note opened with, or a block a press on its drawing
+ * selected whole, until the user moves the selection or edits.
+ */
+type Selected = Opening & { opened?: boolean }
+const selected = StateField.define<Selected | null>({
+  create: () => null,
+  update(value, transaction) {
+    for (const effect of transaction.effects)
+      if (effect.is(select)) return effect.value
+    const main = transaction.selection?.main
+    if (
+      main &&
+      main.from < main.to &&
+      !transaction.docChanged &&
+      transaction.isUserEvent('select.pointer')
+    ) {
+      const block = atomBlockAt(transaction.startState, main.from)
+      if (block?.from === main.from && block.to === main.to)
+        return { anchor: main.anchor, head: main.head }
+    }
+    return !value ||
+      transaction.docChanged ||
+      (main && (main.anchor !== value.anchor || main.head !== value.head))
+      ? null
+      : value
+  },
+})
+
+/**
+ * The block selected whole, which stands for the rich editor's node
+ * selection: it shows without its source, takes no inline formatting, and
+ * Backspace removes it with the blank lines that part it from the next block.
+ */
+export function selectedBlock(state: EditorState) {
+  const value = state.field(selected, false)
+  return value && value.anchor !== value.head
+    ? {
+        from: Math.min(value.anchor, value.head),
+        to: Math.max(value.anchor, value.head),
+      }
+    : null
+}
+
+export const blockSelected = (state: EditorState, from: number, to: number) => {
+  const block = selectedBlock(state)
+  return block?.from === from && block.to === to
+}
+
+/** Selects a block whole, as the rich editor's node selection. */
+export const selectBlock = (from: number, to: number) => ({
+  selection: { anchor: from, head: to },
+  effects: select.of({ anchor: from, head: to }),
+})
+
+/** The source of a block the rich editor draws as one node that starts or ends at `pos`. */
+export function atomBlockAt(state: EditorState, pos: number) {
+  const syntax = state.facet(openSyntax)
+  const tree = syntax?.tree(state)
+  if (!syntax || !tree) return null
+  for (const side of [1, -1] as const)
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(pos, side);
+      node;
+      node = node.parent
+    ) {
+      if (!node.type.is('Block')) continue
+      const block = atomRange(state.doc, node, (node) =>
+        syntax.replaced(state, node),
+      )
+      if (block && (block.from === pos || block.to === pos)) return block
+    }
+  return null
+}
+
+/** The syntax node of a block selected whole. */
+function blockNode(tree: Tree, block: { from: number }) {
+  let node = tree.resolveInner(block.from, 1)
+  while (node.parent && !(node.type.is('Block') && node.from === block.from))
+    node = node.parent
+  return node
+}
+
+/**
+ * A divider or an empty paragraph after a block selected whole, as the rich
+ * editor inserts a node after its node selection. The caret goes into the
+ * paragraph, or after the divider to the next block's start, or to a new
+ * paragraph at the note's end.
+ */
+export function insertAfterBlock(
+  state: EditorState,
+  tree: Tree,
+  block: { from: number; to: number },
+  divider: boolean,
+): TransactionSpec {
+  const node = blockNode(tree, block)
+  const prefix = prefixOf(state, node.parent) ?? ''
+  let item = false
+  for (let parent = node.parent; parent; parent = parent.parent)
+    if (parent.name === 'ListItem') item = true
+  let next = node.nextSibling
+  while (next && !next.type.is('Block')) next = next.nextSibling
+  const rest = state.sliceDoc(block.to)
+  const at = next?.from ?? block.to + rest.length - rest.trimStart().length
+  const end = at === state.doc.length
+  // The rich editor writes an empty last paragraph as one more line break.
+  if (!divider && end && !prefix && rest === '\n')
+    return {
+      changes: { from: state.doc.length, insert: '\n' },
+      selection: { anchor: state.doc.length + 1 },
+    }
+  let insert = `${item ? '' : `\n${prefix.includes('>') ? prefix.trimEnd() : ''}`}\n${prefix}`
+  if (divider) insert += end ? `---\n\n${prefix}` : '---'
+  return {
+    changes: { from: block.to, insert },
+    selection: {
+      anchor: (divider && !end ? at : block.to) + insert.length,
+    },
+  }
+}
+
+/**
+ * As the rich editor deletes a selected block: with the blank lines that
+ * part it from the next block, where the caret goes, or from the block
+ * before it when it is the last.
+ */
+function deleteBlock(view: EditorView) {
+  const { state } = view
+  const block = selectedBlock(state)
+  const tree = state.facet(openSyntax)?.tree(state)
+  if (!block || !tree) return false
+  const node = blockNode(tree, block)
+  let next = node.nextSibling,
+    previous = node.prevSibling
+  while (next && !next.type.is('Block')) next = next.nextSibling
+  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
+  const from = next ? block.from : (previous?.to ?? block.from)
+  view.dispatch({
+    changes: { from, to: next ? next.from : block.to },
+    selection: { anchor: from },
+    userEvent: 'delete.selection',
+    scrollIntoView: true,
+  })
+  return true
+}
 
 /**
  * Selects where the rich editor's Selection.atEnd puts a note's selection.
@@ -181,7 +315,7 @@ export function openAtEnd(view: EditorView, later = false) {
     syntax.tree(state),
     (node) => syntax.replaced(state, node),
   )
-  const value = state.field(opened, false)
+  const value = state.field(selected, false)
   if (
     later &&
     (!selection ||
@@ -192,42 +326,47 @@ export function openAtEnd(view: EditorView, later = false) {
   const at = selection ?? { anchor: end, head: end }
   view.dispatch({
     selection: at,
-    effects: open.of(at),
+    effects: select.of({ ...at, opened: true }),
   })
 }
 
 export const openSelection = (syntax: OpenSyntax) => [
   openSyntax.of(syntax),
-  opened,
+  selected,
   ViewPlugin.define((view) => ({
     update(update) {
-      const value = update.state.field(opened, false)
+      const value = update.state.field(selected, false)
       if (
-        !value ||
+        !value?.opened ||
         (syntax.tree(update.state) === syntax.tree(update.startState) &&
           !update.transactions.some((transaction) => transaction.reconfigured))
       )
         return
       // A view cannot dispatch during its update.
       queueMicrotask(() => {
-        if (view.state.field(opened, false) === value) openAtEnd(view, true)
+        if (view.state.field(selected, false) === value) openAtEnd(view, true)
       })
     },
   })),
-  // As the rich editor's Enter on a selected block: a new paragraph after it.
   Prec.highest(
     keymap.of([
+      // As the rich editor's Enter on a selected block: a new paragraph after it.
       {
         key: 'Enter',
         run(view) {
-          const value = view.state.field(opened, false)
-          if (value && value.anchor !== value.head)
-            view.dispatch({
-              selection: { anchor: Math.max(value.anchor, value.head) },
-            })
-          return false
+          const block = selectedBlock(view.state)
+          const tree = view.state.facet(openSyntax)?.tree(view.state)
+          if (!block || !tree) return false
+          view.dispatch({
+            ...insertAfterBlock(view.state, tree, block, false),
+            userEvent: 'input',
+            scrollIntoView: true,
+          })
+          return true
         },
       },
+      { key: 'Backspace', run: deleteBlock },
+      { key: 'Delete', run: deleteBlock },
     ]),
   ),
 ]

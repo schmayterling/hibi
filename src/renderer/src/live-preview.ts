@@ -83,7 +83,11 @@ import {
   referenceLinks,
 } from './formatted-references'
 import type { FormattedSyntax } from './formatted-syntax'
-import { openedBlock, openSelection } from './formatted-text-end'
+import {
+  atomBlockAt,
+  blockSelected,
+  openSelection,
+} from './formatted-text-end'
 import { nativeDOMSelection } from './native-dom-selection'
 import './formatted'
 import './live-preview.css'
@@ -1657,8 +1661,8 @@ const focused = StateField.define<boolean>({
 
 /**
  * Selection ranges inside one block. As in the rich editor, a selection
- * across blocks, such as select all, shows no markers, nor does the block a
- * note opened with selected.
+ * across blocks, such as select all, shows no markers, nor does a block
+ * selected whole as the rich editor's node selection.
  */
 function inBlocks(state: EditorState, tree: Tree): readonly Revealed[] {
   const ranges: Revealed[] = []
@@ -1667,7 +1671,7 @@ function inBlocks(state: EditorState, tree: Tree): readonly Revealed[] {
     while (block && !block.type.is('LeafBlock')) block = block.parent
     if (
       (from === to || (block && block.to >= to)) &&
-      !openedBlock(state, from, to)
+      !blockSelected(state, from, to)
     )
       ranges.push({ from, to })
   }
@@ -2294,7 +2298,24 @@ export function livePreview(
         widget && view.contentDOM.contains(widget)
           ? view.posAtDOM(widget)
           : null
-      if (event.detail === 1) pressedWidget.set(view, under)
+      if (event.detail === 1) {
+        pressedWidget.set(view, under)
+        // A press on the drawing of a block the rich editor draws as one
+        // node selects its source, as the rich editor node-selects it.
+        const atom =
+          under === null || event.shiftKey
+            ? null
+            : atomBlockAt(view.state, under)
+        if (!atom) return null
+        let { from, to } = atom
+        return {
+          get: () => EditorSelection.single(from, to),
+          update: (update) => {
+            from = update.changes.mapPos(from, 1)
+            to = update.changes.mapPos(to, -1)
+          },
+        }
+      }
       if (event.detail !== 3) return null
       let drawn = pressedWidget.get(view) ?? under
       let at = view.posAtCoords({ x: event.clientX, y: event.clientY })

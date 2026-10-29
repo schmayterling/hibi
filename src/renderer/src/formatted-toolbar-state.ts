@@ -10,6 +10,7 @@ import {
   formattedFormatting,
   formattedLiteral,
 } from './formatted-contributions.ts'
+import { blockSelected } from './formatted-text-end.ts'
 
 /*
  * Toolbar states in the formatted view, read from its syntax tree the way the
@@ -578,6 +579,14 @@ export function formattedStates(
   const literal = state.facet(formattedLiteral)
   const unsupported = (id: string) =>
     !!actionNodes[id] && literal.includes(actionNodes[id])
+  // A block selected whole, as the rich editor's node selection, takes a
+  // quote around it, a divider after it or an image in its place.
+  if (blockSelected(state, range.from, range.to))
+    return {
+      pressed: () => false,
+      disabled: (id: string) =>
+        unsupported(id) || !['quote', 'divider', 'image'].includes(id),
+    }
   // The blocks at the selection's ends, as the rich editor ranges blocks.
   const first = blockAt(tree, range.from, literal)
   const last = range.empty ? first : blockAt(tree, range.to, literal, -1)

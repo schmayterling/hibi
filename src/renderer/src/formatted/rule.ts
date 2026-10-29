@@ -5,6 +5,10 @@ class RuleWidget extends WidgetType {
   override eq() {
     return true
   }
+  /** A press selects the rule, as the rich editor node-selects it. */
+  override ignoreEvent() {
+    return false
+  }
   toDOM() {
     const rule = document.createElement('span')
     rule.className = 'hibi-lp-rule'

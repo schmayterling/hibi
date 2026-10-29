@@ -29,7 +29,7 @@ The original inline implementation already excluded revealed delimiters from its
 
 Task source keeps its operable checkbox. Plain fences use the same source-reveal behavior as rendered addon fences without duplicating those addons' marker styling. The hidden-fence case in `formatted-view.test.mjs` explicitly disables markers; its navigation assertions remain intact.
 
-The engine test helper selects only the main document editor, excluding nested table-cell editors. Startup uses a separate 30-second readiness budget; interaction checks keep their existing deadlines. The caret geometry check waits for the cursor overlay's measured position instead of assuming two animation frames finish the asynchronous update. The code-fence expectation now checks the two revealed source markers; the separate hidden-fence case retains its original navigation assertions.
+The engine test helper selects only the main document editor, excluding nested table-cell editors. Startup uses a separate 30-second readiness budget; interaction checks keep their existing deadlines. Marker fixtures use the existing raw-source helper instead of typing Markdown through a formatted selection, which can inherit pending formatting and escape the new fixture. The original caret geometry limits and frame checks remain intact. The code-fence expectation now checks the two revealed source markers; the separate hidden-fence case retains its original navigation assertions.
 
 The legacy Tiptap editor still draws noneditable generated hints. This accepted CodeMirror-only capability is recorded in `tests/formatted-engine-gaps.md`, and the new tests assert both engine roots.
 

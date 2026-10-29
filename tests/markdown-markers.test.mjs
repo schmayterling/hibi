@@ -12,7 +12,7 @@ import {
   waitForDocumentEditor,
 } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const schema = getSchema([StarterKit])
@@ -530,7 +530,7 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     '***hello***',
   ]) {
     await t.test(source, async () => {
-      await replaceSourceText(page, rich, source)
+      await markerSource(rich, source, source.length)
       const inside = source.indexOf('hello') + 5
       await markerSelection(rich, inside)
       await rich.press('ArrowRight')
@@ -639,7 +639,7 @@ test('codemirror: right arrows exit final formatting, return inside and undo onl
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
     await page.reload()
     await waitForDocumentEditor(app, page)
-    await replaceSourceText(page, rich, '*hello*')
+    await markerSource(rich, '*hello*', 7)
     await markerSelection(rich, 6)
     assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
     await rich.press('ArrowRight')
@@ -721,7 +721,7 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
     await waitForDocumentEditor(app, page)
     for (const source of ['**hello**', '`hello`'])
       await t.test(`${source}, hints ${hints}`, async () => {
-        await replaceSourceText(page, rich, source)
+        await markerSource(rich, source, source.length)
         const inside = source.indexOf('hello') + 5
         await markerSelection(rich, inside)
         // Shown delimiters are editable source, so each arrow crosses
@@ -737,19 +737,12 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
           )
         }
         await page.locator('.editor-cursor').waitFor()
-        // The cursor overlay measures asynchronously, independently of the input event.
-        await waitForAsync(page, () => {
-          const caret = document.querySelector('.editor-cursor')
-          const mark = document.querySelector(
-            '.rich-pane :is(.hibi-lp-strong, .hibi-lp-code)',
-          )
-          return (
-            !!caret &&
-            !!mark &&
-            caret.getBoundingClientRect().left >=
-              mark.getBoundingClientRect().right - 0.5
-          )
-        })
+        await page.evaluate(
+          () =>
+            new Promise((resolve) =>
+              requestAnimationFrame(() => requestAnimationFrame(resolve)),
+            ),
+        )
         const geometry = await page.evaluate(() => {
           const caret = document
             .querySelector('.editor-cursor')
@@ -774,9 +767,9 @@ test('codemirror: drawn caret leaves final formatting and stays text-sized besid
         )
       })
   }
-  await replaceSourceText(page, rich, 'hello $\\dfrac{1}{\\dfrac{1}{2}}$')
+  await markerSource(rich, 'hello $\\dfrac{1}{\\dfrac{1}{2}}$', 0)
   await markerSelection(rich, 0)
-  await page.locator('.rich-pane .katex').waitFor({ timeout: 30000 })
+  await page.locator('.rich-pane .katex').waitFor()
   await rich.press('End')
   await page.evaluate(
     () =>

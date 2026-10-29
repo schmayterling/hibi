@@ -10,7 +10,7 @@ import { uiName } from './ui.mjs'
 
 const addonScheme = {
   ...bundledColorschemes.find((scheme) => scheme.id === 'hibi-dark'),
-  id: 'review.contrast',
+  id: 'review-colors.contrast',
   name: 'Review contrast',
   colors: {
     ...bundledColorschemes.find((scheme) => scheme.id === 'hibi-dark').colors,
@@ -144,7 +144,7 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
   await writeFile(
     join(addon, 'index.js'),
     `export default () => ({
-    start(context) { context.colorschemes.register(${JSON.stringify(addonScheme)}); }
+    start(context) { context.colorschemes.register(${JSON.stringify({ ...addonScheme, id: 'contrast' })}); }
   });`,
   )
   await writeFile(

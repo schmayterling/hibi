@@ -573,14 +573,17 @@ test('parent', async (t) => {
 })
 `,
     )
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
     const child = spawn(
       process.execPath,
       [
+        '--test',
         '--test-reporter=tap',
-        `--test-name-pattern=${name === 'before-timeout' ? 'parent' : 'only a subtest'}`,
+        `--test-name-pattern=${name.endsWith('timeout') ? 'parent' : 'only a subtest'}`,
         file,
       ],
-      { stdio: ['ignore', 'pipe', 'inherit'] },
+      { env, stdio: ['ignore', 'pipe', 'inherit'] },
     )
     t.after(() => child.kill('SIGKILL'))
     let output = ''
@@ -588,9 +591,10 @@ test('parent', async (t) => {
       output += chunk
     })
     const watchdog = setTimeout(() => child.kill('SIGKILL'), 10000)
-    const [, signal] = await once(child, 'close')
+    const [code, signal] = await once(child, 'close')
     clearTimeout(watchdog)
     assert.equal(signal, null, output)
+    assert.equal(code, name.endsWith('timeout') ? 1 : 0, output)
     return output
   }
   assert.match(
@@ -612,7 +616,7 @@ test('parent', async (t) => {
   )
   assert.match(
     await run('before-timeout', 'await new Promise(() => {})', 100),
-    /test timed out after 100ms/,
+    /failed running before hook[\s\S]*closed/,
   )
   assert.match(
     await run(

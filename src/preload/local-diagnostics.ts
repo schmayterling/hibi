@@ -3,14 +3,94 @@ import {
   decodeDiagnostic,
   decodeDiagnosticSession,
   diagnosticLimits,
+  projectLocation,
 } from '../shared/local-diagnostics.ts'
 import {
   DiagnosticAdmission,
   DiagnosticQueue,
 } from '../shared/local-diagnostics-budget.ts'
 
+export function installStartupDiagnostics(
+  producer: DiagnosticProducer,
+  bridge: Pick<Electron.ContextBridge, 'executeInMainWorld'>,
+): () => void {
+  let alive = true
+  const catalog = new Map<string, number>()
+  // Errors belong to the page's world, not preload's isolated global.
+  // Cross the bridge with location primitives only, never an Error or message.
+  const stopObserving = bridge.executeInMainWorld({
+    func: (report: (url: unknown, line: unknown, column: unknown) => void) => {
+      const host = globalThis as unknown as EventTarget
+      const filename = Object.getOwnPropertyDescriptor(
+        ErrorEvent.prototype,
+        'filename',
+      )?.get
+      const line = Object.getOwnPropertyDescriptor(
+        ErrorEvent.prototype,
+        'lineno',
+      )?.get
+      const column = Object.getOwnPropertyDescriptor(
+        ErrorEvent.prototype,
+        'colno',
+      )?.get
+      const onError = (event: Event) => {
+        try {
+          report(filename?.call(event), line?.call(event), column?.call(event))
+        } catch {
+          /* Observing a startup error must preserve native propagation. */
+        }
+      }
+      const onRejection = () => {
+        try {
+          report(undefined, undefined, undefined)
+        } catch {
+          /* No rejection policy change. */
+        }
+      }
+      host.addEventListener('error', onError)
+      host.addEventListener('unhandledrejection', onRejection)
+      return () => {
+        host.removeEventListener('error', onError)
+        host.removeEventListener('unhandledrejection', onRejection)
+      }
+    },
+    args: [
+      (url: unknown, line: unknown, column: unknown) => {
+        producer.record(
+          JSON.stringify({
+            code: 'RENDERER_STARTUP_FAILED',
+            ...projectLocation(url, line, column, catalog),
+          }),
+        )
+      },
+    ],
+  })
+  const stop = () => {
+    alive = false
+    stopObserving()
+    catalog.clear()
+  }
+  producer.record(
+    JSON.stringify({
+      code: 'RENDERER_PRE_ENTRY',
+      stackStatus: 'unavailable',
+    }),
+  )
+  void producer.configuration.then((wire) => {
+    if (!alive) return
+    const session = decodeDiagnosticSession(wire)
+    if (!session) {
+      stop()
+      return
+    }
+    for (const [url, id] of session.artifacts) catalog.set(url, id)
+  })
+  return stop
+}
+
 // This request callback must be Electron's raw transport, never Hibi's journal
-// wrapper. Renderer code has no queue: this is the generation's only backlog.
+// wrapper. This is the generation's only wire backlog; the renderer bounds
+// errors retained while its lazy projector loads.
 export class DiagnosticProducer {
   private readonly request: (
     operation: 'hello' | 'batch',

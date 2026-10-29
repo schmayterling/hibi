@@ -262,6 +262,51 @@ export const electron = {
       },
       args: [...options.args, '--hibi-test', ...gpuArgs],
     })
+    const observeStartup = (page) => {
+      if (page.hibiStartupTrace) return
+      const requests = new Map()
+      const history = []
+      const navigation = []
+      const append = (rows, value) => {
+        if (rows.length === 32) rows.shift()
+        rows.push(value)
+      }
+      page.hibiStartupTrace = { requests, history, navigation }
+      page.on('framenavigated', (frame) =>
+        append(navigation, {
+          url: frame.url().slice(0, 1024),
+          mainFrame: frame === page.mainFrame(),
+          at: Date.now(),
+        }),
+      )
+      page.on('request', (request) => {
+        if (requests.size >= 32) return
+        requests.set(request, {
+          url: request.url().slice(0, 1024),
+          type: request.resourceType(),
+          at: Date.now(),
+          status: null,
+        })
+      })
+      page.on('response', (response) => {
+        const request = requests.get(response.request())
+        if (request) request.status = response.status()
+      })
+      const finished = (request) => {
+        const record = requests.get(request)
+        if (!record) return
+        requests.delete(request)
+        append(history, {
+          ...record,
+          elapsedMs: Date.now() - record.at,
+          error: request.failure()?.errorText?.slice(0, 200),
+        })
+      }
+      page.on('requestfinished', finished)
+      page.on('requestfailed', finished)
+    }
+    application.on?.('window', observeStartup)
+    for (const page of application.windows?.() ?? []) observeStartup(page)
     let quit = false
     let onQuit
     forwardElectronDiagnostics(application.process().stderr).on(
@@ -868,6 +913,8 @@ function startupEntries({ BrowserWindow } = {}) {
           focused: window.isFocused(),
           loading: window.webContents.isLoading(),
           mainFrameLoading: window.webContents.isLoadingMainFrame(),
+          url: window.webContents.getURL().slice(0, 1024),
+          frameUrl: window.webContents.mainFrame.url.slice(0, 1024),
         })),
   }
 }
@@ -912,7 +959,28 @@ export async function startupDiagnostics(application, page) {
       ),
     ),
   ])
-  return { renderer, main, consoleErrors, pageErrors }
+  const trace = page.hibiStartupTrace
+  return {
+    renderer,
+    main,
+    consoleErrors,
+    pageErrors,
+    navigation: {
+      url: page.url().slice(0, 1024),
+      frames: page
+        .frames()
+        .slice(0, 8)
+        .map((frame) => frame.url().slice(0, 1024)),
+      events: trace?.navigation ?? [],
+    },
+    resources: {
+      pending: [...(trace?.requests.values() ?? [])].map((record) => ({
+        ...record,
+        elapsedMs: Date.now() - record.at,
+      })),
+      recent: trace?.history ?? [],
+    },
+  }
 }
 
 export async function waitForDocumentEditor(

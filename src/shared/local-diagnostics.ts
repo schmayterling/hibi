@@ -38,6 +38,32 @@ export const diagnosticLimits = {
 // Keys and labels are application-owned, never derived from an exception.
 export const diagnosticEvents = {
   RUN_STARTED: { severity: 'info', producer: false, critical: false },
+  RENDERER_PRE_ENTRY: { severity: 'info', producer: true, critical: false },
+  RENDERER_STARTUP_FAILED: {
+    severity: 'error',
+    producer: true,
+    critical: true,
+  },
+  BACKGROUND_STARTUP_FAILED: {
+    severity: 'error',
+    producer: true,
+    critical: true,
+  },
+  MAIN_STARTUP_FAILED: { severity: 'error', producer: false, critical: true },
+  NAVIGATION_STARTED: { severity: 'info', producer: false, critical: false },
+  NAVIGATION_FINISHED: { severity: 'info', producer: false, critical: false },
+  NAVIGATION_FAILED: { severity: 'error', producer: false, critical: true },
+  ASSET_PENDING: { severity: 'warning', producer: false, critical: false },
+  ASSET_FAILED: { severity: 'error', producer: false, critical: true },
+  ASSET_COMPLETED: { severity: 'info', producer: false, critical: false },
+  SQLITE_CLOSE_STARTED: { severity: 'info', producer: false, critical: false },
+  SQLITE_CLOSE_WAITING: {
+    severity: 'warning',
+    producer: false,
+    critical: true,
+  },
+  SQLITE_CLOSE_FAILED: { severity: 'error', producer: false, critical: true },
+  SQLITE_CLOSED: { severity: 'info', producer: false, critical: false },
   RUN_ENDED: { severity: 'info', producer: false, critical: false },
   PREVIOUS_RUN_UNCONFIRMED: {
     severity: 'warning',
@@ -100,6 +126,7 @@ export const diagnosticRoles = [
   'renderer',
   'preload',
   'document-worker',
+  'dictionary',
   'word-count',
   'tags',
   'analysis',
@@ -142,6 +169,9 @@ export type SafeDiagnostic = Readonly<{
   exitCode?: number
   durationBucket?: (typeof stallDurationBuckets)[number]
   time?: number
+  moduleId?: number
+  elapsedMs?: number
+  statusCode?: number
 }>
 export type ArtifactCatalog = ReadonlyMap<string, number>
 export type DiagnosticSession = {
@@ -214,7 +244,7 @@ export function decodeDiagnostic(
     if (!data || typeof data !== 'object' || Array.isArray(data)) return null
     const keys = Object.keys(data)
     if (
-      keys.length > 10 ||
+      keys.length > 13 ||
       keys.some(
         (key) =>
           ![
@@ -228,15 +258,24 @@ export function decodeDiagnostic(
             'exitCode',
             'durationBucket',
             'time',
+            'moduleId',
+            'elapsedMs',
+            'statusCode',
           ].includes(key),
       )
     )
       return null
     if (
       producer &&
-      ['role', 'reason', 'exitCode', 'time'].some((key) =>
-        Object.hasOwn(data, key),
-      )
+      [
+        'role',
+        'reason',
+        'exitCode',
+        'time',
+        'moduleId',
+        'elapsedMs',
+        'statusCode',
+      ].some((key) => Object.hasOwn(data, key))
     )
       return null
     if (data.role !== undefined && !diagnosticRoles.includes(data.role))
@@ -262,6 +301,22 @@ export function decodeDiagnostic(
       data.durationBucket !== undefined &&
       (code !== 'MAIN_LOOP_STALLED' ||
         !stallDurationBuckets.includes(data.durationBucket))
+    )
+      return null
+    const resourceEvent = /^(ASSET_|NAVIGATION_)/.test(code)
+    if (
+      (data.moduleId !== undefined &&
+        (!resourceEvent || !positive(data.moduleId, 4096))) ||
+      (data.elapsedMs !== undefined &&
+        (!resourceEvent ||
+          !Number.isSafeInteger(data.elapsedMs) ||
+          data.elapsedMs < 0 ||
+          data.elapsedMs > 3_600_000)) ||
+      (data.statusCode !== undefined &&
+        (!resourceEvent ||
+          !Number.isInteger(data.statusCode) ||
+          data.statusCode < 100 ||
+          data.statusCode > 599))
     )
       return null
     if (!stackStatuses.includes(data.stackStatus)) return null

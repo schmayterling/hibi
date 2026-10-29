@@ -1,148 +1,115 @@
-import {
-  type DiagnosticCode,
-  type DiagnosticProfile,
-  decodeDiagnosticSession,
-  diagnosticCode,
-  diagnosticEvents,
-  projectError,
-  projectLocation,
-  projectStack,
-  type SafeDiagnostic,
-} from '../../shared/local-diagnostics'
-import { DiagnosticAdmission } from '../../shared/local-diagnostics-budget'
+import type { DiagnosticCode } from '../../shared/local-diagnostics'
 import { installDiagnosticReporter } from '../../shared/local-diagnostics-observer'
 
 export { reportDiagnosticFailure as reportRendererFailure } from '../../shared/local-diagnostics-observer'
 
-type Bridge = {
+export type DiagnosticBridge = {
   record: (wire: string) => boolean
   configuration: () => Promise<string | null>
 }
+export type DiagnosticReport = (
+  code: DiagnosticCode,
+  error?: unknown,
+  owner?: object,
+  componentStack?: unknown,
+  location?: readonly [unknown, unknown, unknown],
+) => void
 declare global {
   interface Window {
-    hibiDiagnostics?: Bridge
+    hibiDiagnostics?: DiagnosticBridge
   }
 }
 let activeStop: (() => void) | null = null
 
 export function installRendererDiagnostics(
-  bridge: Bridge | undefined,
+  bridge: DiagnosticBridge | undefined,
 ): () => void {
   try {
     activeStop?.()
     if (!bridge) return () => {}
-    let profile: DiagnosticProfile = 'release'
-    let admission = new DiagnosticAdmission(profile)
     let alive = true
-    const catalog = new Map<string, number>()
-    const seen = new WeakSet<object>()
-    const errorProperty =
-      typeof ErrorEvent !== 'undefined'
-        ? Object.getOwnPropertyDescriptor(ErrorEvent.prototype, 'error')?.get
-        : undefined
-    const filename =
-      typeof ErrorEvent !== 'undefined'
-        ? Object.getOwnPropertyDescriptor(ErrorEvent.prototype, 'filename')?.get
-        : undefined
-    const line =
-      typeof ErrorEvent !== 'undefined'
-        ? Object.getOwnPropertyDescriptor(ErrorEvent.prototype, 'lineno')?.get
-        : undefined
-    const column =
-      typeof ErrorEvent !== 'undefined'
-        ? Object.getOwnPropertyDescriptor(ErrorEvent.prototype, 'colno')?.get
-        : undefined
-    const reason =
-      typeof PromiseRejectionEvent !== 'undefined'
-        ? Object.getOwnPropertyDescriptor(
-            PromiseRejectionEvent.prototype,
-            'reason',
-          )?.get
-        : undefined
-    const report = (
-      code: DiagnosticCode,
-      error?: unknown,
-      owner?: object,
-      componentStack?: unknown,
-      location?: () => Pick<SafeDiagnostic, 'frames' | 'stackStatus'>,
-    ) => {
-      if (!alive || !diagnosticCode(code) || !diagnosticEvents[code].producer)
+    let reporter: DiagnosticReport | null = null
+    let loading: Promise<void> | undefined
+    let pending = 0
+    let dropped = 0
+    let configuration: Promise<string | null>
+    const report: DiagnosticReport = (...args) => {
+      if (!alive) return
+      if (reporter) {
+        reporter(...args)
         return
-      const object =
-        owner ??
-        (error !== null &&
-        (typeof error === 'object' || typeof error === 'function')
-          ? (error as object)
-          : null)
-      if (object && seen.has(object)) return
-      if (!admission.admit(code, performance.now())) return
-      if (object) seen.add(object)
-      let detail = projectError(error, catalog, profile)
-      if (
-        code === 'REACT_RENDER_FAILED' &&
-        !detail.frames?.length &&
-        typeof componentStack === 'string'
-      )
-        detail = {
-          ...detail,
-          ...projectStack(componentStack, catalog, profile),
-        }
-      if (
-        code === 'SOURCE_WORKER_FAILED' ||
-        code === 'WORD_COUNT_WORKER_FAILED' ||
-        code === 'TAGS_WORKER_FAILED'
-      ) {
-        try {
-          const original = projectError(
-            errorProperty?.call(error),
-            catalog,
-            profile,
-          )
-          detail = original.frames?.length
-            ? original
-            : projectLocation(
-                filename?.call(error),
-                line?.call(error),
-                column?.call(error),
-                catalog,
-              )
-        } catch {
-          /* A messageerror may have no original JavaScript location. */
-        }
       }
-      bridge.record(
-        JSON.stringify({
-          code,
-          ...(detail.frames?.length ? detail : (location?.() ?? detail)),
-        }),
-      )
-      const dropped = admission.takeDropped()
-      if (dropped)
-        bridge.record(
-          JSON.stringify({
-            code: 'DIAGNOSTICS_DROPPED',
-            count: dropped,
-            stackStatus: 'unavailable',
-          }),
-        )
+      // Keep failure metadata off the startup path, and bound retained errors
+      // while the first failure loads its reporter.
+      if (pending >= 32) {
+        dropped = Math.min(1_000_000, dropped + 1)
+        return
+      }
+      pending++
+      loading ??= import('./local-diagnostics-report')
+        .then(async (module) => {
+          const next = await module.createRendererDiagnosticReporter(
+            bridge,
+            configuration,
+          )
+          if (alive) reporter = next
+        })
+        .catch(() => {})
+      void loading.then(() => {
+        pending--
+        if (!alive) return
+        try {
+          if (reporter) reporter(...args)
+          else
+            bridge.record(
+              JSON.stringify({
+                code: args[0],
+                stackStatus: 'unavailable',
+              }),
+            )
+          if (!pending && dropped) {
+            bridge.record(
+              JSON.stringify({
+                code: 'DIAGNOSTICS_DROPPED',
+                count: dropped,
+                stackStatus: 'unavailable',
+              }),
+            )
+            dropped = 0
+          }
+        } catch {
+          /* Diagnostics cannot replace the original failure. */
+        }
+      })
     }
-    const uninstallReporter = installDiagnosticReporter(report)
+    const errorProperty = Object.getOwnPropertyDescriptor(
+      ErrorEvent.prototype,
+      'error',
+    )?.get
+    const filename = Object.getOwnPropertyDescriptor(
+      ErrorEvent.prototype,
+      'filename',
+    )?.get
+    const line = Object.getOwnPropertyDescriptor(
+      ErrorEvent.prototype,
+      'lineno',
+    )?.get
+    const column = Object.getOwnPropertyDescriptor(
+      ErrorEvent.prototype,
+      'colno',
+    )?.get
+    const reason = Object.getOwnPropertyDescriptor(
+      PromiseRejectionEvent.prototype,
+      'reason',
+    )?.get
     const onError = (event: ErrorEvent) => {
       try {
-        // Intrinsic DOM getters reject spoofed objects; never read event targets,
-        // error messages, component names, document state or console arguments.
         report(
           'RENDERER_ERROR',
           errorProperty?.call(event),
           undefined,
           undefined,
-          () =>
-            projectLocation(
-              filename?.call(event),
-              line?.call(event),
-              column?.call(event),
-              catalog,
-            ),
+          [filename?.call(event), line?.call(event), column?.call(event)],
         )
       } catch {
         /* Observation never suppresses native event propagation. */
@@ -155,31 +122,20 @@ export function installRendererDiagnostics(
         /* No rejection policy change. */
       }
     }
+    const uninstallReporter = installDiagnosticReporter(report)
     const stop = () => {
       alive = false
+      reporter = null
       window.removeEventListener('error', onError)
       window.removeEventListener('unhandledrejection', onRejection)
-      catalog.clear()
       uninstallReporter()
       if (activeStop === stop) activeStop = null
     }
     activeStop = stop
     window.addEventListener('error', onError)
     window.addEventListener('unhandledrejection', onRejection)
-    void bridge
-      .configuration()
-      .then((wire) => {
-        if (!alive) return
-        const configuration = decodeDiagnosticSession(wire)
-        if (!configuration) {
-          stop()
-          return
-        }
-        profile = configuration.profile
-        admission = new DiagnosticAdmission(profile)
-        for (const [url, id] of configuration.artifacts) catalog.set(url, id)
-      })
-      .catch(stop)
+    // Preload retains pre-entry observation until these listeners are installed.
+    configuration = bridge.configuration().catch(() => null)
     return stop
   } catch {
     try {

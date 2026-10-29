@@ -148,9 +148,29 @@ for (const [mode, cascade] of [
         const at = view.state.doc.toString().indexOf('proof') + 1
         view.dispatch({ selection: { anchor: at } })
         view.focus()
+        // The app shows one error at a time, so a props failure right after
+        // the parser's replaces its toast: record every message shown.
+        window.toastMessages = []
+        new MutationObserver(() => {
+          for (const toast of document.querySelectorAll('.toast')) {
+            const text = toast.textContent.toLowerCase()
+            if (!window.toastMessages.includes(text))
+              window.toastMessages.push(text)
+          }
+        }).observe(document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        })
         window.throwNow = true
         return at
       }, selector)
+      const toasted = (message) =>
+        page.waitForFunction(
+          (message) =>
+            window.toastMessages.some((text) => text.includes(message)),
+          message,
+        )
       await page.keyboard.insertText('z')
       const expected = source.replace('proof', 'pzroof')
       t.diagnostic(
@@ -168,10 +188,7 @@ for (const [mode, cascade] of [
         expected,
       )
       await page.waitForFunction(() => window.parseFailures === 1)
-      await page
-        .locator('.toast')
-        .filter({ hasText: 'parser-proof.bad: parser proof failure' })
-        .waitFor()
+      await toasted('parser-proof.bad: parser proof failure')
       assert.equal(await page.evaluate(() => window.parseFailures), 1)
       assert.equal(
         await page.evaluate(() => window.propFailures ?? 0),
@@ -186,11 +203,7 @@ for (const [mode, cascade] of [
         ),
         at + 1,
       )
-      if (cascade)
-        await page
-          .locator('.toast')
-          .filter({ hasText: 'parser-proof.props: props proof failure' })
-          .waitFor()
+      if (cascade) await toasted('parser-proof.props: props proof failure')
       assert.deepEqual(errors, [])
       await pressShortcut(app, `${mod}+z`)
       await waitForAsync(

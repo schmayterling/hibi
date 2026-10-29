@@ -635,18 +635,6 @@ export class DocumentRuntime {
     }
     return this.get()!
   }
-  /** Main saved these retained tabs at these versions; later local edits stay dirty. */
-  acceptSaved(saved: NonNullable<DocumentState['saved']>) {
-    for (const { tabId, revision, contentVersion } of saved) {
-      const session = this.session(tabId),
-        current = session?.snapshot()
-      if (
-        current?.version === contentVersion &&
-        current.document.revision === revision
-      )
-        session?.markSaved(current)
-    }
-  }
   acknowledgeSave(
     document: DocumentSaveReply,
     token?: DocumentSaveToken,

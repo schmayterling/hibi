@@ -1,17 +1,12 @@
 import type { DocumentState } from '../../shared/desktop.ts'
-import {
-  footnoteGrammar,
-  hasFootnoteDefinitions,
-  mayDefineFootnotes,
-} from '../../shared/markdown-footnotes.ts'
+import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { DocumentRuntime } from './document-runtime.ts'
 import { codemirrorFormattedView } from './formatted-engine.ts'
 
 const certifiedVisualEchoes = new WeakSet<SourceSnapshot>()
 // Weak entries leave with their source snapshot, including when a tab closes.
-let footnoteSources = new WeakMap<SourceSnapshot, boolean>()
-let usedFootnoteGrammar: typeof footnoteGrammar
+const footnoteSources = new WeakMap<SourceSnapshot, boolean>()
 
 /** Internal, one-shot proof from the strict native visual edit path after reconciliation. */
 export function certifyVisualEcho(source: SourceSnapshot) {
@@ -129,17 +124,10 @@ export function hasDocumentFootnotes(
 ) {
   if (!document || (runtime.sourceFor(document)?.utf16Length ?? 0) > 256 * 1024)
     return false
-  if (usedFootnoteGrammar !== footnoteGrammar) {
-    usedFootnoteGrammar = footnoteGrammar
-    footnoteSources = new WeakMap()
-  }
   const source = runtime.sourceFor(document)
   let found = source && footnoteSources.get(source)
   if (found === undefined) {
-    // Keep the legacy rich view closed until the lazy grammar can rule it out.
-    found = footnoteGrammar
-      ? hasFootnoteDefinitions(document.markdown)
-      : mayDefineFootnotes(document.markdown)
+    found = hasFootnoteDefinitions(document.markdown)
     if (source) footnoteSources.set(source, found)
   }
   return found

@@ -65,12 +65,7 @@ import {
 import type { DocumentFlavorStatus } from './ActiveDocumentEditor'
 import { AddonPanel } from './AddonPanel'
 import type { AddonRequest } from './AddonSettings'
-import {
-  AddonSidebar,
-  builtInViews,
-  leftOnlyViews,
-  viewShortcut,
-} from './AddonSidebar'
+import { AddonSidebar, builtInViews, viewShortcut } from './AddonSidebar'
 import { AddonTab } from './AddonTab'
 import { AddonViewContent } from './AddonViewContent'
 import { addonRegistry } from './addon-registry'
@@ -493,7 +488,6 @@ function App() {
     replaceLocal = false,
   ) {
     const previous = currentDocument.current
-    if (next.saved) documentRuntime.acceptSaved(next.saved)
     try {
       acceptDocument(next, false, replaceLocal)
     } catch (error) {
@@ -1146,11 +1140,8 @@ function App() {
   useEffect(() => {
     if (
       addonHost.allReady &&
-      rightSidebarView !== 'none' &&
-      (leftOnlyViews.includes(rightSidebarView) ||
-        ![...builtInViews, ...addonHost.sidebarViews].some(
-          (view) => view.id === rightSidebarView,
-        ))
+      !['none', 'outline', 'backlinks'].includes(rightSidebarView) &&
+      !addonHost.sidebarViews.some((view) => view.id === rightSidebarView)
     ) {
       setRightSidebarView('none')
       localStorage.setItem('right-sidebar-view', 'none')

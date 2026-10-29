@@ -15,7 +15,7 @@ import type { DocumentState } from '../../shared/desktop'
 import { type Hotkeys, shortcutLabels } from '../../shared/hotkeys'
 import { IconButton } from '../../ui/Controls'
 import { useMenus } from '../../ui/MenuHost'
-import { leftOnlyViews, type viewShortcut } from './AddonSidebar'
+import type { viewShortcut } from './AddonSidebar'
 import type { ViewEntry } from './addon-views'
 import { DocumentTabs } from './DocumentTabs'
 import type { ViewMode } from './Editor'
@@ -340,8 +340,9 @@ export function Titlebar({
                         label: 'No view',
                         onSelect: () => onRightSidebarView('none'),
                       },
+                      // Workspace views open only on the left.
                       ...sidebarViews
-                        .filter((view) => !leftOnlyViews.includes(view.id))
+                        .filter((view) => !/^workspaces?$/.test(view.id))
                         .map((view, index) => ({
                           ...view,
                           separatorBefore: index === 0,

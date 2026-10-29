@@ -78,4 +78,30 @@ An adversarial review merged main up to `1b0f6518` (conflicts in `tests/formatte
 
 Checked without defects: undo and redo across list, quote, fence, task and strong edits; checkboxes after typing `x` into `[ ]`, changing `-` to `*`, removing and re-adding the space, and in a quote; changing a fence's language, and unclosing and closing a fence; copying selections that start in a prefix (`- wo`), a whole fence and part of a delimiter (`*wor`), which put exact Markdown on the clipboard; heading and checkbox accessible names; links in table cells. On a 50 MiB note with about 240,000 fences, caret moves, a language edit and unclosing a fence cost the same as on main in two runs each, with no runaway rendering.
 
-Startup: main `1b0f6518` and this branch both load 691,974 startup bytes, with identical startup modules.
+Startup: main `ef7df2b4` and this branch both load 691,974 startup bytes (the cap), with identical startup modules. This change adds no startup bytes.
+
+Final local validation at `e4e481ba`, after merging main `ef7df2b4`. Build and typecheck passed. Biome found no errors across the repository; the six non-null warnings in `live-preview.ts` already existed. Node suites passed 98/98, and `docs:check` passed.
+
+| suite | passed |
+| --- | --- |
+| formatted-marker-edit | 40/40 |
+| formatted-blocks | 8/8 |
+| formatted-fence | 6/6 |
+| markdown-markers | 29/29 |
+| formatted-view | 17/17 |
+| formatted-open-caret | 2/2 |
+| formatted-clipboard | 46/46 |
+| live-preview | 24/24 |
+| formatted-block-drag-geometry | 5/5 |
+| formatted-actions-native | 81/81 |
+| formatted-tables | 144/144 |
+| editor-input | 428/428 |
+| startup-performance | 10/10 |
+
+`formatted-engine-composition`: its CodeMirror case passed in every run. Its tiptap case failed in 2 of 8 full-file runs on this branch, each time at the selection set up before any composition (`''` for `chosen`). It passed in 7 of 7 full-file runs on main `ef7df2b4`, and 6 of 6 tiptap-only runs on each build. That case loads none of the source files this change touches; the only shared change is the test helper's longer startup waits.
+
+Unresolved:
+
+- The guide commit `98efba0` is on the `may/marker-edit` branch of hibigarden/docs, not on its main. Open #674 pins docs main `f840f27`, which does not include it. Whichever merges second conflicts on `docs-revision`, and the next docs pin drops the guide unless that docs branch is merged. `nix/package.nix` keeps the `5080a602` hash until the docs-pin workflow refreshes it, as after #464 and #337.
+- #671 is not merged yet. Startup should be measured again once it is; this branch adds no startup bytes and its startup modules are unchanged.
+- The tiptap composition case flaked as described above.

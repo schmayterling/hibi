@@ -84,7 +84,7 @@ import {
 } from './formatted-references'
 import type { FormattedSyntax } from './formatted-syntax'
 import { openedBlock, openSelection } from './formatted-text-end'
-import { nativeDOMSelection } from './native-dom-selection'
+import { nativeDOMSelection, shiftDoubleClick } from './native-dom-selection'
 import './formatted'
 import './live-preview.css'
 
@@ -2320,25 +2320,7 @@ export function livePreview(
         },
       }
     }),
-    // A shift-double-click extends the selection to the click, not by words,
-    // as in the rich editor, and dragging on follows the pointer.
-    EditorView.mouseSelectionStyle.of((view, event) => {
-      if (event.button !== 0 || event.detail !== 2 || !event.shiftKey)
-        return null
-      let start = view.state.selection
-      return {
-        get: (event) => {
-          const head = view.posAtCoords(
-            { x: event.clientX, y: event.clientY },
-            false,
-          )
-          return start.replaceRange(start.main.extend(head))
-        },
-        update: (update) => {
-          start = start.map(update.changes)
-        },
-      }
-    }),
+    shiftDoubleClick,
     // The page cannot select hidden lines at the note's ends, so a key typed
     // over the whole note would replace only what shows: replace it all, with
     // input handlers seeing the whole range as for any typed text. Text with

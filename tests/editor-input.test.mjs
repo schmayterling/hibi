@@ -2643,6 +2643,16 @@ const acceptedInput = (page) =>
     return window.hibi.getDocument()
   })
 
+const waitForInputSource = (page, markdown) =>
+  waitForAsync(
+    page,
+    async (markdown) => {
+      await window.hibi.flushDocumentChanges()
+      return (await window.hibi.getDocument()).markdown === markdown
+    },
+    markdown,
+  )
+
 const cmCaretText = (rich) =>
   rich.evaluate((element) => {
     const selection = getSelection()
@@ -2934,12 +2944,12 @@ for (const [what, , text, select] of multilineInputCases) {
           app,
           process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
         )
-        assert.equal((await acceptedInput(page)).markdown, before.markdown)
+        await waitForInputSource(page, before.markdown)
         await pressShortcut(
           app,
           process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
         )
-        assert.equal((await acceptedInput(page)).markdown, actual.markdown)
+        await waitForInputSource(page, actual.markdown)
       },
     )
   })
@@ -3181,6 +3191,25 @@ for (const all of [false, true]) {
       await inputWorkProbe(rich)
       await page.keyboard.insertText(text)
       const actual = await acceptedInput(page)
+      // Keep counting while async parsing hides the literal input's escapes.
+      await waitForAsync(page, () => {
+        const element = document.querySelector(
+          '.rich-pane .formatted-editor .cm-content',
+        )
+        const view = element.cmTile.root.view
+        const head = view.state.selection.main.head
+        if (head < view.viewport.from || head > view.viewport.to) return false
+        const caretLine = view.state.doc.lineAt(head).from
+        const lines = [...element.querySelectorAll('.cm-line')].filter(
+          (line) =>
+            line.textContent.trim() &&
+            view.state.doc.lineAt(view.posAtDOM(line)).from !== caretLine,
+        )
+        return (
+          lines.length > 0 &&
+          lines.every((line) => !line.textContent.includes('\\'))
+        )
+      })
       await page.evaluate(
         () =>
           new Promise((resolve) =>
@@ -3251,12 +3280,12 @@ for (const all of [false, true]) {
             app,
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
-          assert.equal((await acceptedInput(page)).markdown, before.markdown)
+          await waitForInputSource(page, before.markdown)
           await pressShortcut(
             app,
             process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
           )
-          assert.equal((await acceptedInput(page)).markdown, actual.markdown)
+          await waitForInputSource(page, actual.markdown)
         },
       )
       await fixture.close()

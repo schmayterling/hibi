@@ -616,15 +616,14 @@ test('opening and quitting an untouched capture preserves the previous draft', {
     name: 'Document editor',
     exact: true,
   })
-  await editor.waitFor()
+  const engineEditor = capture.locator(
+    t.formattedEngine === 'tiptap'
+      ? '.tiptap[contenteditable="true"]'
+      : '.hibi-formatted .cm-content[contenteditable="true"]',
+  )
+  await editor.and(engineEditor).waitFor()
   assert.equal(
-    await capture
-      .locator(
-        t.formattedEngine === 'tiptap'
-          ? '.tiptap[contenteditable="true"]'
-          : '.hibi-formatted .cm-content[contenteditable="true"]',
-      )
-      .count(),
+    await engineEditor.count(),
     1,
     'quick note uses the selected formatted engine',
   )

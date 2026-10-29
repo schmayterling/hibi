@@ -84,7 +84,7 @@ import {
 } from './formatted-references'
 import type { FormattedSyntax } from './formatted-syntax'
 import { atomBlockAt, blockSelected, openSelection } from './formatted-text-end'
-import { nativeDOMSelection } from './native-dom-selection'
+import { nativeDOMSelection, shiftDoubleClick } from './native-dom-selection'
 import './formatted'
 import './live-preview.css'
 
@@ -2337,6 +2337,7 @@ export function livePreview(
         },
       }
     }),
+    shiftDoubleClick,
     // The page cannot select hidden lines at the note's ends, so a key typed
     // over the whole note would replace only what shows: replace it all, with
     // input handlers seeing the whole range as for any typed text. Text with

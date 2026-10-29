@@ -46,7 +46,10 @@ import {
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import { drawReference, referenceLink } from '../formatted-references.ts'
-import { recordPageSelection } from '../native-dom-selection.ts'
+import {
+  recordPageSelection,
+  shiftDoubleClick,
+} from '../native-dom-selection.ts'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -652,6 +655,7 @@ export class CellEditor {
         extensions: [
           preview,
           storedMarkInput,
+          shiftDoubleClick,
           formattedTree.of((state) =>
             cellParser(host.main.state).parse(state.doc.toString()),
           ),

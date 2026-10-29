@@ -213,3 +213,26 @@ export const nativeDOMSelection = ViewPlugin.fromClass(
     }
   },
 )
+
+/**
+ * A shift-double-click extends the selection to the click, not by words, as
+ * in the rich editor, and dragging on follows the pointer.
+ */
+export const shiftDoubleClick = EditorView.mouseSelectionStyle.of(
+  (view, event) => {
+    if (event.button !== 0 || event.detail !== 2 || !event.shiftKey) return null
+    let start = view.state.selection
+    return {
+      get: (event) => {
+        const head = view.posAtCoords(
+          { x: event.clientX, y: event.clientY },
+          false,
+        )
+        return start.replaceRange(start.main.extend(head))
+      },
+      update: (update) => {
+        start = start.map(update.changes)
+      },
+    }
+  },
+)

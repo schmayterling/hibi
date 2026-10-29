@@ -583,76 +583,24 @@ test('shift-drag and shift-double-click from an edited cell keep the anchor in t
     await harness.mouse.up()
   })
   assert.deepEqual([dragged.anchor, dragged.head], [cell, 1])
-  // A double-click extends to the word's far edge, before or after the table.
+  // A double-click extends to the click, before or after the table.
   await edit()
   const before = await point(doc.indexOf('two') + 1)
   const up = await shifted(() => harness.mouse.dblclick(before.x, before.y))
-  assert.deepEqual([up.anchor, up.head], [cell, doc.indexOf('two')])
+  assert.deepEqual([up.anchor, up.head], [cell, doc.indexOf('two') + 1])
   await edit()
   const after = await point(doc.indexOf('five') + 1)
   const down = await shifted(() => harness.mouse.dblclick(after.x, after.y))
-  assert.deepEqual([down.anchor, down.head], [cell, doc.indexOf('five') + 4])
+  assert.deepEqual([down.anchor, down.head], [cell, doc.indexOf('five') + 1])
   assert.equal(down.editor, null)
-  // Without a cell, the view's own shift-double-click still extends by words.
+  // Without a cell, so does the view's own shift-double-click.
   await harness.evaluate(() => {
     const view = window.tables.view()
     view.focus()
     view.dispatch({ selection: { anchor: 1 } })
   })
   const plain = await shifted(() => harness.mouse.dblclick(after.x, after.y))
-  assert.deepEqual([plain.anchor, plain.head], [1, doc.indexOf('five') + 4])
-})
-
-test('shift-double-click extends the selection by words in the formatted view; the rich editor extends it to the click', {
-  timeout: 30000,
-}, async () => {
-  // shift-word-001 in formatted-engine-gaps.md. The rich editor's head stays
-  // where the second press lands, as for a shift-click.
-  const paragraph = page.locator('.tiptap p', { hasText: 'A paragraph before' })
-  await paragraph.click()
-  await page.keyboard.press('Home')
-  const target = await paragraph.evaluate((p) => {
-    const node = p.firstChild
-    const index = node.data.indexOf('before') + 3
-    const range = document.createRange()
-    range.setStart(node, index)
-    range.setEnd(node, index + 1)
-    const { left, top, height } = range.getBoundingClientRect()
-    return { x: left + 1, y: top + height / 2 }
-  })
-  await page.keyboard.down('Shift')
-  try {
-    await page.mouse.dblclick(target.x, target.y)
-  } finally {
-    await page.keyboard.up('Shift')
-  }
-  // The rich editor reads the page's selection when it changes.
-  await page
-    .waitForFunction(
-      () => !document.querySelector('.tiptap').editor.state.selection.empty,
-    )
-    .catch(() => {})
-  const rich = await page.evaluate(() => {
-    const { state } = document.querySelector('.tiptap').editor
-    const { from, to } = state.selection
-    return state.doc.textBetween(from, to)
-  })
-  assert.equal(rich, 'A paragraph bef')
-  // The formatted view extends to the word's far edge, as CodeMirror does;
-  // from a cell too (the test above).
-  const doc = 'one two three\n\nfour five six'
-  await mount(doc)
-  await harness.evaluate(() => {
-    const view = window.tables.view()
-    view.focus()
-    view.dispatch({ selection: { anchor: 0 } })
-  })
-  const { x, y } = await at('five', 2)
-  const formatted = await shifted(() => harness.mouse.dblclick(x, y))
-  assert.deepEqual(
-    [formatted.anchor, formatted.head],
-    [0, doc.indexOf('five') + 4],
-  )
+  assert.deepEqual([plain.anchor, plain.head], [1, doc.indexOf('five') + 1])
 })
 
 test('a shift-drag from an edited cell back over the table picks across cells, as in the rich editor', {
@@ -928,6 +876,247 @@ test("a shift-press in another table's cell extends the selection there; the ric
     [doc.indexOf('first cell') + 3, doc.indexOf('second tail') + 4, null],
   )
   assert.deepEqual(await pick(), ['first cell', 'second tail'])
+})
+
+/** The rich editor's selection: its kind, the cells it selects, its head's cell and its head's text block up to the head. */
+const richSelection = () =>
+  page.evaluate(() => {
+    const { selection } = document.querySelector('.tiptap').editor.state
+    const cell = ($pos) => {
+      for (let depth = $pos.depth; depth > 0; depth--)
+        if (/cell|header/i.test($pos.node(depth).type.name))
+          return $pos.node(depth).textContent
+      return null
+    }
+    const cells = []
+    if ('forEachCell' in selection)
+      selection.forEachCell((node) => cells.push(node.textContent))
+    const { $anchor, $head } = selection
+    return {
+      cells: 'forEachCell' in selection ? cells : null,
+      anchor: [
+        cell($anchor),
+        $anchor.parent.textContent.slice(0, $anchor.parentOffset),
+      ],
+      head: [
+        cell($head),
+        $head.parent.textContent.slice(0, $head.parentOffset),
+      ],
+    }
+  })
+
+/** A visible page point inside the character after the `offset`th of the rich text block that reads `text`. */
+const richAt = async (text, offset) => {
+  const point = await page.evaluate(
+    ({ text, offset }) => {
+      const block = [...document.querySelectorAll('.tiptap p')].find(
+        (p) => p.textContent === text,
+      )
+      block.scrollIntoView({ block: 'center' })
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT)
+      let at = offset
+      while (walker.nextNode() && at >= walker.currentNode.length)
+        at -= walker.currentNode.length
+      const range = document.createRange()
+      range.setStart(walker.currentNode, at)
+      range.setEnd(walker.currentNode, at + 1)
+      const { left, top, height } = range.getBoundingClientRect()
+      const x = left + 1,
+        y = top + height / 2
+      return { x, y, hit: block.contains(document.elementFromPoint(x, y)) }
+    },
+    { text, offset },
+  )
+  // A press off the text would test the browser's fallback instead.
+  assert.ok(point.hit, text)
+  return point
+}
+
+/** Puts the rich editor's caret in the text block that reads `text`, by a click. */
+const richCaret = async (text, offset) => {
+  const { x, y } = await richAt(text, offset)
+  await page.mouse.click(x, y)
+  // The editor reads the click's caret from a later selectionchange.
+  await page.waitForFunction(
+    ({ text, offset }) => {
+      const { $head, empty } =
+        document.querySelector('.tiptap').editor.state.selection
+      return (
+        empty &&
+        $head.parent.textContent === text &&
+        $head.parentOffset === offset
+      )
+    },
+    { text, offset },
+  )
+}
+
+/** Runs rich pointer actions with Shift held, then reads the rich selection once it settles. */
+const richShifted = async (run) => {
+  await page.keyboard.down('Shift')
+  try {
+    await run()
+  } finally {
+    await page.keyboard.up('Shift')
+  }
+  await page.waitForTimeout(300)
+  return richSelection()
+}
+
+/** `at`, asserting that the point hits the text there. */
+const hitAt = async (word, offset) => {
+  const point = await at(word, offset)
+  assert.ok(
+    await harness.evaluate(
+      ({ x, y, word }) =>
+        document.elementFromPoint(x, y)?.textContent.includes(word),
+      { ...point, word },
+    ),
+    word,
+  )
+  return point
+}
+
+test('shift-double-click extends the selection to the click, and a drag from it follows the pointer, as in the rich editor', {
+  timeout: 60000,
+}, async () => {
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const paragraph = 'A paragraph before the table.',
+    closing = 'Closing paragraph.'
+  const double = (point) => () =>
+    page.mouse.click(point.x, point.y, { clickCount: 2 })
+  const rich = {}
+  await richCaret(paragraph, 2)
+  rich.text = await richShifted(double(await richAt(closing, 3)))
+  await richCaret('one', 1)
+  rich.cell = await richShifted(double(await richAt(closing, 3)))
+  await richCaret('two | pipe', 1)
+  rich.inCell = await richShifted(double(await richAt('two | pipe', 8)))
+  await richCaret(paragraph, 2)
+  const from = await richAt(closing, 3)
+  const to = await richAt(closing, 11)
+  rich.drag = await richShifted(async () => {
+    await page.mouse.move(from.x, from.y)
+    await page.mouse.down({ clickCount: 1 })
+    await page.mouse.up({ clickCount: 1 })
+    await page.mouse.down({ clickCount: 2 })
+    await page.mouse.move(to.x, to.y, { steps: 6 })
+    await page.mouse.up({ clickCount: 2 })
+  })
+  await page.locator('.tiptap p', { hasText: 'A paragraph before' }).click()
+  assert.deepEqual(rich, {
+    text: { cells: null, anchor: [null, 'A '], head: [null, 'Clo'] },
+    cell: { cells: null, anchor: ['one', 'o'], head: [null, 'Clo'] },
+    inCell: {
+      cells: null,
+      anchor: ['two | pipe', 't'],
+      head: ['two | pipe', 'two | pi'],
+    },
+    drag: { cells: null, anchor: [null, 'A '], head: [null, 'Closing par'] },
+  })
+  const doc =
+    'one two three\n\n| a | b |\n| --- | --- |\n| x | yy pipe tail |\n\nfour five six'
+  const cell = doc.indexOf('x |') + 1
+  await mount(doc)
+  const formatted = {}
+  const place = (anchor) =>
+    harness.evaluate((anchor) => {
+      const view = window.tables.view()
+      view.focus()
+      view.dispatch({ selection: { anchor } })
+    }, anchor)
+  const edit = async () => {
+    await harness.locator('.hibi-lp-table td', { hasText: /^x$/ }).click()
+    await harness.keyboard.press('End')
+    assert.equal((await state()).editor, 'x')
+  }
+  const dbl = (point) => () => harness.mouse.dblclick(point.x, point.y)
+  await place(2)
+  formatted.text = await shifted(dbl(await hitAt('five', 2)))
+  await edit()
+  formatted.cell = await shifted(dbl(await hitAt('five', 2)))
+  await harness.locator('.hibi-lp-table td', { hasText: 'yy pipe' }).click()
+  await harness.keyboard.press('Home')
+  await harness.keyboard.press('ArrowRight')
+  formatted.inCell = await shifted(dbl(await hitAt('pipe', 2)))
+  await place(2)
+  const start = await hitAt('five', 2)
+  const end = await hitAt('six', 1)
+  formatted.drag = await shifted(async () => {
+    await harness.mouse.move(start.x, start.y)
+    await harness.mouse.down({ clickCount: 1 })
+    await harness.mouse.up({ clickCount: 1 })
+    await harness.mouse.down({ clickCount: 2 })
+    await harness.mouse.move(end.x, end.y, { steps: 6 })
+    await harness.mouse.up({ clickCount: 2 })
+  })
+  const ends = ({ anchor, head }) => [anchor, head]
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(formatted).map(([name, value]) => [name, ends(value)]),
+    ),
+    {
+      text: [2, doc.indexOf('five') + 2],
+      cell: [cell, doc.indexOf('five') + 2],
+      inCell: [doc.indexOf('yy') + 1, doc.indexOf('pipe') + 2],
+      drag: [2, doc.indexOf('six') + 1],
+    },
+  )
+})
+
+test('shift-triple-click on a cell selects its text from outside the cells and extends from a cell, as in the rich editor', {
+  timeout: 60000,
+}, async () => {
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const press = (count) => async () => {
+    const { x, y } = await richAt('1', 0)
+    await page.mouse.click(x, y, { clickCount: count })
+  }
+  const rich = {}
+  await richCaret('A paragraph before the table.', 2)
+  rich.outside = await richShifted(press(3))
+  await richCaret('one', 1)
+  rich.click = await richShifted(press(1))
+  await richCaret('one', 1)
+  rich.triple = await richShifted(press(3))
+  await page.locator('.tiptap p', { hasText: 'A paragraph before' }).click()
+  // From outside the cells the rich editor selects the clicked cell, as a
+  // triple-click does; from a cell, the cells a shift-click selects.
+  assert.deepEqual(rich.outside.cells, ['1'])
+  assert.deepEqual(rich.click.cells, ['one', 'em and code', '1'])
+  assert.deepEqual(rich.triple, rich.click)
+  // The formatted view's cell editor selects the clicked cell's text, as on
+  // a triple-click; from a cell, the selection extends as on a shift-click.
+  const doc =
+    'before words\n\n| a | b |\n| --- | --- |\n| x | cell words |\n\nafter'
+  await mount(doc)
+  const target = await hitAt('cell words', 2)
+  const triple = () =>
+    harness.mouse.click(target.x, target.y, { clickCount: 3 })
+  const start = await hitAt('before', 2)
+  await harness.mouse.click(start.x, start.y)
+  const outside = await shifted(triple)
+  assert.deepEqual(
+    [outside.anchor, outside.head, outside.editor],
+    [doc.indexOf('cell words'), doc.indexOf('cell words') + 10, 'cell words'],
+  )
+  const fromCell = async (run) => {
+    await harness.locator('.hibi-lp-table td', { hasText: /^x$/ }).click()
+    await harness.keyboard.press('End')
+    assert.equal((await state()).editor, 'x')
+    const end = await shifted(run)
+    return [end.anchor, end.head, end.editor, await pick()]
+  }
+  const clicked = await fromCell(() => harness.mouse.click(target.x, target.y))
+  assert.deepEqual(clicked, [
+    doc.indexOf('x |') + 1,
+    doc.indexOf('cell words') + 2,
+    null,
+    ['x', 'cell words'],
+  ])
+  assert.deepEqual(await fromCell(triple), clicked)
 })
 
 test('a drag from a cell selects its text and picks across cells, as in the rich editor', {
@@ -2035,12 +2224,20 @@ test('escape and table-edge navigation wait for current table bounds', {
           await harness.evaluate(() => window.tables.settle())
           const current =
             shrink && target === 'right19999' ? 'right9999' : target
-          if ((await state()).editor?.trim() !== current)
+          if ((await state()).editor?.trim() !== current) {
+            // A parse that reached the table under the open fence drew it as
+            // code, which dropped the cell's editor and the pane's place in
+            // the table's rows: show the last row again to click it.
+            if (target === 'right19999')
+              await harness.locator('.rich-pane').evaluate((pane) => {
+                pane.scrollTop = pane.scrollHeight
+              })
             await harness
               .locator('.hibi-lp-table :is(th, td)', {
                 hasText: new RegExp(`^${current}$`),
               })
               .click()
+          }
           await harness.evaluate(
             ({ key, before }) => {
               const editor = document.querySelector(

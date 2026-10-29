@@ -51,7 +51,7 @@ import {
   formattedTextFeatures,
   inlineStops,
 } from './formatted-contributions.ts'
-import { keepRead, keepReading } from './reading-position'
+import { keepRead, keepReading } from './reading-position.ts'
 
 /**
  * The formatted view owns its syntax tree. A transaction parses for at most

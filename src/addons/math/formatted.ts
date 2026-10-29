@@ -5,7 +5,7 @@ import {
   type FormattedNodeView,
   showMarkdownMarkers,
 } from '../../renderer/src/formatted-contributions'
-import { keepReading } from '../../renderer/src/reading-position'
+import { keepReading } from '../../renderer/src/reading-position.ts'
 import { formattedMathBlock } from '../../shared/formatted-text-rules.ts'
 import { blockMathSyntax, inlineMathSyntax } from './formatted-syntax'
 import type { formulaScheduler } from './rendering'

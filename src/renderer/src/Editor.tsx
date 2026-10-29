@@ -113,6 +113,7 @@ import './markdown-markers.css'
 import { markdownSerializer } from './markdown-serialization'
 import { markdownSyntax } from './markdown-syntax'
 import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
+import { richHeadingLabel } from './outline-label'
 import { outlineHeadingAt } from './outline-position'
 import { createPlainSourceSync } from './plain-source-sync'
 import { observeRichAnnotations } from './rich-annotations'
@@ -2907,7 +2908,7 @@ export function MarkdownEditor({
             id: '',
             position,
             raw: null,
-            label: node.textContent || 'Untitled heading',
+            ...richHeadingLabel(node),
             level: Number(node.attrs.level),
           })
       })
@@ -2920,6 +2921,7 @@ export function MarkdownEditor({
             before !== undefined &&
             before.position === heading.position &&
             before.label === heading.label &&
+            JSON.stringify(before.parts) === JSON.stringify(heading.parts) &&
             before.level === heading.level
           )
         })

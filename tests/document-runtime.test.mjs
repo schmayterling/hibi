@@ -205,15 +205,8 @@ test('save prompt receipts name retained tabs and accept only their saved versio
     }),
   )
   const shown = []
-  const accept = (next) => shown.push(next.tabs[0])
-  const receive = (saved) =>
-    acceptSaved(
-      runtime,
-      saved,
-      (reply, token, expectedId) =>
-        runtime.acknowledgeSave(reply, token, expectedId),
-      accept,
-    )
+  runtime.subscribe((next) => shown.push(next.tabs[0]))
+  const receive = (saved) => acceptSaved(runtime, saved)
   const { revision, contentVersion } = runtime.get('one')
   const saved = {
     tabId: 'one',
@@ -238,12 +231,12 @@ test('save prompt receipts name retained tabs and accept only their saved versio
   assert.deepEqual(shown, [{ id: 'one', name: 'one.md', dirty: false }])
   assert.equal(runtime.get().markdown, 'second')
   assert.equal(runtime.get().tabs[0].name, 'one.md')
-  // Edits after the saved version stay unsaved; the tab still takes the file's name.
+  // A receipt older than later local edits leaves them unsaved.
   draft.edit([{ from: 5, to: 5, insert: ' more' }], 'source', 'typing')
   receive({ ...saved, name: 'renamed.md' })
   assert.equal(runtime.get('one').dirty, true)
   assert.equal(runtime.get('one').savedMarkdown, 'draft')
-  assert.equal(runtime.get().tabs[0].name, 'renamed.md')
+  assert.equal(runtime.get('one').name, 'one.md')
   runtime.dispose()
 })
 

@@ -1,10 +1,9 @@
 import type {
   DocumentFocus,
   DocumentSaved,
-  DocumentSaveReceipt,
   DocumentState,
 } from '../../shared/desktop.ts'
-import type { DocumentRuntime, DocumentSaveToken } from './document-runtime.ts'
+import type { DocumentRuntime } from './document-runtime.ts'
 
 // Reads only metadata, so the source is not materialized.
 const focusOf = ({
@@ -35,52 +34,51 @@ const focusOf = ({
 
 /**
  * A save prompt saved this tab, perhaps before a later prompt cancelled. Its
- * retained editor takes the saved baseline and, after Save As, the new file;
- * edits made since the saved version stay unsaved.
+ * retained editor takes the saved baseline and, after Save As, the new file.
+ * A tab edited since the saved version stays unsaved and refreshes on focus.
  */
-export function acceptSaved(
-  runtime: DocumentRuntime,
-  saved: DocumentSaved,
-  acknowledge: (
-    document: DocumentSaveReceipt,
-    token: DocumentSaveToken,
-    expectedId: string,
-  ) => void,
-  accept: (document: DocumentState, focus: true) => void,
-) {
+export function acceptSaved(runtime: DocumentRuntime, saved: DocumentSaved) {
   const retained = runtime.get(saved.tabId)
-  if (retained?.revision !== saved.revision) return
-  if (retained.contentVersion === saved.contentVersion) {
-    const token = runtime.beginSave(saved.tabId)
-    try {
-      if (token)
-        acknowledge(
-          {
-            ...focusOf(retained),
-            ...saved,
-            saveReceipt: true,
-            savedVersion: saved.contentVersion,
-          },
-          token,
-          retained.id,
-        )
-    } finally {
-      runtime.endSave(token)
-    }
-  }
-  // Inactive tabs show their names from the active tab's list.
-  const active = runtime.get()
   if (
-    !active?.tabs.some(
-      (tab) => tab.id === saved.tabId && tab.name !== saved.name,
-    )
+    retained?.revision !== saved.revision ||
+    retained.contentVersion !== saved.contentVersion
   )
     return
-  const renamed = runtime.focus({
-    ...focusOf(active),
-    tabs: active.tabs.map((tab) =>
-      tab.id === saved.tabId ? { ...tab, name: saved.name } : tab,
-    ),
-  })
-  if (renamed) accept(renamed, true)
+  const token = runtime.beginSave(saved.tabId)
+  if (!token) return
+  try {
+    // Inactive tabs take their names from the active tab's list, which the
+    // acknowledgment below publishes.
+    const active = runtime.get()
+    if (
+      active?.tabs.some(
+        (tab) => tab.id === saved.tabId && tab.name !== saved.name,
+      )
+    )
+      runtime.focus({
+        ...focusOf(active),
+        tabs: active.tabs.map((tab) =>
+          tab.id === saved.tabId ? { ...tab, name: saved.name } : tab,
+        ),
+      })
+    runtime.acknowledgeSave(
+      {
+        ...focusOf(retained),
+        ...saved,
+        saveReceipt: true,
+        savedVersion: saved.contentVersion,
+      },
+      token,
+      retained.id,
+    )
+  } finally {
+    runtime.endSave(token)
+  }
 }
+
+// The first document transfer loads this module, before any tab can be unsaved.
+globalThis.window?.hibi.onDocumentSaved((saved) => {
+  void import('./document-runtime.ts').then(({ documentRuntime }) =>
+    acceptSaved(documentRuntime, saved),
+  )
+})

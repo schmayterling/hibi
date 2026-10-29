@@ -589,20 +589,6 @@ function App() {
     },
     [],
   )
-  useEffect(
-    () =>
-      window.hibi.onDocumentSaved((saved) => {
-        void import('./document-saved').then((module) =>
-          module.acceptSaved(
-            documentRuntime,
-            saved,
-            acknowledgeSave,
-            acceptDocument,
-          ),
-        )
-      }),
-    [acknowledgeSave, acceptDocument],
-  )
   const autosaveStatus = useAutosave(document, busy)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('default-view')

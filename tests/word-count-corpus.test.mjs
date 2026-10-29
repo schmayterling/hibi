@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { readFileSync, realpathSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -719,6 +719,13 @@ async function openCorpus(config, formatted = false) {
               dialect: config.gfm ? 'auto' : 'none',
               syntax: config.wikilinks ? ['markdown.obsidian'] : [],
             }
+      // Use Electron's canonical path for DocumentState.id, including the
+      // Windows drive spelling, rather than guessing it in the test process.
+      const canonical = choice
+        ? await app.evaluate((_electron, file) => {
+            return process.getBuiltinModule('node:fs/promises').realpath(file)
+          }, file)
+        : null
       await page.evaluate(
         ({ keys, choice }) => {
           for (const key of keys)
@@ -726,7 +733,7 @@ async function openCorpus(config, formatted = false) {
         },
         {
           keys: choice
-            ? [...new Set([file, realpathSync(file)])].map(
+            ? [canonical].map(
                 (path) =>
                   `hibi:flavor:${createHash('sha256').update(path).digest('hex')}`,
               )
@@ -914,6 +921,35 @@ const formattedCount = async ({ source, text }) => {
     },
   }
 }
+
+test('canonical path keeps native word-count syntax choices', {
+  timeout: 120000,
+}, async (t) => {
+  for (const [index, config] of corpus.configs.entries())
+    await t.test(`syntax ${index}`, async (t) => {
+      const { page, open, close } = await openCorpus(config, true)
+      t.after(close)
+      const source = 'plain words'
+      await open('syntax.md', source)
+      const arg = { source, text: source }
+      await waitForAsync(page, formattedCount, arg)
+      const native = await page.evaluate(formattedCount, arg)
+      assert.deepEqual(
+        {
+          ...native.syntax,
+          disabledFeatures: native.syntax.disabledFeatures.toSorted(),
+        },
+        {
+          ...countSyntax(config),
+          textExtras: !!config.textExtras,
+          math: !!config.math,
+          mermaid: false,
+          typst: false,
+          disabledFeatures: config.disabledFeatures.toSorted(),
+        },
+      )
+    })
+})
 
 test('native corpus: formatted counts equal the rich text counts in the app', {
   timeout: 1800000,

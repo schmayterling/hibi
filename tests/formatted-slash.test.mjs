@@ -429,6 +429,7 @@ test('formatted slash in a table cell offers inline commands and runs them in th
   )
   await pressShortcut(app, `${mod}+z`)
   await matches(table.replace('beta', '/frontmatterbeta'))
+  await menu().waitFor()
   assert.deepEqual(errors, [])
 })
 

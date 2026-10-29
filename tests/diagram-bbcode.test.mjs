@@ -621,8 +621,18 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
             const figures = [
               ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
             ]
+            const pane = document.querySelector('.rich-pane')
+            const view = pane.querySelector('.cm-content')?.cmTile.root.view
             return {
               phase,
+              viewport: [innerWidth, innerHeight, devicePixelRatio],
+              editor: view && {
+                head: view.state.selection.main.head,
+                visible: view.visibleRanges,
+                target: view.coordsAtPos(view.state.selection.main.head),
+                scroll: [pane.scrollTop, pane.scrollHeight],
+                pane: pane.getBoundingClientRect(),
+              },
               heldFrames: window.heldFrames.length,
               heldIdle: window.heldIdle.length,
               pending: window.pendingDiagrams(true).length,
@@ -650,13 +660,16 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
       const view = element.cmTile.root.view
       const closes = [...view.state.doc.toString().matchAll(/\n```\n/g)]
       const gap = closes[index - 1].index + 5
-      view.dispatch({ selection: { anchor: gap }, scrollIntoView: true })
+      view.dispatch({
+        selection: { anchor: gap },
+        effects: view.constructor.scrollIntoView(gap, { y: 'center' }),
+      })
       return gap
     }, index)
     try {
       await waitForAsync(
         page,
-        async ({ fresh, gap }) => {
+        ({ fresh, gap }) => {
           const ready = () => {
             const root = document.querySelector('.rich-pane .cm-content')
             const view = root.cmTile.root.view
@@ -681,20 +694,29 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
               window.heldFrames.length > 0
             )
           }
-          if (ready()) return true
-          await window.releaseDiagramFrame()
-          return ready()
+          // Held diagram mounts change the height estimates after the first scroll.
+          if (!ready()) {
+            const view = document.querySelector('.rich-pane .cm-content').cmTile
+              .root.view
+            view.dispatch({
+              effects: view.constructor.scrollIntoView(gap, { y: 'center' }),
+            })
+            return false
+          }
+          // Capture these exact targets before another layout can replace them.
+          window.diagramPendingSnapshot = window.watchPendingDiagrams(fresh)
+          return true
         },
         { fresh, gap },
         { timeout: 15000 },
       )
+      return page.evaluate(() => window.diagramPendingSnapshot)
     } catch (error) {
       await diagnose(fresh ? 'cancellation pending' : 'positive pending')
       throw error
     }
   }
-  await waitForPending(80)
-  const control = await page.evaluate(() => window.watchPendingDiagrams())
+  const control = await waitForPending(80)
   assert.ok(control.pending > 0 && control.held > 0, JSON.stringify(control))
   await page.evaluate(() => {
     window.diagramControlTargets = window.diagramProbe.targets
@@ -736,8 +758,7 @@ test('codemirror: diagram work stays near the viewport and disabling it cancels 
   )
 
   // Another untouched region must expose actual pending targets before disable.
-  await waitForPending(40, true)
-  const pending = await page.evaluate(() => window.watchPendingDiagrams(true))
+  const pending = await waitForPending(40, true)
   assert.ok(pending.pending > 0 && pending.held > 0, JSON.stringify(pending))
   t.diagnostic('diagram frame cancellation: ' + JSON.stringify(pending))
   const draws = await page.evaluate(() => window.diagramDraws)

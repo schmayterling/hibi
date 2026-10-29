@@ -33,6 +33,25 @@ function mount() {
   return { scope, released: new WeakRef(state) }
 }
 
+test('toolbar settings keep the registered name while the displayed label changes', () => {
+  const scope = toolbar.scope('names', () => {})
+  try {
+    const handle = scope.api.register({
+      id: 'link',
+      label: 'Link',
+      onClick() {},
+    })
+    handle.update({ label: 'Edit link' })
+    const item = toolbar
+      .snapshot()
+      .items.find((item) => item.id === 'names.link')
+    assert.equal(item.label, 'Edit link')
+    assert.equal(item.name, 'Link')
+  } finally {
+    scope.dispose()
+  }
+})
+
 test('entries rendered buttons still hold release a disposed owner', async () => {
   const { scope, released } = mount()
   // A rendered button keeps the entry it last rendered after the owner goes.

@@ -1,4 +1,6 @@
 import { Lexer, type MarkedExtension, Tokenizer } from 'marked'
+import { blockContainers } from '../../shared/marked-blocks.ts'
+import { quoteBlock, quoteReader } from '../../shared/marked-leaf-blocks.ts'
 import { blockStart } from '../_shared/block-start.ts'
 import { alertMarker } from './alert-marker.ts'
 
@@ -25,26 +27,33 @@ export function alertToken(source: string) {
   const quote = tokenizer.blockquote(source)
   const marker = quote && alertMarker(quote.text)
   if (!quote || !marker) return
-  return {
-    type: 'githubAlert',
-    raw: quote.raw,
-    alertType: marker[1]!.toLowerCase(),
-    fold: marker[2],
-    title: marker[3]?.trim() ?? '',
-    text: quote.text.slice(marker[0].length),
-  }
+  return quoteBlock(
+    {
+      type: 'githubAlert',
+      raw: quote.raw,
+      alertType: marker[1]!.toLowerCase(),
+      fold: marker[2],
+      title: marker[3]?.trim() ?? '',
+      text: quote.text.slice(marker[0].length),
+    },
+    quote.text,
+  )
 }
 
 export const alertMarkdown: MarkedExtension = {
+  tokenizer: blockContainers,
   extensions: [
     {
       name: 'githubAlert',
       level: 'block',
-      tokenizer(source) {
+      tokenizer: quoteReader(function (source) {
         const token = alertToken(source)
-        if (token)
-          return { ...token, tokens: this.lexer.blockTokens(token.text) }
-      },
+        if (token) {
+          const { text } = token
+          const quote = { ...token, tokens: this.lexer.blockTokens(text) }
+          return quoteBlock(quote, token)
+        }
+      }),
       renderer(token) {
         const type = alertType(token.alertType) ?? 'note'
         const title = String(token.title || type).replace(

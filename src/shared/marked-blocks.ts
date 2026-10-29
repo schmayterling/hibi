@@ -1,4 +1,10 @@
 import { type MarkedExtension, marked, type Token, Tokenizer } from 'marked'
+import {
+  extendQuote,
+  leafListEnd,
+  quoteReader,
+  withLeafBlocks,
+} from './marked-leaf-blocks.ts'
 
 // Keep each parser's block grammar, but scan lines without a backtracking frame
 // per character or continuation line. Equivalence tests guard the rule delimiters.
@@ -120,6 +126,12 @@ export const blockMarkdown: MarkedExtension = {
       )
     },
   },
+}
+
+/** Only container overrides, for addons used with a plain Marked instance. */
+export const blockContainers = {
+  list: blockMarkdown.tokenizer!.list!,
+  blockquote: blockMarkdown.tokenizer!.blockquote!,
 }
 
 // Let upstream construct tokens, including its version-specific newline behavior.
@@ -314,6 +326,15 @@ function quoteExtensionInput(
 
 export class BlockTokenizer extends Tokenizer {
   override list(source: string, read = Tokenizer.prototype.list) {
+    return withLeafBlocks(this, () =>
+      BlockTokenizer.prototype.readList.call(this, source, read),
+    )
+  }
+
+  private readList(
+    source: string,
+    read: typeof Tokenizer.prototype.list,
+  ): ReturnType<Tokenizer['list']> {
     if (!this.rules.block.list.test(source)) return read.call(this, source)
     const state = quoteFrames.get(this)
     const parent = state?.scope
@@ -377,22 +398,48 @@ export class BlockTokenizer extends Tokenizer {
       }
     }
     lexer.blockTokens = nested
+    const inlineLength = lexer.inlineQueue.length
+    let cutoff = source.length
+    let token: ReturnType<Tokenizer['list']>
     try {
-      const token = read.call(this, source)
+      token = read.call(this, source)
+      if (token) cutoff = leafListEnd(token, source, columns, base)
       if (token && state) {
         state.origins.set(token, origin!)
         if (restart) parent!.next = origin! + quoteLines(token.raw)
       }
-      return token
     } finally {
       this.rules = rules
       lexer.blockTokens = blockTokens
       containerColumns.set(this, base)
       if (state && parent) state.scope = parent
     }
+    if (cutoff < source.length) {
+      lexer.inlineQueue.length = inlineLength
+      return BlockTokenizer.prototype.readList.call(
+        this,
+        source.slice(0, cutoff),
+        read,
+      )
+    }
+    return token
   }
 
   override blockquote(source: string, read = Tokenizer.prototype.blockquote) {
+    return withLeafBlocks(this, () => {
+      const quote = BlockTokenizer.prototype.readBlockquote.call(
+        this,
+        source,
+        read,
+      )
+      return quote && extendQuote(quote, this.lexer)
+    })
+  }
+
+  private readBlockquote(
+    source: string,
+    read: typeof Tokenizer.prototype.blockquote,
+  ) {
     const match = this.rules.block.blockquote.exec(source)
     if (!match) return read.call(this, source)
     const previousState = quoteFrames.get(this)
@@ -457,35 +504,34 @@ export class BlockTokenizer extends Tokenizer {
           ...options,
           extensions: {
             ...options.extensions,
-            block: options.extensions.block.map(
-              (read) =>
-                function (
-                  this: ThisParameterType<typeof read>,
-                  source: string,
-                  tokens: Token[],
-                ) {
-                  const previous = state.extension
-                  const line = quoteOrigin(state, source)
-                  state.extension = { source, line }
-                  const input = quoteExtensionInput(
-                    tokenizer,
-                    state,
-                    source,
-                    line,
-                  )
-                  try {
-                    const token = read.call(this, input.text, tokens)
-                    if (token && input.offsets.length)
-                      token.raw = quoteRaw(
-                        source,
-                        token.raw.length,
-                        input.offsets,
-                      )
-                    return token
-                  } finally {
-                    state.extension = previous
-                  }
-                },
+            block: options.extensions.block.map((read) =>
+              quoteReader(function (
+                this: ThisParameterType<typeof read>,
+                source: string,
+                tokens: Token[],
+              ) {
+                const previous = state.extension
+                const line = quoteOrigin(state, source)
+                state.extension = { source, line }
+                const input = quoteExtensionInput(
+                  tokenizer,
+                  state,
+                  source,
+                  line,
+                )
+                try {
+                  const token = read.call(this, input.text, tokens)
+                  if (token && input.offsets.length)
+                    token.raw = quoteRaw(
+                      source,
+                      token.raw.length,
+                      input.offsets,
+                    )
+                  return token
+                } finally {
+                  state.extension = previous
+                }
+              }, read),
             ),
           },
         }

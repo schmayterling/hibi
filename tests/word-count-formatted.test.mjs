@@ -13,7 +13,6 @@ import { TableKit } from '@tiptap/extension-table'
 import { TaskItem } from '@tiptap/extension-task-item'
 import { TaskList } from '@tiptap/extension-task-list'
 import { MarkdownManager } from '@tiptap/markdown'
-import { markedGithubFootnote } from 'marked-github-footnote'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
 import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
 import {
@@ -31,13 +30,15 @@ import {
 import { mermaidMarkdown } from '../src/addons/mermaid/markdown.ts'
 import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
-import { typstBlock, typstTokens } from '../src/addons/typst/syntax.ts'
+import { typstMarkdown } from '../src/addons/typst/markdown.ts'
+import { typstTokens } from '../src/addons/typst/syntax.ts'
 import { countText } from '../src/addons/word-count/count.ts'
 import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { documentImage } from '../src/renderer/src/DocumentImage.ts'
 import { editorExtensions } from '../src/renderer/src/markdown.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
+import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import {
@@ -576,23 +577,7 @@ for (const language of ['mermaid', 'typst'])
       group: 'block',
       atom: true,
       addAttributes: () => ({ source: { default: '' }, raw: { default: '' } }),
-      ...(language === 'mermaid'
-        ? mermaidMarkdown
-        : {
-            markdownTokenName: 'typstBlock',
-            markdownTokenizer: {
-              name,
-              level: 'block',
-              start: (source) =>
-                source.search(/^ {0,3}(?:`{3,}|~{3,})typst[ \t]*\r?$/im),
-              tokenize: typstBlock,
-            },
-            parseMarkdown: (token, helpers) =>
-              helpers.createNode(name, {
-                source: token.source,
-                raw: token.raw,
-              }),
-          }),
+      ...(language === 'mermaid' ? mermaidMarkdown : typstMarkdown),
     })
     const flavor = {
       id: `${language}.blocks`,
@@ -610,8 +595,7 @@ for (const language of ['mermaid', 'typst'])
       matches: (token) =>
         language === 'mermaid'
           ? token.type === 'code' && token.lang === 'mermaid'
-          : token.type === 'typstBlock' ||
-            (token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? '')),
+          : token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? ''),
     })
     try {
       for (const disabled of [
@@ -636,14 +620,10 @@ for (const language of ['mermaid', 'typst'])
             `before\n\n\`\`\`${language}\nx\n\nafter`,
             `\`\`\`${language} extra\nx\n\`\`\``,
             `> \`\`\`${language}\n> x\n> \`\`\`\n\nafter`,
+            `> \`\`\`${language}\n> x\n> \`\`\`\noutside\n===\n\n# real`,
+            `> \`\`\`${language}\r\n> x\r\n> \`\`\`\r\noutside\r\n===\r\n\r\n# real`,
             `- before\n\n  \`\`\`${language}\n  x\n  \`\`\`\n\nafter`,
             `before\n\n~~~${language}\nx\n~~~\t\n\nafter`,
-            ...(active && !disabled.length
-              ? [
-                  `before\n\n ~~~${language}\nx\n ~~~\t\n\nafter`,
-                  `before\n\n   ~~~${language}\nx\n   ~~~ \t \n\nafter`,
-                ]
-              : []),
             `> ~~~${language}\n> x\n> ~~~\t\n> tail\n\nafter`,
             `- before\n\n  ~~~${language}\n  x\n  ~~~\t\n  tail\n\nafter`,
             '```js\nordinary code\n```',
@@ -678,12 +658,18 @@ for (const language of ['mermaid', 'typst'])
   })
 
 test('ordinary indented fences retain Marked text despite the native schema omission', () => {
-  const source = 'before\n\n ~~~js\nx\n ~~~\t\n\nafter'
-  assert.equal(native(source), 'before')
-  assert.equal(
-    richText(source, defaultNoteSyntax).slice(1),
-    'before\nx\n ~~~\t\n\nafter',
-  )
+  for (const language of ['js', 'typst'])
+    for (const [indent, suffix] of [
+      [' ', '\t'],
+      ['   ', ' \t '],
+    ]) {
+      const source = `before\n\n${indent}~~~${language}\nx\n${indent}~~~${suffix}\n\nafter`
+      assert.equal(native(source), 'before')
+      assert.equal(
+        richText(source, { ...defaultNoteSyntax, typst: true }).slice(1),
+        `before\nx\n${indent}~~~${suffix}\n\nafter`,
+      )
+    }
 })
 
 test('formatted text and counts match the rich view', () => {
@@ -726,6 +712,34 @@ test('formatted text and counts match the rich view', () => {
       countText(actual),
       countText(expected),
       JSON.stringify(source),
+    )
+  }
+})
+
+test('rich view keeps headings after custom leaves outside containers', () => {
+  // Tiptap copies tokenizer results; leaf identity must survive the copy.
+  for (const source of [
+    '> $$\n> x\n> $$\noutside\n===\n',
+    '> -# small\noutside\n===\n',
+    '- $$\n  x\n  $$\noutside\n===\n',
+    '- -# small\noutside\n===\n',
+    '> > [!NOTE]\n> > ```\n> > x\n> > ```\noutside\n===\n',
+  ]) {
+    const document = nativeDocument(source)
+    const headings = []
+    document.forEach((node) => {
+      if (node.type.name === 'heading') headings.push(node.textContent)
+    })
+    assert.deepEqual(headings, ['outside'], source)
+    assert.equal(
+      richText(source, {
+        ...defaultNoteSyntax,
+        textExtras: true,
+        alerts: true,
+        math: true,
+      }).slice(1),
+      native(source),
+      source,
     )
   }
 })

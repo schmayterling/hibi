@@ -6,7 +6,7 @@ import {
 } from '@tiptap/react'
 import type { AddonContext } from '../api'
 import { editTypstSource, TypstBlockContent } from './BlockContent'
-import { typstBlock } from './syntax'
+import { typstMarkdown } from './markdown'
 
 export function typstNode(context: AddonContext) {
   function View({ node, editor, getPos, updateAttributes }: NodeViewProps) {
@@ -48,31 +48,7 @@ export function typstNode(context: AddonContext) {
       mergeAttributes(HTMLAttributes, { 'data-type': 'typst-block' }),
       ['code', { class: 'language-typst' }, node.attrs.source],
     ],
-    markdownTokenName: 'typstBlock',
-    markdownTokenizer: {
-      name: 'typstBlock',
-      level: 'block',
-      start: (source) =>
-        source.search(/^ {0,3}(?:`{3,}|~{3,})typst[ \t]*\r?$/im),
-      tokenize: typstBlock,
-    },
-    parseMarkdown: (token, helpers) =>
-      helpers.createNode('typstBlock', {
-        source: token.source,
-        raw: token.raw,
-      }),
-    renderMarkdown: (node) => {
-      const source = String(node.attrs?.source ?? '')
-      const raw = String(node.attrs?.raw ?? '')
-      if (raw && typstBlock(raw)?.source === source)
-        return raw.replace(/\r?\n$/, '')
-      const length = Math.max(
-        3,
-        ...Array.from(source.matchAll(/`+/g), (match) => match[0].length + 1),
-      )
-      const fence = '`'.repeat(length)
-      return `${fence}typst\n${source}\n${fence}`
-    },
+    ...typstMarkdown,
     addNodeView: () => ReactNodeViewRenderer(View),
   })
 }

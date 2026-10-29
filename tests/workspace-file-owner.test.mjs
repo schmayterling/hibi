@@ -11,7 +11,7 @@ const source = [
   'let fileOperation = null; let closing = false; let mainWindow = window;',
   index.slice(
     index.indexOf('function trustedWindow('),
-    index.indexOf('async function serveAsset('),
+    index.search(/^(?:async )?function serveAsset\(/m),
   ),
   index.slice(
     index.lastIndexOf('handle(', index.indexOf('WORKSPACE_CHANNELS.readText,')),

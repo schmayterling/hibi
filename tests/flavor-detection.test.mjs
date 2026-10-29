@@ -20,6 +20,7 @@ import {
   textExtrasMarkdown,
 } from '../src/addons/text-extras/syntax.ts'
 import {
+  typstBlock,
   detector as typstDetector,
   typstFlavor,
   typstTokens,
@@ -66,7 +67,7 @@ const pairs = [
     typstFlavor.detect,
     detect(
       new Marked(typstTokens, blockMarkdown),
-      (token) => token.type === 'typstBlock',
+      (token) => token.type === 'code' && !!typstBlock(token.raw),
     ),
   ],
 ]

@@ -42,10 +42,12 @@ import {
   formattedMarkdown,
   formattedNodeViews,
   formattedRefresh,
+  formattedSyntaxTree,
   formattedTree,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import { drawReference, referenceLink } from '../formatted-references.ts'
+import { formattedSelectionText } from '../formatted-selection-text.ts'
 import {
   recordPageSelection,
   shiftDoubleClick,
@@ -268,12 +270,21 @@ function decorateCell(
         if (reference && !answer) return
         out.syntax(node.from, open.to)
         out.syntax(close.from, node.to)
-        if (!literal.has('Link'))
-          out.link(
-            open.to,
-            close.from,
-            answer?.title ? { title: answer.title } : undefined,
-          )
+        if (!literal.has('Link')) {
+          // Revealed Markdown (for example &amp;) keeps its rendered link name.
+          const label = revealedFor(node)
+            ? formattedSelectionText(
+                state,
+                formattedSyntaxTree(state),
+                open.to,
+                close.from,
+              )
+            : null
+          out.link(open.to, close.from, {
+            ...(answer?.title ? { title: answer.title } : {}),
+            ...(label ? { 'aria-label': label } : {}),
+          })
+        }
         return
       }
       case 'Autolink': {
@@ -412,6 +423,7 @@ function editorDecorations(
       ? view.state.selection.ranges
       : []
   const decorations: Range<Decoration>[] = [],
+    outer: Range<Decoration>[] = [],
     atomic: Range<Decoration>[] = [],
     delimiters: { from: number; to: number }[] = []
   const hide = (from: number, to: number, widget: WidgetType | null) => {
@@ -439,7 +451,7 @@ function editorDecorations(
           decorations.push(Decoration.mark({ attributes }).range(from, to)),
         // Inclusive, so that widgets at the text's ends are inside the link too.
         link: (from, to, attributes) =>
-          decorations.push(
+          outer.push(
             Decoration.mark({ attributes, inclusive: true }).range(from, to),
           ),
         hide,
@@ -459,6 +471,7 @@ function editorDecorations(
     )
   return {
     decorations: Decoration.set(decorations, true),
+    outer: Decoration.set(outer, true),
     atomic: Decoration.set(atomic, true),
     runs: Decoration.set(
       delimiterRuns(delimiters).map(({ from, to }) =>
@@ -535,11 +548,13 @@ export class CellEditor {
     const preview = ViewPlugin.fromClass(
       class {
         decorations: DecorationSet
+        outer: DecorationSet
         atomic: DecorationSet
         runs: DecorationSet
         constructor(view: EditorView) {
           ;({
             decorations: this.decorations,
+            outer: this.outer,
             atomic: this.atomic,
             runs: this.runs,
           } = editorDecorations(
@@ -554,6 +569,7 @@ export class CellEditor {
           // decorations until dispatch refreshes against that committed state.
           if (update.docChanged) {
             this.decorations = this.decorations.map(update.changes)
+            this.outer = this.outer.map(update.changes)
             this.atomic = this.atomic.map(update.changes)
             this.runs = this.runs.map(update.changes)
           } else if (
@@ -565,6 +581,7 @@ export class CellEditor {
           )
             ({
               decorations: this.decorations,
+              outer: this.outer,
               atomic: this.atomic,
               runs: this.runs,
             } = editorDecorations(
@@ -577,10 +594,14 @@ export class CellEditor {
       },
       {
         decorations: (plugin) => plugin.decorations,
-        provide: (plugin) =>
+        provide: (plugin) => [
           EditorView.atomicRanges.of(
             (view) => view.plugin(plugin)?.atomic ?? Decoration.none,
           ),
+          EditorView.outerDecorations.of(
+            (view) => view.plugin(plugin)?.outer ?? Decoration.none,
+          ),
+        ],
       },
     )
     // Arrows leave the cell from the selection's head, so a cell Tab selected

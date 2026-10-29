@@ -64,6 +64,10 @@ test('production entry keeps editor implementations behind demand imports', asyn
   assert.doesNotMatch(initial, /node_modules\/@tiptap\//)
   assert.doesNotMatch(
     initial,
+    /src\/shared\/marked-(?:blocks|leaf-blocks|footnotes)\.ts/,
+  )
+  assert.doesNotMatch(
+    initial,
     /src\/renderer\/src\/OutlineFormula\.tsx|node_modules\/katex\//,
   )
   assert.doesNotMatch(
@@ -125,6 +129,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
+  assert.doesNotMatch(
+    modules,
+    /src\/(?:renderer\/src\/local-diagnostics-report|shared\/local-diagnostics(?:-budget)?)\.ts/,
+  )
   assert.doesNotMatch(modules, /markdown-flavor-guard\.ts|flavor-syntax\.ts/)
   assert.doesNotMatch(
     modules,

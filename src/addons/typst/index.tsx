@@ -29,8 +29,7 @@ export default defineAddon({
       level: 'block',
       extensions: ['typstBlock'],
       matches: (token) =>
-        token.type === 'typstBlock' ||
-        (token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? '')),
+        token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? ''),
       slash: {
         markdown: '```typst\n\n```',
         cursor: 9,
@@ -111,18 +110,7 @@ export default defineAddon({
       ...typstFlavor,
       richExtensions: [typstNode(context)],
       export: {
-        extensions: [
-          typstTokens,
-          {
-            extensions: [
-              {
-                name: 'typstBlock',
-                renderer: (token) =>
-                  `<pre data-typst="${encodeURIComponent(String(token.source))}"></pre>`,
-              },
-            ],
-          },
-        ],
+        extensions: [typstTokens],
         css,
         async transform(rendered, _source, documentId) {
           const document = new DOMParser().parseFromString(

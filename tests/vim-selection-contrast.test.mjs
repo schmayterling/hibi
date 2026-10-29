@@ -312,7 +312,10 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
   assert.deepEqual(failures, [])
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
-  await page.locator('#addon-vim').uncheck()
+  await page.locator('#addon-vim').click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-vim')?.checked,
+  )
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await page
     .locator('.source-pane [data-vim-plugin="true"]')

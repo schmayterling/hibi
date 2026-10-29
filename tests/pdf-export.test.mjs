@@ -66,6 +66,37 @@ $ x^2 + y^2 $
 \`\`\`
 
 [^soil]: Loam drains well.
+
+> \`\`\`typst
+> $ x $
+> \`\`\`
+Outside typst
+===
+
+> $$
+> x
+> $$
+Outside math
+===
+
+> -# Small words
+Outside subtext
+===
+
+> > [!NOTE]
+> > \`\`\`
+> > Nested code
+> > \`\`\`
+Outside alert
+===
+
+Boundary note[^boundary].
+
+[^boundary]: \`\`\`
+    Footnote code
+    \`\`\`
+Outside footnote
+===
 `
 
 function assertLightDiagram(html) {
@@ -130,7 +161,7 @@ test('exports the active note as a PDF from the palette and the File menu', {
   await writeFile(join(notes, 'private.png'), pixel)
   await writeFile(
     join(profile, 'addons.json'),
-    JSON.stringify({ math: true, typst: true }),
+    JSON.stringify({ math: true, typst: true, 'text-extras': true }),
   )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -186,7 +217,7 @@ test('exports the active note as a PDF from the palette and the File menu', {
       })
   })
   await page.waitForFunction(() =>
-    ['math', 'mermaid', 'markdown', 'typst'].every(
+    ['math', 'mermaid', 'markdown', 'typst', 'text-extras'].every(
       (id) => performance.getEntriesByName(`hibi:addon:${id}`).length,
     ),
   )
@@ -243,6 +274,21 @@ test('exports the active note as a PDF from the palette and the File menu', {
     assert.deepEqual(options.filters, [{ name: 'PDF', extensions: ['pdf'] }])
     const html = await app.evaluate(() => globalThis.pdfHtml)
     assertLightDiagram(html)
+    for (const flavor of ['typst', 'math', 'subtext', 'alert', 'footnote'])
+      assert.match(html, new RegExp(`<h1[^>]*>Outside ${flavor}</h1>`))
+    assert.deepEqual(
+      await page.evaluate((html) => {
+        const document = new DOMParser().parseFromString(html, 'text/html')
+        return [...document.querySelectorAll('h1')]
+          .filter(
+            (heading) =>
+              heading.textContent.startsWith('Outside ') &&
+              heading.closest('blockquote, li'),
+          )
+          .map((heading) => heading.textContent)
+      }, html),
+      [],
+    )
     const result = await pdfText(target)
     assert.ok(result.pages > 0)
     for (const expected of [

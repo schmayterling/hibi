@@ -65,3 +65,20 @@ the two codemirror desktop failures also reproduce on main `01d1913b`, confirmed
 - `site`: 7 passed, 2 failed (the missing `jump 0` subtest and its parent). the test inserts multiline markdown as literal formatted text; cm-reds is replacing that with paste.
 
 neither is attributed to these tokenizers or blocks this pr. full-repo, giant/corpus, large outline and 2,000-formula stress runs remain excluded by lane rules.
+
+## review fixes (2026-10-30, merged with main `93cf4d4e`)
+
+- quote re-reads were quadratic: marked's blockquote calls `blockTokens` once per lazy chunk with the same token list, and the leaf adapter re-checked the whole list each time (2,000 `> # h\n> p\nlazy` units: 4,006,000 visits). it now checks only appended tokens; `leafBlockCounters` guards the bound.
+- a leaf ending a nested list did not end the outer item at a lazy line where marked would (`1. - para\n     -# small\noutside`). the adapter now applies marked's previous-line fence/heading check to trailing nested leaves, and detects lazy lines the way marked copies them instead of from container columns, so tab continuations inside quoted lists stay in the item.
+- `@tiptap/markdown` copies tokenizer results (`{ ...result }`), which dropped the weak-set identity, so the default rich view still swallowed `outside\n===` after quoted math, subtext and nested alerts while counts and export did not. leaf and quote marks are now symbol-keyed token properties that survive the copy.
+- the codemirror formatted view still read typst bodies with the old tokenizer's dedent. it now reads them like mermaid (`markedFenceText`), matching the rich view's native code tokens; `dedentedFenceText` is removed.
+
+timings (node, this machine; export = marked with blockMarkdown + all built-in extensions, count = `richText` + `countText`):
+
+| note | branch export | branch count | main export | main count |
+| --- | --- | --- | --- | --- |
+| 2 MiB mix | 0.55 s | 0.70 s | 17.3 s | 15.9 s |
+| 4 MiB mix | — | — | 69.1 s | — |
+| 50 MiB mix | 11.8 s | 16.4 s | > 480 s (stopped) | not run |
+
+single giant blockquotes and lazy-quote chains stay superlinear on main and branch alike (marked's own blockquote loop and `marked-blocks.ts` setext candidate search); not changed here.

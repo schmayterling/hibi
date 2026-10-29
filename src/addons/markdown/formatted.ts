@@ -121,7 +121,8 @@ function foldedBody(state: EditorState, quote: SyntaxNode) {
 
 /**
  * A selection end inside a folded body shows it, as find, the outline and
- * undo place one there.
+ * undo place one there, and so does one at its hidden end, where typing
+ * would go into it.
  */
 const revealFolds = EditorState.transactionExtender.of((transaction) => {
   const { state } = transaction
@@ -131,12 +132,12 @@ const revealFolds = EditorState.transactionExtender.of((transaction) => {
   for (const range of state.selection.ranges)
     for (const pos of [range.anchor, range.head])
       for (
-        let node: SyntaxNode | null = tree.resolve(pos, 1);
+        let node: SyntaxNode | null = tree.resolve(pos, -1);
         node;
         node = node.parent
       ) {
         const body = node.name === 'Blockquote' && foldedBody(state, node)
-        if (body && body.from < pos && pos < body.to)
+        if (body && body.from < pos && pos <= body.to)
           effects.push(
             setFold.of({ from: node.from, fold: body.fold, expanded: true }),
           )

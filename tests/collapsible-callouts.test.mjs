@@ -548,6 +548,16 @@ test('codemirror: arrows step over a folded body, and Backspace or Delete beside
   assert.equal(await read(), markdown)
   assert.equal(await head(), after)
 
+  // Backspace on the blank line after the fold, which moves the caret to the
+  // end of the line above, shows the body rather than typing into it unseen.
+  await closed.click()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  await place(after - 1)
+  await page.keyboard.press('Backspace')
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  assert.equal(await head(), after - 2)
+  assert.equal(await read(), markdown)
+
   // A shown body edits as any text does.
   await place(titleEnd)
   await page.keyboard.press('Delete')

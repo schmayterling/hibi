@@ -130,6 +130,7 @@ import type { FindMove, FindStatus } from './FindBar'
 import { flavorSyntax } from './flavor-syntax'
 import { flavors as markdownFlavors } from './flavors'
 import { definitionOf } from './formatted/footnote-definitions'
+import { linkControls } from './formatted/link-controls'
 import {
   followsLink,
   formattedDocument,
@@ -504,6 +505,7 @@ export function SourceEditor({
   showLineNumbers,
   sourceExtensions,
   onFormatting,
+  onEditLink,
   onLink,
   presentation = 'source',
   markers = true,
@@ -540,6 +542,9 @@ export function SourceEditor({
   sourceExtensions: readonly EditorFeature[]
   onFormatting: (formatting: SourceFormatting | null) => void
   onLink: (href: string) => void
+  onEditLink?: (
+    capture: ReturnType<SourceFormatting['capture']>,
+  ) => Promise<void>
   /** Formatted renders Markdown in place over the same source session. */
   presentation?: 'source' | 'formatted'
   /** Formatted view: show the Markdown markers under the caret. */
@@ -714,6 +719,8 @@ export function SourceEditor({
   const formatting = useRef<SourceFormatting | null>(null)
   const reportFormatting = useRef(onFormatting)
   const openLink = useRef(onLink)
+  const editLink = useRef(onEditLink)
+  editLink.current = onEditLink
   openLink.current = onLink
   reportFormatting.current = onFormatting
   ready.current = onReady
@@ -2066,6 +2073,16 @@ export function SourceEditor({
                 syntaxHighlighting(codeHighlighter),
               ],
           EditorView.lineWrapping,
+          formatted && onEditLink
+            ? linkControls({
+                capture: (position) =>
+                  formatting.current?.capture(position) ?? null,
+                edit: (capture) =>
+                  editLink.current?.(capture) ?? Promise.resolve(),
+                open: (href) => openLink.current(href),
+                error: (error) => setInputError(String(error)),
+              })
+            : [],
           placeholder('Start typing'),
           display.current.of(
             formatted
@@ -2805,6 +2822,7 @@ export function SourceEditor({
     viewId,
     formatted,
     kind,
+    onEditLink,
   ])
 
   useEffect(() => {

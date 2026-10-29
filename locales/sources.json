@@ -421,7 +421,7 @@
     "src/addons/review/index.tsx"
   ],
   "345116e83679": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "42f0fec8e4fc": [
     "src/addons/asciidoc/hibi-addon.json"
@@ -943,7 +943,7 @@
     "src/renderer/src/UpdateSettings.tsx"
   ],
   "fab6f4954081": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "44ce6e4a2f8d": [
     "src/addons/documentation/ExportDialog.tsx"
@@ -1241,7 +1241,8 @@
     "src/addons/dictionary/CustomWords.tsx"
   ],
   "e21f935f11d7": [
-    "src/addons/mcp-server/Settings.tsx"
+    "src/addons/mcp-server/Settings.tsx",
+    "src/renderer/src/formatted/link-controls.ts"
   ],
   "0146568214a4": [
     "src/renderer/src/workspace-menu.ts"
@@ -1251,6 +1252,9 @@
   ],
   "ec7ee2826c84": [
     "src/renderer/src/RecoveryScreen.tsx"
+  ],
+  "dbf362d4f210": [
+    "src/renderer/src/formatted/link-controls.ts"
   ],
   "d6fac84c4dc9": [
     "src/renderer/src/workspace-menu.ts"
@@ -1930,7 +1934,7 @@
     "src/main/media.ts"
   ],
   "b07a24db4354": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "faac854ffc99": [
     "src/renderer/src/DocumentTabs.tsx"
@@ -1975,7 +1979,8 @@
     "src/shared/addon-manifest.ts"
   ],
   "464c4ffd019e": [
-    "src/main/index.ts"
+    "src/main/index.ts",
+    "src/renderer/src/formatted/link-controls.ts"
   ],
   "ed4b5895642d": [
     "src/addons/mermaid/BlockContent.tsx"
@@ -2018,7 +2023,11 @@
     "src/renderer/src/main.tsx"
   ],
   "94026ca2d09f": [
-    "src/renderer/src/FormattingToolbar.tsx"
+    "src/renderer/src/FormattingToolbar.tsx",
+    "src/renderer/src/formatted/link-controls.ts"
+  ],
+  "b2132be3f982": [
+    "src/renderer/src/formatted/link-controls.ts"
   ],
   "7bc860ccf5e3": [
     "src/addons/frontmatter/hibi-addon.json"
@@ -2782,8 +2791,8 @@
   ],
   "ac20a57bfde0": [
     "src/addons/mcp-server/Settings.tsx",
-    "src/renderer/src/EditorToolbar.tsx",
-    "src/renderer/src/SettingsScreen.tsx"
+    "src/renderer/src/SettingsScreen.tsx",
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "09f07073c96a": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -2792,13 +2801,13 @@
     "src/renderer/src/AddonPanel.tsx"
   ],
   "460e661f4720": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "435b510709a1": [
     "src/renderer/src/main.tsx"
   ],
   "8ca8ee1036e4": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "a71a84873c4e": [
     "src/renderer/src/SettingsScreen.tsx",
@@ -2828,10 +2837,10 @@
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
   "eae96e02bbc4": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "4810765ffe37": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "bcc843c0a7f9": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -3426,6 +3435,9 @@
   "a6a32dbc5618": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
+  "bffef58c5284": [
+    "src/renderer/src/formatted/link-controls.ts"
+  ],
   "0be7db8d7ab7": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
@@ -3652,7 +3664,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "8b56fc0ea9b7": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "1356a57a7a4b": [
     "src/addons/mermaid/hibi-addon.json"
@@ -3711,10 +3723,10 @@
     "src/renderer/src/workspace-menu.ts"
   ],
   "816580969665": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "189599ffaee2": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "ee1f0c423c5b": [
     "src/renderer/src/WorkspacesSidebar.tsx"
@@ -4069,6 +4081,7 @@
   ],
   "ed077f3d8125": [
     "src/renderer/src/CommandPalette.tsx",
+    "src/renderer/src/formatted/link-controls.ts",
     "src/renderer/src/main.tsx",
     "src/renderer/src/workspace-menu.ts"
   ],
@@ -4192,6 +4205,9 @@
   ],
   "9fa7894a6b62": [
     "src/site/main.tsx"
+  ],
+  "aab63f85c7f1": [
+    "src/renderer/src/formatted/link-controls.ts"
   ],
   "cb30b7d97617": [
     "src/main/local-diagnostics/runtime.ts"
@@ -4710,7 +4726,8 @@
   ],
   "c3812fc4acb8": [
     "src/addons/dictionary/CustomWords.tsx",
-    "src/renderer/src/addons.ts"
+    "src/renderer/src/addons.ts",
+    "src/renderer/src/formatted/link-controls.ts"
   ],
   "65e648140def": [
     "src/renderer/src/addons.ts"
@@ -4725,7 +4742,8 @@
     "src/addons/autocomplete/index.tsx"
   ],
   "4953f8970948": [
-    "src/renderer/src/FormattingToolbar.tsx"
+    "src/renderer/src/FormattingToolbar.tsx",
+    "src/renderer/src/formatted/link-controls.ts"
   ],
   "20b118351e19": [
     "src/addons/documentation/ExportDialog.tsx",
@@ -4848,7 +4866,7 @@
     "src/ui/SettingsFilter.tsx"
   ],
   "78643863b6f8": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "e4af9a2eda8c": [
     "src/renderer/src/HotkeyRow.tsx"
@@ -5244,7 +5262,7 @@
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
   "2ebca79ee1b1": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "ef9e0ecfed5f": [
     "src/renderer/src/Introduction.tsx",
@@ -5254,7 +5272,7 @@
     "src/addons/discord-presence/Settings.tsx"
   ],
   "d939dc73e46c": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "8f607c66708d": [
     "src/renderer/src/HibiSettings.tsx",
@@ -5279,8 +5297,8 @@
     "src/renderer/src/main.tsx"
   ],
   "1da402fd1aeb": [
-    "src/renderer/src/EditorToolbar.tsx",
     "src/renderer/src/Introduction.tsx",
+    "src/renderer/src/ToolbarSettings.tsx",
     "src/renderer/src/main.tsx"
   ],
   "86e811695eda": [
@@ -5656,7 +5674,7 @@
   "71988c4d8e08": [
     "src/addons/frontmatter/Properties.tsx",
     "src/addons/slash-commands/commands.ts",
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "298c5c533fc9": [
     "src/addons/text-extras/hibi-addon.json"
@@ -6830,16 +6848,16 @@
     "src/renderer/src/SourceEditor.tsx"
   ],
   "451aa51a0fb5": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "1a508df78152": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "e2386f6156ae": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "fc887fc99835": [
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "ea93d6a262ec": [
     "src/renderer/src/DependencySettings.tsx"
@@ -7572,7 +7590,7 @@
   ],
   "28391d3bc64e": [
     "src/addons/graph/Panel.tsx",
-    "src/renderer/src/EditorToolbar.tsx"
+    "src/renderer/src/ToolbarSettings.tsx"
   ],
   "03b0f1b66a14": [
     "src/addons/mcp-server/types.ts"

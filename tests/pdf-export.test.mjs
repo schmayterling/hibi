@@ -276,6 +276,19 @@ test('exports the active note as a PDF from the palette and the File menu', {
     assertLightDiagram(html)
     for (const flavor of ['typst', 'math', 'subtext', 'alert', 'footnote'])
       assert.match(html, new RegExp(`<h1[^>]*>Outside ${flavor}</h1>`))
+    assert.deepEqual(
+      await page.evaluate((html) => {
+        const document = new DOMParser().parseFromString(html, 'text/html')
+        return [...document.querySelectorAll('h1')]
+          .filter(
+            (heading) =>
+              heading.textContent.startsWith('Outside ') &&
+              heading.closest('blockquote, li'),
+          )
+          .map((heading) => heading.textContent)
+      }, html),
+      [],
+    )
     const result = await pdfText(target)
     assert.ok(result.pages > 0)
     for (const expected of [

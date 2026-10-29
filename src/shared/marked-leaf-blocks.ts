@@ -73,7 +73,7 @@ export function withLeafBlocks<T>(tokenizer: Tokenizer, read: () => T): T {
   }
   try {
     const token = read()
-    if (types.size) {
+    if (lexer.inlineQueue.length > inlineStart) {
       // Native quote/list re-reads leave queued inline work for discarded tokens.
       const reachable = new Set<object>()
       const pending: unknown[] = [token]

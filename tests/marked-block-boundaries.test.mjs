@@ -327,19 +327,30 @@ for (const [name, extension, body] of [
       })
 }
 
-test('nested alert re-reads keep one footnote back-link per reference', () => {
-  for (const body of [
-    '> > [!NOTE]\n> > body[^a]\nlazy',
-    '> > [!NOTE]\n> > body[^a]\n> > ```\n> > x\n> > ```\noutside\n===',
-    '| cell |\n| --- |\n| ref[^a] |',
-    '> > [!NOTE]\n> > | cell |\n> > | --- |\n> > | ref[^a] |',
-  ]) {
-    const html = new Marked(alertMarkdown, markedGithubFootnote()).parse(
-      `${body}\n\n[^a]: note`,
-    )
-    assert.equal((html.match(/data-footnote-ref\b/g) ?? []).length, 1)
-    assert.equal((html.match(/data-footnote-backref\b/g) ?? []).length, 1)
-  }
+test('container re-reads keep one footnote back-link per reference', () => {
+  for (const alerts of [false, true])
+    for (const body of [
+      '> > [!NOTE]\n> > body[^a]\nlazy',
+      '> > [!NOTE]\n> > body[^a]\n> > ```\n> > x\n> > ```\noutside\n===',
+      '| cell |\n| --- |\n| ref[^a] |',
+      '> > [!NOTE]\n> > | cell |\n> > | --- |\n> > | ref[^a] |',
+    ]) {
+      const html = new Marked(
+        ...(alerts ? [alertMarkdown] : []),
+        markedGithubFootnote(),
+      ).parse(`${body}\n\n[^a]: note`)
+      assert.equal((html.match(/data-footnote-ref\b/g) ?? []).length, 1)
+      assert.equal((html.match(/data-footnote-backref\b/g) ?? []).length, 1)
+    }
+})
+
+test('footnote boundary probes do not register inline references', () => {
+  const source = '[^a]: a\n\n[^b]: -# inner[^a]\n\nUse[^b].'
+  const html = new Marked(textExtrasMarkdown, markedGithubFootnote()).parse(
+    source,
+  )
+  assert.equal((html.match(/data-footnote-ref\b/g) ?? []).length, 2)
+  assert.equal((html.match(/data-footnote-backref\b/g) ?? []).length, 2)
 })
 
 const flavors = {

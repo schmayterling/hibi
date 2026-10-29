@@ -29,6 +29,8 @@ export function markedGithubFootnote(
       extensions: extensions
         ? {
             ...extensions,
+            inline: [],
+            startInline: [],
             block: (extensions.block ?? []).filter(
               (item) => item !== definition.tokenizer,
             ),

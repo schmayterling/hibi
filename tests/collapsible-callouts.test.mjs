@@ -219,7 +219,7 @@ async function openNote(t, engine, markdown) {
   await pressShortcut(app, `${mod}+o`)
   const pane = page.locator('.rich-pane')
   await pane.getByText('After paragraph.', { exact: true }).waitFor()
-  return { app, page, pane }
+  return { app, page, pane, file }
 }
 
 const hiding = [
@@ -416,4 +416,77 @@ test('codemirror: a callout keeps its own fold state as text around it changes',
     await pane.getByText('second body', { exact: true }).isVisible(),
     false,
   )
+})
+
+test('codemirror: a tab keeps its callout folds across tab switches and a reload from disk', {
+  timeout: 150000,
+}, async (t) => {
+  const markdown = [
+    '> [!note]- Closed first',
+    '> first body',
+    '',
+    '> [!tip]+ Open second',
+    '> second body',
+    '>',
+    '> > [!warning]- Nested third',
+    '> > third body',
+    '',
+    'After paragraph.',
+    '',
+  ].join('\n')
+  const { app, page, pane, file } = await openNote(t, 'codemirror', markdown)
+  const other = join(file, '..', 'other.md')
+  await writeFile(other, '# Other\n\nOther note.\n')
+  const control = (title) =>
+    pane.getByRole('button', { name: new RegExp(`callout: ${title}$`) })
+  const [first, second, third] = [
+    control('Closed first'),
+    control('Open second'),
+    control('Nested third'),
+  ]
+  const open = async (path) => {
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, path)
+    await pressShortcut(app, `${mod}+o`)
+  }
+  const back = async (text) => {
+    await page.getByRole('tab', { name: /folds/ }).first().click()
+    await pane.getByText(text, { exact: true }).waitFor()
+    await first.waitFor()
+  }
+  /** The reader's folds: first and second open, the nested third closed. */
+  const kept = async () => {
+    assert.equal(await first.getAttribute('aria-expanded'), 'true')
+    assert.equal(await second.getAttribute('aria-expanded'), 'false')
+    assert.equal(await pane.getByText('third body', { exact: true }).count(), 0)
+    await second.click()
+    assert.equal(await third.getAttribute('aria-expanded'), 'true')
+    await second.click()
+    assert.equal(await second.getAttribute('aria-expanded'), 'false')
+  }
+  await third.click()
+  await first.click()
+  await second.click()
+  await pane.getByText('first body', { exact: true }).waitFor()
+  assert.equal(await second.getAttribute('aria-expanded'), 'false')
+
+  await open(other)
+  await pane.getByText('Other note.', { exact: true }).waitFor()
+  await back('After paragraph.')
+  await kept()
+
+  // A clean tab reads its file again on return; the folds follow their callouts.
+  await open(other)
+  await pane.getByText('Other note.', { exact: true }).waitFor()
+  const changed = `Disk line.\n\n${markdown}`
+  await writeFile(file, changed)
+  await back('Disk line.')
+  await kept()
+  const current = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(current.markdown, changed)
+  assert.equal(current.dirty, false)
 })

@@ -1,14 +1,18 @@
 import {
+  type ChangeDesc,
+  ChangeSet,
   EditorSelection,
   EditorState,
   MapMode,
   StateEffect,
   StateField,
+  type Text,
 } from '@codemirror/state'
-import { type EditorView, WidgetType } from '@codemirror/view'
+import { type EditorView, ViewPlugin, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import {
   type FormattedContribution,
+  formattedDocument,
   formattedRenderInputs,
   formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
@@ -22,6 +26,42 @@ export { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
 
 type Fold = { fold: string; expanded: boolean }
 const setFold = StateEffect.define<Fold & { from: number }>()
+
+function mapFolds(at: ReadonlyMap<number, Fold>, changes: ChangeDesc) {
+  const mapped = new Map<number, Fold>()
+  for (const [from, fold] of at) {
+    // A callout whose first character goes takes its state with it.
+    const pos = changes.mapPos(from, 1, MapMode.TrackAfter)
+    if (pos !== null) mapped.set(pos, fold)
+  }
+  return mapped
+}
+
+/** The text from `a` to `b` as one change, between their common start and end. */
+function textChange(a: string, b: string) {
+  const length = Math.min(a.length, b.length)
+  let from = 0,
+    end = 0
+  while (from < length && a.charCodeAt(from) === b.charCodeAt(from)) from++
+  while (
+    end < length - from &&
+    a.charCodeAt(a.length - 1 - end) === b.charCodeAt(b.length - 1 - end)
+  )
+    end++
+  return ChangeSet.of(
+    { from, to: a.length - end, insert: b.slice(from, b.length - end) },
+    a.length,
+  )
+}
+
+/**
+ * Fold states of each tab's last formatted view, for the session. Its next
+ * view, after a tab switch or a reload of its file, starts with them,
+ * mapped through the text that changed meanwhile.
+ */
+// ponytail: a closed tab's entry keeps its text until the window reloads; drop entries on tab close if large notes make that matter.
+const kept = new Map<string, { doc: Text; at: ReadonlyMap<number, Fold> }>()
+
 /**
  * Fold states set by the reader, by callout start. Renderers read `key`,
  * which only a toggle replaces, so edits that move callouts keep cached
@@ -31,18 +71,18 @@ const folds = StateField.define<{
   at: ReadonlyMap<number, Fold>
   key: object
 }>({
-  create: () => ({ at: new Map(), key: {} }),
+  create(state) {
+    const { tabId } = state.facet(formattedDocument)
+    const saved = tabId === null ? undefined : kept.get(tabId)
+    if (!saved) return { at: new Map(), key: {} }
+    // The text can have changed meanwhile, as when a clean tab reloads its file.
+    const change = textChange(saved.doc.toString(), state.doc.toString())
+    return { at: mapFolds(saved.at, change), key: {} }
+  },
   update(value, transaction) {
     let { at, key } = value
-    if (transaction.docChanged && at.size) {
-      const mapped = new Map<number, Fold>()
-      for (const [from, fold] of at) {
-        // A callout whose first character goes takes its state with it.
-        const pos = transaction.changes.mapPos(from, 1, MapMode.TrackAfter)
-        if (pos !== null) mapped.set(pos, fold)
-      }
-      at = mapped
-    }
+    if (transaction.docChanged && at.size)
+      at = mapFolds(at, transaction.changes)
     for (const effect of transaction.effects)
       if (effect.is(setFold)) {
         at = new Map(at).set(effect.value.from, effect.value)
@@ -50,8 +90,18 @@ const folds = StateField.define<{
       }
     return at === value.at ? value : { at, key }
   },
-  provide: (field) =>
+  provide: (field) => [
     formattedRenderInputs.compute([field], (state) => state.field(field).key),
+    ViewPlugin.define((view) => ({
+      destroy() {
+        const { tabId } = view.state.facet(formattedDocument)
+        const at = view.state.field(field, false)?.at
+        if (tabId === null || !at) return
+        if (at.size) kept.set(tabId, { doc: view.state.doc, at })
+        else kept.delete(tabId)
+      },
+    })),
+  ],
 })
 
 function expandedAt(state: EditorState, from: number, fold: string) {

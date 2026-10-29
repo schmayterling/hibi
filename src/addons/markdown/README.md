@@ -16,4 +16,6 @@ Add `-` directly after a callout's type to start it collapsed, or `+` to start i
 
 In either formatted editor, use the chevron beside the title to fold or unfold the body. Focus the chevron and press Enter or Space to toggle it with the keyboard. Folding does not change the Markdown file. Callouts without `+` or `-` always show their bodies.
 
+Each tab keeps the folds you set until you quit, also when you come back to it or its file changes on disk.
+
 Plain `.txt` files use Hibi's built-in text editor and do not need a addon.

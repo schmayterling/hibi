@@ -404,6 +404,60 @@ test('inserted display math stays in the quote or list item around the caret', {
   }
 })
 
+test('a one-line display formula or image in a quote keeps one quote indent and bar', {
+  timeout: 90000,
+}, async () => {
+  // A drawing that replaces 20 or more characters splits the view's visible
+  // ranges inside its line, which still sits in one quote, not two.
+  await writeFile(
+    join(folder, 'notes', 'quoted.md'),
+    '> Under Shape 1, so\n> $$\\hat\\alpha = \\frac{2y_1+y_2}{2n}$$\n> ![a long alt text for this image](u.png) tail\n\nlast\n',
+  )
+  await open('quoted.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
+  await page.locator('.rich-pane [data-type="block-math"] .katex').waitFor()
+  await page.locator('.rich-pane .cm-line', { hasText: 'tail' }).waitFor()
+  assert.deepEqual(
+    await page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .cm-line.hibi-lp-quote')].map(
+        (line) => [
+          line.style.getPropertyValue('--hibi-indent'),
+          line.style.getPropertyValue('--hibi-paint').split('linear-gradient')
+            .length - 1,
+        ],
+      ),
+    ),
+    [
+      ['calc(21px)', 1],
+      ['calc(21px)', 1],
+      ['calc(21px)', 1],
+    ],
+  )
+  // The tops of the numerator's glyphs reach past the formula's box, inside
+  // the clip that lets a wide formula scroll sideways.
+  const formula = page.locator('.rich-pane [data-type="block-math"]')
+  const clipped = await formula.screenshot()
+  const unclip = await page.addStyleTag({
+    content: '.katex-display { overflow: visible !important }',
+  })
+  const whole = await formula.screenshot()
+  await unclip.evaluate((style) => style.remove())
+  // Glyph pixels, not the quote paint's dithering.
+  const cut = await app.evaluate(
+    ({ nativeImage }, images) => {
+      const [a, b] = images.map((image) =>
+        nativeImage.createFromBuffer(Buffer.from(image, 'base64')).toBitmap(),
+      )
+      let changed = 0
+      for (let i = 0; i < a.length; i += 4)
+        if ([0, 1, 2].some((c) => Math.abs(a[i + c] - b[i + c]) > 32)) changed++
+      return a.length === b.length ? changed : -1
+    },
+    [clipped, whole].map((image) => image.toString('base64')),
+  )
+  assert.equal(cut, 0, 'no part of the formula is cut off')
+})
+
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {
   timeout: 90000,
 }, async () => {

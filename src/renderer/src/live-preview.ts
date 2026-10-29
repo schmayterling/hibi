@@ -564,6 +564,21 @@ function inline(
     }
     return info
   }
+  /**
+   * Holds the line at `pos` in a container once: a drawing that replaces 20
+   * or more characters splits the visible ranges inside its line, so each
+   * range reaches the line's containers.
+   */
+  const contain = (pos: number, node: SyntaxNode) => {
+    const info = line(pos)
+    if (
+      !info.containers.some(
+        (other) => other.from === node.from && other.type === node.type,
+      )
+    )
+      info.containers.push(node)
+    return info
+  }
   // Hidden syntax is atomic, so the caret steps over it and it never splits.
   const hideRange = (from: number, to: number) => {
     if (to <= from) return
@@ -791,7 +806,7 @@ function inline(
             ) {
               const node = ref.node
               eachLine(doc, ref.from, ref.to, range, (current) => {
-                line(current.from).containers.push(node)
+                contain(current.from, node)
               })
             }
           }
@@ -941,7 +956,7 @@ function inline(
         return
       case 'Blockquote':
         eachLine(doc, ref.from, ref.to, range, (current) => {
-          line(current.from).containers.push(ref.node)
+          contain(current.from, ref.node)
         })
         return
       case 'QuoteMark': {
@@ -955,9 +970,7 @@ function inline(
       }
       case 'ListItem':
         eachLine(doc, ref.from, ref.to, range, (current) => {
-          const info = line(current.from)
-          info.item = ref.node
-          info.containers.push(ref.node)
+          contain(current.from, ref.node).item = ref.node
         })
         return
       case 'FencedCode':

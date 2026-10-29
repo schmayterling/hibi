@@ -1,0 +1,11 @@
+diff --git a/docs/guides/settings.md b/docs/guides/settings.md
+--- a/docs/guides/settings.md
++++ b/docs/guides/settings.md
+@@ -71,3 +71,7 @@
+ **Connects to** lists an addon's declared HTTPS hosts in its row and settings. Enabling it approves credential-free GET requests to those exact origins. Redirects outside the declared origins, requests with credentials, and requests to local or private addresses still prompt. Hibi only honors declarations in the manifest reviewed by its main process.
+ 
++### Stage Git changes
++
++Enable **Git**, open your repository's root folder as a workspace, and choose **Git** from the sidebar view menu. Save your notes, then choose **Stage all** beside **Changes** to stage all new, modified, and deleted files. Ignored files are excluded. If a file requires an external Git filter, staging stops without changing the staged files; stage that file with your usual Git client first. You can still stage individual files with their **Stage** buttons. Click the commit icon and enter a message to commit the staged changes.
++
+ ### Install an addon

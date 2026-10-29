@@ -43,9 +43,13 @@ async function repository(context: NativeAddonContext) {
         ? ['credential.helper=manager']
         : []),
   ].flatMap((setting) => ['-c', setting])
-  const run = async (args: string[], optional = false): Promise<string> => {
+  const run = async (
+    args: string[],
+    optional = false,
+    input?: string,
+  ): Promise<string> => {
     try {
-      const result = await execute(git, [...config, ...args], {
+      const pending = execute(git, [...config, ...args], {
         cwd,
         timeout: 90_000,
         maxBuffer: 4 * 1024 * 1024,
@@ -61,6 +65,8 @@ async function repository(context: NativeAddonContext) {
           GIT_OPTIONAL_LOCKS: '0',
         },
       })
+      if (input !== undefined) pending.child.stdin?.end(input)
+      const result = await pending
       return result.stdout
     } catch (error) {
       const failure = error as Error & {
@@ -155,6 +161,37 @@ async function changedPath(
   if (!file) throw new Error('This file has no changes. Refresh Git status.')
   return file
 }
+async function stageFiles(
+  repo: Awaited<ReturnType<typeof repository>>,
+  files: GitFile[],
+) {
+  const paths = [
+    ...new Set(
+      files.flatMap((file) =>
+        file.original && file.worktree === 'R'
+          ? [file.original, file.path]
+          : [file.path],
+      ),
+    ),
+  ]
+  if (!paths.length) return
+  const input = `${paths.join('\0')}\0`
+  const attributes = (
+    await repo.run(['check-attr', '-z', '--stdin', 'filter'], false, input)
+  ).split('\0')
+  for (let i = 2; i < attributes.length; i += 3) {
+    const filter = attributes[i]
+    if (filter && !['unspecified', 'unset'].includes(filter))
+      throw new Error(
+        'This file needs an external Git filter. Stage it in your Git client to preserve its encoding.',
+      )
+  }
+  await repo.run(
+    ['add', '--all', '--pathspec-from-file=-', '--pathspec-file-nul'],
+    false,
+    input,
+  )
+}
 export default {
   id: manifest.id,
   queries: {
@@ -216,19 +253,17 @@ export default {
     async stage(input, context) {
       const repo = await repository(context)
       const file = await changedPath(repo, input)
-      const filter = (
-        await repo.run(['check-attr', '-z', 'filter', '--', file.path])
-      ).split('\0')[2]
-      if (filter && !['unspecified', 'unset'].includes(filter))
-        throw new Error(
-          'This file needs an external Git filter. Stage it in your Git client to preserve its encoding.',
-        )
-      await repo.run([
-        'add',
-        '--',
-        ...(file.original ? [file.original] : []),
-        file.path,
-      ])
+      await stageFiles(repo, [file])
+      return state(context)
+    },
+    async stageAll(_input, context) {
+      const repo = await repository(context)
+      await stageFiles(
+        repo,
+        (await repo.files()).filter(
+          (file) => file.worktree !== ' ' || file.index === '?',
+        ),
+      )
       return state(context)
     },
     async unstage(input, context) {

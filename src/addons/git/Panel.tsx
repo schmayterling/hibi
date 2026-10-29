@@ -235,9 +235,22 @@ export function GitPanel({
           )}
           {!!state.files.length && (
             <section className="git-files" aria-label="Changed files">
-              <p className="git-section-label">
-                Changes · {state.files.length}
-              </p>
+              <div className="git-section-header">
+                <p className="git-section-label">
+                  Changes · {state.files.length}
+                </p>
+                <Button
+                  disabled={
+                    busy ||
+                    !state.files.some(
+                      (file) => file.worktree !== ' ' || file.index === '?',
+                    )
+                  }
+                  onClick={() => void run('stageAll')}
+                >
+                  Stage all
+                </Button>
+              </div>
               {state.files.map((file) => (
                 <div className="git-file" key={file.path}>
                   <Button

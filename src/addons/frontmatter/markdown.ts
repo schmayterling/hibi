@@ -1,7 +1,10 @@
-import { readFrontmatter as splitFrontmatter } from '../../shared/frontmatter.ts'
+import {
+  readFrontmatter as splitFrontmatter,
+  yamlLines,
+} from '../../shared/frontmatter.ts'
 import type { MarkdownProjection } from '../api'
 
-export { splitFrontmatter }
+export { splitFrontmatter, yamlLines }
 
 export function addFrontmatter(source: string): string {
   if (parseFrontmatter(source)) return source
@@ -31,7 +34,7 @@ export function parseFrontmatter(source: string): MarkdownProjection | null {
     sourceOffset: block.prefix.length,
     serialize: (content) =>
       block.prefix +
-      (content && !block.prefix.endsWith('\n') ? block.eol : '') +
+      (content && !/[\r\n]$/.test(block.prefix) ? block.eol : '') +
       content,
   }
 }

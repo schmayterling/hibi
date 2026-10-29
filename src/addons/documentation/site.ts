@@ -6,7 +6,7 @@ import sanitizeHtml from 'sanitize-html'
 import { parseDocument } from 'yaml'
 import { bundledColorschemes } from '../../shared/color-palettes.ts'
 import { COLOR_TOKENS, defineColorscheme } from '../../shared/colorschemes.ts'
-import { readFrontmatter } from '../../shared/frontmatter.ts'
+import { readFrontmatter, yamlLines } from '../../shared/frontmatter.ts'
 import { headingAnchors } from '../../shared/heading-anchor.ts'
 import { lexMarkdown, parseMarkdown } from '../../shared/marked-blocks.ts'
 import type { WorkspaceSnapshot } from '../../shared/workspace'
@@ -261,7 +261,9 @@ export function prepareSite(
       )
     seen.add(page.path.toLowerCase())
     const frontmatter = readFrontmatter(page.markdown)
-    const document = frontmatter ? parseDocument(frontmatter.yaml) : null
+    const document = frontmatter
+      ? parseDocument(yamlLines(frontmatter.yaml))
+      : null
     const property = (key: string) => {
       const value: unknown = document?.get(key)
       return typeof value === 'string' ? value.trim() : ''

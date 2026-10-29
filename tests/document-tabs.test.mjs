@@ -7,7 +7,12 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  replaceRichText,
+  splitTab,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('disk refresh after focusing an older tab advances its revision', {
@@ -1191,6 +1196,94 @@ test('context-menu bulk close confirms dirty tabs and cancels as a unit', {
   )
   assert.equal(current.tabId, a.id)
   assert.equal(await app.evaluate(() => globalThis.choices.length), 2)
+})
+
+test('bulk close keeps saved retained tabs on their revision when a later prompt cancels', {
+  timeout: 40000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-menu-partial-'))
+  const files = ['a', 'b', 'c'].map((name) => join(root, `${name}.md`))
+  for (const file of files) await writeFile(file, `original ${basename(file)}`)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  page.setDefaultTimeout(6500)
+  await waitForDocumentEditor(app, page)
+  const read = () => page.evaluate(() => window.hibi.getDocument())
+  for (const file of files) {
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      basename(file),
+    )
+  }
+  const [a, b, c] = (await read()).tabs.filter((tab) =>
+    ['a.md', 'b.md', 'c.md'].includes(tab.name),
+  )
+  assert.ok(a && b && c)
+  const select = async (id) => {
+    await page.locator(`[data-tab-id="${id}"]`).click()
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      id,
+    )
+    await waitForDocumentEditor(app, page)
+  }
+  const editor = page.getByRole('textbox', { name: /document editor/i })
+  await select(b.id)
+  await replaceRichText(page, editor, 'dirty b')
+  await select(c.id)
+  await replaceRichText(page, editor, 'dirty c')
+  await select(a.id)
+  await app.evaluate(({ dialog }) => {
+    globalThis.choices = []
+    // Save B, then cancel C.
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.choices.push(options.message)
+      return { response: options.message.includes('b.md') ? 0 : 2 }
+    }
+  })
+  await page.locator(`[data-tab-id="${a.id}"]`).click({ button: 'right' })
+  await page
+    .getByRole('menuitem', { name: 'Close other tabs', exact: true })
+    .click()
+  await waitForAsync(app, () => globalThis.choices.length === 2)
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  assert.equal(await readFile(files[1], 'utf8'), 'dirty b')
+  assert.equal(await readFile(files[2], 'utf8'), 'original c.md')
+  const current = await read()
+  assert.equal(current.tabId, a.id)
+  assert.equal(current.tabs.length, 3)
+  // Saving B activated it briefly in main; its retained editor still owns it.
+  await splitTab(app, page, b.id)
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b.id,
+  )
+  await page.locator('.editor-page[data-side="right"]').waitFor()
+  const split = await read()
+  assert.equal(split.dirty, false)
+  assert.equal(split.markdown, 'dirty b')
 })
 
 test('middle-click closes tabs without changing the active document', {

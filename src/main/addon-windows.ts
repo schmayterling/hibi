@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   app,
-  BrowserWindow,
+  type BrowserWindow,
   type IpcMainInvokeEvent,
   type Rectangle,
   screen,
@@ -17,6 +17,7 @@ import { appearanceColors, titleBarColors } from './appearance'
 import { writeText } from './files'
 import { isTrustedRendererUrl } from './security'
 import { testPause } from './test-pauses'
+import { createBrowserWindow } from './window-creation'
 
 type Entry = AddonWindowContext & {
   window: BrowserWindow
@@ -198,7 +199,7 @@ async function create(
   await testPause('addon-window-placement')
   if (request.cancelled)
     throw new Error('This addon window was closed before it opened.')
-  const window = new BrowserWindow({
+  const window = createBrowserWindow({
     ...bounds,
     minWidth: 240,
     minHeight: 240,

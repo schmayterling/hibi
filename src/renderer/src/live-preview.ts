@@ -2005,12 +2005,29 @@ export function livePreview(
           capture: true,
           passive: true,
         })
+        view.contentDOM.addEventListener('focusout', this.left)
+      }
+      /**
+       * Focus leaving a control in the text, such as a checkbox, for outside
+       * the editor hides the syntax the control kept shown. The editor's own
+       * handlers do not see events from widgets.
+       */
+      readonly left = (event: FocusEvent) => {
+        const next = event.relatedTarget
+        if (
+          event.target !== this.view.contentDOM &&
+          !(next instanceof Node && this.view.contentDOM.contains(next))
+        )
+          queueMicrotask(() => {
+            if (!this.destroyed) this.view.dispatch({})
+          })
       }
       destroy() {
         this.destroyed = true
         this.view.contentDOM.removeEventListener('scroll', this.scrolled, {
           capture: true,
         })
+        this.view.contentDOM.removeEventListener('focusout', this.left)
       }
       docViewUpdate(view: EditorView) {
         nameHeadings(view)
@@ -2540,19 +2557,6 @@ export function livePreview(
           event.target.classList.contains('hibi-lp-codescroll')
         )
           view.contentDOM.focus({ preventScroll: true })
-        return false
-      },
-      // Focus leaving a control in the text for outside the editor hides
-      // the syntax the control kept shown.
-      focusout(event, view) {
-        const next = event.relatedTarget
-        if (
-          event.target !== view.contentDOM &&
-          !(next instanceof Node && view.contentDOM.contains(next))
-        )
-          queueMicrotask(() => {
-            if (view.dom.isConnected) view.dispatch({})
-          })
         return false
       },
       beforeinput(event, view) {

@@ -864,7 +864,7 @@ test('failed-step reports and zero-build CLI publish metadata without glob error
     { cwd, env: { ...env, GH_CALLS: join(cwd, 'gh-calls') } },
   )
   const calls = readFileSync(join(cwd, 'gh-calls'), 'utf8')
-  assert.match(calls, /installers\/SHA256SUMS.txt/)
+  assert.match(calls, /installers[\\/]SHA256SUMS\.txt/)
   assert.doesNotMatch(calls, /\*|\.exe|\.dmg|latest=true/)
   assert.ok(
     readFileSync(join(cwd, 'output'), 'utf8').includes('published=true'),

@@ -29,7 +29,10 @@ fixed: typst emitted `typstBlock` before marked handled its own fences. marked's
 
 - fail-first oracle: 9 passed, 3 failed (typst, counts, combined). exact reported quote: 0 passed, 1 failed.
 - final node gate: 259 passed, 0 failed, 4 explicit todo reproductions. build/typecheck, biome, copy check and docs links passed.
-- typst desktop suite: 2 passed, covering both engines.
+- typst desktop suite: 2 passed, covering both engines. startup-performance: 10 passed; startup closure 691,804 bytes (170 below the gate). math-rendering: 9 passed.
+- docs-export: 1 passed. site-export: 8 passed. site: 7 passed, 2 failed (one codemirror navigation subtest and its parent); targeted retry: 1 passed, 2 failed. the missing `jump 0` link repeats at `tests/site.test.mjs:522`.
+- markdown-semantics-native: 19 passed, 1 failed in each of two runs. the codemirror reference-url edit does not publish the expected document source within 7 seconds (`tests/markdown-semantics-native.test.mjs:880`). these two desktop gates remain unresolved.
+- selected main runs total 315 passed, 3 failed, 4 todo; retries are recorded separately. large outline/corpus/search and 2,000-formula stress cases were excluded by lane rules.
 
 ## unresolved
 

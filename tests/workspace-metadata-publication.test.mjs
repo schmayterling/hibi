@@ -59,7 +59,8 @@ const bundle = await build({
           namespace: 'metadata-publication-host',
         }))
         build.onResolve({ filter: /^node:fs$/ }, ({ importer }) =>
-          importer.endsWith('/workspace.ts')
+          // Windows importers use backslashes.
+          /[\\/]workspace\.ts$/.test(importer)
             ? { path: 'watch', namespace: 'metadata-publication-host' }
             : null,
         )

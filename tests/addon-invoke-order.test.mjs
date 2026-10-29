@@ -18,7 +18,7 @@ const source = [
   ),
   index.slice(
     index.indexOf('const fileOperationUnavailable'),
-    index.indexOf('async function serveAsset('),
+    index.search(/^(?:async )?function serveAsset\(/m),
   ),
   addons
     .slice(

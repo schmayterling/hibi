@@ -125,6 +125,11 @@ test('typst fences close and dedent per CommonMark in every view', () => {
   }
 })
 
+test('startup detection sees typst after another language closes with a tab', () => {
+  const source = '```js\nx\n```\t\n\n```typst\ny\n```'
+  assert.equal(typstFlavor.detect(source), true)
+})
+
 test('other fences keep their native code tokens', () => {
   const lex = (source) =>
     new Marked(blockMarkdown).lexer(source).map(({ type, raw, text }) => ({

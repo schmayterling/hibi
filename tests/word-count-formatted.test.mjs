@@ -657,17 +657,17 @@ for (const language of ['mermaid', 'typst'])
     }
   })
 
-test('ordinary indented fences retain Marked text despite the native schema omission', () => {
+test('tab closers keep following text outside indented fences', () => {
   for (const language of ['js', 'typst'])
     for (const [indent, suffix] of [
       [' ', '\t'],
       ['   ', ' \t '],
     ]) {
       const source = `before\n\n${indent}~~~${language}\nx\n${indent}~~~${suffix}\n\nafter`
-      assert.equal(native(source), 'before')
+      assert.equal(native(source), 'before\nafter')
       assert.equal(
         richText(source, { ...defaultNoteSyntax, typst: true }).slice(1),
-        `before\nx\n${indent}~~~${suffix}\n\nafter`,
+        language === 'typst' ? 'before\n\nafter' : 'before\nx\nafter',
       )
     }
 })

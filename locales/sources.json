@@ -4443,7 +4443,7 @@
     "src/addons/typst/index.tsx"
   ],
   "cb6414662e23": [
-    "src/addons/typst/syntax.ts"
+    "src/addons/typst/flavor-info.ts"
   ],
   "a25e1bc00de9": [
     "src/renderer/src/FormatEditor.tsx"

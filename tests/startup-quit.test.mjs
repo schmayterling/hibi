@@ -180,6 +180,9 @@ app.once('quit', () => console.error('quit completed'))
     { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
   )
   const closed = once(child, 'close')
+  t.diagnostic(`constructor quit process: ${child.pid}`)
+  // A native crash can leave helpers holding the output pipes open.
+  child.once('exit', () => stopElectronTree(child))
   t.after(async () => {
     stopElectronTree(child)
     await closed

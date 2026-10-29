@@ -95,17 +95,28 @@ test('inline input throws the tagged rejection only for the unsafe render', () =
 })
 
 test('inline input leaves a reference definition destination to plain text input', () => {
-  const source = '[ref]: /first\n\n# [label][ref]\n\nlast'
-  const state = EditorState.create({
-    doc: source,
-    selection: { anchor: 7, head: 13 },
-  })
-  // The destination is not linked text: typing over it must not wrap it as a link.
-  assert.equal(
-    inlineInput(state, grammar.parse(source), 7, 13, '/changed'),
-    null,
-  )
-  assert.equal(view(source, 7, 13).input('/changed'), false)
+  for (const definition of [
+    '[ref]: /first',
+    '[ref]: </first> "title"',
+    '> [ref]: /first',
+  ]) {
+    const source = `${definition}\n\n# [label][ref]\n\nlast`
+    const from = source.indexOf('/first'),
+      to = from + '/first'.length
+    const state = EditorState.create({
+      doc: source,
+      selection: { anchor: from, head: to },
+    })
+    // The destination is not linked text: typing over it must not wrap it as a link.
+    assert.equal(
+      inlineInput(state, grammar.parse(source), from, to, '/changed'),
+      null,
+    )
+    assert.equal(view(source, from, to).input('/changed'), false)
+  }
+  const linked = view('[label](/first)', 1, 6)
+  assert.equal(linked.input('changed'), true)
+  assert.equal(linked.state.doc.toString(), '[changed](/first)')
 })
 
 test('stored-mark input rejects an unsafe edge with only the annotation', () => {

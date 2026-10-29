@@ -64,13 +64,14 @@ Object.assign(window, {
             ? `anchor ${i} text\n\n$$\n\\begin{pmatrix} ${[i, ...Array(rows - 1).fill('b')].join('\\\\')} \\end{pmatrix}\n$$\n\n`
             : `anchor ${i} text $\\dfrac{${i}}{\\dfrac{1}{2}}$ suffix\n\n`
       anchor = doc.indexOf(`anchor ${index} text`)
+      const syntax = formattedSyntax()
       view = new EditorView({
         parent: host,
         state: EditorState.create({
           doc,
           selection: { anchor },
           extensions: [
-            livePreview(formattedSyntax()),
+            livePreview(syntax),
             ...[contributions.inline, contributions.block].flatMap(
               (contribution) => [
                 formattedMarkdown.of(contribution.syntax),
@@ -86,20 +87,44 @@ Object.assign(window, {
       })
       await document.fonts.ready
       if (focused) view.focus()
-      for (let attempt = 0; attempt < 20; attempt++) {
-        view.dispatch({
-          effects: EditorView.scrollIntoView(anchor, {
-            y: 'start',
-            yMargin: 180,
-          }),
-        })
+      // Lines the editor has not drawn have estimated heights, and a tall
+      // formula's estimate is far off: once it measures the lines above the
+      // reading line, the line moves. Measure them first, a screen at a time.
+      while (
+        pane.scrollTop + pane.clientHeight <
+        view.lineBlockAt(anchor).top
+      ) {
+        pane.scrollTop += pane.clientHeight / 2
         await frame()
-        const top = view.coordsAtPos(anchor, 1)?.top
-        if (
+      }
+      // The view also parses the text around the viewport while the page is
+      // quiet, which draws the formulas there; an unfocused editor does not
+      // anchor its outer pane. The reading line settles once it stays put
+      // through quiet time with no new syntax.
+      const placed = () => {
+        const top = view!.coordsAtPos(anchor, 1)?.top
+        return (
           top !== undefined &&
           Math.abs(top - pane.getBoundingClientRect().top - 180) < 1
         )
-          return
+      }
+      let tree = syntax.tree(view.state)
+      for (let attempt = 0, stable = 0; attempt < 60; attempt++) {
+        if (!placed()) {
+          stable = 0
+          view.dispatch({
+            effects: EditorView.scrollIntoView(anchor, {
+              y: 'start',
+              yMargin: 180,
+            }),
+          })
+        }
+        await frame()
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        const parsed = syntax.tree(view.state)
+        if (parsed !== tree) stable = 0
+        else if (placed() && ++stable === 3) return
+        tree = parsed
       }
       throw new Error('the reading line did not settle')
     },

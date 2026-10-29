@@ -90,7 +90,7 @@ export function countMarkdownSyntax(
             )
               continue
             // Probe native termination only at plausible closers. In particular,
-            // Marked rejects tab suffixes that Lezer accepts; Typst accepts them.
+            // Marked rejects tab suffixes that Lezer accepts, including for Typst.
             const probe = `${opener}${line.text}\nafter`
             const token = typst
               ? typstBlock(probe)

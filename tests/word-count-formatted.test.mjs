@@ -31,7 +31,8 @@ import {
 import { mermaidMarkdown } from '../src/addons/mermaid/markdown.ts'
 import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
-import { typstBlock, typstTokens } from '../src/addons/typst/syntax.ts'
+import { typstMarkdown } from '../src/addons/typst/markdown.ts'
+import { typstTokens } from '../src/addons/typst/syntax.ts'
 import { countText } from '../src/addons/word-count/count.ts'
 import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
@@ -576,23 +577,7 @@ for (const language of ['mermaid', 'typst'])
       group: 'block',
       atom: true,
       addAttributes: () => ({ source: { default: '' }, raw: { default: '' } }),
-      ...(language === 'mermaid'
-        ? mermaidMarkdown
-        : {
-            markdownTokenName: 'typstBlock',
-            markdownTokenizer: {
-              name,
-              level: 'block',
-              start: (source) =>
-                source.search(/^ {0,3}(?:`{3,}|~{3,})typst[ \t]*\r?$/im),
-              tokenize: typstBlock,
-            },
-            parseMarkdown: (token, helpers) =>
-              helpers.createNode(name, {
-                source: token.source,
-                raw: token.raw,
-              }),
-          }),
+      ...(language === 'mermaid' ? mermaidMarkdown : typstMarkdown),
     })
     const flavor = {
       id: `${language}.blocks`,
@@ -610,8 +595,7 @@ for (const language of ['mermaid', 'typst'])
       matches: (token) =>
         language === 'mermaid'
           ? token.type === 'code' && token.lang === 'mermaid'
-          : token.type === 'typstBlock' ||
-            (token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? '')),
+          : token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? ''),
     })
     try {
       for (const disabled of [
@@ -636,14 +620,10 @@ for (const language of ['mermaid', 'typst'])
             `before\n\n\`\`\`${language}\nx\n\nafter`,
             `\`\`\`${language} extra\nx\n\`\`\``,
             `> \`\`\`${language}\n> x\n> \`\`\`\n\nafter`,
+            `> \`\`\`${language}\n> x\n> \`\`\`\noutside\n===\n\n# real`,
+            `> \`\`\`${language}\r\n> x\r\n> \`\`\`\r\noutside\r\n===\r\n\r\n# real`,
             `- before\n\n  \`\`\`${language}\n  x\n  \`\`\`\n\nafter`,
             `before\n\n~~~${language}\nx\n~~~\t\n\nafter`,
-            ...(active && !disabled.length
-              ? [
-                  `before\n\n ~~~${language}\nx\n ~~~\t\n\nafter`,
-                  `before\n\n   ~~~${language}\nx\n   ~~~ \t \n\nafter`,
-                ]
-              : []),
             `> ~~~${language}\n> x\n> ~~~\t\n> tail\n\nafter`,
             `- before\n\n  ~~~${language}\n  x\n  ~~~\t\n  tail\n\nafter`,
             '```js\nordinary code\n```',
@@ -678,12 +658,18 @@ for (const language of ['mermaid', 'typst'])
   })
 
 test('ordinary indented fences retain Marked text despite the native schema omission', () => {
-  const source = 'before\n\n ~~~js\nx\n ~~~\t\n\nafter'
-  assert.equal(native(source), 'before')
-  assert.equal(
-    richText(source, defaultNoteSyntax).slice(1),
-    'before\nx\n ~~~\t\n\nafter',
-  )
+  for (const language of ['js', 'typst'])
+    for (const [indent, suffix] of [
+      [' ', '\t'],
+      ['   ', ' \t '],
+    ]) {
+      const source = `before\n\n${indent}~~~${language}\nx\n${indent}~~~${suffix}\n\nafter`
+      assert.equal(native(source), 'before')
+      assert.equal(
+        richText(source, { ...defaultNoteSyntax, typst: true }).slice(1),
+        `before\nx\n${indent}~~~${suffix}\n\nafter`,
+      )
+    }
 })
 
 test('formatted text and counts match the rich view', () => {

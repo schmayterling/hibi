@@ -11,7 +11,7 @@ import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)
@@ -2686,7 +2686,7 @@ test('a native selection in a read-only table becomes the editing selection', {
   assert.equal((await state()).doc, doc)
   await harness.evaluate(() => window.tables.setEditable(true))
   await harness.evaluate(() => window.tables.settle())
-  await harness.keyboard.type('XY')
+  await withHeldClock(harness, () => harness.keyboard.type('XY'))
   assert.equal((await state()).doc, doc.replace('alpha', 'XY'))
   await harness.keyboard.press(
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
@@ -2901,7 +2901,7 @@ for (const [label, content, pickedText, source] of [
       assert.equal((await state()).doc, doc)
       await harness.evaluate(() => window.tables.setEditable(true))
       await harness.evaluate(() => window.tables.settle())
-      await harness.keyboard.type('XY')
+      await withHeldClock(harness, () => harness.keyboard.type('XY'))
       assert.equal(
         (await state()).doc,
         `${doc.slice(0, from)}XY${doc.slice(to)}`,

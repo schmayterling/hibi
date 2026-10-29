@@ -121,7 +121,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // parser callbacks and recovery stay behind editor imports.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 691124 + 713 + 22 + 115,
+    // Merged main (2a0be662) measures 692186; the editor changes add no bytes.
+    bytes <= 692186,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

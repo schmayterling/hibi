@@ -245,7 +245,8 @@ test('literal double dollars stay literal after rich serialization and export', 
       const saved = markdownSerializer(manager, blockLocal)(doc).source
       let formulas = 0
       parser.walkTokens(parser.lexer(saved), (token) => {
-        if (token.type === 'inlineMath' || token.type === 'blockMath') formulas++
+        if (token.type === 'inlineMath' || token.type === 'blockMath')
+          formulas++
       })
       assert.equal(formulas, 0, saved)
     }

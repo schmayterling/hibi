@@ -87,46 +87,36 @@ Object.assign(window, {
       })
       await document.fonts.ready
       if (focused) view.focus()
-      // Lines the editor has not drawn have estimated heights, and a tall
-      // formula's estimate is far off: once it measures the lines above the
-      // reading line, the line moves. Measure them first, a screen at a time.
-      while (
-        pane.scrollTop + pane.clientHeight <
-        view.lineBlockAt(anchor).top
-      ) {
-        pane.scrollTop += pane.clientHeight / 2
+      for (let attempt = 0; attempt < 20; attempt++) {
+        view.dispatch({
+          effects: EditorView.scrollIntoView(anchor, {
+            y: 'start',
+            yMargin: 180,
+          }),
+        })
         await frame()
-      }
-      // The view also parses the text around the viewport while the page is
-      // quiet, which draws the formulas there; an unfocused editor does not
-      // anchor its outer pane. The reading line settles once it stays put
-      // through quiet time with no new syntax.
-      const placed = () => {
-        const top = view!.coordsAtPos(anchor, 1)?.top
-        return (
+        const top = view.coordsAtPos(anchor, 1)?.top
+        if (
           top !== undefined &&
           Math.abs(top - pane.getBoundingClientRect().top - 180) < 1
         )
-      }
-      let tree = syntax.tree(view.state)
-      for (let attempt = 0, stable = 0; attempt < 60; attempt++) {
-        if (!placed()) {
-          stable = 0
-          view.dispatch({
-            effects: EditorView.scrollIntoView(anchor, {
-              y: 'start',
-              yMargin: 180,
-            }),
-          })
-        }
-        await frame()
-        await new Promise((resolve) => setTimeout(resolve, 100))
-        const parsed = syntax.tree(view.state)
-        if (parsed !== tree) stable = 0
-        else if (placed() && ++stable === 3) return
-        tree = parsed
+          return
       }
       throw new Error('the reading line did not settle')
+    },
+    /** Idle parsing and height estimates must not move an already placed reader. */
+    async idle() {
+      const before = view!.coordsAtPos(anchor, 1)!.top
+      let moved = 0
+      for (let sample = 0; sample < 10; sample++) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        await frame()
+        moved = Math.max(
+          moved,
+          Math.abs(view!.coordsAtPos(anchor, 1)!.top - before),
+        )
+      }
+      return moved
     },
     /**
      * Renders the pending formulas `where` the reading line is, in one slice:
@@ -134,7 +124,12 @@ Object.assign(window, {
      * Optionally scrolls by `scroll` in the next frame. Reports how far the
      * reading line moved after `frames` frames and where the pane ended up.
      */
-    async fill(where: 'above' | 'line' | 'previous', scroll = 0, frames = 2) {
+    async fill(
+      where: 'above' | 'below' | 'line' | 'previous',
+      scroll = 0,
+      frames = 2,
+      typing = false,
+    ) {
       const paneTop = pane.getBoundingClientRect().top
       const before = view!.coordsAtPos(anchor, 1)!.top
       const line = view!.state.doc.lineAt(anchor)
@@ -142,6 +137,7 @@ Object.assign(window, {
         if (!dom.isConnected) return false
         const at = view!.posAtDOM(dom)
         if (where === 'line') return at > anchor && at <= line.to
+        if (where === 'below') return at > line.to
         if (where === 'previous')
           return at < anchor && dom.getBoundingClientRect().bottom <= before
         return dom.getBoundingClientRect().bottom <= paneTop
@@ -159,6 +155,15 @@ Object.assign(window, {
         requestAnimationFrame(() => {
           pane.scrollTop += scroll
           target = pane.scrollTop
+        })
+      if (typing)
+        requestAnimationFrame(() => {
+          view!.dispatch({
+            changes: { from: anchor, insert: 'typed ' },
+            selection: { anchor: anchor + 6 },
+            userEvent: 'input.type',
+          })
+          anchor += 6
         })
       for (const [dom, { latex, display, done }] of chosen) {
         pending.delete(dom)

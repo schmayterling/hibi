@@ -177,14 +177,6 @@ export const markedFenceText = ({ lines, marker, indent }: Fence) =>
     : lines
   ).join('\n')
 
-/** A fence's body with its indentation removed from the lines that start with it. */
-export const dedentedFenceText = ({ lines, indent }: Fence) =>
-  lines
-    .map((line) =>
-      line.startsWith(' '.repeat(indent)) ? line.slice(indent) : line,
-    )
-    .join('\n')
-
 /**
  * Changes that make `source` the body of the fence `node`, keeping its
  * opening and closing lines and writing each new line with the containers'

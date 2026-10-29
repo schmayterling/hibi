@@ -3,11 +3,11 @@ import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import type { FormattedContribution } from '../../renderer/src/formatted-contributions'
 import {
-  dedentedFenceText,
   type FenceBlock,
   type FencedRenderer,
   fencedView,
   fenceKeys,
+  markedFenceText,
   RenderedBlocks,
 } from '../_shared/formatted-fence'
 import type { AddonContext } from '../api'
@@ -37,9 +37,9 @@ export function typstContribution(
     id: 'typst',
     className: 'typst-block',
     matches: (info) => info.toLowerCase() === 'typst',
-    // As the Typst tokenizer reads a fence.
-    source: dedentedFenceText,
-    indented: () => true,
+    // The rich view reads Typst blocks from Marked's code tokens.
+    source: markedFenceText,
+    indented: ({ marker }) => marker.startsWith('`'),
     mount(dom, block) {
       const root = createRoot(dom)
       // Rendered before the line is measured and painted, outside any React

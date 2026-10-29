@@ -3,28 +3,21 @@ import { markedGithubFootnote } from 'marked-github-footnote'
 
 const definition = /(?:^|\r?\n) {0,3}\[\^[^\]\s]+\]:/
 
-/** A line that could start a footnote definition; only a lex can rule it out. */
-export const mayDefineFootnotes = (source: string) => definition.test(source)
-
-/** Installed by the existing lazy Markdown detector setup. */
-export let footnoteGrammar: MarkedExtension | undefined
-export function setFootnoteGrammar(grammar: MarkedExtension) {
-  footnoteGrammar = grammar
-}
+/** The shared block grammar, which the lazy Markdown detector setup adds. */
+export const footnoteGrammar: MarkedExtension[] = []
 
 /**
  * Keep source editing available when formatted editing cannot retain footnotes.
- * Without the shared block grammar, invalid reference titles can hide definitions.
+ * Without the block grammar, invalid reference titles can hide definitions:
+ * `possible` then counts every line that could start one.
  */
-export function hasFootnoteDefinitions(
-  source: string,
-  blockGrammar = footnoteGrammar,
-) {
-  if (!mayDefineFootnotes(source)) return false
+export function hasFootnoteDefinitions(source: string, possible = false) {
+  if (!definition.test(source)) return false
+  if (possible) return true
   const parser = new Marked(
     { gfm: true },
     markedGithubFootnote(),
-    ...(blockGrammar ? [blockGrammar] : []),
+    ...footnoteGrammar,
   )
   let found = false
   parser.walkTokens(parser.lexer(source), (token) => {

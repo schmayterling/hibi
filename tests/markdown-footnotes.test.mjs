@@ -11,7 +11,6 @@ import { prepareSite, siteFiles } from '../src/addons/documentation/site.ts'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import { hasDocumentFootnotes } from '../src/renderer/src/document-shell.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
-import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
@@ -33,7 +32,8 @@ test('footnote definitions are distinguished from code and ordinary links', () =
 test('legacy synchronous footnote fallback sees definitions behind invalid titles', async () => {
   const repro = '[ref]: /x "a\n\n[^1]: note\n"\n\ntext[^1]'
   const code = '```md\n[^source]: note\n```'
-  assert.equal(hasFootnoteDefinitions(repro, blockMarkdown), true)
+  // Plain marked misses this definition; the lazy block grammar finds it.
+  assert.equal(hasFootnoteDefinitions(repro), false)
   const runtime = { sourceFor: (document) => document.source }
   const note = (markdown) => ({ markdown, source: { utf16Length: 0 } })
   const [invalidTitle, fenced, plain] = [repro, code, source].map(note)

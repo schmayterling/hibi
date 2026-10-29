@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
@@ -14,6 +14,8 @@ const hash = (value) => createHash('sha256').update(value).digest('hex')
 test('blank-tail Enter preserves exact source bytes through typing, undo, redo and save', {
   timeout: 120000,
 }, async (t) => {
+  // .scratch is untracked, so a fresh checkout has none.
+  await mkdir('.scratch', { recursive: true })
   const folder = await mkdtemp(resolve('.scratch/blank-tail-native-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],

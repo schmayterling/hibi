@@ -16,7 +16,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   desktop:
-    timeout-minutes: ${{ matrix.shard == '0/1' && 120 || 35 }}
+    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
+    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix:

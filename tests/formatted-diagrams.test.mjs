@@ -242,9 +242,25 @@ test('the caret reveals a diagram fence, and the edit dialog writes its body as 
       hasText: 'Diagram unavailable',
     })
     .waitFor()
-  // Clicking the drawing places the caret: the fence shows as code, its
-  // fence lines as markers, and the diagram stays after it.
+  // A press on the drawing selects the block whole, as the rich editor's node
+  // selection, without showing its source (open-001, triple-001).
   await diagram.locator('.mermaid-diagram').click()
+  assert.equal(
+    await page
+      .locator('.rich-pane .hibi-lp-codeblock', { hasText: 'A --> B' })
+      .count(),
+    0,
+  )
+  // A caret in it shows the fence as code, its fence lines as markers, and
+  // the diagram stays after it.
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('A --> B') },
+    })
+    view.focus()
+  })
   await page
     .locator('.rich-pane .hibi-lp-codeblock', { hasText: 'A --> B' })
     .waitFor()

@@ -2930,7 +2930,8 @@ export function SourceEditor({
     documentRevision,
     document.tabId,
   ])
-  useEffect(() => {
+  // Match the shell's ready state before input or focus can reach this view.
+  useLayoutEffect(() => {
     if (mountedView !== view.current) return
     if (mountedView && (disabled || !inputReady))
       restoreFocus.current ??= captureEditorFocus(mountedView.contentDOM)

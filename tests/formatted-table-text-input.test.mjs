@@ -138,7 +138,7 @@ export async function selectFormattingDOMRange(
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
 import { Editor } from '@tiptap/core'
 import { Strike } from '@tiptap/extension-strike'
@@ -425,7 +425,7 @@ for (const engine of ['tiptap', 'codemirror'])
       await waitForAsync(
         page,
         async (name) => (await window.hibi.getDocument()).name === name,
-        file.split('/').at(-1),
+        basename(file),
       )
       await waitForDocumentEditor(app, page)
       await waitForAsync(

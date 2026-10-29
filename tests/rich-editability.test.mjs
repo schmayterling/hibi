@@ -274,7 +274,15 @@ test('codemirror: canonical empty blocks remain editable across vim and source s
       page,
       async () => (await window.hibi.getDocument()).markdown === '',
     )
-    await replaceRichText(page, rich, block)
+    // Typed text is literal in the formatted view, so write the block's source.
+    await rich.evaluate((element, block) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: block },
+        selection: { anchor: block.length },
+      })
+      view.focus()
+    }, block)
     await waitForAsync(
       page,
       async (block) => (await window.hibi.getDocument()).markdown === block,

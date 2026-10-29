@@ -6,8 +6,11 @@ import { waitForDocumentEditor } from './electron.mjs'
 export async function selectFormattedEngine(app, page, engine) {
   await waitForDocumentEditor(app, page)
   assert.ok(['tiptap', 'codemirror'].includes(engine))
+  // A note can open in a table cell, whose cell editor has its own .cm-content.
   const selector =
-    engine === 'tiptap' ? '.tiptap' : '.hibi-formatted .cm-content'
+    engine === 'tiptap'
+      ? '.tiptap'
+      : '.hibi-formatted .cm-content:not(.hibi-lp-cell-editor *)'
   const editor = page.locator(`.rich-pane ${selector}`)
   if (engine === 'codemirror' && !(await editor.count())) {
     await reloadFormattedEngine(page, engine)

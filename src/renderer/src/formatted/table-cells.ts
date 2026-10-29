@@ -46,6 +46,7 @@ import {
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import { drawReference, referenceLink } from '../formatted-references.ts'
+import { recordPageSelection } from '../native-dom-selection.ts'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -938,6 +939,15 @@ export class CellEditor {
 
   /** Select in the cell's text, for a selection the formatted view set. */
   select(anchor: number, head: number) {
+    // The view writes its pointer selections to the page while this editor
+    // has focus; the editor's record of the page is then stale, and it
+    // would leave the page there.
+    const page = this.view.dom.ownerDocument.getSelection()
+    if (
+      this.view.hasFocus &&
+      !this.view.contentDOM.contains(page?.focusNode ?? null)
+    )
+      recordPageSelection(this.view)
     this.remote = true
     try {
       this.view.dispatch({ selection: { anchor, head } })

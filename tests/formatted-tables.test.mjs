@@ -2662,6 +2662,90 @@ test('cell editors take no input while the formatted view takes none', {
   await harness.evaluate(() => window.tables.setEditable(true))
 })
 
+test('a cell editor that a change drops while the view takes no input is back once it does', {
+  timeout: 60000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  // Changes from elsewhere, as a sync while the view is read-only applies.
+  for (const [name, changes, typed] of [
+    // The edited column is gone: the cell its caret maps to is edited.
+    [
+      'column gone',
+      [
+        [10, 14, ''],
+        [22, 26, ''],
+        [30, 35, ''],
+      ],
+      /^\| Yd \|$/m,
+    ],
+    // A fence opened above turns the table into code: the view is focused.
+    ['fence', [[0, 0, '~~~\n']], /^\| cXY \| d \|$/m],
+  ])
+    await t.test(name, async () => {
+      await mount(doc)
+      await harness.locator('.hibi-lp-table td', { hasText: 'c' }).click()
+      await harness.keyboard.press('End')
+      await harness.keyboard.type('X')
+      await harness.evaluate((changes) => {
+        window.tables.setEditable(false)
+        window.tables.view().dispatch({
+          changes: changes.map(([from, to, insert]) => ({ from, to, insert })),
+        })
+      }, changes)
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.evaluate(() => window.tables.settle())
+      assert.equal(
+        await harness.evaluate(() => document.activeElement === document.body),
+        true,
+      )
+      await harness.evaluate(() => window.tables.setEditable(true))
+      await harness.evaluate(() => window.tables.settle())
+      await harness.keyboard.type('Y')
+      assert.match((await state()).doc, typed)
+    })
+})
+
+test('a pointer selection of the formatted view keeps a focused cell editor’s page selection', {
+  timeout: 60000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  // As addons and the view's own selection reads can dispatch, apart from
+  // the read-only pick reader.
+  for (const [name, readOnly, at, typed] of [
+    ['caret, read-only', true, null, /^\| cW \| d \|$/m],
+    ['caret', false, null, /^\| cW \| d \|$/m],
+    ['cell start, read-only', true, 30, /^\| Wc \| d \|$/m],
+    // Away from the table, the view takes input there once it can.
+    ['elsewhere, read-only', true, doc.length, /afterW$/],
+  ])
+    await t.test(name, async () => {
+      await mount(doc)
+      await harness.locator('.hibi-lp-table td', { hasText: 'c' }).click()
+      await harness.keyboard.press('End')
+      const page = await harness.evaluate(
+        async ({ readOnly, at }) => {
+          const view = window.tables.view()
+          if (readOnly) window.tables.setEditable(false)
+          view.dispatch({
+            selection: { anchor: at ?? view.state.selection.main.head },
+            userEvent: 'select.pointer',
+          })
+          await window.tables.settle()
+          const cell = document.querySelector(
+            '.hibi-lp-cell-editor .cm-content',
+          )
+          return !!cell?.contains(getSelection().focusNode)
+        },
+        { readOnly, at },
+      )
+      if (at !== doc.length) assert.equal(page, true)
+      await harness.evaluate(() => window.tables.setEditable(true))
+      await harness.evaluate(() => window.tables.settle())
+      await harness.keyboard.type('W')
+      assert.match((await state()).doc, typed)
+    })
+})
+
 test('navigation out of a read-only table writes nothing', {
   timeout: 30000,
 }, async () => {

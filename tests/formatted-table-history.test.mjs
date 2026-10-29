@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import test from 'node:test'
 import { isolateHistory } from '@codemirror/commands'
-import { Compartment, EditorSelection, EditorState } from '@codemirror/state'
+import {
+  Compartment,
+  EditorSelection,
+  EditorState,
+  Transaction,
+} from '@codemirror/state'
 import { GFM } from '@lezer/markdown'
 import {
   formattedDocument,
@@ -186,3 +191,35 @@ for (const multiple of [false, true]) {
     assert.deepEqual(view.state.selection.toJSON(), original.toJSON())
   })
 }
+
+test('genuine table pick redo collapses past a later group that took its typing back', (t) => {
+  const { view, bridge, session } = fixture(t, 1, source.indexOf('cell') + 2)
+  assert.equal(sourceFormatting(view).run('bold'), true)
+  const formatted = view.state.doc.toString(),
+    selected = view.state.selection
+  assert.equal(selected.main.empty, false)
+  // A caret outside the table, then typing that its deletion takes back.
+  view.dispatch({ selection: { anchor: 0 } })
+  const time = Date.now()
+  view.dispatch({
+    changes: { from: 0, insert: 'Q' },
+    selection: { anchor: 1 },
+    annotations: Transaction.time.of(time),
+    userEvent: 'input.type',
+  })
+  view.dispatch({
+    changes: { from: 0, to: 1 },
+    selection: { anchor: 0 },
+    annotations: Transaction.time.of(time + 100),
+    userEvent: 'delete.backward',
+  })
+  assert.deepEqual(session.historyDepth(), { undo: 1, redo: 0 })
+  assert.equal(bridge.undo(), true)
+  assert.equal(view.state.doc.toString(), source)
+  assert.equal(bridge.redo(), true)
+  assert.equal(view.state.doc.toString(), formatted)
+  assert.deepEqual(
+    view.state.selection.toJSON(),
+    EditorSelection.single(selected.main.to).toJSON(),
+  )
+})

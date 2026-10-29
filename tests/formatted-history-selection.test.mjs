@@ -70,6 +70,26 @@ const cases = [
     after: 'alpha brXavo charlie\n',
   },
   {
+    // Typing and the deletions right after it are one step in either engine.
+    name: 'range typed over and partly deleted',
+    source: 'alpha bravo charlie\n',
+    anchor: ['bravo', 1],
+    head: ['charlie', 2],
+    typed: ['Z', 'Q'],
+    deleted: 1,
+    after: 'alpha bZarlie\n',
+  },
+  {
+    name: 'earlier caret past typing that its deletion took back',
+    source: 'alpha bravo charlie\n',
+    earlier: { at: ['bravo', 2], typed: 'X' },
+    anchor: ['charlie', 0],
+    head: ['charlie', 0],
+    typed: ['Q'],
+    deleted: 1,
+    after: 'alpha brXavo charlie\n',
+  },
+  {
     name: 'range formatted bold',
     source: 'alpha bravo charlie\n',
     anchor: ['bravo', 1],
@@ -278,11 +298,16 @@ for (const item of cases)
         })
       await cdp.send('Input.insertText', { text: item.composed.at(-1) })
       length = item.composed.at(-1).length
-    } else
+    } else {
       for (const typed of item.typed) {
         await page.keyboard.insertText(typed)
         length += typed.length
       }
+      for (let left = item.deleted ?? 0; left; left--) {
+        await page.keyboard.press('Backspace')
+        length--
+      }
+    }
     await saved(item.after)
     // Typing leaves a caret after its text; formatting keeps the range.
     const left = item.action ? [anchor, head] : [from + length, from + length]

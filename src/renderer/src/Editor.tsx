@@ -1,6 +1,6 @@
 import type { Editor, EditorEvents } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
-import type { Node as RichNode } from '@tiptap/pm/model'
+import type { ResolvedPos, Node as RichNode } from '@tiptap/pm/model'
 import { AllSelection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { Mapping, ReplaceStep } from '@tiptap/pm/transform'
 import { EditorContent, useEditor } from '@tiptap/react'
@@ -152,6 +152,10 @@ const parseParagraph = (editor: Editor, source: string) =>
   performanceDiagnostics.measure('core', 'Markdown paragraph parsing', () =>
     editor.markdown!.parse(source),
   )
+
+// The start of the table cell around a text position, or -1 outside tables.
+const tableCell = ($pos: ResolvedPos) =>
+  /cell/.test(String($pos.node(-1).type.spec.tableRole)) ? $pos.start(-1) : -1
 
 // Addons whose syntax features the plain codec models.
 const plainTextOwners = new Set(
@@ -316,11 +320,11 @@ export function MarkdownEditor({
   const historyCarets = useRef({
     undo: new WeakMap<
       object,
-      { document: RichNode; anchor: number; head: number }
+      { document: RichNode; anchor: number; head: number } | null
     >(),
     redo: new WeakMap<
       object,
-      { document: RichNode; anchor: number; head: number }
+      { document: RichNode; anchor: number; head: number } | null
     >(),
   })
   const serializers = useRef(
@@ -524,7 +528,9 @@ export function MarkdownEditor({
             before = session?.historyIdentity()
           const accepted = prepareRichRef.current(event)
           if (accepted && session && before)
-            // Ranges that touch a table cell keep mapping to a caret.
+            // Ranges across table cells keep mapping to a caret. An edit that
+            // returns its group to the text it started from reaches a known
+            // identity, whose redo selection belongs to the edit before.
             for (const [carets, identity, { doc, selection }] of [
               [historyCarets.current.undo, before, event.editor.state],
               [
@@ -534,18 +540,21 @@ export function MarkdownEditor({
               ],
             ] as const)
               if (
+                carets === historyCarets.current.redo &&
+                historyCarets.current.undo.has(identity)
+              )
+                continue
+              else if (
                 selection.empty ||
                 (selection instanceof TextSelection &&
-                  ![selection.$anchor, selection.$head].some(($pos) =>
-                    /cell/.test(String($pos.node(-1).type.spec.tableRole)),
-                  ))
+                  tableCell(selection.$anchor) === tableCell(selection.$head))
               )
                 carets.set(identity, {
                   document: doc,
                   anchor: selection.anchor,
                   head: selection.head,
                 })
-              else carets.delete(identity)
+              else carets.set(identity, null)
           return accepted
         },
         reject: (error) => {

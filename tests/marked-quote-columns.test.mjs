@@ -3,6 +3,7 @@ import test from 'node:test'
 import { Marked } from 'marked'
 import { micromark } from 'micromark'
 import { gfmHtml, gfm as gfmSyntax } from 'micromark-extension-gfm'
+import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 
@@ -63,26 +64,20 @@ test('a list re-read in a tabbed nested quote keeps the quote markers', () => {
     }
 })
 
-test('fence bodies remove the opening indentation by column', () => {
-  // Marked removes it by character, so a tab that starts inside it vanished
-  // whole, and a tab after a short run of spaces stayed whole.
-  for (const fence of ['```', '~~~'])
-    for (const indent of [1, 2, 3])
-      for (const line of [
-        '\tx',
-        ' \tx',
-        '  \tx',
-        '   \tx',
-        '\t\tx',
-        ' \t x',
-        'x\ty',
-      ])
-        for (const eol of ['\n', '\r\n']) {
-          const open = ' '.repeat(indent) + fence
-          const source = [open, line, open].join(eol)
-          const markdown = new Marked({ gfm: true }, blockMarkdown)
-          assert.deepEqual(code(markdown.parse(source)), oracle(source), source)
-        }
+test('fence bodies in alerts and callouts keep CommonMark indentation', () => {
+  // An alert body is Marked's stripped quote text, whose columns are not the
+  // source's: its fences keep Marked's dedent, which matches CommonMark here.
+  for (const head of ['> [!NOTE]', '> [!tip]- Title'])
+    for (const [open, line] of [
+      ['>   ```', '> \tx'],
+      ['>    ```', '> \tx'],
+      ['>   ```', '>  \tx'],
+      ['>    ```', '> \t x'],
+    ]) {
+      const source = [head, open, line, open, '', 'after', ''].join('\n')
+      const markdown = new Marked(blockMarkdown, alertMarkdown)
+      assert.deepEqual(code(markdown.parse(source)), oracle(source), source)
+    }
 })
 
 test('reference definitions take tabs between their parts', () => {

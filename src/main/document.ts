@@ -1264,17 +1264,23 @@ export async function loadDocument(
   current = source.snapshot(),
   remember = true,
 ): Promise<DocumentState | null> {
-  chosen = await realpath(chosen)
+  // A tab can outlive its file, so a missing path may still name an open tab.
+  const resolved = await realpath(chosen).catch(missingFile)
+  chosen = resolved ?? chosen
   const existing = getOpenDocuments().find((draft) => draft.file === chosen)
   if (existing) {
     // Reopening asks before replacing edits whose file another app changed,
     // or a draft whose planned file another app created.
-    if (existing.pendingPath || (await changedOutside(existing.tabId, false))) {
+    if (
+      (resolved && existing.pendingPath) ||
+      (await changedOutside(existing.tabId, false))
+    ) {
       if (!(await confirmTabDiscard(window, existing.tabId))) return null
       return selectDocumentTab(window, existing.tabId, remember, 'discard')
     }
     return selectDocumentTab(window, existing.tabId, remember, true)
   }
+  if (!resolved) throw new Error(`Could not find ${basename(chosen)}.`)
   const content = await readSource(chosen)
   if (!source.ownsCurrentSnapshot(current))
     throw new Error(

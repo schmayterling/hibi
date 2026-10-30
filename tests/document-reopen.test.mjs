@@ -827,3 +827,92 @@ test('focusing a split pane asks once to replace edits whose file changed', {
   })
   assert.equal(await readFile(file, 'utf8'), draft)
 })
+
+test('a link to the note itself and its explorer row check for outside changes', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, file, read, idle, open } = setupState
+  const { answer, prompts, state, workspace, notice } = setupState
+  const note = (await read()).tabId
+  // The links sit below the first line, where the formatted view shows them rendered.
+  const links = '\n\nsee [self](note.md) and [gone](gone.md)\n'
+  await writeFile(file, `original text${links}`)
+  await open()
+  await workspace()
+  const editor = page.locator('.rich-pane [aria-label="Document editor"]')
+  const link = (name) => editor.getByRole('link', { name, exact: true })
+  await link('self').waitFor()
+  const routes = {
+    self: ['document:link', () => link('self').click({ modifiers: ['Shift'] })],
+    gone: ['document:link', () => link('gone').click({ modifiers: ['Shift'] })],
+    row: [
+      'workspace:open-file',
+      () => page.getByRole('treeitem', { name: /^note\.md/ }).click(),
+    ],
+  }
+  const reopen = async (route, choice = 2) => {
+    await answer(choice)
+    const [channel, run] = routes[route]
+    const done = await replied(app, channel)
+    await run()
+    await done()
+    await idle()
+    return prompts()
+  }
+  // Typing on the first line keeps both links rendered.
+  await editor.getByText('original text').click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' edited')
+  await waitForAsync(page, async () => {
+    const current = await window.hibi.getDocument()
+    return current.dirty && current.markdown.includes(' edited')
+  })
+  const draft = (await read()).markdown
+  // An unchanged file keeps the edits without asking.
+  assert.deepEqual(await reopen('self'), [])
+  assert.deepEqual(await reopen('row'), [])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  // After an outside change both ask like any reopen, and Cancel keeps the edits.
+  await writeFile(file, `outside text${links}`)
+  assert.deepEqual(await reopen('self'), ['Save changes to note.md?'])
+  assert.deepEqual(await reopen('row'), ['Save changes to note.md?'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  // Don't save shows the file's text.
+  assert.deepEqual(await reopen('self', 1), ['Save changes to note.md?'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: `outside text${links}`,
+    dirty: false,
+    ephemeral: false,
+  })
+  // A clean note takes a later outside change without asking.
+  await writeFile(file, `final text${links}`)
+  assert.deepEqual(await reopen('row'), [])
+  await editor.getByText('final text').waitFor()
+  assert.equal((await read()).markdown, `final text${links}`)
+  // A missing link target and a deleted note get plain messages.
+  await reopen('gone')
+  await notice('Could not find gone.md.')
+  await rm(file)
+  assert.deepEqual(await reopen('self'), [])
+  await notice(
+    'note.md was moved or deleted outside Hibi. Save to keep this text.',
+  )
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: `final text${links}`,
+    dirty: false,
+    ephemeral: false,
+  })
+})

@@ -30,7 +30,6 @@ import type {
 import {
   closeDeletedDocuments,
   confirmDiscardAll,
-  getDocument,
   getDocumentPath,
   getDocumentSourceFor,
   getDocumentTabs,
@@ -1154,11 +1153,6 @@ export async function openWorkspaceFile(
   if (!root) throw new Error('Open a workspace first.')
   if (target !== undefined && !isCurrentWorkspaceTarget(target))
     throw new Error('The workspace changed, so this file did not open.')
-  if (
-    typeof path === 'string' &&
-    getWorkspace(undefined, false)?.activePath === path
-  )
-    return getDocument()
   const draft =
     typeof path === 'string' &&
     getOpenDocuments().find(
@@ -1169,6 +1163,7 @@ export async function openWorkspaceFile(
   const planned = draft ? draft.pendingPath : null
   if (draft && !(planned && (await lstat(planned).catch(() => null))))
     return selectDocumentTab(window, draft.tabId)
+  // The active note's row reopens it too, which checks for outside changes.
   return loadDocument(
     window,
     await resolveWorkspaceFile(root, path, await showAllWorkspaceFiles()),

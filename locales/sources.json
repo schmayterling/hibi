@@ -1359,6 +1359,9 @@
   "ed7aa09e55c2": [
     "src/main/addon-repository.ts"
   ],
+  "d19e9c18b795": [
+    "src/main/document.ts"
+  ],
   "f56d1f9d0955": [
     "src/main/updates.ts"
   ],

@@ -77,9 +77,11 @@ export const seamWork = { units: 0 }
  *
  * ponytail: other inline syntax that hides a dollar or backtick, such as an
  * HTML tag or a link destination, reads as text here, and so does emphasis
- * or a link that opened before a formula and wins over it, so a window after
- * one in a giant paragraph can pair otherwise; reading it means replaying
- * every inline parser.
+ * or a link that opened before a formula and wins over it: one such formula
+ * near a giant paragraph's top pairs every window after it otherwise.
+ * Reading it means carrying emphasis and link delimiters in each checkpoint
+ * as lezer pairs them, and giving a window that cuts an open one its
+ * delimiters too.
  */
 export function readSeams(
   text: string,

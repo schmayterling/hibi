@@ -134,7 +134,9 @@ class FormulaWidget extends WidgetType {
     if (!view.state.facet(EditorView.editable)) return
     const at = view.posAtDOM(dom)
     const latex = await this.host.prompt(this.latex)
-    if (latex === null) return
+    // The formula shown leaves out container markers between its lines, so
+    // writing it back unchanged would drop them.
+    if (latex === null || latex.trim() === this.latex) return
     const from = dom.isConnected ? view.posAtDOM(dom) : at
     if (view.state.sliceDoc(from, from + this.source.length) !== this.source)
       return

@@ -665,6 +665,33 @@ test('with markers hidden, clicking a formula opens its prompt and replaces the 
   await engine(true, true)
 })
 
+test('applying an unchanged prompt keeps a formula across quote lines as written', {
+  timeout: 90000,
+}, async () => {
+  // The prompt shows the formula without the quote markers of its later
+  // lines, so writing it back would leave those lines outside the quote.
+  const note =
+    '> Quoted $$a\n> +b$$ formula\n\n> $$\n> c\n> +d\n> $$\n\nlast line\n'
+  await writeFile(join(folder, 'notes', 'quoted-prompt.md'), note)
+  await engine(true, false)
+  await open('quoted-prompt.md')
+  const formulas = page.locator('.rich-pane [data-type="block-math"]')
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.rich-pane [data-type="block-math"] .katex')
+        .length === 2,
+  )
+  const prompt = page.getByRole('dialog', { name: 'Math' })
+  for (const index of [0, 1]) {
+    await formulas.nth(index).click()
+    await prompt.getByRole('textbox', { name: 'LaTeX' }).waitFor()
+    await prompt.getByRole('button', { name: 'Apply' }).click()
+    await prompt.waitFor({ state: 'hidden' })
+    assert.equal(await documentText(), note)
+  }
+  await engine(true, true)
+})
+
 test('2,000 formulas: only formulas near the viewport render and typing renders none', {
   timeout: 120000,
 }, async () => {

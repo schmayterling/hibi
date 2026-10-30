@@ -1011,6 +1011,9 @@ function installQuoteState(
             source: string,
             tokens: Token[],
           ) {
+            // Another lexer given these options, such as a definition's
+            // bounding probe, reads text outside this quote's rows.
+            if (this.lexer !== lexer) return read.call(this, source, tokens)
             const previous = state.extension
             const line = quoteOrigin(
               state,

@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -34,6 +41,18 @@ test('window controls setting is available only on Linux', async (t) => {
   const page = await app.firstWindow()
   const toggle = await appearance(app, page)
   assert.equal(await toggle.count(), process.platform === 'linux' ? 1 : 0)
+  if (process.platform === 'linux') {
+    const cdp = await page.context().newCDPSession(page)
+    const { nodes } = await cdp.send('Accessibility.getFullAXTree')
+    const control = nodes.find(
+      (node) =>
+        node.role?.value === 'checkbox' &&
+        node.name?.value === 'Hide window controls',
+    )
+    assert.match(control?.description?.value ?? '', /On Linux/)
+    assert.match(control?.description?.value ?? '', /Restart Hibi to apply/)
+    await cdp.detach()
+  }
   for (const value of [null, 'true', 1, {}])
     await assert.rejects(
       page.evaluate((value) => window.hibi.setHideWindowControls(value), value),
@@ -90,17 +109,28 @@ test('Linux window controls persist and apply to main and addon windows after re
 
   let page = await launch()
   let toggle = await appearance(app, page)
+  const notice = () =>
+    page.getByRole('status').filter({ hasText: 'Saved. Quit and reopen Hibi' })
   await toggle.waitFor({ state: 'visible' })
   assert.equal(await toggle.isChecked(), false)
+  assert.equal(await notice().count(), 0)
   assert.equal(await padding(page), '140px')
   await toggle.check()
   await page.waitForFunction(
     () => !document.querySelector('#hide-window-controls').disabled,
   )
-  assert.equal(
+  assert.deepEqual(
     JSON.parse(await readFile(join(profile, 'window-controls.json'), 'utf8')),
-    true,
+    { hidden: true },
   )
+  await notice().waitFor()
+  await toggle.uncheck()
+  await page.waitForFunction(
+    () => !document.querySelector('#hide-window-controls').disabled,
+  )
+  await notice().waitFor({ state: 'hidden' })
+  await toggle.check()
+  await notice().waitFor()
   assert.equal(
     (await page.evaluate(() => window.hibi.getAppInfo())).windowControlsHidden,
     false,
@@ -116,6 +146,7 @@ test('Linux window controls persist and apply to main and addon windows after re
   await page.waitForFunction(
     () => document.querySelector('#hide-window-controls')?.checked,
   )
+  assert.equal(await notice().count(), 0)
   assert.equal(
     (await page.evaluate(() => window.hibi.getAppInfo())).windowControlsHidden,
     true,
@@ -135,10 +166,11 @@ test('Linux window controls persist and apply to main and addon windows after re
   await page.waitForFunction(
     () => !document.querySelector('#hide-window-controls').disabled,
   )
-  assert.equal(
+  assert.deepEqual(
     JSON.parse(await readFile(join(profile, 'window-controls.json'), 'utf8')),
-    false,
+    { hidden: false },
   )
+  await notice().waitFor()
   assert.equal(await padding(page), '8px')
   await app.close()
   app = null
@@ -146,39 +178,110 @@ test('Linux window controls persist and apply to main and addon windows after re
   page = await launch()
   toggle = await appearance(app, page)
   assert.equal(await toggle.isChecked(), false)
+  assert.equal(await notice().count(), 0)
   assert.equal(await padding(page), '140px')
   await addon(page, false)
 })
 
-test('a failed window controls save keeps the preference and allows a retry', {
-  skip: process.platform !== 'linux',
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-window-controls-failure-'))
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`],
+for (const [name, contents, initial] of [
+  ['default preference', null, false],
+  ['saved hidden preference', '{"hidden":true}', true],
+  ['corrupt preferences file', '{broken', false],
+])
+  test(`a failed save preserves the ${name} and allows a retry`, {
+    skip: process.platform !== 'linux',
+  }, async (t) => {
+    const profile = await mkdtemp(
+      join(tmpdir(), 'hibi-window-controls-failure-'),
+    )
+    const location = join(profile, 'window-controls.json')
+    if (contents !== null) await writeFile(location, contents)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    const toggle = await appearance(app, page)
+    await page.waitForFunction(
+      () => !document.querySelector('#hide-window-controls').disabled,
+    )
+    assert.equal(await toggle.isChecked(), initial)
+    await app.evaluate(() => {
+      const original = console.error
+      globalThis.windowControlsErrors = []
+      console.error = (...args) => {
+        if (args[0] === 'Could not save window controls preferences:')
+          globalThis.windowControlsErrors.push(args.slice(0, 2))
+        original(...args)
+      }
+    })
+    if (contents !== null) await rename(location, `${location}.before-failure`)
+    await mkdir(location)
+    await toggle.click()
+    await page
+      .getByText('Window controls unavailable', { exact: true })
+      .waitFor()
+    await page
+      .getByText('Could not save your window controls preference. Try again.', {
+        exact: true,
+      })
+      .waitFor()
+    assert.equal(await toggle.isChecked(), initial)
+    assert.equal(
+      await page.evaluate(() => window.hibi.getHideWindowControls()),
+      initial,
+    )
+    assert.deepEqual(
+      await app.evaluate(() => globalThis.windowControlsErrors),
+      [['Could not save window controls preferences:', location]],
+    )
+    await rm(location, { recursive: true })
+    if (contents !== null) {
+      await rename(`${location}.before-failure`, location)
+      assert.equal(await readFile(location, 'utf8'), contents)
+    }
+    await toggle.setChecked(!initial)
+    await page.waitForFunction(
+      () => !document.querySelector('#hide-window-controls').disabled,
+    )
+    assert.equal(await toggle.isChecked(), !initial)
+    assert.deepEqual(JSON.parse(await readFile(location, 'utf8')), {
+      hidden: !initial,
+    })
   })
-  t.after(async () => {
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
+
+for (const [name, contents, hidden] of [
+  ['legacy true', 'true', true],
+  ['legacy false', 'false', false],
+  ['invalid hidden value', '{"hidden":"true"}', false],
+  ['missing hidden field', '{}', false],
+])
+  test(`window controls load ${name} safely`, {
+    skip: process.platform !== 'linux',
+  }, async (t) => {
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-window-controls-load-'))
+    const location = join(profile, 'window-controls.json')
+    await writeFile(location, contents)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    await page.locator('.app[data-platform="linux"]').waitFor()
+    assert.equal(
+      await page.evaluate(() => window.hibi.getHideWindowControls()),
+      hidden,
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getAppInfo()))
+        .windowControlsHidden,
+      hidden,
+    )
+    assert.equal(await readFile(location, 'utf8'), contents)
   })
-  const page = await app.firstWindow()
-  const toggle = await appearance(app, page)
-  await mkdir(join(profile, 'window-controls.json'))
-  await toggle.click()
-  await page.getByText('Window controls unavailable', { exact: true }).waitFor()
-  assert.equal(await toggle.isChecked(), false)
-  assert.equal(
-    await page.evaluate(() => window.hibi.getHideWindowControls()),
-    false,
-  )
-  await rm(join(profile, 'window-controls.json'), { recursive: true })
-  await toggle.check()
-  await page.waitForFunction(
-    () => !document.querySelector('#hide-window-controls').disabled,
-  )
-  assert.equal(await toggle.isChecked(), true)
-  assert.equal(
-    JSON.parse(await readFile(join(profile, 'window-controls.json'), 'utf8')),
-    true,
-  )
-})

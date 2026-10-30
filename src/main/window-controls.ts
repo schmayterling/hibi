@@ -12,13 +12,31 @@ const path = () => join(app.getPath('userData'), 'window-controls.json')
 export const windowControlsHidden = () => hidden
 export const getHideWindowControls = () => preference
 
+function readPreference(value: unknown): boolean {
+  // Accept preferences written before the file had a named field.
+  if (typeof value === 'boolean') return value
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    'hidden' in value &&
+    typeof value.hidden === 'boolean'
+  )
+    return value.hidden
+  throw new TypeError('Expected a boolean hidden preference.')
+}
+
 export async function loadWindowControls() {
   if (process.platform !== 'linux') return
+  const location = path()
   try {
-    preference = JSON.parse(await readFile(path(), 'utf8')) === true
+    preference = readPreference(JSON.parse(await readFile(location, 'utf8')))
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-      console.error('Could not load window controls:', error)
+      console.error(
+        'Could not load window controls preferences:',
+        location,
+        error,
+      )
   }
   hidden = preference
 }
@@ -29,7 +47,22 @@ export function saveHideWindowControls(input: unknown) {
   writing = writing
     .catch(() => {})
     .then(async () => {
-      await writeText(path(), JSON.stringify(input))
+      const location = path()
+      try {
+        await writeText(location, JSON.stringify({ hidden: input }))
+      } catch (error) {
+        console.error(
+          'Could not save window controls preferences:',
+          location,
+          error,
+        )
+        throw new Error(
+          'Could not save your window controls preference. Try again.',
+          {
+            cause: error,
+          },
+        )
+      }
       preference = input
     })
   return writing

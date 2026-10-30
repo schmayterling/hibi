@@ -1398,6 +1398,9 @@
   "45e0434567cb": [
     "src/renderer/src/AddonViewContent.tsx"
   ],
+  "17ff660bf768": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
   "ab4f0719fbd3": [
     "src/renderer/src/main.tsx"
   ],
@@ -1531,6 +1534,9 @@
   ],
   "0af861157fe6": [
     "src/renderer/src/autosave.ts"
+  ],
+  "5a0e41fb509b": [
+    "src/main/window-controls.ts"
   ],
   "93a0e14c0592": [
     "src/site/search-worker-client.ts"
@@ -2811,9 +2817,6 @@
   "40cd6293d193": [
     "src/renderer/src/AddonPanel.tsx"
   ],
-  "49f28ffe7747": [
-    "src/renderer/src/WindowControlsSettings.tsx"
-  ],
   "460e661f4720": [
     "src/renderer/src/ToolbarSettings.tsx"
   ],
@@ -4074,6 +4077,9 @@
   "22ae1d4736ab": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "edcb430f6947": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
   "b5658fc8edda": [
     "src/renderer/src/AddonSidebar.tsx",
     "src/renderer/src/OutlineSidebar.tsx",
@@ -5108,6 +5114,9 @@
   ],
   "fca046ccd586": [
     "src/addons/vim/engine.ts"
+  ],
+  "ac177194f6e6": [
+    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "096b73624b09": [
     "src/renderer/src/AutosaveSettings.tsx"

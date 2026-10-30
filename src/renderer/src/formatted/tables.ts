@@ -2120,9 +2120,10 @@ class TableView {
     const view = this.editing?.editor.view
     // A right press in a cell not edited leaves the caret, which the page
     // would move only after the editor actions menu opened, closing it. The
-    // menu acts at the press.
+    // menu acts at the press; the editor takes focus as from any press.
     if (event.button === 2 && !view?.dom.contains(event.target as Node)) {
       event.preventDefault()
+      if (!this.view.dom.contains(document.activeElement)) this.view.focus()
       return
     }
     if (

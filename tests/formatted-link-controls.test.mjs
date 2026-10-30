@@ -716,7 +716,8 @@ test('codemirror table cell link menu holds the editor actions of addons too', {
     'Find synonyms',
     'Add word to dictionary',
   ]
-  // From outside the cell, and from its editor.
+  // From outside the cell, with the editor unfocused too, and from its editor.
+  await page.evaluate(() => document.activeElement?.blur())
   await page.getByRole('link', { name: 'cats', exact: true }).click({
     button: 'right',
   })

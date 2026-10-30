@@ -3,17 +3,63 @@ import { resolveOwn } from './resolve-own.mjs'
 
 // CodeMirror view 6.43 gives the space below a block wrapper's lines, such as
 // a code box's scrollbar, to the block after the wrapper. A viewport starting
-// at that block does not draw the wrapper, and measuring the block reset that
-// space to nothing: the note lost the scrollbar's height until the wrapper was
-// drawn again. A block that starts the measured range outside any wrapper now
-// keeps the space above it from when it was measured with what precedes it.
+// at that block does not draw the wrapper, and one starting inside the wrapper
+// draws only its later lines, which may not need the scrollbar; measuring the
+// block after it reset the space to what was drawn: the note lost the
+// scrollbar's height until the whole wrapper was drawn again. A block after a
+// wrapper that is not drawn whole now keeps the space above it from when it
+// was measured with all of what precedes it.
 const path = resolveOwn('@codemirror/view')
+// Each patch: the original text, the patched text, and the text an earlier
+// version of the patch wrote, which installs patched before keep.
 const patches = [
   [
-    `                    if (spaceAbove > 0)
+    `        let spaceAbove = 0;
+        let scan = (tile, pos, measureBounds) => {`,
+    `        let spaceAbove = 0;
+        // Whether the wrapper drawn from \`pos\` also holds blocks before it.
+        let wrapsBefore = (wrapper, pos) => this.blockWrappers.some(set => {
+            let found = false;
+            set.between(pos, pos, (start, _end, value) => {
+                if (start < pos && value.eq(wrapper)) {
+                    found = true;
+                    return false;
+                }
+            });
+            return found;
+        });
+        let scan = (tile, pos, measureBounds) => {`,
+  ],
+  [
+    `                if (child instanceof BlockWrapperTile) {
+                    if (end > from)
+                        scan(child, pos, childRect);
+                }
+                else if (pos >= from) {
+                    if (spaceAbove > 0)
                         result.push(-spaceAbove);
                     result.push(height + spaceAbove);`,
-    `                    if (spaceAbove > 0)
+    `                if (child instanceof BlockWrapperTile) {
+                    if (end > from) {
+                        scan(child, pos, childRect);
+                        // Its blocks before the drawn ones are not drawn, nor is the space they need below it.
+                        if (pos == from && wrapsBefore(child.wrapper, pos))
+                            spaceAbove = -Infinity;
+                    }
+                }
+                else if (pos >= from) {
+                    if (spaceAbove > 0)
+                        result.push(-spaceAbove);
+                    // What precedes the block is not drawn: its space above is not known.
+                    else if (spaceAbove < 0 || !measureBounds && pos == from && !result.length)
+                        result.push(-Infinity);
+                    result.push(height + Math.max(spaceAbove, 0));`,
+    `                if (child instanceof BlockWrapperTile) {
+                    if (end > from)
+                        scan(child, pos, childRect);
+                }
+                else if (pos >= from) {
+                    if (spaceAbove > 0)
                         result.push(-spaceAbove);
                     // What precedes the first block is not drawn: its space above is not known.
                     else if (!measureBounds && pos == from && !result.length)
@@ -41,12 +87,15 @@ const patches = [
 
 let source = await readFile(path, 'utf8')
 const patched = source
-for (const [before, after] of patches)
+for (const [before, after, earlier] of patches)
   if (!source.includes(after)) {
-    if (source.split(before).length !== 2)
+    const original = [before, earlier].find(
+      (text) => text && source.split(text).length === 2,
+    )
+    if (!original)
       throw new Error(
         'CodeMirror view changed. Review the wrapper height patch before updating it.',
       )
-    source = source.replace(before, after)
+    source = source.replace(original, after)
   }
 if (source !== patched) await writeFile(path, source)

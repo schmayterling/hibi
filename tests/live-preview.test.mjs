@@ -1049,6 +1049,85 @@ test('a viewport starting just below a code box keeps its scrollbar in the heigh
   assert.equal(result.after, result.before, report)
 })
 
+test('a viewport starting inside a code box below its long lines keeps its scrollbar in the height', {
+  timeout: 60000,
+}, async () => {
+  const long = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = ''
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${long}${'const a = 1\n'.repeat(30)}\`\`\`\n\n`
+  await harness.reload()
+  await harness.waitForFunction(() => !!window.livePreview)
+  const style = await harness.addStyleTag({
+    content:
+      '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 15px !important; height: 15px !important; }',
+  })
+  const result = await harness.evaluate(async (doc) => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await window.livePreview.mount(doc, { width: 900, height: 600 })
+    await window.livePreview.settle()
+    const view = window.livePreview.view()
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    for (let top = 0; top < pane.scrollHeight; top += 300) {
+      pane.scrollTop = top
+      await frames(3)
+    }
+    // The tenth box's hidden closing fence holds the space of the box's
+    // scrollbar, which its long first line shows: measured with the box
+    // drawn from its top.
+    const fence = doc.split('```\n\n').slice(0, 10).join('```\n\n').length
+    const number = view.state.doc.lineAt(fence).number
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(
+        view.state.doc.line(number - 32).from,
+        { y: 'start' },
+      ),
+    })
+    await frames(4)
+    const below = view.lineBlockAt(fence)
+    // Twenty short lines below the long one.
+    const start = view.state.doc.line(number - 10)
+    pane.scrollTop = 0
+    await frames(4)
+    const height = view.contentHeight
+    const offset = pane.getBoundingClientRect().top - view.documentTop
+    const block = view.lineBlockAt(start.from)
+    for (const margin of [
+      500,
+      ...Array.from({ length: 126 }, (_, i) => i * 8),
+    ]) {
+      pane.scrollTop = 0
+      await frames(3)
+      pane.scrollTop = block.top + block.height / 2 + margin - offset
+      await frames(3)
+      if (view.viewport.from === start.from) break
+    }
+    await frames(2)
+    // Drawn from there, the box shows only short lines and no scrollbar.
+    const box = view
+      .domAtPos(start.from)
+      .node.parentElement.closest('.hibi-lp-codescroll')
+    return {
+      start: view.viewport.from === start.from,
+      drawn: box ? box.offsetHeight - box.clientHeight : null,
+      below: [below.from, below.height],
+      now: view.lineBlockAt(below.from).height,
+      before: height,
+      after: view.contentHeight,
+    }
+  }, doc)
+  await style.evaluate((node) => node.remove())
+  const report = JSON.stringify(result)
+  assert.equal(result.start, true, report)
+  assert.equal(result.drawn, 0, report)
+  assert.ok(result.below[1] >= 15, report)
+  assert.equal(result.now, result.below[1], report)
+  assert.equal(result.after, result.before, report)
+})
+
 test('stepping up after a jump to the end, known code blocks never draw as plain text', {
   timeout: 120000,
 }, async () => {

@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { noteTargets, wikiHref, wikiTarget } from '../src/shared/note-links.ts'
 import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -67,7 +68,8 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await page.getByRole('textbox', { name: 'Document editor' }).waitFor()
+  // Wiki links, embeds and callouts are asserted as the Tiptap editor draws them.
+  await selectFormattedEngine(app, page, 'tiptap')
   await app.evaluate(({ dialog }, root) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
   }, root)

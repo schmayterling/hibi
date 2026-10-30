@@ -264,8 +264,8 @@ for (const [language, name, text] of [
     await counts(native)
     const closing = text.lastIndexOf('```') + 3
     const tabbed = text.slice(0, closing) + '\t' + text.slice(closing)
-    const tabCount =
-      language === 'mermaid' ? label(countText('before\n')) : native
+    // A closing fence may end in tabs, so the block stays closed and opaque.
+    const tabCount = native
     await page.evaluate((from) => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root
         .view

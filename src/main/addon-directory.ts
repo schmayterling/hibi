@@ -107,7 +107,12 @@ const manualFetch: typeof fetch = (input, init = {}) =>
     request.end()
   })
 
-/** Directory files come only from the catalog's own location, without credentials or redirects elsewhere. */
+/**
+ * Directory files come without credentials from the catalog's origin, which
+ * redirects may not leave. On raw.githubusercontent.com that origin serves
+ * every repository, so it limits where a redirect goes, not which repository
+ * answers; installing still needs each addon's detached Hibi signature.
+ */
 async function fetchDirectoryFile(
   maxBytes: number,
   path?: string,

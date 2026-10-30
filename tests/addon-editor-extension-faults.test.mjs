@@ -102,10 +102,14 @@ async function open(t, { source, presentation, code }) {
   await page.evaluate(() => {
     const shown = new Set()
     window.shownToasts = shown
-    new MutationObserver(() => {
+    // A toast can already be up, or closing, by the time this runs.
+    const record = () => {
       for (const toast of document.querySelectorAll('.toast'))
         shown.add(toast.textContent)
-    }).observe(document, {
+    }
+    record()
+    new MutationObserver(record).observe(document, {
+      attributes: true,
       childList: true,
       subtree: true,
       characterData: true,

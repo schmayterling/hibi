@@ -72,7 +72,6 @@ body {
   textarea,
   [contenteditable]:not([contenteditable="false"]),
   .cm-content,
-  .tiptap,
   .rich-pane,
   .format-content,
   .plain-text-preview,
@@ -1452,87 +1451,69 @@ button.ui-button.update-download-button:disabled {
   display: flex;
   flex-direction: column;
 }
-.tiptap {
-  white-space: pre-wrap;
-  flex: 1;
-  min-height: 100%;
-  padding: var(--editor-padding);
-  outline: none;
-  font-size: var(--text-editor);
-  line-height: 1.75;
-  /* Chromium can spend seconds laying out long unbroken text with pair kerning. */
-  font-kerning: none;
-  overflow-wrap: anywhere;
-}
-.tiptap > :first-child {
-  margin-top: 0;
-}
-.tiptap p {
-  margin: 0 0 1em;
-}
-:is(.tiptap, .format-content) h1,
-:is(.tiptap, .format-content) h2,
-:is(.tiptap, .format-content) h3,
-:is(.tiptap, .format-content) h4,
-:is(.tiptap, .format-content) h5,
-:is(.tiptap, .format-content) h6 {
+.format-content h1,
+.format-content h2,
+.format-content h3,
+.format-content h4,
+.format-content h5,
+.format-content h6 {
   color: var(--syntax-heading);
   line-height: 1.3;
   font-weight: 600;
   margin: 1.4em 0 0.6em;
   letter-spacing: -0.02em;
 }
-:is(.tiptap, .format-content) h1 {
+.format-content h1 {
   font-size: 30px;
 }
-:is(.tiptap, .format-content) h2 {
+.format-content h2 {
   font-size: 24px;
 }
-:is(.tiptap, .format-content) h3 {
+.format-content h3 {
   font-size: 20px;
 }
-:is(.tiptap, .format-content) h4,
-:is(.tiptap, .format-content) h5,
-:is(.tiptap, .format-content) h6 {
+.format-content h4,
+.format-content h5,
+.format-content h6 {
   font-size: 17px;
 }
-:is(.tiptap, .format-content) ul,
-:is(.tiptap, .format-content) ol {
+.format-content ul,
+.format-content ol {
   margin: 0 0 1em;
   padding-left: 1.5em;
 }
 /* Items and nested lists sit 0.3em apart; blocks within an item keep a paragraph-sized gap whatever
    their own font size. Only top margins are used because task items are flex containers, which
    don't collapse child margins. Task item content sits in a div after the checkbox label. */
-:is(.tiptap, .format-content) :is(li, li > label + div) > * {
+.format-content :is(li, li > label + div) > * {
   margin-block: 0;
 }
 /* Repeated exclusions retain the task-content selector's specificity. */
-:is(.tiptap, .format-content) li > :not(label):not(label):not(label) + *,
-:is(.tiptap, .format-content) li > label + div > :not(label) + * {
+.format-content li > :not(label):not(label):not(label) + *,
+.format-content li > label + div > :not(label) + * {
   margin-top: var(--text-editor);
 }
-:is(.tiptap, .format-content) li + li,
-:is(.tiptap, .format-content) :is(li, li > label + div) > :is(ul, ol) {
+.format-content li + li,
+.format-content :is(li, li > label + div) > :is(ul, ol) {
   margin-top: 0.3em;
 }
-:is(.tiptap, .format-content) blockquote {
+.format-content blockquote {
   margin-inline: 0;
   padding-left: 20px;
   border-left: 1px solid var(--border);
   color: var(--syntax-quote);
 }
-:is(.tiptap, .format-content) blockquote > :last-child {
+.format-content blockquote > :last-child {
   margin-bottom: 0;
 }
-:is(.tiptap, .format-content) pre {
+.format-content pre {
   background: var(--code-background);
   color: var(--code-ink);
   padding: var(--space-4);
   border-radius: var(--radius-control);
   overflow: auto;
 }
-:is(.tiptap, .format-content) code {
+.format-content code {
   font-family: var(--font-mono);
   font-size: 0.85em;
   background: var(--code-background);
@@ -1540,11 +1521,11 @@ button.ui-button.update-download-button:disabled {
   border-radius: var(--radius-control);
   padding: 2px 4px;
 }
-:is(.tiptap, .format-content) pre code {
+.format-content pre code {
   padding: 0;
   background: transparent;
 }
-:is(.tiptap, .format-content) a {
+.format-content a {
   color: var(--syntax-link);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
@@ -1553,38 +1534,32 @@ button.ui-button.update-download-button:disabled {
   color: var(--muted);
   font-size: var(--text-ui);
 }
-:is(.tiptap, .format-content) img,
-:is(.tiptap, .format-content) video {
+.format-content img,
+.format-content video {
   max-width: 100%;
 }
 .document-media {
   display: inline-block;
   max-width: 100%;
 }
-:is(.tiptap, .format-content) hr {
+.format-content hr {
   border: 0;
   border-top: 1px solid var(--border);
   margin-block: 32px;
 }
-:is(.tiptap, .format-content) table {
+.format-content table {
   border-collapse: collapse;
   width: 100%;
   margin-block: 20px;
 }
-:is(.tiptap, .format-content) th,
-:is(.tiptap, .format-content) td {
+.format-content th,
+.format-content td {
   border: 1px solid var(--border);
   padding: 8px 12px;
   text-align: left;
 }
-:is(.tiptap, .format-content) th {
+.format-content th {
   background: var(--surface);
-}
-.tiptap :is(th, td) {
-  position: relative;
-}
-.tiptap input[type="checkbox"] {
-  accent-color: var(--accent);
 }
 .source-editor,
 .cm-editor {

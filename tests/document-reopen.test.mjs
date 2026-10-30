@@ -478,6 +478,52 @@ test('switching to edits whose file changed outside Hibi asks once to replace it
   assert.equal((await read()).dirty, false)
 })
 
+test('another outside write while Hibi asks to replace a file asks again', {
+  timeout: 120000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, open, content } = setupState
+  const { select, answer, prompts, type } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  const other = (await read()).tabId
+  await select(note)
+  const draft = await type('local draft')
+  await select(other)
+  await writeFile(file, 'outside text\n')
+  // Another app writes again while the first replace prompt is open.
+  await app.evaluate(({ dialog }, file) => {
+    const ask = dialog.showMessageBox
+    let writes = 1
+    dialog.showMessageBox = async (window, options) => {
+      if (options.message === 'This file changed outside Hibi.' && writes-- > 0)
+        process
+          .getBuiltinModule('node:fs')
+          .writeFileSync(file, 'later outside text\n')
+      return ask(window, options)
+    }
+  }, file)
+  await answer(0)
+  await select(note)
+  assert.deepEqual(await prompts(), [
+    'This file changed outside Hibi.',
+    'This file changed outside Hibi.',
+  ])
+  assert.equal(await readFile(file, 'utf8'), draft)
+  // Version history keeps the text that Replace overwrote.
+  const versions = await page.evaluate(async () =>
+    Promise.all(
+      (await window.hibi.listVersions()).map((version) =>
+        window.hibi.previewVersion(version.id),
+      ),
+    ),
+  )
+  assert.ok(versions.includes('later outside text\n'))
+})
+
 test('opening the planned file of an unsaved draft discards or saves the draft', {
   timeout: 120000,
 }, async (t) => {

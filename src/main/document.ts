@@ -899,13 +899,13 @@ export async function saveDocument(
   // Another app can create a draft's planned file before its first save.
   const appeared = exclusive && !!(await lstat(destination).catch(missingFile))
   if (destination === path || appeared) {
-    const unchanged =
+    let unchanged =
       !appeared &&
       (await matchesMarkdown(destination, saved).catch(missingFile))
     previous = unchanged
       ? saved
       : ((await readSource(destination).catch(missingFile))?.snapshot() ?? null)
-    if (!unchanged) {
+    while (!unchanged) {
       if (automatic) return null
       const choice = await runFileDialog(() =>
         dialog.showMessageBox(window, {
@@ -918,6 +918,14 @@ export async function saveDocument(
         }),
       )
       if (choice.response !== 0) return null
+      // Another app can write again while the prompt is open; ask about that text too.
+      const shown = previous
+      previous =
+        (await readSource(destination).catch(missingFile))?.snapshot() ?? null
+      unchanged =
+        shown === null
+          ? previous === null
+          : previous !== null && (await sameSource(shown, previous))
     }
   }
   await writeMarkdown(destination, content, exclusive && !appeared)

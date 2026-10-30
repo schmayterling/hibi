@@ -17,17 +17,27 @@ const patches = [
     `        let spaceAbove = 0;
         let scan = (tile, pos, measureBounds) => {`,
     `        let spaceAbove = 0;
-        // Whether the wrapper drawn from \`pos\` also holds blocks before it.
-        let wrapsBefore = (wrapper, pos) => this.blockWrappers.some(set => {
-            let found = false;
-            set.between(pos, pos, (start, _end, value) => {
-                if (start < pos && value.eq(wrapper)) {
-                    found = true;
-                    return false;
-                }
+        // Whether the range of a wrapper's last block starts above the blocks
+        // the wrapper draws from \`pos\`: before it, or in a gap inside it,
+        // which also joins the ranges of equal wrappers around it.
+        let cutWrapper = (tile, pos) => {
+            let drawn = pos, last = pos;
+            DocTile.prototype.blockTiles.call(tile, (block, offset) => {
+                last = pos + offset;
+                if (block.isWidget() && block.widget instanceof BlockGapWidget)
+                    drawn = last + block.length + block.breakAfter;
             });
-            return found;
-        });
+            return this.blockWrappers.some(set => {
+                let found = false;
+                set.between(last, last, (start, _end, value) => {
+                    if (start < drawn && value.eq(tile.wrapper)) {
+                        found = true;
+                        return false;
+                    }
+                });
+                return found;
+            });
+        };
         let scan = (tile, pos, measureBounds) => {`,
   ],
   [
@@ -42,8 +52,8 @@ const patches = [
     `                if (child instanceof BlockWrapperTile) {
                     if (end > from) {
                         scan(child, pos, childRect);
-                        // Its blocks before the drawn ones are not drawn, nor is the space they need below it.
-                        if (pos == from && wrapsBefore(child.wrapper, pos))
+                        // Its range's blocks above are not drawn, nor is the space they need below it.
+                        if (cutWrapper(child, pos))
                             spaceAbove = -Infinity;
                     }
                 }

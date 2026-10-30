@@ -50,7 +50,11 @@ export function observeDocumentMedia(
   revision: number,
   listener: (media: DocumentMedia | null) => void,
 ) {
-  if (/^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(source)) {
+  // Remote images load directly; only local media needs the main process.
+  if (
+    /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(source) ||
+    /^https:\/\//i.test(source)
+  ) {
     listener({ kind: 'image', url: source })
     return () => {}
   }

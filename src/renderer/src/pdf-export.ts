@@ -45,8 +45,8 @@ export async function exportPdf(
       [...body.querySelectorAll('img')].map(async (image) => {
         const src = image.getAttribute('src') ?? ''
         image.removeAttribute('srcset')
-        if (src.startsWith('data:')) return
-        // The print page loads nothing else; images it cannot embed show their description.
+        if (/^(?:data:|https:\/\/)/i.test(src)) return
+        // The print page loads only HTTPS images; local ones it cannot embed show their description.
         const data = await window.hibi
           .readPdfImage(src, document.revision)
           .catch(() => null)

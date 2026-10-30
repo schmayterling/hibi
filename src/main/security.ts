@@ -5,7 +5,8 @@ export const CONTENT_SECURITY_POLICY = [
   "script-src 'self' app://hibi",
   // Editor engines insert stylesheets and layout attributes; scripts stay strict.
   "style-src 'self' app://hibi 'unsafe-inline'",
-  "img-src 'self' app://hibi data:",
+  // Notes may show images from any HTTPS site, as other Markdown apps do.
+  "img-src 'self' app://hibi data: https:",
   'media-src app://hibi data:',
   "font-src 'self' app://hibi data:",
   "connect-src 'self' app://hibi",

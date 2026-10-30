@@ -607,6 +607,54 @@ test('codemirror: a disk edit that drops the open callout leaves the next one fo
   assert.equal(await pane.getByText('second body', { exact: true }).count(), 0)
 })
 
+test('codemirror: a note that ends in a folded callout opens with it folded', {
+  timeout: 120000,
+}, async (t) => {
+  const markdown = [
+    'Before paragraph.',
+    '',
+    '> [!note]- Closed title',
+    '> hidden alpha body.',
+    '',
+  ].join('\n')
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-fold-'))
+  await mkdir(join(folder, 'notes'))
+  const file = join(folder, 'notes', 'folds.md')
+  await writeFile(file, markdown)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(20000)
+  await selectFormattedEngine(app, page, 'codemirror')
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  const pane = page.locator('.rich-pane')
+  const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
+  await closed.waitFor()
+  // The open caret lands at the end of the last text, the title's, not at
+  // the hidden body's end.
+  const titleEnd = markdown.indexOf('Closed title') + 'Closed title'.length
+  await waitForAsync(
+    page,
+    (at) =>
+      document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+        .selection.main.head === at,
+    titleEnd,
+  )
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  assert.equal(
+    await pane.getByText('hidden alpha body.', { exact: true }).count(),
+    0,
+  )
+})
+
 test('codemirror: a closed tab releases its remembered folds and text', {
   timeout: 240000,
 }, async (t) => {

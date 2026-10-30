@@ -165,6 +165,46 @@ const revealFolds = EditorState.transactionExtender.of((transaction) => {
 })
 
 /**
+ * A caret that nothing the reader did puts at a folded body's hidden end,
+ * as the open caret of a note that ends in a folded callout, rests at the
+ * title's end instead, where it shows and the callout stays folded. The
+ * reader's own moves there show the body.
+ */
+const stayFolded = EditorState.transactionFilter.of((transaction) => {
+  const { startState, selection } = transaction
+  const tree =
+    !transaction.docChanged &&
+    transaction.annotation(Transaction.userEvent) === undefined &&
+    formattedSyntaxTree(startState)
+  if (!selection || !tree) return transaction
+  const out = (pos: number) => {
+    for (
+      let node: SyntaxNode | null = tree.resolve(pos, -1);
+      node;
+      node = node.parent
+    ) {
+      const body = node.name === 'Blockquote' && foldedBody(startState, node)
+      if (body && pos === body.to) return body.from
+    }
+    return pos
+  }
+  let moved = false
+  const ranges = selection.ranges.map((range) => {
+    const anchor = out(range.anchor),
+      head = out(range.head)
+    if (anchor === range.anchor && head === range.head) return range
+    moved = true
+    return EditorSelection.range(anchor, head)
+  })
+  return moved
+    ? [
+        transaction,
+        { selection: EditorSelection.create(ranges, selection.mainIndex) },
+      ]
+    : transaction
+})
+
+/**
  * Backspace or Delete beside a folded body, which would remove its hidden
  * text or pull the next line into it, shows the body instead, as the caret
  * reaching a fold does in Obsidian. The next press deletes what shows.
@@ -297,7 +337,7 @@ export const contribution: FormattedContribution = {
   feature: 'markdown.alerts',
   flavor: 'markdown.github',
   syntax: GithubAlerts,
-  extension: [folds, revealFolds, unfoldToDelete],
+  extension: [folds, stayFolded, revealFolds, unfoldToDelete],
   views: [
     {
       // The alerts.css box: a 3px bar in the alert color over a 6% tint, 12px 16px inside.

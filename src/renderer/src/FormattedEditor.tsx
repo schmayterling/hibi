@@ -503,8 +503,8 @@ export function MarkdownEditor({
       format,
       focused,
     )
-  // Like the rich editor, a new view takes focus with the caret at the end,
-  // unless the user already moved focus or the caret elsewhere.
+  // A new view takes focus with the caret at the end of its last text, unless
+  // the user already moved focus or the caret elsewhere.
   const placed = useRef(false)
   useEffect(() => {
     if (!autoFocus || placed.current || !formattedReady) return

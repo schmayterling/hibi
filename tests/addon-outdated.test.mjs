@@ -140,9 +140,21 @@ test('addons installed for an earlier addon API can be updated or uninstalled, a
   })
 
   await t.test(
-    'an update replaces the old install and uninstall removes one',
+    'an update replaces the old install and keeps its setting, uninstall removes the other, and the notice follows',
     async (t) => {
       const { app, page } = await launch(t, profile)
+      // Announce again in this session to watch the notice follow the list.
+      await page.evaluate(() =>
+        localStorage.removeItem('hibi:outdated-addons-announced'),
+      )
+      await page.reload()
+      await waitForDocumentEditor(app, page)
+      const notice = page.locator('.toast', {
+        hasText: /needs? an update for addon API 3/,
+      })
+      await notice
+        .filter({ hasText: '2 addons need an update for addon API 3.' })
+        .waitFor()
       await page.evaluate(() =>
         window.hibi.setAddonTrustSettings({
           allowUnsigned: true,
@@ -154,7 +166,11 @@ test('addons installed for an earlier addon API can be updated or uninstalled, a
           canceled: false,
           filePaths: [source],
         })
-        dialog.showMessageBox = async () => ({ response: 1 })
+        globalThis.reviews = []
+        dialog.showMessageBox = async (_window, options) => {
+          globalThis.reviews.push(options?.buttons ?? [])
+          return { response: 1 }
+        }
         const fs = process.getBuiltinModule('fs/promises')
         shell.trashItem = (path) => fs.rename(path, `${path}.trashed`)
         globalThis.gardenInstalls = []
@@ -192,12 +208,29 @@ test('addons installed for an earlier addon API can be updated or uninstalled, a
       assert.deepEqual(await app.evaluate(() => globalThis.gardenInstalls), [
         'old-theme',
       ])
-      // The same replacement from a local folder.
-      await page.evaluate(() => window.hibi.installAddon())
+      // The same replacement from a local folder, as a command.
+      await clickMenu(app, 'Command palette')
+      const input = page.getByRole('combobox', { name: /search commands/i })
+      await input.fill('install addon')
+      await page.getByRole('option').first().waitFor()
+      await input.press('Enter')
+      await notice
+        .filter({ hasText: 'Old tool needs an update for addon API 3.' })
+        .waitFor()
       const manifest = JSON.parse(
         await readFile(join(themeFolder, 'hibi-addon.json'), 'utf8'),
       )
       assert.deepEqual([manifest.apiVersion, manifest.version], [3, '1.1.0'])
+      // It replaced an install, and a theme asks for no access, so it stays enabled.
+      assert.deepEqual(await app.evaluate(() => globalThis.reviews), [
+        ['Cancel', 'Replace addon'],
+      ])
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getAddonStates())).find(
+          (state) => state.id === 'old-theme',
+        )?.enabled,
+        true,
+      )
       await page.getByRole('button', { name: 'Uninstall Old tool' }).click()
       await page.waitForFunction(
         () =>
@@ -212,6 +245,8 @@ test('addons installed for an earlier addon API can be updated or uninstalled, a
         ),
         [],
       )
+      // Nothing is left to update, so the notice goes.
+      await notice.waitFor({ state: 'detached' })
     },
   )
 })

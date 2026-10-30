@@ -297,6 +297,23 @@ export async function renderExportDocument(
  * Hibi no longer runs addons made for API 1 or 2. One notice per new set of
  * them leads to the addon manager, which keeps listing them.
  */
+function outdatedNotice(
+  outdated: readonly OutdatedAddon[],
+  open: (id: string) => void,
+) {
+  const first = outdated[0]
+  return {
+    message:
+      outdated.length === 1
+        ? `${first?.name} needs an update for addon API 3.`
+        : `${outdated.length} addons need an update for addon API 3.`,
+    action: {
+      label: 'Open addon manager',
+      run: () => first && open(first.id),
+    },
+  }
+}
+
 function announceOutdated(
   outdated: readonly OutdatedAddon[],
   show: ToastApi['show'],
@@ -311,21 +328,16 @@ function announceOutdated(
     // A malformed record announces again.
   }
   localStorage.setItem(key, JSON.stringify(current))
-  const first = outdated[0]
   if (
-    !first ||
+    !outdated.length ||
     (Array.isArray(announced) &&
       current.every((item) => announced.includes(item)))
   )
-    return
-  show({
-    message:
-      outdated.length === 1
-        ? `${first.name} needs an update for addon API 3.`
-        : `${outdated.length} addons need an update for addon API 3.`,
+    return null
+  return show({
+    ...outdatedNotice(outdated, open),
     variant: 'error',
     duration: 0,
-    action: { label: 'Open addon manager', run: () => open(first.id) },
   })
 }
 
@@ -355,6 +367,20 @@ export function useAddons(
   }).current
   const [states, setStates] = useState<AddonState[]>([])
   const [outdated, setOutdated] = useState<readonly OutdatedAddon[]>([])
+  const outdatedToast = useRef<ReturnType<ToastApi['show']> | null>(null)
+  // An update or uninstall settles what the notice named.
+  useEffect(() => {
+    const notice = outdatedToast.current
+    if (!notice) return
+    if (outdated.length)
+      notice.update(
+        outdatedNotice(outdated, (id) => latest.current.openAddonSettings(id)),
+      )
+    else {
+      notice.dismiss()
+      outdatedToast.current = null
+    }
+  }, [outdated])
   const [loaded, setLoaded] = useState(false)
   const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(
     new Map(),
@@ -903,8 +929,10 @@ export function useAddons(
         setStates(states)
         addonRegistry.hydrate(installed)
         setOutdated(outdated)
-        announceOutdated(outdated, toastService.api.show, (id) =>
-          latest.current.openAddonSettings(id),
+        outdatedToast.current = announceOutdated(
+          outdated,
+          toastService.api.show,
+          (id) => latest.current.openAddonSettings(id),
         )
         for (const message of notices)
           toastService.api.show({

@@ -1216,6 +1216,63 @@ test('a viewport starting inside a code box below its long lines keeps its scrol
   await style.evaluate((node) => node.remove())
 })
 
+test('a viewport first drawn inside a code box keeps the scrollbar its drawn lines show', {
+  timeout: 60000,
+}, async () => {
+  const long = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = ''
+  // The long line is the box's last: drawn from inside the box, it shows the
+  // scrollbar.
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${'const a = 1\n'.repeat(40)}${long}\`\`\`\n\n`
+  await harness.reload()
+  await harness.waitForFunction(() => !!window.livePreview)
+  const style = await harness.addStyleTag({
+    content:
+      '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 15px !important; height: 15px !important; }',
+  })
+  // With the caret on the box's first line too: the editor draws the caret's
+  // line there, and the lines below join it across a gap.
+  for (const caret of [false, true]) {
+    const result = await harness.evaluate(
+      async ({ doc, caret }) => {
+        const pane = document.querySelector('.rich-pane')
+        pane.scrollTop = 0
+        await window.livePreview.mount(doc, { width: 900, height: 600 })
+        await window.livePreview.settle()
+        const view = window.livePreview.view()
+        const fence = doc.split('```\n\n').slice(0, 20).join('```\n\n').length
+        const first = view.state.doc.line(
+          view.state.doc.lineAt(fence).number - 41,
+        )
+        if (caret) view.dispatch({ selection: { anchor: first.from } })
+        // Never drawn before: the view draws from 500px above the fence,
+        // inside the box and below its first line.
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(fence, { y: 'start' }),
+        })
+        for (let i = 0; i < 6; i++) await new Promise(requestAnimationFrame)
+        const box = view
+          .domAtPos(view.viewport.from)
+          .node.parentElement.closest('.hibi-lp-codescroll')
+        return {
+          inside: view.viewport.from > first.to && view.viewport.from < fence,
+          joined: !!box?.querySelector('.cm-gap'),
+          bar: box ? box.offsetHeight - box.clientHeight : null,
+          fence: view.lineBlockAt(fence).height,
+        }
+      },
+      { doc, caret },
+    )
+    const report = JSON.stringify({ caret, ...result })
+    assert.equal(result.inside, true, report)
+    assert.equal(result.joined, caret, report)
+    assert.equal(result.bar, 15, report)
+    assert.equal(result.fence, result.bar, report)
+  }
+  await style.evaluate((node) => node.remove())
+})
+
 test('stepping up after a jump to the end, known code blocks never draw as plain text', {
   timeout: 120000,
 }, async () => {

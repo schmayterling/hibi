@@ -67,7 +67,7 @@ The full-repository `npm run check` aggregate is excluded by the lane rules. Val
 
 ## Review, 2026-10-30
 
-An adversarial review merged main up to `2af23f03`, which includes #671. It resolved conflicts in `tests/formatted-engine.mjs` and `tests/markdown-markers.test.mjs` to main's helpers, and compared probes against main builds at `93cf4d4e`, `1b0f6518`, `ef7df2b4` and `2af23f03`. Each fix has a fail-first case in `tests/formatted-marker-edit.test.mjs`.
+An adversarial review merged main up to `93185617`, which includes #671, #683 and #691. It resolved conflicts in `tests/formatted-engine.mjs` and `tests/markdown-markers.test.mjs` to main's helpers, and compared probes against main builds at `93cf4d4e`, `1b0f6518`, `ef7df2b4`, `2af23f03` and `93185617`. Each fix has a fail-first case in `tests/formatted-marker-edit.test.mjs`.
 
 - **Double-click after a reveal.** The first click of a double-click puts the caret in the block, which shows its syntax and moves the text under the pointer. The second press then selected other text: `beta` for `delta` in a code block (the opening fence pushed the code down a line), `[` in a task, a space in a quote, `##` in a heading and `**` beside bold text. Main got the code, task and quote cases right; headings and emphasis were already wrong there. Later presses on the first press's spot now select around the text it hit, dragging on by words as the editor does. A triple-click uses the same position.
 - **Vertical goal column.** A vertical move measured its column on the revealed line and landed on a line that only showed its prefix afterwards: `- hel|lo` went down to `- worl|d`, and down, down, up, up ended one character right of the start (bullets, ordered items, tasks and quotes; main 12, 20, 12, 5, the PR 14, 22, 14, 6). After the landed line reveals, the caret moves back to its goal column on that line. Lines with block widgets are left alone.
@@ -78,12 +78,13 @@ An adversarial review merged main up to `2af23f03`, which includes #671. It reso
 
 Checked without defects: undo and redo across list, quote, fence, task and strong edits; checkboxes after typing `x` into `[ ]`, changing `-` to `*`, removing and re-adding the space, and in a quote; changing a fence's language, and unclosing and closing a fence; copying selections that start in a prefix (`- wo`), a whole fence and part of a delimiter (`*wor`), which put exact Markdown on the clipboard; heading and checkbox accessible names; links in table cells. On a 50 MiB note with about 240,000 fences, caret moves, a language edit and unclosing a fence cost the same as on main in two runs each, with no runaway rendering.
 
-Startup: after #671, main `2af23f03` and this branch both load 681,386 startup bytes (cap 691,974), with identical startup modules. Before #671 both loaded 691,974 at `1b0f6518` and `ef7df2b4`. This change adds no startup bytes.
+Startup: main `93185617` and this branch both load 681,206 startup bytes (cap 691,974), with identical startup modules. Earlier main heads gave the same equality: 691,974 at `1b0f6518` and `ef7df2b4`, 681,386 at `2af23f03`. This change adds no startup bytes.
 
-Final local validation at `5f381aee`, after merging main `2af23f03`. Build and typecheck passed. Biome found no errors across the repository; the six non-null warnings in `live-preview.ts` already existed. Node suites passed 98/98, and `docs:check` passed.
+Final local validation at `c5465a9f`, after merging main `93185617`. Build and typecheck passed. Biome found no errors across the repository; the six non-null warnings in `live-preview.ts` already existed. Node suites passed 98/98, and `docs:check` passed.
 
 | suite | passed |
 | --- | --- |
+| editor-input | 429/429 |
 | formatted-marker-edit | 40/40 |
 | formatted-engine-composition | 2/2 |
 | formatted-blocks | 8/8 |
@@ -92,7 +93,7 @@ Final local validation at `5f381aee`, after merging main `2af23f03`. Build and t
 | formatted-view | 17/17 |
 | formatted-open-caret | 2/2 |
 | formatted-clipboard | 46/46 |
-| live-preview | 24/24 |
+| live-preview | 24/24 (second run; see below) |
 | formatted-block-drag-geometry | 5/5 |
 | link-editing | 2/2 |
 | link-editing-cases | 9/9 (3 skipped by design: tiptap gaps from #677) |
@@ -100,14 +101,17 @@ Final local validation at `5f381aee`, after merging main `2af23f03`. Build and t
 | vim-block-visual | 1/1 |
 | formatted-actions-native | 81/81 |
 | formatted-tables | 144/144 |
-| editor-input | 428/428 |
 | startup-performance | 10/10 |
 
-All suites ran serially through `in-dir.sh` and `electron-lock.sh` with `HIBI_EXPECT_FORMATTED_GAPS=0`, with no retries.
+All suites ran serially through `in-dir.sh` and `electron-lock.sh` with `HIBI_EXPECT_FORMATTED_GAPS=0`.
 
-`formatted-engine-composition` before the final merge: its CodeMirror case passed in every run. Its tiptap case failed in 2 of 8 full-file runs at `e4e481ba`, each time at the selection set up before any composition (`''` for `chosen`). It passed in 7 of 7 full-file runs on main `ef7df2b4`, and in 6 of 6 tiptap-only runs on each build. That case loads none of the source files this change touches; the only shared change is the test helper's longer startup waits.
+Flakes seen on the way, each also seen on main or confined to code this change does not load:
+
+- live-preview "scrolling up through known code blocks…, native scrollbars" failed once in the gate run ("known downward pass stopped 16px from the bottom"). Isolated, it passed 2 of 2 on this branch and failed 1 of 2 on main `93185617` with the same message. The full file then passed 24/24.
+- editor-input "native table picks retain multiline caret positions…" overran its 60-second budget under load before #691: twice in full runs at `1a3eda7c`, and once in 2 isolated runs on both this branch and main `4e1bf03a`. It only ever timed out; no assertion failed. With #691's per-subtest budgets it passed.
+- `formatted-engine-composition`: the CodeMirror case passed in every run. The tiptap case failed in 2 of 8 full-file runs at `e4e481ba`, at the selection set up before any composition (`''` for `chosen`). It passed 7 of 7 on main `ef7df2b4`, 6 of 6 tiptap-only runs on each build, and in both final gate runs. That case loads none of the source files this change touches.
 
 Unresolved:
 
 - The guide commit `98efba0` is on the `may/marker-edit` branch of hibigarden/docs. It branches from `5080a602` and is not on docs main. Main's #683 pinned the published docs `e49aa86f` with its Nix hash, so this branch now keeps that pin rather than an unpublished commit, and the app's guide lacks the marker paragraph until that docs branch is merged into docs main and pinned.
-- The tiptap composition case flaked as described above.
+- The tiptap composition and live-preview scroll flakes above are not this change's; the scroll one fails on main too.

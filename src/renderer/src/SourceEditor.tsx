@@ -2058,8 +2058,15 @@ export function SourceEditor({
           // A right-click places the caret at once, which the page would place
           // only after the menu opens: the menu then acts there and stays open.
           EditorView.mouseSelectionStyle.of((view, event) => {
+            // macOS opens the menu on a Control+click too.
+            const control =
+              event.button === 0 &&
+              event.ctrlKey &&
+              !event.metaKey &&
+              !event.shiftKey &&
+              /Mac/.test(navigator.platform)
             if (
-              event.button !== 2 ||
+              (event.button !== 2 && !control) ||
               (event.target instanceof Element &&
                 event.target.closest('[contenteditable="false"]'))
             )
@@ -2068,13 +2075,17 @@ export function SourceEditor({
               x: event.clientX,
               y: event.clientY,
             })
+            if (pressed === null) return null
             const { from, to } = view.state.selection.main
             // A press in the selection keeps it.
-            if (
-              pressed === null ||
-              (from < to && pressed >= from && pressed <= to)
-            )
-              return null
+            if (from < to && pressed >= from && pressed <= to) {
+              if (!control) return null
+              // A click collapses it on release; this keeps it. Focused now,
+              // the editor does not select it again on release either, as it
+              // does after taking focus.
+              view.focus()
+              return { get: () => view.state.selection, update: () => false }
+            }
             let at = pressed
             return {
               get: () => EditorSelection.single(at),

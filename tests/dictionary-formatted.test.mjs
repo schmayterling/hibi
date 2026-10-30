@@ -483,3 +483,59 @@ test('in the formatted view a right-click offers the dictionary for the pressed 
     .getByText('Music makes me feel happy.')
     .waitFor()
 })
+
+test('in the formatted view a press in a selection keeps it for the dictionary', {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today\n\nThe zorp is here'
+  const { page, open } = await launch(t, { 'note.md': note })
+  await open('note.md')
+  const formatted = page.locator('.rich-pane .formatted-editor .cm-content')
+  await page
+    .locator('.rich-pane .cm-line', { hasText: 'I am Happy today' })
+    .waitFor()
+  const from = note.indexOf('Happy')
+  const selection = { anchor: from, head: from + 'Happy'.length }
+  const select = () =>
+    formatted.evaluate((element, selection) => {
+      const view = element.cmTile.root.view
+      view.focus()
+      view.dispatch({ selection })
+    }, selection)
+  const selected = () =>
+    formatted.evaluate((element) => {
+      const { anchor, head } = element.cmTile.root.view.state.selection.main
+      return { anchor, head }
+    })
+  const word = await formatted.evaluate(
+    (element, at) => element.cmTile.root.view.coordsAtPos(at),
+    from + 2,
+  )
+  const define = page
+    .getByRole('menu', { name: 'Editor actions' })
+    .getByRole('menuitem', { name: /^Define word/ })
+  const presses = [
+    () =>
+      page.mouse.click(word.left, (word.top + word.bottom) / 2, {
+        button: 'right',
+      }),
+  ]
+  // macOS opens the menu on a Control+click too.
+  if (process.platform === 'darwin')
+    presses.push(async () => {
+      await page.keyboard.down('Control')
+      await page.mouse.click(word.left, (word.top + word.bottom) / 2)
+      await page.keyboard.up('Control')
+    })
+  for (const press of presses) {
+    await select()
+    await press()
+    await define.waitFor()
+    // The menu and the selection stay after the press is released.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.deepEqual(await selected(), selection)
+    assert.equal(await define.isVisible(), true)
+    await page.keyboard.press('Escape')
+    await define.waitFor({ state: 'hidden' })
+  }
+})

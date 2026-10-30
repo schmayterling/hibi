@@ -595,9 +595,14 @@ async function removeTabs(
     // The tab shown next is checked for outside changes, as a tab switch does.
     if (next)
       await selectDocumentTab(window, next, false).catch((error: unknown) => {
-        // Edits made meanwhile keep the closing tab open. A next tab whose file
-        // cannot be checked still shows its text, and the close says why.
-        if (!source.ownsCurrentSnapshot(closing) || !tabs.has(next)) throw error
+        // Edits made meanwhile keep the closing tab open.
+        if (!source.ownsCurrentSnapshot(closing))
+          throw new Error(
+            `The tab for ${basename(path ?? pendingPath ?? untitledName)} stayed open because it changed while Hibi was closing it.`,
+          )
+        // A next tab whose file cannot be checked still shows its text, and
+        // the close says why.
+        if (!tabs.has(next)) throw error
         activateTab(next)
         advanceRevision()
         window.webContents.send(

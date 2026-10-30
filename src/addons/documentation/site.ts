@@ -128,7 +128,7 @@ const renderedHtml = (
         }
       : undefined,
     allowedSchemes: ['http', 'https', 'mailto'],
-    allowedSchemesByTag: { img: ['data'] },
+    allowedSchemesByTag: { img: ['data', 'https'] },
     allowProtocolRelative: false,
     transformTags: {
       blockquote: (_tag, attrs) => ({
@@ -426,7 +426,8 @@ function content(
                 siteMediaType(src)?.startsWith('image/') &&
                 siteMediaType(src) !== 'image/svg+xml'
               ? { src: prefix + src }
-              : isMermaidImage(attrs.src ?? '', attrs.class ?? '')
+              : /^https:/i.test(attrs.src ?? '') ||
+                  isMermaidImage(attrs.src ?? '', attrs.class ?? '')
                 ? { src: attrs.src }
                 : {}),
         },

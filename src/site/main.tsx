@@ -309,7 +309,9 @@ export function startSite(workspace: SiteData, root: Root) {
       if (assetType?.startsWith('image/')) continue
       const src = image.getAttribute('src') ?? ''
       if (
-        !/^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(src) &&
+        !/^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,|^https:/i.test(
+          src,
+        ) &&
         !isMermaidImage(src, image.className)
       )
         image.removeAttribute('src')

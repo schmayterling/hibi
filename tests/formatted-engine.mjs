@@ -12,7 +12,8 @@ export async function selectFormattedEngine(app, page, engine) {
       ? '.tiptap'
       : '.hibi-formatted .cm-content:not(.hibi-lp-cell-editor *)'
   const editor = page.locator(`.rich-pane ${selector}`)
-  if (engine === 'codemirror' && !(await editor.count())) {
+  // CodeMirror is the default, so Tiptap takes the reload.
+  if (!(await editor.count())) {
     await reloadFormattedEngine(page, engine)
     await page.waitForLoadState('load')
     await waitForDocumentEditor(app, page, { timeout: 30000 })

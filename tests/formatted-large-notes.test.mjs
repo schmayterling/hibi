@@ -96,12 +96,14 @@ async function launch(t, file, codemirror, boundaryLength) {
         }
       }
     }, boundaryLength)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
-    await page.reload()
-    await waitForDocumentEditor(app, page)
   }
+  // The init script applies on reload; the Tiptap engine needs its choice stored.
+  await page.evaluate(
+    (engine) => localStorage.setItem('hibi:formatted-engine', engine),
+    codemirror ? 'codemirror' : 'tiptap',
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)

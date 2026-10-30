@@ -144,13 +144,13 @@ async function open(name) {
 async function engine(codemirror) {
   if (
     (await page.evaluate(
-      () => localStorage.getItem('hibi:formatted-engine') === 'codemirror',
+      () => localStorage.getItem('hibi:formatted-engine') !== 'tiptap',
     )) === codemirror
   )
     return
   await page.evaluate((codemirror) => {
     if (codemirror) localStorage.setItem('hibi:formatted-engine', 'codemirror')
-    else localStorage.removeItem('hibi:formatted-engine')
+    else localStorage.setItem('hibi:formatted-engine', 'tiptap')
   }, codemirror)
   await page.reload()
   await waitForDocumentEditor(app, page)

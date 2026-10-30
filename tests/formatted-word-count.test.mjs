@@ -84,7 +84,7 @@ after(
 async function engine(formatted) {
   await page.evaluate((formatted) => {
     if (formatted) localStorage.setItem('hibi:formatted-engine', 'codemirror')
-    else localStorage.removeItem('hibi:formatted-engine')
+    else localStorage.setItem('hibi:formatted-engine', 'tiptap')
   }, formatted)
   await page.reload()
   await waitForDocumentEditor(app, page)

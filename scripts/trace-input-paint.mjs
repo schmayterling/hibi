@@ -27,12 +27,12 @@ const { values } = parseArgs({
   options: {
     engine: { type: 'string', default: 'hibi' },
     'bare-markdown': { type: 'boolean' },
-    mode: { type: 'string', default: 'all' },
+    mode: { type: 'string', default: 'source' },
     file: { type: 'string' },
     size: { type: 'string', default: 'all' },
     shape: { type: 'string', default: 'all' },
     position: { type: 'string', default: 'middle' },
-    target: { type: 'string', default: 'both' },
+    target: { type: 'string', default: 'source' },
     'hold-ms': { type: 'string', default: '30000' },
     'settle-ms': { type: 'string', default: '15000' },
     rate: { type: 'string', default: '30' },
@@ -52,7 +52,7 @@ const { values } = parseArgs({
 })
 if (values.help) {
   console.log(
-    'node scripts/trace-input-paint.mjs --engine hibi|bare [--bare-markdown] --mode source|visual|split|split-tabs|all [--file PATH | --size chars|words|all --shape paragraphs|giant|all] --position start|middle|end|all --target source|visual|both --out NEW_DIRECTORY [--quick] [--hold-ms 30000] [--rate 30] [--fixed-chrome] [--background] [--trace-screenshots] [--cpu-profile] [--continue-on-error]',
+    'node scripts/trace-input-paint.mjs --engine hibi|bare [--bare-markdown] --mode source [--file PATH | --size chars|words|all --shape paragraphs|giant|all] --position start|middle|end|all --target source --out NEW_DIRECTORY [--quick] [--hold-ms 30000] [--rate 30] [--fixed-chrome] [--background] [--trace-screenshots] [--cpu-profile] [--continue-on-error]',
   )
   process.exit(0)
 }

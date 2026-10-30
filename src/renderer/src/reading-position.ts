@@ -18,8 +18,12 @@ type Reading = {
 }
 const reading = new WeakMap<EditorView, Reading | null>()
 
-/** Where the reader is: the caret while it is on screen, else the first line below the top of the scrolled pane. */
-function readingPosition(view: EditorView): Reading | null {
+/** Whether a pane whose content was `height` tall is scrolled to its bottom, as CodeMirror tells. */
+const atBottom = (pane: Element, height = pane.scrollHeight) =>
+  pane.scrollTop > Math.max(1, height - pane.clientHeight - 4)
+
+/** The element that scrolls the editor: the first around it that scrolls vertically. */
+function scrollPane(view: EditorView) {
   let pane: Element | null = view.scrollDOM
   while (
     pane &&
@@ -29,6 +33,14 @@ function readingPosition(view: EditorView): Reading | null {
     )
   )
     pane = pane.parentElement
+  return pane
+}
+
+/** Where the reader is: the caret while it is on screen, else the first line below the top of the scrolled pane. */
+function readingPosition(view: EditorView): Reading | null {
+  const pane = scrollPane(view)
+  // A reader at the bottom stays there instead: see `keepRead`.
+  if (pane && atBottom(pane)) return null
   const scroller = pane ?? document.scrollingElement
   const { top, bottom } = pane?.getBoundingClientRect() ?? {
     top: 0,
@@ -111,7 +123,36 @@ const kept = new WeakMap<
   EditorView,
   Reading & { scroll: number; left: number }
 >()
+
+/** Each editor's scrolled pane and how tall its content was when last measured. */
+const heights = new WeakMap<EditorView, { pane: Element; height: number }>()
+/**
+ * A reader at the bottom of the pane stays there when heights change, as
+ * drawn lines replace estimates and the space below the last line comes
+ * back: CodeMirror keeps one only in its own scroller or during input.
+ */
+const keepBottom = {
+  key: heights,
+  read(view: EditorView) {
+    const pane = scrollPane(view)
+    const known = heights.get(view)
+    const pinned =
+      !!pane &&
+      known?.pane === pane &&
+      pane.scrollHeight !== known.height &&
+      atBottom(pane, known.height)
+    if (pane) heights.set(view, { pane, height: pane.scrollHeight })
+    return pinned ? pane : null
+  },
+  write(pane: Element | null) {
+    if (pane) pane.scrollTop = pane.scrollHeight
+  },
+}
+
 export const keepRead = [
+  EditorView.updateListener.of((update) =>
+    update.view.requestMeasure(keepBottom),
+  ),
   EditorView.updateListener.of((update) => {
     const keep = kept.get(update.view)
     if (!keep) return

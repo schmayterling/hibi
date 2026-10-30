@@ -213,6 +213,7 @@ test('development reload checks follow tooling scope on linux and macos while fu
     'scripts/addon-development.ts',
     'scripts/addon-packages.ts',
     'scripts/patch-electron-vite.mjs',
+    'scripts/resolve-own.mjs',
     'scripts/electron-runtime.mjs',
     'scripts/build-site.mjs',
     'scripts/docs.mjs',

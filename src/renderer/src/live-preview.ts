@@ -1434,27 +1434,71 @@ function spacing(
 /**
  * The space below a text's last line, found from the lines after its last
  * block, which start at `from`, and the margin below that block; null when
- * text follows the block. Each line before the last can be whitespace, so
- * the lines are read once per text, and edits above them keep the space.
+ * text follows the block. Found once per text: edits above the lines, and
+ * whitespace typed or deleted among them, keep it.
  */
 const endSpaces = new WeakMap<
   Text,
   { from: number; margin: number; below: number | null }
 >()
 
-/** An edit that ends above the lines after the last block leaves their space as it was. */
+/** An edit above the lines after the last block, or of whitespace among them, keeps their space. */
 function keepEndSpace(update: ViewUpdate) {
   const known = endSpaces.get(update.startState.doc)
   if (!known) return
+  const { changes, state } = update
   let above = true
-  update.changes.iterChangedRanges((_, to) => {
-    if (to >= known.from) above = false
+  let blank = known.below !== null
+  changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    if (toA >= known.from) above = false
+    if (fromA <= known.from || /\S/.test(inserted.toString())) blank = false
   })
   if (above)
-    endSpaces.set(update.state.doc, {
+    endSpaces.set(state.doc, { ...known, from: changes.mapPos(known.from) })
+  else if (blank)
+    endSpaces.set(state.doc, {
       ...known,
-      from: update.changes.mapPos(known.from),
+      below: endSpace(state.doc, known.from, known.margin),
     })
+}
+
+/** Whether the lines after line `end` hold only whitespace; runs of empty lines are not read one by one. */
+function blankAfter(doc: Text, end: number) {
+  for (let number = end + 1; number <= doc.lines; number++) {
+    const line = doc.line(number)
+    if (line.text.trim()) return false
+    // Lines from here to `at` are empty while they hold only line breaks.
+    if (!line.text && number < doc.lines && !doc.line(number + 1).text)
+      number =
+        firstWhere(
+          number,
+          doc.lines,
+          (at) => doc.line(at).to - line.from > at - number,
+        ) - 1
+  }
+  return true
+}
+
+/**
+ * The space below the last line when only blank lines follow the last block,
+ * which ends at `from`: the margin below the block when no line follows it.
+ * Otherwise an empty line with another line break after it is the margin
+ * above an empty paragraph, which shows on the next line, so the last line
+ * shows one after an odd run of empty lines.
+ */
+function endSpace(doc: Text, from: number, margin: number) {
+  const end = doc.lineAt(from).number
+  if (end === doc.lines) return margin
+  const before = doc.line(doc.lines - 1)
+  // Lines from `at` to the one before the last are empty while they hold only line breaks.
+  const run =
+    doc.lines -
+    firstWhere(
+      end + 1,
+      doc.lines,
+      (at) => before.to - doc.line(at).from === doc.lines - 1 - at,
+    )
+  return run % 2 ? blockSpace('Paragraph').bottom : 0
 }
 
 /**
@@ -1473,69 +1517,38 @@ function ending(view: EditorView, tree: Tree, line: (pos: number) => LineInfo) {
   const end = doc.lineAt(last.to)
   // Text after the last block that is not parsed yet may hold more blocks.
   if (uncovered(tree, end.to, doc.length)) return 0
-  const { viewport } = view
-  // Where the lines to lay out end: none while the last block's end is not drawn.
-  const drawn =
-    end.to >= viewport.from && end.to <= viewport.to ? viewport.to : -1
-  const paragraph = blockSpace('Paragraph')
   const after = bottomMargin(last)
-  const known = endSpaces.get(doc)
-  const space =
-    known?.from === end.to && known.margin === after ? known.below : undefined
-  // Text after the last block, such as a definition, leaves no space.
-  if (space === null) return 0
+  let known = endSpaces.get(doc)
+  if (known?.from !== end.to || known.margin !== after) {
+    known = {
+      from: end.to,
+      margin: after,
+      // Text after the last block, such as a definition, leaves no space.
+      below: blankAfter(doc, end.number) ? endSpace(doc, end.to, after) : null,
+    }
+    endSpaces.set(doc, known)
+  }
+  if (known.below === null) return 0
+  const { viewport } = view
+  if (end.to < viewport.from || end.to > viewport.to) return known.below
+  const paragraph = blockSpace('Paragraph')
   let margin = after,
-    below = margin,
     shown = false
-  const gaps: [number, number][] = []
   for (let number = end.number + 1; number <= doc.lines; number++) {
-    let blank = doc.line(number)
-    if (blank.from > drawn) {
-      // Past those, only the space is left, once found for this text.
-      if (space !== undefined) {
-        below = space
-        break
-      }
-      // A run of empty lines before the last line alternates between a
-      // margin and an empty paragraph: skip it in pairs.
-      if (!blank.text && number + 1 < doc.lines && !doc.line(number + 1).text) {
-        const { from } = blank
-        // Lines from here to `at` are empty while they hold only line breaks.
-        const run =
-          firstWhere(
-            number,
-            doc.lines,
-            (at) => doc.line(at).to - from > at - number,
-          ) - number
-        number += run - (run % 2)
-        margin = below = paragraph.bottom
-        blank = doc.line(number)
-      }
-    }
-    if (blank.text.trim()) {
-      endSpaces.set(doc, { from: end.to, margin: after, below: null })
-      return 0
-    }
+    const blank = doc.line(number)
+    if (blank.from > viewport.to) break
     if (shown) {
       shown = false
-      margin = below = paragraph.bottom
-    } else if (!blank.text && number < doc.lines) {
-      if (blank.from <= drawn)
-        gaps.push([blank.from, Math.max(margin, paragraph.top)])
-      shown = true
-    } else {
-      if (blank.from <= drawn) gaps.push([blank.from, margin])
-      below = 0
+      margin = paragraph.bottom
+      continue
     }
-  }
-  if (space === undefined)
-    endSpaces.set(doc, { from: end.to, margin: after, below })
-  for (const [at, height] of gaps) {
-    const info = line(at)
+    shown = !blank.text && number < doc.lines
+    const height = shown ? Math.max(margin, paragraph.top) : margin
+    const info = line(blank.from)
     info.classes.push('hibi-lp-gap')
     info.style.push(`height: ${height}px`, `line-height: ${height}px`)
   }
-  return below
+  return known.below
 }
 
 /** Layout decorations for one parsed chunk, relative to the chunk start. */

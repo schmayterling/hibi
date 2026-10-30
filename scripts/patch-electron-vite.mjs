@@ -1,23 +1,12 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { resolveOwn } from './resolve-own.mjs'
 
 // Electron-vite 6 starts a replacement before the old app releases its lock.
 // Request a normal close so unsaved documents still get their save prompt.
-let entry
-try {
-  entry = import.meta.resolve('electron-vite')
-} catch (error) {
-  if (
-    error.code === 'ERR_MODULE_NOT_FOUND' &&
-    process.env.NODE_ENV === 'production'
-  )
-    process.exit(0)
-  throw error
-}
+const entry = pathToFileURL(resolveOwn('electron-vite'))
 
-const packagePath = fileURLToPath(
-  import.meta.resolve('electron-vite/package.json'),
-)
+const packagePath = resolveOwn('electron-vite/package.json')
 const { version } = JSON.parse(await readFile(packagePath, 'utf8'))
 if (version !== '6.0.0')
   throw new Error(

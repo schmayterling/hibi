@@ -789,13 +789,28 @@ test('whitespace lines after the last block are read once per text, not on every
         return calls
       }
       try {
+        const refresh = count(() => preview.refresh())
+        // Above the last block: the lines after it stay as they were.
+        const edit = count(() =>
+          view.dispatch({ changes: { from: 0, insert: 'x' } }),
+        )
+        const space = view.contentDOM.style.getPropertyValue('--hibi-end')
+        // A line break typed before the last line, among the lines after
+        // the last block, until they are parsed and laid out.
+        calls = 0
+        view.dispatch({
+          changes: { from: view.state.doc.length - 1, insert: '\n' },
+        })
+        const block = view.state.doc.line(3)
+        while (!preview.covered(block.to, view.state.doc.length))
+          await new Promise(requestAnimationFrame)
+        preview.refresh()
         return {
-          refresh: count(() => preview.refresh()),
-          // Above the last block: the lines after it stay as they were.
-          edit: count(() =>
-            view.dispatch({ changes: { from: 0, insert: 'x' } }),
-          ),
-          space: view.contentDOM.style.getPropertyValue('--hibi-end'),
+          refresh,
+          edit,
+          space,
+          typed: calls,
+          after: view.contentDOM.style.getPropertyValue('--hibi-end'),
         }
       } finally {
         text.line = read
@@ -805,10 +820,14 @@ test('whitespace lines after the last block are read once per text, not on every
     // The view shows a few dozen of the 10,000 lines.
     assert.ok(result.refresh < 200, report)
     assert.ok(result.edit < 200, report)
-    spaces.push(result.space)
+    assert.ok(result.typed < 200, report)
+    spaces.push([result.space, result.after])
   }
-  // Only an empty line before the last opens an empty paragraph there.
-  assert.deepEqual(spaces, ['', '16px'])
+  // Only an odd run of empty lines before the last opens an empty paragraph there.
+  assert.deepEqual(spaces, [
+    ['', '16px'],
+    ['16px', ''],
+  ])
 })
 
 test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {
@@ -863,6 +882,63 @@ test('the space below the last line stays while the end is out of view, so scrol
   // reader already at the bottom, who stopped short of it.
   assert.equal(result.away.height, result.height, report)
   assert.ok(Math.abs(result.bottom) <= 1, report)
+})
+
+test('a reader who scrolls back to the end of a giant last block stays at the bottom', {
+  timeout: 240000,
+}, async () => {
+  let prose = ''
+  for (let block = 0; block < 200; block++)
+    prose += `Paragraph ${block} with a few words of prose.\n\n`
+  // Parsed only near the view: away from it, a list loses its layout and
+  // the space below it; a paragraph's joined lines are estimated.
+  for (const tail of [
+    Array.from(
+      { length: 3000 },
+      (_, i) => `words of one giant paragraph, line ${i}`,
+    ).join('\n'),
+    Array.from(
+      { length: 3000 },
+      (_, i) => `- item ${i} with a few words in it`,
+    ).join('\n'),
+  ]) {
+    const result = await harness.evaluate(async (doc) => {
+      const pane = document.querySelector('.rich-pane')
+      pane.scrollTop = 0
+      await window.livePreview.mount(doc, { width: 900, height: 600 })
+      const view = window.livePreview.view()
+      const frame = () => new Promise(requestAnimationFrame)
+      const scroll = async (target) => {
+        pane.scrollTop = target
+        let still = 0
+        let last = ''
+        for (let i = 0; i < 60 && still < 4; i++) {
+          await frame()
+          const now = `${pane.scrollTop} ${view.viewport.from} ${view.viewport.to} ${view.contentDOM.offsetHeight}`
+          still = now === last ? still + 1 : 0
+          last = now
+        }
+      }
+      const stride = Math.round(pane.clientHeight * 0.8)
+      for (
+        let target = 0;
+        target < pane.scrollHeight - pane.clientHeight;
+        target += stride
+      )
+        await scroll(target)
+      await scroll(pane.scrollHeight)
+      await scroll(pane.scrollTop - 40000)
+      await scroll(pane.scrollHeight)
+      // Idle parsing near the end lands too.
+      for (let i = 0; i < 30; i++) await frame()
+      return {
+        length: doc.length,
+        height: pane.scrollHeight,
+        bottom: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
+      }
+    }, `${prose}${tail}\n\n`)
+    assert.ok(Math.abs(result.bottom) <= 1, JSON.stringify(result))
+  }
 })
 
 test('scrolling up through known code blocks keeps the scroll position and full height', {
@@ -1047,6 +1123,97 @@ test('a viewport starting just below a code box keeps its scrollbar in the heigh
   assert.equal(result.start, true, report)
   assert.equal(result.now, result.below[1], report)
   assert.equal(result.after, result.before, report)
+})
+
+test('a viewport starting inside a code box below its long lines keeps its scrollbar in the height', {
+  timeout: 60000,
+}, async () => {
+  const long = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = ''
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${long}${'const a = 1\n'.repeat(30)}\`\`\`\n\n`
+  await harness.reload()
+  await harness.waitForFunction(() => !!window.livePreview)
+  const style = await harness.addStyleTag({
+    content:
+      '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 15px !important; height: 15px !important; }',
+  })
+  // With the caret in the box too, above the lines drawn: the editor draws
+  // the caret's line there, and the lines below join it across a gap.
+  for (const caret of [false, true]) {
+    const result = await harness.evaluate(
+      async ({ doc, caret }) => {
+        const pane = document.querySelector('.rich-pane')
+        pane.scrollTop = 0
+        await window.livePreview.mount(doc, { width: 900, height: 600 })
+        await window.livePreview.settle()
+        const view = window.livePreview.view()
+        const frames = async (count) => {
+          for (let i = 0; i < count; i++)
+            await new Promise(requestAnimationFrame)
+        }
+        for (let top = 0; top < pane.scrollHeight; top += 300) {
+          pane.scrollTop = top
+          await frames(3)
+        }
+        // The tenth box's hidden closing fence holds the space of the box's
+        // scrollbar, which its long first line shows: measured with the box
+        // drawn from its top.
+        const fence = doc.split('```\n\n').slice(0, 10).join('```\n\n').length
+        const number = view.state.doc.lineAt(fence).number
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(
+            view.state.doc.line(number - 32).from,
+            { y: 'start' },
+          ),
+        })
+        await frames(4)
+        const below = view.lineBlockAt(fence)
+        // Twenty short lines below the long one.
+        const start = view.state.doc.line(number - 10)
+        pane.scrollTop = 0
+        await frames(4)
+        const height = view.contentHeight
+        const offset = pane.getBoundingClientRect().top - view.documentTop
+        const block = view.lineBlockAt(start.from)
+        if (caret)
+          view.dispatch({
+            selection: { anchor: view.state.doc.line(number - 29).from },
+          })
+        for (const margin of [
+          500,
+          ...Array.from({ length: 126 }, (_, i) => i * 8),
+        ]) {
+          pane.scrollTop = 0
+          await frames(3)
+          pane.scrollTop = block.top + block.height / 2 + margin - offset
+          await frames(3)
+          if (view.viewport.from === start.from) break
+        }
+        await frames(2)
+        // Drawn from there, the box shows only short lines and no scrollbar.
+        const box = view
+          .domAtPos(start.from)
+          .node.parentElement.closest('.hibi-lp-codescroll')
+        return {
+          start: view.viewport.from === start.from,
+          drawn: box ? box.offsetHeight - box.clientHeight : null,
+          below: [below.from, below.height],
+          now: view.lineBlockAt(below.from).height,
+          before: height,
+          after: view.contentHeight,
+        }
+      },
+      { doc, caret },
+    )
+    const report = JSON.stringify({ caret, ...result })
+    assert.equal(result.start, true, report)
+    assert.equal(result.drawn, 0, report)
+    assert.ok(result.below[1] >= 15, report)
+    assert.equal(result.now, result.below[1], report)
+    assert.equal(result.after, result.before, report)
+  }
+  await style.evaluate((node) => node.remove())
 })
 
 test('stepping up after a jump to the end, known code blocks never draw as plain text', {

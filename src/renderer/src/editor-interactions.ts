@@ -396,13 +396,13 @@ export function attachEditorInteractions(adapter: Adapter) {
       return
     }
     if (!shown || event.ctrlKey || event.metaKey || event.altKey) return
-    const moves: Record<string, number> = {
-      ArrowDown: selected + 1,
-      ArrowUp: selected - 1,
-      Home: 0,
-      End: -1,
-    }
-    if (Object.hasOwn(moves, event.key)) select(moves[event.key]!)
+    const move = new Map([
+      ['ArrowDown', selected + 1],
+      ['ArrowUp', selected - 1],
+      ['Home', 0],
+      ['End', -1],
+    ]).get(event.key)
+    if (move !== undefined) select(move)
     else if (event.key === 'Enter') accept(selected)
     // As in the platform's menus, Tab closes the menu without choosing.
     else if (event.key === 'Tab') closeMenu()

@@ -836,7 +836,7 @@ test('focusing a split pane asks once to replace edits whose file changed', {
   assert.equal(await readFile(file, 'utf8'), draft)
 })
 
-test('a link to the note itself and its explorer row check for outside changes', {
+test('a link to the note itself, its explorer row and dropping it check for outside changes', {
   timeout: 150000,
 }, async (t) => {
   const setupState = await setup(t)
@@ -857,6 +857,20 @@ test('a link to the note itself and its explorer row check for outside changes',
     row: [
       'workspace:open-file',
       () => page.getByRole('treeitem', { name: /^note\.md/ }).click(),
+    ],
+    drop: [
+      'media:open-dropped',
+      async () => {
+        const cdp = await page.context().newCDPSession(page)
+        for (const type of ['dragEnter', 'dragOver', 'drop'])
+          await cdp.send('Input.dispatchDragEvent', {
+            type,
+            x: 600,
+            y: 300,
+            data: { items: [], files: [file], dragOperationsMask: 1 },
+          })
+        await cdp.detach()
+      },
     ],
   }
   const reopen = async (route, choice = 2) => {
@@ -880,6 +894,7 @@ test('a link to the note itself and its explorer row check for outside changes',
   // An unchanged file keeps the edits and their undo history without asking.
   assert.deepEqual(await reopen('self'), [])
   assert.deepEqual(await reopen('row'), [])
+  assert.deepEqual(await reopen('drop'), [])
   assert.deepEqual(await state(), {
     tabId: note,
     markdown: draft,
@@ -898,10 +913,11 @@ test('a link to the note itself and its explorer row check for outside changes',
     async (draft) => (await window.hibi.getDocument()).markdown === draft,
     draft,
   )
-  // After an outside change both ask like any reopen, and Cancel keeps the edits.
+  // After an outside change each asks like any reopen, and Cancel keeps the edits.
   await writeFile(file, `outside text${links}`)
   assert.deepEqual(await reopen('self'), ['Save changes to note.md?'])
   assert.deepEqual(await reopen('row'), ['Save changes to note.md?'])
+  assert.deepEqual(await reopen('drop'), ['Save changes to note.md?'])
   assert.deepEqual(await state(), {
     tabId: note,
     markdown: draft,
@@ -917,6 +933,9 @@ test('a link to the note itself and its explorer row check for outside changes',
     ephemeral: false,
   })
   // A clean note takes a later outside change without asking.
+  await writeFile(file, `dropped text${links}`)
+  assert.deepEqual(await reopen('drop'), [])
+  await editor.getByText('dropped text').waitFor()
   await writeFile(file, `final text${links}`)
   assert.deepEqual(await reopen('row'), [])
   await editor.getByText('final text').waitFor()

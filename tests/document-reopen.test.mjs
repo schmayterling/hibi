@@ -742,7 +742,7 @@ test('switching to a clean tab whose file was deleted keeps its text', {
   timeout: 120000,
 }, async (t) => {
   const setupState = await setup(t)
-  const { notes, file, read, open, content } = setupState
+  const { app, notes, file, read, idle, open, content } = setupState
   const { select, answer, prompts, state, notice } = setupState
   const note = (await read()).tabId
   await writeFile(join(notes, 'other.md'), 'other note\n')
@@ -762,6 +762,14 @@ test('switching to a clean tab whose file was deleted keeps its text', {
     ephemeral: false,
   })
   await content('original text\n')
+  // Saving writes the text back after asking.
+  await answer(0)
+  const done = await replied(app, 'document:save')
+  await clickMenu(app, 'Save')
+  await done()
+  await idle()
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  assert.equal(await readFile(file, 'utf8'), 'original text\n')
 })
 
 test('focusing a split pane asks once to replace edits whose file changed', {

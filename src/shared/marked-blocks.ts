@@ -175,17 +175,42 @@ const setextFrames = new WeakMap<Tokenizer, SetextFrame>()
 const scanningQuotes = new WeakSet<Tokenizer>()
 // Tokenizers whose quotes keep Marked's own tab handling.
 const untabbedQuotes = new WeakSet<Tokenizer>()
+// Each lexer makes a rules object: the long native quotes share one, so the
+// fence and definition rules derived from it are built once.
+let nativeQuoteRules: Tokenizer['rules'] | undefined
 
 /**
- * A quote read with Marked's decisions and tab handling, one line at a time
- * and only as far as it goes: Marked's quote rule first scans the rest of a
- * lazy extent, which is quadratic for a reader called at every quote.
+ * A quote read with Marked's decisions and tab handling, only as far as it
+ * goes: Marked's quote rule first scans the rest of a lazy extent, which is
+ * quadratic for a reader called at every quote.
  */
 export function readNativeQuote(source: string) {
+  // The rule's extent stops at a blank line: when one comes within a few
+  // lines, Marked's own quote reads only those, at a fraction of the cost.
+  const end = quoteWindow(source)
+  if (end !== undefined) {
+    const tokenizer = new Tokenizer()
+    new marked.Lexer({ gfm: true, tokenizer })
+    return tokenizer.blockquote(source.slice(0, end))
+  }
   const tokenizer = new BlockTokenizer()
   new marked.Lexer({ gfm: true, tokenizer })
+  tokenizer.rules = nativeQuoteRules ??= tokenizer.rules
   untabbedQuotes.add(tokenizer)
   return tokenizer.blockquote(source)
+}
+// Where the first blank line within 32 lines starts, or the end of a source
+// that ends sooner. Like Marked's paragraph rule, spaces at the very end are
+// still a line of text.
+function quoteWindow(source: string) {
+  for (let at = 0, line = 0; line < 32; line++) {
+    let char = at
+    while (source.charCodeAt(char) === 32) char++
+    if (line && source.charCodeAt(char) === 10) return at
+    const next = source.indexOf('\n', at)
+    if (next < 0) return source.length
+    at = next + 1
+  }
 }
 const invalidSetext = /[\r\u2028\u2029]/g
 

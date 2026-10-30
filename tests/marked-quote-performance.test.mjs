@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
-import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
+import { alertMarkdown, alertToken } from '../src/addons/markdown/alerts.ts'
 import { mathTokens } from '../src/addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { typstTokens } from '../src/addons/typst/syntax.ts'
@@ -118,6 +118,31 @@ test('alerts read their quote only as far as it goes', () => {
     }
   } finally {
     RegExp.prototype.exec = exec
+  }
+})
+
+test('an alert reads its quote without building rules per call', () => {
+  // A short alert reads with Marked's own quote rule; a long one shares one
+  // rules object, so the fence and definition rules come from its cache.
+  for (const alert of [
+    '> [!WARNING]\n> careful with this one\n> and the next line\n',
+    `> [!WARNING]\n${'> a line\n'.repeat(40)}`,
+  ]) {
+    alertToken(alert)
+    const Native = globalThis.RegExp
+    let built = 0
+    globalThis.RegExp = new Proxy(Native, {
+      construct(target, args, newTarget) {
+        built++
+        return Reflect.construct(target, args, newTarget)
+      },
+    })
+    try {
+      for (let index = 0; index < 50; index++) alertToken(alert)
+    } finally {
+      globalThis.RegExp = Native
+    }
+    assert.equal(built, 0, alert.slice(0, 40))
   }
 })
 

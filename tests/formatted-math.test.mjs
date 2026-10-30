@@ -594,7 +594,10 @@ test('with markers hidden, clicking a formula opens its prompt and replaces the 
   await open('edit.md')
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  await page.locator('.rich-pane [data-type="block-math"] .katex').waitFor()
+  // The reload shows the previous test's note, and its formulas, until this one opens.
+  await page
+    .locator('.rich-pane [data-type="block-math"][data-latex="c^2"] .katex')
+    .waitFor()
   await page.locator('.rich-pane [data-type="block-math"]').click()
   const prompt = page.getByRole('dialog', { name: 'Math' })
   const field = prompt.getByRole('textbox', { name: 'LaTeX' })
@@ -676,6 +679,7 @@ test('applying an unchanged prompt keeps a formula across quote lines as written
   await engine(true, false)
   await open('quoted-prompt.md')
   const formulas = page.locator('.rich-pane [data-type="block-math"]')
+  await page.locator('.rich-pane .cm-line', { hasText: 'Quoted' }).waitFor()
   await page.waitForFunction(
     () =>
       document.querySelectorAll('.rich-pane [data-type="block-math"] .katex')

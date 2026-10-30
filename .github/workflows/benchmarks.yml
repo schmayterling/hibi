@@ -89,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p results
-          for file in scripts/benchmark-startup.mjs scripts/benchmark-input.mjs scripts/benchmark-flows.mjs tests/electron.mjs tests/keyboard.mjs; do
+          for file in scripts/benchmark-startup.mjs scripts/benchmark-input.mjs scripts/benchmark-flows.mjs tests/electron.mjs tests/electron-hooks.mjs tests/keyboard.mjs; do
             cp "candidate/$file" "baseline/$file"
             cmp "candidate/$file" "baseline/$file"
           done
@@ -98,7 +98,7 @@ jobs:
             printf 'baseline=%s\ncandidate=%s\n' "$(git -C baseline rev-parse HEAD)" "$(git -C candidate rev-parse HEAD)"
             printf 'node=%s\nmacos=%s\nrunner=%s\n' "$(node --version)" "$(sw_vers -productVersion)" "${RUNNER_IMAGE:-unknown}"
             printf 'sampler_sha256:\n'
-            shasum -a 256 candidate/scripts/benchmark-startup.mjs candidate/scripts/benchmark-input.mjs candidate/scripts/benchmark-flows.mjs candidate/tests/electron.mjs candidate/tests/keyboard.mjs
+            shasum -a 256 candidate/scripts/benchmark-startup.mjs candidate/scripts/benchmark-input.mjs candidate/scripts/benchmark-flows.mjs candidate/tests/electron.mjs candidate/tests/electron-hooks.mjs candidate/tests/keyboard.mjs
             printf 'order=baseline,candidate,candidate,baseline per workload\n'
             printf 'startup_runs=11 per batch; input_runs=10 per batch\n'
           } > results/manifest.txt

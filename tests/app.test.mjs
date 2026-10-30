@@ -120,6 +120,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'onDocumentMediaScopeChanged',
         'openDroppedFile',
         'getInstalledAddons',
+        'getOutdatedAddons',
         'getAddonDirectory',
         'installDirectoryAddon',
         'onAddonGardenRequest',

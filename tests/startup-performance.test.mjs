@@ -318,6 +318,7 @@ it('blank startup leaves disabled runtimes and closed settings unloaded and sour
   } else {
     // The formatted engine uses SourceEditor; its separate source pane stays unmounted.
     assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
+    assert.doesNotMatch(initial, /node_modules\/(?:@tiptap\/|prosemirror-)/)
   }
   assert.doesNotMatch(initial, /src\/renderer\/src\/FormatEditor\.tsx/)
   await page.evaluate(() => {
@@ -429,7 +430,7 @@ it('default diagrams start with markdown documents and load pele only for a diag
   else
     assert.doesNotMatch(
       loaded().join('\n'),
-      /node_modules\/(?:pele|mermaid|@mermaid-js)\//,
+      /node_modules\/(?:pele|mermaid|@mermaid-js|@tiptap|prosemirror-[a-z-]+)\//,
     )
   const note = join(profile, 'diagram.md')
   await writeFile(note, '```mermaid\nflowchart LR\n  A --> B\n```\n')
@@ -536,4 +537,70 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     '<h1>hello</h1>\r\n',
   )
+})
+
+test('the default engine starts every built-in editor addon without tiptap or prosemirror', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-codemirror-'))
+  // Optional addons with Tiptap features; markdown, mermaid, tags, text extras
+  // and slash commands start by default.
+  const optional = ['math', 'typst', 'block-drag', 'dictionary', 'word-count']
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify(Object.fromEntries(optional.map((id) => [id, true]))),
+  )
+  const note = join(profile, 'note.md')
+  await writeFile(
+    note,
+    '# Note #tag\n\n**bold** ~~gone~~ ==marked== [[other]] H~2~O $x^2$\n\n-# small text\n\n> [!note]\n> callout\n\n- [ ] task\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n$$\nE = mc^2\n$$\n',
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`, note],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('hibi:formatted-engine')),
+    null,
+  )
+  await page.locator('.rich-pane .hibi-formatted .cm-content').first().waitFor()
+  await page.locator('.mermaid-block .mermaid-diagram > svg').waitFor()
+  const started = [
+    'markdown',
+    'mermaid',
+    'tags',
+    'text-extras',
+    'slash-commands',
+    ...optional,
+  ]
+  for (const id of started)
+    await page.waitForFunction(
+      (id) => performance.getEntriesByName(`hibi:addon:${id}`).length,
+      id,
+    )
+  await page.evaluate(
+    () => new Promise((resolve) => requestIdleCallback(resolve)),
+  )
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const session = await page.context().newCDPSession(page)
+  const files = new Set()
+  session.on('Debugger.scriptParsed', ({ url }) => {
+    if (url.startsWith('app://hibi/')) files.add(new URL(url).pathname.slice(1))
+  })
+  await session.send('Debugger.enable')
+  const modules = chunks
+    .filter((chunk) => files.has(chunk.file))
+    .flatMap((chunk) => chunk.modules)
+    .join('\n')
+  for (const id of started)
+    assert.match(modules, new RegExp(`src/addons/${id}/index\\.`), id)
+  assert.doesNotMatch(modules, /node_modules\/(?:@tiptap\/|prosemirror-)/)
+  assert.doesNotMatch(modules, /src\/renderer\/src\/Editor\.tsx/)
 })

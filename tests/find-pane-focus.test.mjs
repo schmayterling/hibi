@@ -34,9 +34,9 @@ for (const formatted of [false, true]) {
     await waitForDocumentEditor(app, page)
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-    if (formatted) {
+    if (!formatted) {
       await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+        localStorage.setItem('hibi:formatted-engine', 'tiptap'),
       )
       await page.reload()
       await waitForDocumentEditor(app, page)

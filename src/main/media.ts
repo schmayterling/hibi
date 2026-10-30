@@ -86,7 +86,7 @@ export async function openDroppedFile(
     throw new Error(
       'Drop a supported document or folder to open it. Drop an image or video onto the editor to attach it.',
     )
-  if (path === getDocumentPath()) return { document: getDocument() }
+  // Dropping the open note reopens it too, which checks for outside changes.
   return { document: await loadDocument(window, path) }
 }
 

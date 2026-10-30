@@ -214,7 +214,7 @@ test('source completions stream, accept in one undo step, and retract on provide
     await page.evaluate((text) => {
       const view =
         window.completionProbe.sdk.codeMirror.view.EditorView.findFromDOM(
-          document.querySelector('.cm-content'),
+          document.querySelector('.source-pane .cm-content'),
         )
       window.completionProbe.events = []
       view.dispatch({
@@ -292,7 +292,9 @@ test('source completions stream, accept in one undo step, and retract on provide
     selectionEnd: 1,
   })
   await page.waitForFunction(() =>
-    document.querySelector('.cm-content').textContent.includes('日'),
+    document
+      .querySelector('.source-pane .cm-content')
+      .textContent.includes('日'),
   )
   assert.deepEqual(await page.evaluate(() => window.completionProbe.events), [])
   await cdp.send('Input.imeSetComposition', {
@@ -316,7 +318,7 @@ test('source completions stream, accept in one undo step, and retract on provide
   await page.evaluate(() => {
     const view =
       window.completionProbe.sdk.codeMirror.view.EditorView.findFromDOM(
-        document.querySelector('.cm-content'),
+        document.querySelector('.source-pane .cm-content'),
       )
     view.dispatch({ selection: { anchor: 1 } })
     view.focus()
@@ -327,7 +329,9 @@ test('source completions stream, accept in one undo step, and retract on provide
     selectionEnd: 1,
   })
   await page.waitForFunction(
-    () => document.querySelector('.cm-content').textContent === 'aaa tail',
+    () =>
+      document.querySelector('.source-pane .cm-content').textContent ===
+      'aaa tail',
   )
   await cdp.send('Input.insertText', { text: 'aa' })
   await page.waitForFunction(() =>
@@ -345,7 +349,7 @@ test('source completions stream, accept in one undo step, and retract on provide
   await page.evaluate(() => {
     const view =
       window.completionProbe.sdk.codeMirror.view.EditorView.findFromDOM(
-        document.querySelector('.cm-content'),
+        document.querySelector('.source-pane .cm-content'),
       )
     view.dispatch({ selection: { anchor: 0, head: 6 } })
     view.focus()
@@ -356,12 +360,16 @@ test('source completions stream, accept in one undo step, and retract on provide
     selectionEnd: 1,
   })
   await page.waitForFunction(
-    () => document.querySelector('.cm-content').textContent === '日 tail',
+    () =>
+      document.querySelector('.source-pane .cm-content').textContent ===
+      '日 tail',
   )
   assert.deepEqual(await page.evaluate(() => window.completionProbe.events), [])
   await cdp.send('Input.insertText', { text: '日本語' })
   await page.waitForFunction(
-    () => document.querySelector('.cm-content').textContent === '日本語 tail',
+    () =>
+      document.querySelector('.source-pane .cm-content').textContent ===
+      '日本語 tail',
   )
   await page.evaluate(
     () =>
@@ -405,7 +413,7 @@ test('source completions stream, accept in one undo step, and retract on provide
   await page.evaluate(() => {
     const view =
       window.completionProbe.sdk.codeMirror.view.EditorView.findFromDOM(
-        document.querySelector('.cm-content'),
+        document.querySelector('.source-pane .cm-content'),
       )
     view.dispatch({ selection: { anchor: 1, head: 5 } })
     view.focus()

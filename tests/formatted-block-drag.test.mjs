@@ -273,6 +273,11 @@ const difference = (a, b) =>
 test('the formatted view’s handle sits and looks like the rich view’s, in light and dark', {
   timeout: 120000,
 }, async () => {
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'tiptap'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
   await open('note.md')
   await page.locator('.tiptap h1').waitFor()
   const rich = {}

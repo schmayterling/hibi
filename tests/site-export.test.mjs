@@ -200,7 +200,7 @@ test('site export keeps supported static content and omits addon runtime state',
         id: 'private-document-id',
         path: 'README.md',
         markdown: '# Public\n\n![preview](images/preview.png)',
-        html: `<h1>Public</h1><p><strong>Supported flavor</strong>${math}<img src="images/preview.png" onerror="window.exportAttack=true"></p><script>window.exportAttack=true</script>`,
+        html: `<h1>Public</h1><p><strong>Supported flavor</strong>${math}<img src="images/preview.png" onerror="window.exportAttack=true"><img alt="remote" src="https://images.example.com/a.png"><img alt="plain" src="http://images.example.com/b.png"></p><script>window.exportAttack=true</script>`,
         images: {
           'images/preview.png': attachment,
           'unused.png': unusedAttachment,
@@ -248,6 +248,11 @@ test('site export keeps supported static content and omits addon runtime state',
     assert.match(article, /<strong>Supported flavor<\/strong>/)
     assert.match(article, /class="katex"/)
     assert.doesNotMatch(article, /<script|onerror|window\.exportAttack/i)
+    assert.match(
+      article,
+      /<img alt="remote" src="https:\/\/images\.example\.com\/a\.png" \/>/,
+    )
+    assert.match(article, /<img alt="plain" \/>/)
   }
 })
 

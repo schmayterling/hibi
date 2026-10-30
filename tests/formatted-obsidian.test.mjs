@@ -85,7 +85,7 @@ async function engine(codemirror, markers = true) {
     ({ codemirror, markers }) => {
       if (codemirror)
         localStorage.setItem('hibi:formatted-engine', 'codemirror')
-      else localStorage.removeItem('hibi:formatted-engine')
+      else localStorage.setItem('hibi:formatted-engine', 'tiptap')
       localStorage.setItem('markdown-markers', String(markers))
     },
     { codemirror, markers },
@@ -183,6 +183,7 @@ async function capture(name, selectors) {
 test('wikilinks, embeds and highlights render in the formatted view as in the rich view, in light and dark', {
   timeout: 120000,
 }, async () => {
+  await engine(false)
   await open('parity.md')
   await page.locator('.tiptap h1', { hasText: 'Wiki parity' }).waitFor()
   await page.waitForFunction(() => {

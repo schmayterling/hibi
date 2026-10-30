@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -10,7 +11,7 @@ import {
 } from './formatted-engine.mjs'
 import { waitForAsync } from './poll.mjs'
 
-async function openSite(t, folder, snapshot) {
+async function openSite(t, folder, snapshot, prepare) {
   const html = join(folder, 'docs.html')
   const template = await readFile('out/site/template.html', 'utf8')
   await writeFile(
@@ -29,6 +30,7 @@ async function openSite(t, folder, snapshot) {
   const desktop = await app.firstWindow()
   if (t.formattedEngine)
     await selectFormattedEngine(app, desktop, t.formattedEngine)
+  await prepare?.(app)
   const nextWindow = app.waitForEvent('window')
   await app.evaluate(({ BrowserWindow }, html) => {
     const window = new BrowserWindow({
@@ -584,4 +586,61 @@ test('outline scroll tracking reads nearby geometry on a thousand-heading page',
     .filter({ hasText: /^Section 0$/ })
     .waitFor()
   assert.ok((await page.evaluate(() => window.headingRectReads)) <= 4)
+})
+
+test('exported site loads remote https images and drops http images', {
+  timeout: 45000,
+}, async (t) => {
+  const pixel = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII=',
+    'base64',
+  )
+  const requests = []
+  const server = createServer(
+    {
+      cert: await readFile('tests/fixtures/host-network-localhost-cert.pem'),
+      key: await readFile('tests/fixtures/host-network-localhost-key.pem'),
+    },
+    (request, response) => {
+      requests.push(request.url)
+      response.writeHead(200, { 'Content-Type': 'image/png' })
+      response.end(pixel)
+    },
+  )
+  await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  t.after(() => server.close())
+  const origin = `https://127.0.0.1:${server.address().port}`
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-site-remote-images-'))
+  const { page } = await openSite(
+    t,
+    folder,
+    {
+      name: 'remote images',
+      pages: [
+        {
+          path: 'README.md',
+          markdown: `# Remote\n\n![remote](${origin}/remote.png)\n\n![plain](http://127.0.0.1:${server.address().port}/plain.png)`,
+        },
+      ],
+    },
+    (app) =>
+      app.evaluate(({ session }) =>
+        session.defaultSession.setCertificateVerifyProc((_request, done) =>
+          done(0),
+        ),
+      ),
+  )
+  await waitForAsync(page, () => {
+    const image = document.querySelector('article img[alt="remote"]')
+    return image?.complete && image.naturalWidth === 1
+  })
+  assert.equal(
+    await page.getByRole('img', { name: 'remote' }).getAttribute('src'),
+    `${origin}/remote.png`,
+  )
+  assert.equal(
+    await page.getByRole('img', { name: 'plain' }).getAttribute('src'),
+    null,
+  )
+  assert.deepEqual(requests, ['/remote.png'])
 })

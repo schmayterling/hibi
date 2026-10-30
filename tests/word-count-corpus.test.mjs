@@ -662,7 +662,7 @@ async function openCorpus(config, formatted = false) {
         )
         if (formatted)
           localStorage.setItem('hibi:formatted-engine', 'codemirror')
-        else localStorage.removeItem('hibi:formatted-engine')
+        else localStorage.setItem('hibi:formatted-engine', 'tiptap')
       },
       { disabled: config.disabledFeatures, formatted },
     )

@@ -70,7 +70,7 @@ for (const math of [false, true]) {
       async () =>
         !!window.hibi && (await window.hibi.getDocument()).name === 'note.md',
     )
-    await waitForDocumentEditor(app, page)
+    await selectFormattedEngine(app, page, 'tiptap')
     assert.equal(
       await page.evaluate(() =>
         Boolean(
@@ -249,12 +249,13 @@ test('rich edits and autosave preserve untouched Obsidian syntax', {
   page.setDefaultTimeout(7000)
   const rich = page.getByRole('textbox', { name: 'Document editor' })
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
+  await page.evaluate(() => {
     localStorage.setItem(
       'hibi:autosave',
       JSON.stringify({ enabled: true, delay: 1000 }),
-    ),
-  )
+    )
+    localStorage.setItem('hibi:formatted-engine', 'tiptap')
+  })
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {

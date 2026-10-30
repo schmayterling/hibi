@@ -79,9 +79,7 @@ test('rich codec attachments invalidate plain certificates but not the source ou
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .waitFor()
+  await selectFormattedEngine(app, page, 'tiptap')
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)

@@ -1,12 +1,12 @@
 import { syntaxTree } from '@codemirror/language'
 import { EditorView, ViewPlugin } from '@codemirror/view'
-import { type Editor, InputRule, type NodeViewRenderer } from '@tiptap/core'
-import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
+import type { Editor, NodeViewRenderer } from '@tiptap/core'
 import type { Node } from '@tiptap/pm/model'
 import katex from 'katex'
 import { Sigma, SquareRadical } from 'lucide-react'
 import type { MarkedExtension } from 'marked'
 import { formattedSyntaxTree } from '../../renderer/src/formatted-contributions'
+import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
@@ -14,13 +14,10 @@ import type { MathHost } from './formatted'
 import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
-import {
-  blockMath,
-  blockMathStart,
-  mathFlavor,
-  mathTokens,
-  richInlineMath,
-} from './syntax'
+import { mathFlavor, mathTokens } from './syntax'
+
+// The Tiptap editor loads only when it is the selected engine.
+const richMath = codemirrorFormattedView ? undefined : await import('./rich')
 
 const options = {
   throwOnError: false,
@@ -237,66 +234,6 @@ export function startMath(context: AddonContext) {
         },
       }
     }
-  const inline = InlineMath.extend({
-    // The rich editor preserves double-dollar source until it can draw display
-    // math inline. Its line breaks read as spaces, as in the text around it.
-    parseMarkdown: (token, helpers) =>
-      token.display
-        ? helpers.createTextNode(
-            (token.raw ?? '').replace(/[ \t]*\n[ \t]*/g, ' '),
-          )
-        : helpers.createNode('inlineMath', { latex: token.latex }),
-    markdownTokenizer: {
-      name: 'inlineMath',
-      level: 'inline',
-      start: (source) => source.indexOf('$'),
-      tokenize: richInlineMath,
-    },
-    addInputRules() {
-      return [
-        new InputRule({
-          find: /(?:^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+?\$)$/,
-          handler: ({ state, range, match }) => {
-            const raw = match[1],
-              token = raw && richInlineMath(raw)
-            if (!token) return null
-            state.tr.replaceWith(
-              range.to - raw.length,
-              range.to,
-              this.type.create({ latex: token.latex }),
-            )
-          },
-        }),
-      ]
-    },
-    addNodeView: () => view(false),
-  })
-  const block = BlockMath.extend({
-    markdownTokenizer: {
-      name: 'blockMath',
-      level: 'block',
-      start: blockMathStart,
-      tokenize: blockMath,
-    },
-    addInputRules() {
-      return [
-        new InputRule({
-          find: /^\$\$([^$\n]+)\$\$$/,
-          handler: ({ state, range, match }) => {
-            const token = blockMath(match[0])
-            const from = state.doc.resolve(range.from)
-            if (!token || !from.depth || !from.parent.isTextblock) return null
-            state.tr.replaceWith(
-              from.before(),
-              from.after(),
-              this.type.create({ latex: token.latex }),
-            )
-          },
-        }),
-      ]
-    },
-    addNodeView: () => view(true),
-  })
   const renderers: MarkedExtension = {
     extensions: ['inlineMath', 'blockMath'].map((name) => ({
       name,
@@ -330,7 +267,7 @@ export function startMath(context: AddonContext) {
   )
   context.editor.registerFlavor({
     ...mathFlavor,
-    richExtensions: [inline, block],
+    richExtensions: richMath ? richMath.mathNodes(view) : [],
     export: {
       extensions: [mathTokens, renderers],
       css: mathStyles,

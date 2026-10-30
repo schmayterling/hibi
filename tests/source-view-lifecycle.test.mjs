@@ -120,7 +120,8 @@ test('source view applies saved gutters and active find after asynchronous const
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await page.locator('.cm-lineNumbers').waitFor()
   await page.waitForFunction(
-    () => document.querySelectorAll('.cm-searchMatch').length === 2,
+    () =>
+      document.querySelectorAll('.source-pane .cm-searchMatch').length === 2,
   )
   assert.equal(await page.locator('.find-count').textContent(), '1/2')
   assert.equal(

@@ -6,6 +6,7 @@ import {
   certifyVisualEcho,
   editorDocumentUpdates,
   hasDocumentFootnotes,
+  largeOpening,
   largeSource,
   preferSourceOpening,
   sameDocumentShell,
@@ -332,7 +333,9 @@ test('opening mode stays fixed while edits cross the threshold, then refreshes o
       },
     })
     runtime.activate(document({ markdown: initial, savedMarkdown: initial }))
-    const before = preferSourceOpening(runtime, runtime.get())
+    const before = largeOpening(runtime, runtime.get())
+    // The default CodeMirror view opens every note; Tiptap opens large ones in source.
+    assert.equal(preferSourceOpening(runtime, runtime.get()), false)
     const session = runtime.session()
     session.edit(
       [{ from: 0, to: initial.length, insert: inserted }],
@@ -340,14 +343,15 @@ test('opening mode stays fixed while edits cross the threshold, then refreshes o
       'replace',
     )
     session.counters(true)
-    assert.equal(preferSourceOpening(runtime, runtime.get()), before)
+    assert.equal(largeOpening(runtime, runtime.get()), before)
     // The live size follows the edit, from the snapshot length alone.
     assert.equal(largeSource(runtime, 'one'), !before)
     assert.equal(largeSource(runtime, 'missing'), false)
     assert.equal(session.counters().materializations, 0)
     const next = { ...runtime.get(), revision: 2 }
     runtime.activate(next)
-    assert.equal(preferSourceOpening(runtime, runtime.get()), !before)
+    assert.equal(largeOpening(runtime, runtime.get()), !before)
+    assert.equal(preferSourceOpening(runtime, runtime.get()), false)
     runtime.dispose()
   }
 })
@@ -376,19 +380,21 @@ test('large source opening policy reads only snapshot metrics and leaves small n
         return { utf16Length: units }
       },
     }
-    assert.equal(preferSourceOpening(runtime, state), units > 256 * 1024)
+    assert.equal(largeOpening(runtime, state), units > 256 * 1024)
+    assert.equal(preferSourceOpening(runtime, state), false)
     if (units > 256 * 1024)
       assert.equal(hasDocumentFootnotes(runtime, state), false)
   }
-  assert.equal(
-    preferSourceOpening(
-      {
-        openingLength() {
-          throw new Error('no document')
+  for (const policy of [largeOpening, preferSourceOpening])
+    assert.equal(
+      policy(
+        {
+          openingLength() {
+            throw new Error('no document')
+          },
         },
-      },
-      null,
-    ),
-    false,
-  )
+        null,
+      ),
+      false,
+    )
 })

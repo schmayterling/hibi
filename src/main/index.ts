@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { realpath } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { serialize } from 'node:v8'
@@ -897,13 +898,41 @@ async function serveAssetResponse(request: Request): Promise<Response> {
   }
 }
 
-function showStartupError(
+// Diagnostics never call stack getters, and V8 keeps every stack behind one. The
+// startup callers print the error first, so its stack is already formatted and
+// reading it runs no formatter; an inert copy lets its frames be recorded.
+function printedError(error: unknown): unknown {
+  try {
+    if (!(error instanceof Error)) return error
+    return Object.defineProperties(new Error(), {
+      name: { value: error.name },
+      message: { value: error.message },
+      stack: { value: error.stack },
+      ...('code' in error ? { code: { value: error.code } } : {}),
+    })
+  } catch {
+    return error
+  }
+}
+
+async function showStartupError(
   error: unknown,
   window: BrowserWindow | null = mainWindow,
-): void {
+): Promise<void> {
   if (quitting || closing || window?.isDestroyed()) return
   // Every "could not start" exit leaves a critical record, whatever the load error code.
-  localDiagnostics.report('MAIN_STARTUP_FAILED', error, { role: 'main' })
+  localDiagnostics.report('MAIN_STARTUP_FAILED', printedError(error), {
+    role: 'main',
+  })
+  // The modal runs no main-process tasks: write the record before it opens.
+  await localDiagnostics.flush()
+  if (quitting || closing || window?.isDestroyed()) return
+  // Electron quits on these signals through a main-thread task the modal never
+  // runs. Removing the last Node listener restores the default action: exit.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    const ignore = () => {}
+    process.on(signal, ignore).off(signal, ignore)
+  }
   dialog.showErrorBox(
     'Hibi could not start',
     'Restart Hibi. If it still cannot start, reinstall it.',
@@ -1202,7 +1231,7 @@ function createWindow(): void {
     )
       return
     console.error('failed to load app:', error)
-    showStartupError(error, window)
+    void showStartupError(error, window)
   })
 }
 
@@ -1520,24 +1549,38 @@ if (!app.requestSingleInstanceLock()) {
         event.preventDefault(),
       )
 
-      if (devUrl) {
-        const websocketOrigin = new URL(devUrl).origin.replace(/^http/, 'ws')
-        const devPolicy = CONTENT_SECURITY_POLICY.replace(
+      // App pages are app://hibi, so every https image is cross-site. Without
+      // cookies, image hosts can't follow a reader from note to note.
+      session.defaultSession.webRequest.onBeforeSendHeaders(
+        { urls: ['https://*/*'] },
+        ({ resourceType, requestHeaders }, callback) => {
+          if (resourceType === 'image') delete requestHeaders.Cookie
+          callback({ requestHeaders })
+        },
+      )
+      const devOrigin = devUrl ? new URL(devUrl).origin : null
+      const devPolicy =
+        devOrigin &&
+        CONTENT_SECURITY_POLICY.replace(
           "script-src 'self'",
           "script-src 'self' 'unsafe-inline'",
-        ).replace("connect-src 'self'", `connect-src 'self' ${websocketOrigin}`)
-        session.defaultSession.webRequest.onHeadersReceived(
-          { urls: [`${new URL(devUrl).origin}/*`] },
-          (details, callback) => {
-            callback({
-              responseHeaders: {
-                ...details.responseHeaders,
-                'Content-Security-Policy': [devPolicy],
-              },
-            })
-          },
+        ).replace(
+          "connect-src 'self'",
+          `connect-src 'self' ${devOrigin.replace(/^http/, 'ws')}`,
         )
-      }
+      // A session keeps one onHeadersReceived listener, so it serves both.
+      session.defaultSession.webRequest.onHeadersReceived(
+        { urls: ['https://*/*', ...(devOrigin ? [`${devOrigin}/*`] : [])] },
+        ({ resourceType, url, responseHeaders = {} }, callback) => {
+          const headers = { ...responseHeaders }
+          if (resourceType === 'image' && url.startsWith('https:'))
+            for (const name of Object.keys(headers))
+              if (name.toLowerCase() === 'set-cookie') delete headers[name]
+          if (devPolicy && url.startsWith(`${devOrigin}/`))
+            headers['Content-Security-Policy'] = [devPolicy]
+          callback({ responseHeaders: headers })
+        },
+      )
 
       const appInfo = (): AppInfo => ({
         version: app.getVersion(),
@@ -2122,7 +2165,9 @@ if (!app.requestSingleInstanceLock()) {
         DOCUMENT_CHANNELS.focusTab,
         (event, id: unknown, expected: unknown) =>
           readAfterFileOperation(event, (window) =>
-            focusDocumentTab(window, id, expected),
+            focusDocumentTab(window, id, expected, (prompt) =>
+              runFileOperation(event, prompt),
+            ),
           ),
       )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
@@ -2567,13 +2612,18 @@ if (!app.requestSingleInstanceLock()) {
                 : 'Could not open the startup workspace.',
             )
           }
+          // Cancel keeps one note as it is; the other files still open,
+          // and another name for the kept note does not ask again.
+          const kept = new Set<string>()
           for (const path of externalFiles.splice(0)) {
             try {
               if (!isDocumentName(path))
                 throw new Error('Unsupported document format.')
+              const file = await realpath(path).catch(() => path)
+              if (kept.has(file)) continue
               const opened = await loadDocument(window, path)
-              if (!opened) break
-              document = opened
+              if (opened) document = opened
+              else kept.add(file)
             } catch (error) {
               errors.push(
                 `${basename(path)}: ${error instanceof Error ? error.message : 'Could not open file.'}`,
@@ -2706,6 +2756,6 @@ if (!app.requestSingleInstanceLock()) {
     })
     .catch((error: unknown) => {
       console.error('startup failed:', error)
-      showStartupError(error)
+      void showStartupError(error)
     })
 }

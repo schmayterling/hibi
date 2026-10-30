@@ -48,6 +48,60 @@ const patches = [
     `                if (height < 0) {
                     above = height == -Infinity ? 0 : -height;`,
   ],
+  // A wrapping editor hides the far parts of a line of 20,000 or more
+  // characters behind a line gap sized as the wrapped rows they would take.
+  // A line styled not to wrap, such as a formatted code line, is one row high
+  // however long it is: its gap only added blank space below the line's start,
+  // and could keep itself, as its height was most of the line's, so the end of
+  // the line could not be scrolled to. Such lines get no gap. The drawn line
+  // tells whether it wraps; one not drawn yet goes by the last measure.
+  [
+    `        this.visibleRanges = [];
+`,
+    `        this.visibleRanges = [];
+        // Starts of long lines styled not to wrap, as last measured.
+        this.unwrapped = [];
+`,
+  ],
+  [
+    `        let viewport = heightChanges.length ? this.mapViewport(this.viewport, update.changes) : this.viewport;`,
+    `        if (this.unwrapped.length)
+            this.unwrapped = this.unwrapped.map(pos => update.changes.mapPos(pos));
+        let viewport = heightChanges.length ? this.mapViewport(this.viewport, update.changes) : this.viewport;`,
+  ],
+  [
+    `        let gaps = [];
+        let addGap = (from, to, line, structure) => {`,
+    `        let gaps = [], unwrapped = [];
+        let addGap = (from, to, line, structure) => {`,
+  ],
+  [
+    `            if (structure.total < doubleMargin)
+                return;
+`,
+    `            if (structure.total < doubleMargin)
+                return;
+            if (wrapping && this.isUnwrapped(line, mayMeasure, unwrapped))
+                return;
+`,
+  ],
+  [
+    `        return gaps;
+    }
+    gapSize(line, from, to, structure) {`,
+    `        if (mayMeasure)
+            this.unwrapped = unwrapped;
+        return gaps;
+    }
+    isUnwrapped(line, view, found) {
+        let dom = view && view.docView.tile.blockTiles((tile, pos) => pos > line.from ? null : pos == line.from && tile.isLine() ? tile.dom : undefined);
+        let unwrapped = dom ? wrappingWhiteSpace.indexOf(getComputedStyle(dom).whiteSpace) < 0 : this.unwrapped.indexOf(line.from) > -1;
+        if (unwrapped)
+            found.push(line.from);
+        return unwrapped;
+    }
+    gapSize(line, from, to, structure) {`,
+  ],
 ]
 
 let source = await readFile(path, 'utf8')
@@ -56,7 +110,7 @@ for (const [before, after] of patches)
   if (!source.includes(after)) {
     if (source.split(before).length !== 2)
       throw new Error(
-        'CodeMirror view changed. Review the wrapper height patch before updating it.',
+        'CodeMirror view changed. Review the wrapper height and line gap patches before updating it.',
       )
     source = source.replace(before, after)
   }

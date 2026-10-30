@@ -33,9 +33,9 @@ async function launch(t, files, engine = 'codemirror') {
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   await waitForDocumentEditor(app, page)
-  if (engine === 'codemirror') {
+  if (engine === 'tiptap') {
     await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
     )
     await page.reload()
     await waitForDocumentEditor(app, page)

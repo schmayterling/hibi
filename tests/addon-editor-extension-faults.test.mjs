@@ -96,10 +96,10 @@ async function open(t, { source, presentation, engine, code }) {
   const page = await app.firstWindow()
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  if (engine === 'codemirror') {
+  if (engine === 'tiptap') {
     await waitForDocumentEditor(app, page)
     await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
     )
     await page.reload()
   }

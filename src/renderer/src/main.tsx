@@ -1524,7 +1524,8 @@ function App() {
     try {
       const next = await window.hibi.openWorkspaceFile(path, target)
       if (next) {
-        await acceptOperationDocument(next)
+        // Reopening can replace edits after the discard prompt, as Open… does.
+        await acceptOperationDocument(next, true)
         const views = addonViews.snapshot()
         const selected = views.instances.find(
           (view) => view.id === views.activeTab,
@@ -2002,8 +2003,10 @@ function App() {
       headings[index]?.scrollIntoView({ block: 'start' })
       return
     }
-    void applyDocumentOperation(() =>
-      window.hibi.openDocumentLink(href, target.revision),
+    void applyDocumentOperation(
+      () => window.hibi.openDocumentLink(href, target.revision),
+      true,
+      true,
     )
   }
 

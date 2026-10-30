@@ -7,6 +7,7 @@ import {
   readFile,
   realpath,
   rename,
+  stat,
   unlink,
 } from 'node:fs/promises'
 import {
@@ -401,6 +402,23 @@ function refreshDirtyIndicator(window: BrowserWindow) {
   window.setDocumentEdited(edited)
   windowDirty.set(window, edited)
 }
+const reportedOutside = new WeakMap<SourceStore, string>()
+/** Whether another app changed the file under a tab's unsaved edits; `once` skips a reported change. */
+async function changedOutside(id: string, once: boolean) {
+  const draft = id === activeTab ? snapshot() : tabs.get(id)
+  if (!draft?.path || !dirty(draft.source, draft.saved)) return false
+  try {
+    const info = await stat(draft.path, { bigint: true })
+    const seen = `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+    if (once && reportedOutside.get(draft.source) === seen) return false
+    if (await matchesMarkdown(draft.path, draft.saved)) return false
+    reportedOutside.set(draft.source, seen)
+    return true
+  } catch {
+    // Missing or unreadable files keep their edits; saving reports them.
+    return false
+  }
+}
 export async function selectDocumentTab(
   window: BrowserWindow,
   id: unknown,
@@ -411,8 +429,14 @@ export async function selectDocumentTab(
   if (typeof id !== 'string' || !tabs.has(id))
     throw new Error('This tab is no longer open.')
   if (id === activeTab && !refresh) return getDocument()
-  const draft = tabs.get(id)!
   const current = source.snapshot()
+  // Switching to edits over an outside change asks once whether to replace it.
+  if (!refresh && (await changedOutside(id, true)))
+    await confirmTabDiscard(window, id, saveRetained)
+  const draft = tabs.get(id)
+  if (!draft) throw new Error('This tab is no longer open.')
+  if (!source.ownsCurrentSnapshot(current))
+    throw new Error('The document changed while switching tabs. Try again.')
   // Explicit reopens confirm discarding first; ordinary tab switches retain edits.
   const modified = dirty(draft.source, draft.saved)
   if (draft.path && (refresh === 'discard' || !modified)) {
@@ -489,12 +513,17 @@ export async function focusDocumentTab(
   }
 }
 
-async function confirmTabDiscard(window: BrowserWindow, id: string) {
+/** Runs a prompt, by default the discard prompt, with this tab's source active. */
+async function confirmTabDiscard(
+  window: BrowserWindow,
+  id: string,
+  prompt: (window: BrowserWindow) => Promise<unknown> = confirmDiscard,
+) {
   storeTab()
   const previous = activeTab
   try {
     activateTab(id)
-    return await confirmDiscard(window)
+    return await prompt(window)
   } finally {
     storeTab()
     activateTab(previous)
@@ -1023,10 +1052,14 @@ export async function confirmDiscard(window: BrowserWindow): Promise<boolean> {
   )
   if (result.response === 2) return false
   if (result.response === 1) return true
+  if (!(await saveRetained(window))) return false
+  return await sameSource(source.snapshot(), saved)
+}
+
+async function saveRetained(window: BrowserWindow) {
   const document = await saveDocument(window)
-  if (!document) return false
   // Retained editors take the saved baseline and file now, even if a later prompt cancels.
-  if (!window.isDestroyed())
+  if (document && !window.isDestroyed())
     window.webContents.send(DOCUMENT_CHANNELS.saved, {
       tabId: document.tabId,
       revision: document.revision,
@@ -1036,7 +1069,7 @@ export async function confirmDiscard(window: BrowserWindow): Promise<boolean> {
       ephemeral: document.ephemeral,
       canAutosave: document.canAutosave,
     } satisfies DocumentSaved)
-  return await sameSource(source.snapshot(), saved)
+  return document
 }
 
 export async function newDocument(
@@ -1180,13 +1213,7 @@ export async function openDocument(
   )
   const selected = result.filePaths[0]
   if (result.canceled || !selected) return null
-  const chosen = await realpath(selected)
-  const existing = getOpenDocuments().find((draft) => draft.file === chosen)
-  if (existing?.dirty) {
-    if (!(await confirmTabDiscard(window, existing.tabId))) return null
-    return selectDocumentTab(window, existing.tabId, true, 'discard')
-  }
-  return loadDocument(window, chosen, current)
+  return loadDocument(window, selected, current)
 }
 
 export async function loadDocument(
@@ -1197,7 +1224,15 @@ export async function loadDocument(
 ): Promise<DocumentState | null> {
   chosen = await realpath(chosen)
   const existing = getOpenDocuments().find((draft) => draft.file === chosen)
-  if (existing) return selectDocumentTab(window, existing.tabId, remember, true)
+  if (existing) {
+    // Reopening asks before replacing edits whose file another app changed,
+    // or a draft whose planned file another app created.
+    if (existing.pendingPath || (await changedOutside(existing.tabId, false))) {
+      if (!(await confirmTabDiscard(window, existing.tabId))) return null
+      return selectDocumentTab(window, existing.tabId, remember, 'discard')
+    }
+    return selectDocumentTab(window, existing.tabId, remember, true)
+  }
   const content = await readSource(chosen)
   if (!source.ownsCurrentSnapshot(current))
     throw new Error(

@@ -62,3 +62,25 @@ test('a list re-read in a tabbed nested quote keeps the quote markers', () => {
       )
     }
 })
+
+test('fence bodies remove the opening indentation by column', () => {
+  // Marked removes it by character, so a tab that starts inside it vanished
+  // whole, and a tab after a short run of spaces stayed whole.
+  for (const fence of ['```', '~~~'])
+    for (const indent of [1, 2, 3])
+      for (const line of [
+        '\tx',
+        ' \tx',
+        '  \tx',
+        '   \tx',
+        '\t\tx',
+        ' \t x',
+        'x\ty',
+      ])
+        for (const eol of ['\n', '\r\n']) {
+          const open = ' '.repeat(indent) + fence
+          const source = [open, line, open].join(eol)
+          const markdown = new Marked({ gfm: true }, blockMarkdown)
+          assert.deepEqual(code(markdown.parse(source)), oracle(source), source)
+        }
+})

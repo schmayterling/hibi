@@ -1317,22 +1317,37 @@ export class BlockTokenizer extends Tokenizer {
   override fences(source: string, read = Tokenizer.prototype.fences) {
     return withFenceRules(this, () => {
       const state = quoteFrames.get(this)
-      if (!state?.scope.columns) return read.call(this, source)
+      if (state ? !state.scope.columns : containerColumns.get(this))
+        return read.call(this, source)
       const match = this.rules.block.fences.exec(source)
       const indent =
         match &&
         this.rules.other.indentCodeCompensation.exec(match[0])?.[1]?.length
-      if (!match || !indent) return read.call(this, source)
-      // Expand only the columns consumed by the opening fence's indentation.
-      const body = quoteInput(
-        this,
-        match[3] ?? '',
-        quoteOrigin(state, source) + 1,
-        indent,
-        true,
-      )
+      if (!match || !indent || (!state && !match[3]?.includes('\t')))
+        return read.call(this, source)
       const parts = Array.from(match) as [string, ...string[]]
-      parts[3] = body.text
+      // Expand only the columns consumed by the opening fence's indentation.
+      if (state)
+        parts[3] = quoteInput(
+          this,
+          match[3] ?? '',
+          quoteOrigin(state, source) + 1,
+          indent,
+          true,
+        ).text
+      // Marked removes that indentation by character: a tab that starts in
+      // it becomes its spaces, so the cut takes columns and keeps the rest.
+      else
+        parts[3] = match[3]!.replace(/^[ \t]+/gm, (prefix) => {
+          let column = 0,
+            text = ''
+          for (const char of prefix) {
+            const width = char === '\t' ? 4 - (column % 4) : 1
+            text += char === '\t' && column < indent ? ' '.repeat(width) : char
+            column += width
+          }
+          return text
+        })
       return blockToken(this, 'fences', source, parts, read)
     })
   }

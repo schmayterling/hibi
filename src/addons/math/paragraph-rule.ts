@@ -1,5 +1,6 @@
 import type { MarkdownParagraphRule } from '../api'
 import { blockMath, inlineMath } from './grammar.ts'
+import { inlineDisplayMath } from './inline-display.ts'
 
 export const mathParagraphRule: MarkdownParagraphRule = {
   characters: '$',
@@ -25,7 +26,10 @@ export const mathParagraphRule: MarkdownParagraphRule = {
           /^ *$/.test(restored.slice(lineStart, index))
             ? blockMath(restored.slice(index))
             : undefined
-        const token = block ?? inlineMath(restored.slice(index))
+        const token =
+          block ??
+          inlineMath(restored.slice(index)) ??
+          inlineDisplayMath(restored.slice(index))
         if (token)
           for (let at = index; at < index + token.raw.length; at++)
             if (dollars.has(at)) escaped.add(at)

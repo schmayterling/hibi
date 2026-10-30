@@ -1,14 +1,20 @@
 import {
+  type ChangeDesc,
+  ChangeSet,
   EditorSelection,
   EditorState,
   MapMode,
   StateEffect,
   StateField,
+  type Text,
+  Transaction,
 } from '@codemirror/state'
-import { type EditorView, WidgetType } from '@codemirror/view'
+import { type EditorView, ViewPlugin, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
+import { documentRuntime } from '../../renderer/src/document-runtime.ts'
 import {
   type FormattedContribution,
+  formattedDocument,
   formattedRenderInputs,
   formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
@@ -22,6 +28,50 @@ export { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
 
 type Fold = { fold: string; expanded: boolean }
 const setFold = StateEffect.define<Fold & { from: number }>()
+
+function mapFolds(
+  at: ReadonlyMap<number, Fold>,
+  changes: ChangeDesc,
+  keep = (_from: number, _pos: number) => true,
+) {
+  const mapped = new Map<number, Fold>()
+  for (const [from, fold] of at) {
+    // A callout whose first character goes takes its state with it.
+    const pos = changes.mapPos(from, 1, MapMode.TrackAfter)
+    if (pos !== null && keep(from, pos)) mapped.set(pos, fold)
+  }
+  return mapped
+}
+
+/** The text from `a` to `b` as one change, between their common start and end. */
+function textChange(a: string, b: string) {
+  const length = Math.min(a.length, b.length)
+  let from = 0,
+    end = 0
+  while (from < length && a.charCodeAt(from) === b.charCodeAt(from)) from++
+  while (
+    end < length - from &&
+    a.charCodeAt(a.length - 1 - end) === b.charCodeAt(b.length - 1 - end)
+  )
+    end++
+  return ChangeSet.of(
+    { from, to: a.length - end, insert: b.slice(from, b.length - end) },
+    a.length,
+  )
+}
+
+/**
+ * Fold states of each open tab's last formatted view, for the session. Its
+ * next view, after a tab switch or a reload of its file, starts with them,
+ * mapped through the text that changed meanwhile. A closed tab's entry goes
+ * with it.
+ */
+const kept = new Map<string, { doc: Text; at: ReadonlyMap<number, Fold> }>()
+documentRuntime.subscribeCatalog(() => {
+  for (const tabId of kept.keys())
+    if (!documentRuntime.session(tabId)) kept.delete(tabId)
+})
+
 /**
  * Fold states set by the reader, by callout start. Renderers read `key`,
  * which only a toggle replaces, so edits that move callouts keep cached
@@ -31,18 +81,26 @@ const folds = StateField.define<{
   at: ReadonlyMap<number, Fold>
   key: object
 }>({
-  create: () => ({ at: new Map(), key: {} }),
+  create(state) {
+    const { tabId } = state.facet(formattedDocument)
+    const saved = tabId === null ? undefined : kept.get(tabId)
+    if (!saved) return { at: new Map(), key: {} }
+    if (saved.doc.eq(state.doc)) return { at: saved.at, key: {} }
+    // The text can have changed meanwhile, as when a clean tab reloads its
+    // file. A state stays with a title that still reads the same, not with
+    // the next callout when the change moved it into this one's place.
+    const change = textChange(saved.doc.toString(), state.doc.toString())
+    const at = mapFolds(
+      saved.at,
+      change,
+      (from, pos) => state.doc.lineAt(pos).text === saved.doc.lineAt(from).text,
+    )
+    return { at, key: {} }
+  },
   update(value, transaction) {
     let { at, key } = value
-    if (transaction.docChanged && at.size) {
-      const mapped = new Map<number, Fold>()
-      for (const [from, fold] of at) {
-        // A callout whose first character goes takes its state with it.
-        const pos = transaction.changes.mapPos(from, 1, MapMode.TrackAfter)
-        if (pos !== null) mapped.set(pos, fold)
-      }
-      at = mapped
-    }
+    if (transaction.docChanged && at.size)
+      at = mapFolds(at, transaction.changes)
     for (const effect of transaction.effects)
       if (effect.is(setFold)) {
         at = new Map(at).set(effect.value.from, effect.value)
@@ -50,8 +108,19 @@ const folds = StateField.define<{
       }
     return at === value.at ? value : { at, key }
   },
-  provide: (field) =>
+  provide: (field) => [
     formattedRenderInputs.compute([field], (state) => state.field(field).key),
+    ViewPlugin.define((view) => ({
+      destroy() {
+        const { tabId } = view.state.facet(formattedDocument)
+        const at = view.state.field(field, false)?.at
+        // A closing tab's view goes after its document; nothing to keep for.
+        if (tabId === null || !at || !documentRuntime.session(tabId)) return
+        if (at.size) kept.set(tabId, { doc: view.state.doc, at })
+        else kept.delete(tabId)
+      },
+    })),
+  ],
 })
 
 function expandedAt(state: EditorState, from: number, fold: string) {
@@ -71,7 +140,8 @@ function foldedBody(state: EditorState, quote: SyntaxNode) {
 
 /**
  * A selection end inside a folded body shows it, as find, the outline and
- * undo place one there.
+ * undo place one there, and so does one at its hidden end, where typing
+ * would go into it.
  */
 const revealFolds = EditorState.transactionExtender.of((transaction) => {
   const { state } = transaction
@@ -81,17 +151,93 @@ const revealFolds = EditorState.transactionExtender.of((transaction) => {
   for (const range of state.selection.ranges)
     for (const pos of [range.anchor, range.head])
       for (
-        let node: SyntaxNode | null = tree.resolve(pos, 1);
+        let node: SyntaxNode | null = tree.resolve(pos, -1);
         node;
         node = node.parent
       ) {
         const body = node.name === 'Blockquote' && foldedBody(state, node)
-        if (body && body.from < pos && pos < body.to)
+        if (body && body.from < pos && pos <= body.to)
           effects.push(
             setFold.of({ from: node.from, fold: body.fold, expanded: true }),
           )
       }
   return effects.length ? { effects } : null
+})
+
+/**
+ * A caret that nothing the reader did puts at a folded body's hidden end,
+ * as the open caret of a note that ends in a folded callout, rests at the
+ * title's end instead, where it shows and the callout stays folded. The
+ * reader's own moves there show the body.
+ */
+const stayFolded = EditorState.transactionFilter.of((transaction) => {
+  const { startState, selection } = transaction
+  const tree =
+    !transaction.docChanged &&
+    transaction.annotation(Transaction.userEvent) === undefined &&
+    formattedSyntaxTree(startState)
+  if (!selection || !tree) return transaction
+  const out = (pos: number) => {
+    for (
+      let node: SyntaxNode | null = tree.resolve(pos, -1);
+      node;
+      node = node.parent
+    ) {
+      const body = node.name === 'Blockquote' && foldedBody(startState, node)
+      if (body && pos === body.to) return body.from
+    }
+    return pos
+  }
+  let moved = false
+  const ranges = selection.ranges.map((range) => {
+    const anchor = out(range.anchor),
+      head = out(range.head)
+    if (anchor === range.anchor && head === range.head) return range
+    moved = true
+    return EditorSelection.range(anchor, head)
+  })
+  return moved
+    ? [
+        transaction,
+        { selection: EditorSelection.create(ranges, selection.mainIndex) },
+      ]
+    : transaction
+})
+
+/**
+ * Backspace or Delete beside a folded body, which would remove its hidden
+ * text or pull the next line into it, shows the body instead, as the caret
+ * reaching a fold does in Obsidian. The next press deletes what shows.
+ */
+const unfoldToDelete = EditorState.transactionFilter.of((transaction) => {
+  const { startState } = transaction
+  const tree =
+    transaction.docChanged &&
+    (transaction.isUserEvent('delete.backward') ||
+      transaction.isUserEvent('delete.forward')) &&
+    startState.selection.ranges.every((range) => range.empty) &&
+    formattedSyntaxTree(startState)
+  if (!tree) return transaction
+  const effects: StateEffect<Fold & { from: number }>[] = []
+  transaction.changes.iterChangedRanges((from, to) => {
+    for (const [pos, side] of [
+      [from - 1, -1],
+      [from, 1],
+      [to, -1],
+    ] as const)
+      for (
+        let node: SyntaxNode | null = tree.resolve(Math.max(0, pos), side);
+        node;
+        node = node.parent
+      ) {
+        const body = node.name === 'Blockquote' && foldedBody(startState, node)
+        if (body && from <= body.to + 1 && to > body.from)
+          effects.push(
+            setFold.of({ from: node.from, fold: body.fold, expanded: true }),
+          )
+      }
+  })
+  return effects.length ? { effects } : transaction
 })
 
 /** Fold or unfold the callout whose title starts where `button` is; folding moves the selection out of it. */
@@ -167,6 +313,10 @@ export class AlertTitleWidget extends WidgetType {
   }
 }
 
+/** A callout type's color, its own inside another callout's too. */
+const alertColor = (type: string) =>
+  `var(--hibi-alert-${type}, var(--status-info))`
+
 /** The alert type of a title line's source. */
 export function titleOf(source: string) {
   const marker = alertMarker(source)
@@ -187,7 +337,7 @@ export const contribution: FormattedContribution = {
   feature: 'markdown.alerts',
   flavor: 'markdown.github',
   syntax: GithubAlerts,
-  extension: [folds, revealFolds],
+  extension: [folds, stayFolded, revealFolds, unfoldToDelete],
   views: [
     {
       // The alerts.css box: a 3px bar in the alert color over a 6% tint, 12px 16px inside.
@@ -201,14 +351,17 @@ export const contribution: FormattedContribution = {
       container(node, { state }) {
         const title = firstBlock(node.node)
         if (title?.name !== 'AlertTitle') return undefined
-        const type = titleOf(state.sliceDoc(title.from, title.to))?.type
+        const type =
+          titleOf(state.sliceDoc(title.from, title.to))?.type ?? 'note'
+        const color = alertColor(type)
+        const tint = `color-mix(in srgb, ${color} 6%, transparent)`
         return {
           width: '19px',
-          class: `hibi-lp-alert hibi-lp-alert-${type ?? 'note'}`,
-          paint: (left, top) =>
+          class: `hibi-lp-alert hibi-lp-alert-${type}`,
+          paint: (left, top, right, bottom) =>
             [
-              `linear-gradient(var(--alert-color), var(--alert-color)) ${left} ${top} / 3px calc(100% - ${top}) no-repeat`,
-              `linear-gradient(var(--alert-tint), var(--alert-tint)) ${left} ${top} / calc(100% - ${left}) calc(100% - ${top}) no-repeat`,
+              `linear-gradient(${color}, ${color}) ${left} ${top} / 3px calc(100% - ${top} - ${bottom}) no-repeat`,
+              `linear-gradient(${tint}, ${tint}) ${left} ${top} / calc(100% - ${left} - ${right}) calc(100% - ${top} - ${bottom}) no-repeat`,
             ].join(', '),
           padding: { top: 12, bottom: 12, right: 16 },
         }
@@ -223,6 +376,7 @@ export const contribution: FormattedContribution = {
         if (!title) return false
         out.line(state.doc.lineAt(node.from).from, {
           class: 'hibi-lp-alert-title',
+          style: `color: ${alertColor(title.type)}`,
         })
         const mark = node.node.getChild('AlertMark')
         if (revealed) {

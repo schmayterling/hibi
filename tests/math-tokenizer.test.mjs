@@ -5,6 +5,7 @@ import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import { TableKit } from '@tiptap/extension-table'
 import { MarkdownManager } from '@tiptap/markdown'
 import { Marked } from 'marked'
+import { inlineDisplayMathTokens } from '../src/addons/math/inline-display.ts'
 import {
   blockMath,
   inlineMath,
@@ -18,14 +19,14 @@ import { markdownSourceParser } from '../src/shared/markdown-source-references.t
 
 const fixtures = [
   ['$$x$$', 1],
-  ['text $$x$$', 0],
-  ['text $$x$$ more', 0],
-  ['x$$x$$', 0],
-  ['text $$x$$\nmore', 0],
-  ['$$x$$ more', 0],
-  ['text\n$$x$$ more', 0],
-  ['text\n   $$x$$ more', 0],
-  ['text\n$$x$$ more\n$$y$$', 1],
+  ['text $$x$$', 0, 1],
+  ['text $$x$$ more', 0, 1],
+  ['x$$x$$', 0, 1],
+  ['text $$x$$\nmore', 0, 1],
+  ['$$x$$ more', 0, 1],
+  ['text\n$$x$$ more', 0, 1],
+  ['text\n   $$x$$ more', 0, 1],
+  ['text\n$$x$$ more\n$$y$$', 1, 1],
   ['text\n$$x$$', 1],
   ['$$\nx\n$$', 1],
   [' $$x$$', 1],
@@ -35,17 +36,17 @@ const fixtures = [
   ['   $$\nx\n   $$', 1],
   ['    $$x$$', 0],
   ['\t$$x$$', 0],
-  ['text\n    $$x$$', 0],
+  ['text\n    $$x$$', 0, 1],
   ['- item\n\n  $$x$$', 1],
   ['- text\n  $$x$$', 1],
-  ['- text $$x$$', 0],
-  ['- text $$x$$ more', 0],
+  ['- text $$x$$', 0, 1],
+  ['- text $$x$$ more', 0, 1],
   ['- item\n\n  $$\n  x\n  $$', 1],
   ['> $$x$$', 1],
   ['> text\n> $$x$$', 1],
   ['> $$\n> x\n> $$', 1],
-  ['> text $$x$$', 0],
-  ['> text $$x$$ more', 0],
+  ['> text $$x$$', 0, 1],
+  ['> text $$x$$ more', 0, 1],
   ['$5 and $$10', 0],
   ['\\$$', 0],
   ['\\$$x$$', 0],
@@ -60,6 +61,11 @@ function mathParser(gfm = false) {
       ({ name }) => name === extension.name,
     )
     return extension.extend({
+      parseMarkdown(token, helpers) {
+        return token.display
+          ? helpers.createTextNode(token.raw ?? '')
+          : this.parent?.(token, helpers)
+      },
       markdownTokenizer: {
         name: syntax.name,
         level: syntax.level,
@@ -74,7 +80,7 @@ function mathParser(gfm = false) {
       id: 'math.latex',
       markedOptions: { gfm },
       richExtensions: [...extensions, ...(gfm ? [TableKit] : [])],
-      export: { extensions: [mathTokens] },
+      export: { extensions: [mathTokens, inlineDisplayMathTokens] },
     },
   ])
   const all = [...core, ...addons]
@@ -88,21 +94,26 @@ function mathParser(gfm = false) {
   }
 }
 
-test('display math starts only at line boundaries in visual and source tokenizers', () => {
+test('display math blocks start only at line boundaries in visual and source tokenizers', () => {
+  const visual = new Marked(mathTokens)
   const parsers = [
-    new Marked(mathTokens),
+    visual,
     markdownSourceParser({ gfm: false, math: true }),
     markdownSourceParser({ gfm: true, math: true }),
   ]
   for (const parser of parsers) {
-    for (const [source, expected] of fixtures) {
+    for (const [source, expected, inline = 0] of fixtures) {
       const tokens = parser.lexer(source)
-      let blocks = 0
+      let blocks = 0,
+        display = 0
       parser.walkTokens(tokens, (token) => {
         if (token.type === 'blockMath') blocks++
-        assert.notEqual(token.type, 'inlineMath', source)
+        if (token.type === 'inlineMath') display++
       })
       assert.equal(blocks, expected, source)
+      // `$$…$$` inside a line is display math there, as Obsidian draws it,
+      // except in the rich editor, which reads it as text.
+      assert.equal(display, parser === visual ? 0 : inline, source)
       assert.equal(tokens.map(({ raw }) => raw).join(''), source, source)
       assert.equal(mathFlavor.detect(source), expected > 0, source)
     }
@@ -210,15 +221,35 @@ test('full and cached math serialization preserve literal dollars and equations'
   }
 })
 
-test('table cells keep literal double dollars without display math escapes', () => {
+test('table cells escape literal double dollars for display-aware exports', () => {
   const { manager, schema } = mathParser(true)
   const doc = schema.nodeFromJSON(
     manager.parse('| \\$$x$$ |\n| --- |\n| $x$ |'),
   )
   for (const blockLocal of [false, true]) {
     const saved = markdownSerializer(manager, blockLocal)(doc).source
-    assert.ok(saved.includes('| $$x$$ |'), saved)
+    assert.ok(saved.includes('| \\$\\$x\\$\\$ |'), saved)
     assert.ok(schema.nodeFromJSON(manager.parse(saved)).eq(doc), saved)
+  }
+})
+
+test('literal double dollars stay literal after rich serialization and export', () => {
+  const { manager, schema } = mathParser(true)
+  const parser = markdownSourceParser({ gfm: true, math: true })
+  for (const source of [
+    String.raw`before \$$x$$ after`,
+    '| \\$$x$$ |\n| --- |',
+  ]) {
+    const doc = schema.nodeFromJSON(manager.parse(source))
+    for (const blockLocal of [false, true]) {
+      const saved = markdownSerializer(manager, blockLocal)(doc).source
+      let formulas = 0
+      parser.walkTokens(parser.lexer(saved), (token) => {
+        if (token.type === 'inlineMath' || token.type === 'blockMath')
+          formulas++
+      })
+      assert.equal(formulas, 0, saved)
+    }
   }
 })
 

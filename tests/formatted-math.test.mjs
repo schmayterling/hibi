@@ -24,7 +24,7 @@ $$
 \\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}
 $$
 
-After the block, $$\\alpha$$ stays text.
+After the block, $5 and $$10 stay text.
 
 $$\\int_0^1 x\\,dx$$
 
@@ -198,7 +198,7 @@ test('formulas render in the formatted view as in the rich view, in light and da
       error: document.querySelector('.hibi-formatted .katex-error')
         ?.textContent,
       literal: [...document.querySelectorAll('.hibi-formatted .cm-line')].some(
-        (line) => line.textContent.includes('$$\\alpha$$ stays text'),
+        (line) => line.textContent.includes('$5 and $$10 stay text'),
       ),
     })),
     { inline: 6, block: 3, error: '\\frac{1', literal: true },
@@ -413,6 +413,114 @@ test('inserted display math stays in the quote or list item around the caret', {
       note,
     )
   }
+})
+
+test('a one-line display formula or image in a quote keeps one quote indent and bar', {
+  timeout: 90000,
+}, async () => {
+  // A drawing that replaces 20 or more characters splits the view's visible
+  // ranges inside its line, which still sits in one quote, not two.
+  await writeFile(
+    join(folder, 'notes', 'quoted.md'),
+    '> Under Shape 1, so\n> $$\\hat\\alpha = \\frac{2y_1+y_2}{2n}$$\n> ![a long alt text for this image](u.png) tail\n\nlast\n',
+  )
+  await open('quoted.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
+  await page.locator('.rich-pane [data-type="block-math"] .katex').waitFor()
+  await page.locator('.rich-pane .cm-line', { hasText: 'tail' }).waitFor()
+  assert.deepEqual(
+    await page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .cm-line.hibi-lp-quote')].map(
+        (line) => [
+          line.style.getPropertyValue('--hibi-indent'),
+          line.style.getPropertyValue('--hibi-paint').split('linear-gradient')
+            .length - 1,
+        ],
+      ),
+    ),
+    [
+      ['calc(21px)', 1],
+      ['calc(21px)', 1],
+      ['calc(21px)', 1],
+    ],
+  )
+  // The tops of the numerator's glyphs reach past the formula's box, inside
+  // the clip that lets a wide formula scroll sideways.
+  for (const cm of [true, false]) {
+    if (!cm) await engine(false)
+    const formula = page.locator('.rich-pane [data-type="block-math"]')
+    await formula.locator('.katex').waitFor()
+    for (const { id } of bundledColorschemes) {
+      await applyPalette(id)
+      const clipped = await formula.screenshot()
+      const unclip = await page.addStyleTag({
+        content: '.katex-display { overflow: visible !important }',
+      })
+      const whole = await formula.screenshot()
+      await unclip.evaluate((style) => style.remove())
+      // Glyph pixels, not the quote paint's dithering.
+      const cut = await app.evaluate(
+        ({ nativeImage }, images) => {
+          const [a, b] = images.map((image) =>
+            nativeImage
+              .createFromBuffer(Buffer.from(image, 'base64'))
+              .toBitmap(),
+          )
+          let changed = 0
+          for (let i = 0; i < a.length; i += 4)
+            if ([0, 1, 2].some((c) => Math.abs(a[i + c] - b[i + c]) > 32))
+              changed++
+          return a.length === b.length ? changed : -1
+        },
+        [clipped, whole].map((image) => image.toString('base64')),
+      )
+      assert.equal(
+        cut,
+        0,
+        `${cm ? 'codemirror' : 'tiptap'} ${id}: no glyph ink is clipped`,
+      )
+    }
+  }
+  await engine(true)
+  await applyPalette('hibi-light')
+})
+
+test('display math inside a heading line draws as display math, in the note and its outline', {
+  timeout: 90000,
+}, async () => {
+  // Obsidian draws `$$…$$` inside a line as display math there; the rich
+  // editor keeps it as text (math-001).
+  const latex = 'f(x,y)\\in C^{k+1}'
+  await writeFile(
+    join(folder, 'notes', 'heading-display.md'),
+    `# If $$ ${latex} $$ at each point\n\nlast\n`,
+  )
+  await open('heading-display.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
+  const formula = page.locator(
+    '.rich-pane .hibi-lp-h1 [data-type="block-math"] .katex-display',
+  )
+  await formula.waitFor()
+  assert.equal(
+    await formula.evaluate((element) =>
+      element.closest('[data-latex]').getAttribute('data-latex'),
+    ),
+    latex,
+  )
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  const row = page.locator(
+    '.outline-sidebar[data-side="right"][data-open="true"] [role="treeitem"]',
+  )
+  await row.locator('.outline-math .katex').waitFor()
+  assert.equal(
+    await row.getAttribute('data-tooltip'),
+    `If ${latex} at each point`,
+  )
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
 })
 
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {

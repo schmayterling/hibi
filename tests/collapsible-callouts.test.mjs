@@ -8,7 +8,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines,
 } from './formatted-engine.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 // Preserve casing, spacing, CRLF, and trailing whitespace across view-only folds.
 const note = [
@@ -219,7 +219,7 @@ async function openNote(t, engine, markdown) {
   await pressShortcut(app, `${mod}+o`)
   const pane = page.locator('.rich-pane')
   await pane.getByText('After paragraph.', { exact: true }).waitFor()
-  return { app, page, pane }
+  return { app, page, pane, file }
 }
 
 const hiding = [
@@ -416,4 +416,314 @@ test('codemirror: a callout keeps its own fold state as text around it changes',
     await pane.getByText('second body', { exact: true }).isVisible(),
     false,
   )
+})
+
+test('codemirror: a tab keeps its callout folds across tab switches and a reload from disk', {
+  timeout: 150000,
+}, async (t) => {
+  const markdown = [
+    '> [!note]- Closed first',
+    '> first body',
+    '',
+    '> [!tip]+ Open second',
+    '> second body',
+    '>',
+    '> > [!warning]- Nested third',
+    '> > third body',
+    '',
+    'After paragraph.',
+    '',
+  ].join('\n')
+  const { app, page, pane, file } = await openNote(t, 'codemirror', markdown)
+  const other = join(file, '..', 'other.md')
+  await writeFile(other, '# Other\n\nOther note.\n')
+  const control = (title) =>
+    pane.getByRole('button', { name: new RegExp(`callout: ${title}$`) })
+  const [first, second, third] = [
+    control('Closed first'),
+    control('Open second'),
+    control('Nested third'),
+  ]
+  const open = async (path) => {
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, path)
+    await pressShortcut(app, `${mod}+o`)
+  }
+  const back = async (text) => {
+    await page.getByRole('tab', { name: /folds/ }).first().click()
+    await pane.getByText(text, { exact: true }).waitFor()
+    await first.waitFor()
+  }
+  /** The reader's folds: first and second open, the nested third closed. */
+  const kept = async () => {
+    assert.equal(await first.getAttribute('aria-expanded'), 'true')
+    assert.equal(await second.getAttribute('aria-expanded'), 'false')
+    assert.equal(await pane.getByText('third body', { exact: true }).count(), 0)
+    await second.click()
+    assert.equal(await third.getAttribute('aria-expanded'), 'true')
+    await second.click()
+    assert.equal(await second.getAttribute('aria-expanded'), 'false')
+  }
+  await third.click()
+  await first.click()
+  await second.click()
+  await pane.getByText('first body', { exact: true }).waitFor()
+  assert.equal(await second.getAttribute('aria-expanded'), 'false')
+
+  await open(other)
+  await pane.getByText('Other note.', { exact: true }).waitFor()
+  await back('After paragraph.')
+  await kept()
+
+  // A clean tab reads its file again on return; the folds follow their callouts.
+  await open(other)
+  await pane.getByText('Other note.', { exact: true }).waitFor()
+  const changed = `Disk line.\n\n${markdown}`
+  await writeFile(file, changed)
+  await back('Disk line.')
+  await kept()
+  const current = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(current.markdown, changed)
+  assert.equal(current.dirty, false)
+})
+
+test('codemirror: arrows step over a folded body, and Backspace or Delete beside it unfold it first', {
+  timeout: 120000,
+}, async (t) => {
+  const markdown = [
+    'Before paragraph.',
+    '',
+    '> [!note]- Closed title',
+    '> hidden alpha body.',
+    '',
+    'After paragraph.',
+    '',
+  ].join('\n')
+  const { page, pane } = await openNote(t, 'codemirror', markdown)
+  const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
+  const titleEnd = markdown.indexOf('Closed title') + 'Closed title'.length
+  const after = markdown.indexOf('After paragraph.')
+  const place = (at) =>
+    page.evaluate((at) => {
+      const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+        .root
+      view.focus()
+      view.dispatch({ selection: { anchor: at } })
+    }, at)
+  const head = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+          .selection.main.head,
+    )
+  const read = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+
+  await closed.waitFor()
+  await place(titleEnd)
+  // One press each way crosses the fold, as Up and Down do.
+  await page.keyboard.press('ArrowRight')
+  assert.equal(await head(), after)
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(await head(), titleEnd)
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+
+  // Delete at the title's end shows the body rather than removing it unseen.
+  await page.keyboard.press('Delete')
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  await pane.getByText('hidden alpha body.', { exact: true }).waitFor()
+  assert.equal(await read(), markdown)
+  assert.equal(await head(), titleEnd)
+
+  // So does Backspace after the fold, which would pull the next line into it.
+  await closed.click()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  await place(after)
+  await page.keyboard.press('Backspace')
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  assert.equal(await read(), markdown)
+  assert.equal(await head(), after)
+
+  // Backspace on the blank line after the fold, which moves the caret to the
+  // end of the line above, shows the body rather than typing into it unseen.
+  await closed.click()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  await place(after - 1)
+  await page.keyboard.press('Backspace')
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  assert.equal(await head(), after - 2)
+  assert.equal(await read(), markdown)
+
+  // A shown body edits as any text does.
+  await place(titleEnd)
+  await page.keyboard.press('Delete')
+  await waitForAsync(
+    page,
+    async (markdown) => (await window.hibi.getDocument()).markdown !== markdown,
+    markdown,
+  )
+})
+
+test('codemirror: a disk edit that drops the open callout leaves the next one folded', {
+  timeout: 120000,
+}, async (t) => {
+  const markdown = [
+    '> [!note]- First',
+    '> first body',
+    '',
+    '> [!note]- Second',
+    '> second body',
+    '',
+    'After paragraph.',
+    '',
+  ].join('\n')
+  const { app, page, pane, file } = await openNote(t, 'codemirror', markdown)
+  const first = pane.getByRole('button', { name: /callout: First$/ })
+  const second = pane.getByRole('button', { name: /callout: Second$/ })
+  await first.click()
+  await pane.getByText('first body', { exact: true }).waitFor()
+  const other = join(file, '..', 'other.md')
+  await writeFile(other, '# Other\n\nOther note.\n')
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, other)
+  await pressShortcut(app, `${mod}+o`)
+  await pane.getByText('Other note.', { exact: true }).waitFor()
+  // The first callout goes on disk, so the second starts where it started;
+  // the first's state does not become the second's.
+  await writeFile(
+    file,
+    markdown.replace('> [!note]- First\n> first body\n\n', ''),
+  )
+  await page.getByRole('tab', { name: /folds/ }).first().click()
+  await pane.getByText('After paragraph.', { exact: true }).waitFor()
+  await second.waitFor()
+  assert.equal(await first.count(), 0)
+  assert.equal(await second.getAttribute('aria-expanded'), 'false')
+  assert.equal(await pane.getByText('second body', { exact: true }).count(), 0)
+})
+
+test('codemirror: a note that ends in a folded callout opens with it folded', {
+  timeout: 120000,
+}, async (t) => {
+  const markdown = [
+    'Before paragraph.',
+    '',
+    '> [!note]- Closed title',
+    '> hidden alpha body.',
+    '',
+  ].join('\n')
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-fold-'))
+  await mkdir(join(folder, 'notes'))
+  const file = join(folder, 'notes', 'folds.md')
+  await writeFile(file, markdown)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(20000)
+  await selectFormattedEngine(app, page, 'codemirror')
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  const pane = page.locator('.rich-pane')
+  const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
+  await closed.waitFor()
+  // The open caret lands at the end of the last text, the title's, not at
+  // the hidden body's end.
+  const titleEnd = markdown.indexOf('Closed title') + 'Closed title'.length
+  await waitForAsync(
+    page,
+    (at) =>
+      document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+        .selection.main.head === at,
+    titleEnd,
+  )
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  assert.equal(
+    await pane.getByText('hidden alpha body.', { exact: true }).count(),
+    0,
+  )
+})
+
+test('codemirror: a closed tab releases its remembered folds and text', {
+  timeout: 240000,
+}, async (t) => {
+  const size = 8 * 1024 * 1024
+  const line = 'a line of a large note with folds, closed again 0123456789\n\n'
+  const { app, page, pane, file } = await openNote(
+    t,
+    'codemirror',
+    'Small note.\n\nAfter paragraph.\n',
+  )
+  const large = join(file, '..', 'large.md')
+  await writeFile(
+    large,
+    `> [!note]- Folded title\n> hidden body.\n\n${line.repeat(Math.ceil(size / line.length))}`,
+  )
+  const cdp = await page.context().newCDPSession(page)
+  const heap = async () => {
+    for (let pass = 0; pass < 3; pass++)
+      await cdp.send('HeapProfiler.collectGarbage')
+    return (await cdp.send('Runtime.getHeapUsage')).usedSize
+  }
+  const toggle = pane.getByRole('button', { name: /callout: Folded title$/ })
+  const small = async () => {
+    await page.getByRole('tab', { name: /folds/ }).first().click()
+    await pane.getByText('After paragraph.', { exact: true }).waitFor()
+  }
+  /** Opens the large note, unfolds its callout and goes back to the small one. */
+  const remember = async () => {
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, large)
+    await pressShortcut(app, `${mod}+o`)
+    await toggle.waitFor({ timeout: 120000 })
+    await toggle.click()
+    await pane.getByText('hidden body.', { exact: true }).waitFor()
+    await small()
+    return heap()
+  }
+  const closed = async (count) => {
+    await waitForAsync(
+      page,
+      (expected) =>
+        document.querySelectorAll('[role="tab"]').length === expected,
+      count - 1,
+    )
+    await pane.getByText('After paragraph.', { exact: true }).waitFor()
+    return heap()
+  }
+  const released = (kept, after, how) =>
+    assert.ok(
+      kept - after > size / 2,
+      `closing the ${size / 1048576} MiB note ${how} released ${((kept - after) / 1048576).toFixed(1)} MiB`,
+    )
+  const before = await heap()
+  // With the large note's view gone, its text stays with its folds.
+  const kept = await remember()
+  assert.ok(kept - before > size, 'the remembered text is in memory')
+  let count = await page.getByRole('tab').count()
+  await page.getByRole('button', { name: /^Close large/ }).click()
+  released(kept, await closed(count), 'from the background')
+  // Closing the tab while its view shows, after its folds came back.
+  const again = await remember()
+  await page.getByRole('tab', { name: /large/ }).first().click()
+  await toggle.waitFor({ timeout: 120000 })
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true')
+  count = await page.getByRole('tab').count()
+  await clickMenu(app, 'Close tab')
+  released(again, await closed(count), 'while shown')
 })

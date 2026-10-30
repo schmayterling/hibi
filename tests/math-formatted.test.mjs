@@ -6,17 +6,23 @@ import { GFM, parser } from '@lezer/markdown'
 import { Marked } from 'marked'
 import {
   blockMathSyntax,
+  inlineDisplayMathEnd,
   inlineMathEnd,
   inlineMathSyntax,
   inlineMathWork,
 } from '../src/addons/math/formatted-syntax.ts'
+import {
+  inlineDisplayMath,
+  inlineDisplayMathTokens,
+} from '../src/addons/math/inline-display.ts'
 import { containerPrefix, mathInsertion } from '../src/addons/math/insert.ts'
 import { inlineMath, mathTokens } from '../src/addons/math/syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import { outlineMathParser } from '../src/renderer/src/source-outline-math.ts'
 
 const formatted = parser.configure([GFM, inlineMathSyntax, blockMathSyntax])
-const marked = new Marked(mathTokens)
+// `$$…$$` inside a line is display math in the formatted view, not the rich view.
+const marked = new Marked(mathTokens, inlineDisplayMathTokens)
 
 /** Math in document order, as the formatted view's syntax tree has it. */
 function lezerMath(source) {
@@ -25,7 +31,12 @@ function lezerMath(source) {
   tree.iterate({
     enter(node) {
       if (node.name === 'InlineMath') {
-        found.push(['inline', source.slice(node.from + 1, node.to - 1)])
+        const mark = node.node.firstChild.to - node.from
+        found.push(
+          mark > 1
+            ? ['display', source.slice(node.from + 2, node.to - 2).trim()]
+            : ['inline', source.slice(node.from + 1, node.to - 1)],
+        )
         return false
       }
       if (node.name === 'BlockMath') {
@@ -47,11 +58,12 @@ function lezerMath(source) {
   return found
 }
 
-/** Math in document order, as the rich view's Marked tokenizers find it. */
+/** Math in document order, as the math addon's Marked tokenizers find it. */
 function markedMath(source) {
   const found = []
   marked.walkTokens(marked.lexer(source), (token) => {
-    if (token.type === 'inlineMath') found.push(['inline', token.latex])
+    if (token.type === 'inlineMath')
+      found.push([token.display ? 'display' : 'inline', token.latex])
     if (token.type === 'blockMath') found.push(['block', token.latex])
   })
   return found
@@ -168,9 +180,21 @@ const fixtures = [
   'line one $x\nline two$',
   `$${'x'.repeat(10_000)}$`,
   `$${'x'.repeat(10_001)}$`,
+  // Display math inside a line, as Obsidian draws `$$…$$` there.
+  '# If $$ f(x,y)\\in C^{k+1} $$ at each point',
+  'a $$x$$ b $$y$$ c',
+  'a $$x$$$ b',
+  'a $$ $$ b',
+  'a $$x\ny$$ b',
+  'a $$x\\$$ b$$ c',
+  'cost $$5 and $$10',
+  '**$$x$$** and [$$y$$](https://example.com/)',
+  '| $$x$$ | y |\n| --- | --- |\n| z | $$w$$ |',
+  `a $$${'x'.repeat(10_000)}$$`,
+  `a $$${'x'.repeat(10_001)}$$`,
 ]
 
-test('formatted math matches the rich view tokenizers on the math fixtures', () => {
+test('formatted math matches the math tokenizers on the math fixtures', () => {
   for (const fixture of fixtures)
     for (const eol of ['\n', '\r\n'])
       for (const ending of ['', '\n']) {
@@ -251,6 +275,70 @@ test('inline math ends where the tokenizer expression ends, in linear time', {
     const closed = `$${'\\'.repeat(count)}x$`
     assert.equal(inlineMathEnd(closed, 0), inlineMath(closed).raw.length)
   }
+})
+
+test('display math inside a line ends where its expression ends, in linear time', () => {
+  const alphabet = ['$', '\\', 'a', ' ', '\n', '\r', '$$']
+  let seed = 11
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+  }
+  for (let run = 0; run < 20_000; run++) {
+    let text = '$$'
+    const length = 1 + Math.floor(random() * 14)
+    for (let i = 0; i < length; i++)
+      text += alphabet[Math.floor(random() * alphabet.length)]
+    assert.equal(
+      inlineDisplayMathEnd(text, 0),
+      inlineDisplayMath(text)?.raw.length ?? -1,
+      JSON.stringify(text),
+    )
+  }
+  // Each opener reads to the next dollar at most, so a line of openers that
+  // never close reads its text a bounded number of times.
+  const work = []
+  for (const count of [1000, 2000, 4000, 8000]) {
+    const line = `x ${'$$ aaaa $ '.repeat(count)}`
+    inlineMathWork.positions = 0
+    formatted.parse(line)
+    work.push(inlineMathWork.positions / line.length)
+  }
+  for (const perUnit of work) assert.ok(perUnit <= 2, JSON.stringify(work))
+})
+
+test('display math can touch currency or another inline formula', () => {
+  for (const [source, expected] of [
+    ['before $$x$$$5 after', [['display', 'x']]],
+    [
+      '$$a+b$$$c+d$',
+      [
+        ['display', 'a+b'],
+        ['inline', 'c+d'],
+      ],
+    ],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, source)
+    assert.deepEqual(markedMath(source), expected, source)
+  }
+})
+
+test('double dollars respect literal contexts and table cells', () => {
+  for (const source of [
+    'costs $5 and $10',
+    'costs $5.00 or $10.00',
+    String.raw`escaped \$$x$$ and \$5`,
+    '`$$x$$` and ``code ` $$y$$``',
+    '```tex\n$$x$$\n```',
+    '[link](https://example.test/$$x$$)',
+    '| `$$x$$` | \\$$y$$ |\n| --- | --- |',
+  ]) {
+    assert.deepEqual(lezerMath(source), [], source)
+    assert.deepEqual(markedMath(source), [], source)
+  }
+  const source = '| before $$x+1$$ after | `$5` |\n| --- | --- |'
+  assert.deepEqual(lezerMath(source), [['display', 'x+1']])
+  assert.deepEqual(markedMath(source), [['display', 'x+1']])
 })
 
 test('many short formulas on one line cost work linear in its length', () => {

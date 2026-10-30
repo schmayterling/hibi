@@ -405,7 +405,7 @@ export async function selectDocumentTab(
   window: BrowserWindow,
   id: unknown,
   remember = true,
-  refresh = false,
+  refresh: boolean | 'discard' = false,
 ): Promise<DocumentState> {
   storeTab()
   if (typeof id !== 'string' || !tabs.has(id))
@@ -413,15 +413,18 @@ export async function selectDocumentTab(
   if (id === activeTab && !refresh) return getDocument()
   const draft = tabs.get(id)!
   const current = source.snapshot()
-  // Refresh clean files on return; dirty tabs keep their saved baseline for conflict checks.
-  if (draft.path && !dirty(draft.source, draft.saved)) {
+  // Explicit reopens confirm discarding first; ordinary tab switches retain edits.
+  const modified = dirty(draft.source, draft.saved)
+  if (draft.path && (refresh === 'discard' || !modified)) {
     const target = draft.source.snapshot(),
       baseline = draft.saved
-    const content = (await matchesMarkdown(draft.path, target))
-      ? null
-      : await readSource(draft.path, id, target.version + 1)
+    const content =
+      !modified && (await matchesMarkdown(draft.path, target))
+        ? null
+        : await readSource(draft.path, id, target.version + 1)
     const changed =
-      content !== null && !(await sameSource(target, content.snapshot()))
+      content !== null &&
+      (modified || !(await sameSource(target, content.snapshot())))
     if (!source.ownsCurrentSnapshot(current))
       throw new Error('The document changed while switching tabs. Try again.')
     const latest = id === activeTab ? snapshot() : tabs.get(id)
@@ -434,8 +437,8 @@ export async function selectDocumentTab(
     )
       throw new Error('The document changed while switching tabs. Try again.')
     if (changed && content) {
-      draft.source = content
-      draft.saved = content.snapshot()
+      // Reads can replace the active tab's cached entry while the file loads.
+      tabs.set(id, { ...latest, source: content, saved: content.snapshot() })
     }
   }
   if (remember && id !== activeTab) rememberLocation()
@@ -1178,6 +1181,11 @@ export async function openDocument(
   const selected = result.filePaths[0]
   if (result.canceled || !selected) return null
   const chosen = await realpath(selected)
+  const existing = getOpenDocuments().find((draft) => draft.file === chosen)
+  if (existing?.dirty) {
+    if (!(await confirmTabDiscard(window, existing.tabId))) return null
+    return selectDocumentTab(window, existing.tabId, true, 'discard')
+  }
   return loadDocument(window, chosen, current)
 }
 

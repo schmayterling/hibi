@@ -50,16 +50,19 @@ test('a definition edit used by 20k paragraphs retains unchanged visibility rows
   }
 })
 
-test('a local edit in 50 MiB recounts bounded regions without flattening the document', {
+test('a local edit in 50 MiB with mid-line display math recounts bounded regions without flattening the document', {
   timeout: 180000,
 }, () => {
-  const unit = 'x'.repeat(1022) + '\n\n'
+  const unit = `word $$x+y$$ ${'x'.repeat(1009)}\n\n`
   const paragraphs = 50 * 1024
   const store = new SourceStore(unit.repeat(paragraphs), {
     tabId: 'large-counts',
     revision: 0,
   })
-  const counter = new FormattedCounter(store, defaultNoteSyntax)
+  const counter = new FormattedCounter(store, {
+    ...defaultNoteSyntax,
+    math: true,
+  })
   const read = () => {
     const work = counter.read()
     for (;;) {
@@ -69,7 +72,7 @@ test('a local edit in 50 MiB recounts bounded regions without flattening the doc
   }
   try {
     const initial = read()
-    assert.equal(initial.words, paragraphs)
+    assert.equal(initial.words, paragraphs * 2)
     counter.counters(true)
     const before = store.snapshot()
     const at = unit.length * (paragraphs / 2) + 512

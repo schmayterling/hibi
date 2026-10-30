@@ -6,6 +6,8 @@ import {
   type ViewUpdate,
 } from '@codemirror/view'
 import { menus } from '../../../ui/menu-store'
+import { formattedSyntaxTree } from '../formatted-contributions'
+import { formattingBefore } from '../formatted-toolbar-state'
 import { readDOMPosition } from '../native-dom-selection'
 import type { SourceFormatting } from '../source-formatting'
 
@@ -106,6 +108,18 @@ export function linkControls(callbacks: Callbacks) {
         this.dismissed = this.target?.capture.link?.from ?? null
         this.hide()
       }
+      /** The link at `at`, or the one that ends there, past its closing syntax. */
+      linkAt(at: number) {
+        const capture = callbacks.capture(at)
+        if (capture?.link) return capture
+        const { state } = this.view
+        const tree = formattedSyntaxTree(state)
+        const text = tree && formattingBefore(state, tree, at, 'link')
+        // A bare address is all text, whose last place inside is before its end.
+        return text
+          ? callbacks.capture(text.to < at ? text.to : at - 1)
+          : capture
+      }
       act(id: Action, capture: Capture, href: string) {
         if (id === 'edit') this.edit(capture)
         else if (id === 'copy')
@@ -171,7 +185,7 @@ export function linkControls(callbacks: Callbacks) {
           at <= current.capture.link.to
         )
           return
-        const capture = callbacks.capture(at)
+        const capture = this.linkAt(at)
         // Dismissed actions stay hidden until the caret leaves their link.
         if (capture?.link?.from !== this.dismissed) this.dismissed = null
         if (!capture?.link || this.dismissed !== null) {
@@ -246,7 +260,7 @@ export function linkControls(callbacks: Callbacks) {
       tab() {
         if (
           !this.view.state.selection.main.empty ||
-          !callbacks.capture(this.view.state.selection.main.head)?.link
+          !this.linkAt(this.view.state.selection.main.head)?.link
         )
           return false
         this.dismissed = null
@@ -261,7 +275,7 @@ export function linkControls(callbacks: Callbacks) {
         return true
       }
       openMenu(at: number, x: number, y: number) {
-        const capture = callbacks.capture(at)
+        const capture = this.linkAt(at)
         if (!capture?.link) return false
         this.hide()
         const readOnly = this.view.state.readOnly

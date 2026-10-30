@@ -131,13 +131,18 @@ test('codemirror link actions stay up while the pointer crosses to them', {
   const { page, editor, panel } = await open(t)
   const link = page.getByRole('link', { name: 'docs', exact: true })
   for (const focused of [false, true]) {
-    // With the caret outside links, the panel shows for the hovered link only.
-    if (focused)
-      await editor.evaluate((element, anchor) => {
+    // Unfocused, or with the caret outside links, the panel shows for the
+    // hovered link only. Opening the note leaves the caret at its table
+    // link's end, which has its own panel.
+    await editor.evaluate(
+      (element, { focused, anchor }) => {
         const view = element.cmTile.root.view
+        if (!focused) return element.ownerDocument.activeElement?.blur()
         view.focus()
         view.dispatch({ selection: { anchor } })
-      }, note.indexOf('here'))
+      },
+      { focused, anchor: note.indexOf('here') },
+    )
     const from = await link.boundingBox()
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
     await panel.waitFor()
@@ -480,4 +485,54 @@ test('codemirror Escape keeps link actions hidden until the caret leaves the lin
   await place(editor, text.indexOf('bare.example'))
   await panel.waitFor()
   assert.equal(await destination.textContent(), 'https://bare.example/path')
+})
+
+test('codemirror link actions show with the caret at a link end', {
+  timeout: 60000,
+}, async (t) => {
+  const { page, editor, panel } = await open(t)
+  const text =
+    'See [docs](https://a.example) mid\n\nEnd [tail](https://b.example)\n\nBare https://c.example/path\n\nMid https://d.example/path here\n\nWords only'
+  await place(editor, text.length, text)
+  const destination = panel.locator('.hibi-link-destination')
+  const ends = {
+    'mid-line link': text.indexOf(') mid') + 1,
+    'line-end link': text.indexOf('\n\nBare'),
+    'line-end address': text.indexOf('\n\nMid'),
+    'mid-line address': text.indexOf(' here'),
+  }
+  const shown = {}
+  for (const [name, at] of Object.entries(ends)) {
+    // From outside any link, so that no shown link carries over.
+    await place(editor, text.length)
+    await panel.waitFor({ state: 'hidden' })
+    await place(editor, at)
+    shown[name] = await panel.waitFor({ timeout: 3000 }).then(
+      () => destination.textContent(),
+      () => null,
+    )
+  }
+  assert.deepEqual(shown, {
+    'mid-line link': 'https://a.example',
+    'line-end link': 'https://b.example',
+    'line-end address': 'https://c.example/path',
+    'mid-line address': 'https://d.example/path',
+  })
+  // A click past the end of the line shows them too, and Shift+F10 opens the link's menu.
+  await place(editor, text.length)
+  await panel.waitFor({ state: 'hidden' })
+  const end = await editor.evaluate(
+    (element, at) => element.cmTile.root.view.coordsAtPos(at),
+    text.indexOf('\n\nBare'),
+  )
+  await page.mouse.click(end.right + 40, (end.top + end.bottom) / 2)
+  await panel.waitFor()
+  assert.equal(await destination.textContent(), 'https://b.example')
+  await page.keyboard.press('Shift+F10')
+  const menu = page.getByRole('menu', { name: 'Link actions', exact: true })
+  await menu
+    .getByRole('menuitem', { name: 'Edit link…', exact: true })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await menu.waitFor({ state: 'hidden' })
 })

@@ -417,7 +417,11 @@ export default sdk => ({
         .getByRole('button', { name: 'Back to app', exact: true })
         .click()
       await waitForDocumentEditor(app, page)
-      assert.equal(await page.locator('.rich-pane [data-beta-view]').count(), 0)
+      // The setting reaches the editor just after the settings page closes.
+      await waitForAsync(
+        page,
+        () => !document.querySelector('.rich-pane [data-beta-view]'),
+      )
       assert.equal(
         await page.locator('.rich-pane [data-foreign-child]').count(),
         0,

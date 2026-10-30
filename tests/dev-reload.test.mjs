@@ -23,7 +23,7 @@ import {
   waitForDocumentEditor,
 } from './electron.mjs'
 import { testFormattedEngines as test } from './formatted-engine.mjs'
-import { replaceRichText } from './keyboard.mjs'
+import { redoKey, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const scenarioTimeout = 180000
@@ -874,7 +874,7 @@ dialog.showMessageBox = (...args) => {
         page,
         async () => (await window.hibi.getDocument()).markdown === '',
       )
-      await editorDuringReload.press('ControlOrMeta+Shift+z')
+      await editorDuringReload.press(redoKey)
       await waitForAsync(
         page,
         async () =>
@@ -1479,7 +1479,7 @@ dialog.showMessageBox = (...args) => {
               (await window.hibi.getDocument()).markdown === expected,
             expected,
           )
-          await editor.press('ControlOrMeta+Shift+z')
+          await editor.press(redoKey)
           await waitForAsync(
             page,
             async () => (await window.hibi.getDocument()).markdown === '',

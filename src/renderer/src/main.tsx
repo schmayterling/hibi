@@ -3181,6 +3181,7 @@ function App() {
             discover={paletteOpen}
             onBack={leaveSettings}
             onInstallAddon={addonHost.install}
+            outdatedAddons={addonHost.outdated}
             addonRequest={addonRequest}
             onAddonRequestDone={(key) =>
               setAddonRequests((queue) =>

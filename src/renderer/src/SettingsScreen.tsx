@@ -13,6 +13,7 @@ import type { AddonState } from '../../addons/api'
 import type { AppInfo } from '../../shared/desktop'
 import { type DocumentView, isDocumentView } from '../../shared/document-types'
 import { actions, type Hotkeys } from '../../shared/hotkeys'
+import type { OutdatedAddon } from '../../shared/sideload'
 import { ColorschemeSettings } from '../../ui/ColorschemeSettings'
 import {
   Button,
@@ -146,6 +147,7 @@ export function SettingsScreen({
   hotkeys,
   onHotkeys,
   addonStates,
+  outdatedAddons,
   onAddonEnabled,
   onInstallAddon,
   onRemoveAddon,
@@ -193,6 +195,8 @@ export function SettingsScreen({
   hotkeys: Hotkeys
   onHotkeys: (hotkeys: Hotkeys) => void
   addonStates: AddonState[]
+  /** Installs made for addon API 1 or 2, listed for update or uninstall. */
+  outdatedAddons: readonly OutdatedAddon[]
   onAddonEnabled: (id: string, enabled: boolean) => Promise<void>
   onInstallAddon: (target?: AddonInstallTarget) => Promise<void>
   onRemoveAddon: (id: string) => Promise<void>
@@ -741,6 +745,7 @@ export function SettingsScreen({
             <AddonSettings
               addons={addons}
               states={addonStates}
+              outdated={outdatedAddons}
               setEnabled={onAddonEnabled}
               install={onInstallAddon}
               remove={onRemoveAddon}

@@ -6,6 +6,7 @@ import type { AddonDirectoryEntry } from '../../shared/addon-directory'
 import { addonPackageUrl } from '../../shared/addon-package'
 import type { AddonTrustSettings } from '../../shared/addon-trust'
 import { errorMessage } from '../../shared/errors'
+import type { OutdatedAddon } from '../../shared/sideload'
 import { sentenceCase } from '../../shared/ui-case'
 import {
   Button,
@@ -125,6 +126,7 @@ export type AddonInstallTarget = string | { directoryId: string }
 export function AddonSettings({
   addons,
   states,
+  outdated = [],
   setEnabled,
   install,
   remove,
@@ -133,6 +135,8 @@ export function AddonSettings({
 }: {
   addons: readonly Addon[]
   states: readonly AddonState[]
+  /** Installs made for addon API 1 or 2, which Hibi lists but does not run. */
+  outdated?: readonly OutdatedAddon[]
   setEnabled: (id: string, enabled: boolean) => Promise<void>
   install: (target?: AddonInstallTarget) => Promise<void>
   remove: (id: string) => Promise<void>
@@ -143,7 +147,10 @@ export function AddonSettings({
   const [category, setCategory] = useState<Category | null>(null)
   const [tab, setTab] = useState<'installed' | 'garden'>('installed')
   const [busy, setBusy] = useState(false)
-  const { directory, retry } = useAddonDirectory(tab === 'garden')
+  // Hibi garden may have an API 3 version of an outdated install.
+  const { directory, retry } = useAddonDirectory(
+    tab === 'garden' || outdated.length > 0,
+  )
   const handled = useRef<number | null>(null)
   const restoreFocus = useRef<string | null>(null)
   const categoryRow = useRef<HTMLDivElement>(null)
@@ -190,7 +197,8 @@ export function AddonSettings({
   const present = categories.filter((option) =>
     garden
       ? directory.entries.some((entry) => addonCategory(entry) === option)
-      : addons.some(({ manifest }) => addonCategory(manifest) === option),
+      : addons.some(({ manifest }) => addonCategory(manifest) === option) ||
+        outdated.some((addon) => addonCategory(addon) === option),
   )
   // Removing the last addon in a category falls back to the full list.
   const active = category && present.includes(category) ? category : null
@@ -199,9 +207,15 @@ export function AddonSettings({
   const shownEntry = (entry: AddonDirectoryEntry) =>
     (!active || addonCategory(entry) === active) &&
     matches(entry, query, 'third-party')
+  const shownOutdated = (addon: OutdatedAddon) =>
+    (!active || addonCategory(addon) === active) &&
+    matches({ ...addon, description: '' }, query, 'local')
   const matching = garden
     ? directory.entries.filter(shownEntry)
-    : ordered.filter(({ manifest }) => shown(manifest))
+    : [
+        ...outdated.filter(shownOutdated),
+        ...ordered.filter(({ manifest }) => shown(manifest)),
+      ]
   const relation = (entry: AddonDirectoryEntry) => {
     const current = addons.find(({ manifest }) => manifest.id === entry.id)
     if (!current) return 'new' as const
@@ -390,6 +404,46 @@ export function AddonSettings({
           />
         ) : (
           <div className="settings-group addon-list" hidden={!matching.length}>
+            {outdated.map((addon) => (
+              <SettingRow
+                key={addon.id}
+                id={`addon-${addon.id}`}
+                label={addon.name}
+                hidden={!shownOutdated(addon)}
+                description={
+                  <>
+                    Made for an earlier version of Hibi, so it does not run. It
+                    needs an update for addon API 3.
+                    <span className="addon-metadata">
+                      <span>Installed</span>
+                      <span>{sentenceCase(addon.kind)}</span>
+                      {addon.version && <span>v{addon.version}</span>}
+                    </span>
+                  </>
+                }
+              >
+                <div className="addon-actions">
+                  <Button
+                    aria-label={`Uninstall ${addon.name}`}
+                    disabled={busy}
+                    onClick={() => void run(() => remove(addon.id))}
+                  >
+                    Uninstall
+                  </Button>
+                  {directory.entries.some((entry) => entry.id === addon.id) && (
+                    <Button
+                      aria-label={`Update ${addon.name}`}
+                      disabled={busy}
+                      onClick={() =>
+                        void run(() => install({ directoryId: addon.id }))
+                      }
+                    >
+                      Update
+                    </Button>
+                  )}
+                </div>
+              </SettingRow>
+            ))}
             {ordered.map(({ manifest }) => {
               const blockedBy =
                 states.find((state) => state.id === manifest.id)?.blockedBy ??

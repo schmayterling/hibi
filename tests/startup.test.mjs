@@ -59,6 +59,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     await page.evaluate(async () => ({
       states: await window.hibi.getAddonStates(),
       packages: await window.hibi.getInstalledAddons(),
+      outdated: await window.hibi.getOutdatedAddons(),
       notices: [],
     })),
   )

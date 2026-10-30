@@ -9,9 +9,6 @@ import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-const update =
-  'This addon was made for an earlier version of Hibi. Ask its author for an update to addon API 3.'
-
 test('installed api 3 formatted contributions run, and addons for earlier apis ask for an update', {
   timeout: 90000,
 }, async (t) => {
@@ -130,13 +127,12 @@ test('installed api 3 formatted contributions run, and addons for earlier apis a
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  // Earlier APIs and the rich SDK are refused before their code runs.
-  for (const id of ['v1-proof', 'v2-proof', 'rich-sdk-proof'])
-    await page
-      .locator('.toast')
-      .filter({ hasText: `Could not load addon "${id}": ${update}` })
-      .first()
-      .waitFor()
+  // Earlier APIs and the rich SDK are refused before their code runs; one
+  // notice asks for their updates.
+  await page
+    .locator('.toast')
+    .filter({ hasText: '3 addons need an update for addon API 3.' })
+    .waitFor()
   await page.waitForFunction(() => window.formattedMarkdownAvailable)
   assert.equal(await page.evaluate(() => window.earlierApiStarted), undefined)
   assert.equal(await page.evaluate(() => window.formattedCommonShared), true)

@@ -3050,7 +3050,8 @@
     "src/main/dependencies.ts"
   ],
   "f8b32f4e92bd": [
-    "src/renderer/src/AddonGarden.tsx"
+    "src/renderer/src/AddonGarden.tsx",
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "73581a21f0ae": [
     "src/shared/addon-manifest.ts"
@@ -3551,6 +3552,9 @@
   ],
   "85a5ac392dfd": [
     "src/addons/_shared/format-worker.ts"
+  ],
+  "63a0f8ccf65c": [
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "42c6b818dcbc": [
     "src/renderer/src/HibiSettings.tsx"
@@ -4135,6 +4139,9 @@
   ],
   "48a7ae24583b": [
     "src/renderer/src/ImportDialog.tsx"
+  ],
+  "ea5c102c5785": [
+    "src/renderer/src/addons.ts"
   ],
   "b52d8596aa3f": [
     "src/renderer/src/addons.ts"
@@ -6393,8 +6400,7 @@
     "src/main/addons.ts"
   ],
   "7d4f3db6cb85": [
-    "src/renderer/src/addon-definition.ts",
-    "src/shared/addon-manifest.ts"
+    "src/renderer/src/addon-definition.ts"
   ],
   "6f81d1a9cd1d": [
     "src/main/addon-windows.ts"
@@ -6919,7 +6925,8 @@
     "src/renderer/src/AddonSettings.tsx"
   ],
   "f981cf355235": [
-    "src/renderer/src/AddonGarden.tsx"
+    "src/renderer/src/AddonGarden.tsx",
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "7786cacd2ef2": [
     "src/addons/dictionary/PackSettings.tsx"
@@ -6981,7 +6988,8 @@
     "src/main/index.ts"
   ],
   "c1c1009d3f37": [
-    "src/addons/dictionary/PackSettings.tsx"
+    "src/addons/dictionary/PackSettings.tsx",
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "d4fc42307306": [
     "src/renderer/src/UpdateSettings.tsx"
@@ -6991,6 +6999,9 @@
   ],
   "1e6bf669df09": [
     "src/renderer/src/UpdateSettings.tsx"
+  ],
+  "a8964f36f720": [
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "22e2bada8f1c": [
     "src/renderer/src/UpdateSettings.tsx"
@@ -7588,6 +7599,9 @@
   "229213386c16": [
     "src/renderer/src/main.tsx"
   ],
+  "6e73ea811fa6": [
+    "src/renderer/src/addons.ts"
+  ],
   "1d662e622a11": [
     "src/main/document.ts"
   ],
@@ -7617,6 +7631,9 @@
   ],
   "539904894032": [
     "src/addons/dictionary/index.tsx"
+  ],
+  "93ebd45523e6": [
+    "src/renderer/src/addons.ts"
   ],
   "d25d00eae8e4": [
     "src/addons/_shared/format-renderer.tsx"

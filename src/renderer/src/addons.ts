@@ -20,6 +20,7 @@ import {
   type MarkdownExtension,
   type SourceExtension,
   type StatusItem,
+  type ToastApi,
   type ViewApi,
   type ViewInstance,
   type ViewRegistration,
@@ -45,6 +46,7 @@ import {
   parseSyntaxDescriptors,
   validatePreservation,
 } from '../../shared/preservation'
+import type { OutdatedAddon } from '../../shared/sideload'
 import { startupSpan } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { useDialogService } from '../../ui/DialogProvider'
@@ -291,6 +293,42 @@ export async function renderExportDocument(
   )
 }
 
+/**
+ * Hibi no longer runs addons made for API 1 or 2. One notice per new set of
+ * them leads to the addon manager, which keeps listing them.
+ */
+function announceOutdated(
+  outdated: readonly OutdatedAddon[],
+  show: ToastApi['show'],
+  open: (id: string) => void,
+) {
+  const key = 'hibi:outdated-addons-announced'
+  const current = outdated.map((addon) => `${addon.id}@${addon.version}`)
+  let announced: unknown = []
+  try {
+    announced = JSON.parse(localStorage.getItem(key) ?? '[]')
+  } catch {
+    // A malformed record announces again.
+  }
+  localStorage.setItem(key, JSON.stringify(current))
+  const first = outdated[0]
+  if (
+    !first ||
+    (Array.isArray(announced) &&
+      current.every((item) => announced.includes(item)))
+  )
+    return
+  show({
+    message:
+      outdated.length === 1
+        ? `${first.name} needs an update for addon API 3.`
+        : `${outdated.length} addons need an update for addon API 3.`,
+    variant: 'error',
+    duration: 0,
+    action: { label: 'Open addon manager', run: () => open(first.id) },
+  })
+}
+
 export function useAddons(
   environment: Environment,
   documentName?: string,
@@ -316,6 +354,7 @@ export function useAddons(
     runAction: (command) => latest.current.runAction(command),
   }).current
   const [states, setStates] = useState<AddonState[]>([])
+  const [outdated, setOutdated] = useState<readonly OutdatedAddon[]>([])
   const [loaded, setLoaded] = useState(false)
   const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(
     new Map(),
@@ -840,7 +879,7 @@ export function useAddons(
   useEffect(() => {
     void window.hibi.bootstrap
       .addons()
-      .then(async ({ states, packages: installed, notices }) => {
+      .then(async ({ states, packages: installed, outdated, notices }) => {
         try {
           if (localStorage.getItem('hibi:dictionary:typing')) {
             const { migrateDictionaryTyping } = await import(
@@ -863,6 +902,10 @@ export function useAddons(
         }
         setStates(states)
         addonRegistry.hydrate(installed)
+        setOutdated(outdated)
+        announceOutdated(outdated, toastService.api.show, (id) =>
+          latest.current.openAddonSettings(id),
+        )
         for (const message of notices)
           toastService.api.show({
             message,
@@ -2468,12 +2511,14 @@ export function useAddons(
           await reviewAddonInstall(dialogService.api, session, openSettings)
         }
       } finally {
-        const [states, packages, { reloadAddons }] = await Promise.all([
+        const [states, packages, old, { reloadAddons }] = await Promise.all([
           window.hibi.getAddonStates(),
           window.hibi.getInstalledAddons(),
+          window.hibi.getOutdatedAddons(),
           import('./addon-reload'),
         ])
         setStates(states)
+        setOutdated(old)
         // A replacement that kept its enabled setting restarts with its new files before the start effect sees them.
         const replaced = addonRegistry
           .hydrate(packages)
@@ -2591,11 +2636,13 @@ export function useAddons(
         next.delete(id)
         return next
       })
-      const [states, packages] = await Promise.all([
+      const [states, packages, old] = await Promise.all([
         window.hibi.getAddonStates(),
         window.hibi.getInstalledAddons(),
+        window.hibi.getOutdatedAddons(),
       ])
       setStates(states)
+      setOutdated(old)
       addonRegistry.hydrate(packages)
     } catch (error) {
       latest.current.error(error)
@@ -2715,6 +2762,8 @@ export function useAddons(
     formattedExtensions,
     statusItems,
     sidebarViews,
+    /** Installs made for addon API 1 or 2, which only an update or uninstall resolves. */
+    outdated,
     setEnabled,
     install,
     remove,

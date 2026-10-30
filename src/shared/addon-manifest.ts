@@ -46,6 +46,9 @@ export type ParsedAddonManifest = {
   themes: (ColorschemeInput | string)[]
 }
 
+/** A package made for addon API 1 or 2, which Hibi no longer runs. */
+export class OutdatedAddonError extends Error {}
+
 /** `themeFiles` holds parsed JSON by declared path; without it, theme paths stay unresolved. */
 export function parseAddonManifest(
   value: unknown,
@@ -85,7 +88,7 @@ export function parseAddonManifest(
     (Array.isArray(data.capabilities) && data.capabilities.includes('rich')) ||
     data.activation === 'rich'
   )
-    throw new Error(
+    throw new OutdatedAddonError(
       'This addon was made for an earlier version of Hibi. Ask its author for an update to addon API 3.',
     )
   if (

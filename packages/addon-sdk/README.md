@@ -14,6 +14,7 @@ export const manifest = {
   description: 'A greeting.',
   version: '1.0.0',
   apiVersion: 3,
+  kind: 'extension',
   capabilities: [],
   activation: 'command',
   commands: [{ id: 'greet', label: 'Greet' }],

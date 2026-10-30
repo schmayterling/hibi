@@ -17,6 +17,17 @@ const oracle = (source) =>
       htmlExtensions: [gfmHtml()],
     }).replaceAll('\r\n', '\n'),
   )
+// Each tab to its next four-column stop.
+const expand = (source) =>
+  source
+    .split('\n')
+    .map((line) => {
+      let text = ''
+      for (const char of line)
+        text += char === '\t' ? ' '.repeat(4 - (text.length % 4)) : char
+      return text
+    })
+    .join('\n')
 
 test('a footnote bounding probe inside a tabbed quote keeps the quote rows', () => {
   // A footnote definition bounds its body with a separate lexer that shares
@@ -33,5 +44,21 @@ test('a footnote bounding probe inside a tabbed quote keeps the quote rows', () 
         markedGithubFootnote(),
       )
       assert.deepEqual(code(markdown.parse(source)), oracle(source), source)
+    }
+})
+
+test('a list re-read in a tabbed nested quote keeps the quote markers', () => {
+  // Marked splices a re-read list into the quote's raw by the list's length.
+  // Counted with a widened tab's spaces, the cut took the nested quote's own
+  // marker, and the enclosing quote's re-read of that raw found no quote.
+  for (const sample of ['>> >\t*\n>>1\nh', '>>>-\n>> >\t|\n>>~\nl'])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      const markdown = new Marked({ gfm: true }, blockMarkdown)
+      assert.equal(
+        markdown.parse(source),
+        markdown.parse(expand(source)),
+        source,
+      )
     }
 })

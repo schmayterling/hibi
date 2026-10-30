@@ -1018,6 +1018,19 @@ class TableView {
     )
   }
 
+  /** Scroll the cell at a position of the formatted view's document into view. */
+  scrollTo(pos: number) {
+    const cell = this.locate(pos)
+    if (!cell) return false
+    const { line, column } = cell
+    if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
+    const row = line ? this.rendered.get(line - 2)?.element : this.head
+    const element = row?.cells[column]
+    if (!element) return false
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    return true
+  }
+
   /** Edit one cell's inline source without normalizing its table's padding. */
   private inline(source: string, from: number, to: number, text: string) {
     const state = this.view.state
@@ -3173,6 +3186,16 @@ export const contribution: FormattedContribution = {
       },
     }),
     tableEditing,
+    // CodeMirror scrolls to a block widget's bounds, which for a table is all
+    // of it: scrolling to a caret in a table, as after undo, shows its cell.
+    // Other handlers, as reading-position's, see the scroll first.
+    Prec.lowest(
+      EditorView.scrollHandler.of(
+        (view, range, { y }) =>
+          y === 'nearest' &&
+          (tableAt(view, range.head, true)?.scrollTo(range.head) ?? false),
+      ),
+    ),
     // Chromium drops typing and compositions over a selection that covers a
     // table widget or starts or ends inside one.
     composeCleared,

@@ -55,6 +55,13 @@ export async function splitTab(app, page, id) {
   await palette.locator(`[id="command-document.split-right.${id}"]`).click()
 }
 
+/**
+ * Redo as a keyboard sends it. Shift makes the key an uppercase Z: CodeMirror
+ * reads a synthetic Ctrl+Shift+z as Ctrl+z, undo, while there is history to undo.
+ */
+export const redoKey =
+  process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+Z'
+
 export async function pressShortcut(app, shortcut) {
   const parts = shortcut.split('+')
   const keyCode = parts.pop().toUpperCase()

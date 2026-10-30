@@ -11,7 +11,12 @@ import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  redoKey,
+  withHeldClock,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)
@@ -1454,9 +1459,7 @@ const replacedOnce = async (doc, [from, to], text, label) => {
   await harness.keyboard.press('ControlOrMeta+z')
   assert.equal((await state()).doc, doc, label)
   // The harness binds CodeMirror's history keymap: redo is Ctrl+Y on Windows.
-  await harness.keyboard.press(
-    process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+z',
-  )
+  await harness.keyboard.press(redoKey)
   assert.equal((await state()).doc, typed, label)
 }
 const compose = async (cdp, ...candidates) => {

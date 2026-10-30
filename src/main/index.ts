@@ -897,8 +897,13 @@ async function serveAssetResponse(request: Request): Promise<Response> {
   }
 }
 
-function showStartupError(window: BrowserWindow | null = mainWindow): void {
+function showStartupError(
+  error: unknown,
+  window: BrowserWindow | null = mainWindow,
+): void {
   if (quitting || closing || window?.isDestroyed()) return
+  // Every "could not start" exit leaves a critical record, whatever the load error code.
+  localDiagnostics.report('MAIN_STARTUP_FAILED', error, { role: 'main' })
   dialog.showErrorBox(
     'Hibi could not start',
     'Restart Hibi. If it still cannot start, reinstall it.',
@@ -1197,7 +1202,7 @@ function createWindow(): void {
     )
       return
     console.error('failed to load app:', error)
-    showStartupError(window)
+    showStartupError(error, window)
   })
 }
 
@@ -2700,8 +2705,7 @@ if (!app.requestSingleInstanceLock()) {
       startUpdateChecks()
     })
     .catch((error: unknown) => {
-      localDiagnostics.report('MAIN_STARTUP_FAILED', error, { role: 'main' })
       console.error('startup failed:', error)
-      showStartupError()
+      showStartupError(error)
     })
 }

@@ -951,7 +951,7 @@ export async function startupDiagnostics(application, page) {
       ),
     ),
     bounded(
-      page.pageErrors().then((errors) =>
+      page.pageErrors({ filter: 'all' }).then((errors) =>
         errors.slice(-3).map((error) => ({
           message: error.message.slice(0, 800),
           stack: error.stack?.slice(0, 800),

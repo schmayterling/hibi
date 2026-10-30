@@ -116,6 +116,34 @@ test('toggling a task edits only the character inside its marker', () => {
   )
 })
 
+test('revealed task markers keep their checkbox without replacing source', () => {
+  const view = contribution.views.find((view) =>
+    view.nodes.includes('TaskMarker'),
+  )
+  const state = EditorState.create({ doc: '- [x]  task' })
+  const syntax = [],
+    widgets = [],
+    replaced = []
+  markdown.parse(state.doc.toString()).iterate({
+    enter(node) {
+      if (node.name !== 'TaskMarker') return
+      view.decorate(
+        node,
+        {
+          syntax: (from, to) => syntax.push([from, to]),
+          widget: (at, widget, side) =>
+            widgets.push([at, widget.checked, side]),
+          replace: (...args) => replaced.push(args),
+        },
+        { state, revealed: true },
+      )
+    },
+  })
+  assert.deepEqual(syntax, [[2, 7]])
+  assert.deepEqual(widgets, [[2, true, -1]])
+  assert.deepEqual(replaced, [])
+})
+
 test('the marker and the space after it become one checkbox', () => {
   const view = contribution.views.find((view) =>
     view.nodes.includes('TaskMarker'),

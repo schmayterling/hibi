@@ -51,6 +51,7 @@ import {
   formattedTextFeatures,
   inlineStops,
 } from './formatted-contributions.ts'
+import { keepRead, keepReading } from './reading-position.ts'
 
 /**
  * The formatted view owns its syntax tree. A transaction parses for at most
@@ -674,6 +675,7 @@ function driver(
                     this.boundaryTree = null
                     this.boundarySeeded = true
                     this.boundaryVersion = page.version
+                    keepReading(this.view)
                     this.view.dispatch({
                       effects: adoptBoundaries.of({
                         doc,
@@ -720,6 +722,7 @@ function driver(
         // While the worker repairs a changed context, keep the local fallback
         // moving one bounded parse step rather than duplicating a full scan.
         const bounded = this.boundarySeeded && this.boundaryFrom !== null
+        keepReading(view)
         view.dispatch({
           effects: [
             ...(same ? [] : [setDemand.of({ from, to })]),
@@ -764,6 +767,7 @@ function driver(
           this.scheduleNear()
           return
         }
+        keepReading(view)
         view.dispatch({
           effects: parseAhead.of({
             window: syntax.ahead?.window ?? {
@@ -828,6 +832,7 @@ function driver(
         if (!stale.length) return
         for (const { start } of stale)
           if (!this.refreshed.includes(start)) this.refreshed.push(start)
+        keepReading(view)
         view.dispatch({
           effects: refreshCode.of(stale.map(({ from, to }) => ({ from, to }))),
         })
@@ -891,6 +896,7 @@ export function formattedSyntax(
         }),
       ),
       driver(syntax, options),
+      keepRead,
     ],
     tree: (state) => state.field(field).tree,
     parser: (state) => syntax.chunkedFor(state).full,

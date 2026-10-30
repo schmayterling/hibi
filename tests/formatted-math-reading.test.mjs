@@ -69,9 +69,11 @@ test('codemirror: formulas rendering on or above the reading line keep it in pla
       ['display', 'above'],
       ['inline', 'above'],
       ['inline', 'line'],
+      ['display', 'below'],
+      ['inline', 'below'],
     ])
       await t.test(
-        `${type} formulas ${where === 'line' ? 'on' : 'above'} the reading line${focused ? ', focused' : ''}`,
+        `${type} formulas ${where === 'line' ? 'on' : where} the reading line${focused ? ', focused' : ''}`,
         async () => {
           await page.evaluate(
             ({ type, focused }) => window.formulaReading.mount(type, focused),
@@ -87,12 +89,28 @@ test('codemirror: formulas rendering on or above the reading line keep it in pla
       )
   for (const focused of [false, true])
     await t.test(
+      `idle parsing keeps the reading line${focused ? ', focused' : ''}`,
+      async () => {
+        await page.evaluate(
+          (focused) => window.formulaReading.mount('display', focused, 128),
+          focused,
+        )
+        const moved = await page.evaluate(() => window.formulaReading.idle())
+        assert.ok(
+          moved < 1,
+          `idle parsing moved the reading line by ${moved}px`,
+        )
+      },
+    )
+  for (const focused of [false, true])
+    await t.test(
       `a very tall formula just before the reading line${focused ? ', focused' : ''}`,
       async () => {
         await page.evaluate(
           (focused) => window.formulaReading.mount('display', focused, 128),
           focused,
         )
+        assert.ok((await page.evaluate(() => window.formulaReading.idle())) < 1)
         const result = await page.evaluate(() =>
           window.formulaReading.fill('previous', 0, 16),
         )
@@ -100,6 +118,29 @@ test('codemirror: formulas rendering on or above the reading line keep it in pla
         assert.ok(Math.abs(result.moved) < 1, JSON.stringify(result))
       },
     )
+  for (const type of ['display', 'inline'])
+    await t.test(
+      `typing while ${type} formulas render keeps the reading line`,
+      async () => {
+        await page.evaluate(
+          (type) => window.formulaReading.mount(type, true),
+          type,
+        )
+        const result = await page.evaluate(() =>
+          window.formulaReading.fill('above', 0, 16, true),
+        )
+        assert.ok(result.filled > 0, JSON.stringify(result))
+        assert.ok(Math.abs(result.moved) < 1, JSON.stringify(result))
+      },
+    )
+  await t.test('a scroll command while formulas fill stands', async () => {
+    await page.evaluate(() => window.formulaReading.mount('display'))
+    const result = await page.evaluate(() =>
+      window.formulaReading.fill('above', 0, 2, false, true),
+    )
+    assert.ok(result.filled > 0, JSON.stringify(result))
+    assert.equal(result.landed, true, JSON.stringify(result))
+  })
   await t.test('scrolling after the formulas fill stands', async () => {
     await page.evaluate(() => window.formulaReading.mount('display'))
     const result = await page.evaluate(() =>

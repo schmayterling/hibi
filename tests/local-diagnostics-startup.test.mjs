@@ -33,12 +33,13 @@ async function profile() {
   return mkdtemp(resolve('.scratch/startup-'))
 }
 
-for (const [entry, kind] of [
+for (const [entry, kind, navigate = false] of [
   ['desktop-bridge', 'exception'],
   ['main', 'exception'],
   ['main', 'rejection'],
+  ['main', 'rejection', true],
 ]) {
-  test(`${entry} ${kind} before renderer entry retains navigation, resource and original error evidence locally`, {
+  test(`${entry} ${kind} before renderer entry retains navigation, resource and original error evidence locally${navigate ? ' across a later navigation' : ''}`, {
     timeout: 30000,
   }, async (t) => {
     const root = await profile()
@@ -70,6 +71,13 @@ for (const [entry, kind] of [
         protocol.unhandle('app')
         protocol.handle('app', async (request) => {
           const pathname = new URL(request.url).pathname
+          if (pathname === '/diagnostic-snapshot')
+            return new Response(
+              '<!doctype html><title>Startup evidence</title>',
+              {
+                headers: { 'Content-Type': 'text/html' },
+              },
+            )
           const file = path.join(
             app.getAppPath(),
             'out/renderer',
@@ -100,7 +108,12 @@ for (const [entry, kind] of [
     )
     const session = await page.context().newCDPSession(page)
     await session.send('Network.setCacheDisabled', { cacheDisabled: true })
+    await page.clearPageErrors()
+    const originalError = page.waitForEvent('pageerror', {
+      predicate: (error) => error.message.includes('PRIVATE_PRE_ENTRY'),
+    })
     await page.reload({ waitUntil: 'commit' })
+    await originalError
     await waitForAsync(
       { evaluate: async (fn) => fn() },
       async () => (await app.evaluate(() => globalThis.preEntryFaults)) === 1,
@@ -118,22 +131,32 @@ for (const [entry, kind] of [
     )
     const rows = await records(root)
     assert.ok(rows.some((row) => row.code === 'RENDERER_PRE_ENTRY'))
-    const snapshot = await startupDiagnostics(app, page)
-    assert.ok(snapshot.navigation, JSON.stringify(snapshot))
-    assert.ok(
-      snapshot.pageErrors.some((error) =>
-        error.stack?.includes(entry === 'desktop-bridge' ? 'index-' : 'main-'),
-      ),
-    )
-    assert.doesNotMatch(
-      JSON.stringify(rows),
-      /PRIVATE_PRE_ENTRY|startup-|\/Users\//,
-    )
     assert.equal(
       await page.evaluate(
         () => performance.getEntriesByName('hibi:renderer-entry').length,
       ),
       0,
+    )
+    if (navigate) {
+      await page.goto('app://hibi/diagnostic-snapshot')
+      assert.deepEqual(await page.pageErrors(), [])
+      assert.equal((await page.pageErrors({ filter: 'all' })).length, 1)
+      t.diagnostic('default pageErrors: 0; all: 1 after navigation')
+    }
+    const snapshot = await startupDiagnostics(app, page)
+    assert.ok(snapshot.navigation, JSON.stringify(snapshot))
+    assert.ok(
+      snapshot.pageErrors.some(
+        (error) =>
+          error.message.includes('PRIVATE_PRE_ENTRY') &&
+          error.stack?.includes(
+            entry === 'desktop-bridge' ? 'index-' : 'main-',
+          ),
+      ),
+    )
+    assert.doesNotMatch(
+      JSON.stringify(rows),
+      /PRIVATE_PRE_ENTRY|startup-|\/Users\//,
     )
   })
 }
@@ -314,7 +337,10 @@ test('ordinary quit waits for overdue sqlite close, preserves its active marker,
     threads.Worker.prototype.postMessage = function (message, ...args) {
       if (message.method === 'close') {
         globalThis.sqliteCloseCalls++
-        globalThis.releaseSqliteClose = () => send.call(this, message, ...args)
+        globalThis.releaseSqliteClose = () => {
+          threads.Worker.prototype.postMessage = send
+          send.call(this, message, ...args)
+        }
         return
       }
       return send.call(this, message, ...args)
@@ -376,13 +402,19 @@ test('ordinary quit waits for overdue sqlite close, preserves its active marker,
 })
 
 // The real worker keeps its database open; each close request reports failure.
+// Restoring lets closes through again but keeps counting them.
 function failSqliteClose() {
   const threads = process.getBuiltinModule('node:worker_threads')
   const send = threads.Worker.prototype.postMessage
   globalThis.sqliteCloseCalls = 0
+  let failing = true
+  globalThis.restoreSqliteClose = () => {
+    failing = false
+  }
   threads.Worker.prototype.postMessage = function (message, ...args) {
     if (message?.method !== 'close') return send.call(this, message, ...args)
     globalThis.sqliteCloseCalls++
+    if (!failing) return send.call(this, message, ...args)
     setImmediate(() =>
       this.emit('message', { seq: message.seq, error: 'PRIVATE_CLOSE_ERROR' }),
     )
@@ -464,7 +496,7 @@ test('a sqlite close that keeps failing is recorded and cannot keep Hibi from qu
   )
 })
 
-test('disabling the dictionary neither waits on nor fails with its sqlite close', {
+test('disabling the dictionary stays bounded and the next open recovers from failed sqlite close', {
   timeout: 30000,
 }, async (t) => {
   const root = await profile()
@@ -486,6 +518,22 @@ test('disabling the dictionary neither waits on nor fails with its sqlite close'
       window.hibi.invokeAddonProfile('dictionary', 'customWordsMetadata'),
     )
   await enabled()
+  await page.evaluate(async () => {
+    const call = (input) =>
+      window.hibi.invokeAddonProfile('dictionary', 'changeCustomWords', input)
+    const { revision } = await window.hibi.invokeAddonProfile(
+      'dictionary',
+      'customWordsMetadata',
+    )
+    const { token } = await call({ type: 'begin', revision })
+    await call({
+      type: 'stage',
+      token,
+      upsert: [{ id: 'kept', word: 'durable' }],
+      remove: [],
+    })
+    await call({ type: 'commit', token })
+  })
   await app.evaluate(() => {
     const threads = process.getBuiltinModule('node:worker_threads')
     const send = threads.Worker.prototype.postMessage
@@ -493,7 +541,10 @@ test('disabling the dictionary neither waits on nor fails with its sqlite close'
     threads.Worker.prototype.postMessage = function (message, ...args) {
       if (message?.method !== 'close') return send.call(this, message, ...args)
       globalThis.sqliteCloseCalls++
-      globalThis.releaseSqliteClose = () => send.call(this, message, ...args)
+      globalThis.releaseSqliteClose = () => {
+        threads.Worker.prototype.postMessage = send
+        send.call(this, message, ...args)
+      }
     }
   })
   const toggle = (enabled) =>
@@ -520,7 +571,7 @@ test('disabling the dictionary neither waits on nor fails with its sqlite close'
   await toggle(true)
   const reopened = enabled()
   await app.evaluate(() => globalThis.releaseSqliteClose())
-  assert.equal((await reopened).count, 0)
+  assert.equal((await reopened).count, 1)
   await waitForAsync(
     { evaluate: async (fn) => fn() },
     async () =>
@@ -533,6 +584,36 @@ test('disabling the dictionary neither waits on nor fails with its sqlite close'
   assert.equal(
     failed.find((state) => state.id === 'dictionary')?.enabled,
     false,
+  )
+  assert.equal(await app.evaluate(() => globalThis.sqliteCloseCalls), 1)
+  await toggle(true)
+  // Request waves after a failed close share one bounded retry schedule
+  // (one second, doubling): five waves cannot send five more closes.
+  for (let wave = 0; wave < 5; wave++)
+    await assert.rejects(enabled(), /PRIVATE_CLOSE_ERROR/)
+  const attempts = await app.evaluate(() => globalThis.sqliteCloseCalls)
+  assert.ok(
+    attempts <= 3,
+    `${attempts} close attempts after five request waves`,
+  )
+  await app.evaluate(() => globalThis.restoreSqliteClose())
+  // Once the window passes one retry succeeds; waiting requests send no more.
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () => (await enabled().catch(() => null))?.count === 1,
+    undefined,
+    { timeout: 10000 },
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.sqliteCloseCalls),
+    attempts + 1,
+  )
+  const { words } = await page.evaluate(() =>
+    window.hibi.invokeAddonProfile('dictionary', 'customWords', {}),
+  )
+  assert.deepEqual(
+    words.map((word) => word.word),
+    ['durable'],
   )
 })
 

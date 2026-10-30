@@ -417,6 +417,31 @@ test('source and rich outline labels keep heading formulas as their LaTeX and as
   assert.equal(plain.parts, undefined)
 })
 
+test('source outline labels preserve mid-line display math in atx and setext headings', () => {
+  const source = '# Before $$f(x)$$ after\n\nSetext $$g(x)$$\n---\n'
+  const { model } = setup(source, { math: true })
+  try {
+    const headings = finish(model.read(), referenceOracle(source))
+    assert.deepEqual(
+      headings.map(({ label, parts, level }) => ({ label, parts, level })),
+      [
+        {
+          label: 'Before f(x) after',
+          parts: ['Before ', { latex: 'f(x)' }, ' after'],
+          level: 1,
+        },
+        {
+          label: 'Setext g(x)',
+          parts: ['Setext ', { latex: 'g(x)' }],
+          level: 2,
+        },
+      ],
+    )
+  } finally {
+    model.dispose()
+  }
+})
+
 test('large math outlines retain label parts and reuse them across body edits', () => {
   const count = 1200
   const source = Array.from(

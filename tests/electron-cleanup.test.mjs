@@ -265,6 +265,9 @@ async function snapshotFixture(t, ps, lsof) {
       await writeFile(join(root, name), `#!${process.execPath}\n${body}\n`, {
         mode: 0o700,
       })
+  // Extensionless fakes must stay CommonJS when TMPDIR sits inside a
+  // "type": "module" package, such as a checkout's .scratch directory.
+  await writeFile(join(root, 'package.json'), '{"type":"commonjs"}')
   process.env.PATH = root
   const messages = []
   t.mock.method(console, 'error', (...args) => messages.push(args.join(' ')))
@@ -390,6 +393,37 @@ test('a stuck snapshot command is killed after two seconds', {
   assert.match(fixture.messages.at(-1), /snapshot unavailable/)
   const pid = Number(await readFile(join(fixture.root, 'ps.pid'), 'utf8'))
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' })
+})
+
+test('fake snapshot commands stay CommonJS inside a "type": "module" TMPDIR', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const scope = await mkdtemp(join(tmpdir(), 'hibi-module-scope-'))
+  await writeFile(join(scope, 'package.json'), '{"type":"module"}')
+  const previous = process.env.TMPDIR
+  process.env.TMPDIR = scope
+  t.after(async () => {
+    if (previous === undefined) delete process.env.TMPDIR
+    else process.env.TMPDIR = previous
+    await rm(scope, { recursive: true, force: true })
+  })
+  const fixture = await snapshotFixture(
+    t,
+    "console.log(process.argv.at(-1) === 'pid=,ppid=,pgid=' ? '42 1 42' : '42 1 42 00:01 electron')",
+    `require('node:fs').writeFileSync(__filename + '.args', JSON.stringify(process.argv.slice(2)))
+console.log('COMMAND PID USER FD TYPE NAME')
+console.log('held 42 x 1w PIPE inherited-output')`,
+  )
+  assert.ok(fixture.root.startsWith(scope))
+  await snapshotElectronProcesses(42)
+  assert.match(fixture.messages[1], /PIPE inherited-output/)
+  assert.deepEqual(
+    JSON.parse(await readFile(join(fixture.root, 'lsof.args'), 'utf8')).slice(
+      0,
+      3,
+    ),
+    ['-nP', '-a', '-p'],
+  )
 })
 
 test('only diagnostic lines are relayed from Electron stderr, including split chunks', async (t) => {

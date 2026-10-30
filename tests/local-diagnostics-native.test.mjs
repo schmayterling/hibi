@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
+import { diagnosticEvents } from '../src/shared/local-diagnostics.ts'
 import { electron, stopElectronTree } from './electron.mjs'
 
 async function launchFixture(t) {
@@ -123,6 +124,44 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
     // This profile cannot be removed until Playwright has closed its transport.
     await restarted.close({ waitForTransport: true })
   }
+})
+
+test('aborted navigation is informational while real load failure remains critical', async (t) => {
+  const { app } = await launchFixture(t)
+  const { text } = await app.evaluate(async ({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents
+    contents.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'app://hibi/', true)
+    contents.emit(
+      'did-fail-load',
+      {},
+      -105,
+      'ERR_NAME_NOT_RESOLVED',
+      'https://PRIVATE_URL/',
+      true,
+    )
+    contents.emit(
+      'did-fail-load',
+      {},
+      -105,
+      'ERR_NAME_NOT_RESOLVED',
+      'https://PRIVATE_SUBFRAME/',
+      false,
+    )
+    return globalThis.diagnosticFixture.report()
+  })
+  const rows = text
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  const aborted = rows.filter((row) => row.code === 'NAVIGATION_ABORTED')
+  const failed = rows.filter((row) => row.code === 'NAVIGATION_FAILED')
+  assert.equal(aborted.length, 1)
+  assert.equal(aborted[0].severity, 'info')
+  assert.equal(diagnosticEvents.NAVIGATION_ABORTED.critical, false)
+  assert.equal(failed.length, 1)
+  assert.equal(failed[0].severity, 'error')
+  assert.equal(diagnosticEvents.NAVIGATION_FAILED.critical, true)
+  assert.doesNotMatch(text, /PRIVATE_|ERR_ABORTED|ERR_NAME_NOT_RESOLVED/)
 })
 
 test('main-loop sampling stops while hidden, minimized, suspended or failed', {

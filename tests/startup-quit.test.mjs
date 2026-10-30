@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -102,9 +102,26 @@ async function launch(t, env = {}) {
     app,
     child,
     closed,
+    profile,
     modals: () => records(modals),
     failures: () => records(failures),
   }
+}
+
+async function diagnosticCodes(profile) {
+  const directory = join(profile, 'logs/debug')
+  const segments = (await readdir(directory)).filter((name) =>
+    /^segment-\d\.log$/.test(name),
+  )
+  return (
+    await Promise.all(
+      segments.map((name) => readFile(join(directory, name), 'utf8')),
+    )
+  )
+    .join('\n')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line).code)
 }
 
 async function deadline(pending, label) {
@@ -231,4 +248,7 @@ test('a genuine startup navigation failure still shows the existing error', {
     },
   ])
   assert.equal((await fixture.failures())[0].context, 'failed to load app:')
+  // The local log must call this fatal exit critical whatever the load error code.
+  const codes = await diagnosticCodes(fixture.profile)
+  assert.ok(codes.includes('MAIN_STARTUP_FAILED'), codes.join(' '))
 })

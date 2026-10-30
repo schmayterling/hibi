@@ -607,16 +607,8 @@ test('codemirror: a disk edit that drops the open callout leaves the next one fo
   assert.equal(await pane.getByText('second body', { exact: true }).count(), 0)
 })
 
-test('codemirror: a note that ends in a folded callout opens with it folded', {
-  timeout: 120000,
-}, async (t) => {
-  const markdown = [
-    'Before paragraph.',
-    '',
-    '> [!note]- Closed title',
-    '> hidden alpha body.',
-    '',
-  ].join('\n')
+/** Opens `markdown`, which ends in a callout folded under "Closed title". */
+async function opensFolded(t, markdown) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-fold-'))
   await mkdir(join(folder, 'notes'))
   const file = join(folder, 'notes', 'folds.md')
@@ -638,8 +630,8 @@ test('codemirror: a note that ends in a folded callout opens with it folded', {
   const pane = page.locator('.rich-pane')
   const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
   await closed.waitFor()
-  // The open caret lands at the end of the last text, the title's, not at
-  // the hidden body's end.
+  // The open caret lands at the end of the outermost folded title, not at
+  // the hidden body's end nor at an inner title that fold hides.
   const titleEnd = markdown.indexOf('Closed title') + 'Closed title'.length
   await waitForAsync(
     page,
@@ -653,7 +645,50 @@ test('codemirror: a note that ends in a folded callout opens with it folded', {
     await pane.getByText('hidden alpha body.', { exact: true }).count(),
     0,
   )
-})
+  assert.equal(
+    await pane.getByRole('button', { name: /callout: Inner title$/ }).count(),
+    0,
+  )
+}
+
+test(
+  'codemirror: a note that ends in a folded callout opens with it folded',
+  {
+    timeout: 120000,
+  },
+  (t) =>
+    opensFolded(
+      t,
+      [
+        'Before paragraph.',
+        '',
+        '> [!note]- Closed title',
+        '> hidden alpha body.',
+        '',
+      ].join('\n'),
+    ),
+)
+
+test(
+  'codemirror: a note that ends in nested folded callouts opens with them folded',
+  {
+    timeout: 120000,
+  },
+  (t) =>
+    opensFolded(
+      t,
+      [
+        'Before paragraph.',
+        '',
+        '> [!note]- Closed title',
+        '> outer body.',
+        '>',
+        '> > [!tip]- Inner title',
+        '> > hidden alpha body.',
+        '',
+      ].join('\n'),
+    ),
+)
 
 test('codemirror: a closed tab releases its remembered folds and text', {
   timeout: 240000,

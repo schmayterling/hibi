@@ -20,6 +20,67 @@ import {
 import { waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 
+it('enabled math rechecks notes containing only mid-line display math', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-midline-detection-'))
+  await writeFile(join(profile, 'addons.json'), JSON.stringify({ math: false }))
+  const file = join(profile, 'midline.md')
+  await writeFile(file, '# Sample\n\nOnly $$x^2$$ appears in this note.\n')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  const status = page
+    .locator('[data-status-id="flavor"]')
+    .filter({ hasText: /math/i })
+  assert.equal(await status.count(), 0)
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+k' : 'Control+k',
+  )
+  const search = page.getByRole('combobox', { name: 'Search commands' })
+  await search.fill('enable latex')
+  await page.getByRole('option').first().waitFor()
+  await search.press('Enter')
+  await page
+    .getByRole('dialog', { name: /command palette/i })
+    .waitFor({ state: 'hidden' })
+  await status.waitFor({ timeout: 10000 })
+  if (t.formattedEngine === 'codemirror')
+    await page.locator('.rich-pane .katex-display').waitFor()
+  // Detection still ignores double-dollar text in code and escaped delimiters.
+  const source = page.getByRole('textbox', {
+    name: 'Markdown editor',
+    exact: true,
+  })
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+Shift+]' : 'Control+Shift+]',
+  )
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  for (const literal of ['`$$x$$`', '\\$$x$$', '```tex\n$$x$$\n```']) {
+    await replaceSourceText(page, source, `# Sample\n\n${literal}\n`)
+    await page
+      .locator('[data-status-id="flavor"]')
+      .filter({ hasText: /math/i })
+      .waitFor({ state: 'hidden' })
+  }
+})
+
 test('math detection respects code, escaped delimiters, and currency spacing', () => {
   for (const source of ['$x^2$', '$$\nx^2\n$$', '$2+2$'])
     assert.equal(mathFlavor.detect(source), true)
@@ -131,26 +192,47 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
   await choose('enable latex')
   // Enabling a flavor does not parse the hidden rich document in source view.
   await pressShortcut(app, `${mod}+Shift+[`)
+  // The formatted view draws `$$…$$` inside a line as display math, as
+  // Obsidian does; the rich editor keeps it as text (accepted difference math-001).
+  const formulas = cm ? 4 : 2
   await page.waitForFunction(
-    () =>
+    (formulas) =>
       document.querySelectorAll(
         '.rich-pane [aria-label="Document editor"] .katex',
-      ).length === 2,
+      ).length === formulas,
+    formulas,
   )
   assert.equal(
     await page
       .locator('.rich-pane [aria-label="Document editor"] .katex-display')
       .count(),
-    1,
+    cm ? 3 : 1,
   )
-  for (const text of ['text $$x$$', 'text $$x$$ more'])
-    assert.equal(
+  if (cm)
+    assert.deepEqual(
       await page
-        .locator('.rich-pane [aria-label="Document editor"] :is(p, .cm-line)')
-        .getByText(text, { exact: true })
-        .textContent(),
-      text,
+        .locator('.rich-pane .cm-line:has([data-latex="x"] .katex-display)')
+        .evaluateAll((lines) =>
+          lines.map((line) =>
+            [...line.childNodes]
+              .filter((node) => node.nodeType === Node.TEXT_NODE)
+              .map((node) => node.textContent)
+              .join('')
+              .replace(/\s+/g, ' ')
+              .trim(),
+          ),
+        ),
+      ['text', 'text more'],
     )
+  else
+    for (const text of ['text $$x$$', 'text $$x$$ more'])
+      assert.equal(
+        await page
+          .locator('.rich-pane [aria-label="Document editor"] p')
+          .getByText(text, { exact: true })
+          .textContent(),
+        text,
+      )
   assert.equal(
     await page.locator('[data-type="inline-math"] .katex-display').count(),
     0,
@@ -259,7 +341,7 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
     if (/^https?:/.test(request.url())) external.push(request.url())
   })
   await site.locator('.katex').first().waitFor()
-  assert.equal(await site.locator('.katex').count(), 2)
+  assert.equal(await site.locator('.katex').count(), 4)
   assert.ok(
     await site.evaluate(
       async () =>
@@ -314,10 +396,11 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
   await choose('automatically detect markdown flavor')
   try {
     await page.waitForFunction(
-      () =>
+      (formulas) =>
         document.querySelectorAll(
           '.rich-pane [aria-label="Document editor"] .katex',
-        ).length === 2,
+        ).length === formulas,
+      formulas,
     )
   } catch (error) {
     const state = await page.evaluate(async () => ({
@@ -362,6 +445,8 @@ it('math source bytes survive source and visual view round trips and saving', {
   })
   const page = await app.firstWindow()
   const cm = t.formattedEngine === 'codemirror'
+  // Three blocks, and in the formatted view the two `$$x$$` inside lines (math-001).
+  const displays = cm ? 5 : 3
   if (cm) {
     await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
@@ -381,10 +466,11 @@ it('math source bytes survive source and visual view round trips and saving', {
     .getByRole('dialog', { name: /command palette/i })
     .waitFor({ state: 'hidden' })
   await page.waitForFunction(
-    () =>
+    (displays) =>
       document.querySelectorAll(
         '.rich-pane [aria-label="Document editor"] .katex-display',
-      ).length === 3,
+      ).length === displays,
+    displays,
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -395,10 +481,11 @@ it('math source bytes survive source and visual view round trips and saving', {
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(
-    () =>
+    (displays) =>
       document.querySelectorAll(
         '.rich-pane [aria-label="Document editor"] .katex-display',
-      ).length === 3,
+      ).length === displays,
+    displays,
   )
   assert.equal(
     await rich.getByText('$$x$$', { exact: true }).textContent(),
@@ -422,8 +509,7 @@ it('math source bytes survive source and visual view round trips and saving', {
 
   if (cm)
     await rich
-      .locator('[data-type="block-math"]')
-      .first()
+      .locator('[data-type="block-math"][data-latex="z"]')
       .getByRole('button', { name: 'Edit equation', exact: true })
       .click()
   else await rich.locator('[data-type="block-math"]').first().click()
@@ -444,10 +530,11 @@ it('math source bytes survive source and visual view round trips and saving', {
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(
-    () =>
+    (displays) =>
       document.querySelectorAll(
         '.rich-pane [aria-label="Document editor"] .katex-display',
-      ).length === 3,
+      ).length === displays,
+    displays,
   )
   assert.equal(
     await rich.getByText('$$x$$', { exact: true }).textContent(),

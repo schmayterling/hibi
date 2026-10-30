@@ -10,12 +10,12 @@ import { DocumentSession } from '../src/shared/document-session.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceTransferSender } from '../src/shared/source-transfer.ts'
 
-function fixture(current, baseline = current) {
+function fixture(current, baseline = current, streamId = 'stream') {
   const head = {
     tabId: 'one',
     revision: 1,
     contentVersion: 7,
-    streamId: 'stream',
+    streamId,
     length: current.length + (baseline === current ? 0 : baseline.length),
   }
   const chunks = function* () {
@@ -133,6 +133,64 @@ test('bridge initialization keeps transfer controls private before hydration', a
     assert.equal(native[name](), name)
   }
 })
+
+test('a delayed open reply can reuse a stream already consumed by a document read', async () => {
+  const f = fixture('reopened source')
+  let release
+  f.native.openDocument = () =>
+    new Promise((resolve) => {
+      release = () => resolve(f.wire)
+    })
+  const fresh = fixture('reopened source', 'reopened source', 'fresh')
+  let requests = 0
+  f.native.openDocumentTransfer = async (tabId) => {
+    assert.equal(tabId, 'one')
+    requests++
+    return fresh.wire
+  }
+  for (const name of [
+    'readDocumentTransfer',
+    'finishDocumentTransfer',
+    'abortDocumentTransfer',
+  ]) {
+    const original = f.native[name]
+    f.native[name] = (request) =>
+      request.streamId === 'fresh'
+        ? fresh.native[name](request)
+        : original(request)
+  }
+  const api = f.api
+  const opening = api.openDocument()
+  const observed = await api.getDocument()
+  assert.equal(observed.markdown, 'reopened source')
+  release()
+  const opened = await opening
+  assert.equal(opened.markdown, observed.markdown)
+  assert.equal(requests, 1)
+  assert.equal(fresh.state().finished, true)
+})
+
+for (const key of ['tabId', 'sourceId', 'revision', 'contentVersion'])
+  test(`a late transfer cannot replace a changed ${key}`, async () => {
+    const f = fixture('original source')
+    f.native.openDocument = async () => f.wire
+    const current = {
+      ...f.wire,
+      [key]: key === 'revision' || key === 'contentVersion' ? 99 : 'changed',
+    }
+    let requests = 0
+    f.native.openDocumentTransfer = async () => {
+      requests++
+      return current
+    }
+    const api = f.api
+    await api.getDocument()
+    await assert.rejects(
+      api.openDocument(),
+      /transfer is stale or out of order/,
+    )
+    assert.equal(requests, 1)
+  })
 
 test('deferred transfer loading retains the received metadata before yielding', async () => {
   const f = fixture('captured transfer\r\n😀')

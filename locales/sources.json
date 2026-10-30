@@ -2091,6 +2091,9 @@
   "5bdda38a810d": [
     "src/shared/source-projection.ts"
   ],
+  "d59e76c53c5a": [
+    "src/renderer/src/SettingsScreen.tsx"
+  ],
   "2d65a6a59c86": [
     "src/renderer/src/addons.ts"
   ],
@@ -2152,7 +2155,7 @@
   "a42f7d67e1fe": [
     "src/addons/ui-preview/index.tsx"
   ],
-  "10c5f48ececb": [
+  "72a573fdfb01": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "3809a20d54e6": [
@@ -2336,8 +2339,7 @@
     "src/renderer/src/markdown-serialization.ts"
   ],
   "3dc9f569422d": [
-    "src/addons/vim/Settings.tsx",
-    "src/renderer/src/SettingsScreen.tsx"
+    "src/addons/vim/Settings.tsx"
   ],
   "3664895579f0": [
     "src/addons/_shared/format-renderer.tsx",

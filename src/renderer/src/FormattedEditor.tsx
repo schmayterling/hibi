@@ -32,7 +32,7 @@ import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
 import type { OutlineHeading } from './OutlineSidebar'
-import { SourceEditor, sourceAfter } from './SourceEditor'
+import { SourceEditor, sourceAfter, sourceCurrent } from './SourceEditor'
 import { editorPosition, revealSourcePosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
 import { useSourceOutline } from './use-source-outline'
@@ -414,8 +414,13 @@ export function MarkdownEditor({
     if (!view) return
     measureHeadings.current = () => {
       const current = sourceOutline.outline()
+      // Edits made while the view is hidden reach it when it is shown.
       if (current?.headings.length === outline.current.headings.length)
-        headingList.current?.measure(view, current)
+        headingList.current?.measure(
+          view,
+          current,
+          () => sourceOutline.outline() === current && sourceCurrent(view),
+        )
     }
     const observer = new MutationObserver(() => measureHeadings.current())
     observer.observe(view.contentDOM, { childList: true })

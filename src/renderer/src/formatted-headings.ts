@@ -51,6 +51,7 @@ export class FormattedHeadingList {
     view: EditorView
     outline: SourceOutline
     doc: EditorView['state']['doc']
+    current: () => boolean
   } | null = null
   private work: Generator<void> | null = null
   private channel: MessageChannel | null = null
@@ -93,8 +94,9 @@ export class FormattedHeadingList {
     this.schedule()
   }
 
-  measure(view: EditorView, outline: SourceOutline) {
-    this.measurement = { view, outline, doc: view.state.doc }
+  /** Places entries by `outline` while `current` says the view shows its source. */
+  measure(view: EditorView, outline: SourceOutline, current: () => boolean) {
+    this.measurement = { view, outline, doc: view.state.doc, current }
     this.schedule()
   }
 
@@ -147,13 +149,18 @@ export class FormattedHeadingList {
         continue
       }
       const measured = this.measurement
-      // An edit invalidates source positions until the next outline read.
+      // An edit invalidates source positions until the next outline read. A
+      // hidden view is behind that read until it is shown, and mapping a
+      // position would bring it up to date in the middle of measuring it.
+      // Until the view can be measured, entries keep their places.
       if (
         measured &&
         measured.doc === measured.view.state.doc &&
+        measured.current() &&
         measured.view.contentDOM.isConnected
       )
         this.target = this.drawn(measured.view, measured.outline)
+      else if (measured) this.target = [this.from, this.to]
       const [from, to] = this.target
       if (from === this.from && to === this.to) return
       yield* this.placeDrawn(from, to)

@@ -201,6 +201,33 @@ test('every heading of a long formatted note reaches assistive technology once, 
   )
   assert.deepEqual(reconciled, expected)
 
+  // The hidden formatted view is behind edits made in source view until it
+  // is shown. Entries placed meanwhile must not mix its text with the newer
+  // outline: here the note shrinks above the drawn lines.
+  await page
+    .locator('.formatted-headings a', { hasText: /^heading 151$/ })
+    .evaluate((link) => link.click())
+  await page.waitForFunction(() =>
+    [
+      ...document.querySelectorAll('.rich-pane .cm-content > [role="heading"]'),
+    ].some((heading) => heading.textContent === 'heading 151'),
+  )
+  await page.getByRole('button', { name: /^source view$/i }).click()
+  await page
+    .getByRole('textbox', { name: 'Markdown editor', exact: true })
+    .waitFor()
+  const shrunk = await page.evaluate((to) => {
+    document
+      .querySelector('.source-pane .cm-content')
+      .cmTile.root.view.dispatch({ changes: { from: 0, to } })
+    return window.outlineReads
+  }, text.indexOf('## heading 1'))
+  await waitForAsync(page, (reads) => window.outlineReads > reads, shrunk)
+  await page.waitForFunction(() => !window.headingWork.pending)
+  await page.getByRole('button', { name: 'normal', exact: true }).click()
+  await headingCount(page, 200, { timeout: 15000 })
+  assert.deepEqual(await headings(), expected.slice(1))
+
   // Without a screen reader or the sidebar, the outline and its entries stop.
   await app.evaluate(({ app }) => app.setAccessibilitySupportEnabled(false))
   await page.waitForFunction(

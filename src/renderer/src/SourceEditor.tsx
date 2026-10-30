@@ -192,6 +192,9 @@ const bridges = new WeakMap<
 /** The whole source after editor changes, exactly as the mounted view commits them. */
 export const sourceAfter = (view: EditorView, changes: readonly RawEdit[]) =>
   bridges.get(view)?.sourceAfter(changes) ?? null
+/** Whether the mounted view shows its session's source, without bringing a hidden view up to date. */
+export const sourceCurrent = (view: EditorView) =>
+  bridges.get(view)?.isCurrent() ?? false
 
 /** The line at a view's top, and where its block starts relative to the top. */
 function placeOf(view: EditorView) {

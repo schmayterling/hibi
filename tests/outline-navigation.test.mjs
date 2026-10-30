@@ -248,6 +248,9 @@ test('source outline resolves references through its worker and preserves native
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  // Any renderer error fails the test, also one that work after an edit throws.
+  const errors = []
+  page.on('pageerror', (error) => errors.push(error.stack ?? String(error)))
   page.setDefaultTimeout(7000)
   await selectFormattedEngine(app, page, t.formattedEngine)
   const cm = t.formattedEngine === 'codemirror'
@@ -449,4 +452,5 @@ test('source outline resolves references through its worker and preserves native
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     original,
   )
+  assert.deepEqual(errors, [])
 })

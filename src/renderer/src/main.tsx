@@ -19,6 +19,7 @@ import type {
   DocumentCommand,
   DocumentState,
 } from '../../shared/desktop'
+import { errorMessage } from '../../shared/errors'
 import type {
   CommandExecutionContext,
   FileId,
@@ -246,8 +247,9 @@ function App() {
   const setError = useCallback(
     (message: string) => {
       errorNotice.current?.dismiss()
+      // Main-process failures arrive wrapped in Electron's IPC error text.
       errorNotice.current = message
-        ? toasts.show({ message, variant: 'error' })
+        ? toasts.show({ message: errorMessage(message), variant: 'error' })
         : null
     },
     [toasts],

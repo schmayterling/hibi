@@ -111,9 +111,7 @@ export function useSourceOutline({
       },
       (error) => {
         if (stopped) return
-        onOutlineUnavailable?.(
-          'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
-        )
+        onOutlineUnavailable?.('The outline could not read this note’s syntax.')
         console.error('Source outline failed:', error)
       },
     )
@@ -139,7 +137,7 @@ export function useSourceOutline({
         onOutlineUnavailable?.(
           grammar.blocked.length
             ? blockedOutline(grammar.blocked)
-            : 'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
+            : 'The outline could not read this note’s syntax.',
         )
         return () => {}
       }
@@ -226,9 +224,7 @@ export function useSourceOutline({
         sourceOutline.current = null
         onOutline([])
         onActiveOutline(null)
-        onOutlineUnavailable?.(
-          'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
-        )
+        onOutlineUnavailable?.('The outline could not read this note’s syntax.')
         console.error('Source outline failed:', error)
       }
       const read = () => {

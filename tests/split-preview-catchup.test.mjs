@@ -76,7 +76,7 @@ test('read-only split preview preserves catch-up, save, selection and normal-vie
     name: 'Markdown editor',
     exact: true,
   })
-  await rich.waitFor()
+  await selectFormattedEngine(app, page, 'tiptap')
   await page.waitForFunction(() => window.splitFixture)
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })

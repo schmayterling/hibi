@@ -39,12 +39,11 @@ for (const engine of ['tiptap', 'codemirror'])
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await waitForDocumentEditor(app, page, {
-      name: engine === 'codemirror' ? 'Markdown editor' : 'Document editor',
-    })
-    if (engine === 'codemirror') {
+    // The default CodeMirror view opens even the large note in Normal view.
+    await waitForDocumentEditor(app, page)
+    if (engine === 'tiptap') {
       await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+        localStorage.setItem('hibi:formatted-engine', 'tiptap'),
       )
       await page.reload()
       await waitForDocumentEditor(app, page)

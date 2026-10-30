@@ -61,7 +61,9 @@ test('rendered worker projection agrees with actual unrevealed formatted DOM', {
       return post.call(this, message, ...rest)
     }
   })
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await selectFormattedEngine(app, page, 'codemirror', {
+    reload: true,
+  })
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(

@@ -1,13 +1,16 @@
 import { lazy } from 'react'
+import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import css from '../_shared/format-style.css?inline'
 import { localPreview, localRender } from '../_shared/local-preview'
 import { defineAddon } from '../api'
-import { mermaidNode } from './Block'
 import { Diagram, editMermaidSource, MermaidBlockContent } from './BlockContent'
 import manifest from './manifest'
 import { getPreferences, settingsEvent } from './preferences'
 import { diagramTheme, renderDiagram } from './render'
+
+// The Tiptap editor loads only when it is the selected engine.
+const rich = codemirrorFormattedView ? undefined : await import('./Block')
 
 const theme = diagramTheme((role) => `var(--${role})`)
 const previewCss = () => {
@@ -109,7 +112,7 @@ export default defineAddon({
       readOnlyWhenDisabled: false,
       serialization: 'block-local',
       detect: (source) => /^ {0,3}(?:`{3,}|~{3,})mermaid\s*$/im.test(source),
-      richExtensions: [mermaidNode(context)],
+      richExtensions: rich ? [rich.mermaidNode(context)] : [],
       export: {
         async transform(rendered, _source, _documentId, options) {
           if (!context.editor.isSyntaxEnabled('blocks')) return rendered

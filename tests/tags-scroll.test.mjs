@@ -59,7 +59,7 @@ test('tags do not scan whole Markdown source when source editor scrolls', {
   await pressShortcut(app, `${mod}+Shift+]`)
   await page
     .locator(
-      '.editor-panes.mode-markdown[data-source-ready="true"] .cm-content[contenteditable="true"]',
+      '.editor-panes.mode-markdown[data-source-ready="true"] .cm-content[contenteditable="true"][aria-label="Markdown editor"]',
     )
     .waitFor()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -93,7 +93,10 @@ test('tags do not scan whole Markdown source when source editor scrolls', {
   await page.evaluate(() => {
     window.tagPerf.scans = 0
     window.tagPerf.posts = 0
-    const scroller = document.querySelector('.cm-scroller')
+    // The formatted view is a CodeMirror editor too; scroll the source editor.
+    const scroller = document
+      .querySelector('.cm-content[aria-label="Markdown editor"]')
+      .closest('.cm-scroller')
     scroller.scrollTop = scroller.scrollHeight
   })
   await source.locator('.hibi-tag[data-tag="last"]').waitFor()

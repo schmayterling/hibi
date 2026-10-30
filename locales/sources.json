@@ -509,7 +509,7 @@
   ],
   "b4276963bf99": [
     "src/addons/block-drag/formatted.ts",
-    "src/addons/block-drag/index.ts"
+    "src/addons/block-drag/rich.ts"
   ],
   "a936b1f4cf9c": [
     "src/addons/block-drag/hibi-addon.json"
@@ -2097,6 +2097,9 @@
   "5bdda38a810d": [
     "src/shared/source-projection.ts"
   ],
+  "d59e76c53c5a": [
+    "src/renderer/src/SettingsScreen.tsx"
+  ],
   "2d65a6a59c86": [
     "src/renderer/src/addons.ts"
   ],
@@ -2158,7 +2161,7 @@
   "a42f7d67e1fe": [
     "src/addons/ui-preview/index.tsx"
   ],
-  "10c5f48ececb": [
+  "72a573fdfb01": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "3809a20d54e6": [
@@ -2342,8 +2345,7 @@
     "src/renderer/src/markdown-serialization.ts"
   ],
   "3dc9f569422d": [
-    "src/addons/vim/Settings.tsx",
-    "src/renderer/src/SettingsScreen.tsx"
+    "src/addons/vim/Settings.tsx"
   ],
   "3664895579f0": [
     "src/addons/_shared/format-renderer.tsx",
@@ -3716,11 +3718,13 @@
   ],
   "df6c593c35d7": [
     "src/addons/block-drag/formatted.ts",
-    "src/addons/block-drag/index.ts"
+    "src/addons/block-drag/index.ts",
+    "src/addons/block-drag/rich.ts"
   ],
   "cc6fc79ab665": [
     "src/addons/block-drag/formatted.ts",
-    "src/addons/block-drag/index.ts"
+    "src/addons/block-drag/index.ts",
+    "src/addons/block-drag/rich.ts"
   ],
   "9adcdf33dce1": [
     "src/renderer/src/WorkspacesSidebar.tsx"

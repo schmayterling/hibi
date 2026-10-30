@@ -284,7 +284,9 @@ async function openFind(
         return post.call(this, message, ...rest)
       }
     }, markdown.replace(/\r\n?/g, '\n').length)
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await selectFormattedEngine(app, page, 'codemirror', {
+    reload: instrument || renderedProbe,
+  })
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   const source = page.getByRole('textbox', {

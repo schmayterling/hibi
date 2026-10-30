@@ -69,9 +69,9 @@ for (const engine of ['default', 'codemirror']) {
     const errors = []
     page.on('pageerror', (error) => errors.push(error.message))
     await waitForDocumentEditor(app, page)
-    if (engine === 'codemirror') {
+    if (engine === 'tiptap') {
       await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+        localStorage.setItem('hibi:formatted-engine', 'tiptap'),
       )
     }
     // Opening a note clears the current error toast. Retain startup attribution.

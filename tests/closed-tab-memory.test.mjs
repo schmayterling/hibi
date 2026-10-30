@@ -56,8 +56,8 @@ test('closing a large note releases its source and editor from the renderer heap
   }
   await open('small.md')
   const before = await heap()
-  // A note this large opens in the source editor.
-  await open('large.md', { name: 'Markdown editor', timeout: 120000 })
+  // The formatted view opens even a note this large.
+  await open('large.md', { timeout: 120000 })
   assert.ok((await heap()) - before > size, 'the large note is loaded')
   const count = await tabs()
   await clickMenu(app, 'Close tab')
@@ -104,11 +104,8 @@ test('closing a large startup note releases it, though early renders still hold 
     if (/StaleDocumentError|This tab is closed/.test(message.text()))
       stale.push(message.text())
   })
-  // A note this large opens in the source editor.
-  await waitForDocumentEditor(app, page, {
-    name: 'Markdown editor',
-    timeout: 120000,
-  })
+  // The formatted view opens even a note this large.
+  await waitForDocumentEditor(app, page, { timeout: 120000 })
   await app.evaluate(
     ({ dialog }, file) => {
       dialog.showOpenDialog = async () => ({

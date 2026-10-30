@@ -7,7 +7,16 @@ import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('experimental editor setting preserves pending edits and switches both engines', {
+const formatted = '.rich-pane .hibi-formatted .cm-content'
+const toggleName = { name: 'Enable exotic butter', exact: true }
+
+async function openSettings(app, page) {
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Editor', exact: true }).click()
+  await page.getByRole('checkbox', toggleName).scrollIntoViewIfNeeded()
+}
+
+test('editor engine setting preserves pending edits and switches both engines', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-engine-settings-'))
@@ -34,15 +43,8 @@ test('experimental editor setting preserves pending edits and switches both engi
       name: 'Document editor',
       exact: true,
     })
-  const toggle = page.getByRole('checkbox', {
-    name: 'Enable exotic butter (experimental)',
-    exact: true,
-  })
-  const settings = async () => {
-    await clickMenu(app, 'Settings')
-    await page.getByRole('tab', { name: 'Editor', exact: true }).click()
-    await toggle.scrollIntoViewIfNeeded()
-  }
+  const toggle = page.getByRole('checkbox', toggleName)
+  const settings = () => openSettings(app, page)
   const back = async () => {
     await page.getByRole('button', { name: 'Back to app', exact: true }).click()
     await page.locator('.settings-screen').waitFor({ state: 'hidden' })
@@ -57,16 +59,25 @@ test('experimental editor setting preserves pending edits and switches both engi
     assert.equal(await rich().innerText(), expected)
     assert.equal(await readFile(file, 'utf8'), 'on disk')
   }
-  await page.locator('.rich-pane .tiptap').waitFor()
+  // A fresh profile stores no choice and opens the CodeMirror formatted view.
+  await page.locator(formatted).waitFor()
+  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
   await source('on disk')
   await settings()
-  assert.equal(await toggle.isChecked(), false)
+  assert.equal(await toggle.isChecked(), true)
   assert.equal(
     await page
       .locator('#settings-editor [data-setting-id]')
       .last()
       .getAttribute('data-setting-id'),
     'exotic-butter',
+  )
+  await page
+    .getByRole('heading', { name: 'Editor engine', exact: true })
+    .waitFor()
+  assert.doesNotMatch(
+    await page.locator('[data-setting-id="exotic-butter"]').textContent(),
+    /experimental/i,
   )
   await page.evaluate(() => {
     const set = Storage.prototype.setItem
@@ -82,12 +93,12 @@ test('experimental editor setting preserves pending edits and switches both engi
   await toggle.click()
   await page.getByText('Could not switch editor', { exact: true }).waitFor()
   assert.equal(await toggle.isEnabled(), true)
-  assert.equal(await toggle.isChecked(), false)
+  assert.equal(await toggle.isChecked(), true)
   assert.equal(
     await page.evaluate(() => localStorage.getItem('hibi:formatted-engine')),
     null,
   )
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 1)
+  assert.equal(await page.locator(formatted).count(), 1)
   await page.evaluate(() => window.restoreEngineStorage())
   await back()
   await app.evaluate(({ ipcMain }) => {
@@ -102,7 +113,7 @@ test('experimental editor setting preserves pending edits and switches both engi
       return append(...args)
     })
   })
-  await replaceRichText(page, rich(), 'pending from tiptap 😀')
+  await replaceRichText(page, rich(), 'pending from codemirror 😀')
   await settings()
   const reloaded = page.waitForEvent('load')
   await toggle.click()
@@ -114,46 +125,115 @@ test('experimental editor setting preserves pending edits and switches both engi
   assert.equal(await app.evaluate(() => globalThis.engineJournalReached), true)
   await app.evaluate(() => globalThis.releaseEngineJournal())
   await reloaded
-  await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
-  await source('pending from tiptap 😀')
-  await settings()
-  assert.equal(await toggle.isChecked(), true)
-  const colors = await page
-    .locator('[data-setting-id="exotic-butter"] label')
-    .evaluate((label) => {
-      const swatch = document.createElement('span')
-      swatch.style.color = 'var(--status-warning)'
-      label.append(swatch)
-      const result = {
-        actual: getComputedStyle(label).color,
-        expected: getComputedStyle(swatch).color,
-      }
-      swatch.remove()
-      return result
-    })
-  assert.equal(colors.actual, colors.expected)
-  await mkdir('.scratch', { recursive: true })
-  await page
-    .locator('.experimental-editor-settings')
-    .screenshot({ path: '.scratch/engine-setting-light.png' })
-  await page.emulateMedia({ colorScheme: 'dark' })
-  await page
-    .locator('.experimental-editor-settings')
-    .screenshot({ path: '.scratch/engine-setting-dark.png' })
-  await back()
-  await replaceRichText(page, rich(), 'pending from codemirror 😀')
-  await settings()
-  const returned = page.waitForEvent('load')
-  await toggle.click()
-  await returned
   await page.locator('.rich-pane .tiptap').waitFor()
   await source('pending from codemirror 😀')
   await settings()
   assert.equal(await toggle.isChecked(), false)
-  await page.reload()
-  await page.locator('.rich-pane .tiptap').waitFor({ state: 'attached' })
-  await settings()
-  assert.equal(await toggle.isChecked(), false)
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('hibi:formatted-engine')),
+    'tiptap',
+  )
+  // The setting is no longer marked experimental: it looks like the rows around it.
+  const appearance = await page.evaluate(() =>
+    ['exotic-butter', 'line-numbers'].map((id) => {
+      const row = document.querySelector(`[data-setting-id="${id}"]`)
+      const group = getComputedStyle(row.closest('.settings-group'))
+      return {
+        label: getComputedStyle(row.querySelector('label')).color,
+        border: group.borderColor,
+        background: group.backgroundColor,
+      }
+    }),
+  )
+  assert.deepEqual(appearance[0], appearance[1])
+  const group = page.locator('.settings-group', {
+    has: page.locator('[data-setting-id="exotic-butter"]'),
+  })
+  await mkdir('.scratch', { recursive: true })
+  await group.screenshot({ path: '.scratch/engine-setting-light.png' })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await group.screenshot({ path: '.scratch/engine-setting-dark.png' })
   await back()
-  await source('pending from codemirror 😀')
+  await replaceRichText(page, rich(), 'pending from tiptap 😀')
+  await settings()
+  const returned = page.waitForEvent('load')
+  await toggle.click()
+  await returned
+  await page.locator(formatted).waitFor()
+  await source('pending from tiptap 😀')
+  await settings()
+  assert.equal(await toggle.isChecked(), true)
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem('hibi:formatted-engine')),
+    'codemirror',
+  )
+  await page.reload()
+  await page.locator(formatted).waitFor({ state: 'attached' })
+  await settings()
+  assert.equal(await toggle.isChecked(), true)
+  await back()
+  await source('pending from tiptap 😀')
+})
+
+test('restarts keep a stored Tiptap choice and move profiles without one to CodeMirror', {
+  timeout: 90000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-engine-upgrade-'))
+  const file = join(profile, 'note.md')
+  await writeFile(file, '# Kept\n\nbody')
+  t.after(() => rm(profile, { recursive: true, force: true }))
+  const launch = async () => {
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`, file],
+    })
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(15000)
+    await waitForDocumentEditor(app, page)
+    return { app, page }
+  }
+  const engine = async (page) => {
+    await page.locator(`${formatted}, .rich-pane .tiptap`).first().waitFor()
+    return (await page.locator('.rich-pane .tiptap').count())
+      ? 'tiptap'
+      : 'codemirror'
+  }
+  // Stored choices as the engine setting writes them; null is a profile that
+  // never changed it, as every profile from before this setting is.
+  for (const [stored, expected] of [
+    [null, 'codemirror'],
+    ['tiptap', 'tiptap'],
+    ['codemirror', 'codemirror'],
+  ]) {
+    let { app, page } = await launch()
+    try {
+      await page.evaluate((stored) => {
+        // Settings an earlier session leaves behind make this an existing profile.
+        localStorage.setItem('default-view', 'normal')
+        localStorage.setItem('introduction', 'seen')
+        if (stored === null) localStorage.removeItem('hibi:formatted-engine')
+        else localStorage.setItem('hibi:formatted-engine', stored)
+      }, stored)
+    } finally {
+      await app.close()
+    }
+    ;({ app, page } = await launch())
+    try {
+      assert.equal(await engine(page), expected, String(stored))
+      assert.equal(
+        await page.evaluate(() =>
+          localStorage.getItem('hibi:formatted-engine'),
+        ),
+        stored,
+        'opening never rewrites the stored choice',
+      )
+      await openSettings(app, page)
+      assert.equal(
+        await page.getByRole('checkbox', toggleName).isChecked(),
+        expected === 'codemirror',
+        String(stored),
+      )
+    } finally {
+      await app.close()
+    }
+  }
 })

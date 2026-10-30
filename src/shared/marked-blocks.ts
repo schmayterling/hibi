@@ -417,6 +417,9 @@ function readQuote(
       const body = setext.replace(this.rules.other.blockquoteSetextReplace2, '')
       chunkLines = []
       raw.push(chunk)
+      // Marked joins a body to the text only once the text is not empty.
+      const empty = text.length === 1 && !text[0]
+      if (empty) text.pop()
       text.push(body)
       if (scope?.columns) {
         const own = RegExp.prototype[Symbol.replace].call(
@@ -426,6 +429,7 @@ function readQuote(
         )
         if (plain || own !== body) {
           plain ??= text.slice(0, -1)
+          if (empty) plain.pop()
           plain.push(own)
         }
       }

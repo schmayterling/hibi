@@ -126,6 +126,24 @@ test('a nested re-read keeps the last quote lines where Marked puts them', () =>
     }
 })
 
+test('a quote joins a body to an empty text like Marked', () => {
+  // A nested quote whose first body strips to nothing, here a marker and a
+  // one-column tab, takes the lazy line after it as its whole text.
+  for (const sample of [
+    '>p\n> >\t\ny',
+    '> >\t\ny',
+    '> > a\n> >\t\ny\n> >\t\nz',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      assert.deepEqual(
+        new Marked(blockMarkdown).lexer(source),
+        new Marked().lexer(source),
+        source,
+      )
+    }
+})
+
 test('quote matching avoids the native recursive regex on whole notes', () => {
   const source = giant.repeat(2000)
   const exec = RegExp.prototype.exec

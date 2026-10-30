@@ -338,7 +338,7 @@ test('find, the outline and undo unfold a callout, and folding keeps typing in v
   assert.equal(await pane.getByText(/KK/).first().isVisible(), true)
 })
 
-test('codemirror: a callout keeps its own fold state as text around it changes', {
+test('a callout keeps its own fold state as text around it changes', {
   timeout: 120000,
 }, async (t) => {
   const { page, pane } = await openNote(
@@ -393,7 +393,7 @@ test('codemirror: a callout keeps its own fold state as text around it changes',
   )
 })
 
-test('codemirror: a tab keeps its callout folds across tab switches and a reload from disk', {
+test('a tab keeps its callout folds across tab switches and a reload from disk', {
   timeout: 150000,
 }, async (t) => {
   const markdown = [
@@ -466,7 +466,7 @@ test('codemirror: a tab keeps its callout folds across tab switches and a reload
   assert.equal(current.dirty, false)
 })
 
-test('codemirror: arrows step over a folded body, and Backspace or Delete beside it unfold it first', {
+test('arrows step over a folded body, and Backspace or Delete beside it unfold it first', {
   timeout: 120000,
 }, async (t) => {
   const markdown = [
@@ -543,7 +543,7 @@ test('codemirror: arrows step over a folded body, and Backspace or Delete beside
   )
 })
 
-test('codemirror: a disk edit that drops the open callout leaves the next one folded', {
+test('a disk edit that drops the open callout leaves the next one folded', {
   timeout: 120000,
 }, async (t) => {
   const markdown = [
@@ -627,7 +627,7 @@ async function opensFolded(t, markdown) {
 }
 
 test(
-  'codemirror: a note that ends in a folded callout opens with it folded',
+  'a note that ends in a folded callout opens with it folded',
   {
     timeout: 120000,
   },
@@ -645,7 +645,7 @@ test(
 )
 
 test(
-  'codemirror: a note that ends in nested folded callouts opens with them folded',
+  'a note that ends in nested folded callouts opens with them folded',
   {
     timeout: 120000,
   },
@@ -665,7 +665,7 @@ test(
     ),
 )
 
-test('codemirror: a closed tab releases its remembered folds and text', {
+test('a closed tab releases its remembered folds and text', {
   timeout: 240000,
 }, async (t) => {
   const size = 8 * 1024 * 1024

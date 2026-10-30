@@ -101,7 +101,7 @@ async function launchCompletionProbe(t) {
   return { app, page, rich }
 }
 
-test('codemirror: rich completion contracts retain menu ownership, rendering, privacy and provider disposal', {
+test('rich completion contracts retain menu ownership, rendering, privacy and provider disposal', {
   timeout: 60000,
 }, async (t) => {
   const { app, page, rich } = await launchCompletionProbe(t)

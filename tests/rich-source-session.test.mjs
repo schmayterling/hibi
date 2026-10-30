@@ -13,7 +13,7 @@ import {
 import { replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('codemirror: accepted transformations are immediately savable and rejected changes stay atomic', {
+test('accepted transformations are immediately savable and rejected changes stay atomic', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-rich-source-'))

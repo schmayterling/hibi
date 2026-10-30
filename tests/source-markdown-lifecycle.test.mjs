@@ -11,7 +11,7 @@ import {
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('codemirror: source loading, addon reconfiguration and split editing preserve source and history', {
+test('source loading, addon reconfiguration and split editing preserve source and history', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-source-markdown-'))

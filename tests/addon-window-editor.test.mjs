@@ -56,9 +56,12 @@ async function formattedWindowProof(page, preview) {
       const addons = Object.values(await import(`app://hibi/${registry}`)).find(
         (value) => value?.isInstalled && value?.snapshot,
       )
-      const { view } = Object.values(await import(`app://hibi/${sdk}`)).find(
-        (value) => value?.view?.EditorView,
-      )
+      const source = await import(`app://hibi/${sdk}`)
+      // The chunk exports the SDK source by name, or as one value when the
+      // bundle shares the module with other chunks.
+      const { view } = source.view
+        ? source
+        : Object.values(source).find((value) => value?.view?.EditorView)
       const addon = addons
         .snapshot()
         .find((entry) => entry.manifest.id === 'text-extras')
@@ -122,7 +125,7 @@ async function hostEditor(t) {
   while (!findPreview()) await setTimeout(30)
   const preview = findPreview()
   preview.setDefaultTimeout(7000)
-  const editor = preview.locator(editorSelector['codemirror'])
+  const editor = preview.locator(editorSelector.codemirror)
   await preview
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .and(editor)
@@ -320,7 +323,7 @@ async function recoverAddons(t) {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!find()) await setTimeout(30)
   const kept = find()
-  const editor = kept.locator(editorSelector['codemirror'])
+  const editor = kept.locator(editorSelector.codemirror)
   await kept
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .and(editor)
@@ -343,19 +346,17 @@ async function recoverAddons(t) {
   await extras.waitFor({ state: 'attached' })
 }
 
-{
-  test(
-    `codemirror: addon windows host the editor without desktop privileges`,
-    {
-      timeout: 45000,
-    },
-    (t) => hostEditor(t),
-  )
-  test(
-    `codemirror: addons that failed in a hidden window recover when toggled in settings`,
-    {
-      timeout: 45000,
-    },
-    (t) => recoverAddons(t),
-  )
-}
+test(
+  `addon windows host the editor without desktop privileges`,
+  {
+    timeout: 45000,
+  },
+  (t) => hostEditor(t),
+)
+test(
+  `addons that failed in a hidden window recover when toggled in settings`,
+  {
+    timeout: 45000,
+  },
+  (t) => recoverAddons(t),
+)

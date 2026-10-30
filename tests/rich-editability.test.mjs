@@ -123,7 +123,7 @@ test('empty formatted blocks remain editable and rich editing survives vim and v
   }
 })
 
-test('codemirror: enter in an empty table cell inserts a line break', {
+test('enter in an empty table cell inserts a line break', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-native-editability-'))
@@ -165,7 +165,7 @@ test('codemirror: enter in an empty table cell inserts a line break', {
   })
 })
 
-test('codemirror: canonical empty blocks remain editable across vim and source switches', {
+test('canonical empty blocks remain editable across vim and source switches', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-native-editability-'))

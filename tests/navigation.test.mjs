@@ -9,7 +9,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('modified link clicks, note/settings history, and file-menu remote imports', {

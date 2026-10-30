@@ -11,7 +11,7 @@ import {
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('codemirror: api 2 source edits preserve canonical source, history and projection guards', {
+test('api 2 source edits preserve canonical source, history and projection guards', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-edits-'))

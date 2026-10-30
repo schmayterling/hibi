@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForFormattedEditor } from './electron.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('codemirror: editable split preserves catch-up, save, mapped selections and dormant bookmarks', {
+test('editable split preserves catch-up, save, mapped selections and dormant bookmarks', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-split-catchup-'))

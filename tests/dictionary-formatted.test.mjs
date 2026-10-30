@@ -309,12 +309,12 @@ test("in the formatted view, a replaced word in a link's text keeps the link's d
   const { app, page, open } = await launch(t, { 'links.md': linkNote })
   await open('links.md')
   const cases = [
-    ['[Happy](', 'Link Happy', 'Happy', '[Glad]('],
-    ['[Happy][ref]', 'Reference Happy', 'Happy', '[Glad][ref]'],
-    ['`happy`', 'Code happy', 'happy', '`glad`'],
-    ['#happy', 'tag #happy', 'happy', '#glad'],
+    ['[Happy](', 'Happy', '[Glad]('],
+    ['[Happy][ref]', 'Happy', '[Glad][ref]'],
+    ['`happy`', 'happy', '`glad`'],
+    ['#happy', 'happy', '#glad'],
   ]
-  for (const [source, rich, word, replaced] of cases) {
+  for (const [source, word, replaced] of cases) {
     await caret(page, linkNote.indexOf(source) + 3)
     await chooseSynonym(app, page, word, 'glad')
     await saved(page, linkNote.replace(source, replaced))

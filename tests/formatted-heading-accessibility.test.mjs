@@ -34,53 +34,51 @@ async function open(t, text, markers = false) {
   return page
 }
 
-{
-  test(`codemirror: atx headings expose their names and levels`, {
-    timeout: 60000,
-  }, async (t) => {
-    const text = `${Array.from(
-      { length: 6 },
-      (_, i) => `${'#'.repeat(i + 1)} level ${i + 1}`,
-    ).join('\n\n')}\n\nclosing paragraph\n`
-    const page = await open(t, text)
-    const rich = page.locator('.rich-pane')
-    await rich.locator('.hibi-lp-h6').waitFor()
-    for (let level = 1; level <= 6; level++) {
-      assert.equal(
-        await rich
-          .getByRole('heading', { name: `level ${level}`, level, exact: true })
-          .count(),
-        1,
-      )
-    }
-    const cdp = await page.context().newCDPSession(page)
-    const accessibility = await cdp.send('Accessibility.getFullAXTree')
-    assert.deepEqual(
-      accessibility.nodes
-        .filter(
-          (node) =>
-            node.role?.value === 'heading' &&
-            /^level [1-6]$/.test(node.name?.value ?? ''),
-        )
-        .map((node) => [
-          node.name.value,
-          node.properties.find((property) => property.name === 'level')?.value
-            .value,
-        ])
-        .sort(),
-      Array.from({ length: 6 }, (_, i) => [`level ${i + 1}`, i + 1]),
-    )
-
-    await page
-      .getByRole('button', { name: /^side-by-side$/i, exact: true })
-      .click()
-    await page.locator('.mode-side-by-side[data-source-ready="true"]').waitFor()
+test(`atx headings expose their names and levels`, {
+  timeout: 60000,
+}, async (t) => {
+  const text = `${Array.from(
+    { length: 6 },
+    (_, i) => `${'#'.repeat(i + 1)} level ${i + 1}`,
+  ).join('\n\n')}\n\nclosing paragraph\n`
+  const page = await open(t, text)
+  const rich = page.locator('.rich-pane')
+  await rich.locator('.hibi-lp-h6').waitFor()
+  for (let level = 1; level <= 6; level++) {
     assert.equal(
-      await page.locator('.source-pane').getByRole('heading').count(),
-      0,
+      await rich
+        .getByRole('heading', { name: `level ${level}`, level, exact: true })
+        .count(),
+      1,
     )
-  })
-}
+  }
+  const cdp = await page.context().newCDPSession(page)
+  const accessibility = await cdp.send('Accessibility.getFullAXTree')
+  assert.deepEqual(
+    accessibility.nodes
+      .filter(
+        (node) =>
+          node.role?.value === 'heading' &&
+          /^level [1-6]$/.test(node.name?.value ?? ''),
+      )
+      .map((node) => [
+        node.name.value,
+        node.properties.find((property) => property.name === 'level')?.value
+          .value,
+      ])
+      .sort(),
+    Array.from({ length: 6 }, (_, i) => [`level ${i + 1}`, i + 1]),
+  )
+
+  await page
+    .getByRole('button', { name: /^side-by-side$/i, exact: true })
+    .click()
+  await page.locator('.mode-side-by-side[data-source-ready="true"]').waitFor()
+  assert.equal(
+    await page.locator('.source-pane').getByRole('heading').count(),
+    0,
+  )
+})
 
 test('multiline setext headings expose one name and omit their underline', {
   timeout: 60000,
@@ -306,35 +304,33 @@ test('revealed markers stay readable heading text but leave its name', {
   )
 })
 
-{
-  test(`codemirror: adjacent heading text keeps its spacing across revealed markers`, {
-    timeout: 60000,
-  }, async (t) => {
-    const source = '# pre**fix**ed\n\n## co`de`word\n\nclosing paragraph\n'
-    const page = await open(t, source, true)
-    const cdp = await page.context().newCDPSession(page)
-    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-    const results = []
-    for (const theme of ['light', 'dark']) {
-      await page.emulateMedia({ colorScheme: theme })
-      for (const word of ['fix', 'de']) {
-        await place(page, source.indexOf(word) + 1)
-        const headings = await headingTree(cdp)
-        results.push({ theme, word, names: headings.map((node) => node.name) })
-        assert.equal(
-          headings[word === 'fix' ? 0 : 1].text,
-          word === 'fix' ? '# pre**fix**ed' : '## co`de`word',
-        )
-      }
-    }
-    for (const result of results)
-      assert.deepEqual(
-        result.names,
-        ['prefixed', 'codeword'],
-        JSON.stringify(result),
+test(`adjacent heading text keeps its spacing across revealed markers`, {
+  timeout: 60000,
+}, async (t) => {
+  const source = '# pre**fix**ed\n\n## co`de`word\n\nclosing paragraph\n'
+  const page = await open(t, source, true)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const results = []
+  for (const theme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: theme })
+    for (const word of ['fix', 'de']) {
+      await place(page, source.indexOf(word) + 1)
+      const headings = await headingTree(cdp)
+      results.push({ theme, word, names: headings.map((node) => node.name) })
+      assert.equal(
+        headings[word === 'fix' ? 0 : 1].text,
+        word === 'fix' ? '# pre**fix**ed' : '## co`de`word',
       )
-  })
-}
+    }
+  }
+  for (const result of results)
+    assert.deepEqual(
+      result.names,
+      ['prefixed', 'codeword'],
+      JSON.stringify(result),
+    )
+})
 
 test('revealed setext naming stays within rendered lines in a 20k-line heading', {
   timeout: 60000,

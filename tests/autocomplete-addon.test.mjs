@@ -201,18 +201,18 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
     )
     const caret = () =>
       page.evaluate(
-        ({ mode, cm }) => {
+        ({ mode }) => {
           const { anchor, head } = document.querySelector(
             `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
           ).cmTile.root.view.state.selection.main
           return { anchor, head }
         },
-        { mode, cm: true },
+        { mode },
       )
     const waitForCaret = (condition) =>
       waitForAsync(
         page,
-        ({ mode, cm, previousHead, expected }) => {
+        ({ mode, previousHead, expected }) => {
           const { anchor, head } = document.querySelector(
             `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
           ).cmTile.root.view.state.selection.main
@@ -220,12 +220,12 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
             ? anchor === expected.anchor && head === expected.head
             : head !== previousHead
         },
-        { mode, cm: true, ...condition },
+        { mode, ...condition },
       )
     const openBetweenParagraphs = async () => {
       await reset('previous paragraph\n\nbro that was\n\nfollowing paragraph')
       await page.evaluate(
-        ({ mode, cm }) => {
+        ({ mode }) => {
           {
             const view = document.querySelector(
               `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
@@ -236,7 +236,7 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
             view.dispatch({ selection: { anchor: head } })
           }
         },
-        { mode, cm: true },
+        { mode },
       )
       await page.keyboard.type(' ')
       await waitForChoice()
@@ -286,13 +286,13 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
     // Read editor state directly so a delayed document flush cannot hide acceptance.
     const editorText = () =>
       page.evaluate(
-        ({ mode, cm }) =>
+        ({ mode }) =>
           document
             .querySelector(
               `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
             )
             .cmTile.root.view.state.doc.toString(),
-        { mode, cm: true },
+        { mode },
       )
     assert.equal(await editorText(), 'bro that was \t', `${mode} next-word Tab`)
     const tabAcceptance = async (enabled) => {

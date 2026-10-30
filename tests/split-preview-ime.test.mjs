@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -8,7 +8,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 for (const [pane, mode] of [
@@ -16,7 +16,7 @@ for (const [pane, mode] of [
   ['rich', 'side-by-side'],
   ['rich', 'normal'],
 ]) {
-  test(`codemirror: native ${pane} IME in ${mode} survives catch-up, save, selection and undo`, {
+  test(`native ${pane} IME in ${mode} survives catch-up, save, selection and undo`, {
     timeout: 45000,
   }, async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-split-ime-'))

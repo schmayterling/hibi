@@ -47,7 +47,7 @@ test('indentation follows the first indented line', () => {
   assert.equal(state.field(sourceIndent).from, 5)
 })
 
-test('codemirror: Tab preserves paragraph, code, list, table, focus and source behavior', {
+test('Tab preserves paragraph, code, list, table, focus and source behavior', {
   timeout: 90000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-tab-indent-'))

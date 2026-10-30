@@ -339,14 +339,25 @@ testFormattedEngines(
     await pane.getByText('Hidden heading').first().waitFor()
     assert.equal(await closed.getAttribute('aria-expanded'), 'true')
 
-    // Undo of typing in a body folded since shows it again.
+    // Undo of typing in a body folded since shows it again. In codemirror
+    // the caret's line shows its quote marker.
+    const caretLine = (text) => (engine === 'codemirror' ? `> ${text}` : text)
     await place('hidden alpha body.', 'hidden'.length)
     await page.keyboard.type('Z')
-    await pane.getByText('hiddenZ alpha body.', { exact: true }).waitFor()
+    await pane
+      .getByText(caretLine('hiddenZ alpha body.'), { exact: true })
+      .waitFor()
+    await waitForAsync(
+      page,
+      async (typed) => (await window.hibi.getDocument()).markdown === typed,
+      hiding.replace('> hidden alpha', '> hiddenZ alpha'),
+    )
     await closed.click()
     assert.equal(await shown('hiddenZ alpha body.'), false)
     await pressShortcut(app, `${mod}+z`)
-    await pane.getByText('hidden alpha body.', { exact: true }).waitFor()
+    await pane
+      .getByText(caretLine('hidden alpha body.'), { exact: true })
+      .waitFor()
     assert.equal(await closed.getAttribute('aria-expanded'), 'true')
     assert.equal(await markdown(), hiding)
 

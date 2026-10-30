@@ -55,6 +55,9 @@ testFormattedEngines(
       'List b',
       'Nested c',
       'Setext g(x)',
+      'Dollar x\\text{ and $y$} inside',
+      'Setext p +q lines',
+      'Blank body',
       'End',
     ]
     const assertOutline = async () => {

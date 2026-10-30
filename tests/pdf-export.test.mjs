@@ -37,6 +37,9 @@ Inline math $e^{i\\pi} + 1 = 0$ sits in a sentence with a footnote[^soil].
 
 Mid-line display $$\\frac{7}{11}$$$5 stays between these words.
 
+A formula across lines $$\\frac{3}{4}
++ 1$$ draws whole, as do $$ $$ and $$x\\text{ and $y$}$$.
+
 $$
 \\bar{x} = \\frac{1}{n} \\sum_{i=1}^{n} x_i
 $$
@@ -313,6 +316,7 @@ test('exports the active note as a PDF from the palette and the File menu', {
       '$$',
       '\\bar',
       '\\frac',
+      '\\text',
       'graph TD',
       '-->',
       'title:',

@@ -281,6 +281,13 @@ test('mid-line display math is excluded from counts while literal dollars stay',
     ['before $$a+b$$$c+d$ after', 'before  after'],
     ['`$$x+y$$` costs $5 and $10', '$$x+y$$ costs $5 and $10'],
     [String.raw`before \$$x+y$$ after`, 'before $$x+y$$ after'],
+    // As in Obsidian, across lines of a paragraph, blank, or holding `$`.
+    ['before $$x\n+y$$ after', 'before  after'],
+    // The quote adds its own line break.
+    ['> before $$x\n> +y$$ after', '\nbefore  after'],
+    ['before $$ $$ after', 'before  after'],
+    ['before $$x$y$$ after', 'before  after'],
+    ['before \\$$x\n+y$$ after', 'before $$x\n+y$$ after'],
   ])
     assert.deepEqual(
       countText(richText(source, syntax).slice(1)),

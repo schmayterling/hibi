@@ -6,14 +6,13 @@ import { GFM, parser } from '@lezer/markdown'
 import { Marked } from 'marked'
 import {
   blockMathSyntax,
-  inlineDisplayMathEnd,
   inlineMathEnd,
   inlineMathSyntax,
-  inlineMathWork,
 } from '../src/addons/math/formatted-syntax.ts'
 import {
   inlineDisplayMath,
   inlineDisplayMathTokens,
+  inlineMathWork,
 } from '../src/addons/math/inline-display.ts'
 import { containerPrefix, mathInsertion } from '../src/addons/math/insert.ts'
 import { inlineMath, mathTokens } from '../src/addons/math/syntax.ts'
@@ -25,19 +24,36 @@ const formatted = parser.configure([GFM, inlineMathSyntax, blockMathSyntax])
 // `$$…$$` inside a line is display math in the formatted view, not the rich view.
 const marked = new Marked(mathTokens, inlineDisplayMathTokens)
 
+/** Display formulas compare apart from the spaces around their line breaks. */
+const lines = (latex) => latex.replace(/[ \t]*\n[ \t]*/g, '\n')
+
 /** Math in document order, as the formatted view's syntax tree has it. */
 function lezerMath(source) {
   const tree = formatted.parse(source)
   const found = []
   tree.iterate({
     enter(node) {
-      if (node.name === 'InlineMath') {
+      if (node.name === 'InlineMath' || node.name === 'InlineMathLines') {
         const mark = node.node.firstChild.to - node.from
-        found.push(
-          mark > 1
-            ? ['display', source.slice(node.from + 2, node.to - 2).trim()]
-            : ['inline', source.slice(node.from + 1, node.to - 1)],
+        if (mark === 1) {
+          found.push(['inline', source.slice(node.from + 1, node.to - 1)])
+          return false
+        }
+        // Later lines' quote markers are no part of the formula.
+        let latex = '',
+          at = node.from + 2
+        for (let child = node.node.firstChild; child; child = child.nextSibling)
+          if (child.name !== 'MathMark') {
+            latex += source.slice(at, child.from)
+            at = child.to
+          }
+        latex += source.slice(at, node.to - 2)
+        assert.equal(
+          node.name === 'InlineMathLines',
+          latex.includes('\n'),
+          `node for ${JSON.stringify(source)}`,
         )
+        found.push(['display', lines(latex.trim())])
         return false
       }
       if (node.name === 'BlockMath') {
@@ -64,7 +80,11 @@ function markedMath(source) {
   const found = []
   marked.walkTokens(marked.lexer(source), (token) => {
     if (token.type === 'inlineMath')
-      found.push([token.display ? 'display' : 'inline', token.latex])
+      found.push(
+        token.display
+          ? ['display', lines(token.latex)]
+          : ['inline', token.latex],
+      )
     if (token.type === 'blockMath') found.push(['block', token.latex])
   })
   return found
@@ -187,6 +207,27 @@ const fixtures = [
   'a $$x$$$ b',
   'a $$ $$ b',
   'a $$x\ny$$ b',
+  // As in Obsidian, across lines of a paragraph, blank, or holding `$`.
+  'a $$x$y$$ b',
+  'a $$$$ b',
+  'a $$ \n $$ b',
+  'a $$$x$$ b',
+  'a $$x\\\n+y$$ b',
+  '> a $$x\n> +y$$ b',
+  '> > a $$x\n> > +y$$ b',
+  '- a $$x\n  +y$$ b',
+  '- > a $$x\n  > +y$$ b',
+  '> - a $$x\n>   +y$$ b',
+  '> [!note]\n> a $$x\n> +y$$ b',
+  'Setext $$p\n+q$$ title\n===',
+  'a \\$$x\n+y$$ b',
+  '`a $$x\n+y$$` b',
+  'a $$x\n\n+y$$ b',
+  'a $$x\n# heading\ny$$ b',
+  '$5 and\n$10',
+  '$5 and $$\n$10',
+  `a $$x\n${'y'.repeat(9_998)}$$`,
+  `a $$x\n${'y'.repeat(9_999)}$$`,
   'a $$x\\$$ b$$ c',
   'cost $$5 and $$10',
   '**$$x$$** and [$$y$$](https://example.com/)',
@@ -274,7 +315,24 @@ test('inline math ends where the tokenizer expression ends, in linear time', {
   }
 })
 
-test('display math inside a line ends where its expression ends, in linear time', () => {
+/**
+ * The display branch of Obsidian 1.13.7's inline math tokenizer in its
+ * app.js, for text starting with `$$`: where the closing `$$` ends, or -1.
+ * Obsidian then also takes the spaces up to a line break after it, which
+ * read the same as part of the paragraph.
+ */
+function obsidianDisplayEnd(text) {
+  let next = text.charCodeAt(2)
+  for (let at = 2; at < text.length; at++) {
+    const code = next
+    next = text.charCodeAt(at + 1)
+    if (code === 36 && next === 36) return at + 2
+    if (code === 92) next = text.charCodeAt(++at + 1)
+  }
+  return -1
+}
+
+test('display math inside a line ends where Obsidian ends it, in linear time', () => {
   const alphabet = ['$', '\\', 'a', ' ', '\n', '\r', '$$']
   let seed = 11
   const random = () => {
@@ -287,21 +345,55 @@ test('display math inside a line ends where its expression ends, in linear time'
     for (let i = 0; i < length; i++)
       text += alphabet[Math.floor(random() * alphabet.length)]
     assert.equal(
-      inlineDisplayMathEnd(text, 0),
       inlineDisplayMath(text)?.raw.length ?? -1,
+      obsidianDisplayEnd(text),
       JSON.stringify(text),
     )
   }
-  // Each opener reads to the next dollar at most, so a line of openers that
-  // never close reads its text a bounded number of times.
-  const work = []
-  for (const count of [1000, 2000, 4000, 8000]) {
-    const line = `x ${'$$ aaaa $ '.repeat(count)}`
-    inlineMathWork.positions = 0
-    formatted.parse(line)
-    work.push(inlineMathWork.positions / line.length)
+  // Each opener reads to the next double dollar or the formula limit. Two
+  // openers overlap at most, as in `$$$`, and the dollar after them reads
+  // to the next dollar, so each unit is read a bounded number of times.
+  for (const [make, bound] of [
+    [(count) => `x ${'$$ aaaa $ '.repeat(count)}`, 1],
+    [(count) => `x ${'$$ a\nb $ '.repeat(count)}`, 1],
+    [(count) => `x ${`$$$${'a'.repeat(10_001)}`.repeat(count / 1000)}`, 3.5],
+  ]) {
+    const work = []
+    for (const count of [1000, 2000, 4000, 8000]) {
+      const line = make(count)
+      inlineMathWork.positions = 0
+      formatted.parse(line)
+      work.push(inlineMathWork.positions / line.length)
+      inlineMathWork.positions = 0
+      marked.lexer(line)
+      work.push(inlineMathWork.positions / line.length)
+    }
+    for (const perUnit of work)
+      assert.ok(perUnit <= bound, JSON.stringify(work))
   }
-  for (const perUnit of work) assert.ok(perUnit <= 2, JSON.stringify(work))
+})
+
+test('display math inside a paragraph spans lines, may be blank and may hold dollars, as in Obsidian', () => {
+  for (const [source, expected] of [
+    ['a $$x\n+y$$ b', [['display', 'x\n+y']]],
+    ['a $$ $$ b', [['display', '']]],
+    ['a $$x$y$$ b', [['display', 'x$y']]],
+    ['a $$$$ b', [['display', '']]],
+    ['a $$x\\\n+y$$ b', [['display', 'x\\\n+y']]],
+    ['> a $$x\n> +y$$ b', [['display', 'x\n+y']]],
+    ['- a $$x\n  +y$$ b', [['display', 'x\n+y']]],
+    ['Setext $$p\n+q$$ title\n===', [['display', 'p\n+q']]],
+    ['| $$x$y$$ | b |\n| --- | --- |', [['display', 'x$y']]],
+    // Escapes, code spans, paragraph ends and currency stay text.
+    ['a \\$$x\n+y$$ b', []],
+    ['`a $$x\n+y$$` b', []],
+    ['a $$x\n\n+y$$ b', []],
+    ['a $$x\n# heading\ny$$ b', []],
+    ['costs $5 and\n$10', []],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, source)
+    assert.deepEqual(markedMath(source), expected, source)
+  }
 })
 
 test('display math can touch currency or another inline formula', () => {

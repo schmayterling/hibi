@@ -257,7 +257,11 @@ export function formattedAtomic(
   if (node.name === 'Image')
     return features.has('core.images') && !!node.getChild('URL')
   if (node.name === 'HorizontalRule') return features.has('core.rule')
-  if (node.name === 'InlineMath' || node.name === 'MathInline')
+  if (
+    node.name === 'InlineMath' ||
+    node.name === 'InlineMathLines' ||
+    node.name === 'MathInline'
+  )
     return features.has('math.inline')
   if (node.name === 'BlockMath')
     return features.has('math.block') && formattedMathBlock(node)

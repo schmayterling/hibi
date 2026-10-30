@@ -228,6 +228,48 @@ export function mathContributions(host: MathHost) {
       return false
     },
   }
+  /**
+   * `$$…$$` that continues on a later line of its paragraph, as Obsidian
+   * draws it: one display formula in place of its lines.
+   */
+  const lines: FormattedNodeView = {
+    nodes: ['InlineMathLines'],
+    decorate(node, out, { revealed }) {
+      if (revealed) {
+        out.syntax(node.from, node.from + 2)
+        out.syntax(node.to - 2, node.to)
+        out.mark(node.from + 2, node.to - 2, {
+          class: 'hibi-lp-math-source',
+        })
+      }
+      return false
+    },
+    layout(node, out, { state, revealed }) {
+      if (revealed) return false
+      // Quote markers of the later lines are no part of the formula.
+      let latex = '',
+        at = node.from + 2
+      for (let child = node.node.firstChild; child; child = child.nextSibling)
+        if (child.name !== 'MathMark') {
+          latex += state.sliceDoc(at, child.from)
+          at = child.to
+        }
+      latex += state.sliceDoc(at, node.to - 2)
+      const source = state.sliceDoc(node.from, node.to)
+      out.replace(
+        node.from,
+        node.to,
+        new FormulaWidget(
+          source,
+          latex.trim(),
+          true,
+          { from: 2, to: source.length - 2 },
+          host,
+        ),
+      )
+      return false
+    },
+  }
   /** A display block's formula, when it is closed. */
   const display = (node: SyntaxNodeRef, source: string) => {
     if (!formattedMathBlock(node.node)) return null
@@ -278,7 +320,7 @@ export function mathContributions(host: MathHost) {
       flavor: 'math.latex',
       syntax: inlineMathSyntax,
       inlineStops: true,
-      views: [inline],
+      views: [inline, lines],
     },
     block: {
       id: 'math.block',

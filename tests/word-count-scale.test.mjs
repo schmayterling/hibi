@@ -53,7 +53,9 @@ test('a definition edit used by 20k paragraphs retains unchanged visibility rows
 test('a local edit in 50 MiB with mid-line display math recounts bounded regions without flattening the document', {
   timeout: 180000,
 }, () => {
-  const unit = `word $$x+y$$ ${'x'.repeat(1009)}\n\n`
+  // Formulas inside a line, across its paragraph's lines, blank or holding `$`.
+  const formulas = 'word $$x+y$$ $$a\n+$b$$ $$ $$ '
+  const unit = `${formulas}${'x'.repeat(1022 - formulas.length)}\n\n`
   const paragraphs = 50 * 1024
   const store = new SourceStore(unit.repeat(paragraphs), {
     tabId: 'large-counts',

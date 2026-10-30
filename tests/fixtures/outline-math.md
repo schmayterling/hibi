@@ -47,4 +47,12 @@ Literal `$$code$$` and escaped \$$literal$$.
 $$f=g$$
 ```
 
+## Dollar $$x\text{ and $y$}$$ inside
+
+Setext $$p
++q$$ lines
+----------
+
+### Blank $$ $$ body
+
 ## End

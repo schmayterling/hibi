@@ -47,6 +47,13 @@ const fixtures = [
   ['> $$\n> x\n> $$', 1],
   ['> text $$x$$', 0, 1],
   ['> text $$x$$ more', 0, 1],
+  // As in Obsidian, across lines of a paragraph or blank.
+  ['text $$x\n+y$$ more', 0, 1],
+  ['text $$ $$ more', 0, 1],
+  ['text $$$$ more', 0, 1],
+  ['> text $$x\n> +y$$ more', 0, 1],
+  ['- text $$x\n  +y$$ more', 0, 1],
+  ['text \\$$x\n+y$$ more', 0],
   ['$5 and $$10', 0],
   ['\\$$', 0],
   ['\\$$x$$', 0],
@@ -63,7 +70,9 @@ function mathParser(gfm = false) {
     return extension.extend({
       parseMarkdown(token, helpers) {
         return token.display
-          ? helpers.createTextNode(token.raw ?? '')
+          ? helpers.createTextNode(
+              (token.raw ?? '').replace(/[ \t]*\n[ \t]*/g, ' '),
+            )
           : this.parent?.(token, helpers)
       },
       markdownTokenizer: {
@@ -160,11 +169,19 @@ test('math paragraphs retain literal text without inserted line breaks', () => {
     'x$$x$$',
     '$5 and $$10',
     '\\$$x$$',
+    'text $$x$y$$ more',
+    'text $$ $$ more',
+    // Line breaks read as spaces, as in the text around them.
+    'text $$x\n  +y$$ more',
   ]) {
     const doc = schema.nodeFromJSON(manager.parse(source))
     assert.equal(doc.childCount, 1, source)
     assert.equal(doc.firstChild.type.name, 'paragraph', source)
-    assert.equal(doc.textContent, source.replace('\\$', '$'), source)
+    assert.equal(
+      doc.textContent,
+      source.replace('\\$', '$').replace(/[ \t]*\n[ \t]*/g, ' '),
+      source,
+    )
   }
 })
 
@@ -201,6 +218,13 @@ test('full and cached math serialization preserve literal dollars and equations'
     '$$x$$',
     '$$\nx+y\n$$',
     '\uE0000\uE001 \\$x$ \uE000\uE0000\uE001',
+    'a $$x\n+y$$ b',
+    'a $$ $$ b',
+    'a $$x$y$$ b',
+    'a $$$$ b',
+    'a $$x\\\n+y$$ b',
+    '> a $$x\n> +y$$ b',
+    '\\$$x\n+y$$',
   ]) {
     await t.test(JSON.stringify(source), () => {
       for (const { manager, schema } of parsers) {
@@ -211,6 +235,7 @@ test('full and cached math serialization preserve literal dollars and equations'
           const reparsed = schema.nodeFromJSON(manager.parse(saved))
           assert.equal(reparsed.textContent, doc.textContent, saved)
           assert.ok(reparsed.eq(doc), saved)
+          assert.ok(!saved.includes('&NewLine;'), saved)
           if (source.includes('$5 and $10'))
             assert.ok(saved.includes('$5 and $10'), saved)
           if (source.includes('`$x$`'))
@@ -239,6 +264,10 @@ test('literal double dollars stay literal after rich serialization and export', 
   for (const source of [
     String.raw`before \$$x$$ after`,
     '| \\$$x$$ |\n| --- |',
+    'before \\$$x\n+y$$ after',
+    String.raw`before \$$ $$ after`,
+    String.raw`before \$$$$ after`,
+    String.raw`before \$$ x $y$$ after`,
   ]) {
     const doc = schema.nodeFromJSON(manager.parse(source))
     for (const blockLocal of [false, true]) {

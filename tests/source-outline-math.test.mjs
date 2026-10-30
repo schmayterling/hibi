@@ -43,6 +43,9 @@ test('source outline reads synthetic course math in paragraphs, headings and con
         ['List b', 3],
         ['Nested c', 4],
         ['Setext g(x)', 2],
+        ['Dollar x\\text{ and $y$} inside', 2],
+        ['Setext p +q lines', 2],
+        ['Blank body', 3],
         ['End', 2],
       ],
     )

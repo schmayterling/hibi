@@ -418,7 +418,9 @@ test('source and rich outline labels keep heading formulas as their LaTeX and as
 })
 
 test('source outline labels preserve mid-line display math in atx and setext headings', () => {
-  const source = '# Before $$f(x)$$ after\n\nSetext $$g(x)$$\n---\n'
+  // As in Obsidian, a formula may hold `$`, be blank, or span setext lines.
+  const source =
+    '# Before $$f(x)$$ after\n\nSetext $$g(x)$$\n---\n\n## Dollar $$x\\text{ and $y$}$$ inside\n\n## Blank $$ $$ body\n\nLines $$p\n+q$$ title\n===\n'
   const { model } = setup(source, { math: true })
   try {
     const headings = finish(model.read(), referenceOracle(source))
@@ -434,6 +436,21 @@ test('source outline labels preserve mid-line display math in atx and setext hea
           label: 'Setext g(x)',
           parts: ['Setext ', { latex: 'g(x)' }],
           level: 2,
+        },
+        {
+          label: 'Dollar x\\text{ and $y$} inside',
+          parts: ['Dollar ', { latex: 'x\\text{ and $y$}' }, ' inside'],
+          level: 2,
+        },
+        {
+          label: 'Blank body',
+          parts: ['Blank ', { latex: '' }, ' body'],
+          level: 2,
+        },
+        {
+          label: 'Lines p +q title',
+          parts: ['Lines ', { latex: 'p\n+q' }, ' title'],
+          level: 1,
         },
       ],
     )

@@ -7,6 +7,7 @@ import type {
   MarkdownConfig,
 } from '@lezer/markdown'
 import { readAhead } from '../../shared/chunked-markdown.ts'
+import { inlineDisplayMathEnd, inlineMathWork } from './inline-display.ts'
 import { blockMath } from './syntax.ts'
 
 /*
@@ -22,9 +23,6 @@ const formulaLimit = 10_000
 
 const isTerminator = (code: number) =>
   code === 10 || code === 13 || code === 0x2028 || code === 0x2029
-
-/** Positions the inline math scan examined, for complexity tests. */
-export const inlineMathWork = { positions: 0 }
 
 /**
  * The end of inline math opened by the `$` at `open`, or -1, as the inline
@@ -79,36 +77,6 @@ export function inlineMathEnd(text: string, open: number, end = text.length) {
     tried.push(0)
   }
   return -1
-}
-
-/**
- * The end of display math opened by the `$$` at `open` inside a line, or -1,
- * as `inlineDisplayMath` matches: the first `$` outside a backslash pair must
- * start the closing `$$`, on the same line.
- */
-export function inlineDisplayMathEnd(
-  text: string,
-  open: number,
-  end = text.length,
-) {
-  let at = open + 2
-  for (; at < end; at++) {
-    inlineMathWork.positions++
-    const code = text.charCodeAt(at)
-    if (code === 36 || code === 10) break
-    if (code === 92) {
-      if (at + 1 >= end || isTerminator(text.charCodeAt(at + 1))) return -1
-      at++
-    }
-  }
-  if (
-    at + 1 >= end ||
-    text.charCodeAt(at) !== 36 ||
-    text.charCodeAt(at + 1) !== 36
-  )
-    return -1
-  const latex = text.slice(open + 2, at)
-  return latex.length > formulaLimit || !latex.trim() ? -1 : at + 2
 }
 
 /**
@@ -361,10 +329,12 @@ function decide(cx: BlockContext, line: Line) {
 
 /**
  * `$…$` inside a line, and `$$…$$` inside a line as display math, as
- * `InlineMath` with `MathMark` delimiters.
+ * `InlineMath` with `MathMark` delimiters. Display math that continues on a
+ * later line of its paragraph is `InlineMathLines`, which the formatted view
+ * lays out whole.
  */
 export const inlineMathSyntax: MarkdownConfig = {
-  defineNodes: ['InlineMath', 'MathMark'],
+  defineNodes: ['InlineMath', 'InlineMathLines', 'MathMark'],
   parseInline: [
     {
       name: 'InlineMath',
@@ -378,8 +348,9 @@ export const inlineMathSyntax: MarkdownConfig = {
         if (end < 0) return -1
         const to = cx.offset + end,
           mark = display ? 2 : 1
+        const lines = display && cx.slice(pos + 2, to - 2).includes('\n')
         return cx.addElement(
-          cx.elt('InlineMath', pos, to, [
+          cx.elt(lines ? 'InlineMathLines' : 'InlineMath', pos, to, [
             cx.elt('MathMark', pos, pos + mark),
             cx.elt('MathMark', to - mark, to),
           ]),

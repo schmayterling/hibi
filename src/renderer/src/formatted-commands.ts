@@ -517,7 +517,12 @@ const atomBlocks = new Set([
   'BlockMath',
 ])
 /** Nodes drawn as one node only where a widget replaces them. */
-const atomWidgets = new Set(['Image', 'InlineMath', 'FencedCode'])
+const atomWidgets = new Set([
+  'Image',
+  'InlineMath',
+  'InlineMathLines',
+  'FencedCode',
+])
 
 /**
  * The source of the block at `pos` that the rich editor draws as one node,

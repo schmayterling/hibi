@@ -244,10 +244,13 @@ export function startMath(context: AddonContext) {
       }
     }
   const inline = InlineMath.extend({
-    // The rich editor preserves double-dollar source until it can draw display math inline.
+    // The rich editor preserves double-dollar source until it can draw display
+    // math inline. Its line breaks read as spaces, as in the text around it.
     parseMarkdown: (token, helpers) =>
       token.display
-        ? helpers.createTextNode(token.raw ?? '')
+        ? helpers.createTextNode(
+            (token.raw ?? '').replace(/[ \t]*\n[ \t]*/g, ' '),
+          )
         : helpers.createNode('inlineMath', { latex: token.latex }),
     markdownTokenizer: {
       name: 'inlineMath',

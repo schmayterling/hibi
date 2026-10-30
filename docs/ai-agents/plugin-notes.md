@@ -16,7 +16,7 @@ Body edits preserve metadata verbatim. Field edits use the [YAML document API](h
 
 `commands.ts` owns the block commands. `source.ts` installs the menu through `registerSource` and `registerFormatted`. Both use `menu.ts` and the shared command-list styles.
 
-Read other plugins' slash actions through `context.commands.getSlashCommands()` and hide unavailable actions. Apply whole-note transforms and slash-query removal together. Source transforms retain Undo; rich whole-note actions rebuild the editor as `context.editor.updateMarkdown` does. Keep the menu out of code, frontmatter, URLs, and paths. Vim normal-mode `/` must remain search. Never execute workspace content as plugin code.
+Read other plugins' slash actions through `context.commands.getSlashCommands()` and hide unavailable actions. Apply whole-note transforms and slash-query removal together. Either view applies the result as one isolated undo step. Keep the menu out of code, frontmatter, URLs, and paths. Vim normal-mode `/` must remain search. Never execute workspace content as plugin code.
 
 ### Vim
 
@@ -32,7 +32,7 @@ Use the formatted view's contribution registry, shared menu, and scoped style AP
 
 ### Word count and typing speed
 
-Word count uses the rich editor's document text for Markdown and source text for other formats. Count in a local worker and retain only the latest pending edit. Stop the worker and remove status items and listeners when disabled. Do not persist or upload document text.
+For Markdown, word count leaves out formatting characters and properties while the formatted pane is open, and counts the current source text in source view. Other formats count their source text. Count in a local worker and retain only the latest pending edit. Stop the worker and remove status items and listeners when disabled. Do not persist or upload document text.
 
 Use language-aware word segmentation and Unicode grapheme segmentation. Combining accents and joined emoji count as one character. Character totals include spaces and line breaks; Markdown totals exclude frontmatter and formatting markers.
 

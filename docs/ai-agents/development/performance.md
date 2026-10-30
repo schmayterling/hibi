@@ -61,4 +61,4 @@ Settings and history load on interaction. Keep the small command palette in the 
 
 Source-editor modules may warm at idle, but mount the editor only when a source view is requested. Fonts, layout, and asynchronous input extensions must finish before reporting readiness. Failed input extensions show an error and leave source read-only until they load or are disabled.
 
-Focus the initial rich editor synchronously on mount. Never schedule a later selection reset that can overwrite a user's selection.
+Focus a new formatted view once it is ready, with the caret at the end of its last text, unless the user already moved focus outside the editor or moved the caret. Never schedule a later selection reset that can overwrite a user's selection.

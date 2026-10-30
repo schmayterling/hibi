@@ -172,8 +172,10 @@ test('dismissing a closed slash menu leaves the editor untouched', {
   await set('plain words')
   const before = await attributes()
   // Caret moves, a press elsewhere and a blur dismiss the closed menu,
-  // which writes nothing: a hidden editor's DOM stays as it is.
-  const writes = await editor().evaluate(async (element, names) => {
+  // which writes nothing: a hidden editor's DOM stays as it is, with
+  // another popup's attributes too.
+  const dismissed = await editor().evaluate(async (element, names) => {
+    element.setAttribute('aria-activedescendant', 'another-popup-option')
     const writes = []
     for (const method of ['setAttribute', 'removeAttribute'])
       element[method] = (name, ...rest) => {
@@ -191,9 +193,11 @@ test('dismissing a closed slash menu leaves the editor untouched', {
     await new Promise(requestAnimationFrame)
     delete element.setAttribute
     delete element.removeAttribute
-    return writes
+    const kept = element.getAttribute('aria-activedescendant')
+    element.removeAttribute('aria-activedescendant')
+    return { writes, kept }
   }, names)
-  assert.deepEqual(writes, [])
+  assert.deepEqual(dismissed, { writes: [], kept: 'another-popup-option' })
   // An open menu still gives the editor its attributes back.
   await set('/h2')
   await menu().waitFor()

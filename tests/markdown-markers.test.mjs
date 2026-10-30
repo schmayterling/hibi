@@ -10,8 +10,8 @@ import {
   electron,
   showTestWindows,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -475,7 +475,7 @@ async function openCMMarkers(t, source, math = false) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await waitForFormattedEditor(app, page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   return { app, page, rich }

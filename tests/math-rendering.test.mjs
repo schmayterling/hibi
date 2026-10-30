@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { formulaCache, formulaScheduler } from '../src/addons/math/rendering.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -401,7 +404,7 @@ test('codemirror: formulas accept input before completion, keep the reading posi
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)

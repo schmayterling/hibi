@@ -8,16 +8,15 @@ import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { openRename } from './rename.mjs'
 
-for (const engine of ['tiptap', 'codemirror']) {
+{
   for (const [mode, pane] of [
     ['normal', 'rich'],
     ['markdown', 'source'],
     ['side-by-side', 'rich'],
     ['side-by-side', 'source'],
   ]) {
-    if (engine === 'tiptap' && mode === 'side-by-side' && pane === 'rich')
-      continue // The legacy split preview is read-only.
-    test(`${engine}: app actions restore the visible ${mode} ${pane} editor`, {
+    // The legacy split preview is read-only.
+    test(`codemirror: app actions restore the visible ${mode} ${pane} editor`, {
       timeout: 60000,
     }, async (t) => {
       const root = await mkdtemp(join(tmpdir(), 'hibi-active-editor-focus-'))
@@ -38,11 +37,8 @@ for (const engine of ['tiptap', 'codemirror']) {
       page.setDefaultTimeout(7000)
       await waitForDocumentEditor(app, page)
       await page.evaluate(
-        ({ engine, mode }) => {
-          localStorage.setItem('hibi:formatted-engine', engine)
-          localStorage.setItem('default-view', mode)
-        },
-        { engine, mode },
+        (mode) => localStorage.setItem('default-view', mode),
+        mode,
       )
       await page.reload()
       await waitForDocumentEditor(app, page, {
@@ -53,9 +49,7 @@ for (const engine of ['tiptap', 'codemirror']) {
       let selector =
         pane === 'source'
           ? '.source-pane .cm-content'
-          : engine === 'codemirror'
-            ? '.rich-pane .cm-content'
-            : '.rich-pane .tiptap'
+          : '.rich-pane .cm-content'
       await page.locator(selector).focus()
       if (pane === 'source') {
         await page.locator(selector).evaluate((element) => {
@@ -77,13 +71,13 @@ for (const engine of ['tiptap', 'codemirror']) {
         } catch (error) {
           const actual = await page.evaluate(() => ({
             active: document.activeElement?.outerHTML.slice(0, 350),
-            panes: Array.from(
-              document.querySelectorAll('.cm-content, .tiptap'),
-            ).map((element) => ({
-              pane: element.closest('section')?.className,
-              editable: element.getAttribute('contenteditable'),
-              visible: element.checkVisibility({ visibilityProperty: true }),
-            })),
+            panes: Array.from(document.querySelectorAll('.cm-content')).map(
+              (element) => ({
+                pane: element.closest('section')?.className,
+                editable: element.getAttribute('contenteditable'),
+                visible: element.checkVisibility({ visibilityProperty: true }),
+              }),
+            ),
           }))
           throw new Error(`${step}: ${JSON.stringify(actual)}`, {
             cause: error,
@@ -163,7 +157,7 @@ for (const engine of ['tiptap', 'codemirror']) {
         async () => (await window.hibi.getDocument()).tabs.length === 0,
       )
       selector =
-        '.editor-page[data-active="true"] :is(.tiptap,.cm-content)[contenteditable="true"]:not([inert] *)'
+        '.editor-page[data-active="true"] .cm-content[contenteditable="true"]:not([inert] *)'
       await focused('last tab close')
       await page.getByRole('button', { name: 'Dismiss this screen' }).click()
       await waitForAsync(
@@ -180,8 +174,8 @@ for (const engine of ['tiptap', 'codemirror']) {
   }
 }
 
-for (const engine of ['tiptap', 'codemirror']) {
-  test(`${engine}: app actions preserve the active document and editing pane after tab switches`, {
+{
+  test(`codemirror: app actions preserve the active document and editing pane after tab switches`, {
     timeout: 60000,
   }, async (t) => {
     const root = await mkdtemp(join(tmpdir(), 'hibi-active-split-focus-'))
@@ -205,10 +199,9 @@ for (const engine of ['tiptap', 'codemirror']) {
     const page = await app.firstWindow()
     page.setDefaultTimeout(7000)
     await waitForDocumentEditor(app, page)
-    await page.evaluate((engine) => {
-      localStorage.setItem('hibi:formatted-engine', engine)
-      localStorage.setItem('default-view', 'side-by-side')
-    }, engine)
+    await page.evaluate(() =>
+      localStorage.setItem('default-view', 'side-by-side'),
+    )
     await page.reload()
     await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     const cdp = await page.context().newCDPSession(page)
@@ -249,7 +242,7 @@ for (const engine of ['tiptap', 'codemirror']) {
       ['left', 'rich', left, texts[0]],
       ['right', 'rich', right, texts[1]],
       ['left', 'source', left, texts[0]],
-    ].filter(([, pane]) => engine === 'codemirror' || pane === 'source')) {
+    ].filter(([, pane]) => true)) {
       await page.getByRole('tab', { name: `${side}.md`, exact: true }).click()
       await waitForAsync(
         page,
@@ -318,7 +311,7 @@ for (const engine of ['tiptap', 'codemirror']) {
     }
     // Selecting a tab need not focus its editor; restore that page's own pane.
     for (const [side, pane, id] of [
-      ['right', engine === 'codemirror' ? 'rich' : 'source', right],
+      ['right', 'rich', right],
       ['left', 'source', left],
     ]) {
       await page.getByRole('tab', { name: `${side}.md`, exact: true }).click()
@@ -360,7 +353,6 @@ test('finishing a file operation preserves newer settings input focus', {
   page.setDefaultTimeout(7000)
   await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('default-view', 'markdown')
   })
   await page.reload()

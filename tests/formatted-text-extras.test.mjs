@@ -79,7 +79,6 @@ async function engine(codemirror, markers = true) {
   await page.evaluate(
     ({ codemirror, markers }) => {
       if (codemirror)
-        localStorage.setItem('hibi:formatted-engine', 'codemirror')
       else localStorage.setItem('hibi:formatted-engine', 'tiptap')
       localStorage.setItem('markdown-markers', String(markers))
     },

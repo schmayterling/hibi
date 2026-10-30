@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -136,7 +137,6 @@ for (const item of cases)
   test(`history restores the ${item.name} on undo and the edit selection on redo`, {
     timeout: 60000,
   }, async (t) => {
-    const engine = t.formattedEngine
     const profile = await mkdtemp(join(tmpdir(), 'hibi-history-selection-'))
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -149,7 +149,7 @@ for (const item of cases)
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, engine)
+    await waitForFormattedEditor(app, page)
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
     // Table padding follows each engine's serializer.
@@ -203,14 +203,12 @@ for (const item of cases)
           node.remove()
         return clone.textContent
       })
-    if (engine === 'codemirror')
-      await root.evaluate((element) => element.cmTile.root.view.focus())
-    else await root.focus()
+    await root.evaluate((element) => element.cmTile.root.view.focus())
     // Picks a DOM selection between two points, inside the cell editor when
     // the formatted view has one open.
     const pick = async (from, to) => {
       const text = await visibleText()
-      if (item.cell && engine === 'codemirror') {
+      if (item.cell && true) {
         // Only enter the cell here. The range itself is a DOM pick below.
         await root.evaluate(
           (element, at) =>
@@ -282,7 +280,9 @@ for (const item of cases)
     const [anchor, head] = await pick(item.anchor, item.head),
       from = Math.min(anchor, head)
     const picked = await settled()
-    t.diagnostic(JSON.stringify({ engine, phase: 'picked', ...picked }))
+    t.diagnostic(
+      JSON.stringify({ engine: 'codemirror', phase: 'picked', ...picked }),
+    )
     assert.deepEqual([picked.anchor, picked.head], [anchor, head], 'picked')
     let length = 0
     if (item.action)
@@ -315,12 +315,16 @@ for (const item of cases)
     // Typing leaves a caret after its text; formatting keeps the range.
     const left = item.action ? [anchor, head] : [from + length, from + length]
     const edited = await settled()
-    t.diagnostic(JSON.stringify({ engine, phase: 'edited', ...edited }))
+    t.diagnostic(
+      JSON.stringify({ engine: 'codemirror', phase: 'edited', ...edited }),
+    )
     assert.deepEqual([edited.anchor, edited.head], left, 'edit selection')
     await pressShortcut(app, `${mod}+z`)
     await saved(item.source)
     const undone = await settled()
-    t.diagnostic(JSON.stringify({ engine, phase: 'undo', ...undone }))
+    t.diagnostic(
+      JSON.stringify({ engine: 'codemirror', phase: 'undo', ...undone }),
+    )
     assert.deepEqual(
       [undone.anchor, undone.head],
       restored ?? [anchor, head],
@@ -329,7 +333,9 @@ for (const item of cases)
     await pressShortcut(app, redo)
     await saved(item.after)
     const redone = await settled()
-    t.diagnostic(JSON.stringify({ engine, phase: 'redo', ...redone }))
+    t.diagnostic(
+      JSON.stringify({ engine: 'codemirror', phase: 'redo', ...redone }),
+    )
     assert.deepEqual([redone.anchor, redone.head], reached ?? left, 'redo')
     await cdp.detach()
   })
@@ -361,7 +367,6 @@ const adjacency = [
 
 for (const item of adjacency)
   test(item.name, { timeout: 60000 }, async (t) => {
-    const engine = t.formattedEngine
     const profile = await mkdtemp(join(tmpdir(), 'hibi-history-adjacent-'))
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -374,7 +379,7 @@ for (const item of adjacency)
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, engine)
+    await waitForFormattedEditor(app, page)
     const file = join(profile, 'note.md')
     await writeFile(file, 'alpha bravo charlie\n')
     await app.evaluate(({ dialog }, file) => {
@@ -400,7 +405,7 @@ for (const item of adjacency)
     await withHeldClock(page, () =>
       root.evaluate(
         (element, { engine, edits }) => {
-          if (engine === 'codemirror') {
+          {
             const { view } = element.cmTile.root
             view.dispatch({ selection: { anchor: edits[0][0] } })
             for (const [from, insert] of edits)
@@ -408,15 +413,9 @@ for (const item of adjacency)
                 changes: { from, insert },
                 userEvent: 'input.type',
               })
-          } else {
-            const { view } = element.editor
-            // One paragraph: its text starts one position into the document.
-            element.editor.commands.setTextSelection(edits[0][0] + 1)
-            for (const [from, insert] of edits)
-              view.dispatch(view.state.tr.insertText(insert, from + 1))
           }
         },
-        { engine, edits: item.edits },
+        { engine: 'codemirror', edits: item.edits },
       ),
     )
     await saved(item.after)

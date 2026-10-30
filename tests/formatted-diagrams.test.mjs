@@ -12,7 +12,6 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT } from './poll.mjs'
 
@@ -180,9 +179,6 @@ test('diagrams and typst blocks render in the formatted view as in the rich view
     await page.waitForTimeout(100)
     rich[scheme] = await capture(`rich-${scheme}`)
   }
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await open('parity.md')

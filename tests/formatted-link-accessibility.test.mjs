@@ -47,7 +47,7 @@ const names = [
   '©🌱',
 ]
 
-async function open(t, engine) {
+async function open(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-link-accessibility-'))
   const notes = join(root, 'notes')
   await mkdir(notes)
@@ -64,10 +64,6 @@ async function open(t, engine) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(
-    (engine) => localStorage.setItem('hibi:formatted-engine', engine),
-    engine,
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog, shell }, notes) => {
@@ -105,11 +101,11 @@ async function shown(app, page, name) {
   await waitForDocumentEditor(app, page)
 }
 
-for (const engine of ['tiptap', 'codemirror']) {
-  test(`${engine}: links expose one named link each to assistive technology`, {
+{
+  test(`codemirror: links expose one named link each to assistive technology`, {
     timeout: 60000,
   }, async (t) => {
-    const { page } = await open(t, engine)
+    const { page } = await open(t)
     const rich = page.locator('.rich-pane')
     await rich.getByRole('link', { name: 'c', exact: true }).waitFor()
     const cdp = await page.context().newCDPSession(page)
@@ -136,10 +132,10 @@ for (const engine of ['tiptap', 'codemirror']) {
     )
   })
 
-  test(`${engine}: shift-click and ctrl+cmd-click follow links, in table cells too`, {
+  test(`codemirror: shift-click and ctrl+cmd-click follow links, in table cells too`, {
     timeout: 120000,
   }, async (t) => {
-    const { app, page } = await open(t, engine)
+    const { app, page } = await open(t)
     const rich = page.locator('.rich-pane')
     const link = (name) => rich.getByRole('link', { name, exact: true })
     await link('c').waitFor()
@@ -184,10 +180,7 @@ for (const engine of ['tiptap', 'codemirror']) {
     ])
       for (const modifiers of follows) {
         await link(name).click()
-        const editing =
-          engine === 'codemirror'
-            ? rich.locator('.hibi-lp-cell-editor').getByRole('link')
-            : link(name)
+        const editing = rich.locator('.hibi-lp-cell-editor').getByRole('link')
         await editing.waitFor()
         assert.equal(await editing.count(), 1)
         assert.deepEqual(await settled(), { name: 'a.md', opened: [] })
@@ -208,10 +201,7 @@ for (const engine of ['tiptap', 'codemirror']) {
         await pressShortcut(app, `${mod}+[`)
         await shown(app, page, 'a.md')
         await row.getByRole('link', { name: 'b', exact: true }).click()
-        const active =
-          engine === 'codemirror'
-            ? row.locator('.hibi-lp-cell-editor [data-wiki-link]')
-            : row.getByRole('link', { name: 'b', exact: true })
+        const active = row.locator('.hibi-lp-cell-editor [data-wiki-link]')
         await active.waitFor()
         await active.click({ modifiers })
         await shown(app, page, 'b.md')
@@ -225,10 +215,7 @@ for (const engine of ['tiptap', 'codemirror']) {
     ])
       for (const modifiers of follows) {
         await link(name).click()
-        const active =
-          engine === 'codemirror'
-            ? rich.locator('.hibi-lp-cell-editor [data-wiki-link]')
-            : link(name)
+        const active = rich.locator('.hibi-lp-cell-editor [data-wiki-link]')
         await active.waitFor()
         await active.click({ modifiers })
         await shown(app, page, target)

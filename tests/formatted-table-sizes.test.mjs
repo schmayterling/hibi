@@ -5,7 +5,6 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { tableKey } from '../src/renderer/src/table-layout-store.ts'
 import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const markdown =
@@ -96,9 +95,6 @@ test('formatted tables show and resize the column and row sizes the rich editor 
       )?.length === 1,
   )
   const [richEntry] = await stored(layout)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await apps.pop().close()
 
   // The formatted view finds them by the table's key.

@@ -10,8 +10,8 @@ import {
   electron,
   stopElectronTree,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -809,7 +809,7 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
       },
     })
   })
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   const statusLabel = ({ words, characters }) =>
     `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'} · ${characters.toLocaleString()} ${characters === 1 ? 'character' : 'characters'}`
   for (const [configuration, disabled] of configurations.entries()) {

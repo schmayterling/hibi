@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { pressPastCompletionDelay, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -25,7 +22,7 @@ test('formatted completions keep exact source, history, composition, privacy and
       name: 'Formatted completion probe',
       description: 'Formatted completion contract test.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       startup: 'background',
       capabilities: [],
@@ -81,7 +78,7 @@ test('formatted completions keep exact source, history, composition, privacy and
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  const rich = await waitForFormattedEditor(app, page)
   await page.waitForFunction(() => window.formattedCompletion?.ready)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -408,9 +405,7 @@ test('formatted completions keep exact source, history, composition, privacy and
   await t.test('typing context uses the named editor offsets', async () => {
     assert.deepEqual(
       await page.evaluate(() => window.formattedCompletion.events[0].change),
-      t.formattedEngine === 'codemirror'
-        ? { from: 7, to: 13, insertedLength: 3 }
-        : { from: 8, to: 14, insertedLength: 3 },
+      { from: 7, to: 13, insertedLength: 3 },
     )
     const event = await page.evaluate(
       () => window.formattedCompletion.events[0],
@@ -445,45 +440,45 @@ test('formatted completions keep exact source, history, composition, privacy and
     process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
   )
   await saved('before 日本語 after 😀')
-  if (t.formattedEngine === 'codemirror') {
-    await t.test('typing context counts crlf once', async () => {
-      await reset('line\r\nbefore chosen after 😀')
-      await page.waitForFunction(
-        () =>
-          document
-            .querySelector('.cm-content')
-            ?.cmTile?.root.view.state.doc.toString() ===
-          'line\nbefore chosen after 😀',
-      )
-      await rich.evaluate((element) => {
-        element.cmTile.root.view.dispatch({
-          selection: { anchor: 12, head: 18 },
-        })
+
+  await t.test('typing context counts crlf once', async () => {
+    await reset('line\r\nbefore chosen after 😀')
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('.cm-content')
+          ?.cmTile?.root.view.state.doc.toString() ===
+        'line\nbefore chosen after 😀',
+    )
+    await rich.evaluate((element) => {
+      element.cmTile.root.view.dispatch({
+        selection: { anchor: 12, head: 18 },
       })
-      await page.keyboard.insertText('日本語')
-      await saved('line\r\nbefore 日本語 after 😀')
-      await page.waitForFunction(() => window.formattedCompletion.events.length)
-      const event = await page.evaluate(
-        () => window.formattedCompletion.events[0],
-      )
-      const live = await rich.evaluate((element) => {
-        const { state } = element.cmTile.root.view
-        const head = state.selection.main.head
-        return {
-          head,
-          before: state.sliceDoc(state.doc.lineAt(head).from, head),
-        }
-      })
-      assert.deepEqual(event.change, { from: 12, to: 18, insertedLength: 3 })
-      assert.equal(event.selection.head, live.head)
-      assert.equal(event.before, live.before)
-      assert.equal(event.before, 'before 日本語')
-      assert.equal(
-        event.change.from + event.change.insertedLength,
-        event.selection.head,
-      )
     })
-  }
+    await page.keyboard.insertText('日本語')
+    await saved('line\r\nbefore 日本語 after 😀')
+    await page.waitForFunction(() => window.formattedCompletion.events.length)
+    const event = await page.evaluate(
+      () => window.formattedCompletion.events[0],
+    )
+    const live = await rich.evaluate((element) => {
+      const { state } = element.cmTile.root.view
+      const head = state.selection.main.head
+      return {
+        head,
+        before: state.sliceDoc(state.doc.lineAt(head).from, head),
+      }
+    })
+    assert.deepEqual(event.change, { from: 12, to: 18, insertedLength: 3 })
+    assert.equal(event.selection.head, live.head)
+    assert.equal(event.before, live.before)
+    assert.equal(event.before, 'before 日本語')
+    assert.equal(
+      event.change.from + event.change.insertedLength,
+      event.selection.head,
+    )
+  })
+
   await reset('password: secret')
   await page.keyboard.type('x')
   await settle()

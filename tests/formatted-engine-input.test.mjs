@@ -3,15 +3,18 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-for (const engine of ['tiptap', 'codemirror']) {
-  test(`${engine}: native replacement, selection and history survive source switching`, {
+{
+  test(`codemirror: native replacement, selection and history survive source switching`, {
     timeout: 45000,
   }, async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-engine-input-'))
@@ -26,7 +29,7 @@ for (const engine of ['tiptap', 'codemirror']) {
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    const rich = await selectFormattedEngine(app, page, engine)
+    const rich = await waitForFormattedEditor(app, page)
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
     const saved = async (text) => {

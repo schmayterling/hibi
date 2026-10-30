@@ -7,8 +7,8 @@ import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-for (const engine of ['tiptap', 'codemirror']) {
-  test(`${engine}: source default focuses its editor before immediate typing`, {
+{
+  test(`codemirror: source default focuses its editor before immediate typing`, {
     timeout: 30000,
   }, async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-source-default-focus-'))
@@ -25,10 +25,7 @@ for (const engine of ['tiptap', 'codemirror']) {
     const page = await app.firstWindow()
     page.setDefaultTimeout(7000)
     await waitForDocumentEditor(app, page)
-    await page.evaluate((engine) => {
-      localStorage.setItem('hibi:formatted-engine', engine)
-      localStorage.setItem('default-view', 'markdown')
-    }, engine)
+    await page.evaluate(() => localStorage.setItem('default-view', 'markdown'))
     await page.reload()
     await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     await page.evaluate(async () => {
@@ -69,7 +66,6 @@ test('split source panes preserve independent selections and target typing', {
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('default-view', 'markdown')
   })
   await page.reload()

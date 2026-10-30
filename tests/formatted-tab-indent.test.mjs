@@ -13,20 +13,21 @@ import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
 import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
 import { NativeTableKit } from '../src/addons/markdown/table-tokenizer.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
-for (const engine of ['tiptap', 'codemirror'])
-  test(`${engine}: Tab in code uses its indentation and leaves code when Tab does not indent`, {
+{
+  test(`codemirror: Tab in code uses its indentation and leaves code when Tab does not indent`, {
     timeout: 60000,
   }, async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-tab-indent-'))
     const file = join(profile, 'code.md')
-    const source =
-      engine === 'codemirror'
-        ? `\`\`\`\n  x\n${'word '.repeat(51).concat('\n').repeat(1024)}y\n\`\`\``
-        : '```\n  x\ny\n```'
+    const source = `\`\`\`\n  x\n${'word '.repeat(51).concat('\n').repeat(1024)}y\n\`\`\``
     await writeFile(file, source)
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`, file],
@@ -41,20 +42,14 @@ for (const engine of ['tiptap', 'codemirror'])
     const page = await app.firstWindow()
     // The default CodeMirror view opens even the large note in Normal view.
     await waitForDocumentEditor(app, page)
-    if (engine === 'tiptap') {
-      await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-      )
-      await page.reload()
-      await waitForDocumentEditor(app, page)
-    }
+
     const editor = page.getByRole('textbox', {
       name: 'Document editor',
       exact: true,
     })
     assert.equal(
       await editor.evaluate((element) => element.matches('.cm-content')),
-      engine === 'codemirror',
+      true,
     )
     // Hidden windows have no focus; keys need a focused editor.
     const session = await page.context().newCDPSession(page)
@@ -86,12 +81,11 @@ for (const engine of ['tiptap', 'codemirror'])
         editor.commands.setTextSelection(at)
         editor.view.focus()
       })
-      if (engine === 'codemirror')
-        await waitForAsync(page, () =>
-          [...document.querySelectorAll('.cm-line.hibi-lp-codeblock')].some(
-            (line) => line.textContent.trim() === 'y',
-          ),
-        )
+      await waitForAsync(page, () =>
+        [...document.querySelectorAll('.cm-line.hibi-lp-codeblock')].some(
+          (line) => line.textContent.trim() === 'y',
+        ),
+      )
     }
     await t.test('code indents with its own unit', async () => {
       await place()
@@ -105,44 +99,43 @@ for (const engine of ['tiptap', 'codemirror'])
       await page.keyboard.press('Shift+Tab')
       await markdown(source)
     })
-    if (engine === 'codemirror')
-      await t.test(
-        'code in a first list item indents its own lines',
-        async () => {
-          const replace = (text, caret) =>
-            editor.evaluate(
-              (element, [text, caret]) => {
-                const view = element.cmTile.root.view
-                view.dispatch({
-                  changes: { from: 0, to: view.state.doc.length, insert: text },
-                  selection: { anchor: caret },
-                })
-                view.focus()
-              },
-              [text, caret],
-            )
-          // The item cannot nest; its code has no indented line of its own.
-          const list = '- item\n\n  ```\n  x\n  y\n  ```'
-          await replace(list, list.lastIndexOf('y'))
-          await markdown(list)
+    await t.test(
+      'code in a first list item indents its own lines',
+      async () => {
+        const replace = (text, caret) =>
+          editor.evaluate(
+            (element, [text, caret]) => {
+              const view = element.cmTile.root.view
+              view.dispatch({
+                changes: { from: 0, to: view.state.doc.length, insert: text },
+                selection: { anchor: caret },
+              })
+              view.focus()
+            },
+            [text, caret],
+          )
+        // The item cannot nest; its code has no indented line of its own.
+        const list = '- item\n\n  ```\n  x\n  y\n  ```'
+        await replace(list, list.lastIndexOf('y'))
+        await markdown(list)
+        await page.keyboard.press('Tab')
+        await markdown(list.replace('  y', '  \ty'))
+        // Leading tabs under a bullet read as spaces, as in the rich editor.
+        for (const code of [
+          '- item\n\n  ~~~\n  x\n  \ty\n  ~~~',
+          '- item\n\n  ~~~\n\tx\n\ty\n  ~~~',
+        ]) {
+          await replace(code, code.indexOf('x') + 1)
+          await markdown(code)
           await page.keyboard.press('Tab')
-          await markdown(list.replace('  y', '  \ty'))
-          // Leading tabs under a bullet read as spaces, as in the rich editor.
-          for (const code of [
-            '- item\n\n  ~~~\n  x\n  \ty\n  ~~~',
-            '- item\n\n  ~~~\n\tx\n\ty\n  ~~~',
-          ]) {
-            await replace(code, code.indexOf('x') + 1)
-            await markdown(code)
-            await page.keyboard.press('Tab')
-            await markdown(code.replace('x', 'x  '))
-            await page.keyboard.press('ControlOrMeta+z')
-            await markdown(code)
-          }
-          await replace(source, 0)
-          await markdown(source)
-        },
-      )
+          await markdown(code.replace('x', 'x  '))
+          await page.keyboard.press('ControlOrMeta+z')
+          await markdown(code)
+        }
+        await replace(source, 0)
+        await markdown(source)
+      },
+    )
     await t.test('without Tab indenting, Tab leaves code', async () => {
       await clickMenu(app, 'Settings')
       await page.getByRole('tab', { name: 'Editor', exact: true }).click()
@@ -165,6 +158,7 @@ for (const engine of ['tiptap', 'codemirror'])
       )
     })
   })
+}
 
 test('quoted code uses the native indentation unit with exact formatted history', {
   timeout: 120000,
@@ -232,8 +226,8 @@ test('quoted code uses the native indentation unit with exact formatted history'
     node.type === 'codeBlock'
       ? (node.content ?? []).map(({ text }) => text).join('')
       : node.content?.map(codeText).find((text) => text !== undefined)
-  for (const engine of ['tiptap', 'codemirror'])
-    await t.test(engine, async (t) => {
+  {
+    await t.test('codemirror', async (t) => {
       const folder = await mkdtemp(join(tmpdir(), 'hibi-quote-code-indent-'))
       const app = await electron.launch({
         args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -246,7 +240,7 @@ test('quoted code uses the native indentation unit with exact formatted history'
         await rm(folder, { recursive: true, force: true })
       })
       const page = await app.firstWindow()
-      await selectFormattedEngine(app, page, engine)
+      await waitForFormattedEditor(app, page)
       const session = await page.context().newCDPSession(page)
       await session.send('Emulation.setFocusEmulationEnabled', {
         enabled: true,
@@ -303,7 +297,7 @@ test('quoted code uses the native indentation unit with exact formatted history'
                 view.state.doc.toString() === source
               )
             },
-            { engine, source, model: parse(source) },
+            { engine: 'codemirror', source, model: parse(source) },
           )
           await editor.evaluate(
             (element, { engine, from }) => {
@@ -325,11 +319,11 @@ test('quoted code uses the native indentation unit with exact formatted history'
               }
               element.focus()
             },
-            { engine, from },
+            { engine: 'codemirror', from },
           )
           const before = await snapshot()
           assert.equal(before.source, source)
-          if (engine === 'tiptap') assert.deepEqual(before.model, parse(source))
+
           await page.keyboard.press('Tab')
           const typed = await snapshot()
           assert.notEqual(
@@ -337,52 +331,32 @@ test('quoted code uses the native indentation unit with exact formatted history'
             source,
             'Tab must perform a native edit',
           )
-          if (engine === 'tiptap') {
-            assert.notDeepEqual(typed.model, before.model)
-            assert.equal(
-              codeText(typed.model),
-              codeText(before.model).replace('foo', 'foo' + unit),
-            )
-            t.diagnostic(
-              JSON.stringify({
-                name,
-                unit,
-                before: codeText(before.model),
-                after: codeText(typed.model),
-              }),
-            )
-            assert.deepEqual(
-              typed.model,
-              parse(typed.source),
-              'native serialization must round-trip its actual model',
-            )
-            native.set(name, typed.model)
-          } else {
-            assert.equal(
-              typed.source,
-              source.slice(0, from) + unit + source.slice(from),
-            )
-            assert.ok(native.has(name), 'native control must pass first')
-            assert.deepEqual(parse(typed.source), native.get(name))
-            await page.keyboard.press('ControlOrMeta+z')
-            await waitForAsync(
-              page,
-              async (source) =>
-                (await window.hibi.getDocument()).markdown === source,
-              source,
-            )
-            assert.deepEqual(await snapshot(), before)
-            await page.keyboard.press(
-              process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
-            )
-            await waitForAsync(
-              page,
-              async (source) =>
-                (await window.hibi.getDocument()).markdown === source,
-              typed.source,
-            )
-            assert.deepEqual(await snapshot(), typed)
-          }
+
+          assert.equal(
+            typed.source,
+            source.slice(0, from) + unit + source.slice(from),
+          )
+          assert.ok(native.has(name), 'native control must pass first')
+          assert.deepEqual(parse(typed.source), native.get(name))
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForAsync(
+            page,
+            async (source) =>
+              (await window.hibi.getDocument()).markdown === source,
+            source,
+          )
+          assert.deepEqual(await snapshot(), before)
+          await page.keyboard.press(
+            process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+          )
+          await waitForAsync(
+            page,
+            async (source) =>
+              (await window.hibi.getDocument()).markdown === source,
+            typed.source,
+          )
+          assert.deepEqual(await snapshot(), typed)
         })
     })
+  }
 })

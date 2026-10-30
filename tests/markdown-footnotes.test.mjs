@@ -12,7 +12,6 @@ import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import { hasDocumentFootnotes } from '../src/renderer/src/document-shell.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 

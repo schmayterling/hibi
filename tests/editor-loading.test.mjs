@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { electron } from './electron.mjs'
-import { testFormattedEngines as test } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -14,19 +14,11 @@ async function blockedEditor(t) {
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
   )
   const entry = chunks.find((chunk) =>
-    chunk.modules.includes(
-      t.formattedEngine === 'codemirror'
-        ? 'src/renderer/src/FormattedEditor.tsx'
-        : 'src/renderer/src/Editor.tsx',
-    ),
+    chunk.modules.includes('src/renderer/src/FormattedEditor.tsx'),
   )
   assert.ok(entry)
   const otherEntry = chunks.find((chunk) =>
-    chunk.modules.includes(
-      t.formattedEngine === 'codemirror'
-        ? 'src/renderer/src/Editor.tsx'
-        : 'src/renderer/src/FormattedEditor.tsx',
-    ),
+    chunk.modules.includes('src/renderer/src/Editor.tsx'),
   )
   assert.ok(otherEntry)
   assert.notEqual(entry.file, otherEntry.file)
@@ -69,11 +61,8 @@ async function blockedEditor(t) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  // Keep the first selected-engine request blocked under either default.
+  // Keep the first editor request blocked.
   await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
-  await page.evaluate((engine) => {
-    localStorage.setItem('hibi:formatted-engine', engine)
-  }, t.formattedEngine)
   await waitForAsync(
     app,
     () =>
@@ -94,7 +83,6 @@ async function blockedEditor(t) {
     const editor = document.querySelector('.editor-page')
     return editor && !editor.inert
   })
-  assert.equal(await page.locator('.tiptap').count(), 0)
   assert.equal(await page.locator('.hibi-formatted').count(), 0)
   return { app, page, profile }
 }
@@ -128,7 +116,6 @@ test('pending rich module keeps shell usable and late completion preserves stand
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
   )
-  assert.equal(await page.locator('.tiptap').count(), 0)
   assert.equal(await page.locator('.hibi-formatted').count(), 0)
   assert.equal(
     await element.evaluate(

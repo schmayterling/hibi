@@ -75,9 +75,6 @@ test('math regions and leading empty paragraphs match native rich counts after e
     )
     const want = label(countText(richText(source, syntax).slice(1)))
     await counts(want)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     await counts(want)

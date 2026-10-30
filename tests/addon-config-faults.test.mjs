@@ -10,8 +10,8 @@ import { waitForAsync } from './poll.mjs'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const source = '# Title\n\n**strong** and ==proof==\n'
 
-for (const engine of ['default', 'codemirror']) {
-  test(`${engine} engine quarantines invalid syntax configuration before source startup`, {
+{
+  test(`codemirror engine quarantines invalid syntax configuration before source startup`, {
     timeout: 90000,
   }, async (t) => {
     const folder = await mkdtemp(join(tmpdir(), 'hibi-config-fault-'))
@@ -69,11 +69,7 @@ for (const engine of ['default', 'codemirror']) {
     const errors = []
     page.on('pageerror', (error) => errors.push(error.message))
     await waitForDocumentEditor(app, page)
-    if (engine === 'tiptap') {
-      await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-      )
-    }
+
     // Opening a note clears the current error toast. Retain startup attribution.
     await page.addInitScript(() => {
       window.configurationNotices = []
@@ -107,13 +103,7 @@ for (const engine of ['default', 'codemirror']) {
         (await window.hibi.getDocument()).markdown === expected,
       source,
     )
-    await page
-      .locator(
-        engine === 'codemirror'
-          ? '.rich-pane .hibi-lp-strong'
-          : '.rich-pane .tiptap strong',
-      )
-      .waitFor()
+    await page.locator('.rich-pane .hibi-lp-strong').waitFor()
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
     await page
       .locator('.source-pane .cm-content[contenteditable="true"]')
@@ -129,7 +119,7 @@ for (const engine of ['default', 'codemirror']) {
     } finally {
       t.diagnostic(
         JSON.stringify({
-          engine,
+          engine: 'codemirror',
           notices: await page.evaluate(() => window.configurationNotices),
         }),
       )

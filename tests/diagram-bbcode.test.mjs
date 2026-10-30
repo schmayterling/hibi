@@ -3,15 +3,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-it('Mermaid and BBCode edit, preview, and export without executing content', {
+test('Mermaid and BBCode edit, preview, and export without executing content', {
   timeout: 90000,
 }, async (t) => {
   const temp = await mkdtemp(join(tmpdir(), 'hibi-diagrams-'))
@@ -32,7 +32,7 @@ it('Mermaid and BBCode edit, preview, and export without executing content', {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
+  await waitForFormattedEditor(app, page)
   page.on('pageerror', (error) => console.error(error.message))
   page.on('console', (message) => {
     if (message.type() === 'error') console.error(message.text())
@@ -259,7 +259,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(15000)
   await waitForDocumentEditor(app, page)
   await prepare?.(page)
@@ -274,7 +274,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   )
   return { app, page }
 }
-it('Mermaid is on by default and keeps diagram links, images, and markup inert', {
+test('Mermaid is on by default and keeps diagram links, images, and markup inert', {
   timeout: 60000,
 }, async (t) => {
   const hostile = `\`\`\`mermaid

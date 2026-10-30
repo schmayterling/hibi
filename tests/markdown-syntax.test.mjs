@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import unit from 'node:test'
 import { Marked } from 'marked'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
@@ -11,11 +12,11 @@ import {
 } from '../src/addons/text-extras/syntax.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { installSyntaxPreferences } from '../src/renderer/src/syntax-parser.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -113,8 +114,8 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   })
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  const cm = t.formattedEngine === 'codemirror'
+  await waitForFormattedEditor(app, page)
+
   await rich.waitFor()
   await pressShortcut(app, `${mod}+Shift+]`)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -157,32 +158,20 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   assert.equal(await rich.locator('h2, .hibi-lp-h2').innerText(), 'two')
   assert.match(await rich.innerText(), /\*\*bold\*\* H~2~O/)
   // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
-  assert.equal(
-    await rich.getAttribute('contenteditable'),
-    cm ? 'true' : 'false',
-  )
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await pressShortcut(app, `${mod}+Shift+[`)
-  await page.waitForFunction(
-    (cm) =>
-      cm
-        ? document.querySelector('.rich-pane [contenteditable="true"]')
-        : document.querySelector('.tiptap')?.editor?.isEditable,
-    cm,
+  await page.waitForFunction(() =>
+    document.querySelector('.rich-pane [contenteditable="true"]'),
   )
-  if (cm) {
-    await rich.evaluate((element) => {
-      const view = element.cmTile.root.view
-      const line = view.state.doc.line(1)
-      view.dispatch({ selection: { anchor: line.from, head: line.to } })
-      view.focus()
-    })
-    await page.keyboard.insertText('# changed')
-  } else
-    await replaceRichText(
-      page,
-      rich.locator('.hibi-literal-block').filter({ hasText: /# one/i }),
-      '# changed',
-    )
+
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const line = view.state.doc.line(1)
+    view.dispatch({ selection: { anchor: line.from, head: line.to } })
+    view.focus()
+  })
+  await page.keyboard.insertText('# changed')
+
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('# changed'),
   )
@@ -190,14 +179,10 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   assert.ok(edited.includes('**bold** H~2~O'))
   assert.ok(edited.includes('> [!WARNING]\n> hello'))
   await pressShortcut(app, `${mod}+Shift+\\`)
-  await page.waitForFunction(
-    (cm) =>
-      cm
-        ? document.querySelector(
-            '.editor-panes.mode-side-by-side .rich-pane .cm-content',
-          )
-        : document.querySelector('.tiptap')?.editor?.isEditable === false,
-    cm,
+  await page.waitForFunction(() =>
+    document.querySelector(
+      '.editor-panes.mode-side-by-side .rich-pane .cm-content',
+    ),
   )
   await settings()
   for (const name of ['heading 1', 'bold', 'alerts', 'subscript', 'small text'])
@@ -216,7 +201,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   // Schema changes recreate the editor asynchronously; wait for the edited content.
   await rich
     .locator('h1, .hibi-lp-h1')
-    .filter({ hasText: cm ? /^#? ?changed$/ : /^changed$/ })
+    .filter({ hasText: /^#? ?changed$/ })
     .waitFor()
     .catch(async (cause) => {
       const state = await page.evaluate(async () => ({
@@ -264,11 +249,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
     edited,
   )
   await pressShortcut(app, `${mod}+Shift+[`)
-  if (cm) await waitForDocumentEditor(app, page)
-  else
-    await page.waitForFunction(
-      () => document.querySelector('.tiptap')?.editor?.isEditable,
-    )
+  await waitForDocumentEditor(app, page)
   // Keep the detected flavor present while exercising rich input rules.
   // Set the editor selection directly; DOM selection changes are asynchronous.
   await rich.evaluate((element) => {
@@ -296,10 +277,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   await rich.press('Enter')
   await rich.pressSequentially('normal again')
   assert.equal(
-    await rich
-      .locator(cm ? '.cm-line' : 'p')
-      .last()
-      .innerText(),
+    await rich.locator('.cm-line').last().innerText(),
     'normal again',
   )
   assert.deepEqual(errors, [])

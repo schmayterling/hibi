@@ -14,12 +14,9 @@ import {
   electron,
   showTestWindows,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
-import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
@@ -1604,7 +1601,7 @@ test('visual typing after a source visit defers the hidden source and toolbar ch
   assert.deepEqual(shown, { text: 'hello', persisted: 'hello' })
 })
 
-it('multi-line text input reaches source view in one edit, without native paragraph steps', {
+test('multi-line text input reaches source view in one edit, without native paragraph steps', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-source-lines-'))
@@ -1614,7 +1611,7 @@ it('multi-line text input reaches source view in one edit, without native paragr
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForEditor(page)
   await switchToSource(app, page)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -1680,7 +1677,7 @@ it('multi-line text input reaches source view in one edit, without native paragr
   assert.deepEqual([plain.prevented, plain.text], [[false], 'one line'])
 })
 
-it('source input handlers see multi-line text input with normalized line breaks', {
+test('source input handlers see multi-line text input with normalized line breaks', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-source-line-handler-'))
@@ -1693,7 +1690,7 @@ it('source input handlers see multi-line text input with normalized line breaks'
       name: 'Upper input',
       description: 'Consuming source input handler fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       capabilities: ['source'],
@@ -1733,7 +1730,7 @@ it('source input handlers see multi-line text input with normalized line breaks'
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForEditor(page)
   await switchToSource(app, page)
   await page.waitForFunction(() => {
@@ -2280,7 +2277,7 @@ async function launchInputFixture(
         name: 'Counted format',
         description: 'Count toolbar inspections',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         capabilities: ['source'],
         authors: [{ displayName: 'Test' }],

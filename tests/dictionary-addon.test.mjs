@@ -2,16 +2,14 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import native from 'node:test'
 import {
   electron,
   waitForAddonShortcut,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -54,7 +52,7 @@ async function dictionaryCase(t) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   // The dictionary starts in the background; its menu items come with it.
@@ -188,16 +186,11 @@ async function dictionaryCase(t) {
   await placeCaret(rich, 7)
   await pressShortcut(app, 'Shift+F7')
   await synonyms.getByRole('button', { name: 'glad', exact: true }).waitFor()
-  if (t.formattedEngine === 'tiptap')
-    await rich.evaluate((element) =>
-      element.editor.commands.insertContentAt(1, 'Oh, '),
-    )
-  else
-    await rich.evaluate((element) =>
-      element.cmTile.root.view.dispatch({
-        changes: { from: 0, insert: 'Oh, ' },
-      }),
-    )
+  await rich.evaluate((element) =>
+    element.cmTile.root.view.dispatch({
+      changes: { from: 0, insert: 'Oh, ' },
+    }),
+  )
   await synonyms.getByRole('button', { name: 'glad', exact: true }).click()
   await page
     .locator('.toast')
@@ -318,7 +311,7 @@ async function dictionarySplitCase(t) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   // The dictionary starts in the background; its menu items come with it.

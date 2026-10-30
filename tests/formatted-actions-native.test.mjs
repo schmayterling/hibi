@@ -15,8 +15,11 @@ import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { sameRichSourceDocument } from '../src/renderer/src/rich-source-preservation.ts'
 import { parseRow } from '../src/shared/markdown-table-source.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -508,8 +511,8 @@ async function snapshot(page) {
   return result
 }
 
-for (const engine of ['tiptap', 'codemirror'])
-  test(`${engine}: toolbar actions preserve native formatting, caret and history`, {
+{
+  test(`codemirror: toolbar actions preserve native formatting, caret and history`, {
     timeout: 180000,
   }, async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-formatting-actions-'))
@@ -532,7 +535,7 @@ for (const engine of ['tiptap', 'codemirror'])
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
-    await selectFormattedEngine(app, page, engine)
+    await waitForFormattedEditor(app, page)
     const rich = page.getByRole('textbox', {
       name: 'Document editor',
       exact: true,
@@ -573,9 +576,7 @@ for (const engine of ['tiptap', 'codemirror'])
       assert.equal(restored.source, expected)
       return restored
     }
-    for (const item of cases.filter(
-      (item) => !item.nativeGuard || engine === 'tiptap',
-    ))
+    for (const item of cases.filter((item) => !item.nativeGuard || false))
       await t.test(item.name, async () => {
         const file = join(profile, `${item.name}.md`)
         let source = item.source
@@ -657,7 +658,7 @@ for (const engine of ['tiptap', 'codemirror'])
               })
             }
           },
-          { item, engine },
+          { item, engine: 'codemirror' },
         )
         if (item.all && !item.selectionMenu)
           await page.keyboard.press(`${mod}+a`)
@@ -686,7 +687,7 @@ for (const engine of ['tiptap', 'codemirror'])
               : !root.cmTile.root.view.state.selection.main.empty
           })
         }
-        if (item.cell && engine === 'codemirror') {
+        if (item.cell && true) {
           await page.locator('td').filter({ hasText: 'cell' }).click()
           const cell = page.getByRole('textbox', {
             name: 'Table cell',
@@ -703,31 +704,7 @@ for (const engine of ['tiptap', 'codemirror'])
             view.focus()
           })
         }
-        if (engine === 'tiptap') {
-          await rich.evaluate((element) => element.editor.view.focus())
-          await page.waitForFunction(() => {
-            const editor = document.querySelector(
-                '.rich-pane [aria-label="Document editor"]',
-              ).editor,
-              selection = getSelection()
-            return (
-              selection?.focusNode &&
-              editor.view.posAtDOM(
-                selection.focusNode,
-                selection.focusOffset,
-              ) === editor.state.selection.head &&
-              editor.view.posAtDOM(
-                selection.anchorNode,
-                selection.anchorOffset,
-              ) === editor.state.selection.anchor
-            )
-          })
-          if (item.cell)
-            assert.equal(
-              (await page.evaluate(() => window.hibi.getDocument())).markdown,
-              await rich.evaluate((element) => element.editor.getMarkdown()),
-            )
-        }
+
         const before = await snapshot(page)
         if (item.nativeGuard)
           await rich.evaluate((element) => {
@@ -781,15 +758,13 @@ for (const engine of ['tiptap', 'codemirror'])
             exact: true,
           })
           if (await cell.count()) await cell.focus()
-          else if (engine === 'tiptap')
-            await rich.evaluate((element) => element.editor.view.focus())
           else await rich.focus()
         }
         await focus()
         const action = await snapshot(page)
         t.diagnostic(
           JSON.stringify({
-            engine,
+            engine: 'codemirror',
             name: item.name,
             phase: 'action',
             before: before.source,
@@ -797,7 +772,7 @@ for (const engine of ['tiptap', 'codemirror'])
           }),
         )
         if (item.nativeGuard) {
-          assert.equal(engine, 'tiptap')
+          assert.equal('codemirror', 'tiptap')
           await page.waitForFunction(() =>
             document
               .querySelector('.rich-pane .document-notice')
@@ -848,13 +823,8 @@ for (const engine of ['tiptap', 'codemirror'])
         }
         if (item.pendingHeading) {
           assert.deepEqual(action.headingLevels, [2])
-          if (engine === 'tiptap') {
-            assert.equal(action.source, '')
-            assert.equal(action.version, 0)
-          }
         }
-        if (engine === 'tiptap') native.set(item.name, { action })
-        else {
+        {
           const expected = native.get(item.name).action
           if (!item.pendingHeading) assert.equal(action.source, expected.source)
           assert.deepEqual(action.headingLevels, expected.headingLevels)
@@ -887,29 +857,8 @@ for (const engine of ['tiptap', 'codemirror'])
           assert.equal(undone.caret.empty, false)
           const redone = await history(action.source, true)
           assert.deepEqual(redone.caret, action.caret)
-          if (engine === 'tiptap')
-            assert.equal(redone.selectionDebug.type, 'all')
         }
-        if (engine === 'tiptap') {
-          // Isolate the next typing edit while retaining the live selection and pending marks.
-          await rich.evaluate((element) => {
-            const editor = element.editor,
-              selection = editor.state.selection,
-              marks = editor.state.storedMarks
-            if (selection.toJSON().type === 'all') {
-              let first
-              editor.state.doc.descendants((node, pos) => {
-                if (first === undefined && node.isTextblock) first = pos + 1
-              })
-              editor.commands.setTextSelection(first)
-            } else editor.commands.selectAll()
-            editor.view.dispatch(
-              editor.state.tr.setSelection(selection).setStoredMarks(marks),
-            )
-            editor.view.focus()
-          })
-          assert.deepEqual((await snapshot(page)).caret, action.caret)
-        }
+
         if (item.clearSelection) {
           await rich.evaluate((element, engine) => {
             if (engine === 'tiptap') {
@@ -933,7 +882,7 @@ for (const engine of ['tiptap', 'codemirror'])
               })
               view.focus()
             }
-          }, engine)
+          }, 'codemirror')
         }
         await focus()
         const typingVersion = (await snapshot(page)).version
@@ -958,10 +907,14 @@ for (const engine of ['tiptap', 'codemirror'])
         })
         const typed = await snapshot(page)
         t.diagnostic(
-          JSON.stringify({ engine, name: item.name, phase: 'typed', ...typed }),
+          JSON.stringify({
+            engine: 'codemirror',
+            name: item.name,
+            phase: 'typed',
+            ...typed,
+          }),
         )
-        if (engine === 'tiptap') native.get(item.name).typed = typed
-        else {
+        {
           const expected = native.get(item.name).typed
           assert.equal(
             item.cell || item.action === 'table'
@@ -991,7 +944,8 @@ for (const engine of ['tiptap', 'codemirror'])
           typed.inputs,
           item.physical &&
             !item.clearSelection &&
-            (engine === 'tiptap' || (item.all && !item.selectionMenu))
+            item.all &&
+            !item.selectionMenu
             ? []
             : Array.from(typedText, (data) => ({ type: 'insertText', data })),
         )
@@ -999,15 +953,13 @@ for (const engine of ['tiptap', 'codemirror'])
         if (item.repeatAfterHistory) {
           t.diagnostic(
             JSON.stringify({
-              engine,
+              engine: 'codemirror',
               name: item.name,
               phase: 'undo-typed',
               ...undone,
             }),
           )
-          if (engine === 'tiptap') native.get(item.name).undone = undone
-          else
-            assert.deepEqual(undone.caret, native.get(item.name).undone.caret)
+          assert.deepEqual(undone.caret, native.get(item.name).undone.caret)
         }
         await history(typed.source, true)
         if (action.source !== before.source) {
@@ -1020,30 +972,24 @@ for (const engine of ['tiptap', 'codemirror'])
           const restored = await snapshot(page)
           t.diagnostic(
             JSON.stringify({
-              engine,
+              engine: 'codemirror',
               name: item.name,
               phase: 'restored',
               ...restored,
             }),
           )
-          if (engine === 'tiptap') native.get(item.name).restored = restored
-          else
-            assert.deepEqual(
-              restored.caret,
-              native.get(item.name).restored.caret,
-            )
+          assert.deepEqual(restored.caret, native.get(item.name).restored.caret)
           await page.keyboard.type('Q')
           const retyped = await snapshot(page)
           t.diagnostic(
             JSON.stringify({
-              engine,
+              engine: 'codemirror',
               name: item.name,
               phase: 'retyped',
               ...retyped,
             }),
           )
-          if (engine === 'tiptap') native.get(item.name).retyped = retyped
-          else {
+          {
             const expected = native.get(item.name).retyped
             assert.equal(retyped.source, expected.source)
             assert.ok(
@@ -1067,3 +1013,4 @@ for (const engine of ['tiptap', 'codemirror'])
         }
       })
   })
+}

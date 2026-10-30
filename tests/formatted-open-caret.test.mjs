@@ -3,8 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -182,8 +186,8 @@ function caret() {
 }
 
 const native = new Map()
-for (const engine of ['tiptap', 'codemirror'])
-  test(`${engine}: a note opens with the caret at the end of its last text`, {
+{
+  test(`codemirror: a note opens with the caret at the end of its last text`, {
     timeout: 600000,
   }, async (t) => {
     const folder = await mkdtemp(join(tmpdir(), 'hibi-open-caret-'))
@@ -205,7 +209,7 @@ for (const engine of ['tiptap', 'codemirror'])
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await selectFormattedEngine(app, page, engine)
+    await waitForFormattedEditor(app, page)
     const session = await page.context().newCDPSession(page)
     await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
     const open = async (name, markdown) => {
@@ -279,12 +283,11 @@ for (const engine of ['tiptap', 'codemirror'])
     }
     for (const [name, markdown] of Object.entries(notes)) {
       const observed = await open(name, markdown)
-      t.diagnostic(JSON.stringify({ engine, name, ...observed }))
-      const expected =
-        accepted[name]?.[engine === 'tiptap' ? 'native' : 'codemirror']
+      t.diagnostic(JSON.stringify({ engine: 'codemirror', name, ...observed }))
+      const expected = accepted[name]?.['codemirror']
       const end = markdown.trimEnd().length
       const block = [markdown.lastIndexOf('\n\n', end) + 2, end]
-      if (engine === 'tiptap') native.set(name, key(observed))
+
       if (expected === node)
         check(name, { selection: observed.selection }, node)
       else if (expected === 'block')
@@ -295,8 +298,7 @@ for (const engine of ['tiptap', 'codemirror'])
       } else if (expected === 'end or native') {
         if (observed.head !== end) check(name, key(observed), native.get(name))
       } else if (expected) check(name, key(observed), expected)
-      else if (engine === 'codemirror')
-        check(name, key(observed), native.get(name))
+      else check(name, key(observed), native.get(name))
       // Wherever its caret is, a note opens at its top.
       if (observed.focus === 'editor')
         check(name, { name, top: observed.top }, { name, top: 0 })
@@ -307,12 +309,12 @@ for (const engine of ['tiptap', 'codemirror'])
     const rendered = { math: 'x^2', mermaid: 'graph TD', typst: '= last' }
     const markdown = () =>
       page.evaluate(async () => (await window.hibi.getDocument()).markdown)
-    const inert = (name) => engine === 'tiptap' && name === 'rule'
+    const inert = (name) => false
     for (const name of atoms)
       for (const press of ['Z', 'Enter', 'Backspace', 'Delete']) {
         const note = notes[name]
         await open(`${name}-${press}`, note)
-        if (engine === 'codemirror' && rendered[name])
+        if (rendered[name])
           check(
             name,
             {
@@ -371,7 +373,7 @@ for (const engine of ['tiptap', 'codemirror'])
       const kept = notes[name].trimEnd()
       for (const action of actions) {
         await open(`${name}-${action.replace(/\W/g, '')}`, notes[name])
-        if (engine === 'codemirror' && action === actions[0]) {
+        if (action === actions[0]) {
           // The enabled or pressed actions, or whether they are `want`.
           const shown = (want) => {
             const ids = [
@@ -451,85 +453,89 @@ for (const engine of ['tiptap', 'codemirror'])
     }
     // The formatted view moves the caret where the rich editor puts it once
     // its view reaches a long note's end, unless the user moved it first.
-    if (engine === 'codemirror')
-      for (const [name, moved] of [
-        ['long', false],
-        ['long-table', false],
-        ['long-mermaid', false],
-        ['long', true],
-      ]) {
-        const markdown = notes[name]
-        await open(`${name}-scrolled${moved ? '-moved' : ''}`, markdown)
-        const end = markdown.trimEnd().length
-        if (moved) await page.keyboard.press('ArrowLeft')
-        const before = await page.evaluate(caret)
-        await page.evaluate(() => {
-          const pane = document.querySelector('.rich-pane')
-          pane.scrollTop = pane.scrollHeight
-        })
-        let last = null
-        for (let read = 0; read < 30; read++) {
-          await page.waitForTimeout(100)
-          const now = await page.evaluate(caret)
-          if (JSON.stringify(now) === JSON.stringify(last)) break
-          last = now
-        }
-        t.diagnostic(JSON.stringify({ engine, name, moved, ...last }))
-        if (moved)
-          check(name, { name, head: last.head }, { name, head: before.head })
-        else if (name === 'long-mermaid')
-          check(
-            name,
-            [last.anchor, last.head],
-            [markdown.lastIndexOf('\n\n', end) + 2, end],
-          )
-        else check(name, key(last), native.get(name))
-      }
-    // Undo can bring back the selection a note opened with, but the reader
-    // has been there since: the cell it lands in is shown, as after any undo.
-    if (engine === 'codemirror') {
-      const note = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
-        { length: 80 },
-        (_, row) => `| r${row} | v${row} |`,
-      ).join('\n')}\n`
-      const rows = async (count) =>
-        (await window.hibi.getDocument()).markdown
-          .split('\n')
-          .filter((line) => line.startsWith('|')).length === count
-      await open('tall-table-undo', note)
-      // Tab in the last cell adds a row.
-      await page.keyboard.press('Tab')
-      await waitForAsync(page, rows, 83)
+    for (const [name, moved] of [
+      ['long', false],
+      ['long-table', false],
+      ['long-mermaid', false],
+      ['long', true],
+    ]) {
+      const markdown = notes[name]
+      await open(`${name}-scrolled${moved ? '-moved' : ''}`, markdown)
+      const end = markdown.trimEnd().length
+      if (moved) await page.keyboard.press('ArrowLeft')
+      const before = await page.evaluate(caret)
       await page.evaluate(() => {
-        document.querySelector('.rich-pane').scrollTop = 0
+        const pane = document.querySelector('.rich-pane')
+        pane.scrollTop = pane.scrollHeight
       })
-      await page.keyboard.press('ControlOrMeta+z')
-      await waitForAsync(page, rows, 82)
       let last = null
       for (let read = 0; read < 30; read++) {
         await page.waitForTimeout(100)
-        const now = await page.evaluate(() => {
-          const shown = document
-            .querySelector('.rich-pane')
-            .getBoundingClientRect()
-          const cell = document.activeElement?.closest('td, th')
-          const box = cell?.getBoundingClientRect()
-          return {
-            cell: cell ? [cell.parentElement.rowIndex, cell.cellIndex] : null,
-            shown:
-              !!box &&
-              box.top >= shown.top - 1 &&
-              box.bottom <= shown.bottom + 1,
-          }
-        })
+        const now = await page.evaluate(caret)
         if (JSON.stringify(now) === JSON.stringify(last)) break
         last = now
       }
-      t.diagnostic(JSON.stringify({ engine, name: 'tall-table-undo', ...last }))
-      check('tall-table-undo', last, { cell: [80, 1], shown: true })
+      t.diagnostic(
+        JSON.stringify({ engine: 'codemirror', name, moved, ...last }),
+      )
+      if (moved)
+        check(name, { name, head: last.head }, { name, head: before.head })
+      else if (name === 'long-mermaid')
+        check(
+          name,
+          [last.anchor, last.head],
+          [markdown.lastIndexOf('\n\n', end) + 2, end],
+        )
+      else check(name, key(last), native.get(name))
     }
+    // Undo can bring back the selection a note opened with, but the reader
+    // has been there since: the cell it lands in is shown, as after any undo.
+    const note = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
+      { length: 80 },
+      (_, row) => `| r${row} | v${row} |`,
+    ).join('\n')}\n`
+    const rows = async (count) =>
+      (await window.hibi.getDocument()).markdown
+        .split('\n')
+        .filter((line) => line.startsWith('|')).length === count
+    await open('tall-table-undo', note)
+    // Tab in the last cell adds a row.
+    await page.keyboard.press('Tab')
+    await waitForAsync(page, rows, 83)
+    await page.evaluate(() => {
+      document.querySelector('.rich-pane').scrollTop = 0
+    })
+    await page.keyboard.press('ControlOrMeta+z')
+    await waitForAsync(page, rows, 82)
+    let last = null
+    for (let read = 0; read < 30; read++) {
+      await page.waitForTimeout(100)
+      const now = await page.evaluate(() => {
+        const shown = document
+          .querySelector('.rich-pane')
+          .getBoundingClientRect()
+        const cell = document.activeElement?.closest('td, th')
+        const box = cell?.getBoundingClientRect()
+        return {
+          cell: cell ? [cell.parentElement.rowIndex, cell.cellIndex] : null,
+          shown:
+            !!box && box.top >= shown.top - 1 && box.bottom <= shown.bottom + 1,
+        }
+      })
+      if (JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    t.diagnostic(
+      JSON.stringify({
+        engine: 'codemirror',
+        name: 'tall-table-undo',
+        ...last,
+      }),
+    )
+    check('tall-table-undo', last, { cell: [80, 1], shown: true })
     assert.deepEqual(differences, [])
   })
+}
 
 // A note opens at its top: the caret it opens with is not where the reader
 // is, so diagrams drawn above it keep the top in place. The Mermaid language
@@ -537,7 +543,7 @@ for (const engine of ['tiptap', 'codemirror'])
 // little shorter than the note, so the formatted view reads where the reader
 // is while the caret is still on screen above the diagrams' placeholders, as
 // when they load late.
-test('codemirror: a note opens at its top while diagrams above its caret draw', {
+test('a note opens at its top while diagrams above its caret draw', {
   timeout: 120000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-open-top-'))
@@ -559,7 +565,7 @@ test('codemirror: a note opens at its top while diagrams above its caret draw', 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(30000)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   const chunks = JSON.parse(
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
   )

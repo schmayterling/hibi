@@ -7,7 +7,6 @@ import { getSchema } from '@tiptap/core'
 import { MarkdownManager } from '@tiptap/markdown'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -286,16 +285,16 @@ test('native multiline input after a long formatted space run keeps paragraph bo
   const nativeSource = `**a**${spaces}\n\n**yb**`
   const parse = modelParser()
   let nativeModel
-  for (const engine of ['tiptap', 'codemirror'])
-    await t.test(engine, async (t) => {
-      const { app, page, folder } = await launch(t, engine)
+  {
+    await t.test('codemirror', async (t) => {
+      const { app, page, folder } = await launch(t, 'codemirror')
       const editor = await openFixture(
         app,
         page,
         folder,
         'long-formatted-spaces',
         source,
-        engine,
+        'codemirror',
       )
       await editor.focus()
       await editor.evaluate(
@@ -309,29 +308,24 @@ test('native multiline input after a long formatted space run keeps paragraph bo
           element.editor.commands.setTextSelection(length + 2)
           element.editor.view.focus()
         },
-        { engine, length: spaces.length },
+        { engine: 'codemirror', length: spaces.length },
       )
       const before = await snapshot(page)
       assert.equal(before.source, source)
-      if (engine === 'tiptap') assert.deepEqual(before.model, parse(source))
+
       await page.keyboard.insertText('\ny')
       const typed = await snapshot(page)
-      assert.equal(typed.source, engine === 'tiptap' ? nativeSource : expected)
-      if (engine === 'tiptap') {
-        nativeModel = typed.model
-        assert.notDeepEqual(parse(typed.source), typed.model)
-      } else assert.deepEqual(parse(typed.source), nativeModel)
+      assert.equal(typed.source, expected)
+      assert.deepEqual(parse(typed.source), nativeModel)
       await t.test(
         'exact source and model after undo and redo',
         {
-          todo:
-            engine === 'tiptap'
-              ? 'native markdown serialization drops the bold mark on trailing spaces during redo'
-              : false,
+          todo: false,
         },
         () => assertHistory(app, page, before, typed),
       )
     })
+  }
 })
 
 test('select-all code input matches the native model with exact formatted undo and redo', {
@@ -340,16 +334,16 @@ test('select-all code input matches the native model with exact formatted undo a
   const source = '```\nabcd\n```\n\nend'
   const input = '```\nX'
   let nativeModel
-  for (const engine of ['tiptap', 'codemirror'])
-    await t.test(engine, async (t) => {
-      const { app, page, folder } = await launch(t, engine)
+  {
+    await t.test('codemirror', async (t) => {
+      const { app, page, folder } = await launch(t, 'codemirror')
       const editor = await openFixture(
         app,
         page,
         folder,
         'code-fence',
         source,
-        engine,
+        'codemirror',
       )
       const snapshot = () =>
         page.evaluate(async () => {
@@ -363,23 +357,13 @@ test('select-all code input matches the native model with exact formatted undo a
           }
         })
       await editor.focus()
-      if (engine === 'tiptap')
-        await editor.evaluate((element) => {
-          element.editor.commands.selectAll()
-          element.editor.view.focus()
-        })
+
       const before = await snapshot()
       assert.equal(before.source, source)
       await editor.press('ControlOrMeta+a')
       await page.keyboard.insertText(input)
       const typed = await snapshot()
-      if (engine === 'tiptap') {
-        nativeModel = typed.model
-        assert.equal(nativeModel.content.length, 1)
-        assert.equal(nativeModel.content[0].type, 'codeBlock')
-        assert.equal(nativeModel.content[0].content[0].text, input)
-        return
-      }
+
       const {
         parser: marked,
         options,
@@ -419,6 +403,7 @@ test('select-all code input matches the native model with exact formatted undo a
         assert.deepEqual(await snapshot(), expected)
       }
     })
+  }
 })
 
 test('multiline selection edges match untouched native marks with exact formatted history', {
@@ -483,9 +468,9 @@ test('multiline selection edges match untouched native marks with exact formatte
   ]
   const parse = modelParser()
   const native = new Map()
-  for (const engine of ['tiptap', 'codemirror'])
-    await t.test(engine, async (t) => {
-      const { app, page, folder } = await launch(t, engine)
+  {
+    await t.test('codemirror', async (t) => {
+      const { app, page, folder } = await launch(t, 'codemirror')
       for (const item of cases)
         for (const backward of [false, true])
           for (const ticks of [true, false]) {
@@ -502,7 +487,7 @@ test('multiline selection edges match untouched native marks with exact formatte
                 folder,
                 name,
                 item.source,
-                engine,
+                'codemirror',
               )
               await editor.focus()
               await editor.evaluate(
@@ -529,12 +514,11 @@ test('multiline selection edges match untouched native marks with exact formatte
                     editor.view.focus()
                   }
                 },
-                { engine, item, backward },
+                { engine: 'codemirror', item, backward },
               )
               const before = await snapshot(page)
               assert.equal(before.source, item.source)
-              if (engine === 'tiptap')
-                assert.deepEqual(before.model, parse(item.source))
+
               const expected = ticks
                 ? item.expected
                 : (item.plain ??
@@ -550,23 +534,15 @@ test('multiline selection edges match untouched native marks with exact formatte
                 before.source,
                 'native control must perform an edit',
               )
-              if (engine === 'tiptap') {
-                assert.notDeepEqual(
-                  typed.model,
-                  before.model,
-                  'native model must change',
-                )
-                assert.deepEqual(typed.model, parse(expected))
-                native.set(name, typed.model)
-              } else {
-                assert.equal(typed.source, expected)
-                assert.ok(native.has(name), 'native control must pass first')
-                assert.deepEqual(parse(typed.source), native.get(name))
-                await assertHistory(app, page, before, typed)
-              }
+
+              assert.equal(typed.source, expected)
+              assert.ok(native.has(name), 'native control must pass first')
+              assert.deepEqual(parse(typed.source), native.get(name))
+              await assertHistory(app, page, before, typed)
             })
           }
     })
+  }
 })
 
 test('raw marker multiline ranges preserve unselected source and exact history', {
@@ -708,9 +684,9 @@ test('inline code multiline input matches the native model with exact source and
   ]
   const parse = modelParser()
   const native = new Map()
-  for (const engine of ['tiptap', 'codemirror'])
-    await t.test(engine, async (t) => {
-      const { app, page, folder } = await launch(t, engine)
+  {
+    await t.test('codemirror', async (t) => {
+      const { app, page, folder } = await launch(t, 'codemirror')
       for (const item of cases)
         await t.test(item.name, async (t) => {
           const editor = await openFixture(
@@ -719,7 +695,7 @@ test('inline code multiline input matches the native model with exact source and
             folder,
             item.name,
             item.source,
-            engine,
+            'codemirror',
           )
           await editor.focus()
           await editor.evaluate(
@@ -740,32 +716,23 @@ test('inline code multiline input matches the native model with exact source and
               element.editor.commands.setTextSelection(position)
               element.editor.view.focus()
             },
-            { engine, item },
+            { engine: 'codemirror', item },
           )
           const before = await snapshot(page)
           assert.equal(before.source, item.source)
-          if (engine === 'tiptap')
-            assert.deepEqual(before.model, parse(item.source))
+
           await page.keyboard.insertText(item.input)
           const typed = await snapshot(page)
-          assert.equal(
-            typed.source,
-            engine === 'tiptap'
-              ? (item.native ?? item.expected)
-              : item.expected,
-          )
-          if (engine === 'tiptap') native.set(item.name, typed.model)
-          else assert.deepEqual(parse(typed.source), native.get(item.name))
+          assert.equal(typed.source, item.expected)
+          assert.deepEqual(parse(typed.source), native.get(item.name))
           await t.test(
             'exact source and model after undo and redo',
             {
-              todo:
-                engine === 'tiptap' && item.native
-                  ? 'native markdown serialization drops the code mark on trailing spaces during redo'
-                  : false,
+              todo: false,
             },
             () => assertHistory(app, page, before, typed),
           )
         })
     })
+  }
 })

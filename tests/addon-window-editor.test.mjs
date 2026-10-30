@@ -4,11 +4,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 
 const editorSelector = {
-  tiptap: '.tiptap[contenteditable="true"]',
   codemirror: '.hibi-formatted .cm-content[contenteditable="true"]',
 }
 
@@ -95,7 +93,7 @@ async function formattedWindowProof(page, preview) {
   await proof.waitFor()
 }
 
-async function hostEditor(t, engine) {
+async function hostEditor(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-addon-window-editor-'))
   const profile = join(root, 'profile')
   await mkdir(profile)
@@ -112,7 +110,7 @@ async function hostEditor(t, engine) {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() =>
     window.hibi.openAddonWindow('ui-preview', {
       id: 'editor',
@@ -124,7 +122,7 @@ async function hostEditor(t, engine) {
   while (!findPreview()) await setTimeout(30)
   const preview = findPreview()
   preview.setDefaultTimeout(7000)
-  const editor = preview.locator(editorSelector[engine])
+  const editor = preview.locator(editorSelector['codemirror'])
   await preview
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .and(editor)
@@ -139,51 +137,15 @@ async function hostEditor(t, engine) {
     await preview.getByRole('region', { name: 'Preview note' }).count(),
     1,
   )
-  if (engine === 'codemirror') await formattedWindowProof(page, preview)
-  else {
-    const chunks = JSON.parse(
-      await readFile('out/renderer/startup-bundle.json', 'utf8'),
-    )
-    const definition = chunks.find((chunk) =>
-      chunk.modules.includes('src/renderer/src/addon-definition.ts'),
-    )
-    assert.ok(definition)
-    // The real window bootstrap supplies the SDK to this omitted-capability factory.
-    const name = await preview.evaluate(async (file) => {
-      const { normalizeDefinition } = await import(`app://hibi/${file}`)
-      let name
-      await normalizeDefinition(
-        (sdk) => {
-          name = sdk.tiptap.Extension.create({ name: 'legacyWindowProof' }).name
-          return { start() {} }
-        },
-        {
-          id: 'legacy-window-proof',
-          name: 'Legacy window proof',
-          description: 'Legacy SDK fixture',
-          apiVersion: 2,
-          version: '1.0.0',
-          kind: 'extension',
-          authors: [{ displayName: 'Test' }],
-        },
-      )
-      return name
-    }, definition.file)
-    assert.equal(name, 'legacyWindowProof')
-  }
+  await formattedWindowProof(page, preview)
 
   await editor.click()
   await preview.keyboard.type('# Title')
   await preview.keyboard.press('Enter')
   await preview.keyboard.type('Body')
-  const heading = preview.locator(
-    engine === 'tiptap' ? '.tiptap h1' : '.hibi-lp-h1',
-  )
+  const heading = preview.locator('.hibi-lp-h1')
   await heading.getByText('Title').waitFor()
-  await preview
-    .locator(engine === 'tiptap' ? '.tiptap p' : '.cm-line')
-    .getByText('Body')
-    .waitFor()
+  await preview.locator('.cm-line').getByText('Body').waitFor()
 
   // Slash transforms that rewrite the whole note apply to the window's note.
   await t.test('window slash transforms apply to its own note', async () => {
@@ -317,7 +279,7 @@ async function hostEditor(t, engine) {
   )
 }
 
-async function recoverAddons(t, engine) {
+async function recoverAddons(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-addon-window-retry-'))
   const profile = join(root, 'profile')
   await mkdir(profile)
@@ -347,7 +309,7 @@ async function recoverAddons(t, engine) {
     }
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() =>
     window.hibi.openAddonWindow('ui-preview', {
       id: 'editor',
@@ -358,7 +320,7 @@ async function recoverAddons(t, engine) {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!find()) await setTimeout(30)
   const kept = find()
-  const editor = kept.locator(editorSelector[engine])
+  const editor = kept.locator(editorSelector['codemirror'])
   await kept
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .and(editor)
@@ -381,19 +343,19 @@ async function recoverAddons(t, engine) {
   await extras.waitFor({ state: 'attached' })
 }
 
-for (const engine of ['tiptap', 'codemirror']) {
+{
   test(
-    `${engine}: addon windows host the editor without desktop privileges`,
+    `codemirror: addon windows host the editor without desktop privileges`,
     {
       timeout: 45000,
     },
-    (t) => hostEditor(t, engine),
+    (t) => hostEditor(t),
   )
   test(
-    `${engine}: addons that failed in a hidden window recover when toggled in settings`,
+    `codemirror: addons that failed in a hidden window recover when toggled in settings`,
     {
       timeout: 45000,
     },
-    (t) => recoverAddons(t, engine),
+    (t) => recoverAddons(t),
   )
 }

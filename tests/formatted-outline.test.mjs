@@ -107,14 +107,10 @@ test('behind the switch, the formatted view reports, follows and navigates the r
     ],
   )
 
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await clickMenu(app, 'Open…')
   await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
   // Hidden windows have no focus; the outline focuses the view it moves.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -317,9 +313,6 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   const chunks = JSON.parse(
@@ -468,9 +461,6 @@ test('outline rows name long headings in full and shorten them only on screen', 
   const rich = await rows()
   assert.equal(rich.label.length, label.length)
   assert.equal(rich.label, label)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await page.locator('.rich-pane .hibi-lp-h1').waitFor()
   const formatted = await rows()
@@ -499,9 +489,6 @@ test('long outline labels run in a worker and cancel when edited, closed, or the
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   page.on('console', (message) => {
     if (
       message.type() === 'error' &&

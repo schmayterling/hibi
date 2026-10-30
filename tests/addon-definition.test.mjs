@@ -10,7 +10,7 @@ const manifest = (id, extra = {}) => ({
   name: id,
   description: 'Definition probe',
   kind: 'extension',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   authors: [{ displayName: 'Test' }],
   ...extra,

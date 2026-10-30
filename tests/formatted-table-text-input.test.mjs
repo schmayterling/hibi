@@ -151,8 +151,11 @@ import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { parseRow } from '../src/shared/markdown-table-source.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -362,8 +365,9 @@ async function snapshot(page) {
   return result
 }
 
-for (const engine of ['tiptap', 'codemirror'])
-  test(engine + ': raw partial DOM range replacement and per-event history', {
+{
+  test('codemirror' +
+    ': raw partial DOM range replacement and per-event history', {
     timeout: 180000,
   }, async (t) => {
     const profile = await mkdtemp(join(tmpdir(), 'hibi-raw-dom-paired-'))
@@ -386,7 +390,7 @@ for (const engine of ['tiptap', 'codemirror'])
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
-    await selectFormattedEngine(app, page, engine)
+    await waitForFormattedEditor(app, page)
     const rich = page.getByRole('textbox', {
       name: 'Document editor',
       exact: true,
@@ -439,9 +443,7 @@ for (const engine of ['tiptap', 'codemirror'])
       // A raw focus of CodeMirror's content puts Chromium's caret at its
       // start, which CodeMirror reverts only for 200 ms; its view draws its
       // own selection as it takes focus.
-      if (engine === 'codemirror')
-        await rich.evaluate((element) => element.cmTile.root.view.focus())
-      else await rich.focus()
+      await rich.evaluate((element) => element.cmTile.root.view.focus())
       await rich.evaluate(() => {
         window.actionInputs = []
         if (!window.rawDOMInputsInstalled) {
@@ -492,7 +494,7 @@ for (const engine of ['tiptap', 'codemirror'])
         await selectFormattingDOMRange(
           page,
           rich,
-          engine,
+          'codemirror',
           item,
           source,
           item.reverse,
@@ -525,7 +527,7 @@ for (const engine of ['tiptap', 'codemirror'])
           observed[phase] = value
           t.diagnostic(
             JSON.stringify({
-              engine,
+              engine: 'codemirror',
               name: item.name,
               phase,
               ...value,
@@ -538,10 +540,7 @@ for (const engine of ['tiptap', 'codemirror'])
         assert.equal(action.version, before.version + 1)
         assert.equal(action.caret.empty, false)
         assert.deepEqual(action.inputs, [])
-        if (engine === 'tiptap') {
-          assert.notDeepEqual(action.model, before.model)
-          native.set(item.name, observed)
-        } else {
+        {
           const expected = native.get(item.name).action
           for (const key of ['source', 'canonicalModel', 'text', 'styles'])
             assert.deepEqual(action[key], expected[key], 'action ' + key)
@@ -583,8 +582,7 @@ for (const engine of ['tiptap', 'codemirror'])
         const fresh = await record('fresh')
         assert.equal(fresh.source, final.source)
         assert.equal(fresh.version, 0)
-        if (engine === 'tiptap')
-          assert.deepEqual(fresh.model, fresh.canonicalModel)
+
         // Owner contract: stable logical behavior in both engines; native quirks are fixed, not copied.
         const point = ({ text, offset }) => [
             text.slice(0, offset),
@@ -627,8 +625,10 @@ for (const engine of ['tiptap', 'codemirror'])
         // History restores a picked range as a caret at its upper end.
         for (const phase of ['undoZ', 'undoFormat', 'redoFormat'])
           expect(phase, caret(point(item.head)))
-        t.diagnostic(JSON.stringify({ engine, name: item.name, logical }))
-        if (engine === 'codemirror') {
+        t.diagnostic(
+          JSON.stringify({ engine: 'codemirror', name: item.name, logical }),
+        )
+        {
           const expected = native.get(item.name),
             differences = []
           for (const [phase, actual] of Object.entries(observed)) {
@@ -661,3 +661,4 @@ for (const engine of ['tiptap', 'codemirror'])
         assert.deepEqual(logical, [], 'logical carets')
       })
   })
+}

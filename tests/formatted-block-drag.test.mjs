@@ -292,14 +292,10 @@ test('the formatted view’s handle sits and looks like the rich view’s, in li
     ])
   }
   await page.mouse.move(0, 0)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await open('note.md')
   await page.locator('.rich-pane .hibi-lp-h1').waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
   const report = []
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
@@ -570,9 +566,6 @@ test('in a long note the handle follows the block under the pointer and moves it
 test('native tab activates the caret block without hover and tall blocks keep their handle', {
   timeout: 120000,
 }, async () => {
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   const session = await page.context().newCDPSession(page)

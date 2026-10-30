@@ -8,7 +8,6 @@ import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { after, before, electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const note = `# Formatted view parity
@@ -413,9 +412,8 @@ async function parity(title, doc, rich, formatted, name) {
         )
         return {
           pane: pane.clientHeight,
-          note: pane
-            .querySelector('.tiptap, .cm-content')
-            .getBoundingClientRect().height,
+          note: pane.querySelector('.cm-content').getBoundingClientRect()
+            .height,
         }
       }, title)
     const tall = { rich: await height(page), formatted: await height(harness) }
@@ -661,7 +659,7 @@ test('notes end as in the rich view, so both views scroll alike', {
       const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
         root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
       )
-      const note = pane.querySelector('.tiptap, .cm-content')
+      const note = pane.querySelector('.cm-content')
       const top = note.getBoundingClientRect().top
       const block = [...note.children].find((child) =>
         child.textContent.includes('tail'),

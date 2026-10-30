@@ -31,9 +31,6 @@ for (const hidden of [true, false]) {
         if (message.type() === 'error') errors.push(message.text())
       })
       await waitForDocumentEditor(app, page)
-      await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-      )
       await page.reload()
       await waitForDocumentEditor(app, page)
       // Hidden windows have no focus; typing needs a focused editor.

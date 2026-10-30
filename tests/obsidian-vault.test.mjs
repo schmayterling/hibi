@@ -5,7 +5,6 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { noteTargets, wikiHref, wikiTarget } from '../src/shared/note-links.ts'
 import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 

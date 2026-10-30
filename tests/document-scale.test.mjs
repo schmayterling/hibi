@@ -3,11 +3,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { crashAndReload, electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  crashAndReload,
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -60,7 +62,8 @@ for (const size of sizes)
           name: 'Scale review',
           description: 'Source edit fixture',
           kind: 'extension',
-          apiVersion: 1,
+          apiVersion: 3,
+          capabilities: ['source'],
           version: '1.0.0',
           authors: [{ displayName: 'Test' }],
           entry: 'index.js',
@@ -93,8 +96,8 @@ for (const size of sizes)
       await rm(root, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
-    const cm = t.formattedEngine === 'codemirror'
+    await waitForFormattedEditor(app, page)
+
     await app.evaluate(({ dialog, ipcMain }, file) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -172,17 +175,7 @@ for (const size of sizes)
         })
       }
     }, file)
-    if (!cm)
-      await page.evaluate(() => {
-        window.scaleRichUnits = 0
-        const manager = document.querySelector('.tiptap').editor.markdown,
-          prototype = Object.getPrototypeOf(manager),
-          parse = prototype.parse
-        prototype.parse = function (source) {
-          window.scaleRichUnits = Math.max(window.scaleRichUnits, source.length)
-          return parse.call(this, source)
-        }
-      })
+
     const started = performance.now()
     await clickMenu(app, 'Open…')
     await waitForAsync(app, () => !!globalThis.scaleProbe.open)
@@ -219,12 +212,6 @@ for (const size of sizes)
         await page.locator('.cm-content[contenteditable="true"]').count(),
         1,
       )
-      if (cm) assert.equal(await page.locator('.tiptap').count(), 0)
-      else
-        assert.ok(
-          await page.evaluate(() => window.scaleRichUnits <= 256 * 1024),
-          'large opening parsed complete rich source',
-        )
     }
     if (!(await page.locator('.cm-content[contenteditable="true"]').count())) {
       await page
@@ -232,7 +219,7 @@ for (const size of sizes)
         .click()
       await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     }
-    if (!baseline && cm) {
+    if (!baseline && true) {
       await t.test(
         'formatted mib notes stay editable and preserve their source',
         async () => {

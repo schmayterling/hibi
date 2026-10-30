@@ -6,7 +6,7 @@ import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { waitForAsync } from './poll.mjs'
 
-async function open(t, text, engine = 'codemirror', markers = false) {
+async function open(t, text, markers = false) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-heading-accessibility-'))
   const file = join(root, 'note.md')
   await writeFile(file, text)
@@ -26,29 +26,25 @@ async function open(t, text, engine = 'codemirror', markers = false) {
     text,
   )
   await page.evaluate(
-    ({ engine, markers }) => {
-      localStorage.setItem('hibi:formatted-engine', engine)
-      localStorage.setItem('markdown-markers', String(markers))
-    },
-    { engine, markers },
+    (markers) => localStorage.setItem('markdown-markers', String(markers)),
+    markers,
   )
   await page.reload()
   await waitForDocumentEditor(app, page)
   return page
 }
 
-for (const engine of ['tiptap', 'codemirror']) {
-  test(`${engine}: atx headings expose their names and levels`, {
+{
+  test(`codemirror: atx headings expose their names and levels`, {
     timeout: 60000,
   }, async (t) => {
     const text = `${Array.from(
       { length: 6 },
       (_, i) => `${'#'.repeat(i + 1)} level ${i + 1}`,
     ).join('\n\n')}\n\nclosing paragraph\n`
-    const page = await open(t, text, engine)
+    const page = await open(t, text)
     const rich = page.locator('.rich-pane')
-    if (engine === 'codemirror') await rich.locator('.hibi-lp-h6').waitFor()
-    else await rich.locator('h6').waitFor()
+    await rich.locator('.hibi-lp-h6').waitFor()
     for (let level = 1; level <= 6; level++) {
       assert.equal(
         await rich
@@ -74,18 +70,15 @@ for (const engine of ['tiptap', 'codemirror']) {
         .sort(),
       Array.from({ length: 6 }, (_, i) => [`level ${i + 1}`, i + 1]),
     )
-    if (engine === 'codemirror') {
-      await page
-        .getByRole('button', { name: /^side-by-side$/i, exact: true })
-        .click()
-      await page
-        .locator('.mode-side-by-side[data-source-ready="true"]')
-        .waitFor()
-      assert.equal(
-        await page.locator('.source-pane').getByRole('heading').count(),
-        0,
-      )
-    }
+
+    await page
+      .getByRole('button', { name: /^side-by-side$/i, exact: true })
+      .click()
+    await page.locator('.mode-side-by-side[data-source-ready="true"]').waitFor()
+    assert.equal(
+      await page.locator('.source-pane').getByRole('heading').count(),
+      0,
+    )
   })
 }
 
@@ -277,7 +270,7 @@ test('revealed markers stay readable heading text but leave its name', {
 }, async (t) => {
   const text =
     '# marker heading\n\n## **bold** heading ##\n\nclosing paragraph\n'
-  const page = await open(t, text, 'codemirror', true)
+  const page = await open(t, text, true)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const rich = page.locator('.rich-pane')
@@ -313,37 +306,25 @@ test('revealed markers stay readable heading text but leave its name', {
   )
 })
 
-for (const engine of ['tiptap', 'codemirror']) {
-  test(`${engine}: adjacent heading text keeps its spacing across revealed markers`, {
+{
+  test(`codemirror: adjacent heading text keeps its spacing across revealed markers`, {
     timeout: 60000,
   }, async (t) => {
     const source = '# pre**fix**ed\n\n## co`de`word\n\nclosing paragraph\n'
-    const page = await open(t, source, engine, true)
+    const page = await open(t, source, true)
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
     const results = []
     for (const theme of ['light', 'dark']) {
       await page.emulateMedia({ colorScheme: theme })
       for (const word of ['fix', 'de']) {
-        if (engine === 'codemirror') await place(page, source.indexOf(word) + 1)
-        else
-          await page.evaluate((word) => {
-            const editor = document.querySelector('.tiptap').editor
-            editor.state.doc.descendants((node, pos) => {
-              if (node.isText && node.text.includes(word))
-                editor.commands.setTextSelection(
-                  pos + node.text.indexOf(word) + 1,
-                )
-            })
-            editor.view.focus()
-          }, word)
+        await place(page, source.indexOf(word) + 1)
         const headings = await headingTree(cdp)
         results.push({ theme, word, names: headings.map((node) => node.name) })
-        if (engine === 'codemirror')
-          assert.equal(
-            headings[word === 'fix' ? 0 : 1].text,
-            word === 'fix' ? '# pre**fix**ed' : '## co`de`word',
-          )
+        assert.equal(
+          headings[word === 'fix' ? 0 : 1].text,
+          word === 'fix' ? '# pre**fix**ed' : '## co`de`word',
+        )
       }
     }
     for (const result of results)
@@ -359,7 +340,7 @@ test('revealed setext naming stays within rendered lines in a 20k-line heading',
   timeout: 60000,
 }, async (t) => {
   const source = `pre**fix**ed\n${'continuation\n'.repeat(19999)}==========\n\nclosing paragraph\n`
-  const page = await open(t, source, 'codemirror', true)
+  const page = await open(t, source, true)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await page.locator('.rich-pane .hibi-lp-heading').first().waitFor()
@@ -409,7 +390,7 @@ test('heading names keep link wrappers and task aliases through edits and viewpo
     '# pre[**fix**](b.md)ed and [co`de`word](c.md)\n\n- [ ] read [[b|alias]] today\n\n' +
     'plain paragraph\n\n'.repeat(120) +
     'far pre[**fix**](b.md)ed\nsecond line\n==========\n\nclosing paragraph\n'
-  const page = await open(t, source, 'codemirror', true)
+  const page = await open(t, source, true)
   const rich = page.locator('.rich-pane')
   const heading = rich.getByRole('heading', {
     name: 'prefixed and codeword',

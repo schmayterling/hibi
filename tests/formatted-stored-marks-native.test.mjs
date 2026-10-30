@@ -2,16 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { Editor } from '@tiptap/core'
 import { Markdown } from '@tiptap/markdown'
 import { marked } from 'marked'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { sameRichSourceDocument } from '../src/renderer/src/rich-source-preservation.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -123,7 +124,6 @@ const scenarios = [
 test('stored mark review cases through native input and toolbar', {
   timeout: 120000,
 }, async (t) => {
-  const engine = t.formattedEngine
   const config = markdownConfiguration([
     { id: 'github', markedOptions: { gfm: true } },
   ])
@@ -154,7 +154,7 @@ test('stored mark review cases through native input and toolbar', {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -167,13 +167,7 @@ test('stored mark review cases through native input and toolbar', {
       return (await window.hibi.getDocument()).markdown
     })
   const compareNative = async (name, source) => {
-    if (engine === 'tiptap') {
-      nativeSources.set(name, source)
-      nativeDocuments.set(
-        name,
-        await rich.evaluate((element) => element.editor.state.doc.toJSON()),
-      )
-    } else {
+    {
       assert.equal(
         await rich.evaluate((element) =>
           element.cmTile.root.view.state.doc.toString(),
@@ -230,11 +224,9 @@ test('stored mark review cases through native input and toolbar', {
     await rich.focus()
     await rich.evaluate(
       (element, { engine, raw, pm }) => {
-        if (engine === 'codemirror')
-          element.cmTile.root.view.dispatch({ selection: { anchor: raw } })
-        else element.editor.commands.setTextSelection(pm)
+        element.cmTile.root.view.dispatch({ selection: { anchor: raw } })
       },
-      { engine, raw, pm },
+      { engine: 'codemirror', raw, pm },
     )
   }
   const action = async (id) => {
@@ -395,7 +387,7 @@ test('stored mark review cases through native input and toolbar', {
         if (engine === 'codemirror')
           element.cmTile.root.view.dispatch({ selection: { anchor: 0 } })
         else element.editor.commands.setTextSelection(1)
-      }, engine)
+      }, 'codemirror')
       await page.keyboard.type('Q')
       await compareNative('moved-selection', await snapshot())
     },
@@ -415,7 +407,7 @@ test('stored mark review cases through native input and toolbar', {
             if (engine === 'codemirror')
               element.cmTile.root.view.dispatch({ selection: { anchor: 0 } })
             else element.editor.commands.setTextSelection(1)
-          }, engine)
+          }, 'codemirror')
           await withHeldClock(page, async () => {
             await page.keyboard.type('Q')
             await page.keyboard.press('Backspace')
@@ -448,75 +440,71 @@ test('stored mark review cases through native input and toolbar', {
     )
   })
 
-  if (engine === 'codemirror')
-    await t.test(
-      'candidate updates stay literal until one marked commit',
-      async () => {
-        await open('candidates', 'plain end', 9, 10)
-        await action('bold')
-        for (const text of ['仮', '候補']) {
-          await cdp.send('Input.imeSetComposition', {
-            text,
-            selectionStart: text.length,
-            selectionEnd: text.length,
-          })
-          await waitForAsync(
-            page,
-            (text) =>
-              document
-                .querySelector('[aria-label="Document editor"]')
-                .textContent.includes(text),
-            text,
-          )
-          assert.equal(await snapshot(), 'plain end' + text)
-        }
-        await cdp.send('Input.insertText', { text: '日本' })
-        const typed = await snapshot()
-        assert.equal(typed, 'plain end**日本**')
-        await compareNative('committed-ime', typed)
-        await history('plain end', typed)
-      },
-    )
+  await t.test(
+    'candidate updates stay literal until one marked commit',
+    async () => {
+      await open('candidates', 'plain end', 9, 10)
+      await action('bold')
+      for (const text of ['仮', '候補']) {
+        await cdp.send('Input.imeSetComposition', {
+          text,
+          selectionStart: text.length,
+          selectionEnd: text.length,
+        })
+        await waitForAsync(
+          page,
+          (text) =>
+            document
+              .querySelector('[aria-label="Document editor"]')
+              .textContent.includes(text),
+          text,
+        )
+        assert.equal(await snapshot(), 'plain end' + text)
+      }
+      await cdp.send('Input.insertText', { text: '日本' })
+      const typed = await snapshot()
+      assert.equal(typed, 'plain end**日本**')
+      await compareNative('committed-ime', typed)
+      await history('plain end', typed)
+    },
+  )
 
-  if (engine === 'codemirror')
-    await t.test(
-      'source edits clear pending marks and retain source focus',
-      async () => {
-        await open('external', 'plain end', 9, 10)
-        await page
-          .getByRole('button', { name: /^side-by-side$/i, exact: true })
-          .click()
-        await page
-          .locator('.mode-side-by-side[data-source-ready="true"]')
-          .waitFor()
-        await rich.focus()
-        await action('bold')
-        const source = page.getByRole('textbox', {
-          name: 'Markdown editor',
-          exact: true,
+  await t.test(
+    'source edits clear pending marks and retain source focus',
+    async () => {
+      await open('external', 'plain end', 9, 10)
+      await page
+        .getByRole('button', { name: /^side-by-side$/i, exact: true })
+        .click()
+      await page
+        .locator('.mode-side-by-side[data-source-ready="true"]')
+        .waitFor()
+      await rich.focus()
+      await action('bold')
+      const source = page.getByRole('textbox', {
+        name: 'Markdown editor',
+        exact: true,
+      })
+      await source.focus()
+      await source.evaluate((element) => {
+        const view = element.cmTile.root.view
+        view.dispatch({
+          changes: { from: 0, insert: 'other ' },
+          selection: { anchor: 15 },
+          userEvent: 'input.type',
         })
-        await source.focus()
-        await source.evaluate((element) => {
-          const view = element.cmTile.root.view
-          view.dispatch({
-            changes: { from: 0, insert: 'other ' },
-            selection: { anchor: 15 },
-            userEvent: 'input.type',
-          })
-        })
-        assert.equal(
-          await source.evaluate(
-            (element) => element === document.activeElement,
-          ),
-          true,
-        )
-        assert.equal(await snapshot(), 'other plain end')
-        await rich.focus()
-        await rich.evaluate((element) =>
-          element.cmTile.root.view.dispatch({ selection: { anchor: 15 } }),
-        )
-        await page.keyboard.type('X')
-        assert.equal(await snapshot(), 'other plain endX')
-      },
-    )
+      })
+      assert.equal(
+        await source.evaluate((element) => element === document.activeElement),
+        true,
+      )
+      assert.equal(await snapshot(), 'other plain end')
+      await rich.focus()
+      await rich.evaluate((element) =>
+        element.cmTile.root.view.dispatch({ selection: { anchor: 15 } }),
+      )
+      await page.keyboard.type('X')
+      assert.equal(await snapshot(), 'other plain endX')
+    },
+  )
 })

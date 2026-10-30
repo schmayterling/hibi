@@ -5,11 +5,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createServer } from 'vite'
 import { codeHtml, codeLanguages } from '../src/renderer/src/code-languages.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('language loading deduplicates aliases and respects disabled preferences during import', async (t) => {
@@ -248,7 +248,7 @@ test('shared format registration does not statically load source parsers', async
   assert.doesNotMatch(modules, /src\/addons\/_shared\/format-language\.ts/)
 })
 
-it('blank startup leaves disabled runtimes and closed settings unloaded and source unmounted', {
+test('blank startup leaves disabled runtimes and closed settings unloaded and source unmounted', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-performance-'))
@@ -263,28 +263,22 @@ it('blank startup leaves disabled runtimes and closed settings unloaded and sour
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
   await page.evaluate(
     () => new Promise((resolve) => requestIdleCallback(resolve)),
   )
-  if (t.formattedEngine === 'tiptap') {
-    assert.equal(
-      await page.evaluate(() => document.activeElement?.matches('.tiptap')),
-      true,
-    )
-    assert.equal(await page.locator('.cm-editor').count(), 0)
-  } else {
-    assert.equal(
-      await page
-        .getByRole('textbox', { name: 'Document editor', exact: true })
-        .evaluate((element) => element === document.activeElement),
-      true,
-    )
-    assert.equal(await page.locator('.rich-pane .cm-editor').count(), 1)
-  }
+
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'Document editor', exact: true })
+      .evaluate((element) => element === document.activeElement),
+    true,
+  )
+  assert.equal(await page.locator('.rich-pane .cm-editor').count(), 1)
+
   assert.equal(await page.locator('.source-pane .cm-editor').count(), 0)
   const chunks = JSON.parse(
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
@@ -312,14 +306,11 @@ it('blank startup leaves disabled runtimes and closed settings unloaded and sour
     initial,
     /src\/renderer\/src\/(?:SettingsScreen|VersionHistory)\.tsx/,
   )
-  if (t.formattedEngine === 'tiptap') {
-    assert.doesNotMatch(initial, /@codemirror\//)
-    assert.doesNotMatch(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
-  } else {
-    // The formatted engine uses SourceEditor; its separate source pane stays unmounted.
-    assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
-    assert.doesNotMatch(initial, /node_modules\/(?:@tiptap\/|prosemirror-)/)
-  }
+
+  // The formatted engine uses SourceEditor; its separate source pane stays unmounted.
+  assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
+  assert.doesNotMatch(initial, /node_modules\/(?:@tiptap\/|prosemirror-)/)
+
   assert.doesNotMatch(initial, /src\/renderer\/src\/FormatEditor\.tsx/)
   await page.evaluate(() => {
     const editor = document.querySelector('.editor-surface')
@@ -389,7 +380,7 @@ it('blank startup leaves disabled runtimes and closed settings unloaded and sour
   )
 })
 
-it('default diagrams start with markdown documents and load pele only for a diagram', {
+test('default diagrams start with markdown documents and load pele only for a diagram', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-mermaid-'))
@@ -401,7 +392,7 @@ it('default diagrams start with markdown documents and load pele only for a diag
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
@@ -422,16 +413,10 @@ it('default diagrams start with markdown documents and load pele only for a diag
       .filter((chunk) => files.has(chunk.file))
       .flatMap((chunk) => chunk.modules)
   assert.match(loaded().join('\n'), /src\/addons\/mermaid\/index\.tsx/)
-  if (t.formattedEngine === 'tiptap')
-    assert.doesNotMatch(
-      loaded().join('\n'),
-      /node_modules\/(?:pele|mermaid|@mermaid-js)\/|@codemirror\//,
-    )
-  else
-    assert.doesNotMatch(
-      loaded().join('\n'),
-      /node_modules\/(?:pele|mermaid|@mermaid-js|@tiptap|prosemirror-[a-z-]+)\//,
-    )
+  assert.doesNotMatch(
+    loaded().join('\n'),
+    /node_modules\/(?:pele|mermaid|@mermaid-js|@tiptap|prosemirror-[a-z-]+)\//,
+  )
   const note = join(profile, 'diagram.md')
   await writeFile(note, '```mermaid\nflowchart LR\n  A --> B\n```\n')
   await app.evaluate(({ dialog }, path) => {
@@ -456,7 +441,7 @@ it('default diagrams start with markdown documents and load pele only for a diag
   )
 })
 
-it('unrelated enabled formats defer source parsers until first source use', {}, async (t) => {
+test('unrelated enabled formats defer source parsers until first source use', {}, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-formats-'))
   await writeFile(
     join(profile, 'addons.json'),
@@ -470,7 +455,7 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.waitForFunction(
     () => performance.getEntriesByName('hibi:addon:rst').length,
   )
@@ -500,16 +485,10 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
       .filter((chunk) => files.has(chunk.file))
       .flatMap((chunk) => chunk.modules)
       .join('\n')
-  if (t.formattedEngine === 'tiptap')
-    assert.doesNotMatch(
-      modules(),
-      /src\/addons\/_shared\/format-language\.ts|@codemirror\//,
-    )
-  else
-    assert.doesNotMatch(
-      modules(),
-      /src\/addons\/_shared\/format-language\.ts|node_modules\/@codemirror\/lang-html\//,
-    )
+  assert.doesNotMatch(
+    modules(),
+    /src\/addons\/_shared\/format-language\.ts|node_modules\/@codemirror\/lang-html\//,
+  )
   const file = join(profile, 'note.html')
   await writeFile(file, '<h1>hello</h1>\r\n')
   await app.evaluate(({ dialog }, file) => {
@@ -527,8 +506,7 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
   assert.match(modules(), /node_modules\/@codemirror\/lang-html\//)
   assert.doesNotMatch(modules(), /node_modules\/@codemirror\/lang-markdown\//)
   // The formatted host loads the shared chunked language.
-  if (t.formattedEngine === 'codemirror')
-    assert.match(modules(), /src\/shared\/chunked-markdown\.ts/)
+  assert.match(modules(), /src\/shared\/chunked-markdown\.ts/)
   assert.doesNotMatch(
     modules(),
     /node_modules\/@codemirror\/legacy-modes\/mode\/(?:stex|textile|r)\./,

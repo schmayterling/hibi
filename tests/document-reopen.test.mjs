@@ -9,22 +9,15 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import nodeTest from 'node:test'
+import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
-
-// Newer cases run in the CodeMirror formatted view only; Tiptap is being removed.
-function codemirrorTest(name, options, run) {
-  nodeTest(`codemirror: ${name}`, options, (t) => {
-    t.formattedEngine = 'codemirror'
-    return run(t)
-  })
-}
 
 // Resolves once main has finished the next request on this channel.
 async function replied(app, channel) {
@@ -69,7 +62,7 @@ async function setup(t) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(15000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog, BrowserWindow }, file) => {
     for (const window of BrowserWindow.getAllWindows())
@@ -252,7 +245,7 @@ for (const slowChunk of [false, true])
       const chunks = JSON.parse(
         await readFile('out/renderer/startup-bundle.json', 'utf8'),
       )
-      const module = `src/renderer/src/${t.formattedEngine === 'tiptap' ? 'Editor' : 'FormattedEditor'}.tsx`
+      const module = `src/renderer/src/FormattedEditor.tsx`
       const asset = chunks.find((chunk) => chunk.modules.includes(module)).file
       await app.evaluate(({ app, protocol, net }, asset) => {
         const { join } = process.getBuiltinModule('node:path')
@@ -978,7 +971,7 @@ test('a link to the note itself, its explorer row and dropping it check for outs
   })
 })
 
-codemirrorTest(
+test(
   'closing a tab checks the tab shown next for outside changes',
   {
     timeout: 150000,
@@ -1027,7 +1020,7 @@ codemirrorTest(
   },
 )
 
-codemirrorTest(
+test(
   'closing a tab still shows the next tab when its file cannot be read',
   {
     timeout: 150000,
@@ -1060,7 +1053,7 @@ codemirrorTest(
   },
 )
 
-codemirrorTest(
+test(
   'a tab that changes while Hibi asks about the next tab stays open and says why',
   {
     timeout: 150000,
@@ -1125,7 +1118,7 @@ codemirrorTest(
   },
 )
 
-codemirrorTest(
+test(
   'a link to a heading of another note or the note itself moves to the heading',
   {
     timeout: 150000,
@@ -1188,7 +1181,7 @@ codemirrorTest(
   },
 )
 
-codemirrorTest(
+test(
   'a missing Finder file and a moved note folder get plain messages',
   {
     timeout: 150000,
@@ -1239,7 +1232,7 @@ codemirrorTest(
   },
 )
 
-codemirrorTest(
+test(
   'a pane checks its file under the file-operation lock, so an autosave meanwhile is skipped',
   {
     timeout: 150000,
@@ -1297,7 +1290,7 @@ codemirrorTest(
   },
 )
 
-codemirrorTest(
+test(
   'clicking a split pane while the window waits to close does not change which note Save writes',
   {
     timeout: 150000,

@@ -10,13 +10,7 @@ import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
-import {
-  clickMenu,
-  pressShortcut,
-  redoKey,
-  withHeldClock,
-} from './keyboard.mjs'
+import { clickMenu, pressShortcut, redoKey, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)
@@ -4063,7 +4057,6 @@ const openFormatted = async () => {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('hibi:toolbar', JSON.stringify({ autoHide: false }))
   })
   await page.reload()

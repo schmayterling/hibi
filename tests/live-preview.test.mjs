@@ -869,6 +869,78 @@ test('scrolling up through known code blocks keeps the scroll position and full 
   await session.detach()
 })
 
+test('a viewport starting just below a code box keeps its scrollbar in the height', {
+  timeout: 60000,
+}, async () => {
+  const code = `const value = ${'"x" + '.repeat(163)}"end";\n`
+  let doc = ''
+  for (let block = 0; block < 40; block++)
+    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${code.repeat(5)}\`\`\`\n\n`
+  await harness.reload()
+  await harness.waitForFunction(() => !!window.livePreview)
+  const style = await harness.addStyleTag({
+    content:
+      '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 15px !important; height: 15px !important; }',
+  })
+  const result = await harness.evaluate(async (doc) => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await window.livePreview.mount(doc, { width: 900, height: 600 })
+    await window.livePreview.settle()
+    const view = window.livePreview.view()
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    // Every box drawn and measured once, from the top down.
+    for (let top = 0; top < pane.scrollHeight; top += 300) {
+      pane.scrollTop = top
+      await frames(3)
+    }
+    const gutters = [...view.contentDOM.querySelectorAll('.hibi-lp-codescroll')]
+      .map((box) => box.offsetHeight - box.clientHeight)
+      .filter(Boolean)
+    // The tenth box's hidden closing fence, below the box, holds the space
+    // of the box's scrollbar.
+    const fence = doc.split('```\n\n').slice(0, 10).join('```\n\n').length
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(fence, { y: 'center' }),
+    })
+    await frames(4)
+    const below = view.lineBlockAt(fence)
+    pane.scrollTop = 0
+    await frames(4)
+    const height = view.contentHeight
+    const offset = pane.getBoundingClientRect().top - view.documentTop
+    // A jump down draws from up to a margin of 1000px above the visible top
+    // (500px for a jump of no bias): put that start in the block.
+    for (const margin of [
+      500,
+      ...Array.from({ length: 126 }, (_, i) => i * 8),
+    ]) {
+      pane.scrollTop = 0
+      await frames(3)
+      pane.scrollTop = below.top + below.height / 2 + margin - offset
+      await frames(3)
+      if (view.viewport.from === below.from) break
+    }
+    await frames(2)
+    return {
+      gutters: gutters.length,
+      start: view.viewport.from === below.from,
+      below: [below.from, below.height],
+      now: view.lineBlockAt(below.from).height,
+      before: height,
+      after: view.contentHeight,
+    }
+  }, doc)
+  await style.evaluate((node) => node.remove())
+  const report = JSON.stringify(result)
+  assert.ok(result.gutters > 0, report)
+  assert.equal(result.start, true, report)
+  assert.equal(result.now, result.below[1], report)
+  assert.equal(result.after, result.before, report)
+})
+
 test('stepping up after a jump to the end, known code blocks never draw as plain text', {
   timeout: 120000,
 }, async () => {

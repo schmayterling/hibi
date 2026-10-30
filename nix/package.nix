@@ -52,9 +52,11 @@ buildNpmPackage {
   };
 
   # npm ci runs with --ignore-scripts, so postinstall never happens.
-  # Only the vim patch changes app behaviour; the other two are dev/macOS.
+  # Only the vim and codemirror patches change app behaviour; the others are
+  # dev/macOS.
   preBuild = ''
     node scripts/patch-vim.mjs
+    node scripts/patch-codemirror-view.mjs
   '';
 
   npmBuildScript = "build:app";

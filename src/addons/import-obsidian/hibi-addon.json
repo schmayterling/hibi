@@ -2,7 +2,7 @@
   "id": "import-obsidian",
   "name": "Import from Obsidian",
   "description": "Bring notes and attachments from an Obsidian vault.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.0",
   "authors": [

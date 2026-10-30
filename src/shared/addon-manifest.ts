@@ -80,6 +80,15 @@ export function parseAddonManifest(
   const string = (value: unknown, max: number): value is string =>
     typeof value === 'string' && !!value.trim() && value.length <= max
   if (
+    data.apiVersion === 1 ||
+    data.apiVersion === 2 ||
+    (Array.isArray(data.capabilities) && data.capabilities.includes('rich')) ||
+    data.activation === 'rich'
+  )
+    throw new Error(
+      'This addon was made for an earlier version of Hibi. Ask its author for an update to addon API 3.',
+    )
+  if (
     !validId(data.id) ||
     !string(data.name, 100) ||
     !string(data.description, 500) ||
@@ -135,24 +144,15 @@ export function parseAddonManifest(
       new Set(data.capabilities).size !== data.capabilities.length ||
       data.capabilities.some(
         (value) =>
-          ![
-            'ui',
-            'rich',
-            'source',
-            'formatted',
-            'markdown',
-            'modalEditing',
-          ].includes(value) ||
-          (value === 'formatted' && data.apiVersion !== 3),
+          !['ui', 'source', 'formatted', 'markdown', 'modalEditing'].includes(
+            value,
+          ),
       ))
   )
     throw new Error('The addon lists invalid SDK capabilities.')
   if (
     data.activation !== undefined &&
-    (!['command', 'source', 'rich', 'formatted'].includes(
-      String(data.activation),
-    ) ||
-      (data.activation === 'formatted' && data.apiVersion !== 3))
+    !['command', 'source', 'formatted'].includes(String(data.activation))
   )
     throw new Error('The addon activation mode is invalid.')
   if (

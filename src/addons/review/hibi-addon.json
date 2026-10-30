@@ -2,7 +2,7 @@
   "id": "review",
   "name": "Review",
   "version": "1.0.0",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "description": "Find repeated words and common English typos.",
   "defaultEnabled": false,
   "startup": "background",

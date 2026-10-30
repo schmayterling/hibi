@@ -2,7 +2,7 @@
   "id": "mermaid",
   "name": "Mermaid",
   "description": "Write and preview diagrams.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.0",
   "authors": [
@@ -12,7 +12,7 @@
     }
   ],
   "defaultEnabled": true,
-  "capabilities": ["ui", "rich", "source", "markdown"],
+  "capabilities": ["ui", "source", "markdown"],
   "fileExtensions": ["mmd", "mermaid"],
   "entry": "index.tsx",
   "native": {

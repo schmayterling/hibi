@@ -10,10 +10,7 @@ import { decodeHTML } from 'entities'
 import type { Token } from 'marked'
 import type { MarkdownExtension, MarkdownFlavor } from '../../addons/api'
 import { blockMathSyntax } from '../../addons/math/formatted-syntax.ts'
-import {
-  builtInFlavors,
-  fencedCodeFlavors,
-} from '../../shared/built-in-grammar.ts'
+import { builtInFlavors } from '../../shared/built-in-grammar.ts'
 import { trackReadAhead } from '../../shared/chunked-markdown.ts'
 import { FrontmatterParser } from '../../shared/frontmatter-parser.ts'
 import { protectMarkdownParser } from '../../shared/markdown-flavor-guard.ts'
@@ -69,43 +66,18 @@ type LabelRenderer = (
 ) => string | readonly OutlineLabelPart[] | null
 
 type Owned = { addonId?: string }
-type LegacyExtension = {
-  config?: { markdownTokenizer?: { level?: string } }
-  parent?: LegacyExtension | null
-}
-
-/** Marked or Tiptap tokenizers that can start blocks only the visual editor reads. */
-function legacyBlocks(flavor: MarkdownFlavor) {
-  return (
-    !!flavor.export?.extensions?.some(
-      (extension) =>
-        extension.tokenizer ||
-        extension.hooks ||
-        extension.extensions?.some(
-          (entry) => 'level' in entry && entry.level !== 'inline',
-        ),
-    ) ||
-    !!flavor.richExtensions?.some((extension) => {
-      let entry = extension as LegacyExtension | null | undefined
-      while (entry && !entry.config?.markdownTokenizer) entry = entry.parent
-      const level = entry?.config?.markdownTokenizer?.level
-      return level !== undefined && level !== 'inline'
-    })
-  )
-}
-
 /**
  * The outline grammar for the selected flavors and projections. Built-in
  * flavors the model was audited for set its options; other flavors' Lezer
  * syntax extends its parser, as in the source view. Inline syntax changes only
  * labels, which keep their Markdown text. `blocked` lists the addons whose
  * block structure the outline cannot follow: projections other than built-in
- * frontmatter and, with `legacy`, block syntax only the visual editor reads.
+ * frontmatter.
  */
 export function sourceOutlineGrammar(
   flavors: readonly (MarkdownFlavor & Owned)[],
   projections: readonly (MarkdownExtension & Owned)[],
-  { origin, legacy }: { origin: (addonId: string) => string; legacy: boolean },
+  { origin }: { origin: (addonId: string) => string },
 ) {
   const owned = (owner: string | undefined, addonId: string | undefined) =>
     owner !== undefined && owner === addonId && origin(owner) === 'built-in'
@@ -114,15 +86,6 @@ export function sourceOutlineGrammar(
     ),
     ids = modeled.map((flavor) => flavor.id),
     blocked = new Set<string>()
-  for (const flavor of flavors)
-    if (
-      legacy &&
-      !modeled.includes(flavor) &&
-      !flavor.syntax &&
-      !owned(fencedCodeFlavors.get(flavor.id), flavor.addonId) &&
-      legacyBlocks(flavor)
-    )
-      blocked.add(flavor.addonId ?? flavor.id)
   for (const projection of projections)
     if (
       projection.id !== 'frontmatter.metadata' ||

@@ -18,7 +18,6 @@ import {
   compatibleAddonManifest,
   type FormattedExtension,
   type MarkdownExtension,
-  type RichExtension,
   type SourceExtension,
   type StatusItem,
   type ViewApi,
@@ -75,7 +74,6 @@ import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, type RegisteredFlavor, renderMarkdownAsync } from './flavors'
-import { codemirrorFormattedView } from './formatted-engine'
 import { reportRendererFailure } from './local-diagnostics'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
@@ -374,10 +372,8 @@ export function useAddons(
           : activation === 'source'
             ? activeView !== 'normal'
             : activation === 'formatted'
-              ? codemirrorFormattedView && activeView !== 'markdown'
-              : activation === 'rich'
-                ? activeView !== 'markdown'
-                : true)
+              ? activeView !== 'markdown'
+              : true)
       )
     },
     [activeView, requested],
@@ -662,19 +658,6 @@ export function useAddons(
   const [markdownExtensions, setMarkdownExtensions] = useState<
     MarkdownExtension[]
   >([])
-  const rich = useRef(
-    new Map<string, RichExtension & { addonId: string }>(),
-  ).current
-  const [richExtensions, setRichExtensions] = useState<RichExtension[]>([])
-  const publishRich = useCallback(() => {
-    setRichExtensions((current) => {
-      const next = [...rich.values()].sort((a, b) => a.id.localeCompare(b.id))
-      return current.length === next.length &&
-        current.every((entry, index) => entry === next[index])
-        ? current
-        : next
-    })
-  }, [rich])
   const sources = useRef(
     new Map<
       string,
@@ -1020,39 +1003,6 @@ export function useAddons(
       const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
-      const compatibility =
-        codemirrorFormattedView && addonRegistry.origin(id) !== 'built-in'
-          ? import('./formatted-addon-compatibility').then(
-              ({ createFormattedCompatibility }) =>
-                disposed
-                  ? null
-                  : createFormattedCompatibility(
-                      id,
-                      addon.manifest.name,
-                      toastScope.api,
-                      () => latest.current.openAddonSettings(id),
-                    ),
-            )
-          : null
-      if (compatibility)
-        cleanups.add(() => {
-          void compatibility.then((scope) => scope?.dispose())
-        })
-      const registerCompatibility = (
-        register: (
-          scope: NonNullable<Awaited<typeof compatibility>>,
-        ) => () => void,
-      ) => {
-        let removed = false
-        let remove: (() => void) | undefined
-        void compatibility?.then((scope) => {
-          if (!removed && scope) remove = register(scope)
-        })
-        return () => {
-          removed = true
-          remove?.()
-        }
-      }
       const registerView: ViewApi['register'] = (view) => {
         let registered: ViewRegistration | undefined
         let removed = false
@@ -1211,15 +1161,8 @@ export function useAddons(
           if (entry.fail && failedFeatures.has(`${presentation}:${key}`))
             return () => {}
           sources.set(`${presentation}:${key}`, entry)
-          const removeCompatibility =
-            presentation === 'formatted'
-              ? registerCompatibility((scope) =>
-                  scope.register('formatted', extension.id),
-                )
-              : () => {}
           if (mounted.current) publishSources()
           return () => {
-            removeCompatibility()
             sources.delete(`${presentation}:${key}`)
             if (!disposed && mounted.current) publishSources()
           }
@@ -1350,9 +1293,6 @@ export function useAddons(
           if (extension.addonId === id) extensions.delete(key)
         for (const [key, extension] of sources)
           if (extension.addonId === id) sources.delete(key)
-        for (const [key, extension] of rich)
-          if (extension.addonId === id) rich.delete(key)
-        if (mounted.current) publishRich()
         for (const [key, item] of status)
           if (item.addonId === id) status.delete(key)
         if (mounted.current) setStatusItems([...status.values()])
@@ -1848,21 +1788,14 @@ export function useAddons(
               registerFlavor(flavor) {
                 if (disposed) return () => {}
                 assertSchemaActivation()
-                const remove = batch.register(`flavor:${flavor.id}`, () => {
-                  const removeFlavor = flavors.register(
+                const remove = batch.register(`flavor:${flavor.id}`, () =>
+                  flavors.register(
                     id,
                     flavor,
                     (error) => latest.current.error(error),
                     addonRegistry.origin(id) !== 'built-in',
-                  )
-                  const removeCompatibility = registerCompatibility((scope) =>
-                    scope.registerFlavor(flavor),
-                  )
-                  return () => {
-                    removeFlavor()
-                    removeCompatibility()
-                  }
-                })
+                  ),
+                )
                 return track(remove)
               },
               renderMarkdown(source, documentId) {
@@ -1965,60 +1898,6 @@ export function useAddons(
                   }
                 })
                 return track(remove)
-              },
-              registerRich(extension) {
-                if (disposed) return () => {}
-                assertInputActivation()
-                const key = `${id}.${extension.id}`
-                if (!/^[a-z][a-z0-9-]*$/.test(extension.id) || rich.has(key))
-                  throw new Error(
-                    `This addon supplied a duplicate or invalid editor feature: ${key}.`,
-                  )
-                const entry = {
-                  id: key,
-                  addonId: id,
-                  ...(extension.preview === 'deferred'
-                    ? { preview: extension.preview }
-                    : {}),
-                  attach(...args: Parameters<RichExtension['attach']>) {
-                    if (disposed) return () => {}
-                    try {
-                      const detach = performanceDiagnostics.measure(
-                        id,
-                        `rich attachment:${extension.id}`,
-                        () => extension.attach(...args),
-                      )
-                      return () => {
-                        try {
-                          performanceDiagnostics.measure(
-                            id,
-                            `rich cleanup:${extension.id}`,
-                            detach,
-                          )
-                        } catch (error) {
-                          latest.current.error(error)
-                        }
-                      }
-                    } catch (error) {
-                      throw new Error(
-                        `${addon.manifest.name} could not start its rich editor feature.`,
-                        { cause: error },
-                      )
-                    }
-                  },
-                }
-                return batch.register(`rich:${extension.id}`, () => {
-                  rich.set(key, entry)
-                  const removeCompatibility = registerCompatibility((scope) =>
-                    scope.register('rich', extension.id),
-                  )
-                  if (mounted.current) publishRich()
-                  return () => {
-                    removeCompatibility()
-                    if (rich.delete(key) && !disposed && mounted.current)
-                      publishRich()
-                  }
-                })
               },
               runCommand: (command) =>
                 disposed ? Promise.resolve(false) : app.runCommand(command),
@@ -2397,8 +2276,6 @@ export function useAddons(
     publishSources,
     status,
     app,
-    rich,
-    publishRich,
     dialogService,
     toastService,
     ready,
@@ -2834,7 +2711,6 @@ export function useAddons(
     commands: visibleCommands,
     captureCommandContext,
     markdownExtensions,
-    richExtensions,
     sourceExtensions,
     formattedExtensions,
     statusItems,

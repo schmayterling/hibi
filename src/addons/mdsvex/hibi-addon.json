@@ -2,7 +2,7 @@
   "id": "mdsvex",
   "name": "MDsveX",
   "description": "Edit and preview MDsveX; run embedded code when you choose.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.1",
   "authors": [

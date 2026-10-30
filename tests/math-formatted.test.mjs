@@ -8,6 +8,7 @@ import {
   blockMathSyntax,
   inlineMathEnd,
   inlineMathSyntax,
+  precedenceWork,
 } from '../src/addons/math/formatted-syntax.ts'
 import {
   inlineDisplayMath,
@@ -471,9 +472,32 @@ test('emphasis, strikethrough or a link that opened first wins over math, as in 
     ['a $$x *y$$ z*', [['display', 'x *y']]],
     ['*a* $$x *b* y$$', [['display', 'x *b* y']]],
     ['a [x $$y [z] w$$ v](u)', [['display', 'y [z] w']]],
+    // A link that finished around math leaves emphasis before it open.
+    ['[a $x$ b](u) *c $y* d$', [['inline', 'x']]],
+    ['*a [b $x$](u) $y* z$', [['inline', 'x']]],
+    ['[ ![i](j) $x$ z', [['inline', 'x']]],
   ]) {
     assert.deepEqual(lezerMath(source), expected, source)
     assert.deepEqual(markedMath(source), expected, source)
+  }
+})
+
+test('math after emphasis, links and open brackets reads its paragraph in linear time', () => {
+  for (const make of [
+    (count) => `x ${'*a* $b$ '.repeat(count)}`,
+    (count) => `*x ${'**a** $b$ '.repeat(count)}`,
+    (count) => `[ ${'![a](b) $c$ '.repeat(count)}`,
+    (count) => `x ${'*a* [b $c$ d](e) '.repeat(count)}`,
+  ]) {
+    const work = []
+    for (const count of [1000, 2000, 4000, 8000]) {
+      const text = make(count)
+      precedenceWork.reads = 0
+      formatted.parse(text)
+      work.push(precedenceWork.reads / text.length)
+    }
+    // Reading every delimiter before each formula was quadratic.
+    for (const perUnit of work) assert.ok(perUnit <= 2, JSON.stringify(work))
   }
 })
 
@@ -784,6 +808,47 @@ test('giant paragraphs pair math and code spans across window seams as the whole
       pairsIn(tree, demand.from, demand.to),
       pairsIn(formatted.parse(text), demand.from, demand.to),
       `after ${JSON.stringify(insert)} at ${pos}`,
+    )
+  }
+})
+
+test('an edit above a seam checkpoint pairs the giant paragraph after it again', () => {
+  // Prose decides no pairs, yet each checkpoint rests on every line before it.
+  const lines = Array.from(
+    { length: 400 },
+    (_, i) => `plain words on line ${i} here`,
+  )
+  lines[240] = 'close$$ here'
+  const text = `# T\n\n${lines.join('\n')}\n\n## after\n`
+  const options = { chunkSize: 64, groupSize: 4, giantBlock: 1024 }
+  const close = text.indexOf('close$$') + 5
+  const { tree } = chunkedParse(
+    text,
+    { from: close - 100, to: close + 200 },
+    options,
+  )
+  // The pair a new `$$` opens reaches into the viewport from above it.
+  const demand = { from: close - 98, to: close + 202 }
+  const pairs = (tree) => {
+    const found = []
+    tree.iterate({
+      ...demand,
+      enter(node) {
+        if (/^(InlineMath|InlineMathLines|InlineCode)$/.test(node.name))
+          found.push(`${node.name}:${node.from}-${node.to}`)
+      },
+    })
+    return found
+  }
+  for (let pos = close - 900; pos < close - 50; pos += 7) {
+    const edited = `${text.slice(0, pos)}$$${text.slice(pos)}`
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+      { fromA: pos, toA: pos, fromB: pos, toB: pos + 2 },
+    ])
+    assert.deepEqual(
+      pairs(chunkedParse(edited, demand, options, fragments).tree),
+      pairs(formatted.parse(edited)),
+      `$$ at ${pos}`,
     )
   }
 })

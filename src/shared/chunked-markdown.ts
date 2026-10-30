@@ -2353,7 +2353,8 @@ class ChunkedParse implements ChunkedPartialParse {
       if (next <= at)
         next = Math.min(pos, lineEnd(this.input, at + spacing) + 1)
       open = readSeams(text, offset, at, next, open, read)
-      added.push({ at: next, open, reach: read.reach })
+      // It read every line before it, even where no pair decided anything.
+      added.push({ at: next, open, reach: Math.max(read.reach, next) })
       at = next
     }
     seams.splice(index + 1, 0, ...added)

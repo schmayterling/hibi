@@ -33,9 +33,10 @@ export const seamWork = { units: 0 }
  * after it keeps the result.
  *
  * ponytail: other inline syntax that hides a dollar or backtick, such as an
- * HTML tag or a link destination, reads as text here, so a window after one
- * in a giant paragraph can pair otherwise; reading it means replaying every
- * inline parser.
+ * HTML tag or a link destination, reads as text here, and so does emphasis
+ * or a link that opened before a formula and wins over it, so a window after
+ * one in a giant paragraph can pair otherwise; reading it means replaying
+ * every inline parser.
  */
 export function readSeams(
   text: string,

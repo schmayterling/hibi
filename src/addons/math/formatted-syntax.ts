@@ -285,13 +285,18 @@ type Scans = {
   closers: Closers
   /** Per delimiter character: the first run at or after `from` that can close, or -1. */
   runs: Map<number, { from: number; at: number }>
-  /** The first unmatched `]` at or after `from`, reusable when no `[` came before it. */
-  bracket: { from: number; at: number; clean: boolean }
-  /** The section's delimiters so far, by index in its parts, read up to `seen`. */
-  delimiters: { at: number; part: Delimiter }[]
+  /** Per section position, the first `]` at or after it that no `[` after it matches, or -1; read once, when first needed. */
+  brackets: Int32Array | null
+  /** The section's other delimiters so far, by index in its parts, each with the runs open after it. */
+  delimiters: {
+    at: number
+    part: Delimiter
+    open: ReadonlyMap<number, number>
+  }[]
+  /** Link and image starts so far, by index in its parts. */
+  starts: { at: number; part: Delimiter }[]
+  /** How many parts were read. */
   seen: number
-  /** The last part read, which a finished link replaces. */
-  tail: unknown
 }
 type Delimiter = { from: number; side: number }
 const scansOf = new WeakMap<InlineContext, Scans>()
@@ -301,15 +306,18 @@ function scans(cx: InlineContext) {
     found = {
       closers: { from: -1, at: -1 },
       runs: new Map(),
-      bracket: { from: -1, at: -1, clean: false },
+      brackets: null,
       delimiters: [],
+      starts: [],
       seen: 0,
-      tail: null,
     }
     scansOf.set(cx, found)
   }
   return found
 }
+
+/** Parts and units the precedence check read, for complexity tests. */
+export const precedenceWork = { reads: 0 }
 
 // As @lezer/markdown decides which delimiter runs can close.
 const punctuation = /[\p{S}\p{P}]/u
@@ -334,6 +342,7 @@ function runClose(cx: InlineContext, char: number, from: number) {
     return known.at
   let found = -1
   for (let at = from; at < cx.end; at++) {
+    precedenceWork.reads++
     const code = cx.char(at)
     if (code === 92) at++
     else if (code === char) {
@@ -352,28 +361,32 @@ function runClose(cx: InlineContext, char: number, from: number) {
 
 /** The first `]` at or after `from` that no `[` after `from` matches, or -1. */
 function bracketClose(cx: InlineContext, from: number) {
-  const known = scans(cx).bracket
-  if (known.clean && known.from <= from && (known.at < 0 || known.at >= from))
-    return known.at
-  let depth = 0,
-    clean = true,
-    found = -1
-  for (let at = from; at < cx.end; at++) {
-    const code = cx.char(at)
-    if (code === 92) at++
-    else if (code === 91) {
-      depth++
-      clean = false
-    } else if (code === 93) {
-      if (!depth) {
-        found = at
-        break
+  const state = scans(cx)
+  if (!state.brackets) {
+    // That `]` is the next one at the depth `from` has, so one pass back
+    // from the end answers every position.
+    const length = cx.end - cx.offset
+    precedenceWork.reads += length
+    const depth = new Int32Array(length),
+      closes = new Uint8Array(length)
+    for (let at = 0, level = 0; at < length; at++) {
+      depth[at] = level
+      const code = cx.text.charCodeAt(at)
+      if (code === 92 && at + 1 < length) depth[++at] = level
+      else if (code === 91) level++
+      else if (code === 93) {
+        closes[at] = 1
+        level--
       }
-      depth--
+    }
+    const next = new Map<number, number>()
+    state.brackets = new Int32Array(length)
+    for (let at = length - 1; at >= 0; at--) {
+      if (closes[at]) next.set(depth[at]!, cx.offset + at)
+      state.brackets[at] = next.get(depth[at]!) ?? -1
     }
   }
-  Object.assign(known, { from, at: found, clean })
-  return found
+  return state.brackets[from - cx.offset] ?? -1
 }
 
 /**
@@ -384,35 +397,58 @@ function bracketClose(cx: InlineContext, from: number) {
 function openSyntaxEnd(cx: InlineContext, pos: number) {
   // ponytail: @lezer/markdown keeps its pending delimiters internal and
   // resolves them only at the section's end; this pairs them in order,
-  // without the rule of three, which only decides emphasis runs' lengths.
+  // without the rule of three, so a run that rule leaves unpaired still
+  // ends math.
   const parts = (cx as unknown as { parts: readonly unknown[] }).parts
   const state = scans(cx)
-  // A finished link replaces the parts after its start: read them again.
-  if (state.seen && parts[state.seen - 1] !== state.tail) {
-    state.delimiters = []
-    state.seen = 0
-  }
-  for (let at = state.seen; at < parts.length; at++) {
-    const part = parts[at] as Partial<Delimiter> | null
-    if (typeof part?.side === 'number')
-      state.delimiters.push({ at, part: part as Delimiter })
+  // A finished link replaces the parts from its start on: forget what was
+  // read there and read on from it. Each part is read about once.
+  let from = state.seen
+  for (const list of [state.delimiters, state.starts])
+    for (
+      let last = list.at(-1);
+      last && parts[last.at] !== last.part;
+      last = list.at(-1)
+    ) {
+      precedenceWork.reads++
+      list.pop()
+      // A link start that could not open is cleared in place.
+      if (parts[last.at] !== null) from = Math.min(from, last.at)
+    }
+  let open = state.delimiters.at(-1)?.open ?? new Map<number, number>()
+  for (let at = from; at < parts.length; at++) {
+    precedenceWork.reads++
+    const part = parts[at] as Delimiter | null
+    if (typeof part?.side !== 'number') continue
+    const char = cx.char(part.from)
+    if (char === 91 || char === 33) {
+      state.starts.push({ at, part })
+      continue
+    }
+    const count = open.get(char) ?? 0
+    const next =
+      part.side & 2 && count ? count - 1 : part.side & 1 ? count + 1 : count
+    if (next === count) continue
+    open = new Map(open).set(char, next)
+    state.delimiters.push({ at, part, open })
   }
   state.seen = parts.length
-  state.tail = parts.at(-1)
-  const open = new Map<number, number>()
-  for (const { at, part } of state.delimiters) {
-    // A link start that could no longer open is cleared or loses its side.
-    if (parts[at] !== part || !part.side) continue
-    let char = cx.char(part.from)
-    if (char === 33) char = 91
-    const count = open.get(char) ?? 0
-    if (char !== 91 && part.side & 2 && count) open.set(char, count - 1)
-    else if (part.side & 1) open.set(char, count + 1)
-  }
   let end = cx.end
-  for (const [char, count] of open) {
-    if (!count) continue
-    const close = char === 91 ? bracketClose(cx, pos) : runClose(cx, char, pos)
+  for (const [char, count] of open)
+    if (count) {
+      const close = runClose(cx, char, pos)
+      if (close >= 0) end = Math.min(end, close)
+    }
+  // Starts before a finished link lose their side; they and cleared ones
+  // never open again.
+  let start = state.starts.at(-1)
+  while (start && (parts[start.at] !== start.part || !start.part.side)) {
+    precedenceWork.reads++
+    state.starts.pop()
+    start = state.starts.at(-1)
+  }
+  if (start) {
+    const close = bracketClose(cx, pos)
     if (close >= 0) end = Math.min(end, close)
   }
   return end

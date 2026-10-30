@@ -392,9 +392,11 @@ test('same-target deferred, synchronous and background legacy commands apply exa
     await acceptedMarkdown(page),
     '# two\nfrom command\nfrom sync command\nfrom background',
   )
-  assert.equal(
-    await source.evaluate((element) => element === document.activeElement),
-    true,
+  // Each update remounts the editor; the new source view takes focus back.
+  await page.waitForFunction(() =>
+    document.activeElement?.matches(
+      '.source-pane .cm-content[aria-label="Markdown editor"]',
+    ),
   )
 })
 

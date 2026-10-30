@@ -50,6 +50,9 @@
   "2108dbdeed4c": [
     "src/addons/import-notion/convert.ts"
   ],
+  "038c3f54b2e6": [
+    "src/main/updates.ts"
+  ],
   "b107fad60f86": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
@@ -1356,6 +1359,9 @@
   "ed7aa09e55c2": [
     "src/main/addon-repository.ts"
   ],
+  "d19e9c18b795": [
+    "src/main/document.ts"
+  ],
   "f56d1f9d0955": [
     "src/main/updates.ts"
   ],
@@ -2430,6 +2436,9 @@
   ],
   "3efed3de9d4b": [
     "src/renderer/src/main.tsx"
+  ],
+  "7bf10c8e9c81": [
+    "src/main/document.ts"
   ],
   "5e43497ec5da": [
     "src/main/workspace-files.ts"
@@ -6595,9 +6604,6 @@
   "6080b3043bae": [
     "src/main/workspace-files.ts"
   ],
-  "4646993d0c2f": [
-    "src/main/document.ts"
-  ],
   "49f84ccd45bb": [
     "src/main/workspace-files.ts"
   ],
@@ -7674,6 +7680,9 @@
   "bb174a00dfce": [
     "src/renderer/src/SourceEditor.tsx"
   ],
+  "a59669afac8c": [
+    "src/main/document.ts"
+  ],
   "106b5be948be": [
     "src/ui/ColorschemeSettings.tsx"
   ],
@@ -7694,6 +7703,9 @@
   ],
   "229213386c16": [
     "src/renderer/src/main.tsx"
+  ],
+  "1d662e622a11": [
+    "src/main/document.ts"
   ],
   "4f371b468934": [
     "src/renderer/src/addon-reload.ts"

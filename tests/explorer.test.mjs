@@ -186,7 +186,7 @@ test('workspace popovers, durable folders, ephemeral files, inline rename, dirty
   // A file created at the draft's name is replaced only after asking.
   assert.equal(await page.evaluate(() => window.hibi.saveDocument(false)), null)
   assert.deepEqual(await app.evaluate(() => globalThis.prompts), [
-    'This file changed outside Hibi.',
+    'untitled.md changed outside Hibi.',
   ])
   assert.equal(
     await readFile(join(root, 'untitled.md'), 'utf8'),

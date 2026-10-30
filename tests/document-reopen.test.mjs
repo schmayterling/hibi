@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
 
 // Resolves once main has finished the next request on this channel.
 async function replied(app, channel) {
@@ -137,6 +144,15 @@ async function setup(t) {
     }, text.trim())
     assert.equal((await read()).markdown, text)
   }
+  // Waits for a toast and checks that no toast shows a raw system error.
+  const notice = async (text) => {
+    await page.locator('.toast').filter({ hasText: text }).first().waitFor()
+    const toasts = await page.locator('.toast').allTextContents()
+    assert.deepEqual(
+      toasts.filter((toast) => /ENOENT|remote method/.test(toast)),
+      [],
+    )
+  }
   await open()
   await content('original text\n')
   return {
@@ -154,6 +170,7 @@ async function setup(t) {
     state,
     type,
     workspace,
+    notice,
   }
 }
 
@@ -408,7 +425,7 @@ for (const route of ['Open…', 'Finder', 'link', 'explorer'])
     await writeFile(file, 'another outside text\n')
     assert.deepEqual(await reopen(0), [
       'Save changes to note.md?',
-      'This file changed outside Hibi.',
+      'note.md changed outside Hibi.',
     ])
     assert.deepEqual(await state(), {
       tabId: note,
@@ -420,7 +437,7 @@ for (const route of ['Open…', 'Finder', 'link', 'explorer'])
     await content(saved)
   })
 
-test('switching to edits whose file changed outside Hibi asks once to replace it', {
+test('switching to edits whose file changed outside Hibi asks once, by name, to replace it', {
   timeout: 120000,
 }, async (t) => {
   const setupState = await setup(t)
@@ -443,7 +460,7 @@ test('switching to edits whose file changed outside Hibi asks once to replace it
   await writeFile(file, 'outside text\n')
   await answer(1)
   await select(note)
-  assert.deepEqual(await prompts(), ['This file changed outside Hibi.'])
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
   assert.deepEqual(await state(), {
     tabId: note,
     markdown: draft,
@@ -460,7 +477,7 @@ test('switching to edits whose file changed outside Hibi asks once to replace it
   await writeFile(file, 'another outside text\n')
   await answer(0)
   await select(note)
-  assert.deepEqual(await prompts(), ['This file changed outside Hibi.'])
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
   assert.deepEqual(await state(), {
     tabId: note,
     markdown: draft,
@@ -499,7 +516,7 @@ test('another outside write while Hibi asks to replace a file asks again', {
     const ask = dialog.showMessageBox
     let writes = 1
     dialog.showMessageBox = async (window, options) => {
-      if (options.message === 'This file changed outside Hibi.' && writes-- > 0)
+      if (options.message === 'note.md changed outside Hibi.' && writes-- > 0)
         process
           .getBuiltinModule('node:fs')
           .writeFileSync(file, 'later outside text\n')
@@ -509,8 +526,8 @@ test('another outside write while Hibi asks to replace a file asks again', {
   await answer(0)
   await select(note)
   assert.deepEqual(await prompts(), [
-    'This file changed outside Hibi.',
-    'This file changed outside Hibi.',
+    'note.md changed outside Hibi.',
+    'note.md changed outside Hibi.',
   ])
   assert.equal(await readFile(file, 'utf8'), draft)
   // Version history keeps the text that Replace overwrote.
@@ -580,7 +597,7 @@ test('opening the planned file of an unsaved draft discards or saves the draft',
   await open()
   assert.deepEqual(await prompts(), [
     'Save changes to second.md?',
-    'This file changed outside Hibi.',
+    'second.md changed outside Hibi.',
   ])
   assert.deepEqual(await state(), {
     tabId: second.tabId,
@@ -635,6 +652,317 @@ test('reopening a dirty document prompts before discarding external or local tex
     await app.evaluate(() =>
       globalThis.reopenPrompts.slice(2).map((prompt) => prompt.message),
     ),
-    ['Save changes to note.md?', 'This file changed outside Hibi.'],
+    ['Save changes to note.md?', 'note.md changed outside Hibi.'],
   )
+})
+
+test('Cancel on one note still opens the other files from Finder', {
+  timeout: 120000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, notes, file, read, idle, content } = setupState
+  const { select, answer, prompts, state, type } = setupState
+  const note = (await read()).tabId
+  const draft = await type('local draft')
+  await writeFile(file, 'outside text\n')
+  const later = join(notes, 'later.md')
+  await writeFile(later, 'later note\n')
+  // The note's folder under another name; a junction needs no rights on Windows.
+  const linked = join(dirname(notes), 'linked')
+  await symlink(notes, linked, 'junction')
+  // One request names the note twice and opens the other file, and Cancel
+  // answers the note's only prompt.
+  await answer(2)
+  const done = await replied(app, 'document:external')
+  await app.evaluate(
+    ({ app }, paths) =>
+      app.emit(
+        'second-instance',
+        {},
+        ['electron', 'app', ...paths],
+        process.cwd(),
+      ),
+    [file, join(linked, 'note.md'), later],
+  )
+  await done()
+  await idle()
+  assert.deepEqual(await prompts(), ['Save changes to note.md?'])
+  await content('later note\n')
+  // Cancel kept the note's edits and the outside text.
+  await select(note)
+  assert.deepEqual(await prompts(), [])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(file, 'utf8'), 'outside text\n')
+})
+
+for (const change of ['deleted', 'moved'])
+  test(`Don't save keeps the edits when the file is ${change} during the prompt`, {
+    timeout: 120000,
+  }, async (t) => {
+    const setupState = await setup(t)
+    const { app, notes, file, read, idle, open } = setupState
+    const { answer, prompts, state, type, notice } = setupState
+    const note = (await read()).tabId
+    const draft = await type('local draft')
+    await writeFile(file, 'outside text\n')
+    const moved = change === 'moved' ? join(notes, 'moved.md') : null
+    // Another app moves or deletes the file while Hibi asks.
+    await app.evaluate(
+      ({ dialog }, [file, moved]) => {
+        const ask = dialog.showMessageBox
+        dialog.showMessageBox = async (window, options) => {
+          dialog.showMessageBox = ask
+          const fs = process.getBuiltinModule('node:fs')
+          if (moved) fs.renameSync(file, moved)
+          else fs.unlinkSync(file)
+          return ask(window, options)
+        }
+      },
+      [file, moved],
+    )
+    await answer(1)
+    await open()
+    assert.deepEqual(await prompts(), ['Save changes to note.md?'])
+    await notice(
+      'note.md was moved or deleted outside Hibi. Save to keep this text.',
+    )
+    assert.deepEqual(await state(), {
+      tabId: note,
+      markdown: draft,
+      dirty: true,
+      ephemeral: false,
+    })
+    // Saving writes the kept edits back after asking.
+    await answer(0)
+    const done = await replied(app, 'document:save')
+    await clickMenu(app, 'Save')
+    await done()
+    await idle()
+    assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+    assert.equal(await readFile(file, 'utf8'), draft)
+    if (moved) assert.equal(await readFile(moved, 'utf8'), 'outside text\n')
+    assert.equal((await read()).dirty, false)
+  })
+
+test('switching to a clean tab whose file was deleted keeps its text', {
+  timeout: 120000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, notes, file, read, idle, open, content } = setupState
+  const { select, answer, prompts, state, notice } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  await rm(file)
+  await select(note)
+  assert.deepEqual(await prompts(), [])
+  await notice(
+    'note.md was moved or deleted outside Hibi. Save to keep this text.',
+  )
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: 'original text\n',
+    dirty: false,
+    ephemeral: false,
+  })
+  await content('original text\n')
+  // Saving writes the text back after asking.
+  await answer(0)
+  const done = await replied(app, 'document:save')
+  await clickMenu(app, 'Save')
+  await done()
+  await idle()
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  assert.equal(await readFile(file, 'utf8'), 'original text\n')
+})
+
+test('focusing a split pane asks once to replace edits whose file changed', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, content } = setupState
+  const { select, answer, prompts, state, type } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  const other = (await read()).tabId
+  await select(note)
+  const draft = await type('local draft')
+  await splitTab(app, page, other)
+  const active = (id) =>
+    waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      id,
+    )
+  await active(other)
+  await idle()
+  const focus = async (side, id) => {
+    const done = await replied(app, 'document:focus-tab')
+    await page
+      .locator(
+        `.editor-page[data-side="${side}"] .rich-pane [aria-label="Document editor"]`,
+      )
+      .click()
+    await done()
+    await idle()
+    await active(id)
+  }
+  // An outside change asks once; Cancel keeps the edits and the file.
+  await writeFile(file, 'outside text\n')
+  await answer(1)
+  await focus('left', note)
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(file, 'utf8'), 'outside text\n')
+  await focus('right', other)
+  await focus('left', note)
+  assert.deepEqual(await prompts(), [])
+  // A later outside change asks again, and Replace saves the edits.
+  await focus('right', other)
+  await writeFile(file, 'another outside text\n')
+  await answer(0)
+  await focus('left', note)
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: false,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(file, 'utf8'), draft)
+})
+
+test('a link to the note itself, its explorer row and dropping it check for outside changes', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, file, read, idle, open } = setupState
+  const { answer, prompts, state, workspace, notice } = setupState
+  const note = (await read()).tabId
+  // The links sit below the first line, where the formatted view shows them rendered.
+  const links = '\n\nsee [self](note.md) and [gone](gone.md)\n'
+  await writeFile(file, `original text${links}`)
+  await open()
+  await workspace()
+  const editor = page.locator('.rich-pane [aria-label="Document editor"]')
+  const link = (name) => editor.getByRole('link', { name, exact: true })
+  await link('self').waitFor()
+  const routes = {
+    self: ['document:link', () => link('self').click({ modifiers: ['Shift'] })],
+    gone: ['document:link', () => link('gone').click({ modifiers: ['Shift'] })],
+    row: [
+      'workspace:open-file',
+      () => page.getByRole('treeitem', { name: /^note\.md/ }).click(),
+    ],
+    drop: [
+      'media:open-dropped',
+      async () => {
+        const cdp = await page.context().newCDPSession(page)
+        for (const type of ['dragEnter', 'dragOver', 'drop'])
+          await cdp.send('Input.dispatchDragEvent', {
+            type,
+            x: 600,
+            y: 300,
+            data: { items: [], files: [file], dragOperationsMask: 1 },
+          })
+        await cdp.detach()
+      },
+    ],
+  }
+  const reopen = async (route, choice = 2) => {
+    await answer(choice)
+    const [channel, run] = routes[route]
+    const done = await replied(app, channel)
+    await run()
+    await done()
+    await idle()
+    return prompts()
+  }
+  // Typing on the first line keeps both links rendered.
+  await editor.getByText('original text').click()
+  await page.keyboard.press('End')
+  await page.keyboard.type(' edited')
+  await waitForAsync(page, async () => {
+    const current = await window.hibi.getDocument()
+    return current.dirty && current.markdown.includes(' edited')
+  })
+  const draft = (await read()).markdown
+  // An unchanged file keeps the edits and their undo history without asking.
+  assert.deepEqual(await reopen('self'), [])
+  assert.deepEqual(await reopen('row'), [])
+  assert.deepEqual(await reopen('drop'), [])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  await editor.getByText('original text edited').click()
+  await page.keyboard.press('ControlOrMeta+z')
+  await waitForAsync(
+    page,
+    async () => !(await window.hibi.getDocument()).markdown.includes(' edited'),
+  )
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await waitForAsync(
+    page,
+    async (draft) => (await window.hibi.getDocument()).markdown === draft,
+    draft,
+  )
+  // After an outside change each asks like any reopen, and Cancel keeps the edits.
+  await writeFile(file, `outside text${links}`)
+  assert.deepEqual(await reopen('self'), ['Save changes to note.md?'])
+  assert.deepEqual(await reopen('row'), ['Save changes to note.md?'])
+  assert.deepEqual(await reopen('drop'), ['Save changes to note.md?'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  // Don't save shows the file's text.
+  assert.deepEqual(await reopen('self', 1), ['Save changes to note.md?'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: `outside text${links}`,
+    dirty: false,
+    ephemeral: false,
+  })
+  // A clean note takes a later outside change without asking.
+  await writeFile(file, `dropped text${links}`)
+  assert.deepEqual(await reopen('drop'), [])
+  await editor.getByText('dropped text').waitFor()
+  await writeFile(file, `final text${links}`)
+  assert.deepEqual(await reopen('row'), [])
+  await editor.getByText('final text').waitFor()
+  assert.equal((await read()).markdown, `final text${links}`)
+  // A missing link target and a deleted note get plain messages.
+  await reopen('gone')
+  await notice('Could not find gone.md.')
+  await rm(file)
+  assert.deepEqual(await reopen('self'), [])
+  await notice(
+    'note.md was moved or deleted outside Hibi. Save to keep this text.',
+  )
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: `final text${links}`,
+    dirty: false,
+    ephemeral: false,
+  })
 })

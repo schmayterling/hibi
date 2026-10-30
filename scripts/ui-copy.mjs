@@ -118,6 +118,14 @@ for (const entry of await readdir('src', {
       node.arguments[0]
     )
       collect(node.arguments[0], file)
+    // Main sends notices to the renderer's toasts on the notice channel.
+    if (
+      node.type === 'CallExpression' &&
+      node.callee.property?.name === 'send' &&
+      node.arguments[0]?.property?.name === 'notice' &&
+      node.arguments[1]
+    )
+      collect(node.arguments[1], file)
     for (const value of Object.values(node)) {
       if (Array.isArray(value)) {
         for (const child of value) if (child?.type) visit(child, node)

@@ -441,14 +441,20 @@ export async function selectDocumentTab(
   const modified = dirty(draft.source, draft.saved)
   const discard = refresh === 'discard'
   const file = draft.path ?? (discard ? draft.pendingPath : null)
+  let missing: string | null = null
   if (file && (discard || !modified)) {
     const target = draft.source.snapshot(),
       baseline = draft.saved
     const reload = discard && (modified || !draft.path)
-    const content =
-      !reload && (await matchesMarkdown(file, target))
-        ? null
-        : await readSource(file, id, target.version + 1)
+    let content: SourceStore | null = null
+    try {
+      if (reload || !(await matchesMarkdown(file, target)))
+        content = await readSource(file, id, target.version + 1)
+    } catch (error) {
+      // A file moved or deleted outside Hibi leaves the tab's text as it is.
+      missingFile(error as NodeJS.ErrnoException)
+      missing = basename(file)
+    }
     const changed =
       content !== null &&
       (reload || !(await sameSource(target, content.snapshot())))
@@ -479,6 +485,11 @@ export async function selectDocumentTab(
   activateTab(id)
   advanceRevision()
   refreshDirtyIndicator(window)
+  if (missing)
+    window.webContents.send(
+      HISTORY_CHANNELS.notice,
+      `${missing} was moved or deleted outside Hibi. Save to keep this text.`,
+    )
   return getDocument()
 }
 
@@ -487,6 +498,9 @@ export async function focusDocumentTab(
   window: BrowserWindow,
   id: unknown,
   expected: unknown,
+  locked: (
+    prompt: (window: BrowserWindow) => Promise<unknown>,
+  ) => Promise<unknown>,
 ): Promise<DocumentFocus> {
   storeTab()
   if (typeof id !== 'string' || !tabs.has(id))
@@ -501,6 +515,13 @@ export async function focusDocumentTab(
     expected.revision !== version.document.revision
   )
     throw new Error('This pane has edits pending synchronization. Try again.')
+  // Focusing a pane over an outside change asks once, as a tab switch does;
+  // only the prompt holds the file-operation lock.
+  if (await changedOutside(id, true)) {
+    await locked((window) => confirmTabDiscard(window, id, saveRetained))
+    if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
+      throw new Error('This pane has edits pending synchronization. Try again.')
+  }
   if (id !== activeTab) {
     activateTab(id)
     refreshDirtyIndicator(window)
@@ -910,7 +931,8 @@ export async function saveDocument(
       const choice = await runFileDialog(() =>
         dialog.showMessageBox(window, {
           type: 'warning',
-          message: 'This file changed outside Hibi.',
+          // Tab switches ask before the tab shows, so the prompt names its file.
+          message: `${basename(destination)} changed outside Hibi.`,
           detail: 'Replace the file with your current document?',
           buttons: ['Replace', 'Cancel'],
           defaultId: 1,
@@ -1242,17 +1264,23 @@ export async function loadDocument(
   current = source.snapshot(),
   remember = true,
 ): Promise<DocumentState | null> {
-  chosen = await realpath(chosen)
+  // A tab can outlive its file, so a missing path may still name an open tab.
+  const resolved = await realpath(chosen).catch(missingFile)
+  chosen = resolved ?? chosen
   const existing = getOpenDocuments().find((draft) => draft.file === chosen)
   if (existing) {
     // Reopening asks before replacing edits whose file another app changed,
     // or a draft whose planned file another app created.
-    if (existing.pendingPath || (await changedOutside(existing.tabId, false))) {
+    if (
+      (resolved && existing.pendingPath) ||
+      (await changedOutside(existing.tabId, false))
+    ) {
       if (!(await confirmTabDiscard(window, existing.tabId))) return null
       return selectDocumentTab(window, existing.tabId, remember, 'discard')
     }
     return selectDocumentTab(window, existing.tabId, remember, true)
   }
+  if (!resolved) throw new Error(`Could not find ${basename(chosen)}.`)
   const content = await readSource(chosen)
   if (!source.ownsCurrentSnapshot(current))
     throw new Error(

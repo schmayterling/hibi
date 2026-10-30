@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { realpath } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { serialize } from 'node:v8'
@@ -2122,7 +2123,9 @@ if (!app.requestSingleInstanceLock()) {
         DOCUMENT_CHANNELS.focusTab,
         (event, id: unknown, expected: unknown) =>
           readAfterFileOperation(event, (window) =>
-            focusDocumentTab(window, id, expected),
+            focusDocumentTab(window, id, expected, (prompt) =>
+              runFileOperation(event, prompt),
+            ),
           ),
       )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
@@ -2567,13 +2570,18 @@ if (!app.requestSingleInstanceLock()) {
                 : 'Could not open the startup workspace.',
             )
           }
+          // Cancel keeps one note as it is; the other files still open,
+          // and another name for the kept note does not ask again.
+          const kept = new Set<string>()
           for (const path of externalFiles.splice(0)) {
             try {
               if (!isDocumentName(path))
                 throw new Error('Unsupported document format.')
+              const file = await realpath(path).catch(() => path)
+              if (kept.has(file)) continue
               const opened = await loadDocument(window, path)
-              if (!opened) break
-              document = opened
+              if (opened) document = opened
+              else kept.add(file)
             } catch (error) {
               errors.push(
                 `${basename(path)}: ${error instanceof Error ? error.message : 'Could not open file.'}`,

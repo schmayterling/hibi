@@ -59,15 +59,13 @@ export async function openDocumentLink(
     const file = await resolveWikiDocument(getDocumentPath(), target)
     if (!file)
       throw new Error('The wikilink target was not found in this workspace.')
-    return file === getDocumentPath()
-      ? getDocument()
-      : loadDocument(window, file)
+    // A link to this note checks for outside changes like any other open.
+    return loadDocument(window, file)
   }
   let path = documentMediaPath(href.split('#')[0]!, getDocumentPath())
   if (path && !isDocumentName(path)) path += '.md'
   if (!path || !isDocumentName(path))
     throw new Error('Choose a web link, email address, or supported document.')
-  if (path === getDocumentPath()) return getDocument()
   return loadDocument(window, path)
 }
 

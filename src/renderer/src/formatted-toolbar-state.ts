@@ -355,6 +355,27 @@ export function formattingBefore(
 }
 
 /**
+ * Formatting of mark `id` whose syntax holds `pos`, at either end included:
+ * the one that ends there first, as `formattingBefore` finds it.
+ */
+export function formattingAround(
+  state: EditorState,
+  tree: Tree,
+  pos: number,
+  id: string,
+) {
+  for (const side of [-1, 1] as const)
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(pos, side);
+      node && !isLeaf(node) && !containers.includes(node.name);
+      node = node.parent
+    )
+      if (markIds[node.name] === id && !linkAddress(node))
+        return formattingText(state, node)
+  return null
+}
+
+/**
  * Walk the nodes that touch `from`-`to` in order, like `Tree.iterate`, until
  * `enter` or `leave` returns `stop`.
  */

@@ -503,7 +503,7 @@ test('codemirror Escape keeps link actions hidden until the caret leaves the lin
   assert.equal(await destination.textContent(), 'https://bare.example/path')
 })
 
-test('codemirror link actions show with the caret at a link end', {
+test('codemirror link actions show with the caret at either end of a link', {
   timeout: 60000,
 }, async (t) => {
   const { page, editor, panel } = await open(t)
@@ -512,6 +512,9 @@ test('codemirror link actions show with the caret at a link end', {
   await place(editor, text.length, text)
   const destination = panel.locator('.hibi-link-destination')
   const ends = {
+    'before a link': text.indexOf('[docs'),
+    'in a destination': text.indexOf('https://a') + 3,
+    'at an address start': text.indexOf('https://c'),
     'mid-line link': text.indexOf(') mid') + 1,
     'line-end link': text.indexOf('\n\nBare'),
     'line-end address': text.indexOf('\n\nMid'),
@@ -529,6 +532,9 @@ test('codemirror link actions show with the caret at a link end', {
     )
   }
   assert.deepEqual(shown, {
+    'before a link': 'https://a.example',
+    'in a destination': 'https://a.example',
+    'at an address start': 'https://c.example/path',
     'mid-line link': 'https://a.example',
     'line-end link': 'https://b.example',
     'line-end address': 'https://c.example/path',

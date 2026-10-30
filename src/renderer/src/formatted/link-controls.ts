@@ -10,7 +10,7 @@ import type { MenuItem } from '../../../ui/menus'
 import { otherPopupOpen } from '../completion-broker'
 import type { EditorActionsRequest } from '../editor-interactions'
 import { formattedSyntaxTree } from '../formatted-contributions'
-import { formattingBefore } from '../formatted-toolbar-state'
+import { formattingAround } from '../formatted-toolbar-state'
 import { readDOMPosition } from '../native-dom-selection'
 import type { SourceFormatting } from '../source-formatting'
 
@@ -120,16 +120,21 @@ export function linkControls(callbacks: Callbacks) {
         const link = capture?.link
         return link ? { from: link.from, to: link.to } : null
       }
-      /** The link at `at`, or the one that ends there, past its closing syntax. */
+      /**
+       * The link at `at`, its syntax and either end included: the caret
+       * before its opening, in its destination or past its closing syntax.
+       */
       linkAt(at: number) {
         const capture = callbacks.capture(at)
         if (capture?.link) return capture
         const { state } = this.view
         const tree = formattedSyntaxTree(state)
-        const text = tree && formattingBefore(state, tree, at, 'link')
+        const text = tree && formattingAround(state, tree, at, 'link')
         // A bare address is all text, whose last place inside is before its end.
         return text
-          ? callbacks.capture(text.to < at ? text.to : at - 1)
+          ? callbacks.capture(
+              at < text.from ? text.from : text.to < at ? text.to : at - 1,
+            )
           : capture
       }
       /** A read-only note offers only the actions that change nothing. */

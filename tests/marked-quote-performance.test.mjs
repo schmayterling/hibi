@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
-import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
+import { alertMarkdown, alertToken } from '../src/addons/markdown/alerts.ts'
 import { mathTokens } from '../src/addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { typstTokens } from '../src/addons/typst/syntax.ts'
@@ -85,6 +85,67 @@ test('quotes that stop early leave the rest of the extent unscanned', () => {
   }
 })
 
+test('alerts read their quote only as far as it goes', () => {
+  // Marked's quote rule scans the rest of a lazy extent before it reads the
+  // first line: for every alert, millions of units here.
+  const rules = new Set([
+    Lexer.rules.block.normal.blockquote.source,
+    Lexer.rules.block.gfm.blockquote.source,
+  ])
+  const exec = RegExp.prototype.exec
+  let units = 0
+  RegExp.prototype.exec = function (text) {
+    if (rules.has(this.source)) units += text.length
+    return exec.call(this, text)
+  }
+  try {
+    for (const unit of [
+      '> [!NOTE]\n> # h\nlazy\n',
+      '> [!tip]-\n> ```\n> c\n> ```\nlazy\n',
+      '> > [!NOTE]\n> > # h\n> lazy\n',
+      '>\t> [!NOTE]\n>\t> # h\n> lazy\n',
+    ]) {
+      const source = unit.repeat(2000)
+      units = 0
+      blockScanCounters.quoteLines = 0
+      const html = parser().parse(source)
+      assert.equal(html.match(/class="github-alert"/g)?.length, 2000, unit)
+      assert.ok(units < source.length, `${JSON.stringify(unit)}: ${units}`)
+      assert.ok(
+        blockScanCounters.quoteLines < 2000 * 20,
+        `${JSON.stringify(unit)}: ${blockScanCounters.quoteLines}`,
+      )
+    }
+  } finally {
+    RegExp.prototype.exec = exec
+  }
+})
+
+test('an alert reads its quote without building rules per call', () => {
+  // A short alert reads with Marked's own quote rule; a long one shares one
+  // rules object, so the fence and definition rules come from its cache.
+  for (const alert of [
+    '> [!WARNING]\n> careful with this one\n> and the next line\n',
+    `> [!WARNING]\n${'> a line\n'.repeat(40)}`,
+  ]) {
+    alertToken(alert)
+    const Native = globalThis.RegExp
+    let built = 0
+    globalThis.RegExp = new Proxy(Native, {
+      construct(target, args, newTarget) {
+        built++
+        return Reflect.construct(target, args, newTarget)
+      },
+    })
+    try {
+      for (let index = 0; index < 50; index++) alertToken(alert)
+    } finally {
+      globalThis.RegExp = Native
+    }
+    assert.equal(built, 0, alert.slice(0, 40))
+  }
+})
+
 test('empty quote markers retain native lazy-line boundaries', () => {
   for (const first of ['>', '> ', '>  ', ' >', '  > ', '> p']) {
     for (const next of [
@@ -103,6 +164,53 @@ test('empty quote markers retain native lazy-line boundaries', () => {
       )
     }
   }
+})
+
+test('a nested re-read keeps the last quote lines where Marked puts them', () => {
+  // Marked re-reads a nested quote from the rest of the quote's lines, which
+  // end without a newline, and counts the lines it leaves from the text after
+  // it: one last quote line that strips to nothing stays in the outer quote.
+  // It counts by the new raw's length, which a list re-read can lengthen,
+  // also when a tab comes in a later line.
+  for (const sample of [
+    '> > o\ny\n>',
+    '> > a\n> > > b\n> c\n> >',
+    '>>o\ny\n>\nz',
+    '> > o\ny\n> \n\nafter',
+    '>>a\n>>>]\n>$\n>>  \n>```',
+    '>>e\n>>>*\n>$\n>>\n>>',
+    '>>>1.\ny\n>>\n>>',
+    '>>>-\ny\n>>\n>>\nx\n',
+    '>>>-\ny\n>>\n>>\nx\n\t',
+    '>>>-\ny\n>>\n>>\nx\ty',
+    '>>>-\ny\n>>\n>>\n\tx',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      assert.deepEqual(
+        new Marked(blockMarkdown).lexer(source),
+        new Marked().lexer(source),
+        source,
+      )
+    }
+})
+
+test('a quote joins a body to an empty text like Marked', () => {
+  // A nested quote whose first body strips to nothing, here a marker and a
+  // one-column tab, takes the lazy line after it as its whole text.
+  for (const sample of [
+    '>p\n> >\t\ny',
+    '> >\t\ny',
+    '> > a\n> >\t\ny\n> >\t\nz',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      assert.deepEqual(
+        new Marked(blockMarkdown).lexer(source),
+        new Marked().lexer(source),
+        source,
+      )
+    }
 })
 
 test('quote matching avoids the native recursive regex on whole notes', () => {
@@ -292,6 +400,11 @@ test('code and definition continuations bound paragraph merge work', () => {
   }
 })
 
+// Each shape at one MiB does work that grows with the note: the quote line
+// checks, through Marked's shared quote start rule, and the setext scan
+// units. Cpu time, which other work on the machine stretches far less than
+// wall time, stays far below the minutes a quadratic parse takes.
+const alert = '> [!NOTE]\n> # h\nlazy\n'
 for (const [shape, unit] of Object.entries({
   giant,
   lazy,
@@ -301,22 +414,35 @@ for (const [shape, unit] of Object.entries({
   heading,
   fence,
   nested,
+  alert,
 })) {
   const source = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
   for (const operation of ['export', 'count']) {
-    test(`one MiB ${shape} quote ${operation} stays under 20 seconds`, () => {
-      const start = performance.now()
-      const result =
-        operation === 'export'
-          ? parser().parse(source, { async: false })
-          : countText(richText(source, syntax))
-      const elapsed = performance.now() - start
+    test(`one MiB ${shape} quote ${operation} does linear work`, () => {
+      const start = new Lexer().tokenizer.rules.other.blockquoteStart
+      let checks = 0
+      start.test = function (text) {
+        checks++
+        return RegExp.prototype.test.call(this, text)
+      }
+      blockScanCounters.units = 0
+      const cpu = process.cpuUsage()
+      let result
+      try {
+        result =
+          operation === 'export'
+            ? parser().parse(source, { async: false })
+            : countText(richText(source, syntax))
+      } finally {
+        delete start.test
+      }
+      const { user, system } = process.cpuUsage(cpu)
       const units = source.length / unit.length
       if (operation === 'export') {
         const pattern =
           shape === 'giant'
             ? /<m>/g
-            : shape === 'lazy' || shape === 'heading'
+            : shape === 'lazy' || shape === 'heading' || shape === 'alert'
               ? /<h1>/g
               : shape === 'list'
                 ? /<ul>/g
@@ -338,7 +464,13 @@ for (const [shape, unit] of Object.entries({
           result.words,
           units * (shape === 'lazy' || shape === 'nested' ? 3 : 2),
         )
-      assert.ok(elapsed < 20000, `${operation}: ${elapsed.toFixed(0)}ms`)
+      assert.ok(checks < source.length * 4, `quote line checks: ${checks}`)
+      assert.ok(
+        blockScanCounters.units < source.length * 8,
+        `setext units: ${blockScanCounters.units}`,
+      )
+      const seconds = (user + system) / 1e6
+      assert.ok(seconds < 30, `${operation}: ${seconds.toFixed(1)} s of cpu`)
     })
   }
 }

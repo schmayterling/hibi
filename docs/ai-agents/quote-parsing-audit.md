@@ -23,7 +23,7 @@ the tests failed before the fixes:
 | code continuation into a paragraph | 43,999,999 source units | < 260,000 source units |
 | lazy lists, copied/joined entries | 12,019,999 entries | < 200,000 entries |
 
-the first 50 mib node probe also failed with `RangeError: Maximum call stack size exceeded` in the native quote regexp. the fixed probes below finish normally. permanent timing assertions cover 1 mib with a 20-second limit per export/count case; 50 mib is an explicit probe outside ci.
+the first 50 mib node probe also failed with `RangeError: Maximum call stack size exceeded` in the native quote regexp. the fixed probes below finish normally. permanent assertions cover 1 mib per export/count case with work counters and a cpu-time limit (see the follow-up below); 50 mib is an explicit probe outside ci.
 
 ## fence parity
 
@@ -31,7 +31,7 @@ the shared fence rule accepts spaces and tabs after a closing fence and removes 
 
 tests compare the rich, exported and formatted bodies with lezer and micromark for plain, quoted, listed and indented fences, including tab closers. typst's standalone token consumer is included so its code token cannot swallow text after a tab closer.
 
-a closing fence also repeats only the opening fence's character: `` ```~~~ `` leaves a backtick fence open, as in commonmark, in the shared rule and in the startup detector's closing check. one earlier marked quirk remains: a body tab that straddles the fence's dedent column still follows marked's character-based dedent in both rendered views.
+a closing fence also repeats only the opening fence's character: `` ```~~~ `` leaves a backtick fence open, as in commonmark, in the shared rule and in the startup detector's closing check. one earlier marked quirk remains: a body tab that straddles the fence's dedent column still follows marked's character-based dedent in every view (see remaining).
 
 a separate existing tiptap serializer bug also remains: a list item whose first child is a typst block serializes its body without the list indentation. this reproduces on main `5ed78560` with ordinary fence closers. the new rich-view test checks parsed bodies through the app's configured schema; this older list serializer is outside the patch.
 
@@ -125,14 +125,33 @@ column state finds each block's physical row from its offset in the frame's sour
 
 against micromark's code block contents over 6,000 generated nested quotes with tabs, this branch is right in 88 cases where main is wrong and wrong in none where main is right. against the same sources with every tab expanded to its physical column, block structure is fixed in 6 of 4,000 cases and lost in none.
 
+## follow-up after #690
+
+each fix below has a test that fails on main `f6f4fff1`:
+
+- a tabbed nested quote whose list marked re-reads with a lazy line threw on main. marked splices the re-read list into the quote's raw by the list's length in its body text, and the widened tab's spaces made the cut take the nested quote's own marker, so the enclosing quote's re-read of that raw found no quote: `>> >⇥*` / `>>1` / `h` raised a `TypeError` in every parse, export and count. 6 to 10 of 6,000 generated tabbed alert notes per seed threw. the splice is now measured in the unwidened body, and no generated quote raw loses its marker (30 and 46 per 6,000 before).
+- three more #690 regressions in nested re-reads: the last quote line that strips to nothing stays in the outer quote (`> > o` / `y` / `>` exported an extra empty quote), the re-read input ends without a newline like marked's, and the lines a re-read consumed are counted from the new raw's length as marked 18 counts them, so `>>e` / `>>>*` / `>$` / `>>` / `>>` no longer splits off an empty quote. a quote's text also joins its next body to an empty text the way marked does. over untabbed quote-heavy notes against native marked: 0 regressions, 88 to 98 of 6,000 per seed fixed.
+- list items that read the row tracker with their own text came from a footnote definition's bounding probe: it builds a lexer from the same options, and the wrapped block extensions moved the outer quote's row cursor. extensions now ignore reads from another lexer: over 3,000 generated cases, 224 row reads from text that is no suffix of the frame on main, none now.
+- a tab that only comes into play during a nested re-read, in a line the re-read reads ahead or after the quote (`>>>-` / `y` / `>>` / `>>` / `x⇥y`), no longer switches the re-read to counting the lines it took: its lines count by length, as marked counts them, unless tab columns widened its input from the start.
+- alerts and callouts read their quote only as far as it goes. a quote whose rule extent ends at a blank line within 32 lines is read by marked's own quote rule over just those lines; a longer one goes through the bounded reader under marked's own tab handling, with one rules object shared across calls so the fence and definition rules derived from it are built once. 2,000 repeated alerts took 42,043,000 native quote-rule units on main and take none. the quote's raw and text equal marked's own quote tokenizer over 5,000 generated alert sources. a short alert builds no regexp per call, where a reader per call built 3, and costs 1.02 to 1.07 times main's cpu time.
+- reference definitions accept tabs between label, destination and title, matching micromark.
+- the 1 mib cases assert work counters (quote line checks under 4 per byte, setext units under 8 per byte) and under 30 s of cpu time instead of 20 s of wall time. measured maxima: 1.79 checks and 0.76 units per byte, 5.2 s of cpu (nested count) at load 12.
+
+measurement correction: the scratch fuzzers that #690 used for the tab oracles advanced an lcg whose product passes 2^53, so every seed drew the same sequence. with a 32-bit generator about 55% of generated tabbed nests differ from their tab-expanded structure and about 33% from micromark's code contents, on main and on this branch alike. the earlier 498 of 4,000 and 87 of 3,000 came from that one sequence.
+
+memory: the live heap at the end of a 2 mib lazy quote paragraph is 47.4 mib, 23.7 bytes per source byte. marked's merged paragraph `raw` and `text` ropes hold 21.8 mib of it and the reader's raw and text chunk arrays 11.0 mib; flattening both leaves 14.6 mib. cutting the ropes means owning marked's paragraph merge or an engine-specific flatten, so neither is done. peak rss sits above the live heap by v8's old-generation growth.
+
 ## remaining
 
-these predate the branch; main parses them the same way or slower:
+these predate #690 unless noted:
 
-- alerts and callouts read their quote with marked's native tokenizer, whose regexp scans the rest of the quote rule's extent for every alert. repeated `> [!NOTE]` / `> # h` / `lazy` quadruples per doubling: 4.2 s on main and 2.9 s here at 128 kib.
-- list items whose `blockTokens` call bypasses the column wrapper, because the list captured the lexer's method before its quote installed column state, still read the frame's row cursor with their own text: 160 such reads over 3,000 generated cases. the extent cache serves only the frame's own loop, identified by its token list, so it never serves them.
-- inside an alert body, a second tab after a nested marker keeps its width relative to the stripped text: `>⇥> [!NOTE]` / `>⇥>` / `>⇥>⇥⇥code` renders `code` where commonmark has two more spaces.
-- deep nests that mix two tabs after a marker with tab list markers: 498 of 4,000 generated cases differ from their tab-expanded structure, and 87 of 3,000 from micromark's code contents, in both main and this branch.
+- alert bodies are lexed from marked's quote text, which joins a nested quote that marked re-reads to the text of that quote's first line: `> [!NOTE]` / `> > b` / `> > c` / `lazy` renders `b` twice. inside an alert body a second tab after a nested marker also keeps its width relative to the stripped text: `>⇥> [!NOTE]` / `>⇥>` / `>⇥>⇥⇥code` renders `code` where commonmark has two more spaces. lexing the body from the alert's own lines fixes the first, but changes 6 to 9% of generated alert notes and needs its own oracle.
+- deep tab nests: the tab-expanded and micromark differences above are on main too. the largest class among minimized cases is a tab after `> ` that marked reads as indentation before a block marker (`> ⇥>`, `> ⇥[a]:`).
+- under tab columns that widen its input from the start, a nested re-read still counts the lines it took, because its raw and its widened input need not share lengths: `>⇥>>-` / `e` / `>>` / `>>`, `>>>2)` / `⇥$` / `>>` / `>>` and `>>e` / `>>>*` / `>$` / `>>` / `>>` / `x⇥y` keep #690's extra empty quote while their untabbed forms now match marked.
+- since footnote probes stopped moving a quote's row cursor, the cursor reaches rows whose recorded prefix holds a `>` that is content: the prefix map takes every leading `>`, space and tab, so `>⇥  >` records a second marker that the column strip does not see. `>[^1]:` / `>>⇥` / `>⇥  >` with footnotes reads the last line as a paragraph `    >` where main and the tab-expanded form read code (micromark puts that code in the outer quote). main got there only because the probe's reads moved the cursor past the source's last row. it showed up as one source in 2,000 generated tabbed notes, in each of two runs. recording only real markers fixes the case but worsens about 1% of generated tabbed code contents against micromark, so it needs its own pass.
+- marked's splice of a multi-line re-read list cuts its raw at a byte count: the alert `>>[!E]` / `>>>]` / `>  >⇥1. m` / `>>=` / `"` parses differently from its tab-expanded form on this branch, where main's cut happened to land like the expanded one.
+- fence bodies follow marked's character-based dedent outside tab-column quotes, so a body tab inside the opening fence's indentation is dropped whole where micromark keeps its remaining columns (`  ~~~` / `⇥x` / `  ~~~`: `x` where micromark has `  x`). a by-column dedent has to change every view at once: the rich and exported parses, typst's standalone consumer and the formatted view's `markedFenceText`. alert and callout bodies are marked's stripped quote text, whose columns are not the source's, so they need the dedent from the alert's own lines. list items keep marked's own tab handling too: 60 of 90 generated tabbed fence bodies in `- `, `1. ` and `> - ` items differ from micromark.
+- native marked drops lazy text after a nested list re-read (`> >  *` / `>1` / `h` loses `1`) and splits a quote line that ends in four spaces off a nested quote (`>>>e` / `e` / `>>>` / `>  >` and four spaces), and hibi keeps marked's tokens in both. the second is the only source, over 3 seeds of 2,000 generated tabbed nests, where this branch differs from its own tab-expanded parse and main does not: its tabbed form matches marked and micromark.
 
 ## structural proof
 
@@ -149,3 +168,5 @@ after merging main at `6cf7cb5a`, all 2,300 node checks passed across 141 scoped
 after merging main again at `73013dab`, the production build, both typechecks, the seven focused markdown suites (490 checks) and startup-performance (10) passed again; the 1 mib list export missed its 20-second wall-clock limit once, at 21.5 s while a fuzz ran beside it, and took 4.0 s alone. the startup closure is 681,040 bytes, main's 681,215, against the unchanged 691,974-byte cap. biome reported no errors.
 
 full corpus runs, the unrelated giant word-count scale sweeps and hosted ci were not run.
+
+the follow-up after its review, merged with main `f8fffeca`: the production build, both typechecks, docs links, copy:check and biome 2.6.2 passed with no errors; its only new warnings are 9 non-null assertions in `marked-blocks.ts`, which has 41 on main. of 2,907 node checks across the 192 scoped test files, 2,904 passed and 3 garbage-collection checks skipped. desktop checks passed for formatted-word-count (7), github-alerts (6), collapsible-callouts (11), markdown-footnotes (6), typst (2), typst-unit (2), pdf-export (2), startup-performance (11), site-export (12) and export-addons (3). the startup closure is 682,864 bytes, equal to main `f8fffeca` built the same way, against the unchanged 691,974-byte cap. the codspeed markdown cases, in one process with interleaved rounds against main, take 1.02 to 1.07 times main's cpu time for the alert tokenizer and 0.98 to 1.02 times for lexing, rendering and walking a note.

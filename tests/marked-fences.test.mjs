@@ -136,6 +136,20 @@ test('typst fences close and dedent per CommonMark in every view', () => {
   }
 })
 
+test('typst bodies with tabs in the opening indentation read alike in every view', () => {
+  // Every view removes that indentation by character, as Marked does.
+  for (const indent of [' ', '  ', '   '])
+    for (const body of ['\tx', ' \tx', '\t\tx']) {
+      const source = `${indent}\`\`\`typst\n${body}\n${indent}\`\`\`\nafter`
+      const { rich, exported, standalone, formatted } = views(source)
+      assert.deepEqual(
+        { rich, exported, standalone },
+        { rich: formatted, exported: formatted, standalone: formatted },
+        JSON.stringify(source),
+      )
+    }
+})
+
 test('rich documents preserve the same typst bodies', () => {
   const diagram = Node.create({
     name: 'typstBlock',

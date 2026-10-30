@@ -158,9 +158,10 @@ test('version restore keeps a prompt save acknowledged when reading the version 
     dialog.showMessageBox = async () => ({ response: 0 })
     const fs = process.getBuiltinModule('node:fs/promises')
     const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+    const { basename } = process.getBuiltinModule('node:path')
     const original = fs.open
     fs.open = async (path, ...args) => {
-      if (String(path).endsWith(`/${version}.md`))
+      if (basename(String(path)) === `${version}.md`)
         throw new Error('version read failed')
       return original(path, ...args)
     }

@@ -219,12 +219,19 @@ test('formatted split links native wheel scrolling in both directions without fe
   await select(page, 'source', 0)
   for (const pane of ['source', 'rich']) {
     const other = pane === 'source' ? 'rich' : 'source'
-    const leader = page.locator(
-      pane === 'rich' ? '.rich-pane' : '.source-pane .cm-scroller',
-    )
+    const selector =
+      pane === 'rich' ? '.rich-pane' : '.source-pane .cm-scroller'
+    const leader = page.locator(selector)
     const box = await leader.boundingBox()
+    const start = await leader.evaluate((element) => element.scrollTop)
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
     await page.mouse.wheel(0, 800)
+    // The panes are still aligned until the wheel scrolls its pane.
+    await page.waitForFunction(
+      ([selector, start]) =>
+        document.querySelector(selector).scrollTop !== start,
+      [selector, start],
+    )
     await waitForAsync(
       page,
       ({ pane, other }) => {
@@ -272,6 +279,18 @@ test('formatted split links native wheel scrolling in both directions without fe
       'scroll feedback settles',
     )
   }
+  // The source view redraws its unchanged selection when the other pane
+  // scrolls it; that report must not hand the focused source pane the lead.
+  const echo = await page.evaluate(async () => {
+    const rich = document.querySelector('.rich-pane')
+    const before = rich.scrollTop
+    document.dispatchEvent(new Event('selectionchange'))
+    await new Promise(requestAnimationFrame)
+    document.querySelector('.source-pane .cm-scroller').scrollTop += 300
+    for (let i = 0; i < 5; i++) await new Promise(requestAnimationFrame)
+    return { before, after: rich.scrollTop }
+  })
+  assert.equal(echo.after, echo.before, 'the scrolled pane keeps the lead')
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await frames(page)
   const stopped = await page.evaluate(async () => {

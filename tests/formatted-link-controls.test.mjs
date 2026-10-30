@@ -83,6 +83,29 @@ const settle = (page) =>
     await new Promise((resolve) => setTimeout(resolve, 200))
   })
 
+/** A menu's actions, `| ` before each that starts a group after a separator. */
+const groupedItems = (menu) =>
+  menu.getByRole('menuitem').evaluateAll((items) =>
+    items.map((item) => {
+      const group = item.closest('[role="group"]')
+      const apart =
+        group?.querySelector('[role="menuitem"]') === item &&
+        group.previousElementSibling?.getAttribute('role') === 'separator'
+      return `${apart ? '| ' : ''}${item.textContent}`
+    }),
+  )
+
+/** Lookups never reach the services. */
+const offline = (app) =>
+  app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('host-network:get-text')
+    ipcMain.handle('host-network:get-text', () => ({
+      ok: false,
+      code: 'http-status',
+      status: 404,
+    }))
+  })
+
 test('codemirror link hover offers URL, edit, open, copy and remove', {
   timeout: 60000,
 }, async (t) => {
@@ -563,26 +586,11 @@ test('codemirror link menu holds the editor actions of addons too', {
   timeout: 60000,
 }, async (t) => {
   const { app, page, panel } = await open(t, { dictionary: true })
-  // Lookups never reach the services.
-  await app.evaluate(({ ipcMain }) => {
-    ipcMain.removeHandler('host-network:get-text')
-    ipcMain.handle('host-network:get-text', () => ({
-      ok: false,
-      code: 'http-status',
-      status: 404,
-    }))
-  })
+  await offline(app)
   const link = page.getByRole('link', { name: 'docs', exact: true })
   const menu = page.getByRole('menu', { name: 'Editor actions', exact: true })
   // The link's actions lead; the addon's follow apart from them.
-  const items = () =>
-    menu
-      .getByRole('menuitem')
-      .evaluateAll((items) =>
-        items.map(
-          (item) => `${item.style.marginTop ? '| ' : ''}${item.textContent}`,
-        ),
-      )
+  const items = () => groupedItems(menu)
   const expected = [
     'Edit link…',
     'Open link',
@@ -635,6 +643,57 @@ test('codemirror link menu holds the editor actions of addons too', {
   await page.keyboard.press('Shift+F10')
   await menu.getByRole('menuitem', { name: 'Define word', exact: true }).click()
   await page.getByRole('dialog', { name: 'Define “docs”' }).waitFor()
+})
+
+test('codemirror editor actions menu groups its actions and keeps menu keys', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, read } = await open(t, { dictionary: true })
+  await offline(app)
+  const menu = page.getByRole('menu', { name: 'Editor actions', exact: true })
+  await page.getByRole('link', { name: 'docs', exact: true }).click()
+  await page.keyboard.press('Shift+F10')
+  await menu
+    .getByRole('menuitem', { name: 'Define word', exact: true })
+    .waitFor()
+  // The link's actions and the addon's are groups, apart by a separator.
+  const groups = await menu
+    .getByRole('group')
+    .evaluateAll((groups) =>
+      groups.map((group) =>
+        [...group.querySelectorAll('[role="menuitem"]')].map(
+          (item) => item.textContent,
+        ),
+      ),
+    )
+  assert.deepEqual(groups, [
+    ['Edit link…', 'Open link', 'Copy link', 'Remove link'],
+    ['Define word', 'Find synonyms', 'Add word to dictionary'],
+  ])
+  assert.equal(await menu.getByRole('separator').count(), 1)
+  const active = () =>
+    page.evaluate(() => {
+      const id = document.activeElement?.getAttribute('aria-activedescendant')
+      return id ? document.getElementById(id)?.textContent : null
+    })
+  // Home and End go to the first and last action.
+  await page.keyboard.press('End')
+  assert.equal(await active(), 'Add word to dictionary')
+  await page.keyboard.press('Home')
+  assert.equal(await active(), 'Edit link…')
+  // Tab closes the menu, as the platform's do, and runs nothing.
+  await page.keyboard.press('ArrowDown')
+  assert.equal(await active(), 'Open link')
+  await page.keyboard.press('Tab')
+  await menu.waitFor({ state: 'hidden' })
+  await settle(page)
+  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [])
+  assert.equal(await read(), note)
+  assert.ok(
+    await page.evaluate(() =>
+      document.activeElement?.closest('.rich-pane .cm-editor'),
+    ),
+  )
 })
 
 test('codemirror read-only link actions open and copy but refuse edits', {

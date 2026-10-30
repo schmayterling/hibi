@@ -197,13 +197,14 @@ export function attachEditorInteractions(adapter: Adapter) {
   const select = (index: number) => {
     if (!shown?.items.length) return
     selected = (index + shown.items.length) % shown.items.length
-    for (const [position, element] of [...menu.children].entries()) {
+    const actions = menu.querySelectorAll<HTMLElement>('[role="menuitem"]')
+    for (const [position, element] of actions.entries()) {
       const active = position === selected
       element.setAttribute('aria-current', String(active))
-      ;(element as HTMLElement).style.background = active ? 'var(--active)' : ''
+      element.style.background = active ? 'var(--active)' : ''
     }
     // The editor keeps its focus; assistive technology follows the selected action.
-    const current = menu.children[selected]
+    const current = actions[selected]
     if (current)
       adapter.element.setAttribute('aria-activedescendant', current.id)
     current?.scrollIntoView({ block: 'nearest' })
@@ -289,36 +290,47 @@ export function attachEditorInteractions(adapter: Adapter) {
       }
       shown = { request, items }
       selected = Math.min(selected, items.length - 1)
-      menu.replaceChildren(
-        ...items.map((item, index) => {
-          const button = document.createElement('button')
-          button.type = 'button'
-          button.id = `${menu.id}-${index}`
-          button.setAttribute('role', 'menuitem')
-          // One action per row.
-          Object.assign(button.style, {
-            display: 'flex',
-            width: '100%',
-            textAlign: 'start',
-          })
-          button.append(
-            copy(
-              item.kind === 'command'
-                ? item.command.label
-                : item.kind === 'edit'
-                  ? item.action.label
-                  : item.item.label,
-              item.kind === 'edit' ? item.action.detail : undefined,
-            ),
-          )
-          const previous = items[index - 1]
-          if (previous && group(previous) !== group(item))
-            button.style.marginTop = 'var(--space-2)'
-          button.addEventListener('pointermove', () => select(index))
-          button.addEventListener('click', () => accept(index))
-          return button
-        }),
-      )
+      // Each source's actions are a group, apart from the next by a separator.
+      const groups: HTMLElement[] = []
+      let current: HTMLElement | null = null
+      for (const [index, item] of items.entries()) {
+        const previous = items[index - 1]
+        if (!current || (previous && group(previous) !== group(item))) {
+          if (current) {
+            const separator = document.createElement('div')
+            separator.setAttribute('role', 'separator')
+            separator.style.height = 'var(--space-2)'
+            groups.push(separator)
+          }
+          current = document.createElement('div')
+          current.setAttribute('role', 'group')
+          groups.push(current)
+        }
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.id = `${menu.id}-${index}`
+        button.setAttribute('role', 'menuitem')
+        // One action per row.
+        Object.assign(button.style, {
+          display: 'flex',
+          width: '100%',
+          textAlign: 'start',
+        })
+        button.append(
+          copy(
+            item.kind === 'command'
+              ? item.command.label
+              : item.kind === 'edit'
+                ? item.action.label
+                : item.item.label,
+            item.kind === 'edit' ? item.action.detail : undefined,
+          ),
+        )
+        button.addEventListener('pointermove', () => select(index))
+        button.addEventListener('click', () => accept(index))
+        current.append(button)
+      }
+      menu.replaceChildren(...groups)
       show(menu, x, y)
       select(selected)
     }
@@ -384,15 +396,19 @@ export function attachEditorInteractions(adapter: Adapter) {
       return
     }
     if (!shown || event.ctrlKey || event.metaKey || event.altKey) return
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      select(selected + (event.key === 'ArrowDown' ? 1 : -1))
-      event.preventDefault()
-      event.stopPropagation()
-    } else if (event.key === 'Enter' || event.key === 'Tab') {
-      accept(selected)
-      event.preventDefault()
-      event.stopPropagation()
+    const moves: Record<string, number> = {
+      ArrowDown: selected + 1,
+      ArrowUp: selected - 1,
+      Home: 0,
+      End: -1,
     }
+    if (Object.hasOwn(moves, event.key)) select(moves[event.key]!)
+    else if (event.key === 'Enter') accept(selected)
+    // As in the platform's menus, Tab closes the menu without choosing.
+    else if (event.key === 'Tab') closeMenu()
+    else return
+    event.preventDefault()
+    event.stopPropagation()
   }
   const outside = (event: PointerEvent) => {
     if (!menu.contains(event.target as Node)) closeMenu()

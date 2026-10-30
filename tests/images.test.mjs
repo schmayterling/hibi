@@ -547,7 +547,7 @@ unit(
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
-    const editor = await selectFormattedEngine(app, page, 'codemirror')
+    const editor = await waitForFormattedEditor(app, page)
     await app.evaluate(({ dialog }, note) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,

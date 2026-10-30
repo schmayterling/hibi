@@ -279,7 +279,7 @@ test('external tree changes retain row focus and failed pages release busy state
     globalThis.focusPages.fail = true
   })
   await writeFile(join(folder, 'two.md'), '# Retry')
-  await page.getByText(/page read failed/).waitFor()
+  await page.getByText('Page read failed', { exact: true }).waitFor()
   assert.notEqual(await tree.getAttribute('aria-busy'), 'true')
   assert.equal(
     await one.evaluate((row) => row === document.activeElement),

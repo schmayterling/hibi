@@ -789,13 +789,28 @@ test('whitespace lines after the last block are read once per text, not on every
         return calls
       }
       try {
+        const refresh = count(() => preview.refresh())
+        // Above the last block: the lines after it stay as they were.
+        const edit = count(() =>
+          view.dispatch({ changes: { from: 0, insert: 'x' } }),
+        )
+        const space = view.contentDOM.style.getPropertyValue('--hibi-end')
+        // A line break typed before the last line, among the lines after
+        // the last block, until they are parsed and laid out.
+        calls = 0
+        view.dispatch({
+          changes: { from: view.state.doc.length - 1, insert: '\n' },
+        })
+        const block = view.state.doc.line(3)
+        while (!preview.covered(block.to, view.state.doc.length))
+          await new Promise(requestAnimationFrame)
+        preview.refresh()
         return {
-          refresh: count(() => preview.refresh()),
-          // Above the last block: the lines after it stay as they were.
-          edit: count(() =>
-            view.dispatch({ changes: { from: 0, insert: 'x' } }),
-          ),
-          space: view.contentDOM.style.getPropertyValue('--hibi-end'),
+          refresh,
+          edit,
+          space,
+          typed: calls,
+          after: view.contentDOM.style.getPropertyValue('--hibi-end'),
         }
       } finally {
         text.line = read
@@ -805,10 +820,14 @@ test('whitespace lines after the last block are read once per text, not on every
     // The view shows a few dozen of the 10,000 lines.
     assert.ok(result.refresh < 200, report)
     assert.ok(result.edit < 200, report)
-    spaces.push(result.space)
+    assert.ok(result.typed < 200, report)
+    spaces.push([result.space, result.after])
   }
-  // Only an empty line before the last opens an empty paragraph there.
-  assert.deepEqual(spaces, ['', '16px'])
+  // Only an odd run of empty lines before the last opens an empty paragraph there.
+  assert.deepEqual(spaces, [
+    ['', '16px'],
+    ['16px', ''],
+  ])
 })
 
 test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {

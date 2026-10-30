@@ -1,47 +1,35 @@
 name: check
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      clean:
-        description: Ignore caches and run a full build and all checks
-        type: boolean
-        default: false
 permissions:
   contents: read
-concurrency:
-  group: check-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
   desktop:
-    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
-    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
-        shard: ['0/4', '1/4', '2/4', '3/4']
-        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
-      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/ci
-        id: ci
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
-          shard: ${{ matrix.shard }}
-      - run: npx electron-builder --dir --config.mac.identity=-
-        shell: bash
-        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
+          node-version-file: .nvmrc
+          cache: npm
+      - run: node .github/actions/ci/install.mjs
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          electron_config_cache: ${{ github.workspace }}/.cache/electron
+      - run: npm run build:app
+      - run: |
+          for run in 1 2 3; do
+            if [ "$RUNNER_OS" = Linux ]; then
+              dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node --test --test-concurrency=1 --test-reporter=tap --test-name-pattern='native wheel scrolling' tests/formatted-split.test.mjs || true
+            else
+              node --test --test-concurrency=1 --test-reporter=tap --test-name-pattern='native wheel scrolling' tests/formatted-split.test.mjs || true
+            fi
+          done

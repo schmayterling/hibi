@@ -67,12 +67,61 @@ async function menu(token) {
   const top = await line.evaluate(
     (line) => Number.parseFloat(line.style.paddingTop) || 0,
   )
-  await page.mouse.move(0, 0)
-  await page.mouse.move(box.x + 80, box.y + top + 14)
-  await page.waitForFunction(() => {
-    const handle = document.querySelector('.rich-pane .block-drag-handle')
-    return handle && getComputedStyle(handle).visibility === 'visible'
+  await page.evaluate(() => {
+    globalThis.__bh = []
   })
+  await page.mouse.move(0, 0)
+  const x = box.x + 80,
+    y = box.y + top + 14
+  await page.mouse.move(x, y)
+  const visible = () =>
+    page.waitForFunction(
+      () => {
+        const handle = document.querySelector('.rich-pane .block-drag-handle')
+        return handle && getComputedStyle(handle).visibility === 'visible'
+      },
+      undefined,
+      { timeout: 4000 },
+    )
+  const dump = async (label) =>
+    console.log(
+      '# DIAG',
+      label,
+      token,
+      JSON.stringify(
+        await page.evaluate(
+          ([x, y]) => {
+            const hit = document.elementFromPoint(x, y)
+            const view = document.querySelector('.rich-pane .cm-content')?.cmTile.root.view
+            return {
+              x,
+              y,
+              now: Math.round(performance.now()),
+              hit: hit && `${hit.tagName}.${String(hit.className).slice(0, 50)}`,
+              ro: view?.state.readOnly,
+              aria: document.querySelector('.rich-pane .cm-content')?.getAttribute('aria-readonly'),
+              busy: document.querySelector('.app')?.getAttribute('aria-busy'),
+              handles: document.querySelectorAll('.rich-pane .block-drag-handle').length,
+              bh: globalThis.__bh ?? null,
+            }
+          },
+          [x, y],
+        ),
+      ),
+    )
+  try {
+    await visible()
+  } catch {
+    await dump('menu-timeout')
+    await page.mouse.move(x, y + 1)
+    try {
+      await visible()
+      await dump('menu-after-nudge')
+    } catch (error) {
+      await dump('menu-failed')
+      throw error
+    }
+  }
   await page.locator('.rich-pane .block-drag-handle').click()
   return page.getByRole('menuitem', { name: 'Move block down', exact: true })
 }

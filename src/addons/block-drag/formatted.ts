@@ -1096,6 +1096,7 @@ class BlockHandle {
   }
 
   hide() {
+    (((globalThis as any).__bh ??= []) as unknown[][]).push(['hide', Math.round(performance.now()), (new Error().stack ?? '').split('\n').slice(2, 4).map((line) => line.trim()).join(' < ')])
     this.handle.style.visibility = 'hidden'
     this.handle.style.pointerEvents = 'none'
   }
@@ -1130,6 +1131,7 @@ class BlockHandle {
   }
 
   readonly move = (event: MouseEvent) => {
+    (((globalThis as any).__bh ??= []) as unknown[][]).push(['move', Math.round(performance.now()), event.clientX, event.clientY, !!this.dragged, this.wrapper.contains(event.target as Node), this.frame])
     if (this.dragged || this.wrapper.contains(event.target as Node)) return
     this.pointer = { x: event.clientX, y: event.clientY }
     this.frame ||= requestAnimationFrame(() => {
@@ -1144,6 +1146,7 @@ class BlockHandle {
   hover(x: number, y: number) {
     const { view } = this
     const tree = formattedSyntaxTree(view.state)
+    (((globalThis as any).__bh ??= []) as unknown[][]).push(['hover', Math.round(performance.now()), x, y, !!tree, editable(view), !!this.dragged])
     if (!tree || !editable(view) || this.dragged) return
     const text = column(view)
     // The margin beside a block finds it, as in the rich view.
@@ -1154,6 +1157,7 @@ class BlockHandle {
       const box = blockBox(view, node)
       return !!box && y < box.top + 12
     })
+    (((globalThis as any).__bh ??= []) as unknown[][]).push(['node', Math.round(performance.now()), pos, node?.name ?? null, node?.from ?? null, this.handle.style.visibility])
     if (!node) return
     if (
       this.target &&
@@ -1177,6 +1181,7 @@ class BlockHandle {
   }
 
   positioned(position: { left: number; top: number } | null) {
+    (((globalThis as any).__bh ??= []) as unknown[][]).push(['positioned', Math.round(performance.now()), position && Math.round(position.left), position && Math.round(position.top)])
     if (!position) return this.hide()
     this.handle.style.left = `${position.left}px`
     this.handle.style.top = `${position.top}px`

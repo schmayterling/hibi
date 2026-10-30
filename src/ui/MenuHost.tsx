@@ -27,8 +27,11 @@ export function MenuHost() {
   const last = useRef(open)
   if (open) last.current = open
   const menu = open ?? last.current
+  const shown = useRef(open)
   useLayoutEffect(() => {
     const host = element.current
+    const previous = shown.current
+    shown.current = open
     if (!host) return
     if (!open) {
       if (host.matches(':popover-open')) host.hidePopover()
@@ -38,7 +41,15 @@ export function MenuHost() {
     const bounds = host.getBoundingClientRect()
     host.style.left = `${Math.max(8, Math.min(open.x, innerWidth - bounds.width - 8))}px`
     host.style.top = `${Math.max(8, Math.min(open.y + 4, innerHeight - bounds.height - 8))}px`
-    host.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+    // A menu opened again with new states keeps its focused action.
+    const focused = document.activeElement
+    if (
+      previous?.owner !== open.owner ||
+      previous.label !== open.label ||
+      !host.contains(focused) ||
+      focused?.matches(':disabled')
+    )
+      host.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   }, [open])
   // Manual popovers skip native light dismiss, whose release check would close
   // a context menu that opened on button press (macOS and Linux).

@@ -5,7 +5,9 @@ import { stripTypeScriptTypes } from 'node:module'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 
-const { withoutSetCookie } = await import('../src/main/images.ts')
+const { remoteImageRequestHeaders, withoutSetCookie } = await import(
+  '../src/main/images.ts'
+)
 const source = stripTypeScriptTypes(
   await readFile(new URL('../src/main/pdf-export.ts', import.meta.url), 'utf8'),
 )
@@ -114,6 +116,7 @@ function runtime(options = {}) {
       state.writes.push({ path, bytes })
     },
     imageSources: () => new Set(['pixel.png']),
+    remoteImageRequestHeaders,
     withoutSetCookie,
     documentMediaPath: (source) => decodeURIComponent(source),
     readDocumentImage: async (path) => {
@@ -155,7 +158,8 @@ test('print window disables scripts and releases its private page after success'
         { url: 'https://example.com/pixel.png', resourceType: 'image' },
       ])
         state.request(details, ({ cancel }) => assert.equal(cancel, false))
-      // Image hosts get no cookies and keep none between exports.
+      // Image hosts get no cookies or cache validators, and keep no cookies
+      // between exports.
       const [sendFilter, send] = state.sendHeaders
       const [receiveFilter, receive] = state.receiveHeaders
       assert.deepEqual(
@@ -163,9 +167,20 @@ test('print window disables scripts and releases its private page after success'
         [{ urls: ['https://*/*'] }, { urls: ['https://*/*'] }],
       )
       send(
-        { requestHeaders: { Cookie: 'reader=42', Accept: 'image/png' } },
+        {
+          requestHeaders: {
+            Cookie: 'reader=42',
+            'If-None-Match': '"reader-42"',
+            'if-modified-since': 'Wed, 01 Jan 2025 00:00:00 GMT',
+            'Cache-Control': 'max-age=0',
+            Accept: 'image/png',
+          },
+        },
         ({ requestHeaders }) =>
-          assert.deepEqual(requestHeaders, { Accept: 'image/png' }),
+          assert.deepEqual(requestHeaders, {
+            Accept: 'image/png',
+            'Cache-Control': 'no-cache',
+          }),
       )
       receive(
         {

@@ -33,6 +33,25 @@ export function imageMime(data: Buffer): string | null {
   return null
 }
 
+/**
+ * Request headers for a remote image that give its host nothing to recognize a
+ * returning reader by: no cookies, and no cache validators (ETag,
+ * Last-Modified). The page's memory cache sets validators on the request,
+ * where they are dropped; Chromium's HTTP cache adds its own after webRequest,
+ * so the request tells it to skip the cache.
+ */
+export const remoteImageRequestHeaders = (headers: Record<string, string>) => ({
+  ...Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) =>
+        !/^(?:cookie|cache-control|if-none-match|if-modified-since)$/i.test(
+          name,
+        ),
+    ),
+  ),
+  'Cache-Control': 'no-cache',
+})
+
 /** Response headers without Set-Cookie, so a remote image host stores no cookie. */
 export const withoutSetCookie = (headers: Record<string, string[]>) =>
   Object.fromEntries(

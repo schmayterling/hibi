@@ -179,7 +179,11 @@ import { HostCredentials } from './host-credentials'
 import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
-import { readDocumentImage, withoutSetCookie } from './images'
+import {
+  readDocumentImage,
+  remoteImageRequestHeaders,
+  withoutSetCookie,
+} from './images'
 import { cancelImport, runCancellableImport } from './import-cancellation'
 import { listLicenses, readLicense } from './licenses'
 import {
@@ -1550,15 +1554,18 @@ if (!app.requestSingleInstanceLock()) {
       )
 
       // App pages are app://hibi, so every https image is cross-site. Image
-      // hosts get no cookies to follow a reader with, but they can still
-      // recognize a repeat request when the cache revalidates an image
-      // (ETag, Last-Modified), which webRequest never sees.
+      // hosts get no cookies or cache validators to follow a reader with, so
+      // remote images download again instead of coming from the cache, and
+      // don't show offline.
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: ['https://*/*'] },
-        ({ resourceType, requestHeaders }, callback) => {
-          if (resourceType === 'image') delete requestHeaders.Cookie
-          callback({ requestHeaders })
-        },
+        ({ resourceType, requestHeaders }, callback) =>
+          callback({
+            requestHeaders:
+              resourceType === 'image'
+                ? remoteImageRequestHeaders(requestHeaders)
+                : requestHeaders,
+          }),
       )
       const devOrigin = devUrl ? new URL(devUrl).origin : null
       const devPolicy =

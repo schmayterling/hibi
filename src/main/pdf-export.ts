@@ -16,6 +16,7 @@ import {
   documentMediaPath,
   imageSources,
   readDocumentImage,
+  remoteImageRequestHeaders,
   withoutSetCookie,
 } from './images'
 import { workspaceRoot } from './workspace'
@@ -67,14 +68,12 @@ async function renderPdf(html: string, owner: BrowserWindow) {
           ),
       }),
     )
-    // Image hosts get no cookies and keep none between exports, as in the
-    // app's own session.
+    // Image hosts get no cookies or cache validators and keep no cookies
+    // between exports, as in the app's own session.
     partition.webRequest.onBeforeSendHeaders(
       { urls: ['https://*/*'] },
-      ({ requestHeaders }, callback) => {
-        delete requestHeaders.Cookie
-        callback({ requestHeaders })
-      },
+      ({ requestHeaders }, callback) =>
+        callback({ requestHeaders: remoteImageRequestHeaders(requestHeaders) }),
     )
     partition.webRequest.onHeadersReceived(
       { urls: ['https://*/*'] },

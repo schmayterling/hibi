@@ -75,7 +75,8 @@ export default defineAddon({
         }
       return tagVersion(document, syntaxIdentity.fingerprint)
     }
-    let sent: TagJob | null = null
+    // The key alone: the job's source would keep a closed note until the reply.
+    let sent: string | null = null
     const failed = (event: Event) => {
       const old = worker
       if (!old) return
@@ -101,12 +102,8 @@ export default defineAddon({
       next.addEventListener('messageerror', failed)
       next.onmessage = (event: MessageEvent<TagResult>) => {
         const document = context.editor.getDocument()
-        if (
-          sent?.key === event.data.key &&
-          document &&
-          keyFor(document) === sent.key
-        )
-          analysis.remember(sent.key, event.data.tags)
+        if (sent === event.data.key && document && keyFor(document) === sent)
+          analysis.remember(sent, event.data.tags)
         sent = null
         counter.receive(event.data)
       }
@@ -131,7 +128,7 @@ export default defineAddon({
         const tags = analysis.get(job.key)
         if (tags) counter.receive({ key: job.key, tags })
         else if (worker) {
-          sent = job
+          sent = job.key
           worker.postMessage(job)
         } else counter.receive({ key: job.key, tags: [] })
       },

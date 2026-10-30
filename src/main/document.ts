@@ -515,13 +515,15 @@ export async function focusDocumentTab(
     expected.revision !== version.document.revision
   )
     throw new Error('This pane has edits pending synchronization. Try again.')
-  // Focusing a pane over an outside change asks once, as a tab switch does;
-  // only the prompt holds the file-operation lock.
-  if (await changedOutside(id, true)) {
-    await locked((window) => confirmTabDiscard(window, id, saveRetained))
-    if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
-      throw new Error('This pane has edits pending synchronization. Try again.')
-  }
+  // Focusing a pane over an outside change asks once, as a tab switch does.
+  // The check and its prompt hold the file-operation lock, so no other file
+  // operation runs between them; the focus itself does not.
+  await locked(async (window) => {
+    if (await changedOutside(id, true))
+      await confirmTabDiscard(window, id, saveRetained)
+  })
+  if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
+    throw new Error('This pane has edits pending synchronization. Try again.')
   if (id !== activeTab) {
     activateTab(id)
     refreshDirtyIndicator(window)

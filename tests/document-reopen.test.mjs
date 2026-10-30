@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import nodeTest from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import {
   selectFormattedEngine,
@@ -1137,5 +1138,63 @@ codemirrorTest(
       dirty: true,
       ephemeral: false,
     })
+  },
+)
+
+codemirrorTest(
+  'a pane checks its file under the file-operation lock, so an autosave meanwhile is skipped',
+  {
+    timeout: 150000,
+  },
+  async (t) => {
+    const setupState = await setup(t)
+    const { app, page, notes, file, read, idle, open, content } = setupState
+    const { select, answer, prompts, state, type } = setupState
+    const note = (await read()).tabId
+    await writeFile(join(notes, 'other.md'), 'other note\n')
+    await answer(2, join(notes, 'other.md'))
+    await open()
+    await content('other note\n')
+    const other = (await read()).tabId
+    await select(note)
+    const draft = await type('local draft')
+    const { revision } = await read()
+    await splitTab(app, page, other)
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      other,
+    )
+    await idle()
+    assert.deepEqual(await prompts(), [])
+    // Focusing the note's pane reads its changed file; hold that read.
+    await writeFile(file, 'outside text\n')
+    await gateReadAndReply(app, file)
+    await answer(1)
+    const focused = await replied(app, 'document:focus-tab')
+    await page
+      .locator(
+        '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
+      )
+      .click()
+    await app.evaluate(() => globalThis.reopenGate.reading)
+    // An autosave meanwhile is skipped, as it is during other file operations.
+    const autosave = page.evaluate(
+      ([id, revision]) => window.hibi.autosaveDocument(id, revision),
+      [note, revision],
+    )
+    const early = await Promise.race([autosave, delay(10000, 'still waiting')])
+    await app.evaluate(() => globalThis.reopenGate.releaseRead())
+    await focused()
+    await idle()
+    assert.deepEqual(early, { status: 'skipped', document: null })
+    assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+    assert.deepEqual(await state(), {
+      tabId: note,
+      markdown: draft,
+      dirty: true,
+      ephemeral: false,
+    })
+    assert.equal(await readFile(file, 'utf8'), 'outside text\n')
   },
 )

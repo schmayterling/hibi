@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -7,16 +7,19 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import electronPath from 'electron'
 import { electron, stopElectronTree } from './electron.mjs'
 
 function recordStartupDialogs(
-  { app, BrowserWindow, dialog },
-  { modals, failures },
+  { app, BrowserWindow, dialog, ipcMain },
+  { modals, failures, logged, occupy, block },
 ) {
   const fs = process.getBuiltinModule('node:fs')
   const append = (path, value) =>
     fs.appendFileSync(path, `${JSON.stringify(value)}\n`)
+  // Taking a channel first makes the app's own registration fail its startup.
+  if (occupy) ipcMain.handle(occupy, () => {})
   const original = console.error
   console.error = (...args) => {
     if (args[0] === 'failed to load app:' || args[0] === 'startup failed:')
@@ -40,6 +43,21 @@ function recordStartupDialogs(
         title: method === 'showErrorBox' ? args[0] : options?.title,
         content: method === 'showErrorBox' ? args[1] : options?.message,
       })
+      if (logged) {
+        // What a user who never dismisses the dialog leaves on disk.
+        const directory = `${app.getPath('userData')}/logs/debug`
+        for (const name of fs.existsSync(directory)
+          ? fs.readdirSync(directory)
+          : [])
+          if (/^segment-\d\.log$/.test(name))
+            fs.appendFileSync(
+              logged,
+              fs.readFileSync(`${directory}/${name}`, 'utf8'),
+            )
+      }
+      // A native modal runs no main-process tasks or timers until it closes.
+      if (block)
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20000)
       return method === 'showMessageBoxSync' ? 1 : undefined
     }
   }
@@ -251,4 +269,111 @@ test('a genuine startup navigation failure still shows the existing error', {
   // The local log must call this fatal exit critical whatever the load error code.
   const codes = await diagnosticCodes(fixture.profile)
   assert.ok(codes.includes('MAIN_STARTUP_FAILED'), codes.join(' '))
+})
+
+// Spawned without Playwright: its inspector calls cannot reach a blocked main process.
+async function spawnFailedStartup(t, { block = false } = {}) {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-failure-'))
+  const files = Object.fromEntries(
+    ['modals', 'failures', 'logged'].map((name) => [
+      name,
+      join(profile, `${name}.jsonl`),
+    ]),
+  )
+  for (const path of Object.values(files)) await writeFile(path, '')
+  const hook = join(profile, 'startup-hook.cjs')
+  await writeFile(
+    hook,
+    `(${recordStartupDialogs})(require('electron'), ${JSON.stringify({ ...files, occupy: 'clipboard:write-text', block })})`,
+  )
+  const env = {
+    ...process.env,
+    HIBI_TEST_ADDON_REVOCATIONS_URL: new URL(
+      './fixtures/no-addon-revocations.json',
+      import.meta.url,
+    ).href,
+  }
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(
+    electronPath,
+    [
+      '--require',
+      hook,
+      resolve('.'),
+      `--user-data-dir=${profile}`,
+      '--hibi-test',
+    ],
+    { env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] },
+  )
+  const closed = once(child, 'close')
+  t.after(async () => {
+    stopElectronTree(child)
+    await closed
+    await rm(profile, { recursive: true, force: true })
+  })
+  const read = async (path) => (await readFile(path, 'utf8')).trim()
+  return {
+    child,
+    closed,
+    profile,
+    modals: () => read(files.modals),
+    failures: () => read(files.failures),
+    logged: async () =>
+      (await read(files.logged))
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line)),
+  }
+}
+
+// Every process of this run carries its profile in its command line.
+async function survivors(profile) {
+  const { stdout } = await promisify(execFile)('ps', ['-axo', 'command='])
+  return stdout.split('\n').filter((line) => line.includes(profile))
+}
+
+test('a failed startup records its error before the dialog and quits when it closes', {
+  skip: process.platform === 'win32',
+  timeout: 30000,
+}, async (t) => {
+  const fixture = await spawnFailedStartup(t)
+  assert.deepEqual(await deadline(fixture.closed, 'failed startup exit'), [
+    0,
+    null,
+  ])
+  assert.match(
+    await fixture.failures(),
+    /Attempted to register a second handler for 'clipboard:write-text'/,
+  )
+  assert.match(await fixture.modals(), /Hibi could not start/)
+  const failure = (await fixture.logged()).find(
+    (record) => record.code === 'MAIN_STARTUP_FAILED',
+  )
+  assert.ok(
+    failure,
+    'MAIN_STARTUP_FAILED was not on disk when the dialog opened',
+  )
+  // Frames of the main bundle (module 1) locate the failing registration.
+  assert.equal(failure.stackStatus, 'captured')
+  assert.equal(failure.frames[0][0], 1)
+  assert.deepEqual(await survivors(fixture.profile), [])
+})
+
+test('the could-not-start dialog quits on SIGTERM without leaving Electron behind', {
+  skip: process.platform === 'win32',
+  timeout: 30000,
+}, async (t) => {
+  const fixture = await spawnFailedStartup(t, { block: true })
+  const start = performance.now()
+  while (!(await fixture.modals())) {
+    assert.ok(performance.now() - start < 15000, 'no startup dialog')
+    await setTimeout(50)
+  }
+  fixture.child.kill('SIGTERM')
+  assert.deepEqual(await deadline(fixture.closed, 'SIGTERM exit'), [
+    null,
+    'SIGTERM',
+  ])
+  await setTimeout(1000)
+  assert.deepEqual(await survivors(fixture.profile), [])
 })

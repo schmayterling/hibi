@@ -243,6 +243,18 @@ export class LocalDiagnostics {
     }
   }
 
+  // Writes every queued record before a blocking native modal; bounded like quit.
+  async flush(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      this.sink?.ready.then(() => this.sink?.flush()),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 1500)
+      }),
+    ])
+    clearTimeout(timer)
+  }
+
   private stopMainLoop() {
     clearInterval(this.stallTimer)
     this.stallTimer = undefined

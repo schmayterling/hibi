@@ -467,6 +467,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     ['undo', '$ x^3 $'],
     ['redo', '$ x^4 $'],
   ]) {
+    // Shift produces uppercase Z; a synthetic Ctrl+Shift+z runs undo in CM.
     if (t.formattedEngine === 'tiptap')
       await page.evaluate((command) => {
         document.querySelector('.tiptap').editor.commands[command]()
@@ -477,7 +478,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
           ? 'ControlOrMeta+z'
           : process.platform === 'win32'
             ? 'Control+y'
-            : 'ControlOrMeta+Shift+z',
+            : 'ControlOrMeta+Shift+Z',
       )
     const expected = markdown.replace(
       '$ sum_(k=1)^n k = (n(n+1))/2 $',

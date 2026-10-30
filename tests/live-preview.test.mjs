@@ -757,6 +757,114 @@ test('blank lines after the last block are laid out only where the view shows th
   assert.deepEqual(heights, [16, 28, 16, 28])
 })
 
+test('whitespace lines after the last block are read once per text, not on every redraw', {
+  timeout: 60000,
+}, async () => {
+  const spaces = []
+  for (const tail of ['\n '.repeat(10000), '\n\n '.repeat(5000)]) {
+    const doc = `# Blank tail\n\ntail${tail}`
+    await harness.evaluate(async (doc) => {
+      await window.livePreview.mount(doc, { width: 800, height: 600 })
+      window.livePreview.scrollTo(doc.length)
+    }, doc)
+    // Once idle parsing reaches the end, the space below comes from every line after the last block.
+    await harness.waitForFunction(() =>
+      window.livePreview.covered(0, window.livePreview.view().state.doc.length),
+    )
+    const result = await harness.evaluate(async () => {
+      const preview = window.livePreview
+      await preview.settle()
+      const view = preview.view()
+      // Reads of any text, so the edit's new text counts too.
+      const text = Object.getPrototypeOf(Object.getPrototypeOf(view.state.doc))
+      const read = text.line
+      let calls = 0
+      text.line = function (number) {
+        calls++
+        return read.call(this, number)
+      }
+      const count = (run) => {
+        calls = 0
+        run()
+        return calls
+      }
+      try {
+        return {
+          refresh: count(() => preview.refresh()),
+          // Above the last block: the lines after it stay as they were.
+          edit: count(() =>
+            view.dispatch({ changes: { from: 0, insert: 'x' } }),
+          ),
+          space: view.contentDOM.style.getPropertyValue('--hibi-end'),
+        }
+      } finally {
+        text.line = read
+      }
+    })
+    const report = JSON.stringify(result)
+    // The view shows a few dozen of the 10,000 lines.
+    assert.ok(result.refresh < 200, report)
+    assert.ok(result.edit < 200, report)
+    spaces.push(result.space)
+  }
+  // Only an empty line before the last opens an empty paragraph there.
+  assert.deepEqual(spaces, ['', '16px'])
+})
+
+test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {
+  timeout: 60000,
+}, async () => {
+  let doc = ''
+  for (let block = 0; block < 200; block++)
+    doc += `Paragraph ${block} with a few words of prose.\n\n`
+  const result = await harness.evaluate(async (doc) => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await window.livePreview.mount(doc, { width: 900, height: 600 })
+    const view = window.livePreview.view()
+    const frame = () => new Promise(requestAnimationFrame)
+    const scroll = async (target) => {
+      pane.scrollTop = target
+      // Until nothing moves for a few frames.
+      let still = 0
+      let last = ''
+      for (let i = 0; i < 60 && still < 4; i++) {
+        await frame()
+        const now = `${pane.scrollTop} ${view.viewport.from} ${view.viewport.to} ${view.contentDOM.offsetHeight}`
+        still = now === last ? still + 1 : 0
+        last = now
+      }
+    }
+    // Down first, so the editor has drawn and measured every line.
+    const step = Math.round(pane.clientHeight * 0.8)
+    for (
+      let target = 0;
+      target < pane.scrollHeight - pane.clientHeight;
+      target += step
+    )
+      await scroll(target)
+    await scroll(pane.scrollHeight)
+    const height = pane.scrollHeight
+    await scroll(pane.scrollTop - 3000)
+    const away = {
+      height: pane.scrollHeight,
+      drawn: view.viewport.to === doc.length,
+    }
+    await scroll(pane.scrollHeight)
+    return {
+      height,
+      away,
+      bottom: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
+    }
+  }, doc)
+  const report = JSON.stringify(result)
+  assert.equal(result.away.drawn, false, report)
+  // Before, the space came only with the end in view: the note grew under a
+  // reader already at the bottom, who stopped short of it.
+  assert.equal(result.away.height, result.height, report)
+  assert.ok(Math.abs(result.bottom) <= 1, report)
+})
+
 test('scrolling up through known code blocks keeps the scroll position and full height', {
   timeout: 120000,
 }, async (t) => {

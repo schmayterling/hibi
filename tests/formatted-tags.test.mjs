@@ -706,6 +706,13 @@ test('typing scans only rendered tagged paragraphs in notes of different sizes',
           JSON.stringify(redraw),
         )
     })
+    // That happens now and then, not for every key: whatever the note's size,
+    // its keys take at most two redraws more than one each.
+    const redraws = sample.typed.reduce(
+      (count, key) => count + key.redraws.length,
+      0,
+    )
+    assert.ok(redraws <= sample.typed.length + 2, JSON.stringify(sample.typed))
   }
   for (const { jumped, length } of [short, long])
     assert.ok(

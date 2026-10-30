@@ -33,7 +33,7 @@ two earlier marked quirks remain outside these fixes: mixed backtick/tilde closi
 
 a separate existing tiptap serializer bug also remains: a list item whose first child is a typst block serializes its body without the list indentation. this reproduces on main `5ed78560` with ordinary fence closers. the new rich-view test checks parsed bodies through the app's configured schema; this older list serializer is outside the patch.
 
-the startup detector keeps the same boundaries before and after the runtime grammar loads, including typst after another language's tab-closed fence. the production startup closure is 691,362 bytes against the unchanged 691,974-byte cap.
+the startup detector keeps the same boundaries before and after the runtime grammar loads, including typst after another language's tab-closed fence. the production startup closure was 691,362 bytes before merging main and is 681,162 bytes after it, against the unchanged 691,974-byte cap.
 
 ## measurements
 
@@ -105,8 +105,8 @@ focused tests also cover empty quote markers and the native token boundaries aro
 
 ## local gates
 
-all 2,272 node checks passed across 140 scoped test files, including marked-block-boundaries, word-count-formatted, flavor-detection, formatted-fence, marked-fences and the new quote-performance checks. all 36 desktop checks passed: typst (2), pdf-export (2), site (9), markdown-footnotes (6), startup-performance (10), default-addon-grammar (6) and outline-addon-syntax (1).
+after merging main at `b93974a2`, all 2,282 node checks passed across 141 scoped test files: the earlier 140, including marked-block-boundaries, word-count-formatted, flavor-detection, formatted-fence, marked-fences and the quote-performance checks, plus formatted-alerts for #688's quote-based callouts. all 52 desktop checks passed: typst (2), pdf-export (2), site (9), markdown-footnotes (6), startup-performance (10), default-addon-grammar (6), outline-addon-syntax (1), github-alerts (6) and collapsible-callouts (10). the 54,000 fuzz comparisons were unchanged again.
 
-the production build and both typechecks passed. biome reported no errors (33 warnings and 7 informational diagnostics). the copy catalog check indexed 2,468 messages, and the documentation check validated local links in 400 markdown files.
+the production build and both typechecks passed. biome reported no errors (32 warnings and 7 informational diagnostics). the copy catalog check indexed 2,472 messages, and the documentation check validated local links in 401 markdown files.
 
 full corpus runs, the unrelated giant word-count scale sweeps and hosted ci were not run.

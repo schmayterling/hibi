@@ -1520,24 +1520,38 @@ if (!app.requestSingleInstanceLock()) {
         event.preventDefault(),
       )
 
-      if (devUrl) {
-        const websocketOrigin = new URL(devUrl).origin.replace(/^http/, 'ws')
-        const devPolicy = CONTENT_SECURITY_POLICY.replace(
+      // App pages are app://hibi, so every https image is cross-site. Without
+      // cookies, image hosts can't follow a reader from note to note.
+      session.defaultSession.webRequest.onBeforeSendHeaders(
+        { urls: ['https://*/*'] },
+        ({ resourceType, requestHeaders }, callback) => {
+          if (resourceType === 'image') delete requestHeaders.Cookie
+          callback({ requestHeaders })
+        },
+      )
+      const devOrigin = devUrl ? new URL(devUrl).origin : null
+      const devPolicy =
+        devOrigin &&
+        CONTENT_SECURITY_POLICY.replace(
           "script-src 'self'",
           "script-src 'self' 'unsafe-inline'",
-        ).replace("connect-src 'self'", `connect-src 'self' ${websocketOrigin}`)
-        session.defaultSession.webRequest.onHeadersReceived(
-          { urls: [`${new URL(devUrl).origin}/*`] },
-          (details, callback) => {
-            callback({
-              responseHeaders: {
-                ...details.responseHeaders,
-                'Content-Security-Policy': [devPolicy],
-              },
-            })
-          },
+        ).replace(
+          "connect-src 'self'",
+          `connect-src 'self' ${devOrigin.replace(/^http/, 'ws')}`,
         )
-      }
+      // A session keeps one onHeadersReceived listener, so it serves both.
+      session.defaultSession.webRequest.onHeadersReceived(
+        { urls: ['https://*/*', ...(devOrigin ? [`${devOrigin}/*`] : [])] },
+        ({ resourceType, url, responseHeaders = {} }, callback) => {
+          const headers = { ...responseHeaders }
+          if (resourceType === 'image' && url.startsWith('https:'))
+            for (const name of Object.keys(headers))
+              if (name.toLowerCase() === 'set-cookie') delete headers[name]
+          if (devPolicy && url.startsWith(`${devOrigin}/`))
+            headers['Content-Security-Policy'] = [devPolicy]
+          callback({ responseHeaders: headers })
+        },
+      )
 
       const appInfo = (): AppInfo => ({
         version: app.getVersion(),

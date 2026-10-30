@@ -1122,6 +1122,19 @@ export function waitForAppState(page, check, timeout = 10000) {
   return waitForAsync(page, check, undefined, { timeout, polling: 100 })
 }
 
+// A background addon starts after the editor is ready; its commands bind
+// their shortcuts and join the menus only then.
+export function waitForAddonShortcut(page, id) {
+  return waitForAsync(
+    page,
+    async (id) =>
+      (await window.hibi.getAddonHotkeys()).some(
+        (binding) => binding.id === id && binding.effectiveShortcut,
+      ),
+    id,
+  )
+}
+
 export async function crashAndReload(application) {
   // Drain pending locator disposal before replacing Playwright's debug target.
   await (await application.firstWindow()).evaluate(() => undefined)

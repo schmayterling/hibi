@@ -147,20 +147,35 @@ function readQuote(
 ): Tokens.Blockquote | undefined {
   const match = quoteMatch(this, source)
   if (!match) return
-  const lines = match[0].replace(/\n+$/, '').split('\n')
+  // Slice physical lines on demand: consumed lines keep no strings alive.
+  const physical = match[0].replace(/\n+$/, '')
+  const starts = [0]
+  for (
+    let at = physical.indexOf('\n');
+    at >= 0;
+    at = physical.indexOf('\n', at + 1)
+  )
+    starts.push(at + 1)
+  starts.push(physical.length + 1)
+  const lines = (index: number) =>
+    physical.slice(starts[index], starts[index + 1]! - 1)
   let from = 0
   let front: string[] = []
   let frontAt = 0
-  const countLines = () => front.length - frontAt + lines.length - from
+  const countLines = () => front.length - frontAt + starts.length - 1 - from
   const lineAt = (index = 0) =>
     frontAt + index < front.length
       ? front[frontAt + index]!
-      : lines[from + frontAt + index - front.length]!
+      : lines(from + frontAt + index - front.length)
   const takeLine = () =>
-    frontAt < front.length ? front[frontAt++]! : lines[from++]!
+    frontAt < front.length ? front[frontAt++]! : lines(from++)
   const firstLine = (value: string) => {
     if (frontAt < front.length) front[frontAt] = value
-    else lines[from] = value
+    else {
+      front = [value]
+      frontAt = 0
+      from++
+    }
   }
   const remainingLines = (count = countLines()) =>
     Array.from({ length: count }, (_, index) => lineAt(index))

@@ -478,6 +478,74 @@ test('switching to edits whose file changed outside Hibi asks once to replace it
   assert.equal((await read()).dirty, false)
 })
 
+test('opening the planned file of an unsaved draft discards or saves the draft', {
+  timeout: 120000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, read, idle, open, content } = setupState
+  const { select, answer, prompts, state, type, workspace } = setupState
+  const note = (await read()).tabId
+  await workspace()
+  const draft = async (name) => {
+    await page
+      .getByRole('button', { name: 'New workspace file', exact: true })
+      .click()
+    const rename = page.getByRole('textbox', {
+      name: 'Rename item',
+      exact: true,
+    })
+    await rename.waitFor()
+    await rename.fill(`${name}.md`)
+    await rename.press('Enter')
+    await rename.waitFor({ state: 'hidden' })
+    await idle()
+    const markdown = await type(`${name} draft`)
+    const current = await read()
+    assert.deepEqual([current.name, current.ephemeral], [`${name}.md`, true])
+    return { tabId: current.tabId, markdown, file: join(notes, `${name}.md`) }
+  }
+  // Another app creates a file at the draft's planned name. Choosing it in
+  // the explorer asks like Open…, and Cancel keeps the draft.
+  const first = await draft('first')
+  await writeFile(first.file, 'outside first\n')
+  await select(note)
+  await answer(2, first.file)
+  const done = await replied(app, 'workspace:open-file')
+  await page.getByRole('treeitem', { name: /^first\.md/ }).click()
+  await done()
+  await idle()
+  assert.deepEqual(await prompts(), ['Save changes to first.md?'])
+  assert.equal((await read()).tabId, note)
+  // Don't save discards the draft and opens that file in its tab.
+  await answer(1)
+  await open()
+  assert.deepEqual(await prompts(), ['Save changes to first.md?'])
+  assert.deepEqual(await state(), {
+    tabId: first.tabId,
+    markdown: 'outside first\n',
+    dirty: false,
+    ephemeral: false,
+  })
+  await content('outside first\n')
+  // Save asks before replacing the file, instead of failing because it exists.
+  const second = await draft('second')
+  await writeFile(second.file, 'outside second\n')
+  await answer(0, second.file)
+  await open()
+  assert.deepEqual(await prompts(), [
+    'Save changes to second.md?',
+    'This file changed outside Hibi.',
+  ])
+  assert.deepEqual(await state(), {
+    tabId: second.tabId,
+    markdown: second.markdown,
+    dirty: false,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(second.file, 'utf8'), second.markdown)
+  await content(second.markdown)
+})
+
 test('reopening a dirty document prompts before discarding external or local text', {
   timeout: 60000,
 }, async (t) => {

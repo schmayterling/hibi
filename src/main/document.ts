@@ -437,18 +437,21 @@ export async function selectDocumentTab(
   if (!draft) throw new Error('This tab is no longer open.')
   if (!source.ownsCurrentSnapshot(current))
     throw new Error('The document changed while switching tabs. Try again.')
-  // Explicit reopens confirm discarding first; ordinary tab switches retain edits.
+  // Explicit reopens confirm discarding first, and drafts then take their planned file.
   const modified = dirty(draft.source, draft.saved)
-  if (draft.path && (refresh === 'discard' || !modified)) {
+  const discard = refresh === 'discard'
+  const file = draft.path ?? (discard ? draft.pendingPath : null)
+  if (file && (discard || !modified)) {
     const target = draft.source.snapshot(),
       baseline = draft.saved
+    const reload = discard && (modified || !draft.path)
     const content =
-      !modified && (await matchesMarkdown(draft.path, target))
+      !reload && (await matchesMarkdown(file, target))
         ? null
-        : await readSource(draft.path, id, target.version + 1)
+        : await readSource(file, id, target.version + 1)
     const changed =
       content !== null &&
-      (modified || !(await sameSource(target, content.snapshot())))
+      (reload || !(await sameSource(target, content.snapshot())))
     if (!source.ownsCurrentSnapshot(current))
       throw new Error('The document changed while switching tabs. Try again.')
     const latest = id === activeTab ? snapshot() : tabs.get(id)
@@ -457,12 +460,19 @@ export async function selectDocumentTab(
       latest.source !== draft.source ||
       !latest.source.ownsCurrentSnapshot(target) ||
       latest.saved !== baseline ||
-      latest.path !== draft.path
+      latest.path !== draft.path ||
+      latest.pendingPath !== draft.pendingPath
     )
       throw new Error('The document changed while switching tabs. Try again.')
     if (changed && content) {
       // Reads can replace the active tab's cached entry while the file loads.
-      tabs.set(id, { ...latest, source: content, saved: content.snapshot() })
+      tabs.set(id, {
+        ...latest,
+        source: content,
+        saved: content.snapshot(),
+        path: file,
+        pendingPath: null,
+      })
     }
   }
   if (remember && id !== activeTab) rememberLocation()
@@ -886,10 +896,12 @@ export async function saveDocument(
       'This file is open in another tab. Choose a different name.',
     )
   let previous: SourceSnapshot | null = null
-  if (destination === path) {
-    const unchanged = await matchesMarkdown(destination, saved).catch(
-      missingFile,
-    )
+  // Another app can create a draft's planned file before its first save.
+  const appeared = exclusive && !!(await lstat(destination).catch(missingFile))
+  if (destination === path || appeared) {
+    const unchanged =
+      !appeared &&
+      (await matchesMarkdown(destination, saved).catch(missingFile))
     previous = unchanged
       ? saved
       : ((await readSource(destination).catch(missingFile))?.snapshot() ?? null)
@@ -908,7 +920,7 @@ export async function saveDocument(
       if (choice.response !== 0) return null
     }
   }
-  await writeMarkdown(destination, content, exclusive)
+  await writeMarkdown(destination, content, exclusive && !appeared)
   path = destination
   pendingPath = null
   saved = saving

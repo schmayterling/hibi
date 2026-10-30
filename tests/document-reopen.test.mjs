@@ -877,7 +877,7 @@ test('a link to the note itself and its explorer row check for outside changes',
     return current.dirty && current.markdown.includes(' edited')
   })
   const draft = (await read()).markdown
-  // An unchanged file keeps the edits without asking.
+  // An unchanged file keeps the edits and their undo history without asking.
   assert.deepEqual(await reopen('self'), [])
   assert.deepEqual(await reopen('row'), [])
   assert.deepEqual(await state(), {
@@ -886,6 +886,18 @@ test('a link to the note itself and its explorer row check for outside changes',
     dirty: true,
     ephemeral: false,
   })
+  await editor.getByText('original text edited').click()
+  await page.keyboard.press('ControlOrMeta+z')
+  await waitForAsync(
+    page,
+    async () => !(await window.hibi.getDocument()).markdown.includes(' edited'),
+  )
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  await waitForAsync(
+    page,
+    async (draft) => (await window.hibi.getDocument()).markdown === draft,
+    draft,
+  )
   // After an outside change both ask like any reopen, and Cancel keeps the edits.
   await writeFile(file, `outside text${links}`)
   assert.deepEqual(await reopen('self'), ['Save changes to note.md?'])

@@ -236,3 +236,76 @@ test('local images resolve from the note, validate content, and retain their Mar
     `data:image/png;base64,${png.toString('base64')}`,
   )
 })
+
+unit(
+  'formatted view shows raw HTML images and reveals their source at the caret',
+  {
+    timeout: 30000,
+  },
+  async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-html-images-'))
+    await mkdir(join(folder, 'assets'))
+    await writeFile(join(folder, 'assets', 'pixel.png'), png)
+    const note = join(folder, 'note.md')
+    await writeFile(
+      note,
+      '<img src="assets/pixel.png" alt="block">\n\ntext <img src=assets/pixel.png alt="inline">',
+    )
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(6500)
+    const editor = await selectFormattedEngine(app, page, 'codemirror')
+    await app.evaluate(({ dialog }, note) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [note],
+      })
+    }, note)
+    await pressShortcut(
+      app,
+      `${process.platform === 'darwin' ? 'Meta' : 'Control'}+o`,
+    )
+    const loaded = () =>
+      page.waitForFunction(() => {
+        const images = [
+          ...document.querySelectorAll('.rich-pane img:not(.cm-widgetBuffer)'),
+        ]
+        return (
+          images.map((image) => image.alt).join() === 'block,inline' &&
+          images.every((image) => image.complete && image.naturalWidth === 1)
+        )
+      })
+    await loaded()
+    // At the caret, a tag shows as source with its image still beside it.
+    const shown = async (key, source, hidden) => {
+      await editor.press(key)
+      await page.waitForFunction(
+        ([source, hidden]) => {
+          const text = document.querySelector(
+            '.rich-pane .hibi-formatted .cm-content',
+          ).textContent
+          return text.includes(source) && !text.includes(hidden)
+        },
+        [source, hidden],
+      )
+      await loaded()
+    }
+    await editor.focus()
+    await shown(
+      'ControlOrMeta+Home',
+      '<img src="assets/pixel.png" alt="block">',
+      'alt="inline"',
+    )
+    await shown(
+      'ControlOrMeta+End',
+      '<img src=assets/pixel.png alt="inline">',
+      'alt="block"',
+    )
+  },
+)

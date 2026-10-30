@@ -130,34 +130,44 @@ test('source outline keeps paragraph math edits and distant block delimiters cur
   } finally {
     model.dispose()
   }
-  for (const prefix of ['', '> ', '- '])
-    for (const frontmatter of ['', '---\ntitle: example\n---\n\n'])
-      for (const eol of ['\n', '\r\n']) {
-        const continuation = prefix === '- ' ? '  ' : prefix
-        const text =
-          `${frontmatter}${prefix}$$\n${continuation}# hidden when closed\n${`${continuation}body\n`.repeat(100)}${continuation}END\n\n# after`.replaceAll(
-            '\n',
-            eol,
-          )
-        const { store, model } = setup(text, { math: true })
-        try {
-          assert.equal(finish(model.read()).value.length, 2)
-          // Queue an earlier edit too, so decision positions must follow fragment offsets.
-          const at = text.indexOf('$$') - prefix.length
-          edit(store, model, [{ from: at, to: at, insert: eol }])
-          const from = text.indexOf('END') + eol.length
-          edit(store, model, [{ from, to: from + 3, insert: '$$' }])
-          assert.deepEqual(
-            finish(model.read()).value.map(({ label }) => label),
-            ['after'],
-            JSON.stringify({ prefix, frontmatter: !!frontmatter, eol }),
-          )
-          edit(store, model, [{ from, to: from + 2, insert: 'END' }])
-          assert.equal(finish(model.read()).value.length, 2)
-        } finally {
-          model.dispose()
+  for (const queued of [false, true])
+    for (const prefix of ['', '> ', '- '])
+      for (const frontmatter of ['', '---\ntitle: example\n---\n\n'])
+        for (const eol of ['\n', '\r\n']) {
+          const continuation = prefix === '- ' ? '  ' : prefix
+          const text =
+            `${frontmatter}intro\n\n${prefix}$$\n${continuation}# hidden when closed\n${`${continuation}body\n`.repeat(100)}${continuation}END\n\n# after`.replaceAll(
+              '\n',
+              eol,
+            )
+          const { store, model } = setup(text, { math: true })
+          try {
+            assert.equal(finish(model.read()).value.length, 2)
+            // Only the distant delimiter changes, so the reused opener must be
+            // parsed again. A queued edit before it moves that decision too.
+            const shift = queued ? ' text'.length : 0
+            if (queued) {
+              const at = text.indexOf('intro') + 'intro'.length
+              edit(store, model, [{ from: at, to: at, insert: ' text' }])
+            }
+            const from = text.indexOf('END') + shift
+            edit(store, model, [{ from, to: from + 3, insert: '$$' }])
+            assert.deepEqual(
+              finish(model.read()).value.map(({ label }) => label),
+              ['after'],
+              JSON.stringify({
+                queued,
+                prefix,
+                frontmatter: !!frontmatter,
+                eol,
+              }),
+            )
+            edit(store, model, [{ from, to: from + 2, insert: 'END' }])
+            assert.equal(finish(model.read()).value.length, 2)
+          } finally {
+            model.dispose()
+          }
         }
-      }
 })
 
 test('source outline covers headings beyond the viewport without materializing source', () => {

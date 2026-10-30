@@ -460,7 +460,7 @@ function readQuote(
         const own = RegExp.prototype[Symbol.replace].call(
           this.rules.other.blockquoteSetextReplace2,
           setext,
-          '',
+          () => '',
         )
         if (plain || own !== body) {
           plain ??= text.slice(0, -1)
@@ -609,7 +609,7 @@ function readQuote(
         if (
           rest !== undefined &&
           lineAt(used + 1) === undefined &&
-          !RegExp.prototype[Symbol.replace].call(strip, rest, '')
+          !RegExp.prototype[Symbol.replace].call(strip, rest, () => '')
         )
           used++
         if (used > 0)

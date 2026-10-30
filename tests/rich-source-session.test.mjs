@@ -70,9 +70,7 @@ test('S01/S03/S07/J01: accepted rich transformations are savable before callback
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .waitFor()
+  await selectFormattedEngine(app, page, 'tiptap')
   await page.waitForFunction(() => !!window.bridgeContext)
   await app.evaluate(({ dialog, ipcMain }, path) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })

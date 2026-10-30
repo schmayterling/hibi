@@ -163,6 +163,7 @@ async function capture(name) {
 test('formulas render in the formatted view as in the rich view, in light and dark', {
   timeout: 120000,
 }, async () => {
+  await engine(false)
   await open('parity.md')
   await page.locator('.tiptap h1', { hasText: 'Math parity' }).waitFor()
   await page.waitForFunction(

@@ -78,6 +78,11 @@ test('behind the switch, the formatted view reports, follows and navigates the r
     )
 
   // The rich view's outline is the reference for the same note.
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'tiptap'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
   await clickMenu(app, 'Open…')
   await page.locator('.tiptap h4', { hasText: 'Last' }).waitFor()
   await openOutline()

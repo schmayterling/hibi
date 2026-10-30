@@ -251,6 +251,7 @@ test('tags render in the formatted view as in the rich view, in light and dark',
   timeout: 180000,
 }, async () => {
   const expected = noteTags(parityNote)
+  await engine(false)
   await open('parity.md')
   await page.waitForFunction(
     (count) => document.querySelectorAll('.tiptap .hibi-tag').length === count,

@@ -60,7 +60,7 @@ test('Tab indents source and code, keeps lists and tables, and Escape then Tab l
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, 'tiptap')
   const rich = page.locator('.tiptap')
   const source = page.getByRole('textbox', {
     name: 'Markdown editor',

@@ -45,7 +45,10 @@ test('Markdown source loading and schema recreation leave the hidden rich docume
     exact: true,
   })
   await rich.waitFor()
-  await page.evaluate(() => localStorage.setItem('default-view', 'markdown'))
+  await page.evaluate(() => {
+    localStorage.setItem('default-view', 'markdown')
+    localStorage.setItem('hibi:formatted-engine', 'tiptap')
+  })
   await page.reload()
   await source.waitFor()
   const emptyRich = async () => {

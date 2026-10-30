@@ -6218,6 +6218,9 @@
   "4dfa22469b2f": [
     "src/main/sideload.ts"
   ],
+  "b1b558cd3e2a": [
+    "src/main/document.ts"
+  ],
   "09aae7464226": [
     "src/main/workspace-layout.ts"
   ],

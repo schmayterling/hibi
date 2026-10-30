@@ -150,7 +150,7 @@ these predate #690 unless noted:
 - under tab columns a nested re-read still counts the lines it took, because its raw and its widened input need not share lengths: `>⇥>>-` / `e` / `>>` / `>>` keeps #690's extra empty quote while its untabbed form now matches marked.
 - marked's splice of a multi-line re-read list cuts its raw at a byte count: the alert `>>[!E]` / `>>>]` / `>  >⇥1. m` / `>>=` / `"` parses differently from its tab-expanded form on this branch, where main's cut happened to land like the expanded one.
 - list items keep marked's own tab handling, so a fence body tab in a list item can still become spaces where micromark keeps it (`-  ~~~` / `   ⇥x` / `   ~~~`): 60 of 90 generated tabbed fence bodies in `- `, `1. ` and `> - ` items differ from micromark on main and here.
-- native marked drops lazy text after a nested list re-read (`> >  *` / `>1` / `h` loses `1`), and hibi keeps marked's tokens there.
+- native marked drops lazy text after a nested list re-read (`> >  *` / `>1` / `h` loses `1`) and splits a quote line that ends in four spaces off a nested quote (`>>>e` / `e` / `>>>` / `>  >` and four spaces), and hibi keeps marked's tokens in both. the second is the only source, over 3 seeds of 2,000 generated tabbed nests, where this branch differs from its own tab-expanded parse and main does not: its tabbed form matches marked and micromark.
 
 ## structural proof
 
@@ -167,3 +167,5 @@ after merging main at `6cf7cb5a`, all 2,300 node checks passed across 141 scoped
 after merging main again at `73013dab`, the production build, both typechecks, the seven focused markdown suites (490 checks) and startup-performance (10) passed again; the 1 mib list export missed its 20-second wall-clock limit once, at 21.5 s while a fuzz ran beside it, and took 4.0 s alone. the startup closure is 681,040 bytes, main's 681,215, against the unchanged 691,974-byte cap. biome reported no errors.
 
 full corpus runs, the unrelated giant word-count scale sweeps and hosted ci were not run.
+
+the follow-up, rebased on main `f6f4fff1`: the production build, both typechecks, docs links, copy:check and biome 2.6.2 passed with no errors; its only new warnings are 10 non-null assertions in `marked-blocks.ts`, which has 41 on main. of 2,905 node checks across the 192 scoped test files, 2,902 passed and 3 garbage-collection checks skipped. desktop checks passed for formatted-word-count (7), github-alerts (6), collapsible-callouts (11), markdown-footnotes (6), typst (2), typst-unit (2), pdf-export (2), startup-performance (11), site-export (12) and export-addons (3). the startup closure is 682,864 bytes, equal to main's, against the unchanged 691,974-byte cap.

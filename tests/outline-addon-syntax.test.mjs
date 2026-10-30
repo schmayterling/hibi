@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const install = async (profile, id, manifest, code) => {
@@ -103,7 +104,8 @@ test('the source outline follows addon syntax and names addons it cannot follow'
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
-  await waitForDocumentEditor(app, page)
+  // Box blocks are syntax only the Tiptap editor reads, so its outline names them.
+  await selectFormattedEngine(app, page, 'tiptap')
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)

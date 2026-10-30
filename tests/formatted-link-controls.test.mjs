@@ -627,11 +627,39 @@ test('codemirror link menu holds the editor actions of addons too', {
       return id ? document.getElementById(id)?.textContent : null
     })
   assert.equal(await active(), 'Edit link…')
+  // The menu is outside the editor, which names it as the popup it controls;
+  // Chrome's accessibility tree follows both relations from the editor.
+  const controls = () =>
+    page.evaluate(() => document.activeElement?.getAttribute('aria-controls'))
+  const id = await controls()
+  assert.equal(await menu.getAttribute('id'), id)
+  const cdp = await page.context().newCDPSession(page)
+  const related = async () => {
+    const { nodes } = await cdp.send('Accessibility.getFullAXTree')
+    // The page's root area counts as focused too; the editor comes last.
+    const focused = nodes.findLast((node) =>
+      node.properties?.some(
+        (property) => property.name === 'focused' && property.value.value,
+      ),
+    )
+    const names = (name) =>
+      focused?.properties
+        .find((property) => property.name === name)
+        ?.value.relatedNodes?.map(
+          ({ backendDOMNodeId }) =>
+            nodes.find((node) => node.backendDOMNodeId === backendDOMNodeId)
+              ?.name?.value,
+        )
+    return [names('activedescendant'), names('controls')]
+  }
+  assert.deepEqual(await related(), [['Edit link…'], ['Editor actions']])
   await page.keyboard.press('ArrowDown')
   assert.equal(await active(), 'Open link')
+  assert.deepEqual(await related(), [['Open link'], ['Editor actions']])
   await page.keyboard.press('Enter')
   await menu.waitFor({ state: 'hidden' })
   assert.equal(await active(), null)
+  assert.equal(await controls(), null)
   // Opening a link keeps the app busy for a moment; the editor then has its
   // focus back.
   await page.waitForFunction(() =>
@@ -640,6 +668,21 @@ test('codemirror link menu holds the editor actions of addons too', {
   assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
     'https://old.example/',
   ])
+  // Opened again, the menu and its actions keep their ids.
+  await page.keyboard.press('Shift+F10')
+  await menu
+    .getByRole('menuitem', { name: 'Define word', exact: true })
+    .waitFor()
+  assert.equal(await controls(), id)
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute('aria-activedescendant'),
+    ),
+    `${id}-0`,
+  )
+  await page.keyboard.press('Escape')
+  await menu.waitFor({ state: 'hidden' })
+  assert.equal(await controls(), null)
   await page.keyboard.press('Shift+F10')
   await menu.getByRole('menuitem', { name: 'Define word', exact: true }).click()
   await page.getByRole('dialog', { name: 'Define “docs”' }).waitFor()
@@ -764,8 +807,27 @@ test('codemirror table cell link menu holds the editor actions of addons too', {
   assert.deepEqual(await groupedItems(menu), expected)
   await page.keyboard.press('Escape')
   await menu.waitFor({ state: 'hidden' })
-  // Shift+F10 in the cell opens it too, and its addon actions run.
+  // Shift+F10 in the cell opens it too, and its addon actions run. The
+  // cell's editor, which has the focus, names the menu and its action.
   await page.keyboard.press('Shift+F10')
+  await menu
+    .getByRole('menuitem', { name: 'Define word', exact: true })
+    .waitFor()
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const editor = document.activeElement
+      const menu = document.getElementById(
+        editor?.getAttribute('aria-controls'),
+      )
+      const id = editor?.getAttribute('aria-activedescendant')
+      return [
+        !!editor?.closest('.hibi-lp-cell-editor'),
+        menu?.getAttribute('aria-label'),
+        document.getElementById(id)?.textContent,
+      ]
+    }),
+    [true, 'Editor actions', 'Edit link…'],
+  )
   await menu.getByRole('menuitem', { name: 'Define word', exact: true }).click()
   await page.getByRole('dialog', { name: 'Define “cats”' }).waitFor()
 })

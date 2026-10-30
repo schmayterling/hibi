@@ -402,16 +402,19 @@ test('ordinary quit waits for overdue sqlite close, preserves its active marker,
 })
 
 // The real worker keeps its database open; each close request reports failure.
+// Restoring lets closes through again but keeps counting them.
 function failSqliteClose() {
   const threads = process.getBuiltinModule('node:worker_threads')
   const send = threads.Worker.prototype.postMessage
   globalThis.sqliteCloseCalls = 0
+  let failing = true
   globalThis.restoreSqliteClose = () => {
-    threads.Worker.prototype.postMessage = send
+    failing = false
   }
   threads.Worker.prototype.postMessage = function (message, ...args) {
     if (message?.method !== 'close') return send.call(this, message, ...args)
     globalThis.sqliteCloseCalls++
+    if (!failing) return send.call(this, message, ...args)
     setImmediate(() =>
       this.emit('message', { seq: message.seq, error: 'PRIVATE_CLOSE_ERROR' }),
     )
@@ -582,11 +585,29 @@ test('disabling the dictionary stays bounded and the next open recovers from fai
     failed.find((state) => state.id === 'dictionary')?.enabled,
     false,
   )
+  assert.equal(await app.evaluate(() => globalThis.sqliteCloseCalls), 1)
   await toggle(true)
-  await assert.rejects(enabled(), /PRIVATE_CLOSE_ERROR/)
-  assert.equal(await app.evaluate(() => globalThis.sqliteCloseCalls), 2)
+  // Request waves after a failed close share one bounded retry schedule
+  // (one second, doubling): five waves cannot send five more closes.
+  for (let wave = 0; wave < 5; wave++)
+    await assert.rejects(enabled(), /PRIVATE_CLOSE_ERROR/)
+  const attempts = await app.evaluate(() => globalThis.sqliteCloseCalls)
+  assert.ok(
+    attempts <= 3,
+    `${attempts} close attempts after five request waves`,
+  )
   await app.evaluate(() => globalThis.restoreSqliteClose())
-  assert.equal((await enabled()).count, 1)
+  // Once the window passes one retry succeeds; waiting requests send no more.
+  await waitForAsync(
+    { evaluate: async (fn) => fn() },
+    async () => (await enabled().catch(() => null))?.count === 1,
+    undefined,
+    { timeout: 10000 },
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.sqliteCloseCalls),
+    attempts + 1,
+  )
   const { words } = await page.evaluate(() =>
     window.hibi.invokeAddonProfile('dictionary', 'customWords', {}),
   )

@@ -12,12 +12,17 @@ let current: PackStore | undefined
 let words: CustomWordStore | undefined
 let closing = Promise.resolve()
 let generation = 0
+let closeFailures = 0
+let retryAfter = 0
 async function waitForClose(captured: number) {
   // Retain the old stores until their close succeeds, sharing any retry.
   const previous = closing
-  await previous.catch(() => {
-    if (captured === generation)
-      return closing === previous ? closeStores() : closing
+  await previous.catch((error) => {
+    if (captured !== generation) return
+    if (closing !== previous) return closing
+    // Inside the backoff window a request fails fast instead of sending another close.
+    if (Date.now() < retryAfter) throw error
+    return closeStores()
   })
 }
 async function store() {
@@ -47,10 +52,18 @@ function closeStores() {
     closing.catch(() => {}),
     packs?.close(),
     customWords?.close(),
-  ]).then(() => {
-    if (current === packs) current = undefined
-    if (words === customWords) words = undefined
-  })
+  ]).then(
+    () => {
+      if (current === packs) current = undefined
+      if (words === customWords) words = undefined
+      closeFailures = 0
+    },
+    (error) => {
+      // Open-driven retries back off from 1 s, doubling to 30 s; stop and quit always try.
+      retryAfter = Date.now() + Math.min(30_000, 1000 * 2 ** closeFailures++)
+      throw error
+    },
+  )
   return closing
 }
 function stop() {

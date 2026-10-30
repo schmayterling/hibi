@@ -87,6 +87,15 @@ function nativeAddon(t) {
   return { addon, stores }
 }
 
+// Close retries back off on Date.now; tests move it by hand.
+function clock(t) {
+  let now = 0
+  t.mock.method(Date, 'now', () => now)
+  return (ms) => {
+    now += ms
+  }
+}
+
 test('disable during a queued re-enable prevents store resurrection and pack listing', async (t) => {
   const { addon, stores } = nativeAddon(t)
   await addon.queries.packs()
@@ -143,6 +152,7 @@ test('disable during a waiting custom-word request cannot resurrect its storage 
 
 test('the next open retries failed dictionary close once for concurrent pack and word callers', async (t) => {
   const { addon, stores } = nativeAddon(t)
+  const advance = clock(t)
   await addon.queries.packs()
   await addon.queries.customWords({})
   const [packs, words] = stores
@@ -152,6 +162,7 @@ test('the next open retries failed dictionary close once for concurrent pack and
   assert.equal(words.closeCalls, 1)
 
   words.closeError = undefined
+  advance(1000)
   const reopened = Promise.all([
     addon.queries.packs(),
     addon.queries.customWords({}),
@@ -169,14 +180,17 @@ test('the next open retries failed dictionary close once for concurrent pack and
 
 test('a persistent close failure keeps storage for later recovery without opening twice', async (t) => {
   const { addon, stores } = nativeAddon(t)
+  const advance = clock(t)
   await addon.queries.customWords({})
   const [words] = stores
   words.closeError = new Error('close failed')
   await assert.rejects(addon.stop(), /close failed/)
+  advance(1000)
   await assert.rejects(addon.queries.customWords({}), /close failed/)
   assert.equal(words.closeCalls, 2)
   assert.equal(stores.length, 1)
   words.closeError = undefined
+  advance(2000)
   const reopened = addon.queries.customWords({})
   words.finishClose()
   await reopened
@@ -186,11 +200,13 @@ test('a persistent close failure keeps storage for later recovery without openin
 
 test('disable during close recovery invalidates the waiting open', async (t) => {
   const { addon, stores } = nativeAddon(t)
+  const advance = clock(t)
   await addon.queries.customWords({})
   const [words] = stores
   words.closeError = new Error('close failed')
   await assert.rejects(addon.stop(), /close failed/)
   words.closeError = undefined
+  advance(1000)
   const stale = assert.rejects(
     addon.queries.customWords({}),
     /Dictionary packs are closed/,
@@ -201,6 +217,47 @@ test('disable during close recovery invalidates the waiting open', async (t) => 
   words.finishClose()
   await Promise.all([stale, stopped])
   assert.equal(stores.length, 1)
+})
+
+test('a close that keeps failing retries once per bounded backoff window, not per request wave', async (t) => {
+  const { addon, stores } = nativeAddon(t)
+  const advance = clock(t)
+  await addon.queries.customWords({})
+  const [words] = stores
+  words.closeError = new Error('close failed')
+  await assert.rejects(addon.stop(), /close failed/)
+  assert.equal(words.closeCalls, 1)
+  // Waves inside the window reject with the retained error and send no close.
+  for (let wave = 0; wave < 3; wave++)
+    await assert.rejects(
+      Promise.all([addon.queries.customWords({}), addon.queries.packs()]),
+      /close failed/,
+    )
+  assert.equal(words.closeCalls, 1)
+  assert.equal(stores.length, 1)
+  // Windows double from one second and stay capped at thirty.
+  for (const window of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+    const attempts = words.closeCalls
+    advance(window - 1)
+    await assert.rejects(addon.queries.customWords({}), /close failed/)
+    assert.equal(words.closeCalls, attempts)
+    advance(1)
+    await assert.rejects(addon.queries.customWords({}), /close failed/)
+    assert.equal(words.closeCalls, attempts + 1)
+  }
+  // A successful close resets the schedule.
+  words.closeError = undefined
+  advance(30000)
+  const reopened = addon.queries.customWords({})
+  words.finishClose()
+  await reopened
+  assert.equal(stores.length, 2)
+  const [, next] = stores
+  next.closeError = new Error('close failed')
+  await assert.rejects(addon.stop(), /close failed/)
+  advance(1000)
+  await assert.rejects(addon.queries.customWords({}), /close failed/)
+  assert.equal(next.closeCalls, 2)
 })
 
 test('stop invalidates a waiting first caller when no store exists', async (t) => {

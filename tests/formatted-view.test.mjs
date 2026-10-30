@@ -141,9 +141,11 @@ test('behind the switch, hidden fence lines and multi-line link destinations sta
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
+  await page.evaluate(() => {
+    localStorage.setItem('hibi:formatted-engine', 'codemirror')
+    // This case exercises the navigation contract while syntax is hidden.
+    localStorage.setItem('markdown-markers', 'false')
+  })
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {

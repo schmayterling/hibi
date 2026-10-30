@@ -4,6 +4,7 @@ import {
   EditorState,
   type Extension,
   Facet,
+  findClusterBreak,
   Prec,
   type Range,
   RangeSet,
@@ -13,6 +14,7 @@ import {
   type TransactionSpec,
 } from '@codemirror/state'
 import {
+  BlockType,
   BlockWrapper,
   Decoration,
   type DecorationSet,
@@ -113,6 +115,38 @@ type Revealed = { from: number; to: number }
 
 /** Where the widget under the first press of a click sequence starts. */
 const pressedWidget = new WeakMap<EditorView, number | null>()
+/**
+ * Where the first press of a click sequence hit the text. The caret it
+ * places can show syntax that moves the text before the next press.
+ */
+const pressedText = new WeakMap<
+  EditorView,
+  { x: number; y: number; doc: Text; pos: number; assoc: -1 | 1 }
+>()
+
+/** The run of word, space or other characters a double-click selects, as the editor's own. */
+function groupAt(state: EditorState, pos: number, assoc: number) {
+  const line = state.doc.lineAt(pos)
+  const { text } = line
+  let from = pos - line.from,
+    to = from
+  if (from === text.length || (from > 0 && assoc < 0))
+    from = findClusterBreak(text, from, false)
+  else to = findClusterBreak(text, to)
+  const categorize = state.charCategorizer(pos)
+  const category = categorize(text.slice(from, to))
+  while (from > 0) {
+    const before = findClusterBreak(text, from, false)
+    if (categorize(text.slice(before, from)) !== category) break
+    from = before
+  }
+  while (to < text.length) {
+    const after = findClusterBreak(text, to)
+    if (categorize(text.slice(to, after)) !== category) break
+    to = after
+  }
+  return { from: line.from + from, to: line.from + to }
+}
 
 /** A range over the whole note, or all its text after metadata the view keeps hidden. */
 function selectsWholeNote(state: EditorState, range: Revealed) {
@@ -517,13 +551,15 @@ function inline(
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
     reveal.some((range) => range.from <= to && range.to >= from)
-  /** Whether a node shows its source: the delimiters of emphasis, code and strikethrough show for their whole block. */
+  /** Whether a node shows its source, with block-scoped reveal for formatting and task markers. */
   const revealedAt = (node: SyntaxNodeRef) => {
     let block: SyntaxNode | null = blockMarkedNodes.has(node.name)
       ? node.node.parent
       : null
     while (block && !block.type.is('LeafBlock')) block = block.parent
-    return block ? touched(block.from, block.to) : touched(node.from, node.to)
+    return block
+      ? touched(doc.lineAt(block.from).from, block.to)
+      : touched(node.from, node.to)
   }
   /** Contributed container layouts, once per container node and render. */
   const shapeCache = new Map<string, FormattedContainer | undefined>()
@@ -682,6 +718,10 @@ function inline(
       closing?.name === 'CodeMark' &&
       closing.from >= last.from &&
       last.number > first.number
+    if (fenced && touched(node.from, node.to) && !replacedWhole(state, node)) {
+      syntax(node.from, first.to, true)
+      if (closed) syntax(closing.from, last.to, true)
+    }
     const from = fenced ? first.number + 1 : first.number
     const to = closed ? last.number - 1 : last.number
     const visibleFrom = doc.lineAt(range.from).number,
@@ -1004,6 +1044,17 @@ function inline(
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
+    // A line its paragraph flows onto from the line before keeps its prefix
+    // hidden: shown, it would sit inside the text.
+    let flowed = false
+    layout.between(at - 1, at, (_, to, value) => {
+      if (value === space && to === at) flowed = true
+    })
+    const showPrefix =
+      touched(at, current.to) &&
+      !flowed &&
+      (info.quoteEnd !== null ||
+        (!!info.item && doc.lineAt(info.item.from).from === at))
     const edges = containers(
       doc,
       at,
@@ -1015,12 +1066,15 @@ function inline(
       decorations.push(Decoration.widget({ widget: edges, side: -1 }).range(at))
     let prefix = info.quoteEnd ?? at
     if (info.code !== null) prefix = info.code
-    else if (info.item) prefix = itemLine(doc, current, info, prefix, ordinals)
+    else if (info.item)
+      prefix = itemLine(doc, current, info, prefix, ordinals, showPrefix)
     else if (info.leaf !== null) prefix = info.leaf
     // Quote markers, list markers and indentation before the line's
     // content, unless the layout field replaces the whole line.
-    if (!replacedLine(layout, current))
-      hideRange(at, Math.min(prefix, current.to))
+    if (!replacedLine(layout, current)) {
+      if (showPrefix) syntax(at, Math.min(prefix, current.to), true)
+      else hideRange(at, Math.min(prefix, current.to))
+    }
     if (info.gap) info.style.push(`padding-top: ${info.gap}px`)
     decorations.push(
       Decoration.line({
@@ -1253,13 +1307,14 @@ function containers(
   return edges ? new ContainerEdges(edges) : undefined
 }
 
-/** List lines: native markers in the indentation, source markers and continuation indentation hidden. */
+/** List lines: native markers while source is hidden, and continuation indentation. */
 function itemLine(
   doc: Text,
   current: ReturnType<Text['lineAt']>,
   info: LineInfo,
   prefix: number,
   ordinals: Map<number, number[]>,
+  revealed: boolean,
 ) {
   const item = info.item!
   const depth = info.containers.filter(
@@ -1308,6 +1363,7 @@ function itemLine(
     info.style.push(
       `list-style-type: ${['disc', 'circle', 'square'][Math.min(depth, 3) - 1]}`,
     )
+  if (revealed) info.style.push('list-style-type: none')
   return content
 }
 
@@ -1515,6 +1571,8 @@ function chunkLayout(
         if (owned) return
         switch (ref.name) {
           case 'FencedCode': {
+            sensitive = true
+            if (intersects(reveal, ref.from, ref.to)) return false
             const first = doc.lineAt(ref.from)
             if (starts(first.from))
               out.push(hiddenLine.range(first.from - from, first.to - from))
@@ -1705,13 +1763,8 @@ function revealMatters(
   tree: Tree,
   reveal: readonly Revealed[],
 ) {
-  // Only contributed layout views follow the selection, in the chunks
-  // around it.
-  if (
-    !reveal.length ||
-    !state.facet(formattedViews).some((view) => view.layout)
-  )
-    return false
+  // Fences and contributed layout views follow the selection in its chunks.
+  if (!reveal.length) return false
   const cache = cacheFor(state)
   return reveal.some((range) =>
     parsedChunks(tree, range).some(
@@ -1734,17 +1787,18 @@ const focused = StateField.define<boolean>({
 })
 
 /**
- * Selection ranges inside one block. As in the rich editor, a selection
+ * Selection ranges inside one block or its line prefix. A selection
  * across blocks, such as select all, shows no markers, nor does a block
  * selected whole as the rich editor's node selection.
  */
 function inBlocks(state: EditorState, tree: Tree): readonly Revealed[] {
   const ranges: Revealed[] = []
   for (const { from, to } of state.selection.ranges) {
-    let block: SyntaxNode | null = from < to ? tree.resolve(from, 1) : null
+    const line = from < to ? state.doc.lineAt(from) : null
+    let block: SyntaxNode | null = line ? tree.resolve(line.to, -1) : null
     while (block && !block.type.is('LeafBlock')) block = block.parent
     if (
-      (from === to || (block && block.to >= to)) &&
+      (from === to || (block && block.to >= to) || (line && to <= line.to)) &&
       !blockSelected(state, from, to)
     )
       ranges.push({ from, to })
@@ -1796,7 +1850,16 @@ const sameRanges = (a: readonly Revealed[], b: readonly Revealed[]) =>
 
 /** Ranges whose markers show: the selection while the focused editor shows markers. */
 function revealed(view: EditorView, tree: Tree): readonly Revealed[] {
-  if (!view.hasFocus || !view.state.facet(showMarkdownMarkers)) return []
+  // A control in the text, such as a task's checkbox, keeps what shows:
+  // drawn again without its source, it would lose the focus.
+  const active = view.root.activeElement
+  const control =
+    active instanceof HTMLElement &&
+    !active.isContentEditable &&
+    view.contentDOM.contains(active) &&
+    view.dom.ownerDocument.hasFocus()
+  if (!(view.hasFocus || control) || !view.state.facet(showMarkdownMarkers))
+    return []
   return inBlocks(view.state, tree)
 }
 
@@ -1893,6 +1956,8 @@ export function livePreview(
       /** Decorated columns of long code lines by line start; null where a line wraps. */
       columns = new Map<number, Revealed | null>()
       long: readonly LongLine[] = []
+      /** Wrappers kept as they were while an input method composes. */
+      held = false
       destroyed = false
       readonly measure = {
         key: this,
@@ -1985,12 +2050,29 @@ export function livePreview(
           capture: true,
           passive: true,
         })
+        view.contentDOM.addEventListener('focusout', this.left)
+      }
+      /**
+       * Focus leaving a control in the text, such as a checkbox, for outside
+       * the editor hides the syntax the control kept shown. The editor's own
+       * handlers do not see events from widgets.
+       */
+      readonly left = (event: FocusEvent) => {
+        const next = event.relatedTarget
+        if (
+          event.target !== this.view.contentDOM &&
+          !(next instanceof Node && this.view.contentDOM.contains(next))
+        )
+          queueMicrotask(() => {
+            if (!this.destroyed) this.view.dispatch({})
+          })
       }
       destroy() {
         this.destroyed = true
         this.view.contentDOM.removeEventListener('scroll', this.scrolled, {
           capture: true,
         })
+        this.view.contentDOM.removeEventListener('focusout', this.left)
       }
       docViewUpdate(view: EditorView) {
         nameHeadings(view)
@@ -2052,6 +2134,7 @@ export function livePreview(
         } else if (
           update.docChanged ||
           update.viewportChanged ||
+          this.held ||
           update.state.facet(formattedBlockEdges) !==
             update.startState.facet(formattedBlockEdges) ||
           changedReveal ||
@@ -2070,6 +2153,7 @@ export function livePreview(
             ),
           )
         ) {
+          const { wrappers } = this
           ;({
             decorations: this.decorations,
             groupMarks: this.groupMarks,
@@ -2087,9 +2171,54 @@ export function livePreview(
             update.state.field(layout),
             this.columns,
           ))
+          // A line moved into or out of a wrapper, as when composed text
+          // turns a heading into a paragraph, loses its composition.
+          this.held = update.view.composing
+          if (this.held) this.wrappers = wrappers.map(update.changes)
           if (this.long.length) update.view.requestMeasure(this.measure)
+          if (changedReveal && !update.docChanged) this.keepColumn(update)
         } else if (update.geometryChanged && this.long.length)
           update.view.requestMeasure(this.measure)
+      }
+      /**
+       * A vertical move keeps its column on a line that shows its syntax
+       * once the caret is in it, though the syntax moves the line's text.
+       */
+      keepColumn(update: ViewUpdate) {
+        const { selection } = update.state
+        const { head, assoc, goalColumn } = selection.main
+        if (
+          !update.selectionSet ||
+          goalColumn === undefined ||
+          !selection.main.empty ||
+          selection.ranges.length > 1
+        )
+          return
+        queueMicrotask(() => {
+          const { view } = update
+          if (this.destroyed || view.state.selection !== selection) return
+          // Only text moves: the caret stays beside a block widget.
+          const line = view.lineBlockAt(head)
+          const caret = view.coordsAtPos(head, assoc || 1)
+          if (line.type !== BlockType.Text || !caret) return
+          const at = view.posAndSideAtCoords(
+            {
+              x: view.contentDOM.getBoundingClientRect().left + goalColumn,
+              y: (caret.top + caret.bottom) / 2,
+            },
+            false,
+          )
+          if (at.pos !== head && at.pos >= line.from && at.pos <= line.to)
+            view.dispatch({
+              selection: EditorSelection.cursor(
+                at.pos,
+                at.assoc,
+                undefined,
+                goalColumn,
+              ),
+              userEvent: 'select',
+            })
+        })
       }
     },
     { decorations: (plugin) => plugin.decorations },
@@ -2380,8 +2509,14 @@ export function livePreview(
         widget && view.contentDOM.contains(widget)
           ? view.posAtDOM(widget)
           : null
+      const point = { x: event.clientX, y: event.clientY }
       if (event.detail === 1) {
         pressedWidget.set(view, under)
+        pressedText.set(view, {
+          ...point,
+          doc: view.state.doc,
+          ...view.posAndSideAtCoords(point, false),
+        })
         // A press on the drawing of a block the rich editor draws as one
         // node selects its source, as the rich editor node-selects it.
         const atom =
@@ -2398,9 +2533,47 @@ export function livePreview(
           },
         }
       }
+      // Later presses on the spot where the first one hit text select around
+      // that text, wherever the syntax its caret shows moved it.
+      const first = pressedText.get(view)
+      const onFirst = (press: MouseEvent) =>
+        !!first &&
+        first.doc === view.state.doc &&
+        pressedWidget.get(view) === null &&
+        Math.abs(press.clientX - first.x) < 5 &&
+        Math.abs(press.clientY - first.y) < 5
+      if (
+        first &&
+        event.detail === 2 &&
+        onFirst(event) &&
+        !(event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) &&
+        view.posAtCoords(point, false) !== first.pos
+      ) {
+        // As the editor's own double-click, dragging on extends by words.
+        let start = first.pos
+        return {
+          get: (current) => {
+            const word = groupAt(view.state, start, first.assoc)
+            const at = onFirst(current)
+              ? null
+              : view.posAndSideAtCoords(
+                  { x: current.clientX, y: current.clientY },
+                  false,
+                )
+            const to = at ? groupAt(view.state, at.pos, at.assoc) : word
+            return to.from < word.from
+              ? EditorSelection.single(word.to, to.from)
+              : EditorSelection.single(word.from, Math.max(word.to, to.to))
+          },
+          update: (update) => {
+            start = update.changes.mapPos(start)
+          },
+        }
+      }
       if (event.detail !== 3) return null
       let drawn = pressedWidget.get(view) ?? under
-      let at = view.posAtCoords({ x: event.clientX, y: event.clientY })
+      let at = view.posAtCoords(point)
+      if (at !== null && first && onFirst(event)) at = first.pos
       const text = () => {
         const tree = syntax.tree(view.state)
         const pos = drawn ?? at

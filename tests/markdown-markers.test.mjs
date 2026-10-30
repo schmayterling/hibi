@@ -901,7 +901,10 @@ test('codemirror: focused markers preserve copying, source, undo, preferences an
     .click()
   assert.equal(await paragraph.locator('.hibi-lp-marker').count(), 0)
   await rich.locator('.hibi-lp-codeblock').first().click()
-  assert.equal(await rich.locator('.hibi-lp-marker').count(), 0)
+  assert.deepEqual(await rich.locator('.hibi-lp-marker').allTextContents(), [
+    '```js',
+    '```',
+  ])
   await markerSelection(rich, to)
   await page.keyboard.insertText('x')
   await waitForAsync(

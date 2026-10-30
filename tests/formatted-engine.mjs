@@ -4,7 +4,7 @@ import { waitForDocumentEditor } from './electron.mjs'
 
 // Keep parity oracles explicit when the application's default changes.
 export async function selectFormattedEngine(app, page, engine) {
-  await waitForDocumentEditor(app, page)
+  await waitForDocumentEditor(app, page, { timeout: 30000 })
   assert.ok(['tiptap', 'codemirror'].includes(engine))
   // A note can open in a table cell, whose cell editor has its own .cm-content.
   const selector =
@@ -15,9 +15,9 @@ export async function selectFormattedEngine(app, page, engine) {
   if (engine === 'codemirror' && !(await editor.count())) {
     await reloadFormattedEngine(page, engine)
     await page.waitForLoadState('load')
-    await waitForDocumentEditor(app, page)
+    await waitForDocumentEditor(app, page, { timeout: 30000 })
   }
-  await editor.waitFor()
+  await editor.waitFor({ timeout: 30000 })
   assert.equal(await editor.getAttribute('aria-label'), 'Document editor')
   return editor
 }

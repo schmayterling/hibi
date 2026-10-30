@@ -47,6 +47,43 @@ const lazy = '> # h\n> p\nlazy\n'
 const paragraph = '> p\nlazy\n'
 const code = '> p\n    lazy\n'
 const list = '> - a\nlazy\n'
+// Quotes that end before the native quote rule's extent does: a lazy line
+// after a heading or fenced code, and a nested quote that ends first.
+const heading = '> # h\nlazy\n'
+const fence = '> ```\n> c\n> ```\nlazy\n'
+const nested = '> > b\nc\n>\n> d\n'
+// The same under tab columns: each nested quote's extensions read the quote's
+// extent widened at its tabs, here with tabs after and away from the marker.
+const tabbed = '> > # h\t\n> lazy\n'
+const widened = '> >\t# h\n> lazy\n'
+
+test('quotes that stop early leave the rest of the extent unscanned', () => {
+  // Every quote line check, in any scan, uses Marked's shared quote start rule.
+  const start = new Lexer().tokenizer.rules.other.blockquoteStart
+  let checks = 0
+  start.test = function (text) {
+    checks++
+    return RegExp.prototype.test.call(this, text)
+  }
+  const shape = (tokens) =>
+    tokens
+      .filter((token) => token.type !== 'space')
+      .map((token) => [token.type, token.raw, shape(token.tokens ?? [])])
+  try {
+    for (const unit of [heading, fence, nested, tabbed, widened]) {
+      const source = unit.repeat(2000)
+      checks = 0
+      const tokens = parser().lexer(source)
+      const counted = checks
+      assert.deepEqual(shape(tokens), shape(new Marked().lexer(source)), unit)
+      // Scanning the whole extent again at every quote call checks the lines
+      // of every unit after it: millions of lines here.
+      assert.ok(counted < 2000 * 100, `${JSON.stringify(unit)}: ${counted}`)
+    }
+  } finally {
+    delete start.test
+  }
+})
 
 test('empty quote markers retain native lazy-line boundaries', () => {
   for (const first of ['>', '> ', '>  ', ' >', '  > ', '> p']) {
@@ -261,6 +298,9 @@ for (const [shape, unit] of Object.entries({
   paragraph,
   code,
   list,
+  heading,
+  fence,
+  nested,
 })) {
   const source = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
   for (const operation of ['export', 'count']) {
@@ -276,16 +316,28 @@ for (const [shape, unit] of Object.entries({
         const pattern =
           shape === 'giant'
             ? /<m>/g
-            : shape === 'lazy'
+            : shape === 'lazy' || shape === 'heading'
               ? /<h1>/g
               : shape === 'list'
                 ? /<ul>/g
-                : /<p>/g
+                : shape === 'fence'
+                  ? /<pre>/g
+                  : shape === 'nested'
+                    ? /<blockquote>/g
+                    : /<p>/g
         assert.equal(
           (result.match(pattern) ?? []).length,
-          shape === 'paragraph' || shape === 'code' ? 1 : units,
+          shape === 'paragraph' || shape === 'code'
+            ? 1
+            : shape === 'nested'
+              ? 2 * units + 1
+              : units,
         )
-      } else assert.equal(result.words, units * (shape === 'lazy' ? 3 : 2))
+      } else
+        assert.equal(
+          result.words,
+          units * (shape === 'lazy' || shape === 'nested' ? 3 : 2),
+        )
       assert.ok(elapsed < 20000, `${operation}: ${elapsed.toFixed(0)}ms`)
     })
   }

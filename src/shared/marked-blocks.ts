@@ -701,11 +701,29 @@ type QuoteScope = {
   columns: boolean
   last?: Token[]
 }
+// A nested quote's extent from its first scanned line, with each tab after its
+// marker widened: `text` is the widened extent and the rest of the source, and
+// `tabs` holds each widened line's start, its prefix end in `text` and the
+// total width added through it.
+type QuoteExtent = {
+  from: number
+  to: number
+  text: string
+  tabs: { at: number; end: number; added: number }[]
+  next: number
+}
 type QuoteState = {
   base: number
   scope: QuoteScope
   frame?:
-    | { source: string; scope: QuoteScope; scanned: number; row: number }
+    | {
+        source: string
+        scope: QuoteScope
+        scanned: number
+        row: number
+        tokens: Token[]
+        extent?: QuoteExtent
+      }
     | undefined
   origins: WeakMap<object, number>
   prefixes: Map<number, string>
@@ -820,20 +838,17 @@ function quoteRaw(
   }
   return source.slice(0, length - extra)
 }
-function quoteExtensionInput(
+function quoteExtent(
   tokenizer: Tokenizer,
   state: QuoteState,
   source: string,
   line: number,
-) {
-  const offsets: [number, number][] = []
-  if (
-    !state.scope.columns ||
-    !tokenizer.rules.other.blockquoteStart.test(source)
-  )
-    return { text: source, offsets }
-  const extent = quoteScan(tokenizer, source)?.extent()
-  if (!extent?.includes('\t')) return { text: source, offsets }
+  from: number,
+): QuoteExtent {
+  const extent = quoteScan(tokenizer, source)?.extent() ?? ''
+  const tabs: QuoteExtent['tabs'] = []
+  const result = { from, to: from + extent.length, text: '', tabs, next: 0 }
+  if (!extent.includes('\t')) return result
   const rule = tokenizer.rules.other.blockquoteSetextReplace2
   let row = line,
     scanned = 0,
@@ -849,13 +864,66 @@ function quoteExtensionInput(
         prefix.slice(0, -1) +
         ' '.repeat(quoteTab(state, row, state.scope.depth + 1, prefix))
       added += normalized.length - prefix.length
-      offsets.push([at + prefix.length + added, added])
+      tabs.push({ at, end: at + prefix.length + added, added })
       return normalized
     },
   )
+  if (tabs.length) result.text = text + source.slice(extent.length)
+  return result
+}
+function quoteExtensionInput(
+  tokenizer: Tokenizer,
+  state: QuoteState,
+  source: string,
+  line: number,
+  tokens: Token[],
+): { text: string; raw?: (length: number) => string } {
+  if (
+    !state.scope.columns ||
+    !tokenizer.rules.other.blockquoteStart.test(source)
+  )
+    return { text: source }
+  // A later quote line of the same extent ends at the same line, and widens
+  // the same rows. Within one frame's own loop, reuse the extent instead of
+  // scanning its rest again at every block and extension.
+  const frame = state.frame
+  const own =
+    frame?.scope === state.scope &&
+    frame.tokens === tokens &&
+    !tokenizer.lexer.options.pedantic
+      ? frame
+      : undefined
+  const at = own ? own.source.length - source.length : 0
+  let extent = own?.extent
+  if (
+    !extent ||
+    at < extent.from ||
+    at >= extent.to ||
+    (at !== extent.from && own!.source.charCodeAt(at - 1) !== 10)
+  ) {
+    extent = quoteExtent(tokenizer, state, source, line, at)
+    if (own) own.extent = extent
+  }
+  const offset = at - extent.from
+  const { tabs } = extent
+  while (extent.next < tabs.length && tabs[extent.next]!.at < offset)
+    extent.next++
+  const first = extent.next
+  if (first === tabs.length) return { text: source }
+  const added = first ? tabs[first - 1]!.added : 0
+  const start = offset + added
   return {
-    text: offsets.length ? text + source.slice(extent.length) : source,
-    offsets,
+    text: extent.text.slice(start),
+    raw: (length) => {
+      let extra = 0
+      for (
+        let index = first;
+        index < tabs.length && tabs[index]!.end - start <= length;
+        index++
+      )
+        extra = tabs[index]!.added - added
+      return source.slice(0, length - extra)
+    },
   }
 }
 
@@ -949,11 +1017,16 @@ function installQuoteState(
               quoteSource?.raw === source ? quoteSource.source : source,
             )
             state.extension = { source, line }
-            const input = quoteExtensionInput(tokenizer, state, source, line)
+            const input = quoteExtensionInput(
+              tokenizer,
+              state,
+              source,
+              line,
+              tokens,
+            )
             try {
               const token = read.call(this, input.text, tokens)
-              if (token && input.offsets.length)
-                token.raw = quoteRaw(source, token.raw.length, input.offsets)
+              if (token && input.raw) token.raw = input.raw(token.raw.length)
               return token
             } finally {
               state.extension = previous
@@ -985,7 +1058,15 @@ function installQuoteState(
     state.scope = frameScope
     const row = frameScope.next
     if (frameScope.kind === 'quote') frameScope.next += quoteLines(args[0]) + 1
-    state.frame = { source: args[0], scope: frameScope, scanned: 0, row }
+    // Name the token list Marked passes to this frame's own block calls.
+    args[1] ??= []
+    state.frame = {
+      source: args[0],
+      scope: frameScope,
+      scanned: 0,
+      row,
+      tokens: args[1],
+    }
     try {
       const tokens = Reflect.apply(blockTokens, lexer, args)
       frameScope.last = tokens

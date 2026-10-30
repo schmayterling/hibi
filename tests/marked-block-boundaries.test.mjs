@@ -208,6 +208,8 @@ test('closed typst detection uses CommonMark fence grammar and body indentation'
     ['```typst\nunclosed', false],
     ['```typst\nx\n```\t\nafter', true],
     ['```typst\nx\n```\u2028after', false],
+    ['```typst\nx\n```~~~\nafter', false],
+    ['~~~typst\nx\n~~~```\nafter', false],
   ]) {
     const native = new Marked(blockMarkdown).lexer(source)[0]
     const block = typstBlock(source)

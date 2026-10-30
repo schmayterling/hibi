@@ -4,11 +4,12 @@ import type { MarkdownFlavor } from '../api'
 
 /** Replaced by the full block grammar once Markdown detectors load. */
 export const detector = new Marked(commonMarkFences)
-/** A later line closes the fence, also with trailing tabs Marked's own rule misses. */
+/** A later line closes the fence: the opening run or longer in the same character, then spaces or tabs. */
 const closed = (raw: string) => {
   const marker = /^ {0,3}(`{3,}|~{3,})/.exec(raw)?.[1]
   return (
-    !!marker && new RegExp(`\\n {0,3}${marker}[~\`]*[ \\t]*(?:\\n|$)`).test(raw)
+    !!marker &&
+    new RegExp(`\\n {0,3}${marker}${marker[0]}*[ \\t]*(?:\\n|$)`).test(raw)
   )
 }
 export const typstFlavor: MarkdownFlavor = {

@@ -699,6 +699,10 @@ test('formatted text and counts match the rich view', () => {
     'H~2~O\n\n-# small words',
     '![image](a.png)\n\na ![inline](b.png) b',
     '[label][ref]\n\n[ref]: https://example.test',
+    // A closing run of the other fence character leaves the fence open.
+    '```js\nx\n```~~~\n\nafter',
+    '~~~\nx\n~~~```\n\nafter',
+    '> ```\nx\n> ```~\n\nafter',
   ]) {
     const expected = native(source)
     const actual = richText(source, {

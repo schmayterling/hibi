@@ -80,9 +80,16 @@ const cases = [
   // Backtick fences keep their reading.
   ['  ```typst\n  x\n    y\n  ```\nafter', 'x\n  y'],
 ]
-// A closing fence repeats its opening character. Marked still closes on a
-// mixed run such as ```~~~, which CommonMark does not.
-const open = ['~~~typst\nx\n```\nafter', '```typst\nx\n \t```\nafter']
+// Fences that stay open: a closer in the other character, a tab in the
+// closer's indentation, or a closing run followed by the other character.
+const open = [
+  '~~~typst\nx\n```\nafter',
+  '```typst\nx\n \t```\nafter',
+  '```typst\nx\n```~~~\nafter',
+  '~~~typst\nx\n~~~```\nafter',
+  '> ```typst\n> x\n> ```~\n> after',
+  '- ~~~typst\n  x\n  ~~~`\n  after',
+]
 
 test('typst fences close and dedent per CommonMark in every view', () => {
   for (const [source, body] of cases) {
@@ -204,4 +211,20 @@ test('other fences keep their native code tokens', () => {
     raw: '  ~~~\n  x\n  ~~~',
     text: 'x',
   })
+  // A run of the other character does not close a fence.
+  for (const [source, text] of [
+    ['```\nx\n```~\nafter', 'x\n```~\nafter'],
+    ['~~~\nx\n~~~```\nafter', 'x\n~~~```\nafter'],
+    ['```\nx\n````\nafter', 'x'],
+  ]) {
+    assert.deepEqual(
+      micromark(source).match(/<pre><code[^>]*>[\s\S]*?<\/code><\/pre>/g),
+      [`<pre><code>${text}\n</code></pre>`],
+    )
+    assert.deepEqual(lex(source)[0], {
+      type: 'code',
+      raw: text === 'x' ? '```\nx\n````\n' : source,
+      text,
+    })
+  }
 })

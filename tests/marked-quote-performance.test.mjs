@@ -182,6 +182,8 @@ test('a nested re-read keeps the last quote lines where Marked puts them', () =>
     '>>>1.\ny\n>>\n>>',
     '>>>-\ny\n>>\n>>\nx\n',
     '>>>-\ny\n>>\n>>\nx\n\t',
+    '>>>-\ny\n>>\n>>\nx\ty',
+    '>>>-\ny\n>>\n>>\n\tx',
   ])
     for (const eol of ['\n', '\r\n']) {
       const source = sample.replaceAll('\n', eol)

@@ -612,6 +612,9 @@ function readQuote(
             }
           },
         }
+        // The re-read's lines count by length, as Marked counts them, unless
+        // tab columns widened its input from the start.
+        const native = !scope?.columns
         quoteFeed = inner
         let quote: Tokens.Blockquote
         try {
@@ -621,14 +624,14 @@ function readQuote(
         }
         tokens[tokens.length - 1] = quote
         let used = inner.taken - prefix.length
-        if (!scope?.columns)
+        if (native)
           used =
             readLines(inner.lines, inner.length ?? quote.raw.length) -
             prefix.length
         // Under tab columns the raw and the widened input need not share
         // lengths: count the lines the re-read took. A last quote line that
         // strips to nothing still counts, as Marked leaves no text after it.
-        const rest = scope?.columns && used >= 0 ? lineAt(used) : undefined
+        const rest = !native && used >= 0 ? lineAt(used) : undefined
         if (
           rest !== undefined &&
           lineAt(used + 1) === undefined &&

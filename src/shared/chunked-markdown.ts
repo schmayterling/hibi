@@ -144,7 +144,10 @@ const readDecisions = new NodeProp<Reach>({
 })
 
 /** Keep read-ahead decisions on plain block parses too. */
-function trackReadAhead(inner: PartialParse, input: Input): PartialParse {
+export function trackReadAhead(
+  inner: PartialParse,
+  input: Input,
+): PartialParse {
   const reads = new Map<number, number>()
   return {
     get parsedPos() {

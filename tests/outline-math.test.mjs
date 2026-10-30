@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { electron, waitForDocumentEditor } from './electron.mjs'
@@ -7,7 +7,82 @@ import {
   selectFormattedEngine,
   testFormattedEngines,
 } from './formatted-engine.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
+
+testFormattedEngines(
+  'source and formatted outlines read math in course-note containers',
+  { timeout: 60000 },
+  async (t) => {
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-outline-containers-'))
+    await writeFile(
+      join(profile, 'addons.json'),
+      JSON.stringify({ math: true }),
+    )
+    const file = join(profile, 'course.md')
+    await writeFile(
+      file,
+      await readFile(
+        new URL('./fixtures/outline-math.md', import.meta.url),
+        'utf8',
+      ),
+    )
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, t.formattedEngine)
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForDocumentEditor(app, page)
+    await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+    await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+    await page
+      .getByRole('menuitem', { name: 'On this page', exact: true })
+      .click()
+    const expected = [
+      'Course x',
+      'Formula f(x)',
+      'Callout a',
+      'List b',
+      'Nested c',
+      'Setext g(x)',
+      'End',
+    ]
+    const assertOutline = async () => {
+      await page.waitForFunction((expected) => {
+        const rows = [
+          ...document.querySelectorAll(
+            '.outline-sidebar[data-side="right"][data-open="true"] [role="treeitem"]',
+          ),
+        ]
+        return (
+          JSON.stringify(rows.map((row) => row.dataset.tooltip)) ===
+          JSON.stringify(expected)
+        )
+      }, expected)
+      assert.equal(
+        await page.getByText(/Source outline could not read/).count(),
+        0,
+      )
+    }
+    if (t.formattedEngine === 'codemirror') await assertOutline()
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+Shift+]' : 'Control+Shift+]',
+    )
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await assertOutline()
+  },
+)
 
 const note = `# Taylor $f(x,y)\\in C^{k+1}$ near $(a,b)$
 

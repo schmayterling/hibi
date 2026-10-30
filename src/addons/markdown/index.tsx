@@ -4,7 +4,7 @@ import { TaskList } from '@tiptap/extension-task-list'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
-import { defineAddon, type MarkdownFlavor } from '../api'
+import { defineAddon, type MarkdownFlavor, type RenderedMarkdown } from '../api'
 import { alertMarkdown, alertMarker } from './alerts'
 import alertCss from './alerts.css?inline'
 import { obsidianInfo } from './flavor-info'
@@ -17,6 +17,34 @@ import {
   WikiLink,
 } from './obsidian'
 import { NativeTableKit } from './table-tokenizer'
+
+/**
+ * Exports show a callout that folds as a disclosure, open for `+` and
+ * closed for `-`, as the formatted views start it.
+ */
+async function foldableAlerts(rendered: RenderedMarkdown) {
+  if (!/data-fold="[+-]"/.test(rendered.html)) return rendered
+  const template = document.createElement('template')
+  template.innerHTML = rendered.html
+  for (const quote of template.content.querySelectorAll<HTMLElement>(
+    'blockquote.github-alert:is([data-fold="+"], [data-fold="-"])',
+  )) {
+    const details = document.createElement('details')
+    for (const { name, value } of quote.attributes)
+      details.setAttribute(name, value)
+    details.open = quote.dataset.fold === '+'
+    const title = quote.querySelector(':scope > .github-alert-title')
+    if (title) {
+      const summary = document.createElement('summary')
+      summary.className = title.className
+      summary.append(...title.childNodes)
+      title.replaceWith(summary)
+    }
+    details.append(...quote.childNodes)
+    quote.replaceWith(details)
+  }
+  return { ...rendered, html: template.innerHTML }
+}
 
 const github: MarkdownFlavor = {
   id: 'github',
@@ -37,6 +65,7 @@ const github: MarkdownFlavor = {
   export: {
     extensions: [alertMarkdown, markedGithubFootnote()],
     css: alertCss,
+    transform: foldableAlerts,
   },
 }
 

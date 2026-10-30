@@ -12,9 +12,22 @@ let current: PackStore | undefined
 let words: CustomWordStore | undefined
 let closing = Promise.resolve()
 let generation = 0
+let closeFailures = 0
+let retryAfter = 0
+async function waitForClose(captured: number) {
+  // Retain the old stores until their close succeeds, sharing any retry.
+  const previous = closing
+  await previous.catch((error) => {
+    if (captured !== generation) return
+    if (closing !== previous) return closing
+    // Inside the backoff window a request fails fast instead of sending another close.
+    if (Date.now() < retryAfter) throw error
+    return closeStores()
+  })
+}
 async function store() {
   const captured = generation
-  await closing
+  await waitForClose(captured)
   if (captured !== generation) throw new Error('Dictionary packs are closed.')
   current ??= new PackStore(
     join(app.getPath('userData'), 'dictionary-packs'),
@@ -24,7 +37,7 @@ async function store() {
 }
 async function wordStore() {
   const captured = generation
-  await closing
+  await waitForClose(captured)
   if (captured !== generation) throw new Error('Dictionary packs are closed.')
   words ??= new CustomWordStore(
     join(app.getAppPath(), 'out/main/dictionary-custom-words-worker.js'),
@@ -32,19 +45,30 @@ async function wordStore() {
   )
   return words
 }
-function stop() {
-  generation++
+function closeStores() {
   const packs = current
   const customWords = words
   closing = Promise.all([
     closing.catch(() => {}),
     packs?.close(),
     customWords?.close(),
-  ]).then(() => {
-    if (current === packs) current = undefined
-    if (words === customWords) words = undefined
-  })
+  ]).then(
+    () => {
+      if (current === packs) current = undefined
+      if (words === customWords) words = undefined
+      closeFailures = 0
+    },
+    (error) => {
+      // Open-driven retries back off from 1 s, doubling to 30 s; stop and quit always try.
+      retryAfter = Date.now() + Math.min(30_000, 1000 * 2 ** closeFailures++)
+      throw error
+    },
+  )
   return closing
+}
+function stop() {
+  generation++
+  return closeStores()
 }
 app.on('before-quit', () => {
   void stop().catch((error) =>

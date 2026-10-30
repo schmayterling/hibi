@@ -16,7 +16,43 @@ import './document-saved.ts'
 export { parseTransferHead }
 
 /** Stream validation and publication load only when a document transfer starts. */
-export async function loadDocumentTransfer(
+export function loadDocumentTransfer(
+  native: DocumentTransferApi,
+  wire: DocumentTransfer,
+  loaded: WeakMap<DocumentState, LoadedDocument>,
+  pending: Map<string, Promise<DocumentState>>,
+  retry = true,
+): Promise<DocumentState> {
+  const head = parseTransferHead(wire.documentTransfer),
+    previous = pending.get(head.streamId)
+  if (previous) return previous
+  const work = readDocumentTransfer(native, wire, loaded)
+    .catch(async (error) => {
+      if (
+        !retry ||
+        !String(error).includes(
+          'The document transfer is stale or out of order.',
+        )
+      )
+        throw error
+      // Another reply may have consumed this stream before this one arrived.
+      const current = await native.openDocumentTransfer(wire.tabId)
+      if (
+        current.tabId !== wire.tabId ||
+        current.sourceId !== wire.sourceId ||
+        current.revision !== wire.revision ||
+        current.contentVersion !== wire.contentVersion ||
+        current.documentTransfer.streamId === head.streamId
+      )
+        throw error
+      return loadDocumentTransfer(native, current, loaded, pending, false)
+    })
+    .finally(() => pending.delete(head.streamId))
+  pending.set(head.streamId, work)
+  return work
+}
+
+async function readDocumentTransfer(
   native: DocumentTransferApi,
   wire: DocumentTransfer,
   loaded: WeakMap<DocumentState, LoadedDocument>,

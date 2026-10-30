@@ -14,7 +14,9 @@ export const mathStyles =
     return data ? `src:url(${data}) format("woff2")` : declaration
   }) +
   // Equations are not scroll anchors: text around them stays put while they render.
+  // A display formula scrolls sideways; glyphs reach past its box, so part of
+  // its margin is padding inside the clip (the tops of `\frac` numerators).
   // Accent marks and the overlays of laps (`\not`, `\neq`) paint after the glyph
   // under them, so their own opaque selection background would hide it
   // (`\bar x` selected read as `¯`).
-  '\n.tiptap-mathematics-render{cursor:pointer;overflow-anchor:none}.tiptap-mathematics-render[data-type="inline-math"]{display:inline-block}.tiptap-mathematics-render[data-type="block-math"]{overflow-x:auto;padding:8px 0}.katex-display{overflow-x:auto;overflow-y:hidden}.katex{color:inherit}.katex :is(.accent-body,.katex-inner) ::selection{background:transparent}'
+  '\n.tiptap-mathematics-render{cursor:pointer;overflow-anchor:none}.tiptap-mathematics-render[data-type="inline-math"]{display:inline-block}.tiptap-mathematics-render[data-type="block-math"]{overflow-x:auto;padding:8px 0}.katex-display{overflow-x:auto;overflow-y:hidden;margin:.75em 0;padding:.25em 0}.katex{color:inherit}.katex :is(.accent-body,.katex-inner) ::selection{background:transparent}'

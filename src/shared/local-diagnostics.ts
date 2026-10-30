@@ -53,6 +53,7 @@ export const diagnosticEvents = {
   NAVIGATION_STARTED: { severity: 'info', producer: false, critical: false },
   NAVIGATION_FINISHED: { severity: 'info', producer: false, critical: false },
   NAVIGATION_FAILED: { severity: 'error', producer: false, critical: true },
+  NAVIGATION_ABORTED: { severity: 'info', producer: false, critical: false },
   ASSET_PENDING: { severity: 'warning', producer: false, critical: false },
   ASSET_FAILED: { severity: 'error', producer: false, critical: true },
   ASSET_COMPLETED: { severity: 'info', producer: false, critical: false },

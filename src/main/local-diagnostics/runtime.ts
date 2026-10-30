@@ -483,12 +483,17 @@ export class LocalDiagnostics {
       const loaded = () => navigation('NAVIGATION_FINISHED', contents.getURL())
       const failed = (
         _event: Electron.Event,
-        _code: number,
+        code: number,
         _description: string,
         url: string,
         mainFrame: boolean,
       ) => {
-        if (mainFrame) navigation('NAVIGATION_FAILED', url)
+        // Chromium -3 is a canceled load, including superseded navigation.
+        if (mainFrame)
+          navigation(
+            code === -3 ? 'NAVIGATION_ABORTED' : 'NAVIGATION_FAILED',
+            url,
+          )
       }
       const preload = (_event: Electron.Event, _path: string, error: Error) =>
         this.report('PRELOAD_ERROR', error, { role: 'preload' })

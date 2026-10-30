@@ -11,10 +11,10 @@ import { blockMath } from './syntax.ts'
 
 /*
  * Math syntax for the formatted view. It decides like the math addon's Marked
- * tokenizers (./syntax.ts) and the source outline: `$…$` inside a line, and
- * `$$…$$` blocks that start a line, also inside quotes and lists. A `$$` line
- * is math only when its closing `$$` follows within the formula limit; other
- * `$$` lines stay paragraph text.
+ * tokenizers (./syntax.ts) and the source outline: `$…$` and `$$…$$` inside a
+ * line, and `$$…$$` blocks that start a line, also inside quotes and lists. A
+ * `$$` line is math only when its closing `$$` follows within the formula
+ * limit; other `$$` lines stay paragraph text.
  */
 
 /** UTF-16 units a formula may have, as in ./syntax.ts. */
@@ -79,6 +79,36 @@ export function inlineMathEnd(text: string, open: number, end = text.length) {
     tried.push(0)
   }
   return -1
+}
+
+/**
+ * The end of display math opened by the `$$` at `open` inside a line, or -1,
+ * as `inlineDisplayMath` matches: the first `$` outside a backslash pair must
+ * start the closing `$$`, on the same line.
+ */
+export function inlineDisplayMathEnd(
+  text: string,
+  open: number,
+  end = text.length,
+) {
+  let at = open + 2
+  for (; at < end; at++) {
+    inlineMathWork.positions++
+    const code = text.charCodeAt(at)
+    if (code === 36 || code === 10) break
+    if (code === 92) {
+      if (at + 1 >= end || isTerminator(text.charCodeAt(at + 1))) return -1
+      at++
+    }
+  }
+  if (
+    at + 1 >= end ||
+    text.charCodeAt(at) !== 36 ||
+    text.charCodeAt(at + 1) !== 36
+  )
+    return -1
+  const latex = text.slice(open + 2, at)
+  return latex.length > formulaLimit || !latex.trim() ? -1 : at + 2
 }
 
 /**
@@ -329,7 +359,10 @@ function decide(cx: BlockContext, line: Line) {
   return last.found
 }
 
-/** `$…$` inside a line, as `InlineMath` with `MathMark` delimiters. */
+/**
+ * `$…$` inside a line, and `$$…$$` inside a line as display math, as
+ * `InlineMath` with `MathMark` delimiters.
+ */
 export const inlineMathSyntax: MarkdownConfig = {
   defineNodes: ['InlineMath', 'MathMark'],
   parseInline: [
@@ -337,13 +370,18 @@ export const inlineMathSyntax: MarkdownConfig = {
       name: 'InlineMath',
       parse(cx: InlineContext, next: number, pos: number) {
         if (next !== 36) return -1
-        const end = inlineMathEnd(cx.text, pos - cx.offset)
+        const display = cx.char(pos + 1) === 36
+        const end = (display ? inlineDisplayMathEnd : inlineMathEnd)(
+          cx.text,
+          pos - cx.offset,
+        )
         if (end < 0) return -1
-        const to = cx.offset + end
+        const to = cx.offset + end,
+          mark = display ? 2 : 1
         return cx.addElement(
           cx.elt('InlineMath', pos, to, [
-            cx.elt('MathMark', pos, pos + 1),
-            cx.elt('MathMark', to - 1, to),
+            cx.elt('MathMark', pos, pos + mark),
+            cx.elt('MathMark', to - mark, to),
           ]),
         )
       },

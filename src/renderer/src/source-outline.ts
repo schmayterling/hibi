@@ -9,10 +9,12 @@ import {
 import { decodeHTML } from 'entities'
 import type { Token } from 'marked'
 import type { MarkdownExtension, MarkdownFlavor } from '../../addons/api'
+import { blockMathSyntax } from '../../addons/math/formatted-syntax.ts'
 import {
   builtInFlavors,
   fencedCodeFlavors,
 } from '../../shared/built-in-grammar.ts'
+import { trackReadAhead } from '../../shared/chunked-markdown.ts'
 import { FrontmatterParser } from '../../shared/frontmatter-parser.ts'
 import { protectMarkdownParser } from '../../shared/markdown-flavor-guard.ts'
 import { markdownSourceParser } from '../../shared/markdown-source-references.ts'
@@ -31,10 +33,6 @@ import { SourceParserSession } from '../../shared/source-parser.ts'
 import { normalizedSource } from '../../shared/source-projection.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
 import { type OutlineLabelPart, outlineLabel } from './outline-label.ts'
-import {
-  outlineMathParser,
-  validateOutlineMathCandidate,
-} from './source-outline-math.ts'
 
 export type SourceOutlineHeading = Readonly<{
   id: string
@@ -226,7 +224,6 @@ export class SourceOutlineModel {
   readonly #markdown: MarkdownParser
   readonly #session: SourceParserSession
   readonly #frontmatter: boolean
-  readonly #math: boolean
   readonly #disabled: ReadonlySet<string>
   readonly #labels: ReturnType<typeof markdownSourceParser>
   readonly #deferLabels: boolean
@@ -264,7 +261,6 @@ export class SourceOutlineModel {
   ) {
     this.#deferLabels = options.deferLabels ?? false
     this.#frontmatter = options.frontmatter
-    this.#math = options.math ?? false
     this.#disabled = new Set(options.disabled)
     this.#labels = markdownSourceParser({
       gfm: options.gfm,
@@ -275,22 +271,7 @@ export class SourceOutlineModel {
     this.#renderLabel = options.renderLabel ?? ((tokens) => plainText(tokens))
     const markdown = parser.configure([
       ...(options.gfm ? GFM : []),
-      ...(this.#math
-        ? [
-            outlineMathParser(
-              (from, to) => {
-                const current = this.#session.state().source
-                return normalizedSource(
-                  current.sliceRaw(
-                    rawPosition(current, from),
-                    rawPosition(current, to),
-                  ),
-                )
-              },
-              () => this.#session.state().source.normalizedLength,
-            ),
-          ]
-        : []),
+      ...(options.math ? [blockMathSyntax, { wrap: trackReadAhead }] : []),
       {
         defineNodes: [{ name: 'Frontmatter', block: true }],
         // Only block boundaries feed the outline. Labels have their own bounded
@@ -390,7 +371,7 @@ export class SourceOutlineModel {
     if (!tree) throw new Error('Source outline requires a completed tree.')
     // Unchanged paragraph boundaries also exclude reference definitions.
     // Prove that before scheduling reference lookups for every cached label.
-    if (yield* this.#mapBody(tree, current)) {
+    if (this.#mapBody(tree)) {
       this.#tree = tree
       this.#pending = []
       return this.#publish(source)
@@ -419,23 +400,6 @@ export class SourceOutlineModel {
           (name === 'OrderedList' && this.#disabled.has('core.numbered-lists'))
       if (!heading && cursor.type.is('Heading'))
         throw new Error('Source outline cannot represent the active syntax.')
-      if (
-        this.#math &&
-        (name === 'Paragraph' || name.startsWith('SetextHeading'))
-      ) {
-        for (let from = cursor.from; from < cursor.to; from += 4096) {
-          validateOutlineMathCandidate(
-            normalizedSource(
-              source.sliceRaw(
-                rawPosition(source, from),
-                rawPosition(source, Math.min(cursor.to, from + 4097)),
-              ),
-            ),
-          )
-          yield
-          current()
-        }
-      }
       if (heading && !this.#disabled.has(`core.heading-${heading[1]}`)) {
         let cached = this.#index.cursorGet(cursor)
         if (
@@ -551,7 +515,7 @@ export class SourceOutlineModel {
     return this.#snapshot
   }
 
-  *#mapBody(tree: Tree, current: () => void): Generator<undefined, boolean> {
+  #mapBody(tree: Tree): boolean {
     const previous = this.#tree,
       firstChange = this.#pending[0]
     if (!previous || !firstChange) return false
@@ -574,7 +538,6 @@ export class SourceOutlineModel {
       edits.push(group)
     }
     let safe = true
-    const paragraphs = new Map<number, number>()
     const paragraph = (tree: Tree, position: number) => {
       let node = tree.resolveInner(position, 1)
       for (const side of [1, -1] as const) {
@@ -588,7 +551,6 @@ export class SourceOutlineModel {
       this.#work.indexVisits += 2
       const oldBlock = paragraph(previous, from),
         newBlock = paragraph(tree, nextFrom)
-      paragraphs.set(newBlock.from, newBlock.to)
       if (
         oldBlock.name !== 'Paragraph' ||
         newBlock.name !== 'Paragraph' ||
@@ -616,22 +578,6 @@ export class SourceOutlineModel {
       if (oldParent || newParent) safe = false
     })
     if (!safe) return false
-    if (this.#math) {
-      const source = this.#session.state().source
-      for (const [start, end] of paragraphs)
-        for (let from = start; from < end; from += 4096) {
-          validateOutlineMathCandidate(
-            normalizedSource(
-              source.sliceRaw(
-                rawPosition(source, from),
-                rawPosition(source, Math.min(end, from + 4097)),
-              ),
-            ),
-          )
-          yield
-          current()
-        }
-    }
     let directory = this.#directory,
       first = this.#first
     for (const group of edits) {

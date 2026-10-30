@@ -1,10 +1,12 @@
-// Run outside CI: node --expose-gc scripts/probe-quote-parsing.mjs [MiB=50] [source-root] [shape] [export|count]
+// Run outside CI: node --expose-gc scripts/probe-quote-parsing.mjs [MiB[,MiB...]=50] [source-root] [shape] [export|count]
 import { resolve } from 'node:path'
+import { setImmediate } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { Marked } from 'marked'
 
-const size = Number(process.argv[2] ?? 50)
-if (!Number.isFinite(size) || size <= 0) throw new Error('MiB must be positive')
+const sizes = (process.argv[2] ?? '50').split(',').map(Number)
+if (sizes.some((size) => !Number.isFinite(size) || size <= 0))
+  throw new Error('MiB must be positive')
 const root = resolve(process.argv[3] ?? '.')
 const load = (path) => import(pathToFileURL(`${root}/src/${path}`).href)
 const { blockMarkdown, blockScanCounters } = await load(
@@ -42,55 +44,90 @@ if (chosenShape && !(chosenShape in shapes))
   throw new Error('Unknown quote shape')
 if (chosenOperation && !['export', 'count'].includes(chosenOperation))
   throw new Error('Unknown operation')
-for (const [shape, unit] of Object.entries(shapes)) {
-  if (
-    chosenShape ? chosenShape !== shape : shape === 'code' || shape === 'list'
-  )
-    continue
+
+function probe(size, shape, unit, operation) {
   const source = unit.repeat(Math.ceil((size * 1024 * 1024) / unit.length))
-  for (const operation of ['export', 'count']) {
-    if (chosenOperation && chosenOperation !== operation) continue
-    globalThis.gc?.()
-    const start = performance.now()
-    blockScanCounters.units = 0
-    blockScanCounters.quoteLines = 0
-    let result
-    if (operation === 'export') {
-      const parser = new Marked(
-        { gfm: true, breaks: false },
-        blockMarkdown,
-        alertMarkdown,
-        markedGithubFootnote(),
-        mathTokens,
-        textExtrasMarkdown,
-        typstTokens,
-      )
-      // Match export's block grammar without compiling each formula or diagram.
-      parser.use({
-        extensions: [
-          { name: 'blockMath', renderer: (token) => `<m>${token.latex}</m>` },
-        ],
-      })
-      const html = parser.parse(source, { async: false })
-      result = {
-        html: html.length,
-        headings: (html.match(/<h\d/g) ?? []).length,
-      }
-    } else {
-      result = countText(richText(source, syntax))
-    }
-    console.log(
-      JSON.stringify({
-        root,
-        shape,
-        operation,
-        bytes: source.length,
-        ms: Math.round(performance.now() - start),
-        scanUnits: blockScanCounters.units,
-        quoteLines: blockScanCounters.quoteLines,
-        maxRssKiB: process.resourceUsage().maxRSS,
-        result,
-      }),
+  globalThis.gc?.()
+  const start = performance.now()
+  const cpuStart = process.cpuUsage()
+  blockScanCounters.units = 0
+  blockScanCounters.quoteLines = 0
+  let result
+  let parseMs
+  let countMs = 0
+  let rssAfterParseKiB
+  let heapAfterParseKiB
+  if (operation === 'export') {
+    const parser = new Marked(
+      { gfm: true, breaks: false },
+      blockMarkdown,
+      alertMarkdown,
+      markedGithubFootnote(),
+      mathTokens,
+      textExtrasMarkdown,
+      typstTokens,
     )
+    // Match export's block grammar without compiling each formula or diagram.
+    parser.use({
+      extensions: [
+        { name: 'blockMath', renderer: (token) => `<m>${token.latex}</m>` },
+      ],
+    })
+    const html = parser.parse(source, { async: false })
+    parseMs = performance.now() - start
+    result = {
+      html: html.length,
+      headings: (html.match(/<h\d/g) ?? []).length,
+    }
+  } else {
+    const text = richText(source, syntax)
+    parseMs = performance.now() - start
+    const memory = process.memoryUsage()
+    rssAfterParseKiB = Math.round(memory.rss / 1024)
+    heapAfterParseKiB = Math.round(memory.heapUsed / 1024)
+    const countStart = performance.now()
+    result = countText(text)
+    countMs = performance.now() - countStart
+  }
+  const ms = performance.now() - start
+  const cpu = process.cpuUsage(cpuStart)
+  return {
+    root,
+    shape,
+    operation,
+    bytes: source.length,
+    ms: Math.round(ms),
+    msPerMiB: Math.round((ms / size) * 100) / 100,
+    cpuMs: Math.round((cpu.user + cpu.system) / 1000),
+    parseMs: Math.round(parseMs),
+    countMs: Math.round(countMs),
+    scanUnits: blockScanCounters.units,
+    quoteLines: blockScanCounters.quoteLines,
+    maxRssKiB: process.resourceUsage().maxRSS,
+    rssAfterParseKiB,
+    heapAfterParseKiB,
+    result,
+  }
+}
+
+for (const size of sizes) {
+  for (const [shape, unit] of Object.entries(shapes)) {
+    if (
+      chosenShape ? chosenShape !== shape : shape === 'code' || shape === 'list'
+    )
+      continue
+    for (const operation of ['export', 'count']) {
+      if (chosenOperation && chosenOperation !== operation) continue
+      const row = probe(size, shape, unit, operation)
+      // End the probe's stack frame before checking for retained parse data.
+      await setImmediate()
+      globalThis.gc?.()
+      const memory = process.memoryUsage()
+      row.rssAfterGcKiB = Math.round(memory.rss / 1024)
+      row.heapAfterGcKiB = Math.round(memory.heapUsed / 1024)
+      // maxRSS is the process-wide high-water mark, cumulative in a size series.
+      row.maxRssKiB = process.resourceUsage().maxRSS
+      console.log(JSON.stringify(row))
+    }
   }
 }

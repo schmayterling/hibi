@@ -105,6 +105,25 @@ test('empty quote markers retain native lazy-line boundaries', () => {
   }
 })
 
+test('a nested re-read keeps the last empty quote line in the quote', () => {
+  // Marked counts the lines a nested re-read leaves from the text after it,
+  // so one last quote line that strips to nothing stays in the outer quote.
+  for (const sample of [
+    '> > o\ny\n>',
+    '> > a\n> > > b\n> c\n> >',
+    '>>o\ny\n>\nz',
+    '> > o\ny\n> \n\nafter',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      assert.deepEqual(
+        new Marked(blockMarkdown).lexer(source),
+        new Marked().lexer(source),
+        source,
+      )
+    }
+})
+
 test('quote matching avoids the native recursive regex on whole notes', () => {
   const source = giant.repeat(2000)
   const exec = RegExp.prototype.exec

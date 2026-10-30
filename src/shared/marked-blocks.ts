@@ -506,7 +506,16 @@ function readQuote(
           quoteFeed = undefined
         }
         tokens[tokens.length - 1] = quote
-        const used = inner.taken - prefix.length
+        let used = inner.taken - prefix.length
+        // Marked counts the lines its re-read leaves from the text after it:
+        // a last quote line that strips to nothing counts as none.
+        const rest = used >= 0 ? lineAt(used) : undefined
+        if (
+          rest !== undefined &&
+          lineAt(used + 1) === undefined &&
+          !RegExp.prototype[Symbol.replace].call(strip, rest, '')
+        )
+          used++
         if (used > 0)
           raw.push(Array.from({ length: used }, takeLine).join('\n'))
         replaceQuoteTail(text, last.text.length, quote.text)

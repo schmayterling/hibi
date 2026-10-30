@@ -1973,6 +1973,7 @@
   "995a14b50dbc": "The source replica missed an operation.",
   "bd0d4d522e2d": "The staged file changed. Review it before updating.",
   "4dfa22469b2f": "The stylesheet {style} is missing from the addon.",
+  "b1b558cd3e2a": "The tab for {value1} stayed open because it changed while Hibi was closing it.",
   "09aae7464226": "The table layout is invalid.",
   "69dd525bd911": "The test directory redirected.",
   "bee50784d023": "The text at the edit range has changed.",

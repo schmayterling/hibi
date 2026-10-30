@@ -29,8 +29,33 @@ async function measureFindLayout(rich) {
   )
 }
 
+/** Track the find requests posted to workers from now on until each is answered. */
+const trackFindRequests = (page) =>
+  page.evaluate(() => {
+    const pending = new Set(),
+      observed = new WeakSet(),
+      post = Worker.prototype.postMessage
+    window.pendingFinds = pending
+    Worker.prototype.postMessage = function (message, ...rest) {
+      const request = message?.message ?? message
+      if (request?.type === 'find') {
+        if (!observed.has(this)) {
+          observed.add(this)
+          this.addEventListener('message', ({ data }) => {
+            const reply = data?.message ?? data
+            if (reply?.type === 'find' || reply?.type === 'canceled')
+              pending.delete(`${reply.epoch}:${reply.id}`)
+          })
+        }
+        pending.add(`${request.epoch}:${request.id}`)
+      }
+      return post.call(this, message, ...rest)
+    }
+  })
+
 // The highlight window is measured in a frame after CodeMirror's, and the find
-// worker answers for it later: wait until the highlights stop changing.
+// worker answers for it later: wait until every tracked find request has its
+// answer and the highlights stop changing.
 async function settleFindHighlights(rich) {
   await measureFindLayout(rich)
   await rich.evaluate(
@@ -47,6 +72,7 @@ async function settleFindHighlights(rich) {
           subtree: true,
         })
         const frame = () => {
+          if (window.pendingFinds.size) quiet = 0
           if (++quiet < 5) requestAnimationFrame(frame)
           else {
             observer.disconnect()
@@ -1133,6 +1159,7 @@ test('formatted find moving to an adjacent match restyles highlights without rew
 }, async (t) => {
   const dense = 'needle word '.repeat(10000).trimEnd()
   const { page, rich, input, count } = await openFind(t, dense)
+  await trackFindRequests(page)
   await input.fill('needle')
   await count('1/10000')
   await settleFindHighlights(rich)

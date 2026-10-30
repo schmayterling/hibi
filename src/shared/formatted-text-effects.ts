@@ -295,6 +295,14 @@ export function* formattedTextEffects(
     }
     if (formattedAtomic(node, read, features)) {
       yield effect('barrier', node.from, node.to)
+      // A widget shows none of its source, line breaks included, so they
+      // read as no space: a formula or image alt over two lines is one atom.
+      for (let at = from; at < to; ) {
+        const bounds = input.lineAt(at)
+        if (bounds.to >= to) break
+        line(bounds.from).soft = false
+        at = bounds.to + 1
+      }
       leaves.push({ from, to })
       descend = false
       continue

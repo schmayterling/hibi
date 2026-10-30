@@ -481,6 +481,33 @@ test('semantic block separators differ from soft lines and keep source provenanc
   }
 })
 
+test('a line break inside a formula or image alt adds no text, as its widget shows none', () => {
+  for (const text of [
+    'a $$x\n+y$$ b',
+    'a $x\ny$ b',
+    '> a $$x\n> +y$$ b',
+    'a ![x\ny](pic.png) b',
+  ]) {
+    const input = inputFor(text),
+      range = { from: 0, to: text.length },
+      effects = effectsFor(parser.parse(text), input, range),
+      runs = formattedTextRuns(effects, input, {
+        window: range,
+        selection: range,
+      })
+    assert.equal(textFor(runs, input, range), 'a  b', JSON.stringify(text))
+    const index = indexFor(text)
+    assert.equal(
+      [...index.range(0, text.length)]
+        .filter((run) => !run.barrier)
+        .map((run) => run.text ?? index.text(run.from, run.to))
+        .join(''),
+      'a  b',
+      JSON.stringify(text),
+    )
+  }
+})
+
 test('an enclosing quoted-list leaf shares the same bounded run assembly as find', () => {
   const text = '> - first\n>   **word**',
     input = inputFor(text),

@@ -273,20 +273,29 @@ export function useSourceOutline({
         work?.return(undefined as never)
         work = null
       }
+      // When the read last waited for the page to be idle.
+      let idled = 0
       const queue = () => {
+        const start = () => {
+          idled = performance.now()
+          read()
+        }
         if (typeof requestIdleCallback === 'function')
-          idle = requestIdleCallback(read, { timeout: 16 })
-        else timer = setTimeout(read, 16)
+          idle = requestIdleCallback(start, { timeout: 16 })
+        else timer = setTimeout(start, 16)
       }
       // A started read continues on the next task. Nested timers wait at least
       // 4 ms and idle callbacks up to a frame, which left large outlines idle
-      // after most of their 2 ms slices, labels and references.
+      // after most of their 2 ms slices, labels and references. Every 50 ms it
+      // waits for an idle period once, so idle callbacks queued meanwhile run.
       const continuation = new MessageChannel()
       continuation.port1.onmessage = (event: MessageEvent<number>) => {
         if (event.data === continued) read()
       }
       const resume = () => {
-        continuation.port2.postMessage(++continued)
+        if (performance.now() - idled < 50)
+          continuation.port2.postMessage(++continued)
+        else queue()
       }
       const failed = (error: unknown) => {
         cancel()

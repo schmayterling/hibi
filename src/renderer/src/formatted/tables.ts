@@ -47,6 +47,7 @@ import {
   recordPageSelection,
   registerDOMPositions,
 } from '../native-dom-selection.ts'
+import { placedSelection } from '../reading-position.ts'
 import { type InsertValues, tableActions } from '../source-formatting.ts'
 import {
   formattedInputError,
@@ -993,7 +994,9 @@ class TableView {
     // Markdown; CodeMirror's focus update, which draws it, waits for a timer.
     editor.refresh()
     editor.mirror()
-    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    // A note opening in its last cell still opens at its top.
+    if (!this.view.state.facet(placedSelection))
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     return true
   }
 

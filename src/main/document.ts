@@ -441,14 +441,20 @@ export async function selectDocumentTab(
   const modified = dirty(draft.source, draft.saved)
   const discard = refresh === 'discard'
   const file = draft.path ?? (discard ? draft.pendingPath : null)
+  let missing: string | null = null
   if (file && (discard || !modified)) {
     const target = draft.source.snapshot(),
       baseline = draft.saved
     const reload = discard && (modified || !draft.path)
-    const content =
-      !reload && (await matchesMarkdown(file, target))
-        ? null
-        : await readSource(file, id, target.version + 1)
+    let content: SourceStore | null = null
+    try {
+      if (reload || !(await matchesMarkdown(file, target)))
+        content = await readSource(file, id, target.version + 1)
+    } catch (error) {
+      // A file moved or deleted outside Hibi leaves the tab's text as it is.
+      missingFile(error as NodeJS.ErrnoException)
+      missing = basename(file)
+    }
     const changed =
       content !== null &&
       (reload || !(await sameSource(target, content.snapshot())))
@@ -479,6 +485,11 @@ export async function selectDocumentTab(
   activateTab(id)
   advanceRevision()
   refreshDirtyIndicator(window)
+  if (missing)
+    window.webContents.send(
+      HISTORY_CHANNELS.notice,
+      `${missing} was moved or deleted outside Hibi. Save to keep this text.`,
+    )
   return getDocument()
 }
 

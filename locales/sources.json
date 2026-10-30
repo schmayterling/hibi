@@ -50,6 +50,9 @@
   "2108dbdeed4c": [
     "src/addons/import-notion/convert.ts"
   ],
+  "038c3f54b2e6": [
+    "src/main/updates.ts"
+  ],
   "b107fad60f86": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
@@ -2428,6 +2431,9 @@
   ],
   "3efed3de9d4b": [
     "src/renderer/src/main.tsx"
+  ],
+  "7bf10c8e9c81": [
+    "src/main/document.ts"
   ],
   "5e43497ec5da": [
     "src/main/workspace-files.ts"
@@ -7666,6 +7672,9 @@
   ],
   "bb174a00dfce": [
     "src/renderer/src/SourceEditor.tsx"
+  ],
+  "a59669afac8c": [
+    "src/main/document.ts"
   ],
   "106b5be948be": [
     "src/ui/ColorschemeSettings.tsx"

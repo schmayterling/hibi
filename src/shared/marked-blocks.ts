@@ -596,12 +596,10 @@ function readQuote(
         }
         tokens[tokens.length - 1] = quote
         let used = inner.taken - prefix.length
-        if (!scope?.columns) {
-          const read =
+        if (!scope?.columns)
+          used =
             readLines(inner.lines, inner.length ?? quote.raw.length) -
             prefix.length
-          if (!scope?.columns) used = read
-        }
         // Under tab columns the raw and the widened input need not share
         // lengths: count the lines the re-read took. A last quote line that
         // strips to nothing still counts, as Marked leaves no text after it.

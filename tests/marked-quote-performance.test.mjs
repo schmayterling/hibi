@@ -145,7 +145,8 @@ test('a nested re-read keeps the last quote lines where Marked puts them', () =>
   // Marked re-reads a nested quote from the rest of the quote's lines, which
   // end without a newline, and counts the lines it leaves from the text after
   // it: one last quote line that strips to nothing stays in the outer quote.
-  // It counts by the new raw's length, which a list re-read can lengthen.
+  // It counts by the new raw's length, which a list re-read can lengthen,
+  // also when a tab comes in a later line.
   for (const sample of [
     '> > o\ny\n>',
     '> > a\n> > > b\n> c\n> >',
@@ -154,6 +155,8 @@ test('a nested re-read keeps the last quote lines where Marked puts them', () =>
     '>>a\n>>>]\n>$\n>>  \n>```',
     '>>e\n>>>*\n>$\n>>\n>>',
     '>>>1.\ny\n>>\n>>',
+    '>>>-\ny\n>>\n>>\nx\n',
+    '>>>-\ny\n>>\n>>\nx\n\t',
   ])
     for (const eol of ['\n', '\r\n']) {
       const source = sample.replaceAll('\n', eol)

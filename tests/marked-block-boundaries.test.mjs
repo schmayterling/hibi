@@ -295,19 +295,27 @@ test('tab-indented item lines after math stay in the item', () => {
     )
 })
 
-test('incomplete math keeps native paragraphs and list continuations', () => {
-  for (const source of [
-    '- $$unfinished\noutside\n===',
-    '> $$unfinished\noutside\n===',
-    '- $$\n  missing closer\noutside\n===',
-    '> $$\n> missing closer\noutside\n===',
-    '-#no space\noutside\n===',
-  ])
-    assert.deepEqual(
-      boundaries(new Marked(mathTokens, textExtrasMarkdown).lexer(source)),
-      boundaries(new Marked().lexer(source)),
-      source,
-    )
+test('unclosed math runs to the end of its quote or list item, as in Obsidian', () => {
+  const marked = new Marked(mathTokens, textExtrasMarkdown)
+  // Expectations from Obsidian 1.13.7: an item takes the lazy lines after it,
+  // a quote ends where its lazy lines no longer continue a paragraph.
+  for (const [source, formulas] of [
+    ['- $$unfinished\noutside\n===', ['unfinished\noutside\n===']],
+    ['> $$unfinished\noutside\n===', []],
+    ['- $$\n  missing closer\noutside\n===', ['missing closer\noutside\n===']],
+    ['> $$\n> missing closer\noutside\n===', ['missing closer']],
+  ]) {
+    const found = []
+    marked.walkTokens(marked.lexer(source), (token) => {
+      if (token.type === 'blockMath') found.push(token.latex)
+    })
+    assert.deepEqual(found, formulas, source)
+  }
+  const source = '-#no space\noutside\n==='
+  assert.deepEqual(
+    boundaries(marked.lexer(source)),
+    boundaries(new Marked().lexer(source)),
+  )
 })
 
 for (const [name, extension, body] of [

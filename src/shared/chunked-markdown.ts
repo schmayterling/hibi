@@ -1697,13 +1697,11 @@ class ChunkedParse implements ChunkedPartialParse {
         const close = /^(FencedCode|BlockMath)$/.test(node.name)
           ? node.node.lastChild
           : null
-        if (
-          !retypes.has(node.name) &&
-          !(
-            /^(Code|Math)Mark$/.test(close?.name ?? '') &&
-            close!.from > node.from
-          )
-        )
+        const closed =
+          !!close &&
+          /^(Code|Math)Mark$/.test(close.name) &&
+          close.from > node.from
+        if (!retypes.has(node.name) && !closed)
           return node.type.is('BlockContext') ? undefined : false
         const from = base + node.from,
           to = base + node.to

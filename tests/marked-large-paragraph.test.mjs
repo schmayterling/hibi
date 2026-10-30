@@ -356,24 +356,33 @@ test('math interruptions retain reference semantics inside lists and quotes', ()
     }
 })
 
-test('reference titles keep invalid math candidates and stop for math closed after the title', () => {
-  for (const body of ['$$\nunclosed', `$$\n${'x'.repeat(10001)}\n$$`]) {
+test('reference titles end at display math as at fenced code, and keep lines that open none', () => {
+  // Display math reads on like a fence, so its opening line interrupts a
+  // title as a fence does; Obsidian lets a title take both.
+  const markdown = new Marked({ gfm: false }, mathTokens, blockMarkdown)
+  for (const body of [
+    '$$\nunclosed',
+    `$$\n${'x'.repeat(10001)}\n$$`,
+    '$$\nx"\n$$',
+  ]) {
     const source = `[ref]: /x "one\n${body}\nlast"\n\n[ref]`
-    const markdown = new Marked({ gfm: false }, mathTokens, blockMarkdown)
-    assert.equal(markdown.lexer(source).links.ref?.title, `one\n${body}\nlast`)
-    assert.equal(references(source, false, true)?.title, `one\n${body}\nlast`)
-    assert.doesNotMatch(
+    assert.equal(markdown.lexer(source).links.ref ?? null, null)
+    assert.equal(
+      markdown.lexer(source.replaceAll('$$', '```')).links.ref ?? null,
+      null,
+    )
+    assert.equal(references(source, false, true) ?? null, null)
+    assert.match(
       parser.configure(blockMathSyntax).parse(source).toString(),
       /BlockMath\(/,
     )
   }
-  const source = '[ref]: /x "one\n$$\nx"\n$$\n\n[ref]'
-  assert.equal(
-    new Marked({ gfm: false }, mathTokens, blockMarkdown).lexer(source).links
-      .ref?.href ?? null,
-    null,
-  )
-  assert.match(
+  // Another `$` on a `$$` line keeps it text.
+  const body = '$$no$\n$$ x $ y'
+  const source = `[ref]: /x "one\n${body}\nlast"\n\n[ref]`
+  assert.equal(markdown.lexer(source).links.ref?.title, `one\n${body}\nlast`)
+  assert.equal(references(source, false, true)?.title, `one\n${body}\nlast`)
+  assert.doesNotMatch(
     parser.configure(blockMathSyntax).parse(source).toString(),
     /BlockMath\(/,
   )
@@ -950,9 +959,10 @@ test('export keeps a quoted title with a blank line as text, as CommonMark does'
   assert.ok(html.includes('[ref]: /target'), html)
 })
 
-test('invalid math candidates keep reference title scans linear', (t) => {
+test('math-like title lines keep reference title scans linear', (t) => {
+  // A `$$` line with another `$` on it opens no block, so the title goes on.
   for (const count of [64, 256, 1024]) {
-    const title = `"first\n${'$$no\n'.repeat(count)}last"`
+    const title = `"first\n${'$$no$\n'.repeat(count)}last"`
     const source = `[ref]: /x ${title}\n\n[ref]`
     blockStartCounters.calls =
       blockStartCounters.units =

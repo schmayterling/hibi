@@ -193,7 +193,7 @@ export async function workspaceAction(
         await shell.trashItem(source)
         treeChanged = true
       }
-      closeDeletedDocuments(window, source)
+      await closeDeletedDocuments(window, source)
       resultPath = source
     } else {
       if (action === 'rename') {

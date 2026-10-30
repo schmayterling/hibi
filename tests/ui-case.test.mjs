@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import nodeTest from 'node:test'
+import { sentenceCase } from '../src/shared/ui-case.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
   selectFormattedEngine,
@@ -9,6 +11,21 @@ import {
 } from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+
+nodeTest('sentence case leaves file names in messages as they are', () => {
+  for (const message of [
+    'notes.txt was moved or deleted outside Hibi. Save to keep this text.',
+    'index.html was moved or deleted outside Hibi. Save to keep this text.',
+    'draft.markdown changed outside Hibi.',
+    'Could not find report.pdf.',
+    'No hibi-addon.json was found in this folder or repository.',
+  ])
+    assert.equal(sentenceCase(message), message)
+  assert.equal(
+    sentenceCase('export as pdf or html from the ui'),
+    'Export as PDF or HTML from the UI',
+  )
+})
 
 test('sentence case is default; lowercase covers UI and menus while preserving content and persists', {
   timeout: 30000,

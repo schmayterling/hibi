@@ -388,3 +388,10 @@ test('preloaded sessions retain explicit kernel limits without scanning their so
   assert.equal(store.counters().unitsScanned, scanned)
   session.dispose()
 })
+
+test('the lazy transfer module exports only its loader', async () => {
+  assert.deepEqual(
+    Object.keys(await import('../src/renderer/src/document-transfer-load.ts')),
+    ['loadDocumentTransfer'],
+  )
+})

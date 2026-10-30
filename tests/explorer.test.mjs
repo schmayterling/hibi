@@ -173,16 +173,21 @@ test('workspace popovers, durable folders, ephemeral files, inline rename, dirty
   )
   await assert.rejects(access(join(root, 'guides', 'renamed.md')))
   await app.evaluate(({ dialog }) => {
-    dialog.showMessageBox = async () => ({ response: 1 })
+    globalThis.prompts = []
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.prompts.push(options.message)
+      return { response: 1 }
+    }
   })
   await page.evaluate(() =>
     window.hibi.workspaceAction({ action: 'new-file', path: '' }),
   )
   await writeFile(join(root, 'untitled.md'), 'external file')
-  await assert.rejects(
-    page.evaluate(() => window.hibi.saveDocument(false)),
-    /EEXIST/,
-  )
+  // A file created at the draft's name is replaced only after asking.
+  assert.equal(await page.evaluate(() => window.hibi.saveDocument(false)), null)
+  assert.deepEqual(await app.evaluate(() => globalThis.prompts), [
+    'This file changed outside Hibi.',
+  ])
   assert.equal(
     await readFile(join(root, 'untitled.md'), 'utf8'),
     'external file',

@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { stripTypeScriptTypes } from 'node:module'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createPersonalModel } from '../src/addons/autocomplete/model.ts'
 import {
   insertionText,
@@ -386,15 +385,21 @@ async function dictionary(roots, fixturesOnly) {
   let index
   if (installed.size) {
     // Reuse the production read-only pack reader without building Electron output.
-    const code = stripTypeScriptTypes(
-      readFileSync(
-        new URL('../src/addons/dictionary/pack-index.ts', import.meta.url),
-        'utf8',
-      ),
-      { mode: 'transform' },
-    )
+    // One bundle carries its relative imports, which a data: module cannot resolve.
+    const { build } = await import('esbuild')
+    const { outputFiles } = await build({
+      entryPoints: [
+        fileURLToPath(
+          new URL('../src/addons/dictionary/pack-index.ts', import.meta.url),
+        ),
+      ],
+      bundle: true,
+      write: false,
+      format: 'esm',
+      platform: 'node',
+    })
     const { PackIndex } = await import(
-      `data:text/javascript;base64,${Buffer.from(code).toString('base64')}`
+      `data:text/javascript;base64,${Buffer.from(outputFiles[0].contents).toString('base64')}`
     )
     index = new PackIndex()
     for (const [lang, directory] of installed)

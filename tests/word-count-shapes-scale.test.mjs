@@ -31,6 +31,18 @@ function change(counter, at, insert) {
     changes: [{ from: at, to: at, insert }],
   })
 }
+// node:test cannot time out a synchronous test, and wall time stretches under
+// load, so each shape keeps its 180 s budget in process CPU time instead.
+function cpuBudget(t) {
+  const start = process.cpuUsage()
+  t.after(() => {
+    const { user, system } = process.cpuUsage(start)
+    assert.ok(
+      user + system < 180e6,
+      `${t.name} used ${(user + system) / 1e6} s of CPU`,
+    )
+  })
+}
 function bounded(counter, before, at, name, insert = ' y ', words = 2) {
   counter.counters(true)
   change(counter, at, insert)
@@ -62,9 +74,8 @@ function bounded(counter, before, at, name, insert = ' y ', words = 2) {
   return result
 }
 
-test('50 MiB formatted projections and reference reads retain long paragraphs', {
-  timeout: 180000,
-}, () => {
+test('50 MiB formatted projections and reference reads retain long paragraphs', (t) => {
+  cpuBudget(t)
   const size = 50 * 1024 * 1024
   for (const unit of ['ordinary words. ', 'ordinary words.\n']) {
     const source = `${unit.repeat(Math.ceil(size / unit.length)).slice(0, size - 1)}x`
@@ -87,9 +98,8 @@ test('50 MiB formatted projections and reference reads retain long paragraphs', 
   }
 })
 
-test('50 MiB single paragraph retains local counts at its endpoints and three depths', {
-  timeout: 180000,
-}, () => {
+test('50 MiB single paragraph retains local counts at its endpoints and three depths', (t) => {
+  cpuBudget(t)
   const size = 50 * 1024 * 1024
   const source = 'ordinary words. '.repeat(Math.ceil(size / 16)).slice(0, size)
   const counter = new FormattedCounter(
@@ -121,9 +131,8 @@ test('50 MiB single paragraph retains local counts at its endpoints and three de
   }
 })
 
-test('50 MiB unclosed labels keep distant ordinary edits local', {
-  timeout: 180000,
-}, () => {
+test('50 MiB unclosed labels keep distant ordinary edits local', (t) => {
+  cpuBudget(t)
   const paragraph = 'plain words here. '.repeat(64)
   const unit = `${paragraph}\n\n`
   const units = Math.ceil((50 * 1024 * 1024) / unit.length)
@@ -165,9 +174,8 @@ test('50 MiB unclosed labels keep distant ordinary edits local', {
   }
 })
 
-test('50 MiB mixed blocks retain counts inside long marked paragraphs', {
-  timeout: 180000,
-}, () => {
+test('50 MiB mixed blocks retain counts inside long marked paragraphs', (t) => {
+  cpuBudget(t)
   const paragraph = 'ordinary words. '.repeat(2200)
   const unit = `# heading\n\n**bold** ${paragraph}**last**\n\n> quote\n> next\n\n- one\n- two\n\n| a | b |\n|---|---|\n| c | d |\n\n\`\`\`js\nx=1\n\`\`\`\n\n$$\nx\n\ny\n$$\n\n[label][ref]\n\n[ref]: https://example.test\n\n`
   const units = Math.ceil((50 * 1024 * 1024) / unit.length)

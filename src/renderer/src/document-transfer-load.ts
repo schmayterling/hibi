@@ -13,8 +13,6 @@ import { sourceDocument } from './document-transfer.ts'
 // Every retained source arrives through here first, so save reports start with it.
 import './document-saved.ts'
 
-export { parseTransferHead }
-
 /** Stream validation and publication load only when a document transfer starts. */
 export function loadDocumentTransfer(
   native: DocumentTransferApi,

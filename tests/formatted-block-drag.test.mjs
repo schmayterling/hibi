@@ -108,13 +108,24 @@ const shown = (top = -Infinity, bottom = Infinity) =>
 /** Hover a line's text, `x` from its left edge, and wait for the handle beside it. */
 const hover = async (line, x = 40) => {
   const box = await page.locator(line).first().boundingBox()
-  const top = await page
+  const { top, pane } = await page
     .locator(line)
     .first()
-    .evaluate((element) => Number.parseFloat(element.style.paddingTop) || 0)
+    .evaluate((element) => {
+      const { top, bottom } = element
+        .closest('.rich-pane')
+        .getBoundingClientRect()
+      return {
+        top: Number.parseFloat(element.style.paddingTop) || 0,
+        pane: [top, bottom],
+      }
+    })
+  const y = box.y + top + 14
+  // The pointer reaches only what the scrolled pane shows.
+  assert.ok(y > pane[0] && y < pane[1], `${line} at ${y}, pane ${pane}`)
   await page.mouse.move(0, 0)
   // Nested blocks give way to their parents within 12px of their edges.
-  await page.mouse.move(box.x + x, box.y + top + 14)
+  await page.mouse.move(box.x + x, y)
   await shown(box.y, box.y + box.height)
   await settled()
   return { ...box, top }
@@ -504,14 +515,17 @@ test('in a long note the handle follows the block under the pointer and moves it
     .waitFor()
   const before = await markdown()
   // Jump to the middle of the note, with the caret in the block above, whose
-  // markers the focused view shows.
+  // markers the focused view shows. Scrolling the caret into view would leave
+  // the block below it past the pane's edge, so center that block instead.
   await page.evaluate(() => {
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root
       .view
-    const at = view.state.doc.toString().indexOf('Paragraph 2499 ')
+    const doc = view.state.doc.toString()
     view.dispatch({
-      selection: { anchor: at },
-      scrollIntoView: true,
+      selection: { anchor: doc.indexOf('Paragraph 2499 ') },
+      effects: view.constructor.scrollIntoView(doc.indexOf('Paragraph 2500 '), {
+        y: 'center',
+      }),
     })
   })
   // Its markers hidden: the formatted view has laid out the blocks around it.

@@ -212,9 +212,9 @@ test('outline grammar follows addon syntax and refuses only block syntax it cann
     export: { extensions: [{ tokenizer: { heading: () => undefined } }] },
   })
   assert.deepEqual(grammar([github, marked, override]).blocked, [])
-  // A local copy cannot authorize Typst's shared fence tokenizer override.
+  // So a local Typst copy's fence tokenizer override leaves it unchanged too.
   origins.typst = 'local'
-  assert.deepEqual(grammar([typst]).blocked, ['typst'])
+  assert.deepEqual(grammar([typst]).blocked, [])
   origins.typst = 'built-in'
 
   // Projections other than built-in frontmatter hide part of the source.

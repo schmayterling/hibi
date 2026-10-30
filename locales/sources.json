@@ -6591,9 +6591,6 @@
   "6080b3043bae": [
     "src/main/workspace-files.ts"
   ],
-  "4646993d0c2f": [
-    "src/main/document.ts"
-  ],
   "49f84ccd45bb": [
     "src/main/workspace-files.ts"
   ],
@@ -7690,6 +7687,9 @@
   ],
   "229213386c16": [
     "src/renderer/src/main.tsx"
+  ],
+  "1d662e622a11": [
+    "src/main/document.ts"
   ],
   "4f371b468934": [
     "src/renderer/src/addon-reload.ts"

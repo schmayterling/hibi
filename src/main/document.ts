@@ -910,7 +910,8 @@ export async function saveDocument(
       const choice = await runFileDialog(() =>
         dialog.showMessageBox(window, {
           type: 'warning',
-          message: 'This file changed outside Hibi.',
+          // Tab switches ask before the tab shows, so the prompt names its file.
+          message: `${basename(destination)} changed outside Hibi.`,
           detail: 'Replace the file with your current document?',
           buttons: ['Replace', 'Cancel'],
           defaultId: 1,

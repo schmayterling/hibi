@@ -357,7 +357,7 @@ test('tray preserves drafts, restores the same renderer and cancels unsafe quits
   assert.deepEqual(
     await app.evaluate(() => globalThis.backgroundTestDialogs[1]),
     {
-      message: 'This file changed outside Hibi.',
+      message: 'saved.md changed outside Hibi.',
       buttons: ['Replace', 'Cancel'],
       windowId: id,
       visible: true,

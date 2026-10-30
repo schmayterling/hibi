@@ -408,7 +408,7 @@ for (const route of ['Open…', 'Finder', 'link', 'explorer'])
     await writeFile(file, 'another outside text\n')
     assert.deepEqual(await reopen(0), [
       'Save changes to note.md?',
-      'This file changed outside Hibi.',
+      'note.md changed outside Hibi.',
     ])
     assert.deepEqual(await state(), {
       tabId: note,
@@ -420,7 +420,7 @@ for (const route of ['Open…', 'Finder', 'link', 'explorer'])
     await content(saved)
   })
 
-test('switching to edits whose file changed outside Hibi asks once to replace it', {
+test('switching to edits whose file changed outside Hibi asks once, by name, to replace it', {
   timeout: 120000,
 }, async (t) => {
   const setupState = await setup(t)
@@ -443,7 +443,7 @@ test('switching to edits whose file changed outside Hibi asks once to replace it
   await writeFile(file, 'outside text\n')
   await answer(1)
   await select(note)
-  assert.deepEqual(await prompts(), ['This file changed outside Hibi.'])
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
   assert.deepEqual(await state(), {
     tabId: note,
     markdown: draft,
@@ -460,7 +460,7 @@ test('switching to edits whose file changed outside Hibi asks once to replace it
   await writeFile(file, 'another outside text\n')
   await answer(0)
   await select(note)
-  assert.deepEqual(await prompts(), ['This file changed outside Hibi.'])
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
   assert.deepEqual(await state(), {
     tabId: note,
     markdown: draft,
@@ -499,7 +499,7 @@ test('another outside write while Hibi asks to replace a file asks again', {
     const ask = dialog.showMessageBox
     let writes = 1
     dialog.showMessageBox = async (window, options) => {
-      if (options.message === 'This file changed outside Hibi.' && writes-- > 0)
+      if (options.message === 'note.md changed outside Hibi.' && writes-- > 0)
         process
           .getBuiltinModule('node:fs')
           .writeFileSync(file, 'later outside text\n')
@@ -509,8 +509,8 @@ test('another outside write while Hibi asks to replace a file asks again', {
   await answer(0)
   await select(note)
   assert.deepEqual(await prompts(), [
-    'This file changed outside Hibi.',
-    'This file changed outside Hibi.',
+    'note.md changed outside Hibi.',
+    'note.md changed outside Hibi.',
   ])
   assert.equal(await readFile(file, 'utf8'), draft)
   // Version history keeps the text that Replace overwrote.
@@ -580,7 +580,7 @@ test('opening the planned file of an unsaved draft discards or saves the draft',
   await open()
   assert.deepEqual(await prompts(), [
     'Save changes to second.md?',
-    'This file changed outside Hibi.',
+    'second.md changed outside Hibi.',
   ])
   assert.deepEqual(await state(), {
     tabId: second.tabId,
@@ -635,7 +635,7 @@ test('reopening a dirty document prompts before discarding external or local tex
     await app.evaluate(() =>
       globalThis.reopenPrompts.slice(2).map((prompt) => prompt.message),
     ),
-    ['Save changes to note.md?', 'This file changed outside Hibi.'],
+    ['Save changes to note.md?', 'note.md changed outside Hibi.'],
   )
 })
 

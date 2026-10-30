@@ -48,6 +48,7 @@ import { CodeSyntaxSettings } from './CodeSyntaxSettings'
 import { colorschemes } from './colorschemes'
 import { DependencySettings } from './DependencySettings'
 import type { CursorSettings } from './EditorCursor'
+import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { FormatsSettings } from './FormatsSettings'
 import { codemirrorFormattedView } from './formatted-engine'
 import { HibiSettings } from './HibiSettings'
@@ -270,6 +271,8 @@ export function SettingsScreen({
   const wasOpen = useRef(false)
   const search = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
+  const [rememberScrollPosition, setRememberScrollPosition] =
+    useEditorPreference(editorPreferences.rememberScrollPosition)
   const [searchSelection, setSearchSelection] = useState<string | null>(null)
   const indexed = useSyncExternalStore(
     settingsIndex.subscribe,
@@ -511,6 +514,20 @@ export function SettingsScreen({
                   onChange={(event) => {
                     if (!tabsBusy) onTabsEnabled(event.target.checked)
                   }}
+                />
+              </SettingRow>
+              <SettingRow
+                id="remember-scroll-position"
+                label="Remember scroll position"
+                description="Return to your place when you reopen a file."
+              >
+                <Toggle
+                  id="remember-scroll-position"
+                  aria-describedby="remember-scroll-position-description"
+                  checked={rememberScrollPosition}
+                  onChange={(event) =>
+                    setRememberScrollPosition(event.target.checked)
+                  }
                 />
               </SettingRow>
             </div>

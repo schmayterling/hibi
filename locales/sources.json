@@ -4734,6 +4734,9 @@
   "09cfe40287bf": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "1e8b83af925b": [
+    "src/renderer/src/SettingsScreen.tsx"
+  ],
   "83de550b6c53": [
     "src/addons/autocomplete/Settings.tsx"
   ],
@@ -4932,6 +4935,9 @@
   ],
   "c2b325e2cb9e": [
     "src/renderer/src/AddonSettings.tsx"
+  ],
+  "fb86906a1d74": [
+    "src/renderer/src/SettingsScreen.tsx"
   ],
   "0026c5053478": [
     "src/addons/ui-preview/index.tsx"

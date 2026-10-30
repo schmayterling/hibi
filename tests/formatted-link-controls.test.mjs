@@ -832,6 +832,77 @@ test('codemirror table cell link menu holds the editor actions of addons too', {
   await page.getByRole('dialog', { name: 'Define “cats”' }).waitFor()
 })
 
+test('codemirror macOS Control+Shift+click opens the menu as Control+click does', {
+  timeout: 60000,
+  skip: process.platform !== 'darwin',
+}, async (t) => {
+  const { app, page, editor } = await open(t, { dictionary: true })
+  await offline(app)
+  const text =
+    'Intro words here\n\nSee [docs](https://old.example) and more words.\n\n| name |\n| --- |\n| [cats](https://cell.example) and dogs |\n'
+  const menu = page.getByRole('menu', { name: 'Editor actions', exact: true })
+  const selection = () =>
+    editor.evaluate((element) => {
+      const { from, to } = element.cmTile.root.view.state.selection.main
+      return [from, to]
+    })
+  // A Control+click is the secondary click: Shift does not make it extend
+  // the selection from the caret, follow a link or edit a cell.
+  const press = async (target, modifiers) => {
+    await place(editor, 0, text)
+    await settle(page)
+    const point =
+      typeof target === 'string'
+        ? await editor.evaluate((element, word) => {
+            // The word's first character, in a line or a table cell.
+            const walker = document.createTreeWalker(
+              element,
+              NodeFilter.SHOW_TEXT,
+            )
+            let node = walker.nextNode()
+            while (node && !node.data.includes(word)) node = walker.nextNode()
+            const range = document.createRange()
+            const at = node.data.indexOf(word)
+            range.setStart(node, at)
+            range.setEnd(node, at + 1)
+            const box = range.getBoundingClientRect()
+            return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+          }, target)
+        : await target.boundingBox().then((box) => ({
+            x: box.x + box.width / 2,
+            y: box.y + box.height / 2,
+          }))
+    for (const key of modifiers) await page.keyboard.down(key)
+    await page.mouse.click(point.x, point.y)
+    for (const key of modifiers) await page.keyboard.up(key)
+    await menu
+      .getByRole('menuitem', { name: 'Define word', exact: true })
+      .waitFor()
+    await settle(page)
+    const result = {
+      selection: await selection(),
+      items: await groupedItems(menu),
+      cellEditors: await page.locator('.hibi-lp-cell-editor').count(),
+    }
+    await page.keyboard.press('Escape')
+    await menu.waitFor({ state: 'hidden' })
+    return result
+  }
+  for (const target of [
+    'more words',
+    page.getByRole('link', { name: 'docs', exact: true }),
+    'dogs',
+    page.getByRole('link', { name: 'cats', exact: true }),
+  ]) {
+    const control = await press(target, ['Control'])
+    const shift = await press(target, ['Control', 'Shift'])
+    assert.deepEqual(shift, control, String(target))
+    assert.equal(shift.selection[0], shift.selection[1], String(target))
+    assert.equal(shift.cellEditors, 0, String(target))
+  }
+  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [])
+})
+
 test('codemirror read-only link actions open and copy but refuse edits', {
   timeout: 60000,
 }, async (t) => {

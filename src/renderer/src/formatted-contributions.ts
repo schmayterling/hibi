@@ -250,18 +250,24 @@ export const formattedLinkAttributes = (
   role: 'link',
 })
 
-/** A press that opens the context menu: a right press, or a Control+click on macOS. */
+/**
+ * A press that opens the context menu: a right press, or a Control+click on
+ * macOS, which is the secondary click there with Shift held too.
+ */
 export const opensContextMenu = (event: MouseEvent) =>
   event.button === 2 ||
   (event.button === 0 &&
     event.ctrlKey &&
     !event.metaKey &&
-    !event.shiftKey &&
     /Mac/.test(navigator.platform))
 
-/** A click that follows the link under it: Shift-click, or Ctrl+Cmd-click as in the rich view. */
+/**
+ * A click that follows the link under it: Shift-click, or Ctrl+Cmd-click as
+ * in the rich view; a press that opens the context menu never does.
+ */
 export const followsLink = (event: MouseEvent) =>
-  event.shiftKey || (event.ctrlKey && event.metaKey)
+  !opensContextMenu(event) &&
+  (event.shiftKey || (event.ctrlKey && event.metaKey))
 
 /**
  * Follow the link at a position of the formatted view's document, as a

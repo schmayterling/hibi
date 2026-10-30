@@ -45,11 +45,12 @@ const fixtures = [
   ['text $$$$ more', 0, 1],
   ['> text $$x\n> +y$$ more', 0, 1],
   ['- text $$x\n  +y$$ more', 0, 1],
-  ['text \\$$x\n+y$$ more', 0],
+  // As in Obsidian, an escaped dollar leaves `$x$` before the last one.
+  ['text \\$$x\n+y$$ more', 0, 1],
   ['$5 and $$10', 0],
   ['\\$$', 0],
-  ['\\$$x$$', 0],
-  ['text \\$$x$$ more', 0],
+  ['\\$$x$$', 0, 1],
+  ['text \\$$x$$ more', 0, 1],
   ['`$$x$$`', 0],
   ['```tex\n$$x$$\n```', 0],
 ]
@@ -71,11 +72,10 @@ test('display math blocks start only at line boundaries in visual and source tok
         if (token.type === 'inlineMath') display++
       })
       assert.equal(blocks, expected, source)
-      // `$$…$$` inside a line is display math there, as Obsidian draws it,
-      // except in the rich editor, which reads it as text.
-      assert.equal(display, parser === visual ? 0 : inline, source)
+      // `$$…$$` inside a line is display math there, as Obsidian draws it.
+      assert.equal(display, inline, source)
       assert.equal(tokens.map(({ raw }) => raw).join(''), source, source)
-      assert.equal(mathFlavor.detect(source), expected > 0, source)
+      assert.equal(mathFlavor.detect(source), expected + inline > 0, source)
     }
   }
 })
@@ -117,15 +117,15 @@ test('literal double dollars stay literal after rich serialization and export', 
   // The source the rich editor saved for each note with the GitHub and math
   // flavors, in full and block-local serialization.
   for (const [source, saved] of Object.entries({
-    'before \\$$x$$ after': [
+    'before \\$\\$x\\$\\$ after': [
       'before \\$\\$x\\$\\$ after',
       'before \\$\\$x\\$\\$ after',
     ],
-    '| \\$$x$$ |\n| --- |': [
+    '| \\$\\$x\\$\\$ |\n| --- |': [
       '\n| \\$\\$x\\$\\$ |\n| --------- |\n',
       '\n| \\$\\$x\\$\\$ |\n| --------- |\n',
     ],
-    'before \\$$x\n+y$$ after': [
+    'before \\$\\$x\n+y\\$\\$ after': [
       'before \\$\\$x +y\\$\\$ after',
       'before \\$\\$x +y\\$\\$ after',
     ],
@@ -137,9 +137,9 @@ test('literal double dollars stay literal after rich serialization and export', 
       'before \\$\\$\\$\\$ after',
       'before \\$\\$\\$\\$ after',
     ],
-    'before \\$$ x $y$$ after': [
-      'before \\$\\$ x \\$y\\$\\$ after',
-      'before \\$\\$ x \\$y\\$\\$ after',
+    'before \\$\\$ x $y\\$\\$ after': [
+      'before $$ x $y\\$\\$ after',
+      'before $$ x $y\\$\\$ after',
     ],
   }))
     for (const text of saved) {

@@ -12,7 +12,11 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { frozenOracle, frozenSnapshot } from './frozen-oracle.mjs'
+import {
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -265,7 +269,8 @@ async function handles(targets) {
 
 test('the formatted view’s handle keeps the rich view’s colors and its recorded place and drawing, in light and dark', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('note.md')
   await page.locator('.rich-pane .hibi-lp-h1').waitFor()
   const blocks = {
@@ -282,7 +287,7 @@ test('the formatted view’s handle keeps the rich view’s colors and its recor
       const handle = formatted[index]
       const rich = richHandle({ scheme, block })
       // Beside the block's first line, within a pixel of where it was recorded.
-      check(`${block} place`, handle.box, { perPlatform: true, tolerance: 1 })
+      check(`${block} place`, handle.box, { tolerance: 1 })
       assert.equal(handle.color, rich.color, block)
       assert.equal(handle.background, rich.background, block)
       assert.deepEqual(handle.hovered, rich.hovered, block)
@@ -291,7 +296,6 @@ test('the formatted view’s handle keeps the rich view’s colors and its recor
       check(`${block} drawn`, handle.drawn.shape)
       check(`${block} ${scheme} paint`, handle.drawn.paint)
       check(`${block} parts`, handle.drawn.boxes, {
-        perPlatform: true,
         tolerance: 1,
       })
     }

@@ -12,7 +12,7 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { frozenSnapshot } from './frozen-oracle.mjs'
+import { frozenSnapshot, overlayScrollbars } from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -209,7 +209,8 @@ async function capture() {
 
 test('formulas keep the rich view’s recorded boxes and drawing, in light and dark', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Math parity' })
@@ -246,12 +247,10 @@ test('formulas keep the rich view’s recorded boxes and drawing, in light and d
     )
     const formatted = await capture()
     check(`parity ${scheme} formulas`, formatted.boxes, {
-      perPlatform: true,
       tolerance: 1,
     })
     check(`parity ${scheme} drawn`, formatted.drawn)
     check(`parity ${scheme} boxes`, formatted.lines, {
-      perPlatform: true,
       tolerance: 1,
     })
   }

@@ -16,7 +16,7 @@ import {
   waitForFormattedEditor,
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
-import { frozenSnapshot } from './frozen-oracle.mjs'
+import { defaultPane, frozenSnapshot } from './frozen-oracle.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -310,13 +310,9 @@ const drawn = (target) =>
 test('tables in the formatted view keep the rich view’s recorded cells, text and styles in light and dark', {
   timeout: 60000,
 }, async () => {
-  const pane = await page.locator('.rich-pane').evaluate((element) => {
-    const box = element.getBoundingClientRect()
-    return { width: box.width, height: box.height }
-  })
   await harness.evaluate(({ doc, pane }) => window.tables.mount(doc, pane), {
     doc: note,
-    pane,
+    pane: defaultPane,
   })
   for (const id of ['hibi-light', 'hibi-dark']) {
     await applyPalette(harness, palette(id))
@@ -338,7 +334,7 @@ test('tables in the formatted view keep the rich view’s recorded cells, text a
         check(
           `${id} ${fraction} ${table.header} boxes`,
           { at, cells: rows.map((row) => row.map(({ box }) => box)) },
-          { perPlatform: true, tolerance: 1 },
+          { tolerance: 1 },
         )
         compared.add(table.header)
       }
@@ -349,7 +345,7 @@ test('tables in the formatted view keep the rich view’s recorded cells, text a
     await scroll(harness, 0)
     const { blocks, boxes } = await drawn(harness)
     check(`${id} blocks`, blocks)
-    check(`${id} block boxes`, boxes, { perPlatform: true, tolerance: 1 })
+    check(`${id} block boxes`, boxes, { tolerance: 1 })
   }
 })
 

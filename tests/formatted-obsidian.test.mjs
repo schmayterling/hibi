@@ -12,7 +12,11 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { frozenOracle, frozenSnapshot } from './frozen-oracle.mjs'
+import {
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -281,7 +285,8 @@ const drawing = () =>
 
 test('wikilinks, embeds and highlights keep the rich view’s styles and their recorded drawing in light and dark', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Wiki parity' })
@@ -305,7 +310,7 @@ test('wikilinks, embeds and highlights keep the rich view’s styles and their r
     const drawn = await drawing()
     check('drawn', drawn.drawn)
     check(`${scheme} paint`, drawn.paint)
-    check('boxes', drawn.boxes, { perPlatform: true, tolerance: 1 })
+    check('boxes', drawn.boxes, { tolerance: 1 })
   }
   // Six wikilinks, three highlights, an image embed and a note embed, as in the rich view.
   const rich = richStyles({ scheme: 'hibi-light' })

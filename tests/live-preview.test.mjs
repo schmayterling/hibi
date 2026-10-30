@@ -8,7 +8,12 @@ import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
-import { frozenOracle, frozenSnapshot } from './frozen-oracle.mjs'
+import {
+  defaultPane,
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const note = `# Formatted view parity
@@ -458,16 +463,9 @@ const drawing = (target, title) =>
  * formatted view recorded while it matched the rich view within a pixel.
  */
 async function parity(title, doc, formatted, name) {
-  const richPane = page.locator('.rich-pane', {
-    has: page.locator('.hibi-lp-h1', { hasText: title }),
-  })
-  const pane = await richPane.evaluate((element) => {
-    const box = element.getBoundingClientRect()
-    return { width: box.width, height: box.height }
-  })
   await harness.evaluate(
     ({ doc, pane }) => window.livePreview.mount(doc, pane),
-    { doc, pane },
+    { doc, pane: defaultPane },
   )
   // The panes scroll alike: where scrollbars take space, as on Linux and
   // Windows, the app's thin scrollbar is in both.
@@ -500,7 +498,6 @@ async function parity(title, doc, formatted, name) {
       return { pane: pane.clientHeight, note: note.height }
     }, title)
     check(`${name} note`, tall.note <= tall.pane ? tall.note : 'scrolls', {
-      perPlatform: true,
       tolerance: 1,
     })
     const after = await sample(harness, formatted, title)
@@ -521,23 +518,25 @@ async function parity(title, doc, formatted, name) {
       text[key] = b.box
     }
     // Full phrase bounds, within a pixel of where they were recorded.
-    check(`${name} text`, text, { perPlatform: true, tolerance: 1 })
+    check(`${name} text`, text, { tolerance: 1 })
     const drawn = await drawing(harness, title)
     check(`${name} drawn`, drawn.drawn)
     check(`${name} ${id} paint`, drawn.paint)
-    check(`${name} boxes`, drawn.boxes, { perPlatform: true, tolerance: 1 })
+    check(`${name} boxes`, drawn.boxes, { tolerance: 1 })
   }
 }
 
 test('the formatted view keeps the rich view’s styles and its recorded drawing in light and dark', {
   timeout: 60000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page, harness)
   await parity('Formatted view parity', note, formatted, 'parity')
 })
 
 test('blocks inside quotes and lists keep the rich view’s styles and their recorded drawing in light and dark', {
   timeout: 60000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page, harness)
   await open(join(folder, 'notes', 'nested.md'), 'Nested blocks')
   await parity(
     'Nested blocks',
@@ -572,7 +571,8 @@ test('blocks inside quotes and lists keep the rich view’s styles and their rec
 
 test('list markers alone on their lines keep the item text beside them, in their recorded drawing', {
   timeout: 60000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page, harness)
   await open(join(folder, 'notes', 'markers.md'), 'Marker lines')
   await parity(
     'Marker lines',
@@ -603,7 +603,8 @@ test('list markers alone on their lines keep the item text beside them, in their
 
 test('notes end at their recorded heights, so a pane scrolls only for a taller note', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, harness)
   // Zero, one and several final line breaks, and last blocks that paint or are replaced.
   const endings = {
     paragraph: 'tail',
@@ -660,11 +661,7 @@ test('notes end at their recorded heights, so a pane scrolls only for a taller n
     const { note, block } = await measure(harness, title)
     // As tall as the rich view's note, within a pixel when recorded; space
     // after the last block lies outside it, as a quote's bar shows.
-    check(
-      `ending ${name}`,
-      { note, block },
-      { perPlatform: true, tolerance: 1 },
-    )
+    check(`ending ${name}`, { note, block }, { tolerance: 1 })
     // Panes a little shorter than the note scroll; a little taller do not.
     const scrolling = []
     for (const height of [Math.floor(note) - 2, Math.ceil(note) + 2]) {

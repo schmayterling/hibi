@@ -12,7 +12,7 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { frozenSnapshot } from './frozen-oracle.mjs'
+import { frozenSnapshot, overlayScrollbars } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT } from './poll.mjs'
 
@@ -262,7 +262,8 @@ test('diagrams and typst blocks keep their recorded boxes and drawing in light a
   // ponytail: the opening caret can still scroll this long note to its end
   // once its diagrams draw; drop this when the open-at-top fix lands.
   todo: 'a note can open scrolled to its caret until the open-at-top fix lands',
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Diagrams and Typst' })
@@ -274,10 +275,10 @@ test('diagrams and typst blocks keep their recorded boxes and drawing in light a
     const formatted = await capture()
     assert.equal(formatted.top, 0, 'the note opens at its top')
     // Where the blocks sit, within a pixel of the rich view's when recorded.
-    check('blocks', formatted.blocks, { perPlatform: true, tolerance: 1 })
+    check('blocks', formatted.blocks, { tolerance: 1 })
     check('drawn', formatted.drawn)
     check(`${scheme} paint`, formatted.paint)
-    check('boxes', formatted.boxes, { perPlatform: true, tolerance: 1 })
+    check('boxes', formatted.boxes, { tolerance: 1 })
   }
 })
 

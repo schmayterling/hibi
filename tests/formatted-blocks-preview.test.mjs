@@ -7,7 +7,12 @@ import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
-import { frozenOracle, frozenSnapshot } from './frozen-oracle.mjs'
+import {
+  defaultPane,
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const image =
@@ -323,17 +328,11 @@ const formatted = {
 
 test('tasks, entities, alerts, html blocks and images keep the rich view’s styles and their recorded drawing in light and dark', {
   timeout: 90000,
-}, async () => {
-  const richPane = page.locator('.rich-pane', {
-    has: page.locator('.hibi-lp-h1', { hasText: 'Blocks parity' }),
-  })
-  const pane = await richPane.evaluate((element) => {
-    const box = element.getBoundingClientRect()
-    return { width: box.width, height: box.height }
-  })
+}, async (t) => {
+  await overlayScrollbars(t, harness)
   await harness.evaluate(
     ({ doc, pane }) => window.livePreview.mount(doc, pane),
-    { doc: note, pane },
+    { doc: note, pane: defaultPane },
   )
   await harness.locator('.document-media img[src]').waitFor()
   for (const id of ['hibi-light', 'hibi-dark']) {
@@ -361,11 +360,11 @@ test('tasks, entities, alerts, html blocks and images keep the rich view’s sty
       starts[key] = { left: b.box.left, top: b.box.top }
     }
     // Where each block's text starts, within a pixel of where it was recorded.
-    check('starts', starts, { perPlatform: true, tolerance: 1 })
+    check('starts', starts, { tolerance: 1 })
     const drawn = await drawing(harness)
     check('drawn', drawn.drawn)
     check(`${id} paint`, drawn.paint)
-    check('boxes', drawn.boxes, { perPlatform: true, tolerance: 1 })
+    check('boxes', drawn.boxes, { tolerance: 1 })
   }
 })
 

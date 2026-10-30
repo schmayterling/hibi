@@ -13,7 +13,7 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { frozenSnapshot } from './frozen-oracle.mjs'
+import { frozenSnapshot, overlayScrollbars } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
@@ -246,7 +246,8 @@ after(
 
 test('tags render in the formatted view with the rich view’s recorded styles and sizes, in light and dark', {
   timeout: 180000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page)
   const expected = noteTags(parityNote)
   await open('parity.md')
   await page.waitForFunction(
@@ -281,8 +282,12 @@ test('tags render in the formatted view with the rich view’s recorded styles a
     )
     check(
       `parity ${scheme} sizes`,
-      formatted.map(({ width, height }) => ({ width, height })),
-      { perPlatform: true, tolerance: 0.5 },
+      // Hibi's fonts have no CJK glyphs: each system's fallback font sets
+      // that tag's width, so only its height is compared.
+      formatted.map(({ tag, width, height }) =>
+        tag === '日本語' ? { height } : { width, height },
+      ),
+      { tolerance: 0.5 },
     )
   }
 

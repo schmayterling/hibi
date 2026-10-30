@@ -12,7 +12,11 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { frozenOracle, frozenSnapshot } from './frozen-oracle.mjs'
+import {
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -215,7 +219,8 @@ const capture = (selectors) =>
 
 test('subscripts and small text keep the rich view’s recorded styles and drawing, in light and dark', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Small parity' })
@@ -232,7 +237,6 @@ test('subscripts and small text keep the rich view’s recorded styles and drawi
     check(`parity ${scheme} styles`, formatted.styles)
     check(`parity ${scheme} drawn`, formatted.drawn)
     check(`parity ${scheme} boxes`, formatted.boxes, {
-      perPlatform: true,
       tolerance: 1,
     })
   }

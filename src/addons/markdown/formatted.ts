@@ -7,9 +7,11 @@ import {
   StateEffect,
   StateField,
   type Text,
+  Transaction,
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
+import { documentRuntime } from '../../renderer/src/document-runtime.ts'
 import {
   type FormattedContribution,
   formattedDocument,
@@ -27,12 +29,16 @@ export { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
 type Fold = { fold: string; expanded: boolean }
 const setFold = StateEffect.define<Fold & { from: number }>()
 
-function mapFolds(at: ReadonlyMap<number, Fold>, changes: ChangeDesc) {
+function mapFolds(
+  at: ReadonlyMap<number, Fold>,
+  changes: ChangeDesc,
+  keep = (_from: number, _pos: number) => true,
+) {
   const mapped = new Map<number, Fold>()
   for (const [from, fold] of at) {
     // A callout whose first character goes takes its state with it.
     const pos = changes.mapPos(from, 1, MapMode.TrackAfter)
-    if (pos !== null) mapped.set(pos, fold)
+    if (pos !== null && keep(from, pos)) mapped.set(pos, fold)
   }
   return mapped
 }
@@ -55,12 +61,16 @@ function textChange(a: string, b: string) {
 }
 
 /**
- * Fold states of each tab's last formatted view, for the session. Its next
- * view, after a tab switch or a reload of its file, starts with them,
- * mapped through the text that changed meanwhile.
+ * Fold states of each open tab's last formatted view, for the session. Its
+ * next view, after a tab switch or a reload of its file, starts with them,
+ * mapped through the text that changed meanwhile. A closed tab's entry goes
+ * with it.
  */
-// ponytail: a closed tab's entry keeps its text until the window reloads; drop entries on tab close if large notes make that matter.
 const kept = new Map<string, { doc: Text; at: ReadonlyMap<number, Fold> }>()
+documentRuntime.subscribeCatalog(() => {
+  for (const tabId of kept.keys())
+    if (!documentRuntime.session(tabId)) kept.delete(tabId)
+})
 
 /**
  * Fold states set by the reader, by callout start. Renderers read `key`,
@@ -75,9 +85,17 @@ const folds = StateField.define<{
     const { tabId } = state.facet(formattedDocument)
     const saved = tabId === null ? undefined : kept.get(tabId)
     if (!saved) return { at: new Map(), key: {} }
-    // The text can have changed meanwhile, as when a clean tab reloads its file.
+    if (saved.doc.eq(state.doc)) return { at: saved.at, key: {} }
+    // The text can have changed meanwhile, as when a clean tab reloads its
+    // file. A state stays with a title that still reads the same, not with
+    // the next callout when the change moved it into this one's place.
     const change = textChange(saved.doc.toString(), state.doc.toString())
-    return { at: mapFolds(saved.at, change), key: {} }
+    const at = mapFolds(
+      saved.at,
+      change,
+      (from, pos) => state.doc.lineAt(pos).text === saved.doc.lineAt(from).text,
+    )
+    return { at, key: {} }
   },
   update(value, transaction) {
     let { at, key } = value
@@ -96,7 +114,8 @@ const folds = StateField.define<{
       destroy() {
         const { tabId } = view.state.facet(formattedDocument)
         const at = view.state.field(field, false)?.at
-        if (tabId === null || !at) return
+        // A closing tab's view goes after its document; nothing to keep for.
+        if (tabId === null || !at || !documentRuntime.session(tabId)) return
         if (at.size) kept.set(tabId, { doc: view.state.doc, at })
         else kept.delete(tabId)
       },

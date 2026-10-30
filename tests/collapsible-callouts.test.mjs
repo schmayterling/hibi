@@ -8,7 +8,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines,
 } from './formatted-engine.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 // Preserve casing, spacing, CRLF, and trailing whitespace across view-only folds.
 const note = [
@@ -566,4 +566,116 @@ test('codemirror: arrows step over a folded body, and Backspace or Delete beside
     async (markdown) => (await window.hibi.getDocument()).markdown !== markdown,
     markdown,
   )
+})
+
+test('codemirror: a disk edit that drops the open callout leaves the next one folded', {
+  timeout: 120000,
+}, async (t) => {
+  const markdown = [
+    '> [!note]- First',
+    '> first body',
+    '',
+    '> [!note]- Second',
+    '> second body',
+    '',
+    'After paragraph.',
+    '',
+  ].join('\n')
+  const { app, page, pane, file } = await openNote(t, 'codemirror', markdown)
+  const first = pane.getByRole('button', { name: /callout: First$/ })
+  const second = pane.getByRole('button', { name: /callout: Second$/ })
+  await first.click()
+  await pane.getByText('first body', { exact: true }).waitFor()
+  const other = join(file, '..', 'other.md')
+  await writeFile(other, '# Other\n\nOther note.\n')
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, other)
+  await pressShortcut(app, `${mod}+o`)
+  await pane.getByText('Other note.', { exact: true }).waitFor()
+  // The first callout goes on disk, so the second starts where it started;
+  // the first's state does not become the second's.
+  await writeFile(
+    file,
+    markdown.replace('> [!note]- First\n> first body\n\n', ''),
+  )
+  await page.getByRole('tab', { name: /folds/ }).first().click()
+  await pane.getByText('After paragraph.', { exact: true }).waitFor()
+  await second.waitFor()
+  assert.equal(await first.count(), 0)
+  assert.equal(await second.getAttribute('aria-expanded'), 'false')
+  assert.equal(await pane.getByText('second body', { exact: true }).count(), 0)
+})
+
+test('codemirror: a closed tab releases its remembered folds and text', {
+  timeout: 240000,
+}, async (t) => {
+  const size = 8 * 1024 * 1024
+  const line = 'a line of a large note with folds, closed again 0123456789\n\n'
+  const { app, page, pane, file } = await openNote(
+    t,
+    'codemirror',
+    'Small note.\n\nAfter paragraph.\n',
+  )
+  const large = join(file, '..', 'large.md')
+  await writeFile(
+    large,
+    `> [!note]- Folded title\n> hidden body.\n\n${line.repeat(Math.ceil(size / line.length))}`,
+  )
+  const cdp = await page.context().newCDPSession(page)
+  const heap = async () => {
+    for (let pass = 0; pass < 3; pass++)
+      await cdp.send('HeapProfiler.collectGarbage')
+    return (await cdp.send('Runtime.getHeapUsage')).usedSize
+  }
+  const toggle = pane.getByRole('button', { name: /callout: Folded title$/ })
+  const small = async () => {
+    await page.getByRole('tab', { name: /folds/ }).first().click()
+    await pane.getByText('After paragraph.', { exact: true }).waitFor()
+  }
+  /** Opens the large note, unfolds its callout and goes back to the small one. */
+  const remember = async () => {
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, large)
+    await pressShortcut(app, `${mod}+o`)
+    await toggle.waitFor({ timeout: 120000 })
+    await toggle.click()
+    await pane.getByText('hidden body.', { exact: true }).waitFor()
+    await small()
+    return heap()
+  }
+  const closed = async (count) => {
+    await waitForAsync(
+      page,
+      (expected) =>
+        document.querySelectorAll('[role="tab"]').length === expected,
+      count - 1,
+    )
+    await pane.getByText('After paragraph.', { exact: true }).waitFor()
+    return heap()
+  }
+  const released = (kept, after, how) =>
+    assert.ok(
+      kept - after > size / 2,
+      `closing the ${size / 1048576} MiB note ${how} released ${((kept - after) / 1048576).toFixed(1)} MiB`,
+    )
+  const before = await heap()
+  // With the large note's view gone, its text stays with its folds.
+  const kept = await remember()
+  assert.ok(kept - before > size, 'the remembered text is in memory')
+  let count = await page.getByRole('tab').count()
+  await page.getByRole('button', { name: /^Close large/ }).click()
+  released(kept, await closed(count), 'from the background')
+  // Closing the tab while its view shows, after its folds came back.
+  const again = await remember()
+  await page.getByRole('tab', { name: /large/ }).first().click()
+  await toggle.waitFor({ timeout: 120000 })
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true')
+  count = await page.getByRole('tab').count()
+  await clickMenu(app, 'Close tab')
+  released(again, await closed(count), 'while shown')
 })

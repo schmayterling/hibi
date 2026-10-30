@@ -250,7 +250,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
         ({ app }, file) => app.emit('open-file', { preventDefault() {} }, file),
         join(workspace, 'missing-external.md'),
       )
-      await page.getByText(/missing-external\.md:/).waitFor()
+      await page.getByText(/Could not find missing-external\.md\./).waitFor()
       await retained()
       const cdp = await page.context().newCDPSession(page)
       async function drop(file) {

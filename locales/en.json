@@ -1973,7 +1973,6 @@
   "bd0d4d522e2d": "The staged file changed. Review it before updating.",
   "4dfa22469b2f": "The stylesheet {style} is missing from the addon.",
   "09aae7464226": "The table layout is invalid.",
-  "69dd525bd911": "The test directory redirected.",
   "bee50784d023": "The text at the edit range has changed.",
   "bfffe147f4f5": "The text request exceeds the 2 MiB message limit.",
   "6aa88449912f": "The theme file {entry} has an invalid color scheme. {value2}",

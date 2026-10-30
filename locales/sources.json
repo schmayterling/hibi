@@ -6218,9 +6218,6 @@
   "09aae7464226": [
     "src/main/workspace-layout.ts"
   ],
-  "69dd525bd911": [
-    "src/main/addon-directory.ts"
-  ],
   "bee50784d023": [
     "src/shared/document-edits.ts"
   ],

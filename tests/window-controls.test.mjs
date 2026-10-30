@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
 import {
   mkdir,
   mkdtemp,
@@ -10,8 +11,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 async function appearance(app, page) {
   await clickMenu(app, 'Settings')
@@ -26,6 +27,17 @@ const padding = (page) =>
   page
     .locator('.titlebar')
     .evaluate((bar) => getComputedStyle(bar).paddingRight)
+
+const restartPrompt = (page) =>
+  page.getByRole('dialog', { name: 'Restart Hibi?', exact: true })
+async function restartLater(page) {
+  const prompt = restartPrompt(page)
+  await prompt.getByRole('button', { name: 'Later', exact: true }).click()
+  await prompt.waitFor({ state: 'hidden' })
+  await page.waitForFunction(
+    () => document.activeElement?.id === 'hide-window-controls',
+  )
+}
 
 test('window controls setting is available only on Linux', async (t) => {
   const profile = await mkdtemp(
@@ -109,11 +121,9 @@ test('Linux window controls persist and apply to main and addon windows after re
 
   let page = await launch()
   let toggle = await appearance(app, page)
-  const notice = () =>
-    page.getByRole('status').filter({ hasText: 'Saved. Quit and reopen Hibi' })
   await toggle.waitFor({ state: 'visible' })
   assert.equal(await toggle.isChecked(), false)
-  assert.equal(await notice().count(), 0)
+  assert.equal(await restartPrompt(page).count(), 0)
   assert.equal(await padding(page), '140px')
   await toggle.check()
   await page.waitForFunction(
@@ -123,14 +133,20 @@ test('Linux window controls persist and apply to main and addon windows after re
     JSON.parse(await readFile(join(profile, 'window-controls.json'), 'utf8')),
     { hidden: true },
   )
-  await notice().waitFor()
+  await restartPrompt(page).waitFor()
+  await restartLater(page)
+  assert.equal(
+    await toggle.evaluate((control) => control === document.activeElement),
+    true,
+  )
   await toggle.uncheck()
   await page.waitForFunction(
     () => !document.querySelector('#hide-window-controls').disabled,
   )
-  await notice().waitFor({ state: 'hidden' })
+  assert.equal(await restartPrompt(page).count(), 0)
   await toggle.check()
-  await notice().waitFor()
+  await restartPrompt(page).press('Escape')
+  await restartPrompt(page).waitFor({ state: 'hidden' })
   assert.equal(
     (await page.evaluate(() => window.hibi.getAppInfo())).windowControlsHidden,
     false,
@@ -146,7 +162,7 @@ test('Linux window controls persist and apply to main and addon windows after re
   await page.waitForFunction(
     () => document.querySelector('#hide-window-controls')?.checked,
   )
-  assert.equal(await notice().count(), 0)
+  assert.equal(await restartPrompt(page).count(), 0)
   assert.equal(
     (await page.evaluate(() => window.hibi.getAppInfo())).windowControlsHidden,
     true,
@@ -170,7 +186,7 @@ test('Linux window controls persist and apply to main and addon windows after re
     JSON.parse(await readFile(join(profile, 'window-controls.json'), 'utf8')),
     { hidden: false },
   )
-  await notice().waitFor()
+  await restartLater(page)
   assert.equal(await padding(page), '8px')
   await app.close()
   app = null
@@ -178,9 +194,122 @@ test('Linux window controls persist and apply to main and addon windows after re
   page = await launch()
   toggle = await appearance(app, page)
   assert.equal(await toggle.isChecked(), false)
-  assert.equal(await notice().count(), 0)
+  assert.equal(await restartPrompt(page).count(), 0)
   assert.equal(await padding(page), '140px')
   await addon(page, false)
+})
+
+test('cancelling unsaved-work confirmation cancels the requested restart', {
+  skip: process.platform !== 'linux',
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(
+    join(tmpdir(), 'hibi-window-controls-restart-cancel-'),
+  )
+  const marker = join(profile, 'relaunch.txt')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  let closed = false
+  t.after(async () => {
+    if (!closed) {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+    }
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await replaceRichText(
+    page,
+    page.getByRole('textbox', { name: 'Document editor', exact: true }),
+    'Keep this unsaved draft.',
+  )
+  await app.evaluate(({ app, dialog }, marker) => {
+    globalThis.restartSavePrompts = 0
+    dialog.showMessageBox = async () => {
+      globalThis.restartSavePrompts++
+      return { response: 2 }
+    }
+    app.relaunch = () =>
+      process.getBuiltinModule('fs').writeFileSync(marker, 'relaunch')
+  }, marker)
+  const toggle = await appearance(app, page)
+  await toggle.check()
+  await restartPrompt(page)
+    .getByRole('button', { name: 'Restart Hibi', exact: true })
+    .click()
+  await waitForAsync(app, () => globalThis.restartSavePrompts === 1)
+  assert.equal(page.isClosed(), false)
+  assert.match(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    /Keep this unsaved draft\./,
+  )
+  assert.equal(
+    await page.evaluate(() => window.hibi.getHideWindowControls()),
+    true,
+  )
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  await app.close()
+  closed = true
+  assert.equal(await readFile(marker, 'utf8').catch(() => null), null)
+})
+
+test('confirming restart saves unsaved work before requesting relaunch', {
+  skip: process.platform !== 'linux',
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(
+    join(tmpdir(), 'hibi-window-controls-restart-save-'),
+  )
+  const marker = join(profile, 'relaunch.txt')
+  const note = join(profile, 'saved-note.md')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    if (app.process().exitCode === null) {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+    }
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await replaceRichText(
+    page,
+    page.getByRole('textbox', { name: 'Document editor', exact: true }),
+    'Save this draft before restarting.',
+  )
+  await app.evaluate(
+    ({ app, dialog }, { marker, note }) => {
+      dialog.showMessageBox = async () => ({ response: 0 })
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: note })
+      app.relaunch = () => {
+        const fs = process.getBuiltinModule('fs')
+        fs.writeFileSync(marker, fs.readFileSync(note))
+      }
+    },
+    { marker, note },
+  )
+  const toggle = await appearance(app, page)
+  await toggle.check()
+  const exited = once(app.process(), 'exit')
+  await restartPrompt(page)
+    .getByRole('button', { name: 'Restart Hibi', exact: true })
+    .click()
+  const [code, signal] = await exited
+  assert.equal(code, 0)
+  assert.equal(signal, null)
+  const saved = await readFile(note, 'utf8')
+  assert.equal(saved.trim(), 'Save this draft before restarting.')
+  assert.equal(await readFile(marker, 'utf8'), saved)
 })
 
 for (const [name, contents, initial] of [
@@ -244,6 +373,7 @@ for (const [name, contents, initial] of [
       assert.equal(await readFile(location, 'utf8'), contents)
     }
     await toggle.setChecked(!initial)
+    await restartLater(page)
     await page.waitForFunction(
       () => !document.querySelector('#hide-window-controls').disabled,
     )

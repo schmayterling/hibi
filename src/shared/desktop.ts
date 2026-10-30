@@ -111,6 +111,7 @@ export type AppInfo = {
 export type DesktopApi = {
   getHideWindowControls: () => Promise<boolean>
   setHideWindowControls: (hidden: boolean) => Promise<void>
+  restartForWindowControls: () => Promise<void>
   getBackgroundMode: () => Promise<boolean>
   setBackgroundMode: (enabled: boolean) => Promise<boolean>
   onOpenSettings: (callback: () => void) => () => void

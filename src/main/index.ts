@@ -546,6 +546,7 @@ let fileOperation: Promise<unknown> | null = null
 const pendingFileOperations = new Set<Promise<void>>()
 let closing = false
 let quitting = false
+let windowControlsRestartRequested = false
 let recordingHotkey = false
 const globalShortcuts = new GlobalShortcuts(globalShortcut)
 const addonHotkeys = new AddonHotkeys(
@@ -652,6 +653,9 @@ app.on('before-quit', () => {
   quitting = true
   // With no main window to confirm, kept-alive addon windows must not block quitting.
   if (!mainWindow) releaseAddonWindows()
+})
+app.once('quit', () => {
+  if (windowControlsRestartRequested) app.relaunch()
 })
 let devRestartRequested = false
 function cancelDevRestart() {
@@ -1171,7 +1175,10 @@ function createWindow(): void {
       .finally(() => {
         confirmingClose = false
         if (!allowClose) closing = false
-        if (!quitting) cancelDevRestart()
+        if (!quitting) {
+          windowControlsRestartRequested = false
+          cancelDevRestart()
+        }
       })
   })
   window.once('ready-to-show', () => {
@@ -1713,6 +1720,16 @@ if (!app.requestSingleInstanceLock()) {
       handle(WINDOW_CONTROLS_CHANNELS.set, (_event, value: unknown) =>
         saveHideWindowControls(value),
       )
+      handle(WINDOW_CONTROLS_CHANNELS.restart, () => {
+        if (
+          process.platform !== 'linux' ||
+          getHideWindowControls() === windowControlsHidden()
+        )
+          return
+        if (closing || quitting) throw fileOperationUnavailable()
+        windowControlsRestartRequested = true
+        app.quit()
+      })
       handle(ABOUT_CHANNELS.licenses, (event) => {
         trustedWindow(event)
         return listLicenses()

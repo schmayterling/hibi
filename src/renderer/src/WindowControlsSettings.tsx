@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import { SettingRow, Toggle } from '../../ui/Controls'
+import { useDialogs } from '../../ui/DialogProvider'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 
 export function WindowControlsSettings({
@@ -9,16 +10,16 @@ export function WindowControlsSettings({
   appliedHidden: boolean
 }) {
   const [hidden, setHidden] = useState<boolean | null>(null)
-  const [saved, setSaved] = useState<boolean | null>(null)
   const [changing, setChanging] = useState(false)
   const [error, setError] = useState('')
+  const dialogs = useDialogs()
+  const control = useRef<HTMLInputElement>(null)
   useEffect(() => {
     let active = true
     window.hibi.getHideWindowControls().then(
       (value) => {
         if (active) {
           setHidden(value)
-          setSaved(value)
         }
       },
       () => {
@@ -37,11 +38,23 @@ export function WindowControlsSettings({
     setHidden(value)
     setChanging(true)
     setError('')
+    let saved = false
     try {
       await window.hibi.setHideWindowControls(value)
-      setSaved(value)
+      saved = true
+      setChanging(false)
+      if (value !== appliedHidden) {
+        const restart = await dialogs.confirm({
+          title: 'Restart Hibi?',
+          description: 'Restart Hibi to apply your window controls preference.',
+          confirmLabel: 'Restart Hibi',
+          cancelLabel: 'Later',
+        })
+        if (restart) await window.hibi.restartForWindowControls()
+        else control.current?.focus()
+      }
     } catch (error) {
-      setHidden(previous)
+      if (!saved) setHidden(previous)
       setError(errorMessage(error))
     } finally {
       setChanging(false)
@@ -52,24 +65,10 @@ export function WindowControlsSettings({
       <SettingRow
         id="hide-window-controls"
         label="Hide window controls"
-        description={
-          <>
-            On Linux, hide the minimize, maximize, and close buttons. Restart
-            Hibi to apply.
-            {saved !== null && saved !== appliedHidden && (
-              <span
-                className="setting-description"
-                role="status"
-                aria-live="polite"
-              >
-                Saved. Quit and reopen Hibi to apply your window controls
-                preference.
-              </span>
-            )}
-          </>
-        }
+        description="On Linux, hide the minimize, maximize, and close buttons. Restart Hibi to apply."
       >
         <Toggle
+          ref={control}
           id="hide-window-controls"
           aria-describedby="hide-window-controls-description"
           checked={hidden ?? false}

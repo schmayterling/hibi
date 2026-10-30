@@ -3412,6 +3412,9 @@
   "e139c41b9472": [
     "src/addons/vim/engine.ts"
   ],
+  "73b6e48a1b55": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
   "184b93e3f146": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -4917,6 +4920,15 @@
   "243854b4d0c7": [
     "src/ui/Sidebar.tsx"
   ],
+  "75a99619eb2c": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
+  "47e44bb60ade": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
+  "4c2ad2b22b61": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
   "159713231bf6": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -5114,9 +5126,6 @@
   ],
   "fca046ccd586": [
     "src/addons/vim/engine.ts"
-  ],
-  "ac177194f6e6": [
-    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "096b73624b09": [
     "src/renderer/src/AutosaveSettings.tsx"

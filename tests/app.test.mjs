@@ -142,6 +142,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'setAppearance',
         'getHideWindowControls',
         'setHideWindowControls',
+        'restartForWindowControls',
         'getAddonStates',
         'setAddonEnabled',
         'readAddonStorage',

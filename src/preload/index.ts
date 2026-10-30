@@ -487,6 +487,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.get),
     setHideWindowControls: (hidden) =>
       ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.set, hidden),
+    restartForWindowControls: () =>
+      ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.restart),
     getAddonStates: () => ipcRenderer.invoke(ADDON_CHANNELS.states),
     setAddonEnabled: (id, enabled, includeRequired) =>
       ipcRenderer.invoke(ADDON_CHANNELS.enable, id, enabled, includeRequired),

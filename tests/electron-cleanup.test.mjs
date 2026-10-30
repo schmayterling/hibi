@@ -250,6 +250,32 @@ test('delayed ready-to-show does not reveal a real window during its close', {
   assert.deepEqual(calls, [])
 })
 
+test('tests cannot replace an IPC handler the app has not registered', {
+  timeout: 10000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-early-ipc-'))
+  const app = await electron.launch({
+    args: [process.cwd(), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await assert.rejects(
+    app.evaluate(({ ipcMain }) => ipcMain.removeHandler('hibi-test:missing')),
+    /hibi-test:missing has no handler to replace yet; replace IPC handlers after app\.firstWindow\(\)/,
+  )
+  await app.firstWindow()
+  assert.equal(
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('clipboard:write-text')
+      ipcMain.handle('clipboard:write-text', () => {})
+      return ipcMain._invokeHandlers.has('clipboard:write-text')
+    }),
+    true,
+  )
+})
+
 async function snapshotFixture(t, ps, lsof) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-shutdown-snapshot-'))
   const path = process.env.PATH

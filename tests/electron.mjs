@@ -133,6 +133,20 @@ export function installElectronDiagnostics({ dialog }) {
   }
 }
 
+// A replacement that beats the app's own registration makes that registration
+// throw, and with it startup ("Hibi could not start"). The app registers every
+// handler before its first window, so tests replace them after firstWindow().
+export function refuseEarlyIpcReplacements({ ipcMain }) {
+  const remove = ipcMain.removeHandler.bind(ipcMain)
+  ipcMain.removeHandler = (channel) => {
+    if (!ipcMain._invokeHandlers.has(channel))
+      throw new Error(
+        `${channel} has no handler to replace yet; replace IPC handlers after app.firstWindow()`,
+      )
+    remove(channel)
+  }
+}
+
 export function showElectronTestWindows({ app, BrowserWindow }) {
   const closing = new WeakSet()
   const revealed = new WeakSet()
@@ -443,6 +457,7 @@ export const electron = {
       application.context().on('page', report)
       for (const page of application.windows()) report(page)
       await application.evaluate(installElectronDiagnostics)
+      await application.evaluate(refuseEarlyIpcReplacements)
       await application.evaluate(({ app }) =>
         app.once('quit', () => console.error('electron-main-quit')),
       )

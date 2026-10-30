@@ -898,13 +898,41 @@ async function serveAssetResponse(request: Request): Promise<Response> {
   }
 }
 
-function showStartupError(
+// Diagnostics never call stack getters, and V8 keeps every stack behind one. The
+// startup callers print the error first, so its stack is already formatted and
+// reading it runs no formatter; an inert copy lets its frames be recorded.
+function printedError(error: unknown): unknown {
+  try {
+    if (!(error instanceof Error)) return error
+    return Object.defineProperties(new Error(), {
+      name: { value: error.name },
+      message: { value: error.message },
+      stack: { value: error.stack },
+      ...('code' in error ? { code: { value: error.code } } : {}),
+    })
+  } catch {
+    return error
+  }
+}
+
+async function showStartupError(
   error: unknown,
   window: BrowserWindow | null = mainWindow,
-): void {
+): Promise<void> {
   if (quitting || closing || window?.isDestroyed()) return
   // Every "could not start" exit leaves a critical record, whatever the load error code.
-  localDiagnostics.report('MAIN_STARTUP_FAILED', error, { role: 'main' })
+  localDiagnostics.report('MAIN_STARTUP_FAILED', printedError(error), {
+    role: 'main',
+  })
+  // The modal runs no main-process tasks: write the record before it opens.
+  await localDiagnostics.flush()
+  if (quitting || closing || window?.isDestroyed()) return
+  // Electron quits on these signals through a main-thread task the modal never
+  // runs. Removing the last Node listener restores the default action: exit.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+    const ignore = () => {}
+    process.on(signal, ignore).off(signal, ignore)
+  }
   dialog.showErrorBox(
     'Hibi could not start',
     'Restart Hibi. If it still cannot start, reinstall it.',
@@ -1203,7 +1231,7 @@ function createWindow(): void {
     )
       return
     console.error('failed to load app:', error)
-    showStartupError(error, window)
+    void showStartupError(error, window)
   })
 }
 
@@ -2714,6 +2742,6 @@ if (!app.requestSingleInstanceLock()) {
     })
     .catch((error: unknown) => {
       console.error('startup failed:', error)
-      showStartupError(error)
+      void showStartupError(error)
     })
 }

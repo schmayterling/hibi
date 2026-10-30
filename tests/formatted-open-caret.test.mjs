@@ -61,8 +61,11 @@ const notes = {
   'frontmatter-paragraph': '---\ntitle: x\n---\n\nlast\n',
   empty: '',
   blank: '\n\n',
-  // Taller than the pane; it opens at its top.
+  // Taller than the pane; they open at their top, also where the cell's
+  // editor puts the caret in the middle of an empty cell's padding.
   'tall-table': `${'line\n\n'.repeat(60)}| aa   | bb   |\n| ---- | ---- |\n| cell | tail |\n`,
+  'tall-table-empty-cell': `${'line\n\n'.repeat(60)}| aa   | bb   |\n| ---- | ---- |\n| cell |      |\n`,
+  'tall-table-empty-odd-cell': `${'line\n\n'.repeat(60)}| aa   | bb   |\n| ---- | ---- |\n| cell |   |\n`,
   // Accepted differences, below.
   html: 'plain\n\n<div>\nlast\n</div>\n',
   'html-comment': 'plain\n\n<!-- last -->\n',
@@ -482,6 +485,49 @@ for (const engine of ['tiptap', 'codemirror'])
           )
         else check(name, key(last), native.get(name))
       }
+    // Undo can bring back the selection a note opened with, but the reader
+    // has been there since: the cell it lands in is shown, as after any undo.
+    if (engine === 'codemirror') {
+      const note = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
+        { length: 80 },
+        (_, row) => `| r${row} | v${row} |`,
+      ).join('\n')}\n`
+      const rows = async (count) =>
+        (await window.hibi.getDocument()).markdown
+          .split('\n')
+          .filter((line) => line.startsWith('|')).length === count
+      await open('tall-table-undo', note)
+      // Tab in the last cell adds a row.
+      await page.keyboard.press('Tab')
+      await waitForAsync(page, rows, 83)
+      await page.evaluate(() => {
+        document.querySelector('.rich-pane').scrollTop = 0
+      })
+      await page.keyboard.press('ControlOrMeta+z')
+      await waitForAsync(page, rows, 82)
+      let last = null
+      for (let read = 0; read < 30; read++) {
+        await page.waitForTimeout(100)
+        const now = await page.evaluate(() => {
+          const shown = document
+            .querySelector('.rich-pane')
+            .getBoundingClientRect()
+          const cell = document.activeElement?.closest('td, th')
+          const box = cell?.getBoundingClientRect()
+          return {
+            cell: cell ? [cell.parentElement.rowIndex, cell.cellIndex] : null,
+            shown:
+              !!box &&
+              box.top >= shown.top - 1 &&
+              box.bottom <= shown.bottom + 1,
+          }
+        })
+        if (JSON.stringify(now) === JSON.stringify(last)) break
+        last = now
+      }
+      t.diagnostic(JSON.stringify({ engine, name: 'tall-table-undo', ...last }))
+      check('tall-table-undo', last, { cell: [80, 1], shown: true })
+    }
     assert.deepEqual(differences, [])
   })
 
@@ -520,10 +566,13 @@ test('codemirror: a note opens at its top while diagrams above its caret draw', 
   const held = [
     'src/addons/mermaid/language.ts',
     'node_modules/pele/dist/esm/lazy.js',
-  ].map(
-    (module) =>
-      `/${chunks.find((chunk) => chunk.modules.includes(module)).file}`,
-  )
+  ].map((module) => {
+    // A linked dependency install names its modules by their real path.
+    const chunk = chunks.find((chunk) =>
+      chunk.modules.some((id) => id === module || id.endsWith(`/${module}`)),
+    )
+    return `/${chunk.file}`
+  })
   await app.evaluate(({ app, protocol, net }, held) => {
     const { join } = process.getBuiltinModule('node:path')
     const { pathToFileURL } = process.getBuiltinModule('node:url')

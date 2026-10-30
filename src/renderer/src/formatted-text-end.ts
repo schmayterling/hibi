@@ -9,7 +9,7 @@ import {
 } from '@codemirror/state'
 import { type EditorView, keymap, ViewPlugin } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
-import { parseRow } from '../../shared/markdown-table-source.ts'
+import { cellSpan, parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
 import { prefixOf } from './formatted-commands.ts'
 import { placedSelection } from './reading-position.ts'
@@ -44,8 +44,15 @@ function tableEnd(doc: Text, table: SyntaxNode) {
     row = row.prevSibling
   if (!header || !row) return trimmed(doc, table.to)
   const columns = parseRow(doc.sliceString(header.from, header.to)).cells.length
-  const { cells } = parseRow(doc.sliceString(row.from, row.to), row.from)
-  return (cells[columns - 1] ?? cells.at(-1))?.to ?? trimmed(doc, row.to)
+  const parsed = parseRow(doc.sliceString(row.from, row.to), row.from)
+  const index = parsed.cells[columns - 1]
+    ? columns - 1
+    : parsed.cells.length - 1
+  const cell = parsed.cells[index]
+  if (!cell) return trimmed(doc, row.to)
+  // An empty cell's editor puts the caret in the middle of its padding.
+  const span = cell.from === cell.to && cellSpan(parsed, index, row.to)
+  return span ? span.from + Math.ceil((span.to - span.from) / 2) : cell.to
 }
 
 /** Blocks the rich editor draws as one node, which its Selection.atEnd selects whole. */
@@ -157,9 +164,10 @@ const select = StateEffect.define<Selected | null>()
 
 /**
  * The selection a note opened with, or a block a press on its drawing
- * selected whole, until the user moves the selection or edits.
+ * selected whole, until the user moves the selection or edits. `placed`
+ * while the view put it there, not undo bringing it back.
  */
-type Selected = Opening & { opened?: boolean }
+type Selected = Opening & { opened?: boolean; placed?: boolean }
 const selected = StateField.define<Selected | null>({
   create: () => null,
   update(value, transaction) {
@@ -337,7 +345,7 @@ export function openAtEnd(view: EditorView, later = false) {
   const at = selection ?? { anchor: end, head: end }
   view.dispatch({
     selection: at,
-    effects: select.of({ ...at, opened: true }),
+    effects: select.of({ ...at, opened: true, placed: true }),
   })
 }
 
@@ -348,9 +356,14 @@ export const openSelection = (syntax: OpenSyntax) => [
   // with keep the top in place, not the caret.
   placedSelection.compute(
     [selected],
-    (state) => state.field(selected)?.opened === true,
+    (state) => state.field(selected)?.placed === true,
   ),
-  sourceHistoryEffects.of((state) => [select.of(state.field(selected))]),
+  // Undo brings back the selection a note opened with, which still moves
+  // later, but the reader has been there since.
+  sourceHistoryEffects.of((state) => {
+    const value = state.field(selected)
+    return [select.of(value && { ...value, placed: false })]
+  }),
   ViewPlugin.define((view) => ({
     update(update) {
       const value = update.state.field(selected, false)

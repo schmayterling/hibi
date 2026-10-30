@@ -17,7 +17,12 @@ import {
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
 import { frozenSnapshot } from './frozen-oracle.mjs'
-import { clickMenu, pressShortcut, redoKey, withHeldClock } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  redoKey,
+  withHeldClock,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)

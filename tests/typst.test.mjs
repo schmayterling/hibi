@@ -15,7 +15,12 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import { clickMenu, pressShortcut, redoKey, replaceSourceText } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  redoKey,
+  replaceSourceText,
+} from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT, waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { recordToasts } from './toasts.mjs'

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { createPersonalModel } from '../src/addons/autocomplete/model.ts'
 import { rankWords } from '../src/addons/autocomplete/suggestions.ts'
@@ -815,13 +818,34 @@ test('bounded common-prefix ranking stays below 5ms at maximum snapshot size', (
   )
 })
 
-test('offline replay reports real sample sizes, baseline ranking and measured metrics', () => {
-  const report = JSON.parse(
-    execFileSync(process.execPath, ['scripts/autocomplete-replay.mjs'], {
-      cwd: new URL('..', import.meta.url),
-      encoding: 'utf8',
+test('offline replay reports real sample sizes, baseline ranking and measured metrics', async (t) => {
+  // One installed pack goes through the production reader; other languages use fixtures.
+  const root = await mkdtemp(join(tmpdir(), 'hibi-replay-packs-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const pack = join(root, 'en')
+  const entry = `${JSON.stringify({ word: 'prefix', keys: [], meanings: [], synonyms: [], antonyms: [] })}\n`
+  await mkdir(pack)
+  await writeFile(join(pack, 'data.jsonl'), entry)
+  await writeFile(
+    join(pack, 'index.json'),
+    JSON.stringify({
+      version: 1,
+      id: 'en',
+      rows: [['prefix', [[0, entry.length]]]],
     }),
   )
+  await writeFile(
+    join(pack, 'manifest.json'),
+    JSON.stringify({ id: 'en', format: 1 }),
+  )
+  const report = JSON.parse(
+    execFileSync(
+      process.execPath,
+      ['scripts/autocomplete-replay.mjs', `--pack-root=${root}`],
+      { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+    ),
+  )
+  assert.deepEqual(report.dictionary.installedLanguages, ['en'])
   assert.ok(report.samples > 50)
   assert.equal(report.corpora.length, 3)
   assert.ok(report.method.includes('rankWords'))

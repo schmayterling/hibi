@@ -1165,7 +1165,10 @@ export async function openWorkspaceFile(
       (draft) =>
         draft.pendingPath && relativePath(root!, draft.pendingPath) === path,
     )
-  if (draft) return selectDocumentTab(window, draft.tabId)
+  // Once another app creates a draft's planned file, it opens like the file.
+  const planned = draft ? draft.pendingPath : null
+  if (draft && !(planned && (await lstat(planned).catch(() => null))))
+    return selectDocumentTab(window, draft.tabId)
   return loadDocument(
     window,
     await resolveWorkspaceFile(root, path, await showAllWorkspaceFiles()),

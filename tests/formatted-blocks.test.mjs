@@ -93,12 +93,13 @@ test('task checkboxes toggle their marker with one edit, undo, and the keyboard'
     await boxes.nth(2).getAttribute('aria-label'),
     'Task item checkbox for empty task item',
   )
-  // The marker and list bullet are not text; the checkbox is a real control.
+  // The marker and list bullet are not text, except as the source the caret
+  // shows in its task; the checkbox is a real control.
   assert.deepEqual(
     await pane('.cm-line').evaluateAll((lines) =>
       lines.map((line) => line.textContent),
     ),
-    ['buy milk', 'done', '', ''],
+    ['buy milk', 'done', '- [ ]', ''],
   )
   await boxes.first().click()
   await source('- [x] buy milk\n- [x] done\n- [ ]\n')

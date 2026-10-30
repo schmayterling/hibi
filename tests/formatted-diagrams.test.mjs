@@ -163,7 +163,14 @@ const capture = () =>
     const origin = pane.getBoundingClientRect()
     const round = (value) => Math.round(value * 10) / 10
     const place = (element) => {
-      const box = element.getBoundingClientRect()
+      let box = element.getBoundingClientRect()
+      // A diagram label's own box takes in its glyphs' ink, which Linux and
+      // Windows round out to whole pixels; its text's box is the same on all.
+      if (element instanceof SVGTextContentElement) {
+        const text = document.createRange()
+        text.selectNodeContents(element)
+        box = text.getBoundingClientRect()
+      }
       return [
         round(box.left - origin.left),
         round(box.top - origin.top),
@@ -259,9 +266,6 @@ const rendered = (root) =>
 
 test('diagrams and typst blocks keep their recorded boxes and drawing in light and dark', {
   timeout: NATIVE_COMPILER_READY_TIMEOUT + 120000,
-  // ponytail: the opening caret can still scroll this long note to its end
-  // once its diagrams draw; drop this when the open-at-top fix lands.
-  todo: 'a note can open scrolled to its caret until the open-at-top fix lands',
 }, async (t) => {
   await overlayScrollbars(t, page)
   await open('parity.md')

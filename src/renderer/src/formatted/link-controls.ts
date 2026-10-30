@@ -37,6 +37,8 @@ export function linkControls(callbacks: Callbacks) {
         doc: EditorView['state']['doc']
       } | null = null
       menuOwner: symbol | null = null
+      /** Opens the shown link actions menu again, as read-only state changes. */
+      reopenMenu: (() => void) | null = null
       generation = 0
       /** The link whose dismissed actions stay hidden while the caret stays in it. */
       dismissed: { from: number; to: number } | null = null
@@ -310,35 +312,46 @@ export function linkControls(callbacks: Callbacks) {
         const capture = this.linkAt(at)
         if (!capture?.link) return false
         this.hide()
-        const readOnly = this.view.state.readOnly
         // The menu offers every action, for keyboards where Tab indents.
         const run = (id: Action) => () =>
           Promise.resolve(capture.href).then((href) => {
             if (href) this.act(id, capture, href)
           })
-        const items: MenuItem[] = [
-          {
-            id: 'edit-link',
-            label: 'Edit link…',
-            disabled: readOnly,
-            onSelect: () => this.edit(capture),
-          },
-          { id: 'open-link', label: 'Open link', onSelect: run('open') },
-          { id: 'copy-link', label: 'Copy link', onSelect: run('copy') },
-          {
-            id: 'remove-link',
-            label: 'Remove link',
-            disabled: readOnly,
-            onSelect: run('remove'),
-          },
-        ]
+        const items = (): MenuItem[] => {
+          const readOnly = this.view.state.readOnly
+          return [
+            {
+              id: 'edit-link',
+              label: 'Edit link…',
+              disabled: readOnly,
+              onSelect: () => this.edit(capture),
+            },
+            { id: 'open-link', label: 'Open link', onSelect: run('open') },
+            { id: 'copy-link', label: 'Copy link', onSelect: run('copy') },
+            {
+              id: 'remove-link',
+              label: 'Remove link',
+              disabled: readOnly,
+              onSelect: run('remove'),
+            },
+          ]
+        }
         // Addon and editor actions join the link's in the editor's menu.
         const request = new CustomEvent<EditorActionsRequest>(
           'hibi:editor-actions-request',
-          { cancelable: true, detail: { position: at, x, y, items } },
+          {
+            cancelable: true,
+            detail: { position: at, x, y, items: items() },
+          },
         )
         if (!this.view.contentDOM.dispatchEvent(request)) return true
-        this.scope.api.open({ label: 'Link actions', anchor: { x, y }, items })
+        this.reopenMenu = () =>
+          this.scope.api.open({
+            label: 'Link actions',
+            anchor: { x, y },
+            items: items(),
+          })
+        this.reopenMenu()
         this.menuOwner = menus.snapshot()?.owner ?? null
         return true
       }
@@ -426,7 +439,12 @@ export function linkControls(callbacks: Callbacks) {
           )
           this.dismissed = from === null || to === null ? null : { from, to }
         }
-        if (update.state.readOnly !== update.startState.readOnly) this.enable()
+        if (update.state.readOnly !== update.startState.readOnly) {
+          this.enable()
+          // A shown menu offers what the note allows now.
+          if (this.menuOwner && menus.snapshot()?.owner === this.menuOwner)
+            this.reopenMenu?.()
+        }
         if (
           update.docChanged ||
           moved ||

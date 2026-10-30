@@ -715,13 +715,33 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   ])
   await page.keyboard.press('Escape')
   await menu.waitFor({ state: 'hidden' })
-  // Removal chosen from a menu opened before the note turned read-only removes nothing.
+  // A menu opened before the note turned read-only disables its edits then,
+  // and keeps its focused action.
   await readOnly(false)
   await link.click({ button: 'right' })
   await menu.waitFor()
   assert.deepEqual(await states(menu, 'menuitem', items), items)
+  await page.keyboard.press('ArrowDown')
   await readOnly(true)
-  await menu.getByRole('menuitem', { name: 'Remove link', exact: true }).click()
+  await page.waitForFunction(
+    () =>
+      [
+        ...document.querySelectorAll(
+          '[role="menu"][aria-label="Link actions"] [role="menuitem"]',
+        ),
+      ].filter((item) => item.disabled).length === 2,
+  )
+  assert.deepEqual(await states(menu, 'menuitem', items), [
+    'Edit link… disabled',
+    'Open link',
+    'Copy link',
+    'Remove link disabled',
+  ])
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Open link',
+  )
+  await page.keyboard.press('Escape')
   await menu.waitFor({ state: 'hidden' })
   await settle(page)
   assert.equal(await read(), note)

@@ -5,6 +5,7 @@ import {
   Tokenizer,
   type Tokens,
 } from 'marked'
+import { blockStartLines } from '../addons/_shared/block-start.ts'
 import { withFenceRules } from './marked-fences.ts'
 import {
   extendQuote,
@@ -24,6 +25,14 @@ const containerColumns = new WeakMap<Tokenizer, number>()
 // Candidate calls and source spans, including title interruption windows, and
 // the quote lines scanned for the native quote rule's extent.
 export const blockScanCounters = { calls: 0, units: 0, quoteLines: 0 }
+
+// Lines where the lexer's block extensions start. They interrupt paragraphs
+// there, so, as in lezer, they also end lazy quote lines and setext text.
+function extensionLines(tokenizer: Tokenizer) {
+  return (tokenizer.lexer.options.extensions?.startBlock ?? []).flatMap(
+    (start) => blockStartLines.get(start) ?? [],
+  )
+}
 
 // The paragraph interruptions inside the native quote rule, or null when a
 // custom rule replaced it.
@@ -68,6 +77,9 @@ function quoteScan(
   const { blockquoteStart } = tokenizer.rules.other
   if (!blockquoteStart.test(source)) return
   const interrupt = quoteInterrupt(tokenizer)
+  // A line's newline tells that the quote's container goes on after it, but
+  // not in a nested re-read, whose lines can run past the enclosing quote.
+  const blocks = feed ? [] : extensionLines(tokenizer)
   // Line starts of the extent in the source, or the fed lines; text is sliced
   // on demand.
   const starts: number[] = []
@@ -105,7 +117,13 @@ function quoteScan(
     if (blockquoteStart.test(line)) {
       const marker = line.indexOf('>')
       lazy = marker + (line[marker + 1] === ' ' ? 2 : 1) < line.length
-    } else if (!lazy || !line || interrupt!.test(raw)) return false
+    } else if (
+      !lazy ||
+      !line ||
+      interrupt!.test(raw) ||
+      blocks.some((block) => block.test(raw))
+    )
+      return false
     if (!scan.tabs && line.includes('\t')) scan.tabs = true
     return true
   }
@@ -1340,6 +1358,8 @@ export class BlockTokenizer extends Tokenizer {
     }
     const index = candidate ? candidate.index - from : 0
     if (!candidate?.[1] || !index) return
+    const text = source.slice(source.indexOf('\n'), index + 1)
+    if (extensionLines(this).some((line) => line.test(text))) return
     if (frame) {
       if (frame.invalid === undefined || frame.invalid < from) {
         invalidSetext.lastIndex = from

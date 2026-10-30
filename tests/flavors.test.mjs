@@ -477,6 +477,13 @@ it('math source bytes survive source and visual view round trips and saving', {
     original,
   )
   const rich = page.locator('.rich-pane [aria-label="Document editor"]')
+  // `\$$x$$` is an escaped dollar, `$x$` and a dollar, as Obsidian reads it.
+  const escapedDollars = () =>
+    rich
+      .locator('[data-type="inline-math"][data-latex="x"]')
+      .evaluate((formula) =>
+        formula.parentElement.textContent.replace(formula.textContent, ''),
+      )
   await pressShortcut(app, `${mod}+Shift+]`)
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   await pressShortcut(app, `${mod}+Shift+[`)
@@ -487,10 +494,7 @@ it('math source bytes survive source and visual view round trips and saving', {
       ).length === displays,
     displays,
   )
-  assert.equal(
-    await rich.getByText('$$x$$', { exact: true }).textContent(),
-    '$$x$$',
-  )
+  assert.equal(await escapedDollars(), '$$')
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     original,
@@ -536,10 +540,7 @@ it('math source bytes survive source and visual view round trips and saving', {
       ).length === displays,
     displays,
   )
-  assert.equal(
-    await rich.getByText('$$x$$', { exact: true }).textContent(),
-    '$$x$$',
-  )
+  assert.equal(await escapedDollars(), '$$')
 })
 
 it('split focus preserves each file flavor', {

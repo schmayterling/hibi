@@ -40,7 +40,10 @@ export function markedGithubFootnote(
     const item = tokenizer.list(prefix + body)?.items[0]
     if (!item || item.raw.length < prefix.length)
       return read.call(this, source, tokens)
-    const end = marker[0].length + item.raw.length - prefix.length
+    let end = marker[0].length + item.raw.length - prefix.length
+    // Marked trims the item's last line; the definition keeps its trailing
+    // spaces, as Obsidian 1.13.7 and the footnote package read them.
+    while (source[end] === ' ' || source[end] === '\t') end++
     const token = read.call(this, source.slice(0, end), tokens)
     const last = token?.tokens?.at(-1)
     return token && last && !['paragraph', 'text'].includes(last.type)

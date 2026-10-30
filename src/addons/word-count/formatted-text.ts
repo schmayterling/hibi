@@ -260,7 +260,7 @@ function taskItem(raw: string, syntax: ProjectionSyntax, out: string[]) {
     .map((line) => (line.trim() ? line.slice(indent) : ''))
     .join('\n')
     .trim()
-  if (nested) children(lex(`${nested}\n`, syntax), syntax, out, false)
+  if (nested) children(lex(nested, syntax), syntax, out, false)
 }
 
 /** A list item's blocks; an item holds a paragraph even when it is empty. */

@@ -17,6 +17,7 @@ import {
 import { formattedBlockParser } from '../src/renderer/src/formatted-contributions.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { Footnotes, GithubAlerts } from '../src/shared/markdown-extra-syntax.ts'
+import { readAheadBlock } from './read-ahead-block.mjs'
 
 const extensions = [
   GFM,
@@ -24,6 +25,7 @@ const extensions = [
   GithubAlerts,
   blockMathSyntax,
   subtextSyntax,
+  readAheadBlock,
 ]
 const grammar = EditorState.create({
   extensions: formattedSyntax({ extensions }).extension,
@@ -188,18 +190,18 @@ test('a last item cannot absorb prose after blank separators', () => {
     assert.equal(moved(doc, token, 'ListItem', direction), null, doc)
 })
 
-test('moves cannot activate earlier math decisions across blocks or inside paragraphs', () => {
+test('moves cannot activate earlier read-ahead decisions across blocks or inside paragraphs', () => {
   const big = 'big ' + 'word '.repeat(2200)
   for (const [doc, token, direction] of [
-    ['$$ a\n\nf\n\nt\n\nm $$ x\n\nz $$\n', 'z $$', -1],
-    ['$$ a\n\nf\n\nt\n\nm $$ x\n\nz $$\n', 'm $$ x', 1],
-    ['a1\na2\n$$ q\na4\na5\n\nm $$ x\n\nz $$\n', 'z $$', -1],
+    ['%% a\n\nf\n\nt\n\nm %% x\n\nz %%\n', 'z %%', -1],
+    ['%% a\n\nf\n\nt\n\nm %% x\n\nz %%\n', 'm %% x', 1],
+    ['a1\na2\n%% q\na4\na5\n\nm %% x\n\nz %%\n', 'z %%', -1],
     [
-      '> intro\n>\n> $$ a\n>\n> f\n>\n> t\n>\n> m $$ x\n>\n> z $$\n',
-      'z $$',
+      '> intro\n>\n> %% a\n>\n> f\n>\n> t\n>\n> m %% x\n>\n> z %%\n',
+      'z %%',
       -1,
     ],
-    [`$$ a\n\nf\n\nt\n\n${big}\n\nz $$\n\nlast\n`, 'big word', 1],
+    [`%% a\n\nf\n\nt\n\n${big}\n\nz %%\n\nlast\n`, 'big word', 1],
   ]) {
     const { state } = view(doc)
     for (const tree of [view(doc).tree, md.parse(doc)]) {
@@ -209,10 +211,10 @@ test('moves cannot activate earlier math decisions across blocks or inside parag
       assert.equal(blockStep(state, tree, block, direction), null, doc)
     }
   }
-  const far = `$$\na + b\n\nf\n\ntee\n\n${'filler words here\n\n'.repeat(700)}$$\nx\n$$\n`
+  const far = `%%\na + b\n\nf\n\ntee\n\n${'filler words here\n\n'.repeat(700)}%%\nx\n%%\n`
   const { state } = view(far)
   const tree = md.parse(far)
-  const block = tree.topNode.getChild('BlockMath')
+  const block = tree.topNode.getChild('ReadAheadBlock')
   const target = tree.resolveInner(far.indexOf('tee'), 1)
   assert.ok(block)
   assert.equal(moveBlock(state, tree, block, target, true), null)
@@ -223,14 +225,14 @@ test('moves cannot activate earlier math decisions across blocks or inside parag
 })
 
 test('lookahead dependency queries skip unrelated chunks in large notes', () => {
-  const doc = '$$ a\n\nf\n\nt\n\nm $$ x\n\nz $$\n'
+  const doc = '%% a\n\nf\n\nt\n\nm %% x\n\nz %%\n'
   const chunked = new ChunkedMarkdownParser(md, md)
   const tree = chunked.parse(doc)
   const boundary = new BoundaryTree(chunked, doc.length)
   boundary.append([...boundaryRecords(tree)])
-  assert.equal(readAheadFrom(boundary.finish(), doc.indexOf('m $$ x')), null)
+  assert.equal(readAheadFrom(boundary.finish(), doc.indexOf('m %% x')), null)
   const visits = (count, quoted = false) => {
-    let doc = '$$ q\n\nm $$ x\n\n'.repeat(count) + 'end\n'
+    let doc = '%% q\n\nm %% x\n\n'.repeat(count) + 'end\n'
     if (quoted)
       doc = doc
         .split('\n')
@@ -289,8 +291,8 @@ test('lookahead dependency queries skip unrelated chunks in large notes', () => 
         : value
     }
     try {
-      const starts = readAheadFrom(tree, doc.lastIndexOf('m $$ x') + 3)
-      const opening = doc.lastIndexOf('$$ q')
+      const starts = readAheadFrom(tree, doc.lastIndexOf('m %% x') + 3)
+      const opening = doc.lastIndexOf('%% q')
       assert.ok(starts?.includes(doc.lastIndexOf('\n', opening - 1) + 1))
     } finally {
       proto.prop = original
@@ -303,7 +305,7 @@ test('lookahead dependency queries skip unrelated chunks in large notes', () => 
   const giantLarge = visits(20000, true)
   console.log(
     JSON.stringify({
-      mathDependencies: { small, large, giantSmall, giantLarge },
+      readAheadDependencies: { small, large, giantSmall, giantLarge },
     }),
   )
   assert.ok(large < 100 && large <= small + 32, `${small}, ${large}`)
@@ -356,14 +358,14 @@ test('tab separators cannot move a nested list across its content column', () =>
     structure(spaced, current.tree, list, 1),
   )
 })
-test('dragged blank separators cannot activate an earlier interior math line', () => {
-  const body = `p1\np2\n$$ ${'q'.repeat(4000)}\n${'r'.repeat(5991)}\nplast`
+test('dragged blank separators cannot activate an earlier interior read-ahead line', () => {
+  const body = `p1\np2\n%% ${'q'.repeat(4000)}\n${'r'.repeat(5991)}\nplast`
   for (const doc of [
-    `X\n\n${body}\n\n\n\n\n\nB\n\n$$\n`,
+    `X\n\n${body}\n\n\n\n\n\nB\n\n%%\n`,
     `> X\n>\n${body
       .split('\n')
       .map((line) => '> ' + line)
-      .join('\n')}\n>\n>\n>\n>\n>\n> B\n>\n> $$\n`,
+      .join('\n')}\n>\n>\n>\n>\n>\n> B\n>\n> %%\n`,
   ]) {
     const { state, tree } = view(doc)
     const find = (token) => {
@@ -433,11 +435,11 @@ test('jumping to a known giant end retains decisions through worker adoption', (
   const paragraph =
     'intro words of the long paragraph\n' +
     filler(80000, 'p') +
-    '\n$$ a\n' +
+    '\n%% a\n' +
     filler(9600, 'f')
   const doc =
     paragraph +
-    '\n\nm $$ x\n\nz $$\n\n' +
+    '\n\nm %% x\n\nz %%\n\n' +
     filler(4000, 'q') +
     '\n\n' +
     filler(30000, 'r').replaceAll('\n', '\n\n') +
@@ -450,8 +452,8 @@ test('jumping to a known giant end retains decisions through worker adoption', (
   }
   const input = (doc) => new DocInput(EditorState.create({ doc }).doc)
   const demand = {
-    from: doc.indexOf('m $$ x') + 3000,
-    to: doc.indexOf('m $$ x') + 6000,
+    from: doc.indexOf('m %% x') + 3000,
+    to: doc.indexOf('m %% x') + 6000,
   }
   const initial = finish(chunked.startChunkedParse(input(doc), [], demand))
   const worker = finish(chunked.startBoundaryParse(input(doc), []))
@@ -486,8 +488,8 @@ test('jumping to a known giant end retains decisions through worker adoption', (
     ),
   )
   const { state } = view(edited)
-  const at = edited.indexOf('m $$ x')
-  const deciding = edited.indexOf('\n$$ a\n') + 1
+  const at = edited.indexOf('m %% x')
+  const deciding = edited.indexOf('\n%% a\n') + 1
   for (const tree of [updated, repaired, adopted]) {
     const decisions = readAheadFrom(tree, at)
     assert.ok(
@@ -498,7 +500,7 @@ test('jumping to a known giant end retains decisions through worker adoption', (
   for (const tree of [updated, adopted]) {
     let target = tree.resolveInner(at, 1)
     while (target && target.name !== 'Paragraph') target = target.parent
-    let block = tree.resolveInner(edited.indexOf('z $$'), 1)
+    let block = tree.resolveInner(edited.indexOf('z %%'), 1)
     while (block && block.name !== 'Paragraph') block = block.parent
     assert.ok(block && target)
     assert.equal(moveBlock(state, tree, block, target, false), null)
@@ -519,9 +521,9 @@ test('a stuck continuation retains decisions before its new window', () => {
   const doc =
     '> intro\n>\n' +
     paragraphs(15000, 'p') +
-    '\n> $$ a\n>\n' +
+    '\n> %% a\n>\n' +
     paragraphs(9500, 'f') +
-    '\n> m $$ x\n>\n> z $$\n>\n' +
+    '\n> m %% x\n>\n> z %%\n>\n' +
     paragraphs(12000, 'g') +
     '\n> > ~~~\n> > code\n> > ~~~\n> >\n' +
     '> > quoted words *em*\n'.repeat(5000) +
@@ -532,8 +534,8 @@ test('a stuck continuation retains decisions before its new window', () => {
     giantBlock: 65536,
   })
   const demand = {
-    from: doc.indexOf('z $$') + 3000,
-    to: doc.indexOf('z $$') + 6000,
+    from: doc.indexOf('z %%') + 3000,
+    to: doc.indexOf('z %%') + 6000,
   }
   const parse = (text, fragments, demand) => {
     const work = chunked.startChunkedParse(
@@ -546,8 +548,8 @@ test('a stuck continuation retains decisions before its new window', () => {
     return tree
   }
   const initial = parse(doc, [], demand)
-  const at = doc.indexOf('m $$ x')
-  const deciding = doc.indexOf('> $$ a')
+  const at = doc.indexOf('m %% x')
+  const deciding = doc.indexOf('> %% a')
   assert.ok(readAheadFrom(initial, at)?.includes(deciding))
   const edit = doc.indexOf('> g40 ') + 4
   const edited = doc.slice(0, edit) + 'x' + doc.slice(edit)
@@ -565,20 +567,20 @@ test('a stuck continuation retains decisions before its new window', () => {
     if (viewport !== demand) continue
     let target = tree.resolveInner(at, 1)
     while (target && target.name !== 'Paragraph') target = target.parent
-    let block = tree.resolveInner(edited.indexOf('z $$'), 1)
+    let block = tree.resolveInner(edited.indexOf('z %%'), 1)
     while (block && block.name !== 'Paragraph') block = block.parent
     assert.ok(block && target)
     assert.equal(moveBlock(state, tree, block, target, false), null)
   }
 })
 
-test('viewport changes retain distant math decisions in giant containers', () => {
+test('viewport changes retain distant read-ahead decisions in giant containers', () => {
   const doc =
     '> intro\n>\n' +
     Array.from({ length: 300 }, (_, i) => `> padding ${i}\n>\n`).join('') +
-    '> $$ a\n>\n' +
+    '> %% a\n>\n' +
     '> f\n>\n'.repeat(1000) +
-    '> m $$ x\n>\n> z $$\n'
+    '> m %% x\n>\n> z %%\n'
   const { state } = view(doc)
   const chunked = new ChunkedMarkdownParser(md, md, {
     chunkSize: 128,
@@ -596,7 +598,7 @@ test('viewport changes retain distant math decisions in giant containers', () =>
       if (tree) return tree
     }
   }
-  const at = doc.indexOf('m $$ x')
+  const at = doc.indexOf('m %% x')
   const initial = parse(null, Infinity, Infinity)
   const boundary = new BoundaryTree(chunked, doc.length)
   const records = [...boundaryRecords(initial)]
@@ -610,7 +612,7 @@ test('viewport changes retain distant math decisions in giant containers', () =>
     for (let i = 0; i < 3; i++) {
       tree = parse(tree, at - 10, doc.length)
       const starts = readAheadFrom(tree, at)
-      if (complete) assert.ok(starts?.includes(doc.indexOf('> $$ a')))
+      if (complete) assert.ok(starts?.includes(doc.indexOf('> %% a')))
       else assert.equal(starts, null)
       let block = tree.resolveInner(at, 1)
       while (block && block.name !== 'Paragraph') block = block.parent

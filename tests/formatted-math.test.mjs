@@ -420,7 +420,9 @@ test('a one-line display formula or image in a quote keeps one quote indent and 
   timeout: 90000,
 }, async () => {
   // A drawing that replaces 20 or more characters splits the view's visible
-  // ranges inside its line, which still sits in one quote, not two.
+  // ranges inside its line, which still sits in one quote, not two. The
+  // formula is display math inside the quote's paragraph, as Obsidian reads
+  // it, so the quote draws as one line.
   await writeFile(
     join(folder, 'notes', 'quoted.md'),
     '> Under Shape 1, so\n> $$\\hat\\alpha = \\frac{2y_1+y_2}{2n}$$\n> ![a long alt text for this image](u.png) tail\n\nlast\n',
@@ -439,11 +441,7 @@ test('a one-line display formula or image in a quote keeps one quote indent and 
         ],
       ),
     ),
-    [
-      ['calc(21px)', 1],
-      ['calc(21px)', 1],
-      ['calc(21px)', 1],
-    ],
+    [['calc(21px)', 1]],
   )
   // The tops of the numerator's glyphs reach past the formula's box, inside
   // the clip that lets a wide formula scroll sideways.

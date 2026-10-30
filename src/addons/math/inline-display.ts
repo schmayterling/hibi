@@ -5,6 +5,13 @@ export const formulaLimit = 10_000
  * How far past its opener a closing `$$` is looked for. A pair found within
  * it pairs even past the formula limit and then stays text whole, so its
  * closer opens nothing; giant paragraphs read their seams this far ahead.
+ *
+ * ponytail: only a paragraph over the giant block size can hold a pair this
+ * long. Its opener then pairs nothing, so the later pairs of that paragraph
+ * pair one off; Obsidian pairs it at any distance. Whether a `$$` closes
+ * depends on every opener before it in the paragraph, so matching that needs
+ * windows to read seams from openers past this limit, and an edit inside
+ * such a pair to read again from its opener.
  */
 export const pairLimit = 65_536
 

@@ -331,6 +331,27 @@ const richQuirks = [
     states: ['29:1', '29:2', '29:3'],
   },
   {
+    // The rich task list tokenizer ends the list at a line CommonMark reads
+    // as lazy item text, so a `$$` line after it opens display math at the
+    // top level, up to the closing `$$`. In Obsidian 1.13.7 both lines stay
+    // item text, as the formatted count reads them.
+    source: '- [x] two\nx\n$$\n\nvanished\n\n$$',
+    syntax: { math: true },
+    text: '\n\ntwo\nx\n',
+    difference: { words: -1, characters: -14 },
+    states: ['31:5', '31:6', '31:7'],
+  },
+  {
+    // The same in an ordered list: with display math disabled, the rich view
+    // keeps the source of the block it opens there, unclosed to the end of
+    // the note, while Obsidian 1.13.7 ends the block with the item.
+    source: '1.  a\n$$\nb\n    c\n\nd',
+    syntax: { math: true, disabledFeatures: ['math.inline', 'math.block'] },
+    text: '\n\na\n$$\nb\n    c\n\nd',
+    difference: { words: 0, characters: 5 },
+    states: ['53:22', '53:23', '53:24'],
+  },
+  {
     // CommonMark limits ordered markers to nine digits; the rich tokenizer
     // accepts ten and removes the marker from its text.
     source: '1234567890. a',

@@ -298,6 +298,25 @@ test('mid-line display math is excluded from counts while literal dollars stay',
     )
 })
 
+test('a `$$` line ending a task item stays text, as in Obsidian', () => {
+  // With no line after it in the item, it opens no display math.
+  const syntax = { ...defaultNoteSyntax, math: true }
+  for (const [source, text] of [
+    ['- [x] two\nx\n$$', '\n\ntwo\nx $$'],
+    ['- [x] two\nx\n$$\n\nafter', '\n\ntwo\nx $$\nafter'],
+    ['- [x] two\n[^a]$**x=y\n$$', '\n\ntwo\n[^a]$'],
+  ])
+    assert.equal(richText(source, syntax).slice(1), text, source)
+})
+
+test('footnote definitions keep the spaces that end them, as in Obsidian', () => {
+  for (const [source, text] of [
+    ['[^a]: n \n', 'n '],
+    ['[^a]: note\n\n    second \n> quote', 'note\nsecond \n\nquote'],
+  ])
+    assert.equal(richText(source, defaultNoteSyntax).slice(1), text, source)
+})
+
 for (const [source, formatted, rich] of [
   ['- [ ] text[^a]\n\n[^a]: note', '\n\ntext\nnote', '\n\ntext[^a]\nnote'],
   [

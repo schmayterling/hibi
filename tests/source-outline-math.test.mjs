@@ -59,16 +59,22 @@ test('source outline reads synthetic course math in paragraphs, headings and con
 })
 
 test('source outline leaves incomplete and oversized math as ordinary Markdown', () => {
-  for (const body of [
-    'before $$ math',
-    `$$${'x'.repeat(20_000)}`,
-    `$$x$$${' '.repeat(20_000)}`,
-  ]) {
+  for (const body of ['before $$ math', `$$x$$${' '.repeat(20_000)}`]) {
     assert.deepEqual(
       outline(`${body}\n\n# real`).headings.map(({ label }) => label),
       ['real'],
     )
   }
+  // As in Obsidian, an unclosed block runs to the end of the note, here as
+  // text over the formula limit, and a closed one ends at its closing line.
+  for (const [body, headings] of [
+    [`$$${'x'.repeat(20_000)}`, []],
+    [`$$${'x'.repeat(20_000)}\n$$`, ['real']],
+  ])
+    assert.deepEqual(
+      outline(`${body}\n\n# real`).headings.map(({ label }) => label),
+      headings,
+    )
   assert.deepEqual(
     outline('text $$x$$\n---\n\n# real').headings.map(({ label }) => label),
     ['text x', 'real'],
@@ -87,9 +93,10 @@ test('source outline contains math at quote and list boundaries', () => {
       outline(source).headings.map(({ label }) => label),
       ['real'],
     )
-  // A closing delimiter outside the container cannot swallow its next heading.
+  // A `$$` that its quote ends right after opens nothing there; one outside
+  // opens a block that runs to the end of the note, as in Obsidian.
   assert.deepEqual(
     outline('> $$\n# visible\n$$\n\n# real').headings.map(({ label }) => label),
-    ['visible', 'real'],
+    ['visible'],
   )
 })

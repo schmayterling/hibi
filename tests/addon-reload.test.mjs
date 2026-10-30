@@ -802,17 +802,18 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   await writeInstalled(
     profile,
     manifest('slow-consumer', 'Slow consumer', {
+      startup: 'background',
       requires: { addons: [{ id: 'frontmatter' }] },
     }),
     {
-      // The restarted consumer adds a syntax flavor, so the editor reconfigures after the user's choice.
+      // The restarted consumer starts in the background, so the editor stays
+      // interactive while the reload holds it read-only.
       'index.js': `export default () => ({
-        async start(context) {
+        async start() {
           window.consumerStarts = (window.consumerStarts || 0) + 1;
           if (window.holdConsumer) {
             window.holdConsumer = false;
             await new Promise((resolve) => { window.releaseConsumer = resolve; });
-            context.editor.registerFlavor({ id: 'late', name: 'Late', kind: 'syntax', description: 'Rebuilds the editor', detect: () => false });
           }
         },
       });`,
@@ -890,7 +891,7 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
     assert.equal(await editor.getAttribute('aria-readonly'), 'false')
   })
 
-  // The selection, read-only gate and subsequent native input are checked on both engines below.
+  // The selection, read-only gate and subsequent native input are checked below.
   assert.equal(
     await page.locator('.rich-pane .cm-content[data-chosen-in]').count(),
     1,

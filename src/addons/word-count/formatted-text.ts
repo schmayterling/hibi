@@ -10,7 +10,6 @@ import {
 } from '../../shared/note-syntax.ts'
 import type { ReferenceDefinitions } from '../../shared/source-references.ts'
 import { alertMarkdown } from '../markdown/alerts.ts'
-import { inlineDisplayMathTokens } from '../math/inline-display.ts'
 import { mathTokens } from '../math/syntax.ts'
 import { textExtrasMarkdown } from '../text-extras/syntax.ts'
 import { typstBlock } from '../typst/syntax.ts'
@@ -43,7 +42,7 @@ export function countParser(syntax: CountSyntax) {
     if (syntax.gfm) countFootnotes(parser)
     if (syntax.alerts) parser.use(alertMarkdown)
     if (syntax.textExtras) parser.use(textExtrasMarkdown)
-    if (syntax.math) parser.use(mathTokens, inlineDisplayMathTokens)
+    if (syntax.math) parser.use(mathTokens)
     // Custom tokenizers own child traversal; body masking below keeps the view's scope.
     const children = parser.defaults.extensions?.childTokens
     if (children) {

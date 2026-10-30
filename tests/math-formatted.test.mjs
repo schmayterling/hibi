@@ -11,7 +11,6 @@ import {
 } from '../src/addons/math/formatted-syntax.ts'
 import {
   inlineDisplayMath,
-  inlineDisplayMathTokens,
   inlineMathWork,
 } from '../src/addons/math/inline-display.ts'
 import { containerPrefix, mathInsertion } from '../src/addons/math/insert.ts'
@@ -21,8 +20,7 @@ import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const formatted = parser.configure([GFM, inlineMathSyntax, blockMathSyntax])
-// `$$…$$` inside a line is display math in the formatted view, not the rich view.
-const marked = new Marked(mathTokens, inlineDisplayMathTokens)
+const marked = new Marked(mathTokens)
 
 /** Display formulas compare apart from the spaces around their line breaks. */
 const lines = (latex) => latex.replace(/[ \t]*\n[ \t]*/g, '\n')
@@ -35,25 +33,25 @@ function lezerMath(source) {
     enter(node) {
       if (node.name === 'InlineMath' || node.name === 'InlineMathLines') {
         const mark = node.node.firstChild.to - node.from
-        if (mark === 1) {
-          found.push(['inline', source.slice(node.from + 1, node.to - 1)])
-          return false
-        }
         // Later lines' quote markers are no part of the formula.
         let latex = '',
-          at = node.from + 2
+          at = node.from + mark
         for (let child = node.node.firstChild; child; child = child.nextSibling)
           if (child.name !== 'MathMark') {
             latex += source.slice(at, child.from)
             at = child.to
           }
-        latex += source.slice(at, node.to - 2)
+        latex += source.slice(at, node.to - mark)
         assert.equal(
           node.name === 'InlineMathLines',
           latex.includes('\n'),
           `node for ${JSON.stringify(source)}`,
         )
-        found.push(['display', lines(latex.trim())])
+        found.push(
+          mark === 1
+            ? ['inline', lines(latex)]
+            : ['display', lines(latex.trim())],
+        )
         return false
       }
       if (node.name === 'BlockMath') {
@@ -83,7 +81,7 @@ function markedMath(source) {
       found.push(
         token.display
           ? ['display', lines(token.latex)]
-          : ['inline', token.latex],
+          : ['inline', lines(token.latex)],
       )
     if (token.type === 'blockMath') found.push(['block', token.latex])
   })
@@ -286,10 +284,27 @@ test('formatted and source outlines agree around nested and mid-line math', () =
   }
 })
 
-test('inline math ends where the tokenizer expression ends, in linear time', {
-  timeout: 60_000,
-}, () => {
-  const alphabet = ['$', '\\', 'a', ' ', '\n', '\r', '$$']
+/**
+ * The inline branch of Obsidian 1.13.7's inline math tokenizer in its
+ * app.js, for text starting with one `$`: where the closing `$` ends, or -1.
+ */
+function obsidianInlineEnd(text) {
+  let next = text.charCodeAt(1)
+  if (next === 36 || next === 32 || next === 9) return -1
+  for (let at = 1; at < text.length; at++) {
+    const code = next
+    next = text.charCodeAt(at + 1)
+    if (code === 36) {
+      const before = text.charCodeAt(at - 1)
+      if (before !== 32 && before !== 9 && !(next >= 48 && next <= 57))
+        return at + 1
+    } else if (code === 92) next = text.charCodeAt(++at + 1)
+  }
+  return -1
+}
+
+test('inline math ends where Obsidian ends it, in linear time', () => {
+  const alphabet = ['$', '\\', 'a', ' ', '\t', '\n', '5', '$$']
   let seed = 7
   const random = () => {
     seed = (seed * 1103515245 + 12345) % 2147483648
@@ -300,18 +315,60 @@ test('inline math ends where the tokenizer expression ends, in linear time', {
     const length = 1 + Math.floor(random() * 14)
     for (let i = 0; i < length; i++)
       text += alphabet[Math.floor(random() * alphabet.length)]
+    const expected = obsidianInlineEnd(text)
+    assert.equal(inlineMathEnd(text, 0), expected, JSON.stringify(text))
+    // The tokenizer reads a `$$` as display math.
     assert.equal(
-      inlineMathEnd(text, 0),
       inlineMath(text)?.raw.length ?? -1,
+      text[1] === '$' ? obsidianDisplayEnd(text) : expected,
       JSON.stringify(text),
     )
   }
-  // The expression backtracks exponentially over an unclosed backslash run
-  // (its time doubles every two backslashes); the scan solves each position once.
   assert.equal(inlineMathEnd(`$${'\\'.repeat(200_000)}x`, 0), -1)
   for (const count of [5_000, 5_001]) {
     const closed = `$${'\\'.repeat(count)}x$`
-    assert.equal(inlineMathEnd(closed, 0), inlineMath(closed).raw.length)
+    assert.equal(inlineMathEnd(closed, 0), obsidianInlineEnd(closed))
+  }
+  // Openers without a closer, as in currency, share one search for it.
+  for (const make of [
+    (count) => `x ${'$5 and '.repeat(count)}`,
+    (count) => `x ${'a$5 b\n'.repeat(count)}`,
+    (count) => `x ${'$a \\$ '.repeat(count)}`,
+  ]) {
+    const work = []
+    for (const count of [1000, 2000, 4000, 8000]) {
+      const text = make(count)
+      inlineMathWork.positions = 0
+      formatted.parse(text)
+      work.push(inlineMathWork.positions / text.length)
+      inlineMathWork.positions = 0
+      marked.lexer(text)
+      work.push(inlineMathWork.positions / text.length)
+    }
+    for (const perUnit of work) assert.ok(perUnit <= 1, JSON.stringify(work))
+  }
+})
+
+test('single-dollar math reads as Obsidian reads it, after an escaped dollar too', () => {
+  for (const [source, expected] of [
+    // `\$` is a dollar sign; the formula after it closes right before `$`.
+    ['\\$$x$$', [['inline', 'x']]],
+    ['a \\$$x\ny$$ b', [['inline', 'x\ny']]],
+    ['cost $5 and $$\n10$$', [['inline', '5 and $']]],
+    ['$x$$', [['inline', 'x']]],
+    // A `$` after a space or before a digit does not close.
+    ['$a $b$', [['inline', 'a $b']]],
+    ['$a$1 b$', [['inline', 'a$1 b']]],
+    ['$x\ny$ z', [['inline', 'x\ny']]],
+    ['> a $x\n> y$ b', [['inline', 'x\ny']]],
+    ['$5 and $10', []],
+    ['$ x$', []],
+    ['$x $', []],
+    ['\\$x$', []],
+    ['\\$\\$x$$', []],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, source)
+    assert.deepEqual(markedMath(source), expected, source)
   }
 })
 
@@ -384,8 +441,9 @@ test('display math inside a paragraph spans lines, may be blank and may hold dol
     ['- a $$x\n  +y$$ b', [['display', 'x\n+y']]],
     ['Setext $$p\n+q$$ title\n===', [['display', 'p\n+q']]],
     ['| $$x$y$$ | b |\n| --- | --- |', [['display', 'x$y']]],
-    // Escapes, code spans, paragraph ends and currency stay text.
-    ['a \\$$x\n+y$$ b', []],
+    // After an escaped dollar, `$x\n+y$` is inline math; code spans,
+    // paragraph ends and currency stay text.
+    ['a \\$$x\n+y$$ b', [['inline', 'x\n+y']]],
     ['`a $$x\n+y$$` b', []],
     ['a $$x\n\n+y$$ b', []],
     ['a $$x\n# heading\ny$$ b', []],
@@ -393,6 +451,44 @@ test('display math inside a paragraph spans lines, may be blank and may hold dol
   ]) {
     assert.deepEqual(lezerMath(source), expected, source)
     assert.deepEqual(markedMath(source), expected, source)
+  }
+})
+
+test('emphasis, strikethrough or a link that opened first wins over math, as in Obsidian and exports', () => {
+  for (const [source, expected] of [
+    ['a *$$x* +y$$', []],
+    ['a **$$x** y$$', []],
+    ['a ~~$$x~~ y$$', []],
+    ['a _$$x_ y$$', []],
+    ['a [$$x](u) y$$', []],
+    ['a *b $$x* y$$ c*', []],
+    ['a *x $$y\nz* w$$', []],
+    ['a *$x* y$', []],
+    ['a ![$$x](u) y$$', []],
+    ['a *b* *c $$x* y$$', []],
+    // Math inside them, or syntax that closed before it, stays math.
+    ['a *$$x$$* b', [['display', 'x']]],
+    ['a $$x *y$$ z*', [['display', 'x *y']]],
+    ['*a* $$x *b* y$$', [['display', 'x *b* y']]],
+    ['a [x $$y [z] w$$ v](u)', [['display', 'y [z] w']]],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, source)
+    assert.deepEqual(markedMath(source), expected, source)
+  }
+})
+
+test('a pair over the formula limit stays text, so its closing dollars open nothing', () => {
+  const long = 'x'.repeat(10_001)
+  for (const [source, expected] of [
+    [`a $$${long}$$ b $$c$$ d`, [['display', 'c']]],
+    [`a $$x\n${long}$$ b $$c$$ d`, [['display', 'c']]],
+    [`$$\n${long}\n$$ b $$c$$`, [['display', 'c']]],
+    [`a $${long}$b$ c`, []],
+    [`a $${long}$ $b$ c`, [['inline', 'b']]],
+  ]) {
+    const label = JSON.stringify(source.slice(0, 12))
+    assert.deepEqual(lezerMath(source), expected, label)
+    assert.deepEqual(markedMath(source), expected, label)
   }
 })
 
@@ -416,14 +512,22 @@ test('double dollars respect literal contexts and table cells', () => {
   for (const source of [
     'costs $5 and $10',
     'costs $5.00 or $10.00',
-    String.raw`escaped \$$x$$ and \$5`,
+    String.raw`escaped \$\$x$$ and \$5`,
     '`$$x$$` and ``code ` $$y$$``',
     '```tex\n$$x$$\n```',
     '[link](https://example.test/$$x$$)',
-    '| `$$x$$` | \\$$y$$ |\n| --- | --- |',
+    '| `$$x$$` | \\$\\$y$$ |\n| --- | --- |',
   ]) {
     assert.deepEqual(lezerMath(source), [], source)
     assert.deepEqual(markedMath(source), [], source)
+  }
+  // As in Obsidian, an escaped first dollar leaves `$y$` before the last one.
+  for (const source of [
+    String.raw`escaped \$$y$$ and \$5`,
+    '| `$$x$$` | \\$$y$$ |\n| --- | --- |',
+  ]) {
+    assert.deepEqual(lezerMath(source), [['inline', 'y']], source)
+    assert.deepEqual(markedMath(source), [['inline', 'y']], source)
   }
   const source = '| before $$x+1$$ after | `$5` |\n| --- | --- |'
   assert.deepEqual(lezerMath(source), [['display', 'x+1']])

@@ -5,12 +5,12 @@ import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import { TableKit } from '@tiptap/extension-table'
 import { MarkdownManager } from '@tiptap/markdown'
 import { Marked } from 'marked'
-import { inlineDisplayMathTokens } from '../src/addons/math/inline-display.ts'
 import {
   blockMath,
   inlineMath,
   mathFlavor,
   mathTokens,
+  richInlineMath,
 } from '../src/addons/math/syntax.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { markdownSerializer } from '../src/renderer/src/markdown-serialization.ts'
@@ -53,11 +53,12 @@ const fixtures = [
   ['text $$$$ more', 0, 1],
   ['> text $$x\n> +y$$ more', 0, 1],
   ['- text $$x\n  +y$$ more', 0, 1],
-  ['text \\$$x\n+y$$ more', 0],
+  // As in Obsidian, an escaped dollar leaves `$x$` before the last one.
+  ['text \\$$x\n+y$$ more', 0, 1],
   ['$5 and $$10', 0],
   ['\\$$', 0],
-  ['\\$$x$$', 0],
-  ['text \\$$x$$ more', 0],
+  ['\\$$x$$', 0, 1],
+  ['text \\$$x$$ more', 0, 1],
   ['`$$x$$`', 0],
   ['```tex\n$$x$$\n```', 0],
 ]
@@ -67,6 +68,9 @@ function mathParser(gfm = false) {
     const syntax = mathTokens.extensions.find(
       ({ name }) => name === extension.name,
     )
+    // As in the app, the rich editor keeps its own inline math rule.
+    const tokenize =
+      extension === InlineMath ? richInlineMath : syntax.tokenizer
     return extension.extend({
       parseMarkdown(token, helpers) {
         return token.display
@@ -79,7 +83,7 @@ function mathParser(gfm = false) {
         name: syntax.name,
         level: syntax.level,
         start: syntax.start,
-        tokenize: syntax.tokenizer,
+        tokenize,
       },
     })
   })
@@ -89,7 +93,7 @@ function mathParser(gfm = false) {
       id: 'math.latex',
       markedOptions: { gfm },
       richExtensions: [...extensions, ...(gfm ? [TableKit] : [])],
-      export: { extensions: [mathTokens, inlineDisplayMathTokens] },
+      export: { extensions: [mathTokens] },
     },
   ])
   const all = [...core, ...addons]
@@ -120,11 +124,10 @@ test('display math blocks start only at line boundaries in visual and source tok
         if (token.type === 'inlineMath') display++
       })
       assert.equal(blocks, expected, source)
-      // `$$…$$` inside a line is display math there, as Obsidian draws it,
-      // except in the rich editor, which reads it as text.
-      assert.equal(display, parser === visual ? 0 : inline, source)
+      // `$$…$$` inside a line is display math there, as Obsidian draws it.
+      assert.equal(display, inline, source)
       assert.equal(tokens.map(({ raw }) => raw).join(''), source, source)
-      assert.equal(mathFlavor.detect(source), expected > 0, source)
+      assert.equal(mathFlavor.detect(source), expected + inline > 0, source)
     }
   }
 })
@@ -168,7 +171,7 @@ test('math paragraphs retain literal text without inserted line breaks', () => {
     'text $$x$$ more',
     'x$$x$$',
     '$5 and $$10',
-    '\\$$x$$',
+    '\\$\\$x\\$\\$',
     'text $$x$y$$ more',
     'text $$ $$ more',
     // Line breaks read as spaces, as in the text around them.
@@ -179,7 +182,7 @@ test('math paragraphs retain literal text without inserted line breaks', () => {
     assert.equal(doc.firstChild.type.name, 'paragraph', source)
     assert.equal(
       doc.textContent,
-      source.replace('\\$', '$').replace(/[ \t]*\n[ \t]*/g, ' '),
+      source.replaceAll('\\$', '$').replace(/[ \t]*\n[ \t]*/g, ' '),
       source,
     )
   }
@@ -249,7 +252,7 @@ test('full and cached math serialization preserve literal dollars and equations'
 test('table cells escape literal double dollars for display-aware exports', () => {
   const { manager, schema } = mathParser(true)
   const doc = schema.nodeFromJSON(
-    manager.parse('| \\$$x$$ |\n| --- |\n| $x$ |'),
+    manager.parse('| \\$\\$x\\$\\$ |\n| --- |\n| $x$ |'),
   )
   for (const blockLocal of [false, true]) {
     const saved = markdownSerializer(manager, blockLocal)(doc).source
@@ -262,12 +265,12 @@ test('literal double dollars stay literal after rich serialization and export', 
   const { manager, schema } = mathParser(true)
   const parser = markdownSourceParser({ gfm: true, math: true })
   for (const source of [
-    String.raw`before \$$x$$ after`,
-    '| \\$$x$$ |\n| --- |',
-    'before \\$$x\n+y$$ after',
+    String.raw`before \$\$x\$\$ after`,
+    '| \\$\\$x\\$\\$ |\n| --- |',
+    'before \\$\\$x\n+y\\$\\$ after',
     String.raw`before \$$ $$ after`,
     String.raw`before \$$$$ after`,
-    String.raw`before \$$ x $y$$ after`,
+    String.raw`before \$\$ x $y\$\$ after`,
   ]) {
     const doc = schema.nodeFromJSON(manager.parse(source))
     for (const blockLocal of [false, true]) {

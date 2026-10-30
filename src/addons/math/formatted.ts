@@ -231,16 +231,17 @@ export function mathContributions(host: MathHost) {
     },
   }
   /**
-   * `$$…$$` that continues on a later line of its paragraph, as Obsidian
-   * draws it: one display formula in place of its lines.
+   * `$…$` or `$$…$$` that continues on a later line of its paragraph, as
+   * Obsidian draws it: one formula in place of its lines.
    */
   const lines: FormattedNodeView = {
     nodes: ['InlineMathLines'],
     decorate(node, out, { revealed }) {
       if (revealed) {
-        out.syntax(node.from, node.from + 2)
-        out.syntax(node.to - 2, node.to)
-        out.mark(node.from + 2, node.to - 2, {
+        const mark = (node.node.firstChild?.to ?? node.from + 2) - node.from
+        out.syntax(node.from, node.from + mark)
+        out.syntax(node.to - mark, node.to)
+        out.mark(node.from + mark, node.to - mark, {
           class: 'hibi-lp-math-source',
         })
       }
@@ -248,24 +249,25 @@ export function mathContributions(host: MathHost) {
     },
     layout(node, out, { state, revealed }) {
       if (revealed) return false
+      const mark = (node.node.firstChild?.to ?? node.from + 2) - node.from
       // Quote markers of the later lines are no part of the formula.
       let latex = '',
-        at = node.from + 2
+        at = node.from + mark
       for (let child = node.node.firstChild; child; child = child.nextSibling)
         if (child.name !== 'MathMark') {
           latex += state.sliceDoc(at, child.from)
           at = child.to
         }
-      latex += state.sliceDoc(at, node.to - 2)
+      latex += state.sliceDoc(at, node.to - mark)
       const source = state.sliceDoc(node.from, node.to)
       out.replace(
         node.from,
         node.to,
         new FormulaWidget(
           source,
-          latex.trim(),
-          true,
-          { from: 2, to: source.length - 2 },
+          mark > 1 ? latex.trim() : latex,
+          mark > 1,
+          { from: mark, to: source.length - mark },
           host,
         ),
       )

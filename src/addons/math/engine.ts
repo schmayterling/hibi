@@ -11,22 +11,16 @@ import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
 import type { MathHost } from './formatted'
-import { inlineDisplayMathTokens } from './inline-display'
 import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
 import {
   blockMath,
   blockMathStart,
-  detector,
-  inlineMath,
   mathFlavor,
   mathTokens,
+  richInlineMath,
 } from './syntax'
-
-// Recheck automatic math detection, now including `$$…$$` inside a line, when
-// this lazy runtime registers its flavor.
-detector.use(inlineDisplayMathTokens)
 
 const options = {
   throwOnError: false,
@@ -256,7 +250,7 @@ export function startMath(context: AddonContext) {
       name: 'inlineMath',
       level: 'inline',
       start: (source) => source.indexOf('$'),
-      tokenize: inlineMath,
+      tokenize: richInlineMath,
     },
     addInputRules() {
       return [
@@ -264,7 +258,7 @@ export function startMath(context: AddonContext) {
           find: /(?:^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+?\$)$/,
           handler: ({ state, range, match }) => {
             const raw = match[1],
-              token = raw && inlineMath(raw)
+              token = raw && richInlineMath(raw)
             if (!token) return null
             state.tr.replaceWith(
               range.to - raw.length,
@@ -338,7 +332,7 @@ export function startMath(context: AddonContext) {
     ...mathFlavor,
     richExtensions: [inline, block],
     export: {
-      extensions: [mathTokens, inlineDisplayMathTokens, renderers],
+      extensions: [mathTokens, renderers],
       css: mathStyles,
     },
   })

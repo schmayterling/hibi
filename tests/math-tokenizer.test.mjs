@@ -17,8 +17,10 @@ import { markdownSerializer } from '../src/renderer/src/markdown-serialization.t
 import { preserveRichSource } from '../src/renderer/src/rich-source-preservation.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 
+// As in Obsidian, a `$$` line opens a block only without another `$` on it,
+// so `$$x$$` on a line of its own is display math in a paragraph.
 const fixtures = [
-  ['$$x$$', 1],
+  ['$$x$$', 0, 1],
   ['text $$x$$', 0, 1],
   ['text $$x$$ more', 0, 1],
   ['x$$x$$', 0, 1],
@@ -26,24 +28,27 @@ const fixtures = [
   ['$$x$$ more', 0, 1],
   ['text\n$$x$$ more', 0, 1],
   ['text\n   $$x$$ more', 0, 1],
-  ['text\n$$x$$ more\n$$y$$', 1, 1],
-  ['text\n$$x$$', 1],
+  ['text\n$$x$$ more\n$$y$$', 0, 2],
+  ['text\n$$x$$', 0, 1],
   ['$$\nx\n$$', 1],
-  [' $$x$$', 1],
-  ['  $$x$$', 1],
-  ['   $$x$$', 1],
-  ['text\n   $$x$$', 1],
+  [' $$x$$', 0, 1],
+  ['  $$x$$', 0, 1],
+  ['   $$x$$', 0, 1],
+  ['text\n   $$x$$', 0, 1],
+  ['text\n   $$\nx\n$$', 1],
   ['   $$\nx\n   $$', 1],
   ['    $$x$$', 0],
   ['\t$$x$$', 0],
   ['text\n    $$x$$', 0, 1],
-  ['- item\n\n  $$x$$', 1],
-  ['- text\n  $$x$$', 1],
+  ['- item\n\n  $$x$$', 0, 1],
+  ['- text\n  $$x$$', 0, 1],
+  ['- text\n  $$\n  x\n  $$', 1],
   ['- text $$x$$', 0, 1],
   ['- text $$x$$ more', 0, 1],
   ['- item\n\n  $$\n  x\n  $$', 1],
-  ['> $$x$$', 1],
-  ['> text\n> $$x$$', 1],
+  ['> $$x$$', 0, 1],
+  ['> text\n> $$x$$', 0, 1],
+  ['> text\n> $$\n> x\n> $$', 1],
   ['> $$\n> x\n> $$', 1],
   ['> text $$x$$', 0, 1],
   ['> text $$x$$ more', 0, 1],
@@ -137,7 +142,7 @@ test('display math start hints and tokenizer agree on indentation and real newli
     ({ name }) => name === 'blockMath',
   ).start
   for (const indent of ['', ' ', '  ', '   ']) {
-    const source = `${indent}$$x$$`
+    const source = `${indent}$$\nx\n$$`
     assert.equal(blockMath(source)?.raw, source)
     const tail = `text\n${source}`
     const at = start(tail)
@@ -150,15 +155,21 @@ test('display math start hints and tokenizer agree on indentation and real newli
     'text $$x$$',
     'text $$x$$ more',
     '\\$$x$$',
-    'text\n    $$x$$',
+    'text\n    $$\nx',
+    // Another `$` on the line, or no line after it.
+    'text\n$$x$$\nmore',
+    'text\n$$',
   ])
     assert.ok(start(source) === undefined || start(source) < 0, source)
   for (const source of [
+    '$$x$$',
     'text $$x$$',
     'text $$x$$ more',
-    '    $$x$$',
-    '\t$$x$$',
+    '    $$\nx\n$$',
+    '\t$$\nx\n$$',
     '\\$$x$$',
+    '$$',
+    '$$a$b\nc\n$$',
   ])
     assert.equal(blockMath(source), undefined, source)
   assert.equal(inlineMath('$x$')?.latex, 'x')

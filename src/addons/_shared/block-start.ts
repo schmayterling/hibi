@@ -1,5 +1,11 @@
 import { Lexer, type TokenizerThis } from 'marked'
 
+/**
+ * The line each block start looks for, at any line start: as a paragraph's
+ * interruption, it also ends a quote's lazy lines and setext heading text.
+ */
+export const blockStartLines = new WeakMap<object, RegExp>()
+
 /** Calls, source units read, and the largest single read, for complexity checks. */
 export const blockStartCounters = { calls: 0, units: 0, max: 0 }
 
@@ -39,7 +45,7 @@ export function blockStart(line: RegExp) {
     }
     return regex
   }
-  return function (this: TokenizerThis | undefined, source: string) {
+  const start = function (this: TokenizerThis | undefined, source: string) {
     const lexer = this?.lexer
     blockStartCounters.calls++
     // Outside top-level paragraphs, such as in list items, Marked ignores it.
@@ -58,4 +64,6 @@ export function blockStart(line: RegExp) {
     blockStartCounters.max = Math.max(blockStartCounters.max, units)
     return match?.[1] === undefined ? -1 : match.index + 1
   }
+  blockStartLines.set(start, new RegExp(`^(?:${line.source})`, 'm'))
+  return start
 }

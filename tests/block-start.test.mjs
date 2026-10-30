@@ -8,9 +8,11 @@ import {
   subtextStart,
   textExtrasMarkdown,
 } from '../src/addons/text-extras/syntax.ts'
+import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 
 const hints = [
-  { name: 'math', start: blockMathStart, line: / {0,3}\$\$/ },
+  // A `$$` line without another `$`, which a line follows.
+  { name: 'math', start: blockMathStart, line: / {0,3}\$\$+[^$\n]*\n/ },
   {
     name: 'alert',
     start: alertStart,
@@ -27,7 +29,15 @@ const lines = [
   ...['---', '***', '___', '- - -', '===', '<div>', '</div>', '<DIV>'],
   ...['<span>', '<!-- c -->', '<?x', '<!DOC', '<![CDATA[', '| a | b |'],
   ...['|---|---|', 'a | b', '--- | ---', '    indented', '\t$$', '  $$x$$'],
-  ...['$$x$$', '$$', '> [!NOTE]', '   > [!tip] t', '-# small', ' -# no'],
+  ...[
+    '$$x$$',
+    '$$',
+    '$$$ a',
+    '> [!NOTE]',
+    '   > [!tip] t',
+    '-# small',
+    ' -# no',
+  ],
 ]
 let seed = 0x9e3779b9
 const random = () => {
@@ -54,9 +64,10 @@ test('block start hints read exactly the paragraph marked would read', () => {
         pick,
       ).join('\n')}`
       const read = paragraph.exec(source)[0]
-      // A marker may also be the line that ends the paragraph, such as an alert.
+      // A marker may also be the line that ends the paragraph, such as an
+      // alert, with its newline when math needs a line after it.
       const end = source.indexOf('\n', read.length + 1)
-      const scope = end < 0 ? source : source.slice(0, end)
+      const scope = end < 0 ? source : source.slice(0, end + 1)
       for (const { name, start, line } of hints) {
         const hit = new RegExp(`\\n(?:${line.source})`).exec(scope)
         assert.equal(
@@ -88,7 +99,7 @@ test('block start hints stay linear whatever ends the paragraph', () => {
       // A later display equation made the old hints rescan the rest each time.
       const source = `${Array.from({ length: count }, (_, index) =>
         section(index),
-      ).join('')}\n$$x$$`
+      ).join('')}\n$$\nx\n$$`
       reset()
       const tokens = parser.lexer(source)
       assert.equal(tokens.at(-1).type, 'blockMath', shape)
@@ -105,7 +116,7 @@ test('block start hints stay linear whatever ends the paragraph', () => {
   }
   // Marked reads list items line by line and ignores block hints there.
   reset()
-  parser.lexer(`- item\n${'  lazy line\n'.repeat(2000)}\n$$x$$`)
+  parser.lexer(`- item\n${'  lazy line\n'.repeat(2000)}\n$$\nx\n$$`)
   assert.ok(blockStartCounters.calls >= 2000)
   assert.ok(blockStartCounters.units < 100, `${blockStartCounters.units}`)
 })
@@ -176,4 +187,27 @@ test('alert and subtext hints no longer start blocks in the middle of a line', (
     'paragraph',
     'githubAlert',
   ])
+})
+
+test('a line where a block extension starts ends lazy quote lines and setext text', () => {
+  // As in lezer: a line that interrupts a paragraph is no continuation text.
+  const parser = new Marked({ gfm: false, breaks: false }, blockMarkdown)
+  parser.setOptions({ gfm: true })
+  parser.use(mathTokens, textExtrasMarkdown)
+  const blocks = (source) =>
+    parser.lexer(source).map(({ type, raw }) => `${type}:${raw}`)
+  assert.deepEqual(blocks('> a\n$$\nx\n$$'), [
+    'blockquote:> a\n',
+    'blockMath:$$\nx\n$$',
+  ])
+  assert.deepEqual(blocks('> a\n-# small'), [
+    'blockquote:> a\n',
+    'subtext:-# small',
+  ])
+  assert.deepEqual(blocks('a\n$$\nb\n---'), [
+    'paragraph:a\n',
+    'blockMath:$$\nb\n---',
+  ])
+  // Only a `$$` line that a line follows opens a block.
+  assert.deepEqual(blocks('> a\n$$'), ['blockquote:> a\n$$'])
 })

@@ -274,7 +274,7 @@ export function mathContributions(host: MathHost) {
       return false
     },
   }
-  /** A display block's formula, when it is closed. */
+  /** A display block's formula, when it has one within the formula limit. */
   const display = (node: SyntaxNodeRef, source: string) => {
     if (!formattedMathBlock(node.node)) return null
     const texts = node.node.getChildren('MathText')

@@ -141,8 +141,14 @@ test('source outline keeps paragraph math edits and distant block delimiters cur
               eol,
             )
           const { store, model } = setup(text, { math: true })
+          // As in Obsidian, an unclosed block runs to the end of its quote,
+          // list item or note, so only a top-level one hides the last heading.
+          const open = prefix ? ['after'] : []
           try {
-            assert.equal(finish(model.read()).value.length, 2)
+            assert.deepEqual(
+              finish(model.read()).value.map(({ label }) => label),
+              open,
+            )
             // Only the distant delimiter changes, so the reused opener must be
             // parsed again. A queued edit before it moves that decision too.
             const shift = queued ? ' text'.length : 0
@@ -163,7 +169,10 @@ test('source outline keeps paragraph math edits and distant block delimiters cur
               }),
             )
             edit(store, model, [{ from, to: from + 2, insert: 'END' }])
-            assert.equal(finish(model.read()).value.length, 2)
+            assert.deepEqual(
+              finish(model.read()).value.map(({ label }) => label),
+              open,
+            )
           } finally {
             model.dispose()
           }

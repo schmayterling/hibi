@@ -691,8 +691,9 @@ test('a giant fence in a quote in a list item continues in bounded steps', () =>
 })
 
 test('a decision that read past an edit parses its chunk and the chunk before it again', () => {
-  // `$$` opens display math only when a closing `$$` line follows within
-  // 10,000 characters, as in the rich view, so the decision reads ahead.
+  // `$$` opens a block only when a closing `$$` line follows within 10,000
+  // characters, as display math once did, so the decision reads ahead. Its
+  // own node name: the real display math continues like a fence.
   let input = null
   /** Where the display math opened at `start` ends, or null. */
   const closing = (start) => {
@@ -704,16 +705,16 @@ test('a decision that read past an edit parses its chunk and the chunk before it
   const math = parser.configure([
     GFM,
     {
-      defineNodes: [{ name: 'BlockMath', block: true }],
+      defineNodes: [{ name: 'ReadAheadBlock', block: true }],
       wrap: (inner, outer) => {
         input = outer
         return inner
       },
       parseBlock: [
         {
-          name: 'BlockMath',
+          name: 'ReadAheadBlock',
           before: 'FencedCode',
-          // Display math interrupts a paragraph.
+          // The block interrupts a paragraph.
           endLeaf: (cx, line) =>
             line.text.slice(line.pos) === '$$' &&
             closing(cx.lineStart + line.pos) !== null,
@@ -724,7 +725,7 @@ test('a decision that read past an edit parses its chunk and the chunk before it
             if (end === null) return false
             while (cx.lineStart + line.text.length < end && cx.nextLine()) {}
             cx.nextLine()
-            cx.addElement(cx.elt('BlockMath', start, end))
+            cx.addElement(cx.elt('ReadAheadBlock', start, end))
             return true
           },
         },

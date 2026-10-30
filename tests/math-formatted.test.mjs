@@ -56,16 +56,16 @@ function lezerMath(source) {
         return false
       }
       if (node.name === 'BlockMath') {
-        const text = node.node
-          .getChildren('MathText')
+        const parts = node.node.getChildren('MathText')
+        const text = parts
           .map((part) => source.slice(part.from, part.to))
           .join('')
+        // Without its closing line, a block runs to its container's end.
         const marks = node.node.getChildren('MathMark')
-        assert.equal(
-          marks.length,
-          2,
-          `closed block in ${JSON.stringify(source)}`,
-        )
+        assert.ok(marks.length <= 2, `marks in ${JSON.stringify(source)}`)
+        // Over the formula limit, it keeps its lines as text.
+        const body = source.slice(marks[0].to, marks[1]?.from ?? node.to)
+        if (!parts.length && /[^\s>]/.test(body)) return false
         found.push(['block', text.trim()])
         return false
       }
@@ -501,12 +501,64 @@ test('math after emphasis, links and open brackets reads its paragraph in linear
   }
 })
 
+test('display blocks read on like fenced code, as in Obsidian', () => {
+  // Expectations from Obsidian 1.13.7's reading view.
+  for (const [source, expected] of [
+    // Without its closing line, a block runs to the end of its quote, list
+    // item or note.
+    ['$$\nx\n\n# heading', [['block', 'x\n\n# heading']]],
+    [
+      '> $$\n> x\n\nafter $y$',
+      [
+        ['block', 'x'],
+        ['inline', 'y'],
+      ],
+    ],
+    [
+      '- $$\n  x\n- $y$',
+      [
+        ['block', 'x'],
+        ['inline', 'y'],
+      ],
+    ],
+    // The closing line ends in as many dollar signs as opened the block and
+    // holds no other; a backslash before them escapes nothing.
+    ['$$$\nx\n$$\ny\n$$$', [['block', 'x\n$$\ny']]],
+    ['$$\nx $$ y\nz\n$$', [['block', 'x $$ y\nz']]],
+    ['$$\nx\n$$ tail\n$$', [['block', 'x\n$$ tail']]],
+    ['$$\nx + y$$\nafter', [['block', 'x + y']]],
+    ['$$\nx\\$$\nafter', [['block', 'x\\']]],
+    ['$$\n$$', [['block', '']]],
+    // An opening line holds no other dollar sign, and a line follows it in
+    // its container: an item's blank lines count only before its next item.
+    ['text\n$$', []],
+    ['$$x$$\nafter', [['display', 'x']]],
+    ['$$a$b\nc\n$$', [['display', 'a$b\nc']]],
+    [
+      '- $$\n\n- $y$',
+      [
+        ['block', ''],
+        ['inline', 'y'],
+      ],
+    ],
+    ['- $$\n\nafter', []],
+    // A lazy `$$` line ends a quote, as other blocks that interrupt text do.
+    ['> a\n$$\nx\n$$', [['block', 'x']]],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, JSON.stringify(source))
+    assert.deepEqual(markedMath(source), expected, JSON.stringify(source))
+  }
+})
+
 test('a pair over the formula limit stays text, so its closing dollars open nothing', () => {
   const long = 'x'.repeat(10_001)
   for (const [source, expected] of [
     [`a $$${long}$$ b $$c$$ d`, [['display', 'c']]],
     [`a $$x\n${long}$$ b $$c$$ d`, [['display', 'c']]],
-    [`$$\n${long}\n$$ b $$c$$`, [['display', 'c']]],
+    // A block over the limit stays text to its closing line, not past it.
+    [`$$\n${long}\n$$ b $$c$$`, []],
+    [`$$\n${long}\n$$\nb $$c$$`, [['display', 'c']]],
+    [`> $$\n> ${long}\n> $$\n> b $$c$$`, [['display', 'c']]],
     [`a $${long}$b$ c`, []],
     [`a $${long}$ $b$ c`, [['inline', 'b']]],
   ]) {
@@ -812,6 +864,85 @@ test('giant paragraphs pair math and code spans across window seams as the whole
   }
 })
 
+test('a display block over a giant note continues in windows like fenced code', () => {
+  const lines = 'x + y\n'.repeat(40_000)
+  for (const [text, end] of [
+    [`intro\n\n$$\n${lines}`, null],
+    [`intro\n\n$$\n${lines}$$\n\n# after\n`, '# after'],
+  ]) {
+    const at = Math.floor(text.length / 2)
+    for (const demand of [
+      { from: at, to: at + 3000 },
+      { from: text.length - 2000, to: text.length },
+    ]) {
+      const { tree, probe } = chunkedParse(text, demand)
+      let block = tree.resolveInner(demand.from + 100, 1)
+      while (block && block.name !== 'BlockMath') block = block.parent
+      if (end === null || demand.from === at)
+        assert.equal(block?.from, text.indexOf('$$'), JSON.stringify(demand))
+      if (end && demand.from !== at)
+        assert.equal(
+          tree.resolveInner(text.indexOf(end) + 3, 1).name,
+          'ATXHeading1',
+        )
+      // Windows replay the opening line instead of parsing the whole block.
+      assert.ok(probe.parsedUnits < 64_000, JSON.stringify(probe))
+    }
+  }
+})
+
+test('giant paragraphs in quotes and list items pair math across window seams too', () => {
+  // A `$` after a quote marker or an item's indent starts its line's
+  // content, where it can close math opened on the line before.
+  const giant = giantParagraph(100_000, 13).replace(
+    /\n(see|code)/g,
+    (_, word) => ` $q\n$ ${word}`,
+  )
+  const [title, ...rest] = giant.split('\n\n')
+  const body = rest.slice(0, -1).join('\n\n').split('\n')
+  for (const [label, first, later] of [
+    ['quote', '> ', '> '],
+    ['list item', '- ', '  '],
+    ['quote in a list item', '- > ', '  > '],
+    ['list item in a quote', '> - ', '>   '],
+  ]) {
+    let text = `${title}\n\n${body
+      .map((line, i) => (i ? later : first) + line)
+      .join('\n')}\n\n## after\n`
+    const exact = formatted.parse(text)
+    for (const options of [
+      {},
+      { chunkSize: 64, groupSize: 4, giantBlock: 1024 },
+    ])
+      for (let k = 1; k < 12; k++) {
+        const at = Math.floor((text.length * k) / 12)
+        const demand = { from: at, to: Math.min(text.length, at + 3000) }
+        const { tree } = chunkedParse(text, demand, options)
+        assert.deepEqual(
+          pairsIn(tree, demand.from, demand.to),
+          pairsIn(exact, demand.from, demand.to),
+          `${label} ${JSON.stringify(options)} at ${at}`,
+        )
+      }
+    // A new `$$` above the viewport flips every pair after it.
+    const at = Math.floor(text.length / 2)
+    const demand = { from: at, to: at + 3000 }
+    let { tree } = chunkedParse(text, demand)
+    for (const pos of [at + 1500, text.indexOf('\n', 200) + first.length + 1]) {
+      text = `${text.slice(0, pos)}$$${text.slice(pos)}`
+      const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+        { fromA: pos, toA: pos, fromB: pos, toB: pos + 2 },
+      ])
+      ;({ tree } = chunkedParse(text, demand, {}, fragments))
+      assert.deepEqual(
+        pairsIn(tree, demand.from, demand.to),
+        pairsIn(formatted.parse(text), demand.from, demand.to),
+        `${label} after $$ at ${pos}`,
+      )
+    }
+  }
+})
+
 test('an edit above a seam checkpoint pairs the giant paragraph after it again', () => {
   // Prose decides no pairs, yet each checkpoint rests on every line before it.
   const lines = Array.from(
@@ -932,11 +1063,13 @@ test('random notes of quotes, lists and math agree with the rich view tokenizers
 })
 
 test('display math decided by a distant closing follows edits to it incrementally', () => {
+  // Each block, and whether its formula shows: within the formula limit.
   const blocks = (tree) => {
     const found = []
     tree.iterate({
       enter(node) {
-        if (node.name === 'BlockMath') found.push([node.from, node.to])
+        if (node.name === 'BlockMath')
+          found.push([node.from, node.to, !!node.node.getChild('MathText')])
       },
     })
     return found
@@ -954,22 +1087,23 @@ test('display math decided by a distant closing follows edits to it incrementall
       ),
     }
   }
-  // The opener is three chunks above the edit that closes it.
-  const open = `$$\nx\n\n${'padding\n\n'.repeat(600)}`
+  // Without a closing line, the block runs to the end of the note, here
+  // past the formula limit, so it keeps its lines as text.
+  const open = `$$\nx\n\n${'padding\n\n'.repeat(1200)}`
   let tree = new ChunkedMarkdownParser(formatted, formatted).parse(open)
-  assert.deepEqual(blocks(tree), [])
-  const closed = edit(tree, open, open.length, open.length, '$$')
-  assert.deepEqual(blocks(closed.tree), [[0, closed.text.length]])
+  assert.deepEqual(blocks(tree), [[0, open.length, false]])
+  // A closing line two chunks below the opener makes it a formula there.
+  const at = open.indexOf('padding', 8000)
+  const closed = edit(tree, open, at, at, '$$\n')
+  assert.deepEqual(blocks(closed.tree), [[0, at + 2, true]])
   assert.deepEqual(blocks(closed.tree), blocks(formatted.parse(closed.text)))
-  // Breaking the closing line makes the opener text again.
-  const reopened = edit(
-    closed.tree,
-    closed.text,
-    closed.text.length,
-    closed.text.length,
-    ' tail',
+  // Breaking the closing line makes it text again.
+  const reopened = edit(closed.tree, closed.text, at + 2, at + 2, ' tail')
+  assert.deepEqual(blocks(reopened.tree), [[0, reopened.text.length, false]])
+  assert.deepEqual(
+    blocks(reopened.tree),
+    blocks(formatted.parse(reopened.text)),
   )
-  assert.deepEqual(blocks(reopened.tree), [])
   // Random edits keep chunked trees equal to whole-document trees.
   const snippets = [
     '$$\nx^2\n$$',

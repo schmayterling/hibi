@@ -10,7 +10,14 @@ import {
 } from '@lezer/common'
 import type { MarkdownParser } from '@lezer/markdown'
 import { pairLimit } from '../addons/math/inline-display.ts'
-import { readSeams, type SeamPair } from '../addons/math/seams.ts'
+import {
+  contentStart,
+  type Level,
+  nextColumn,
+  readSeams,
+  type SeamPair,
+  space,
+} from '../addons/math/seams.ts'
 
 /**
  * Chunks start at top-level block starts of an exact parse. Parsing a chunk
@@ -84,6 +91,18 @@ type Giant = {
  * keeps the checkpoint.
  */
 type Seam = { at: number; open: SeamPair | null; reach: number }
+
+/**
+ * A giant paragraph a window cuts: the start of its first line, the end of
+ * its opening lines in the window's head, the end of its last line, and the
+ * quotes and list items around its lines.
+ */
+type Paragraph = {
+  para: number
+  headEnd: number
+  last: number
+  levels: readonly Level[]
+}
 
 /**
  * The quote (`>`) or list a stuck block leaves open at its end: the list's
@@ -434,7 +453,18 @@ type Work =
       para: number
       end: number
       target: number
+      /** The containers of the paragraph's lines. */
+      levels: readonly Level[]
     }
+
+/** The input a masked window input hides pairs in. */
+const unmasked = new WeakMap<Input, Input>()
+
+/**
+ * The text block decisions read: a window's masks only hide inline pairs,
+ * so a line's block type stays as in the whole document.
+ */
+export const blockInput = (input: Input) => unmasked.get(input) ?? input
 
 /**
  * Markdown consumes whole lines, unlike the generic lezer chunk contract.
@@ -481,6 +511,7 @@ function markdownInput(
     },
   }
   if (readers.has(input)) readers.set(result, (to) => readAhead(input, to))
+  if (masks.length) unmasked.set(result, input)
   return result
 }
 
@@ -547,6 +578,8 @@ function openingEnd(input: Input, name: string, from: number) {
     case 'HTMLBlock':
     case 'CommentBlock':
     case 'ProcessingInstructionBlock':
+    // Display math reads on like a fence (../addons/math/formatted-syntax.ts).
+    case 'BlockMath':
       lines = 1
       break
     // The second line decides whether a paragraph is a table; a setext
@@ -596,6 +629,8 @@ function stateKey(input: Input, name: string, from: number) {
       return name
     case 'FencedCode':
       return `${name} ${/^(`+|~+)/.exec(first)?.[0]}`
+    case 'BlockMath':
+      return `${name} ${/^\$+/.exec(first)?.[0]}`
     default:
       return `${name} ${first}`
   }
@@ -726,6 +761,33 @@ function endAround(ends: readonly End[], pos: number) {
     } else high = middle - 1
   }
   return found
+}
+
+/**
+ * The content column of the list item whose marker is at `from`-`to`, past
+ * the base of the containers `outer` around it on its line, as lezer reads
+ * it; null when that line does not continue them.
+ */
+function itemValue(
+  input: Input,
+  from: number,
+  to: number,
+  outer: readonly Level[],
+) {
+  const start = lineStart(input, from)
+  const text = input.read(start, lineEnd(input, to))
+  const basePos = contentStart(outer, text)
+  if (basePos < 0 || basePos > from - start) return null
+  let column = 0,
+    at = 0
+  for (; at < basePos; at++) column = nextColumn(column, text.charCodeAt(at))
+  const base = column
+  for (; at < to - start; at++) column = nextColumn(column, text.charCodeAt(at))
+  const after = column
+  while (space(text.charCodeAt(at)))
+    column = nextColumn(column, text.charCodeAt(at++))
+  // Five or more spaces after the marker start indented code in the item.
+  return (column >= after + 5 ? after + 1 : column) - base
 }
 
 /** A line that is blank inside its quotes and lists. */
@@ -1264,7 +1326,7 @@ class ChunkedParse implements ChunkedPartialParse {
   private continueWork() {
     const work = this.work!
     if (work.kind === 'seams') {
-      const { seams, para, end, target } = work
+      const { seams, para, end, target, levels } = work
       const at = Math.max(
         para,
         seams.findLast((seam) => seam.at <= target)?.at ?? para,
@@ -1273,7 +1335,7 @@ class ChunkedParse implements ChunkedPartialParse {
       let step = lineStart(this.input, Math.min(target, at + size))
       if (step <= at)
         step = Math.min(target, lineEnd(this.input, at + size) + 1)
-      this.seamAt(seams, para, end, step, Number.POSITIVE_INFINITY)
+      this.seamAt(seams, para, end, step, Number.POSITIVE_INFINITY, levels)
       if (step < target) return false
       this.work = null
       const { from, to, block, reach, reveal } = work
@@ -1632,10 +1694,15 @@ class ChunkedParse implements ChunkedPartialParse {
       to: until - base,
       enter: (node) => {
         if (!node.type.is('Block')) return false
-        const close = node.name === 'FencedCode' ? node.node.lastChild : null
+        const close = /^(FencedCode|BlockMath)$/.test(node.name)
+          ? node.node.lastChild
+          : null
         if (
           !retypes.has(node.name) &&
-          !(close?.name === 'CodeMark' && close.from > node.from)
+          !(
+            /^(Code|Math)Mark$/.test(close?.name ?? '') &&
+            close!.from > node.from
+          )
         )
           return node.type.is('BlockContext') ? undefined : false
         const from = base + node.from,
@@ -2098,7 +2165,9 @@ class ChunkedParse implements ChunkedPartialParse {
         !block.leaf ||
           block.opaque ||
           block.key === 'Table' ||
-          /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(block.key ?? '')
+          /^(FencedCode|CodeBlock|HTMLBlock|BlockMath)(?: |$)/.test(
+            block.key ?? '',
+          )
           ? this.giantLeaf(this.giant(block, end), to - from, block.reach)
           : this.leaf('pending', to - from, block.reach),
       )
@@ -2160,15 +2229,34 @@ class ChunkedParse implements ChunkedPartialParse {
     )
     let masks: readonly number[] = [],
       hidden = false
-    if (
-      this.parser.seams &&
-      !complete &&
-      block.leaf &&
-      !block.opaque &&
-      block.end !== null &&
-      (block.key === 'plain' || block.key === 'pipe')
-    ) {
-      const plan = this.seamPlan(from, to, block, reach, reveal, start, stop)
+    // The giant paragraph the window cuts, as read from its start.
+    let paragraph: Paragraph | null = null
+    if (this.parser.seams && !complete && !block.opaque)
+      if (
+        block.leaf &&
+        block.end !== null &&
+        (block.key === 'plain' || block.key === 'pipe')
+      ) {
+        const head = point.head[0]!
+        paragraph = {
+          para: from + head.from,
+          headEnd: from + head.to,
+          last: from + block.end,
+          levels: [],
+        }
+      } else if (!block.leaf && point.retype)
+        paragraph = this.paragraphAt(from, block, point)
+    if (paragraph) {
+      const plan = this.seamPlan(
+        from,
+        to,
+        block,
+        reach,
+        reveal,
+        start,
+        stop,
+        paragraph,
+      )
       if (!plan) return
       ;({ start, stop, masks, hidden, block } = plan)
     }
@@ -2226,6 +2314,64 @@ class ChunkedParse implements ChunkedPartialParse {
   }
 
   /**
+   * The giant paragraph a container window replays inside, as the opening
+   * lines of the replay point parse, or null while its end is not scanned.
+   */
+  private paragraphAt(
+    from: number,
+    block: Giant,
+    point: Replay,
+  ): Paragraph | null {
+    const input = this.input
+    const ranges = point.head.map((range) => ({
+      from: from + range.from,
+      to: from + range.to,
+    }))
+    const headEnd = ranges.at(-1)?.to
+    if (headEnd === undefined) return null
+    // The input ends with the last line's text, not an empty line after it.
+    ranges.at(-1)!.to -= 1
+    const parse = this.parser.scan.startParse(
+      markdownInput(input, ranges),
+      [],
+      ranges,
+    )
+    let tree: Tree | null = null
+    while (!tree) tree = parse.advance()
+    const probe = this.parser.options.probe
+    if (probe)
+      probe.scannedUnits += ranges.reduce(
+        (sum, range) => sum + range.to - range.from,
+        0,
+      )
+    const base = ranges[0]!.from
+    let node: SyntaxNode | null = tree.resolveInner(headEnd - 1 - base, -1)
+    while (node && !/^(Paragraph|SetextHeading[12])$/.test(node.name))
+      node = node.parent
+    const end = node && endAround(block.ends, base + node.from - from)
+    if (!node || end?.from !== base + node.from - from) return null
+    const around: SyntaxNode[] = []
+    for (let parent = node.parent; parent; parent = parent.parent)
+      around.unshift(parent)
+    const levels: Level[] = []
+    for (const parent of around)
+      if (parent.name === 'Blockquote') levels.push({ quote: true })
+      else if (parent.name === 'ListItem') {
+        const mark = parent.getChild('ListMark')
+        const value =
+          mark && itemValue(input, base + mark.from, base + mark.to, levels)
+        if (value == null) return null
+        levels.push({ quote: false, value })
+      }
+    return {
+      para: lineStart(input, base + node.from),
+      headEnd,
+      last: lineEnd(input, from + end.last),
+      levels,
+    }
+  }
+
+  /**
    * A window into a giant paragraph pairs code spans and math as the whole
    * paragraph does: the pairs holding its seams are read from the
    * paragraph's start, and each one crossing a gap between the window's
@@ -2241,12 +2387,9 @@ class ChunkedParse implements ChunkedPartialParse {
     reveal: boolean,
     start: number,
     stop: number,
+    { para, headEnd, last, levels }: Paragraph,
   ) {
     const input = this.input
-    const head = block.points[0]!.head[0]!
-    const para = from + head.from,
-      headEnd = from + head.to,
-      last = from + block.end!
     const seams = (block.seams ?? []).map((seam) => shiftSeam(seam, from))
     const pending = (target: number) => {
       this.pos = from
@@ -2261,10 +2404,12 @@ class ChunkedParse implements ChunkedPartialParse {
         para,
         end: last,
         target,
+        levels,
       }
       return null
     }
-    const holding = (pos: number) => this.seamAt(seams, para, last, pos)
+    const holding = (pos: number) =>
+      this.seamAt(seams, para, last, pos, undefined, levels)
     // The window's lines follow the head's without a gap from its end on.
     let open = start > headEnd ? holding(start) : null
     if (open === undefined) return pending(start)
@@ -2286,12 +2431,12 @@ class ChunkedParse implements ChunkedPartialParse {
       this.countSeams(text.length)
       return text
     }
-    let tail = readSeams(text(end), first, first, end, open, read)
+    let tail = readSeams(text(end), first, first, end, open, read, levels)
     // A pair the window's end cuts: end the window after it.
     if (tail && tail.from >= first && !tail.over) {
       stop = Math.min(last, lineEnd(input, tail.to - 1))
       const next = lastStart <= stop + 1 ? last : stop + 1
-      tail = readSeams(text(next), first, end, next, tail, read)
+      tail = readSeams(text(next), first, end, next, tail, read, levels)
       end = next
     }
     const ranges = [
@@ -2334,6 +2479,7 @@ class ChunkedParse implements ChunkedPartialParse {
     end: number,
     pos: number,
     budget = 4 * this.parser.giantBlock,
+    levels: readonly Level[] = [],
   ) {
     let index = seams.length - 1
     while (index >= 0 && seams[index]!.at > pos) index--
@@ -2352,7 +2498,7 @@ class ChunkedParse implements ChunkedPartialParse {
       let next = lineStart(this.input, Math.min(pos, at + spacing))
       if (next <= at)
         next = Math.min(pos, lineEnd(this.input, at + spacing) + 1)
-      open = readSeams(text, offset, at, next, open, read)
+      open = readSeams(text, offset, at, next, open, read, levels)
       // It read every line before it, even where no pair decided anything.
       added.push({ at: next, open, reach: Math.max(read.reach, next) })
       at = next
@@ -2897,7 +3043,9 @@ export function boundaryWindow(tree: Tree, from: number, to: number) {
   const opaque =
     !!block?.leaf &&
     (block.opaque ||
-      /^(FencedCode|CodeBlock|HTMLBlock)(?: |$)/.test(block.key ?? '')) &&
+      /^(FencedCode|CodeBlock|HTMLBlock|BlockMath)(?: |$)/.test(
+        block.key ?? '',
+      )) &&
     block.key !== 'Table'
   if (!block || block.leaf)
     return {

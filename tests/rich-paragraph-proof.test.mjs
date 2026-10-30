@@ -148,7 +148,11 @@ test('escaped angle bracket remains literal text, never raw html', () => {
 })
 
 test('paragraph edits cannot change adjacent block math across a token boundary', () => {
-  for (const source of ['head$$\nx\n$$', '$$x$$\nhead']) {
+  for (const source of [
+    'head\n$$\nx\n$$',
+    '$$\nx\n$$\nhead',
+    'head$$\nx\n$$',
+  ]) {
     const { state, proof } = setup(source)
     assert.ok(proof)
     const tr = insert(state, 'head', 4, '$')

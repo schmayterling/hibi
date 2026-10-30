@@ -1529,6 +1529,7 @@ function App() {
     if (busyRef.current) return false
     startBusy()
     setError('')
+    const intent = settingsIntent.current
     try {
       const next = await window.hibi.openWorkspaceFile(path, target)
       if (next) {
@@ -1540,7 +1541,7 @@ function App() {
         )
         if (!owner || selected?.definition.owner !== owner)
           addonViews.selectDocument()
-        setSettingsOpen(false)
+        setSettingsOpen(settingsOpenedSince(intent))
         refreshWorkspaceView()
         if (sidebarResize.overlay) setSidebarOpen(false)
       }
@@ -1753,13 +1754,14 @@ function App() {
   ) {
     if (busyRef.current || dialogs.isOpen()) return
     startBusy()
+    const intent = settingsIntent.current
     try {
       const next = await operation()
       if (!next) return
       await acceptOperationDocument(next, replaceLocal)
       refreshWorkspaceView()
       if (revealDocument) {
-        showDocument()
+        showDocument(intent)
         settingsNavigation.current.forward = []
       }
       if (next.tabs.length === 0)

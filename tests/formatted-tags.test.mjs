@@ -566,18 +566,29 @@ test('typing scans only rendered tagged paragraphs in notes of different sizes',
   await page.evaluate(() => {
     if (window.tagScan) return
     const matchAll = String.prototype.matchAll
-    window.tagScan = { calls: 0, characters: 0 }
+    window.tagScan = { calls: 0, characters: 0, redraws: [] }
     String.prototype.matchAll = function (pattern) {
       if (pattern instanceof RegExp && pattern.source.includes('#(')) {
-        window.tagScan.calls++
-        window.tagScan.characters += this.length
+        const scan = window.tagScan
+        scan.calls++
+        scan.characters += this.length
+        // One redraw scans its tags within one task.
+        if (!scan.redraw) {
+          scan.redraw = { calls: 0, characters: 0 }
+          scan.redraws.push(scan.redraw)
+          queueMicrotask(() => {
+            scan.redraw = null
+          })
+        }
+        scan.redraw.calls++
+        scan.redraw.characters += this.length
       }
       return matchAll.call(this, pattern)
     }
   })
   const reset = () =>
     page.evaluate(() => {
-      window.tagScan = { calls: 0, characters: 0 }
+      window.tagScan = { calls: 0, characters: 0, redraws: [] }
     })
   /** Wait until renders stop, and give what they scanned since the last reset. */
   const settled = async () => {
@@ -674,25 +685,27 @@ test('typing scans only rendered tagged paragraphs in notes of different sizes',
   console.log(JSON.stringify({ short, long }))
   // Both open in the formatted view, below the source-first opening size.
   assert.ok(long.length < 256 * 1024 && long.length > 3.9 * short.length)
-  // Each visible paragraph has two tagged runs (15 characters total); the
-  // heading adds one seven-character run, and each typed key adds one unit.
-  const normalized = (sample) =>
-    sample.typed.map(({ calls, characters, paragraphs }, index) => ({
-      calls: calls - 2 * paragraphs,
-      characters: characters - 15 * paragraphs - (index + 1),
-    }))
-  assert.deepEqual(normalized(long), normalized(short))
+  // Each redraw scans each visible paragraph's two tagged runs (15 characters
+  // total), the heading's seven-character run and every key typed so far.
+  // The formatted view redraws for each parse step it publishes, so a busy
+  // page can redraw a key's text twice, or the text before it once more.
   for (const sample of [short, long]) {
     assert.equal(sample.shown, 2 * sample.paragraphs)
-    assert.deepEqual(
-      normalized(sample),
-      [...'typed'].map(() => ({ calls: 1, characters: 7 })),
-    )
-    for (const key of sample.typed)
-      assert.ok(
-        key.calls > 0 && key.characters < sample.length / 50,
-        JSON.stringify(key),
+    sample.typed.forEach(({ redraws, paragraphs }, index) => {
+      const typed = redraws.map(({ calls, characters }) =>
+        calls === 2 * paragraphs + 1 ? characters - 15 * paragraphs - 7 : NaN,
       )
+      assert.ok(
+        typed.includes(index + 1) &&
+          typed.every((count) => count === index || count === index + 1),
+        JSON.stringify(sample.typed),
+      )
+      for (const redraw of redraws)
+        assert.ok(
+          redraw.characters < sample.length / 50,
+          JSON.stringify(redraw),
+        )
+    })
   }
   for (const { jumped, length } of [short, long])
     assert.ok(

@@ -53,7 +53,9 @@ test('math regions and leading empty paragraphs match native rich counts after e
       text,
     )
   for (const [index, source] of fixtures.entries()) {
-    await page.evaluate(() => localStorage.removeItem('hibi:formatted-engine'))
+    await page.evaluate(() =>
+      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
+    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     await app.evaluate(

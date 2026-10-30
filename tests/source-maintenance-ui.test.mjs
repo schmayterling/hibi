@@ -67,12 +67,12 @@ test('ENG23/J01: fragmented source remains editable and savable across quiet-tim
   }, file)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
+    () => document.querySelector('.source-pane .cm-content')?.isContentEditable,
   )
   const result = await page.evaluate(async () => {
     const { sdk, context } = window.maintenanceFixture
     const view = sdk.codeMirror.view.EditorView.findFromDOM(
-      document.querySelector('.cm-content'),
+      document.querySelector('.source-pane .cm-content'),
     )
     view.dispatch({
       changes: {

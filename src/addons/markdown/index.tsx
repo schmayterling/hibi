@@ -1,6 +1,4 @@
-import { Strike } from '@tiptap/extension-strike'
-import { TaskItem } from '@tiptap/extension-task-item'
-import { TaskList } from '@tiptap/extension-task-list'
+import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
@@ -8,15 +6,11 @@ import { defineAddon, type MarkdownFlavor, type RenderedMarkdown } from '../api'
 import { alertMarkdown, alertMarker } from './alerts'
 import alertCss from './alerts.css?inline'
 import { obsidianInfo } from './flavor-info'
-import { GithubAlert } from './GithubAlert'
 import manifest from './manifest'
-import {
-  ObsidianHighlight,
-  obsidianMarkdown,
-  WikiEmbed,
-  WikiLink,
-} from './obsidian'
-import { NativeTableKit } from './table-tokenizer'
+import { obsidianMarkdown } from './obsidian-markdown'
+
+// The Tiptap editor loads only when it is the selected engine.
+const rich = codemirrorFormattedView ? undefined : await import('./rich')
 
 /**
  * Exports show a callout that folds as a disclosure, open for `+` and
@@ -55,13 +49,7 @@ const github: MarkdownFlavor = {
   detect: () => true,
   serialization: 'block-local',
   markedOptions: { gfm: true },
-  richExtensions: [
-    GithubAlert,
-    Strike,
-    NativeTableKit.configure({ table: { resizable: false } }),
-    TaskList,
-    TaskItem.configure({ nested: true }),
-  ],
+  richExtensions: rich?.githubExtensions ?? [],
   export: {
     extensions: [alertMarkdown, markedGithubFootnote()],
     css: alertCss,
@@ -72,7 +60,7 @@ const github: MarkdownFlavor = {
 const obsidian: MarkdownFlavor = {
   ...obsidianInfo,
   serialization: 'block-local',
-  richExtensions: [WikiEmbed, WikiLink, ObsidianHighlight],
+  richExtensions: rich?.obsidianExtensions ?? [],
   export: { extensions: [obsidianMarkdown] },
 }
 

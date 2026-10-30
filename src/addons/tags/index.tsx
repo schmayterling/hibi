@@ -1,4 +1,5 @@
 import { Tags } from 'lucide-react'
+import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer'
@@ -7,7 +8,6 @@ import { defineAddon } from '../api'
 import { createTagAnalysis } from './analysis'
 import manifest from './manifest'
 import { TagsPanel } from './Panel'
-import { richTags } from './rich-decorations'
 import {
   scheduleTagCounts,
   type TagJob,
@@ -15,6 +15,11 @@ import {
   tagVersion,
 } from './schedule'
 import css from './style.css?inline'
+
+// The Tiptap editor loads only when it is the selected engine.
+const rich = codemirrorFormattedView
+  ? undefined
+  : await import('./rich-decorations')
 
 let stop: (() => void) | undefined
 export default defineAddon({
@@ -70,7 +75,8 @@ export default defineAddon({
         }
       return tagVersion(document, syntaxIdentity.fingerprint)
     }
-    let sent: TagJob | null = null
+    // The key alone: the job's source would keep a closed note until the reply.
+    let sent: string | null = null
     const failed = (event: Event) => {
       const old = worker
       if (!old) return
@@ -96,12 +102,8 @@ export default defineAddon({
       next.addEventListener('messageerror', failed)
       next.onmessage = (event: MessageEvent<TagResult>) => {
         const document = context.editor.getDocument()
-        if (
-          sent?.key === event.data.key &&
-          document &&
-          keyFor(document) === sent.key
-        )
-          analysis.remember(sent.key, event.data.tags)
+        if (sent === event.data.key && document && keyFor(document) === sent)
+          analysis.remember(sent, event.data.tags)
         sent = null
         counter.receive(event.data)
       }
@@ -126,7 +128,7 @@ export default defineAddon({
         const tags = analysis.get(job.key)
         if (tags) counter.receive({ key: job.key, tags })
         else if (worker) {
-          sent = job
+          sent = job.key
           worker.postMessage(job)
         } else counter.receive({ key: job.key, tags: [] })
       },
@@ -159,7 +161,7 @@ export default defineAddon({
         document && isMarkdownDocument(document.name) ? keyFor(document) : null,
       )
     })
-    context.editor.registerRich(richTags(browse))
+    if (rich) context.editor.registerRich(rich.richTags(browse))
     const removeFormatted = formattedRegistry.register({
       id: 'tags.highlights',
       load: () =>

@@ -145,11 +145,11 @@ function FormattedEngineSettings() {
   }
   return (
     <>
-      <h2>Experimental</h2>
-      <div className="settings-group experimental-editor-settings">
+      <h2>Editor engine</h2>
+      <div className="settings-group">
         <SettingRow
           id="exotic-butter"
-          label="Enable exotic butter (experimental)"
+          label="Enable exotic butter"
           description="Use CodeMirror instead of Tiptap/ProseMirror. Reloads this window to apply."
         >
           <Toggle

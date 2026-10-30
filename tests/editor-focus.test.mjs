@@ -55,9 +55,14 @@ test('new sidebar click keeps focus while source waits for font', {
   )
   const sidebar = page.locator('.workspace-sidebar')
   const wasOpen = await sidebar.getAttribute('data-open')
+  // The formatted ready flag describes its visible editor while source waits.
   assert.equal(
-    await page.locator('.editor-panes').getAttribute('data-source-ready'),
-    'false',
+    await page.locator('.source-pane').evaluate((element) => element.inert),
+    true,
+  )
+  assert.match(
+    await page.locator('.editor-panes').getAttribute('class'),
+    /mode-normal/,
   )
   await toggle.click()
   assert.notEqual(await sidebar.getAttribute('data-open'), wasOpen)
@@ -68,7 +73,8 @@ test('new sidebar click keeps focus while source waits for font', {
   await page.evaluate(() => window.releaseSourceFont())
   await page.waitForFunction(
     () =>
-      document.querySelector('.editor-panes')?.dataset.sourceReady === 'true',
+      document.querySelector('.editor-panes.mode-markdown')?.dataset
+        .sourceReady === 'true',
   )
   assert.equal(
     await toggle.evaluate((element) => element === document.activeElement),

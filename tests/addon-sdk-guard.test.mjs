@@ -28,7 +28,7 @@ for (const formatted of [true, false]) {
     const storage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
-      value: { getItem: () => (formatted ? 'codemirror' : null) },
+      value: { getItem: () => (formatted ? 'codemirror' : 'tiptap') },
     })
     t.after(() => {
       if (storage) Object.defineProperty(globalThis, 'localStorage', storage)

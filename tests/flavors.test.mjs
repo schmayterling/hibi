@@ -136,7 +136,7 @@ it('flavors auto-detect, persist overrides, render/edit math, and export it offl
     await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await selectFormattedEngine(app, page, t.formattedEngine, { reload: cm })
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
@@ -451,7 +451,7 @@ it('math source bytes survive source and visual view round trips and saving', {
     await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await selectFormattedEngine(app, page, t.formattedEngine, { reload: cm })
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
@@ -561,7 +561,7 @@ it('split focus preserves each file flavor', {
     await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await selectFormattedEngine(app, page, t.formattedEngine, { reload: cm })
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
@@ -723,7 +723,7 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
     await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
     await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
   }
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await selectFormattedEngine(app, page, t.formattedEngine, { reload: cm })
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)

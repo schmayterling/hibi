@@ -12,6 +12,7 @@ import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import { hasDocumentFootnotes } from '../src/renderer/src/document-shell.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -489,7 +490,9 @@ test('source footnotes preview and save without changing markdown', {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  // The footnote preview stands in for the Tiptap editor, which cannot draw
+  // footnotes; the formatted view draws them itself.
+  await selectFormattedEngine(app, page, 'tiptap')
   await pressShortcut(app, `${mod}+Shift+]`)
   const editor = page.getByRole('textbox', { name: /markdown editor/i })
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })

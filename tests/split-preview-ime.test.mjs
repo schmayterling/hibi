@@ -69,7 +69,7 @@ test('native source IME survives split preview catch-up and keeps one undo group
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, 'tiptap')
   await page.waitForFunction(() => window.imeFixture)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })

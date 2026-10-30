@@ -230,10 +230,10 @@ before(
     await page
       .locator('style[data-addon-style="text-extras.text-extras"]')
       .waitFor({ state: 'attached' })
-    // Tall enough that every line of the parity note renders.
-    await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].setContentSize(1100, 2000),
-    )
+    // Tall enough that every line of the parity note renders. macOS keeps a
+    // shown window, as hosted runners show them, within the screen; the
+    // page's own viewport can be taller.
+    await page.setViewportSize({ width: 1100, height: 2000 })
     await openWorkspace()
   },
   { timeout: 90000 },

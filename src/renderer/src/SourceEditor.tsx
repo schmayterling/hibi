@@ -502,7 +502,8 @@ const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
   const { from, to } = view.state.selection.main
   // A press in the selection keeps it.
   if (from < to && pressed >= from && pressed <= to) {
-    if (!control) return null
+    // A right press keeps it by itself; a macOS Control+click does not.
+    if (event.button === 2) return null
     // A click collapses it on release; this keeps it. Focused now,
     // the editor does not select it again on release either, as it
     // does after taking focus.

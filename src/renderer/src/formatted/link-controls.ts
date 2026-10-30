@@ -1,4 +1,4 @@
-import { Prec } from '@codemirror/state'
+import { MapMode, Prec } from '@codemirror/state'
 import {
   type EditorView,
   keymap,
@@ -33,7 +33,8 @@ export function linkControls(callbacks: Callbacks) {
       } | null = null
       menuOwner: symbol | null = null
       generation = 0
-      dismissed = false
+      /** The start of the link whose dismissed actions stay hidden while the caret stays in it. */
+      dismissed: number | null = null
       focusPending = false
       leave: ReturnType<typeof setTimeout> | undefined
 
@@ -61,8 +62,7 @@ export function linkControls(callbacks: Callbacks) {
             const target = this.target
             // A destination still resolving has no href yet.
             if (!target?.href || target.doc !== view.state.doc) return
-            this.dismissed = true
-            this.hide()
+            this.dismiss()
             this.act(id, target.capture, target.href)
           })
           actions.append(button)
@@ -101,6 +101,11 @@ export function linkControls(callbacks: Callbacks) {
         this.forget()
         if (this.panel.matches(':popover-open')) this.panel.hidePopover()
       }
+      /** Hides the shown link's actions until the caret leaves it or a pointer comes back. */
+      dismiss() {
+        this.dismissed = this.target?.capture.link?.from ?? null
+        this.hide()
+      }
       act(id: Action, capture: Capture, href: string) {
         if (id === 'edit') this.edit(capture)
         else if (id === 'copy')
@@ -126,12 +131,10 @@ export function linkControls(callbacks: Callbacks) {
           this.hide()
       }
       outside = (event: PointerEvent) => {
-        if (
-          !(event.target instanceof Node) ||
-          (!this.panel.contains(event.target) &&
-            !this.view.dom.contains(event.target))
-        )
-          this.hide()
+        const target = event.target instanceof Node ? event.target : null
+        // A press in the editor may show dismissed actions again.
+        if (target && this.view.dom.contains(target)) this.dismissed = null
+        else if (!target || !this.panel.contains(target)) this.hide()
       }
       point(x: number, y: number) {
         const range = document.caretRangeFromPoint(x, y)
@@ -155,7 +158,7 @@ export function linkControls(callbacks: Callbacks) {
           return
         }
         this.keep()
-        this.dismissed = false
+        this.dismissed = null
         const at = this.point(event.clientX, event.clientY)
         if (at !== null) this.show(at, link.getBoundingClientRect())
       }
@@ -169,7 +172,9 @@ export function linkControls(callbacks: Callbacks) {
         )
           return
         const capture = callbacks.capture(at)
-        if (!capture?.link) {
+        // Dismissed actions stay hidden until the caret leaves their link.
+        if (capture?.link?.from !== this.dismissed) this.dismissed = null
+        if (!capture?.link || this.dismissed !== null) {
           this.hide()
           return
         }
@@ -214,7 +219,6 @@ export function linkControls(callbacks: Callbacks) {
       caret() {
         if (this.panel.contains(document.activeElement)) return
         if (
-          this.dismissed ||
           !this.view.dom.contains(document.activeElement) ||
           !this.view.state.selection.main.empty
         ) {
@@ -230,7 +234,7 @@ export function linkControls(callbacks: Callbacks) {
         else this.hide()
       }
       edit(capture: Capture) {
-        this.dismissed = true
+        this.dismissed = capture.link?.from ?? null
         void callbacks
           .edit(capture)
           .catch(callbacks.error)
@@ -245,7 +249,7 @@ export function linkControls(callbacks: Callbacks) {
           !callbacks.capture(this.view.state.selection.main.head)?.link
         )
           return false
-        this.dismissed = false
+        this.dismissed = null
         this.focusPending = true
         this.caret()
         if (this.panel.matches(':popover-open')) {
@@ -305,10 +309,7 @@ export function linkControls(callbacks: Callbacks) {
             event.preventDefault()
             event.stopImmediatePropagation()
           }
-        } else if (event.key === 'Escape' && this.target) {
-          this.dismissed = true
-          this.hide()
-        }
+        } else if (event.key === 'Escape' && this.target) this.dismiss()
       }
       menuKey = (event: KeyboardEvent) => {
         if (
@@ -341,8 +342,7 @@ export function linkControls(callbacks: Callbacks) {
         )
           return
         event.preventDefault()
-        this.dismissed = true
-        this.hide()
+        this.dismiss()
         this.view.focus()
       }
       update(update: ViewUpdate) {
@@ -354,13 +354,19 @@ export function linkControls(callbacks: Callbacks) {
           this.panel.matches(':popover-open')
         if (update.docChanged && focused) this.hide()
         else if (update.docChanged || moved) this.forget()
+        // A dismissed link stays dismissed while edited, until its start goes.
+        if (update.docChanged && this.dismissed !== null)
+          this.dismissed = update.changes.mapPos(
+            this.dismissed,
+            1,
+            MapMode.TrackAfter,
+          )
         if (
           update.docChanged ||
           moved ||
           update.selectionSet ||
           update.focusChanged
         ) {
-          if (update.selectionSet) this.dismissed = false
           queueMicrotask(() => {
             if (this.view.dom.isConnected) this.caret()
           })

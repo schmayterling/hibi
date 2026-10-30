@@ -47,6 +47,33 @@ async function open(t) {
   return { app, page, editor, panel, dialog, read }
 }
 
+/** Put the caret at `anchor`, after replacing the note with `text` if given. */
+const place = (editor, anchor, text) =>
+  editor.evaluate(
+    (element, { anchor, text }) => {
+      const view = element.cmTile.root.view
+      view.focus()
+      view.dispatch({
+        ...(text === undefined
+          ? {}
+          : {
+              changes: { from: 0, to: view.state.doc.length, insert: text },
+              userEvent: 'input.fixture',
+            }),
+        selection: { anchor },
+      })
+    },
+    { anchor, text },
+  )
+
+/** Let a caret move or keystroke reach the panel: frames and a pause. */
+const settle = (page) =>
+  page.evaluate(async () => {
+    for (let frame = 0; frame < 3; frame++)
+      await new Promise(requestAnimationFrame)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  })
+
 test('codemirror link hover offers URL, edit, open, copy and remove', {
   timeout: 60000,
 }, async (t) => {
@@ -417,4 +444,40 @@ test('codemirror entity-only cell link has the same caret actions', {
     'https://cell.example',
   )
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+})
+
+test('codemirror Escape keeps link actions hidden until the caret leaves the link', {
+  timeout: 60000,
+}, async (t) => {
+  const { page, editor, panel, read } = await open(t)
+  const destination = panel.locator('.hibi-link-destination')
+  await page.getByRole('link', { name: 'docs', exact: true }).click()
+  await panel.waitFor()
+  await page.keyboard.press('Escape')
+  await panel.waitFor({ state: 'hidden' })
+  // Typing and moving inside the link leave them hidden.
+  await page.keyboard.type('x')
+  await waitForAsync(
+    page,
+    async (note) => (await window.hibi.getDocument()).markdown !== note,
+    note,
+  )
+  await settle(page)
+  assert.equal(await panel.isVisible(), false, 'after typing')
+  await page.keyboard.press('ArrowLeft')
+  await settle(page)
+  assert.equal(await panel.isVisible(), false, 'after moving')
+  assert.match(await read(), /^See \[d\w*x\w*\]\(/)
+  // Back in the link after leaving it, they show again.
+  const text = await read()
+  await place(editor, text.indexOf('here'))
+  await place(editor, text.indexOf('[d') + 2)
+  await panel.waitFor()
+  assert.equal(await destination.textContent(), 'https://old.example')
+  // Another link shows its own after Escape in this one.
+  await page.keyboard.press('Escape')
+  await panel.waitFor({ state: 'hidden' })
+  await place(editor, text.indexOf('bare.example'))
+  await panel.waitFor()
+  assert.equal(await destination.textContent(), 'https://bare.example/path')
 })

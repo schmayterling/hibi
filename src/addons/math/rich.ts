@@ -1,6 +1,6 @@
 import { InputRule, type NodeViewRenderer } from '@tiptap/core'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
-import { blockMath, blockMathStart, inlineMath } from './syntax'
+import { blockMath, blockMathStart, richInlineMath } from './syntax'
 
 /** The Tiptap editor's math nodes, drawn with the given formula views. */
 export function mathNodes(view: (display: boolean) => NodeViewRenderer) {
@@ -17,7 +17,7 @@ export function mathNodes(view: (display: boolean) => NodeViewRenderer) {
       name: 'inlineMath',
       level: 'inline',
       start: (source) => source.indexOf('$'),
-      tokenize: inlineMath,
+      tokenize: richInlineMath,
     },
     addInputRules() {
       return [
@@ -25,7 +25,7 @@ export function mathNodes(view: (display: boolean) => NodeViewRenderer) {
           find: /(?:^|[^\\$])(\$(?!\$)(?:\\.|[^$\n])+?\$)$/,
           handler: ({ state, range, match }) => {
             const raw = match[1],
-              token = raw && inlineMath(raw)
+              token = raw && richInlineMath(raw)
             if (!token) return null
             state.tr.replaceWith(
               range.to - raw.length,

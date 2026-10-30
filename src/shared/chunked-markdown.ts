@@ -9,6 +9,8 @@ import {
   TreeFragment,
 } from '@lezer/common'
 import type { MarkdownParser } from '@lezer/markdown'
+import { pairLimit } from '../addons/math/inline-display.ts'
+import { readSeams, type SeamPair } from '../addons/math/seams.ts'
 
 /**
  * Chunks start at top-level block starts of an exact parse. Parsing a chunk
@@ -71,7 +73,17 @@ type Giant = {
    * written up to a line that must start a top-level block.
    */
   stuck?: Stuck
+  /** A giant paragraph's code span and math pairs at line starts, for windows into it. */
+  seams?: readonly Seam[]
 }
+
+/**
+ * The code span or formula holding line start `at` of a giant paragraph, read
+ * from the paragraph's start, so a window from `at` pairs as the whole
+ * paragraph does. `reach` is how far the reading looked: an edit after it
+ * keeps the checkpoint.
+ */
+type Seam = { at: number; open: SeamPair | null; reach: number }
 
 /**
  * The quote (`>`) or list a stuck block leaves open at its end: the list's
@@ -104,6 +116,8 @@ type Window = {
   head: readonly Lines[]
   from: number
   to: number
+  /** The opening lines hide a code span or formula that runs on past them, so they show it as text. */
+  hidden?: boolean
 }
 
 /** How far decisions made in a chunk or group read ahead, relative to its start. */
@@ -310,6 +324,8 @@ export type ChunkedMarkdownProbe = {
   builtGroups: number
   /** UTF-16 units of fence info strings read for their language. */
   codeInfoUnits?: number
+  /** UTF-16 units read for code span and math pairs at giant paragraphs' seams. */
+  seamUnits?: number
   /** Worker adoption diagnostics; absent until a worker is attached. */
   adoptionDeclined?: number
   adoptedRecords?: number
@@ -375,6 +391,7 @@ type Continuation = {
   /** A line start inside the block where the next window begins. */
   frontier: number
   span: number
+  seams?: readonly Seam[]
 }
 
 type Found = Pick<Continuation, 'leaf' | 'key' | 'retype' | 'frontier'> & {
@@ -404,16 +421,51 @@ type Work =
       units: number
       parse: PartialParse
     }
+  | {
+      /** Reading a giant paragraph's seams up to a window, a step at a time. */
+      kind: 'seams'
+      from: number
+      to: number
+      block: Giant
+      reach: Reach
+      reveal: boolean
+      /** Absolute checkpoints so far. */
+      seams: Seam[]
+      para: number
+      end: number
+      target: number
+    }
 
-/** Markdown consumes whole lines, unlike the generic lezer chunk contract. */
+/**
+ * Markdown consumes whole lines, unlike the generic lezer chunk contract.
+ * Positions in `masks`, in order, read as a comma: punctuation like the dollar
+ * signs and backticks they hide, so other syntax around them parses the same.
+ */
 function markdownInput(
   input: Input,
   ranges: readonly { from: number; to: number }[],
+  masks: readonly number[] = [],
 ): Input {
+  const masked = (text: string, at: number) => {
+    let low = 0,
+      high = masks.length
+    while (low < high) {
+      const middle = (low + high) >> 1
+      if (masks[middle]! < at) low = middle + 1
+      else high = middle
+    }
+    let out = '',
+      done = 0
+    for (; low < masks.length && masks[low]! < at + text.length; low++) {
+      out += `${text.slice(done, masks[low]! - at)},`
+      done = masks[low]! - at + 1
+    }
+    return done ? out + text.slice(done) : text
+  }
   const result: Input = {
     length: input.length,
     lineChunks: false,
-    read: (from, to) => input.read(from, to),
+    read: (from, to) => masked(input.read(from, to), from),
     chunk(at) {
       const end = ranges.find((range) => range.to > at)?.to ?? input.length
       const parts: string[] = []
@@ -421,7 +473,7 @@ function markdownInput(
         const chunk = input.chunk(at).slice(0, end - at)
         if (!chunk) break
         const lf = chunk.indexOf('\n')
-        parts.push(lf < 0 ? chunk : chunk.slice(0, lf + 1))
+        parts.push(masked(lf < 0 ? chunk : chunk.slice(0, lf + 1), at))
         if (lf >= 0) break
         at += chunk.length
       }
@@ -626,7 +678,7 @@ function giantCovers(
 ) {
   if (!info.window) return false
   if (info.block.opaque) return true
-  const a = Math.max(from, start + head(info.block)),
+  const a = Math.max(from, start + (info.window.hidden ? 0 : head(info.block))),
     b = Math.min(to, start + length)
   return (
     a >= b || (start + info.window.from <= a && b <= start + info.window.to)
@@ -649,6 +701,16 @@ const shift = (point: Replay, by: number): Replay => ({
 const shiftEnd = (end: End, by: number): End => ({
   from: end.from + by,
   last: end.last + by,
+})
+
+const shiftSeam = (seam: Seam, by: number): Seam => ({
+  at: seam.at + by,
+  reach: seam.reach + by,
+  open: seam.open && {
+    ...seam.open,
+    from: seam.open.from + by,
+    to: seam.open.to + by,
+  },
 })
 
 /** The last noted leaf block starting at or before `pos`. */
@@ -1068,6 +1130,10 @@ class ChunkedParse implements ChunkedPartialParse {
         .map((known) => shiftEnd(known, from)),
       frontier,
       span: 2 * this.parser.chunkSize,
+      // Checkpoints that read only text before the edit still hold.
+      seams: (block.seams ?? [])
+        .filter((seam) => from + seam.reach <= old.safe)
+        .map((seam) => shiftSeam(seam, from)),
     })
     if (end > old.safe) {
       // Edited inside: the block continues from its last replay point before
@@ -1197,6 +1263,29 @@ class ChunkedParse implements ChunkedPartialParse {
   /** Advance the active inner parse; true when it finished. */
   private continueWork() {
     const work = this.work!
+    if (work.kind === 'seams') {
+      const { seams, para, end, target } = work
+      const at = Math.max(
+        para,
+        seams.findLast((seam) => seam.at <= target)?.at ?? para,
+      )
+      const size = 4 * this.parser.giantBlock
+      let step = lineStart(this.input, Math.min(target, at + size))
+      if (step <= at)
+        step = Math.min(target, lineEnd(this.input, at + size) + 1)
+      this.seamAt(seams, para, end, step, Number.POSITIVE_INFINITY)
+      if (step < target) return false
+      this.work = null
+      const { from, to, block, reach, reveal } = work
+      this.startWindow(
+        from,
+        to,
+        { ...block, seams: seams.map((seam) => shiftSeam(seam, -from)) },
+        reach,
+        reveal,
+      )
+      return true
+    }
     let tree: Tree | null = null
     this.reading = work.parse
     for (let i = 0; i < innerSteps && !tree; i++) tree = work.parse.advance()
@@ -1635,6 +1724,9 @@ class ChunkedParse implements ChunkedPartialParse {
       opaque: block.opaque,
       ends: block.ends.map((known) => shiftEnd(known, -block.from)),
       end: end === null ? null : end - block.from,
+      ...(block.seams?.length
+        ? { seams: block.seams.map((seam) => shiftSeam(seam, -block.from)) }
+        : {}),
     }
   }
 
@@ -2059,13 +2151,27 @@ class ChunkedParse implements ChunkedPartialParse {
         if (from + candidate.at <= want) point = candidate
       start = from + point.at
     }
-    const stop = Math.min(
+    let stop = Math.min(
       last,
       lineEnd(
         input,
         Math.min(last, Math.max(start, demand ? demand.to + pad : last)),
       ),
     )
+    let masks: readonly number[] = [],
+      hidden = false
+    if (
+      this.parser.seams &&
+      !complete &&
+      block.leaf &&
+      !block.opaque &&
+      block.end !== null &&
+      (block.key === 'plain' || block.key === 'pipe')
+    ) {
+      const plan = this.seamPlan(from, to, block, reach, reveal, start, stop)
+      if (!plan) return
+      ;({ start, stop, masks, hidden, block } = plan)
+    }
     const segments: [number, number][] = point.head.map((range) => [
       from + range.from,
       from + range.to - 1,
@@ -2100,6 +2206,7 @@ class ChunkedParse implements ChunkedPartialParse {
       reach,
       window: {
         head: point.head,
+        ...(hidden ? { hidden } : {}),
         from: complete ? 0 : block.opaque ? point.at : start - from,
         to: complete
           ? to - from
@@ -2111,11 +2218,152 @@ class ChunkedParse implements ChunkedPartialParse {
       base: ranges[0]!.from,
       units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
       parse: this.parser.full.startParse(
-        markdownInput(input, ranges),
+        markdownInput(input, ranges, masks),
         [],
         ranges,
       ),
     }
+  }
+
+  /**
+   * A window into a giant paragraph pairs code spans and math as the whole
+   * paragraph does: the pairs holding its seams are read from the
+   * paragraph's start, and each one crossing a gap between the window's
+   * ranges has its dollar signs and backticks hidden, unless lezer sees both
+   * its ends. The window takes a formula it cuts whole. Null while the
+   * reading takes steps of its own.
+   */
+  private seamPlan(
+    from: number,
+    to: number,
+    block: Giant,
+    reach: Reach,
+    reveal: boolean,
+    start: number,
+    stop: number,
+  ) {
+    const input = this.input
+    const head = block.points[0]!.head[0]!
+    const para = from + head.from,
+      headEnd = from + head.to,
+      last = from + block.end!
+    const seams = (block.seams ?? []).map((seam) => shiftSeam(seam, from))
+    const pending = (target: number) => {
+      this.pos = from
+      this.work = {
+        kind: 'seams',
+        from,
+        to,
+        block,
+        reach,
+        reveal,
+        seams,
+        para,
+        end: last,
+        target,
+      }
+      return null
+    }
+    const holding = (pos: number) => this.seamAt(seams, para, last, pos)
+    // The window's lines follow the head's without a gap from its end on.
+    let open = start > headEnd ? holding(start) : null
+    if (open === undefined) return pending(start)
+    // A pair opened between the head and the window: take it whole.
+    if (open && !open.over && open.from >= headEnd) {
+      start = lineStart(input, open.from)
+      open = start > headEnd ? holding(start) : null
+      if (open === undefined) return pending(start)
+    }
+    const gap = start > headEnd
+    const opening = gap ? holding(headEnd) : null
+    if (opening === undefined) return pending(headEnd)
+    const first = gap ? start : para
+    const lastStart = lineStart(input, last)
+    let end = lastStart <= stop + 1 ? last : stop + 1
+    const read = { reach: 0 }
+    const text = (to: number) => {
+      const text = input.read(first, Math.min(last, to + pairLimit))
+      this.countSeams(text.length)
+      return text
+    }
+    let tail = readSeams(text(end), first, first, end, open, read)
+    // A pair the window's end cuts: end the window after it.
+    if (tail && tail.from >= first && !tail.over) {
+      stop = Math.min(last, lineEnd(input, tail.to - 1))
+      const next = lastStart <= stop + 1 ? last : stop + 1
+      tail = readSeams(text(next), first, end, next, tail, read)
+      end = next
+    }
+    const ranges = [
+      ...(gap ? [{ from: para, to: headEnd }] : []),
+      { from: first, to: end },
+      ...(end < last ? [{ from: lastStart, to: last }] : []),
+    ]
+    const seen = (pos: number) =>
+      ranges.some((range) => range.from <= pos && pos < range.to)
+    const masks = new Set<number>()
+    for (const pair of [opening, open, end < last ? tail : null]) {
+      if (!pair || (!pair.over && seen(pair.from) && seen(pair.to - 1)))
+        continue
+      for (const range of ranges) {
+        const a = Math.max(range.from, pair.from),
+          b = Math.min(range.to, pair.to)
+        const chars = a < b ? input.read(a, b) : ''
+        for (let i = 0; i < chars.length; i++)
+          if (chars[i] === '$' || chars[i] === '`') masks.add(a + i)
+      }
+    }
+    const sorted = [...masks].sort((a, b) => a - b)
+    return {
+      start,
+      stop,
+      masks: sorted,
+      hidden: gap && (sorted[0] ?? headEnd) < headEnd,
+      block: { ...block, seams: seams.map((seam) => shiftSeam(seam, -from)) },
+    }
+  }
+
+  /**
+   * The pair holding line start `pos` of the giant paragraph `para`-`end`,
+   * read on from the last checkpoint before it, which adds checkpoints for
+   * the lines read; undefined past a step's worth of reading.
+   */
+  private seamAt(
+    seams: Seam[],
+    para: number,
+    end: number,
+    pos: number,
+    budget = 4 * this.parser.giantBlock,
+  ) {
+    let index = seams.length - 1
+    while (index >= 0 && seams[index]!.at > pos) index--
+    const known = index >= 0 && seams[index]!.at >= para ? seams[index]! : null
+    let at = known ? known.at : para,
+      open = known ? known.open : null
+    if (at >= pos) return open
+    if (pos - at > budget) return undefined
+    const offset = at,
+      text = this.input.read(at, Math.min(end, pos + pairLimit))
+    this.countSeams(text.length)
+    const read = { reach: known ? known.reach : at }
+    const spacing = this.parser.giantBlock / 4
+    const added: Seam[] = []
+    while (at < pos) {
+      let next = lineStart(this.input, Math.min(pos, at + spacing))
+      if (next <= at)
+        next = Math.min(pos, lineEnd(this.input, at + spacing) + 1)
+      open = readSeams(text, offset, at, next, open, read)
+      // It read every line before it, even where no pair decided anything.
+      added.push({ at: next, open, reach: Math.max(read.reach, next) })
+      at = next
+    }
+    seams.splice(index + 1, 0, ...added)
+    return open
+  }
+
+  private countSeams(units: number) {
+    const probe = this.parser.options.probe
+    if (probe) probe.seamUnits = (probe.seamUnits ?? 0) + units
   }
 
   private windowed(work: Extract<Work, { kind: 'window' }>, tree: Tree) {
@@ -2412,6 +2660,8 @@ export class ChunkedMarkdownParser extends Parser {
   readonly groupSize: number
   readonly giantBlock: number
   readonly opaque: ReadonlySet<string>
+  /** Giant paragraphs read code span and math pairs across their windows' seams. */
+  readonly seams: boolean
   /** The node a document prefix that is not Markdown becomes, when the syntax defines it. */
   readonly frontmatter: NodeType | undefined
 
@@ -2445,6 +2695,7 @@ export class ChunkedMarkdownParser extends Parser {
     this.groupSize = options.groupSize ?? 64
     this.giantBlock = options.giantBlock ?? 16 * this.chunkSize
     this.opaque = options.opaque ?? new Set()
+    this.seams = Array.isArray(inline) && inline.includes('InlineMath')
     this.frontmatter = full.nodeSet.types.find(
       (type) => type.name === 'Frontmatter',
     )
@@ -2542,7 +2793,9 @@ export function parsedChunks(
         const { window } = info
         const covered: { from: number; to: number }[] = []
         const headTo = head(info.block)
-        if (headTo) covered.push({ from, to: from + headTo })
+        if (window.hidden) {
+          // Its opening lines show a pair as text: a view there parses them again.
+        } else if (headTo) covered.push({ from, to: from + headTo })
         else
           for (const range of window.head)
             covered.push({ from: from + range.from, to: from + range.to })
@@ -2793,7 +3046,8 @@ export function* boundaryRecords(
         ...(info.edge === undefined ? {} : { edge: info.edge }),
       }
       if (info.kind !== 'giant') continue
-      const { points, key, ends, ...block } = info.block
+      // Views read seams themselves, for their own windows.
+      const { points, key, ends, seams: _seams, ...block } = info.block
       yield { kind: 'giant', ...block }
       if (key !== null) {
         if (!key.length) yield { kind: 'key', text: '' }

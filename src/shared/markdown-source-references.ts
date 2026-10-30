@@ -1,6 +1,5 @@
 import { Marked } from 'marked'
 import { alertMarkdown } from '../addons/markdown/alerts.ts'
-import { inlineDisplayMathTokens } from '../addons/math/inline-display.ts'
 import { mathTokens } from '../addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../addons/text-extras/syntax.ts'
 import type { MarkdownReferenceSyntax } from './document-worker-protocol.ts'
@@ -17,7 +16,7 @@ export function markdownSourceParser(syntax: MarkdownReferenceSyntax) {
   const parser = new Marked({ gfm: syntax.gfm, breaks: false }, blockMarkdown)
   if (syntax.alerts) parser.use(alertMarkdown)
   if (syntax.textExtras) parser.use(textExtrasMarkdown)
-  if (syntax.math) parser.use(mathTokens, inlineDisplayMathTokens)
+  if (syntax.math) parser.use(mathTokens)
   return parser
 }
 

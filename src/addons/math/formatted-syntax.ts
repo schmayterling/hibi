@@ -7,8 +7,15 @@ import type {
   MarkdownConfig,
 } from '@lezer/markdown'
 import { readAhead } from '../../shared/chunked-markdown.ts'
-import { inlineDisplayMathEnd, inlineMathWork } from './inline-display.ts'
+import {
+  type Closers,
+  formulaLimit,
+  inlineDisplayMathEnd,
+  inlineMathEnd,
+} from './inline-display.ts'
 import { blockMath } from './syntax.ts'
+
+export { inlineMathEnd }
 
 /*
  * Math syntax for the formatted view. It decides like the math addon's Marked
@@ -17,67 +24,6 @@ import { blockMath } from './syntax.ts'
  * `$$` line is math only when its closing `$$` follows within the formula
  * limit; other `$$` lines stay paragraph text.
  */
-
-/** UTF-16 units a formula may have, as in ./syntax.ts. */
-const formulaLimit = 10_000
-
-const isTerminator = (code: number) =>
-  code === 10 || code === 13 || code === 0x2028 || code === 0x2029
-
-/**
- * The end of inline math opened by the `$` at `open`, or -1, as the inline
- * tokenizer's regular expression matches. It searches depth first in the
- * expression's order: after each body unit the lazy body tries to close, and
- * a `\x` pair comes before a plain backslash. A position that cannot reach a
- * closing is remembered, so each is explored once, the search stops at the
- * first closing, and runs of backslashes cost linear time instead of the
- * expression's backtracking.
- */
-export function inlineMathEnd(text: string, open: number, end = text.length) {
-  const start = open + 1
-  const first = text.charCodeAt(start)
-  if (start >= end || first === 36 || first === 10) return -1
-  const dead = new Set<number>()
-  // Frames: where a body unit starts, and which alternative comes next.
-  const units = [start],
-    tried = [0]
-  while (units.length) {
-    const top = units.length - 1
-    const at = units[top]!
-    const code = text.charCodeAt(at)
-    let next = -1
-    if (tried[top] === 0) {
-      tried[top] = 1
-      if (code === 92 && at + 1 < end && !isTerminator(text.charCodeAt(at + 1)))
-        next = at + 2
-    }
-    if (next < 0 && tried[top] === 1) {
-      tried[top] = 2
-      if (at < end && code !== 36 && code !== 10) next = at + 1
-    }
-    if (next < 0) {
-      units.pop()
-      tried.pop()
-      dead.add(at)
-      continue
-    }
-    if (dead.has(next)) continue
-    inlineMathWork.positions++
-    if (
-      next < end &&
-      text.charCodeAt(next) === 36 &&
-      (next + 1 >= end || text.charCodeAt(next + 1) !== 36)
-    ) {
-      const latex = text.slice(start, next)
-      return latex.length > formulaLimit || latex.trim() !== latex
-        ? -1
-        : next + 1
-    }
-    units.push(next)
-    tried.push(0)
-  }
-  return -1
-}
 
 /**
  * The input of the parse that is running, so the block parser can read past
@@ -328,10 +274,191 @@ function decide(cx: BlockContext, line: Line) {
 }
 
 /**
- * `$…$` inside a line, and `$$…$$` inside a line as display math, as
- * `InlineMath` with `MathMark` delimiters. Display math that continues on a
- * later line of its paragraph is `InlineMathLines`, which the formatted view
- * lays out whole.
+ * Per parse input, where the later lines of paragraphs in quotes and list
+ * items start their content: their markers read as spaces inline, but
+ * Obsidian strips them, so a `$` there can close math.
+ */
+const contentStarts = new WeakMap<Input, Set<number>>()
+
+/** A paragraph's closer searches, so each closer is read about once. */
+type Scans = {
+  closers: Closers
+  /** Per delimiter character: the first run at or after `from` that can close, or -1. */
+  runs: Map<number, { from: number; at: number }>
+  /** Per section position, the first `]` at or after it that no `[` after it matches, or -1; read once, when first needed. */
+  brackets: Int32Array | null
+  /** The section's other delimiters so far, by index in its parts, each with the runs open after it. */
+  delimiters: {
+    at: number
+    part: Delimiter
+    open: ReadonlyMap<number, number>
+  }[]
+  /** Link and image starts so far, by index in its parts. */
+  starts: { at: number; part: Delimiter }[]
+  /** How many parts were read. */
+  seen: number
+}
+type Delimiter = { from: number; side: number }
+const scansOf = new WeakMap<InlineContext, Scans>()
+function scans(cx: InlineContext) {
+  let found = scansOf.get(cx)
+  if (!found) {
+    found = {
+      closers: { from: -1, at: -1 },
+      runs: new Map(),
+      brackets: null,
+      delimiters: [],
+      starts: [],
+      seen: 0,
+    }
+    scansOf.set(cx, found)
+  }
+  return found
+}
+
+/** Parts and units the precedence check read, for complexity tests. */
+export const precedenceWork = { reads: 0 }
+
+// As @lezer/markdown decides which delimiter runs can close.
+const punctuation = /[\p{S}\p{P}]/u
+const blank = /\s|^$/
+function canClose(cx: InlineContext, char: number, from: number, to: number) {
+  const before = cx.slice(from - 1, from),
+    after = cx.slice(to, to + 1)
+  const sBefore = blank.test(before),
+    sAfter = blank.test(after)
+  const pBefore = punctuation.test(before),
+    pAfter = punctuation.test(after)
+  const left = !sAfter && (!pAfter || sBefore || pBefore)
+  const right = !sBefore && (!pBefore || sAfter || pAfter)
+  return right && (char !== 95 || !left || pAfter)
+}
+
+/** The first run of `char` at or after `from` that can close emphasis or strikethrough, or -1. */
+function runClose(cx: InlineContext, char: number, from: number) {
+  const runs = scans(cx).runs
+  const known = runs.get(char)
+  if (known && known.from <= from && (known.at < 0 || known.at >= from))
+    return known.at
+  let found = -1
+  for (let at = from; at < cx.end; at++) {
+    precedenceWork.reads++
+    const code = cx.char(at)
+    if (code === 92) at++
+    else if (code === char) {
+      let end = at + 1
+      while (cx.char(end) === char) end++
+      if ((char !== 126 || end - at === 2) && canClose(cx, char, at, end)) {
+        found = at
+        break
+      }
+      at = end - 1
+    }
+  }
+  runs.set(char, { from, at: found })
+  return found
+}
+
+/** The first `]` at or after `from` that no `[` after `from` matches, or -1. */
+function bracketClose(cx: InlineContext, from: number) {
+  const state = scans(cx)
+  if (!state.brackets) {
+    // That `]` is the next one at the depth `from` has, so one pass back
+    // from the end answers every position.
+    const length = cx.end - cx.offset
+    precedenceWork.reads += length
+    const depth = new Int32Array(length),
+      closes = new Uint8Array(length)
+    for (let at = 0, level = 0; at < length; at++) {
+      depth[at] = level
+      const code = cx.text.charCodeAt(at)
+      if (code === 92 && at + 1 < length) depth[++at] = level
+      else if (code === 91) level++
+      else if (code === 93) {
+        closes[at] = 1
+        level--
+      }
+    }
+    const next = new Map<number, number>()
+    state.brackets = new Int32Array(length)
+    for (let at = length - 1; at >= 0; at--) {
+      if (closes[at]) next.set(depth[at]!, cx.offset + at)
+      state.brackets[at] = next.get(depth[at]!) ?? -1
+    }
+  }
+  return state.brackets[from - cx.offset] ?? -1
+}
+
+/**
+ * Where emphasis, strikethrough or a link still open before `pos` closes
+ * first after it, or the section's end. As in Obsidian and exports, the
+ * syntax that opened first wins, so math cannot run past that closer.
+ */
+function openSyntaxEnd(cx: InlineContext, pos: number) {
+  // ponytail: @lezer/markdown keeps its pending delimiters internal and
+  // resolves them only at the section's end; this pairs them in order,
+  // without the rule of three, so a run that rule leaves unpaired still
+  // ends math.
+  const parts = (cx as unknown as { parts: readonly unknown[] }).parts
+  const state = scans(cx)
+  // A finished link replaces the parts from its start on: forget what was
+  // read there and read on from it. Each part is read about once.
+  let from = state.seen
+  for (const list of [state.delimiters, state.starts])
+    for (
+      let last = list.at(-1);
+      last && parts[last.at] !== last.part;
+      last = list.at(-1)
+    ) {
+      precedenceWork.reads++
+      list.pop()
+      // A link start that could not open is cleared in place.
+      if (parts[last.at] !== null) from = Math.min(from, last.at)
+    }
+  let open = state.delimiters.at(-1)?.open ?? new Map<number, number>()
+  for (let at = from; at < parts.length; at++) {
+    precedenceWork.reads++
+    const part = parts[at] as Delimiter | null
+    if (typeof part?.side !== 'number') continue
+    const char = cx.char(part.from)
+    if (char === 91 || char === 33) {
+      state.starts.push({ at, part })
+      continue
+    }
+    const count = open.get(char) ?? 0
+    const next =
+      part.side & 2 && count ? count - 1 : part.side & 1 ? count + 1 : count
+    if (next === count) continue
+    open = new Map(open).set(char, next)
+    state.delimiters.push({ at, part, open })
+  }
+  state.seen = parts.length
+  let end = cx.end
+  for (const [char, count] of open)
+    if (count) {
+      const close = runClose(cx, char, pos)
+      if (close >= 0) end = Math.min(end, close)
+    }
+  // Starts before a finished link lose their side; they and cleared ones
+  // never open again.
+  let start = state.starts.at(-1)
+  while (start && (parts[start.at] !== start.part || !start.part.side)) {
+    precedenceWork.reads++
+    state.starts.pop()
+    start = state.starts.at(-1)
+  }
+  if (start) {
+    const close = bracketClose(cx, pos)
+    if (close >= 0) end = Math.min(end, close)
+  }
+  return end
+}
+
+/**
+ * `$…$` and `$$…$$` inside a paragraph, the second as display math, as
+ * `InlineMath` with `MathMark` delimiters. Math that continues on a later
+ * line of its paragraph is `InlineMathLines`, which the formatted view lays
+ * out whole.
  */
 export const inlineMathSyntax: MarkdownConfig = {
   defineNodes: ['InlineMath', 'InlineMathLines', 'MathMark'],
@@ -341,14 +468,22 @@ export const inlineMathSyntax: MarkdownConfig = {
       parse(cx: InlineContext, next: number, pos: number) {
         if (next !== 36) return -1
         const display = cx.char(pos + 1) === 36
-        const end = (display ? inlineDisplayMathEnd : inlineMathEnd)(
-          cx.text,
-          pos - cx.offset,
-        )
-        if (end < 0) return -1
+        const starts = current && contentStarts.get(current)
+        const end = display
+          ? inlineDisplayMathEnd(cx.text, pos - cx.offset)
+          : inlineMathEnd(
+              cx.text,
+              pos - cx.offset,
+              scans(cx).closers,
+              starts ? (at) => starts.has(cx.offset + at) : undefined,
+            )
+        if (end < 0 || cx.offset + end > openSyntaxEnd(cx, pos)) return -1
         const to = cx.offset + end,
           mark = display ? 2 : 1
-        const lines = display && cx.slice(pos + 2, to - 2).includes('\n')
+        // A pair over the formula limit stays text, delimiters included, so
+        // its closer opens nothing.
+        if (to - pos - 2 * mark > formulaLimit) return to
+        const lines = cx.slice(pos + mark, to - mark).includes('\n')
         return cx.addElement(
           cx.elt(lines ? 'InlineMathLines' : 'InlineMath', pos, to, [
             cx.elt('MathMark', pos, pos + mark),
@@ -377,7 +512,17 @@ export const blockMathSyntax: MarkdownConfig = {
         parseBlock(cx, line, found)
         return true
       },
-      endLeaf: (cx, line) => line.next === 36 && decide(cx, line) !== null,
+      endLeaf(cx, line) {
+        if (line.baseIndent && current) {
+          let starts = contentStarts.get(current)
+          if (!starts) {
+            starts = new Set()
+            contentStarts.set(current, starts)
+          }
+          starts.add(cx.lineStart + line.basePos)
+        }
+        return line.next === 36 && decide(cx, line) !== null
+      },
     },
   ],
   wrap,

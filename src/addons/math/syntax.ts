@@ -9,7 +9,7 @@ import {
 } from './grammar.ts'
 import { mathParagraphRule } from './paragraph-rule.ts'
 
-export { blockMathStart, inlineMath } from './grammar.ts'
+export { blockMathStart, inlineMath, richInlineMath } from './grammar.ts'
 export { mathParagraphRule } from './paragraph-rule.ts'
 export const mathFlavor = { ...info, paragraphRules: [mathParagraphRule] }
 

@@ -11,15 +11,10 @@ import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
 import type { MathHost } from './formatted'
-import { inlineDisplayMathTokens } from './inline-display'
 import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
-import { detector, mathFlavor, mathTokens } from './syntax'
-
-// Recheck automatic math detection, now including `$$…$$` inside a line, when
-// this lazy runtime registers its flavor.
-detector.use(inlineDisplayMathTokens)
+import { mathFlavor, mathTokens } from './syntax'
 
 // The Tiptap editor loads only when it is the selected engine.
 const richMath = codemirrorFormattedView ? undefined : await import('./rich')
@@ -274,7 +269,7 @@ export function startMath(context: AddonContext) {
     ...mathFlavor,
     richExtensions: richMath ? richMath.mathNodes(view) : [],
     export: {
-      extensions: [mathTokens, inlineDisplayMathTokens, renderers],
+      extensions: [mathTokens, renderers],
       css: mathStyles,
     },
   })

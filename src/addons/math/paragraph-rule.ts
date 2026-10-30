@@ -1,5 +1,5 @@
 import type { MarkdownParagraphRule } from '../api'
-import { blockMath, inlineMath } from './grammar.ts'
+import { blockMath, inlineMath, richInlineMath } from './grammar.ts'
 import { inlineDisplayMath } from './inline-display.ts'
 
 export const mathParagraphRule: MarkdownParagraphRule = {
@@ -26,10 +26,13 @@ export const mathParagraphRule: MarkdownParagraphRule = {
           /^ *$/.test(restored.slice(lineStart, index))
             ? blockMath(restored.slice(index))
             : undefined
+        const display = inlineDisplayMath(restored.slice(index))
+        // Other views read inline math as Obsidian does: escape for both.
         const token =
           block ??
+          richInlineMath(restored.slice(index)) ??
           inlineMath(restored.slice(index)) ??
-          inlineDisplayMath(restored.slice(index))
+          (display?.type === 'inlineMath' ? display : undefined)
         if (token)
           for (let at = index; at < index + token.raw.length; at++)
             if (dollars.has(at)) escaped.add(at)

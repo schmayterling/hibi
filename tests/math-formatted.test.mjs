@@ -8,10 +8,10 @@ import {
   blockMathSyntax,
   inlineMathEnd,
   inlineMathSyntax,
+  precedenceWork,
 } from '../src/addons/math/formatted-syntax.ts'
 import {
   inlineDisplayMath,
-  inlineDisplayMathTokens,
   inlineMathWork,
 } from '../src/addons/math/inline-display.ts'
 import { containerPrefix, mathInsertion } from '../src/addons/math/insert.ts'
@@ -21,8 +21,7 @@ import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const formatted = parser.configure([GFM, inlineMathSyntax, blockMathSyntax])
-// `$$…$$` inside a line is display math in the formatted view, not the rich view.
-const marked = new Marked(mathTokens, inlineDisplayMathTokens)
+const marked = new Marked(mathTokens)
 
 /** Display formulas compare apart from the spaces around their line breaks. */
 const lines = (latex) => latex.replace(/[ \t]*\n[ \t]*/g, '\n')
@@ -35,25 +34,25 @@ function lezerMath(source) {
     enter(node) {
       if (node.name === 'InlineMath' || node.name === 'InlineMathLines') {
         const mark = node.node.firstChild.to - node.from
-        if (mark === 1) {
-          found.push(['inline', source.slice(node.from + 1, node.to - 1)])
-          return false
-        }
         // Later lines' quote markers are no part of the formula.
         let latex = '',
-          at = node.from + 2
+          at = node.from + mark
         for (let child = node.node.firstChild; child; child = child.nextSibling)
           if (child.name !== 'MathMark') {
             latex += source.slice(at, child.from)
             at = child.to
           }
-        latex += source.slice(at, node.to - 2)
+        latex += source.slice(at, node.to - mark)
         assert.equal(
           node.name === 'InlineMathLines',
           latex.includes('\n'),
           `node for ${JSON.stringify(source)}`,
         )
-        found.push(['display', lines(latex.trim())])
+        found.push(
+          mark === 1
+            ? ['inline', lines(latex)]
+            : ['display', lines(latex.trim())],
+        )
         return false
       }
       if (node.name === 'BlockMath') {
@@ -83,7 +82,7 @@ function markedMath(source) {
       found.push(
         token.display
           ? ['display', lines(token.latex)]
-          : ['inline', token.latex],
+          : ['inline', lines(token.latex)],
       )
     if (token.type === 'blockMath') found.push(['block', token.latex])
   })
@@ -286,10 +285,27 @@ test('formatted and source outlines agree around nested and mid-line math', () =
   }
 })
 
-test('inline math ends where the tokenizer expression ends, in linear time', {
-  timeout: 60_000,
-}, () => {
-  const alphabet = ['$', '\\', 'a', ' ', '\n', '\r', '$$']
+/**
+ * The inline branch of Obsidian 1.13.7's inline math tokenizer in its
+ * app.js, for text starting with one `$`: where the closing `$` ends, or -1.
+ */
+function obsidianInlineEnd(text) {
+  let next = text.charCodeAt(1)
+  if (next === 36 || next === 32 || next === 9) return -1
+  for (let at = 1; at < text.length; at++) {
+    const code = next
+    next = text.charCodeAt(at + 1)
+    if (code === 36) {
+      const before = text.charCodeAt(at - 1)
+      if (before !== 32 && before !== 9 && !(next >= 48 && next <= 57))
+        return at + 1
+    } else if (code === 92) next = text.charCodeAt(++at + 1)
+  }
+  return -1
+}
+
+test('inline math ends where Obsidian ends it, in linear time', () => {
+  const alphabet = ['$', '\\', 'a', ' ', '\t', '\n', '5', '$$']
   let seed = 7
   const random = () => {
     seed = (seed * 1103515245 + 12345) % 2147483648
@@ -300,18 +316,60 @@ test('inline math ends where the tokenizer expression ends, in linear time', {
     const length = 1 + Math.floor(random() * 14)
     for (let i = 0; i < length; i++)
       text += alphabet[Math.floor(random() * alphabet.length)]
+    const expected = obsidianInlineEnd(text)
+    assert.equal(inlineMathEnd(text, 0), expected, JSON.stringify(text))
+    // The tokenizer reads a `$$` as display math.
     assert.equal(
-      inlineMathEnd(text, 0),
       inlineMath(text)?.raw.length ?? -1,
+      text[1] === '$' ? obsidianDisplayEnd(text) : expected,
       JSON.stringify(text),
     )
   }
-  // The expression backtracks exponentially over an unclosed backslash run
-  // (its time doubles every two backslashes); the scan solves each position once.
   assert.equal(inlineMathEnd(`$${'\\'.repeat(200_000)}x`, 0), -1)
   for (const count of [5_000, 5_001]) {
     const closed = `$${'\\'.repeat(count)}x$`
-    assert.equal(inlineMathEnd(closed, 0), inlineMath(closed).raw.length)
+    assert.equal(inlineMathEnd(closed, 0), obsidianInlineEnd(closed))
+  }
+  // Openers without a closer, as in currency, share one search for it.
+  for (const make of [
+    (count) => `x ${'$5 and '.repeat(count)}`,
+    (count) => `x ${'a$5 b\n'.repeat(count)}`,
+    (count) => `x ${'$a \\$ '.repeat(count)}`,
+  ]) {
+    const work = []
+    for (const count of [1000, 2000, 4000, 8000]) {
+      const text = make(count)
+      inlineMathWork.positions = 0
+      formatted.parse(text)
+      work.push(inlineMathWork.positions / text.length)
+      inlineMathWork.positions = 0
+      marked.lexer(text)
+      work.push(inlineMathWork.positions / text.length)
+    }
+    for (const perUnit of work) assert.ok(perUnit <= 1, JSON.stringify(work))
+  }
+})
+
+test('single-dollar math reads as Obsidian reads it, after an escaped dollar too', () => {
+  for (const [source, expected] of [
+    // `\$` is a dollar sign; the formula after it closes right before `$`.
+    ['\\$$x$$', [['inline', 'x']]],
+    ['a \\$$x\ny$$ b', [['inline', 'x\ny']]],
+    ['cost $5 and $$\n10$$', [['inline', '5 and $']]],
+    ['$x$$', [['inline', 'x']]],
+    // A `$` after a space or before a digit does not close.
+    ['$a $b$', [['inline', 'a $b']]],
+    ['$a$1 b$', [['inline', 'a$1 b']]],
+    ['$x\ny$ z', [['inline', 'x\ny']]],
+    ['> a $x\n> y$ b', [['inline', 'x\ny']]],
+    ['$5 and $10', []],
+    ['$ x$', []],
+    ['$x $', []],
+    ['\\$x$', []],
+    ['\\$\\$x$$', []],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, source)
+    assert.deepEqual(markedMath(source), expected, source)
   }
 })
 
@@ -384,8 +442,9 @@ test('display math inside a paragraph spans lines, may be blank and may hold dol
     ['- a $$x\n  +y$$ b', [['display', 'x\n+y']]],
     ['Setext $$p\n+q$$ title\n===', [['display', 'p\n+q']]],
     ['| $$x$y$$ | b |\n| --- | --- |', [['display', 'x$y']]],
-    // Escapes, code spans, paragraph ends and currency stay text.
-    ['a \\$$x\n+y$$ b', []],
+    // After an escaped dollar, `$x\n+y$` is inline math; code spans,
+    // paragraph ends and currency stay text.
+    ['a \\$$x\n+y$$ b', [['inline', 'x\n+y']]],
     ['`a $$x\n+y$$` b', []],
     ['a $$x\n\n+y$$ b', []],
     ['a $$x\n# heading\ny$$ b', []],
@@ -393,6 +452,67 @@ test('display math inside a paragraph spans lines, may be blank and may hold dol
   ]) {
     assert.deepEqual(lezerMath(source), expected, source)
     assert.deepEqual(markedMath(source), expected, source)
+  }
+})
+
+test('emphasis, strikethrough or a link that opened first wins over math, as in Obsidian and exports', () => {
+  for (const [source, expected] of [
+    ['a *$$x* +y$$', []],
+    ['a **$$x** y$$', []],
+    ['a ~~$$x~~ y$$', []],
+    ['a _$$x_ y$$', []],
+    ['a [$$x](u) y$$', []],
+    ['a *b $$x* y$$ c*', []],
+    ['a *x $$y\nz* w$$', []],
+    ['a *$x* y$', []],
+    ['a ![$$x](u) y$$', []],
+    ['a *b* *c $$x* y$$', []],
+    // Math inside them, or syntax that closed before it, stays math.
+    ['a *$$x$$* b', [['display', 'x']]],
+    ['a $$x *y$$ z*', [['display', 'x *y']]],
+    ['*a* $$x *b* y$$', [['display', 'x *b* y']]],
+    ['a [x $$y [z] w$$ v](u)', [['display', 'y [z] w']]],
+    // A link that finished around math leaves emphasis before it open.
+    ['[a $x$ b](u) *c $y* d$', [['inline', 'x']]],
+    ['*a [b $x$](u) $y* z$', [['inline', 'x']]],
+    ['[ ![i](j) $x$ z', [['inline', 'x']]],
+  ]) {
+    assert.deepEqual(lezerMath(source), expected, source)
+    assert.deepEqual(markedMath(source), expected, source)
+  }
+})
+
+test('math after emphasis, links and open brackets reads its paragraph in linear time', () => {
+  for (const make of [
+    (count) => `x ${'*a* $b$ '.repeat(count)}`,
+    (count) => `*x ${'**a** $b$ '.repeat(count)}`,
+    (count) => `[ ${'![a](b) $c$ '.repeat(count)}`,
+    (count) => `x ${'*a* [b $c$ d](e) '.repeat(count)}`,
+  ]) {
+    const work = []
+    for (const count of [1000, 2000, 4000, 8000]) {
+      const text = make(count)
+      precedenceWork.reads = 0
+      formatted.parse(text)
+      work.push(precedenceWork.reads / text.length)
+    }
+    // Reading every delimiter before each formula was quadratic.
+    for (const perUnit of work) assert.ok(perUnit <= 2, JSON.stringify(work))
+  }
+})
+
+test('a pair over the formula limit stays text, so its closing dollars open nothing', () => {
+  const long = 'x'.repeat(10_001)
+  for (const [source, expected] of [
+    [`a $$${long}$$ b $$c$$ d`, [['display', 'c']]],
+    [`a $$x\n${long}$$ b $$c$$ d`, [['display', 'c']]],
+    [`$$\n${long}\n$$ b $$c$$`, [['display', 'c']]],
+    [`a $${long}$b$ c`, []],
+    [`a $${long}$ $b$ c`, [['inline', 'b']]],
+  ]) {
+    const label = JSON.stringify(source.slice(0, 12))
+    assert.deepEqual(lezerMath(source), expected, label)
+    assert.deepEqual(markedMath(source), expected, label)
   }
 })
 
@@ -416,14 +536,22 @@ test('double dollars respect literal contexts and table cells', () => {
   for (const source of [
     'costs $5 and $10',
     'costs $5.00 or $10.00',
-    String.raw`escaped \$$x$$ and \$5`,
+    String.raw`escaped \$\$x$$ and \$5`,
     '`$$x$$` and ``code ` $$y$$``',
     '```tex\n$$x$$\n```',
     '[link](https://example.test/$$x$$)',
-    '| `$$x$$` | \\$$y$$ |\n| --- | --- |',
+    '| `$$x$$` | \\$\\$y$$ |\n| --- | --- |',
   ]) {
     assert.deepEqual(lezerMath(source), [], source)
     assert.deepEqual(markedMath(source), [], source)
+  }
+  // As in Obsidian, an escaped first dollar leaves `$y$` before the last one.
+  for (const source of [
+    String.raw`escaped \$$y$$ and \$5`,
+    '| `$$x$$` | \\$$y$$ |\n| --- | --- |',
+  ]) {
+    assert.deepEqual(lezerMath(source), [['inline', 'y']], source)
+    assert.deepEqual(markedMath(source), [['inline', 'y']], source)
   }
   const source = '| before $$x+1$$ after | `$5` |\n| --- | --- |'
   assert.deepEqual(lezerMath(source), [['display', 'x+1']])
@@ -577,6 +705,174 @@ test('chunked parses with math match whole-document trees', () => {
       JSON.stringify(text),
     )
   }
+})
+
+/** A paragraph over 64 KiB, which the formatted view parses in windows. */
+function giantParagraph(length, seed) {
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+  }
+  const units = [
+    (i) => `w${i} words $$x_${i}`,
+    (i) => `+y_${i}$$ more words`,
+    (i) => `see \`$$\` and \`a$\` code ${i}`,
+    (i) => `cost \\$$ and \\$5 here ${i}`,
+    (i) => `inline $a_${i}$ and $$b$$ then`,
+    (i) => `code \`\`spans ${i}`,
+    () => `across\`\` lines $c$`,
+  ]
+  const lines = []
+  for (let i = 0, size = 0; size < length; i++) {
+    const line =
+      i === 900
+        ? `long $$q\n${'q'.repeat(4_000)}\n${'q'.repeat(4_000)}$$ end`
+        : i === 1800
+          ? `over $$${'z'.repeat(10_500)}$$ after`
+          : units[Math.floor(random() * units.length)](i)
+    lines.push(line)
+    size += line.length + 1
+  }
+  return `# T\n\n${lines.join('\n')}\n\n## after\n`
+}
+
+/** Code spans and math fully inside `from`-`to`. */
+function pairsIn(tree, from, to) {
+  const found = []
+  tree.iterate({
+    from,
+    to,
+    enter(node) {
+      if (
+        /^(InlineMath|InlineMathLines|InlineCode)$/.test(node.name) &&
+        node.from >= from &&
+        node.to <= to
+      )
+        found.push(`${node.name}:${node.from}-${node.to}`)
+    },
+  })
+  return found
+}
+
+const stringInput = (text) => ({
+  length: text.length,
+  lineChunks: false,
+  chunk: (from) => text.slice(from),
+  read: (from, to) => text.slice(from, to),
+})
+
+function chunkedParse(text, demand, options = {}, fragments = []) {
+  const probe = { scannedUnits: 0, parsedUnits: 0, reusedNodes: 0 }
+  const parse = new ChunkedMarkdownParser(formatted, formatted, {
+    ...options,
+    probe,
+  }).startChunkedParse(stringInput(text), fragments, demand)
+  let tree = null
+  while (!tree) tree = parse.advance()
+  return { tree, probe }
+}
+
+test('giant paragraphs pair math and code spans across window seams as the whole paragraph does', () => {
+  let text = giantParagraph(150_000, 41)
+  const exact = formatted.parse(text)
+  for (const options of [{}, { chunkSize: 64, groupSize: 4, giantBlock: 1024 }])
+    for (let k = 1; k < 25; k++) {
+      const at = Math.floor((text.length * k) / 25)
+      const demand = { from: at, to: Math.min(text.length, at + 3000) }
+      const { tree } = chunkedParse(text, demand, options)
+      assert.deepEqual(
+        pairsIn(tree, demand.from, demand.to),
+        pairsIn(exact, demand.from, demand.to),
+        `${JSON.stringify(options)} at ${at}`,
+      )
+    }
+  // Edits keep the pairing: in the viewport, and far above it, where a new
+  // `$$` flips every pair after it.
+  const at = Math.floor(text.length / 2)
+  const demand = { from: at, to: at + 3000 }
+  let { tree } = chunkedParse(text, demand)
+  for (const [pos, insert] of [
+    [at + 1500, 'x'],
+    [at + 1500, '$$'],
+    [at + 1600, '`'],
+    [at + 1700, '\\'],
+    [20, '$$'],
+    [20, '`'],
+  ]) {
+    text = text.slice(0, pos) + insert + text.slice(pos)
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+      { fromA: pos, toA: pos, fromB: pos, toB: pos + insert.length },
+    ])
+    ;({ tree } = chunkedParse(text, demand, {}, fragments))
+    assert.deepEqual(
+      pairsIn(tree, demand.from, demand.to),
+      pairsIn(formatted.parse(text), demand.from, demand.to),
+      `after ${JSON.stringify(insert)} at ${pos}`,
+    )
+  }
+})
+
+test('an edit above a seam checkpoint pairs the giant paragraph after it again', () => {
+  // Prose decides no pairs, yet each checkpoint rests on every line before it.
+  const lines = Array.from(
+    { length: 400 },
+    (_, i) => `plain words on line ${i} here`,
+  )
+  lines[240] = 'close$$ here'
+  const text = `# T\n\n${lines.join('\n')}\n\n## after\n`
+  const options = { chunkSize: 64, groupSize: 4, giantBlock: 1024 }
+  const close = text.indexOf('close$$') + 5
+  const { tree } = chunkedParse(
+    text,
+    { from: close - 100, to: close + 200 },
+    options,
+  )
+  // The pair a new `$$` opens reaches into the viewport from above it.
+  const demand = { from: close - 98, to: close + 202 }
+  const pairs = (tree) => {
+    const found = []
+    tree.iterate({
+      ...demand,
+      enter(node) {
+        if (/^(InlineMath|InlineMathLines|InlineCode)$/.test(node.name))
+          found.push(`${node.name}:${node.from}-${node.to}`)
+      },
+    })
+    return found
+  }
+  for (let pos = close - 900; pos < close - 50; pos += 7) {
+    const edited = `${text.slice(0, pos)}$$${text.slice(pos)}`
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+      { fromA: pos, toA: pos, fromB: pos, toB: pos + 2 },
+    ])
+    assert.deepEqual(
+      pairs(chunkedParse(edited, demand, options, fragments).tree),
+      pairs(formatted.parse(edited)),
+      `$$ at ${pos}`,
+    )
+  }
+})
+
+test('typing in a giant paragraph reads its seams in bounded work, whatever its length', () => {
+  const work = []
+  for (const length of [1 << 20, 4 << 20]) {
+    let text = giantParagraph(length, 7)
+    const at = Math.floor(text.length * 0.6)
+    const demand = { from: at, to: at + 3000 }
+    let { tree } = chunkedParse(text, demand)
+    for (const insert of ['x', '$$', 'y']) {
+      const pos = at + 1500
+      text = text.slice(0, pos) + insert + text.slice(pos)
+      const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+        { fromA: pos, toA: pos, fromB: pos, toB: pos + insert.length },
+      ])
+      let probe
+      ;({ tree, probe } = chunkedParse(text, demand, {}, fragments))
+      work.push(probe.seamUnits)
+    }
+  }
+  // About a viewport's window and one pair limit of reading ahead, not the paragraph.
+  for (const units of work) assert.ok(units <= 4 * 65_536, JSON.stringify(work))
 })
 
 test('random notes of quotes, lists and math agree with the rich view tokenizers', () => {

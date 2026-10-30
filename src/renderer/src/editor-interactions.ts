@@ -100,9 +100,12 @@ function copy(label: string, detail?: string) {
   return entry
 }
 
+let menuCount = 0
+
 export function attachEditorInteractions(adapter: Adapter) {
   const hover = panel('tooltip', 'Editor hover')
   const menu = panel('menu', 'Editor actions')
+  menu.id = `hibi-editor-actions-${++menuCount}`
   let hoverTimer: ReturnType<typeof setTimeout> | null = null
   let hoverCancel: (() => void) | null = null
   let actionCancel: (() => void) | null = null
@@ -121,6 +124,13 @@ export function attachEditorInteractions(adapter: Adapter) {
     if (element === menu) {
       releaseMenu?.()
       releaseMenu = null
+      // Another popup's, such as completions', stays.
+      if (
+        adapter.element
+          .getAttribute('aria-activedescendant')
+          ?.startsWith(`${menu.id}-`)
+      )
+        adapter.element.removeAttribute('aria-activedescendant')
     }
     if (element.matches(':popover-open')) element.hidePopover()
   }
@@ -192,7 +202,11 @@ export function attachEditorInteractions(adapter: Adapter) {
       element.setAttribute('aria-current', String(active))
       ;(element as HTMLElement).style.background = active ? 'var(--active)' : ''
     }
-    menu.children[selected]?.scrollIntoView({ block: 'nearest' })
+    // The editor keeps its focus; assistive technology follows the selected action.
+    const current = menu.children[selected]
+    if (current)
+      adapter.element.setAttribute('aria-activedescendant', current.id)
+    current?.scrollIntoView({ block: 'nearest' })
   }
   const accept = (index: number) => {
     const current = shown
@@ -279,6 +293,7 @@ export function attachEditorInteractions(adapter: Adapter) {
         ...items.map((item, index) => {
           const button = document.createElement('button')
           button.type = 'button'
+          button.id = `${menu.id}-${index}`
           button.setAttribute('role', 'menuitem')
           // One action per row.
           Object.assign(button.style, {

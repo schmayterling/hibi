@@ -605,9 +605,19 @@ test('codemirror link menu holds the editor actions of addons too', {
     .getByRole('menuitem', { name: 'Define word', exact: true })
     .waitFor()
   assert.deepEqual(await items(), expected)
+  // The editor keeps its focus and names the selected action to assistive
+  // technology, as its active descendant.
+  const active = () =>
+    page.evaluate(() => {
+      const id = document.activeElement?.getAttribute('aria-activedescendant')
+      return id ? document.getElementById(id)?.textContent : null
+    })
+  assert.equal(await active(), 'Edit link…')
   await page.keyboard.press('ArrowDown')
+  assert.equal(await active(), 'Open link')
   await page.keyboard.press('Enter')
   await menu.waitFor({ state: 'hidden' })
+  assert.equal(await active(), null)
   // Opening a link keeps the app busy for a moment; the editor then has its
   // focus back.
   await page.waitForFunction(() =>

@@ -591,8 +591,20 @@ async function removeTabs(
       (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
       order.slice(order.indexOf(activeTab) + 1).find((id) => !ids.has(id)) ??
       order.findLast((id) => !ids.has(id))
+    const closing = source.snapshot()
     // The tab shown next is checked for outside changes, as a tab switch does.
-    if (next) await selectDocumentTab(window, next, false)
+    if (next)
+      await selectDocumentTab(window, next, false).catch((error: unknown) => {
+        // Edits made meanwhile keep the closing tab open. A next tab whose file
+        // cannot be checked still shows its text, and the close says why.
+        if (!source.ownsCurrentSnapshot(closing) || !tabs.has(next)) throw error
+        activateTab(next)
+        advanceRevision()
+        window.webContents.send(
+          HISTORY_CHANNELS.notice,
+          error instanceof Error ? error.message : String(error),
+        )
+      })
   }
   for (const id of ids) {
     tabs.delete(id)

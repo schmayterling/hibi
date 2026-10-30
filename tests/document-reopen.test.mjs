@@ -1028,6 +1028,39 @@ codemirrorTest(
 )
 
 codemirrorTest(
+  'closing a tab still shows the next tab when its file cannot be read',
+  {
+    timeout: 150000,
+  },
+  async (t) => {
+    const setupState = await setup(t)
+    const { app, page, notes, file, read, idle, open, content } = setupState
+    const { answer, prompts, state, notice } = setupState
+    const note = (await read()).tabId
+    await writeFile(join(notes, 'other.md'), 'other note\n')
+    await answer(2, join(notes, 'other.md'))
+    await open()
+    await content('other note\n')
+    // Another app puts a folder where the next tab's file was.
+    await rm(file)
+    await mkdir(file)
+    const done = await replied(app, 'document:close-tab')
+    await page.getByRole('button', { name: /^close other\.md$/i }).click()
+    await done()
+    await idle()
+    await notice('Choose a text file, not a folder or device.')
+    assert.deepEqual(await prompts(), [])
+    assert.deepEqual(await state(), {
+      tabId: note,
+      markdown: 'original text\n',
+      dirty: false,
+      ephemeral: false,
+    })
+    await content('original text\n')
+  },
+)
+
+codemirrorTest(
   'a link to a heading of another note or the note itself moves to the heading',
   {
     timeout: 150000,

@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -1085,5 +1086,56 @@ codemirrorTest(
     await follow('down')
     assert.equal((await read()).tabId, note)
     await atHeading(self)
+  },
+)
+
+codemirrorTest(
+  'a missing Finder file and a moved note folder get plain messages',
+  {
+    timeout: 150000,
+  },
+  async (t) => {
+    const setupState = await setup(t)
+    const { app, page, notes, read, idle } = setupState
+    const { prompts, state, type, notice } = setupState
+    const note = (await read()).tabId
+    // A missing file from Finder is named once.
+    let done = await replied(app, 'document:external')
+    await app.evaluate(
+      ({ app }, path) =>
+        app.emit(
+          'second-instance',
+          {},
+          ['electron', 'app', path],
+          process.cwd(),
+        ),
+      join(notes, 'gone.md'),
+    )
+    await done()
+    await idle()
+    await notice('Could not find gone.md.')
+    assert.deepEqual(
+      (await page.locator('.toast').allTextContents()).filter((toast) =>
+        toast.includes('gone.md:'),
+      ),
+      [],
+    )
+    // Saving after another app moves the note's folder keeps the edits and says why.
+    const draft = await type('local draft')
+    await rename(notes, join(dirname(notes), 'moved'))
+    done = await replied(app, 'document:save')
+    await clickMenu(app, 'Save')
+    await done()
+    await idle()
+    await notice(
+      'The folder for note.md was moved or deleted outside Hibi. Use Save as to keep this text.',
+    )
+    assert.deepEqual(await prompts(), [])
+    assert.deepEqual(await state(), {
+      tabId: note,
+      markdown: draft,
+      dirty: true,
+      ephemeral: false,
+    })
   },
 )

@@ -2625,8 +2625,13 @@ if (!app.requestSingleInstanceLock()) {
               if (opened) document = opened
               else kept.add(file)
             } catch (error) {
+              const message =
+                error instanceof Error ? error.message : 'Could not open file.'
+              // A message that already names the file is not prefixed with it.
               errors.push(
-                `${basename(path)}: ${error instanceof Error ? error.message : 'Could not open file.'}`,
+                message.includes(basename(path))
+                  ? message
+                  : `${basename(path)}: ${message}`,
               )
             }
           }

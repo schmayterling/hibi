@@ -910,7 +910,12 @@ export async function saveDocument(
   destination = await realpath(chosen).catch(
     async (error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
-      return join(await realpath(dirname(chosen)), basename(chosen))
+      const folder = await realpath(dirname(chosen)).catch(missingFile)
+      if (!folder)
+        throw new Error(
+          `The folder for ${basename(chosen)} was moved or deleted outside Hibi. Use Save as to keep this text.`,
+        )
+      return join(folder, basename(chosen))
     },
   )
   if (isOpenInOtherTab(destination))

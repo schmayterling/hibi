@@ -13,21 +13,36 @@ import { electron, stopElectronTree } from './electron.mjs'
 
 function recordStartupDialogs(
   { app, BrowserWindow, dialog, ipcMain },
-  { modals, failures, logged, occupy, block },
+  { modals, failures, logged, occupy, block, closeDuringFlush },
 ) {
   const fs = process.getBuiltinModule('node:fs')
   const append = (path, value) =>
     fs.appendFileSync(path, `${JSON.stringify(value)}\n`)
   // Taking a channel first makes the app's own registration fail its startup.
   if (occupy) ipcMain.handle(occupy, () => {})
+  if (closeDuringFlush) {
+    // The diagnostics sink never creates its folder, so the flush before the
+    // dialog waits its whole bound.
+    const promises = process.getBuiltinModule('node:fs/promises')
+    const mkdir = promises.mkdir
+    promises.mkdir = function (path, ...rest) {
+      if (/[\\/]logs$/.test(String(path))) return new Promise(() => {})
+      return mkdir.call(this, path, ...rest)
+    }
+    process.getBuiltinModule('node:module').syncBuiltinESMExports()
+  }
   const original = console.error
   console.error = (...args) => {
-    if (args[0] === 'failed to load app:' || args[0] === 'startup failed:')
+    if (args[0] === 'failed to load app:' || args[0] === 'startup failed:') {
       append(failures, {
         context: args[0],
         message: args[1]?.message,
         stack: args[1]?.stack,
       })
+      // The person closes the window while the failure is being written.
+      if (closeDuringFlush)
+        setTimeout(() => BrowserWindow.getAllWindows()[0]?.close(), 100)
+    }
     original(...args)
   }
   for (const method of [
@@ -75,7 +90,7 @@ function recordStartupDialogs(
   globalThis.startupDialogsInstalled = true
 }
 
-async function launch(t, env = {}) {
+async function launch(t, env = {}, options = {}) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-quit-'))
   const modals = join(profile, 'modals.jsonl')
   const failures = join(profile, 'failures.jsonl')
@@ -84,7 +99,7 @@ async function launch(t, env = {}) {
   const hook = join(profile, 'startup-hook.cjs')
   await writeFile(
     hook,
-    `(${recordStartupDialogs})(require('electron'), ${JSON.stringify({ modals, failures })})`,
+    `(${recordStartupDialogs})(require('electron'), ${JSON.stringify({ modals, failures, ...options })})`,
   )
   const app = await electron.launch({
     args: ['--require', hook, resolve('.'), `--user-data-dir=${profile}`],
@@ -269,6 +284,42 @@ test('a genuine startup navigation failure still shows the existing error', {
   // The local log must call this fatal exit critical whatever the load error code.
   const codes = await diagnosticCodes(fixture.profile)
   assert.ok(codes.includes('MAIN_STARTUP_FAILED'), codes.join(' '))
+})
+
+test('closing the window while a failed start is recorded still ends with the dialog and a quit', {
+  timeout: 60000,
+}, async (t) => {
+  const requested = Promise.withResolvers()
+  const server = createServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html' })
+    response.write('<!doctype html><title>Pending startup</title>')
+    requested.resolve(request)
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  t.after(async () => {
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
+  })
+  const url = `http://127.0.0.1:${server.address().port}/`
+  const fixture = await launch(
+    t,
+    { ELECTRON_RENDERER_URL: url },
+    { closeDuringFlush: true },
+  )
+  const request = await deadline(requested.promise, 'startup navigation')
+  request.socket.destroy()
+  // On macOS closing the last window does not quit, so the dialog must still open.
+  await deadline(fixture.closed, 'failed startup exit', 20)
+  assert.equal(fixture.child.exitCode, 0)
+  if (process.platform === 'darwin')
+    assert.deepEqual(await fixture.modals(), [
+      {
+        method: 'showErrorBox',
+        title: 'Hibi could not start',
+        content: 'Restart Hibi. If it still cannot start, reinstall it.',
+      },
+    ])
 })
 
 // Spawned without Playwright: its inspector calls cannot reach a blocked main process.

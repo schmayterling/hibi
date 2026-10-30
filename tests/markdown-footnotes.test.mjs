@@ -431,20 +431,37 @@ test('source footnotes preview and save without changing markdown', {
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), source)
 
-  await replaceSourceText(
-    page,
-    editor,
-    'Unsafe[^note].\n\n[^note]: <img src="x" onerror="window.footnoteAttack=true">',
-  )
-  // The definition's markup stays literal source, never a live element.
+  const unsafe =
+    'Unsafe[^note] and[^tag].\n\n[^note]: <img src="x" onerror="window.footnoteAttack=true">\n[^tag]: <span onmouseover="window.footnoteAttack=true">hover</span>'
+  await replaceSourceText(page, editor, unsafe)
+  await preview.locator('.hibi-lp-footnote-ref', { hasText: 'note' }).waitFor()
+  // A definition's image draws without its markup's handlers, and other tags
+  // stay literal source, never live elements.
   await preview
     .locator('.hibi-lp-html', {
-      hasText: '<img src="x" onerror="window.footnoteAttack=true">',
+      hasText: 'onmouseover="window.footnoteAttack=true"',
     })
     .waitFor()
-  await preview.locator('.hibi-lp-footnote-ref', { hasText: 'note' }).waitFor()
-  assert.equal(await preview.locator('img').count(), 0)
+  // Its source does not resolve, so the drawn image has no size.
+  await preview.locator('.document-media img').waitFor({ state: 'attached' })
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  assert.deepEqual(
+    await preview.evaluate((pane) =>
+      [...pane.querySelectorAll('*')].flatMap((element) =>
+        element.getAttributeNames().filter((name) => name.startsWith('on')),
+      ),
+    ),
+    [],
+  )
   assert.equal(await page.evaluate(() => window.footnoteAttack), undefined)
+  await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), unsafe)
   assert.deepEqual(errors, [])
 })
 

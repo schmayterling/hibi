@@ -105,14 +105,16 @@ test('empty quote markers retain native lazy-line boundaries', () => {
   }
 })
 
-test('a nested re-read keeps the last empty quote line in the quote', () => {
-  // Marked counts the lines a nested re-read leaves from the text after it,
-  // so one last quote line that strips to nothing stays in the outer quote.
+test('a nested re-read keeps the last quote lines where Marked puts them', () => {
+  // Marked re-reads a nested quote from the rest of the quote's lines, which
+  // end without a newline, and counts the lines it leaves from the text after
+  // it: one last quote line that strips to nothing stays in the outer quote.
   for (const sample of [
     '> > o\ny\n>',
     '> > a\n> > > b\n> c\n> >',
     '>>o\ny\n>\nz',
     '> > o\ny\n> \n\nafter',
+    '>>a\n>>>]\n>$\n>>  \n>```',
   ])
     for (const eol of ['\n', '\r\n']) {
       const source = sample.replaceAll('\n', eol)

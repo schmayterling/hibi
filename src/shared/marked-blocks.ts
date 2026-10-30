@@ -45,8 +45,6 @@ function quoteInterrupt(tokenizer: Tokenizer) {
 type QuoteScan = {
   /** Line `index` of the quote's extent, or undefined past its end. */
   line(index: number): string | undefined
-  /** Line `index` with its newline when one follows it in the source. */
-  raw(index: number): string | undefined
   /** The source up to the end of the scanned lines, as the native rule matches. */
   extent(): string
   /** A scanned line contains a tab. */
@@ -140,12 +138,6 @@ function quoteScan(
       if (from === undefined) return
       const end = index + 1 < starts.length ? starts[index + 1]! - 1 : at - 1
       return source.slice(from, end)
-    },
-    raw(index) {
-      const line = scan.line(index)
-      if (line === undefined) return
-      if (feed) return lines[index]
-      return starts[index]! + line.length < source.length ? `${line}\n` : line
     },
     extent() {
       let count = feed ? lines.length : starts.length
@@ -343,10 +335,10 @@ function readQuote(
   // Line `index` as the native re-read input spells it: with a newline unless
   // it is the last line of the extent.
   const rawLineAt = (index: number) => {
-    if (frontAt + index >= front.length)
-      return scan.raw(from + frontAt + index - front.length)
-    const line = front[frontAt + index]!
-    return peek(index + 1) === undefined ? line : `${line}\n`
+    const line = peek(index)
+    return line === undefined || peek(index + 1) === undefined
+      ? line
+      : `${line}\n`
   }
   const takeLine = () =>
     frontAt < front.length ? front[frontAt++]! : scan.line(from++)!

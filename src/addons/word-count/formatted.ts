@@ -168,7 +168,8 @@ export function observeFormattedCounts(
             view.dom
               .closest('[data-editor-view]')
               ?.getAttribute('data-editor-view') === active.viewId &&
-            !view.dom.closest('[aria-hidden="true"], [hidden]'),
+            // Settings may hide the whole page without switching its editor mode.
+            !view.dom.closest('.rich-pane[aria-hidden="true"]'),
         )
       return {
         kind: 'count',

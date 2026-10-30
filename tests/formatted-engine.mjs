@@ -3,7 +3,13 @@ import test from 'node:test'
 import { waitForDocumentEditor } from './electron.mjs'
 
 // Keep parity oracles explicit when the application's default changes.
-export async function selectFormattedEngine(app, page, engine) {
+// `reload` reloads a mounted engine too, so init scripts and stored settings apply.
+export async function selectFormattedEngine(
+  app,
+  page,
+  engine,
+  { reload = false } = {},
+) {
   await waitForDocumentEditor(app, page, { timeout: 30000 })
   assert.ok(['tiptap', 'codemirror'].includes(engine))
   // A note can open in a table cell, whose cell editor has its own .cm-content.
@@ -13,7 +19,7 @@ export async function selectFormattedEngine(app, page, engine) {
       : '.hibi-formatted .cm-content:not(.hibi-lp-cell-editor *)'
   const editor = page.locator(`.rich-pane ${selector}`)
   // CodeMirror is the default, so Tiptap takes the reload.
-  if (!(await editor.count())) {
+  if (reload || !(await editor.count())) {
     await reloadFormattedEngine(page, engine)
     await page.waitForLoadState('load')
     await waitForDocumentEditor(app, page, { timeout: 30000 })

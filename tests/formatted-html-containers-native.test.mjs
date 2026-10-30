@@ -59,6 +59,18 @@ async function open(name, doc, token) {
   await page.locator('.rich-pane .cm-line', { hasText: token }).waitFor()
 }
 
+/**
+ * A note opens with the caret on its last line, which then shows its prefix
+ * markers; on the blank line after the first block, no line shows them.
+ */
+async function caretBetweenBlocks(doc) {
+  await page.evaluate((at) => {
+    document
+      .querySelector('.rich-pane .cm-content')
+      .cmTile.root.view.dispatch({ selection: { anchor: at } })
+  }, doc.indexOf('\n\n') + 1)
+}
+
 test('quoted html ends before following prose and lists, with container markers hidden', {
   timeout: 90000,
 }, async () => {
@@ -210,6 +222,7 @@ test('literal lists keep nested quote markers while active quote prefixes hide',
         document.querySelector('.rich-pane .cm-line')?.textContent ===
         '- literal a',
     )
+    await caretBetweenBlocks(doc)
     assert.deepEqual(
       await page.locator('.rich-pane .cm-line').allTextContents(),
       [
@@ -245,6 +258,7 @@ test('quoted fences still hide their container markers after html parsing change
   const doc =
     '> ~~~txt\n> quoted code\n> ~~~\n\n- parent\n\n  > ~~~txt\n  > nested code\n  > ~~~\n\n> ~~~markdown\n> > literal greater-than\n> ~~~\n'
   await open('fences.md', doc, 'nested code')
+  await caretBetweenBlocks(doc)
   assert.deepEqual(
     await page.locator('.rich-pane .hibi-lp-codeblock').allTextContents(),
     ['quoted code', 'nested code', '> literal greater-than'],

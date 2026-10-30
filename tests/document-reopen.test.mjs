@@ -1024,3 +1024,66 @@ codemirrorTest(
     assert.equal(await readFile(file, 'utf8'), 'another outside text\n')
   },
 )
+
+codemirrorTest(
+  'a link to a heading of another note or the note itself moves to the heading',
+  {
+    timeout: 150000,
+  },
+  async (t) => {
+    const setupState = await setup(t)
+    const { app, page, notes, file, read, idle, open, select } = setupState
+    const { prompts } = setupState
+    const note = (await read()).tabId
+    // Both headings sit far below the links, out of view.
+    const filler = Array.from(
+      { length: 120 },
+      (_, index) => `filler paragraph ${index}\n\n`,
+    ).join('')
+    const self = `original text\n\nsee [down](note.md#far-away) and [there](other.md#far-away)\n\n${filler}## Far away\n\nend\n`
+    const other = `other note\n\n${filler}## Far away\n\nother end\n`
+    await writeFile(file, self)
+    await writeFile(join(notes, 'other.md'), other)
+    await open()
+    const editor = page.locator('.rich-pane [aria-label="Document editor"]')
+    const follow = async (name) => {
+      const done = await replied(app, 'document:link')
+      await editor
+        .getByRole('link', { name, exact: true })
+        .click({ modifiers: ['Shift'] })
+      await done()
+      await idle()
+      assert.deepEqual(await prompts(), [])
+    }
+    // The caret moves to the heading's text, and the heading is in view.
+    const atHeading = async (markdown) => {
+      const from = markdown.indexOf('## Far away') + 3
+      await waitForAsync(
+        page,
+        (from) =>
+          document.querySelector('.rich-pane .cm-content').cmTile.root.view
+            .state.selection.main.head === from,
+        from,
+      )
+      assert.equal(
+        await editor.evaluate((element, from) => {
+          const caret = element.cmTile.root.view.coordsAtPos(from)
+          const pane = element.closest('.rich-pane').getBoundingClientRect()
+          return (
+            !!caret &&
+            caret.top >= pane.top - 1 &&
+            caret.bottom <= pane.bottom + 1
+          )
+        }, from),
+        true,
+      )
+      assert.equal((await read()).markdown, markdown)
+    }
+    await follow('there')
+    await atHeading(other)
+    await select(note)
+    await follow('down')
+    assert.equal((await read()).tabId, note)
+    await atHeading(self)
+  },
+)

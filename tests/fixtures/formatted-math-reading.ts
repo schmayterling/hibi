@@ -126,7 +126,8 @@ Object.assign(window, {
     /**
      * Renders the pending formulas `where` the reading line is, in one slice:
      * above the pane, on the reading line, or the one just before it.
-     * Optionally scrolls by `scroll` in the next frame. Reports how far the
+     * Optionally scrolls by `scroll` in the next frame, or `jump`s to the
+     * note's end with a scroll command in the same task. Reports how far the
      * reading line moved after `frames` frames and where the pane ended up.
      */
     async fill(
@@ -134,6 +135,7 @@ Object.assign(window, {
       scroll = 0,
       frames = 2,
       typing = false,
+      jump = false,
     ) {
       const paneTop = pane.getBoundingClientRect().top
       const before = view!.coordsAtPos(anchor, 1)!.top
@@ -174,11 +176,20 @@ Object.assign(window, {
         pending.delete(dom)
         done(katex.renderToString(latex, { displayMode: display }))
       }
+      const end = view!.state.doc.length
+      if (jump)
+        view!.dispatch({
+          effects: EditorView.scrollIntoView(end, { y: 'end' }),
+        })
       for (let count = 0; count < frames; count++) await frame()
+      const last = jump ? view!.coordsAtPos(end, -1) : null
+      const { bottom } = pane.getBoundingClientRect()
       return {
         filled: chosen.length,
         moved: view!.coordsAtPos(anchor, 1)!.top - before,
         scrolled: target === null ? null : pane.scrollTop - target,
+        // The note's last line is on screen after the jump.
+        landed: last ? last.top >= paneTop && last.bottom <= bottom + 1 : null,
       }
     },
   },

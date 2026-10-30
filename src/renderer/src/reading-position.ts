@@ -1,5 +1,7 @@
 import { EditorView } from '@codemirror/view'
 
+const scrollRequests = new WeakMap<EditorView, number>()
+
 /** The reading position during one rendering or background parsing slice. */
 type Reading = {
   /** The element that scrolls the editor. */
@@ -12,6 +14,7 @@ type Reading = {
   moved: boolean
   doc: EditorView['state']['doc']
   selection: EditorView['state']['selection']
+  scrollRequest: number
 }
 const reading = new WeakMap<EditorView, Reading | null>()
 
@@ -50,6 +53,7 @@ function readingPosition(view: EditorView): Reading | null {
         moved: false,
         doc: view.state.doc,
         selection: view.state.selection,
+        scrollRequest: scrollRequests.get(view) ?? 0,
       }
     : null
 }
@@ -67,6 +71,7 @@ export function keepReading(view: EditorView, at = 0) {
     position = readingPosition(view)
     reading.set(view, position)
     queueMicrotask(() => {
+      if (reading.get(view) !== position) return
       reading.delete(view)
       if (
         !position?.moved ||
@@ -76,8 +81,12 @@ export function keepReading(view: EditorView, at = 0) {
         view.state.selection !== position.selection
       )
         return
-      restore(view, position)
-      kept.set(view, { ...position, scroll: position.pane.scrollTop, left: 8 })
+      if (restore(view, position))
+        kept.set(view, {
+          ...position,
+          scroll: position.pane.scrollTop,
+          left: 8,
+        })
     })
   }
   if (position && at <= position.line) position.moved = true
@@ -86,8 +95,11 @@ export function keepReading(view: EditorView, at = 0) {
 /** Scrolls the reading position back to where it was on screen. */
 function restore(view: EditorView, position: Reading) {
   const now = view.coordsAtPos(position.pos, 1)
+  // Measuring can execute a pending scroll command; its destination takes precedence.
+  if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
   if (now && Math.abs(now.top - position.top) >= 0.5)
     position.pane.scrollTop += now.top - position.top
+  return true
 }
 
 /**
@@ -99,24 +111,32 @@ const kept = new WeakMap<
   EditorView,
   Reading & { scroll: number; left: number }
 >()
-export const keepRead = EditorView.updateListener.of((update) => {
-  const keep = kept.get(update.view)
-  if (!keep) return
-  if (
-    update.docChanged ||
-    update.selectionSet ||
-    Math.abs(keep.pane.scrollTop - keep.scroll) > 1
-  ) {
-    kept.delete(update.view)
-    return
-  }
-  if (
-    !update.geometryChanged &&
-    !update.heightChanged &&
-    !update.viewportChanged
-  )
-    return
-  if (--keep.left <= 0) kept.delete(update.view)
-  restore(update.view, keep)
-  keep.scroll = keep.pane.scrollTop
-})
+export const keepRead = [
+  EditorView.updateListener.of((update) => {
+    const keep = kept.get(update.view)
+    if (!keep) return
+    if (
+      update.docChanged ||
+      update.selectionSet ||
+      Math.abs(keep.pane.scrollTop - keep.scroll) > 1
+    ) {
+      kept.delete(update.view)
+      return
+    }
+    if (
+      !update.geometryChanged &&
+      !update.heightChanged &&
+      !update.viewportChanged
+    )
+      return
+    if (--keep.left <= 0) kept.delete(update.view)
+    restore(update.view, keep)
+    keep.scroll = keep.pane.scrollTop
+  }),
+  EditorView.scrollHandler.of((view) => {
+    scrollRequests.set(view, (scrollRequests.get(view) ?? 0) + 1)
+    reading.delete(view)
+    kept.delete(view)
+    return false
+  }),
+]

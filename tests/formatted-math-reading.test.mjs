@@ -133,6 +133,14 @@ test('codemirror: formulas rendering on or above the reading line keep it in pla
         assert.ok(Math.abs(result.moved) < 1, JSON.stringify(result))
       },
     )
+  await t.test('a scroll command while formulas fill stands', async () => {
+    await page.evaluate(() => window.formulaReading.mount('display'))
+    const result = await page.evaluate(() =>
+      window.formulaReading.fill('above', 0, 2, false, true),
+    )
+    assert.ok(result.filled > 0, JSON.stringify(result))
+    assert.equal(result.landed, true, JSON.stringify(result))
+  })
   await t.test('scrolling after the formulas fill stands', async () => {
     await page.evaluate(() => window.formulaReading.mount('display'))
     const result = await page.evaluate(() =>

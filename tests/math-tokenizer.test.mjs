@@ -125,6 +125,22 @@ test('literal double dollars stay literal after rich serialization and export', 
       '\n| \\$\\$x\\$\\$ |\n| --------- |\n',
       '\n| \\$\\$x\\$\\$ |\n| --------- |\n',
     ],
+    'before \\$$x\n+y$$ after': [
+      'before \\$\\$x +y\\$\\$ after',
+      'before \\$\\$x +y\\$\\$ after',
+    ],
+    'before \\$$ $$ after': [
+      'before \\$\\$ \\$\\$ after',
+      'before \\$\\$ \\$\\$ after',
+    ],
+    'before \\$$$$ after': [
+      'before \\$\\$\\$\\$ after',
+      'before \\$\\$\\$\\$ after',
+    ],
+    'before \\$$ x $y$$ after': [
+      'before \\$\\$ x \\$y\\$\\$ after',
+      'before \\$\\$ x \\$y\\$\\$ after',
+    ],
   }))
     for (const text of saved) {
       let formulas = 0

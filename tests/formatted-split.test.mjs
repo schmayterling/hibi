@@ -217,6 +217,21 @@ test('formatted split links native wheel scrolling in both directions without fe
   ).join('\n\n')
   const { page } = await open(t, text)
   await select(page, 'source', 0)
+  await page.evaluate(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')
+    window.__writes = []
+    Object.defineProperty(Element.prototype, 'scrollTop', {
+      configurable: true,
+      get: descriptor.get,
+      set(value) {
+        if (this.matches?.('.rich-pane, .source-pane .cm-scroller'))
+          window.__writes.push([Math.round(performance.now()), this.classList.contains('rich-pane') ? 'rich' : 'source', Math.round(descriptor.get.call(this)), Math.round(value)])
+        descriptor.set.call(this, value)
+      },
+    })
+    for (const type of ['selectionchange', 'hibi:source-caret'])
+      document.addEventListener(type, () => window.__writes.push([Math.round(performance.now()), type, document.activeElement?.closest('.rich-pane') ? 'rich-focus' : document.activeElement?.closest('.source-pane') ? 'source-focus' : 'other']), true)
+  })
   for (const pane of ['source', 'rich']) {
     const other = pane === 'source' ? 'rich' : 'source'
     const selector =
@@ -272,6 +287,13 @@ test('formatted split links native wheel scrolling in both directions without fe
     }
     return samples
   })
+  const moved = [0, 1].some((index) => {
+    const positions = samples.map((sample) => sample[index])
+    return Math.max(...positions) - Math.min(...positions) >= 2
+  })
+  const trace = await page.evaluate(() => window.__writes.slice(-30))
+  console.log('# DIAG split', moved ? 'MOVED' : 'still', JSON.stringify(samples))
+  for (const row of trace) console.log('# DIAG trace', JSON.stringify(row))
   for (const index of [0, 1]) {
     const positions = samples.map((sample) => sample[index])
     assert.ok(

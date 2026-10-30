@@ -1,0 +1,133 @@
+import {
+  type Closers,
+  formulaLimit,
+  inlineDisplayMathEnd,
+  inlineMathEnd,
+  pairLimit,
+} from './inline-display.ts'
+
+/**
+ * A code span or formula that holds a line start of a paragraph: its opener,
+ * the end of its closer, and whether it is math over the formula limit, which
+ * stays text whole.
+ */
+export type SeamPair = { from: number; to: number; over: boolean }
+
+/** ASCII punctuation a backslash escapes, as in @lezer/markdown. */
+const escapable = new Set(
+  Array.from('!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~', (char) =>
+    char.charCodeAt(0),
+  ),
+)
+
+/** Units read, for complexity tests. */
+export const seamWork = { units: 0 }
+
+/**
+ * The pair holding `to` after reading a paragraph's text from `from`, where
+ * `open` holds `from` (or null), as the formatted view's inline parser pairs
+ * that text: backslash escapes, then code spans and math, whichever opens
+ * first. `text` is the paragraph from document position `offset` on, through
+ * `pairLimit` past `to` or the paragraph's end; closers are looked for there.
+ * `read.reach` grows to the furthest position a decision read, so an edit
+ * after it keeps the result.
+ *
+ * ponytail: other inline syntax that hides a dollar or backtick, such as an
+ * HTML tag or a link destination, reads as text here, so a window after one
+ * in a giant paragraph can pair otherwise; reading it means replaying every
+ * inline parser.
+ */
+export function readSeams(
+  text: string,
+  offset: number,
+  from: number,
+  to: number,
+  open: SeamPair | null,
+  read: { reach: number },
+): SeamPair | null {
+  let pos = from
+  if (open) {
+    read.reach = Math.max(read.reach, open.to)
+    if (open.to > to) return open
+    pos = open.to
+  }
+  const end = offset + text.length
+  const code = (at: number) => text.charCodeAt(at - offset)
+  // Runs of each backtick count: the first one found at or after the starts
+  // asked so far, or -1 with how far none was found. Starts only grow, so
+  // each run is read about once per count.
+  const runs = new Map<number, { at: number; searched: number }>()
+  const closingRun = (size: number, start: number) => {
+    const limit = Math.min(end, start + pairLimit)
+    const known = runs.get(size)
+    if (known && known.at >= start) return known.at
+    let i = known && known.at < 0 ? Math.max(start, known.searched) : start
+    let at = -1
+    for (; i < limit; i++) {
+      if (code(i) !== 96) continue
+      let length = 1
+      while (i + length < end && code(i + length) === 96) length++
+      seamWork.units += length
+      if (length === size) {
+        at = i
+        break
+      }
+      i += length
+    }
+    // A run reaching past the limit was read whole: the next search starts after it.
+    runs.set(size, { at, searched: at < 0 ? i : at })
+    read.reach = Math.max(read.reach, at < 0 ? i : at + size)
+    return at
+  }
+  const closers: Closers = { from: -1, at: -1 }
+  const stops = /[\\`$]/g
+  while (pos < to) {
+    stops.lastIndex = pos - offset
+    const found = stops.exec(text)
+    const at = found ? offset + found.index : end
+    seamWork.units += Math.min(at, to) - pos
+    if (at >= to) return null
+    const char = code(at)
+    if (char === 92) {
+      const next = code(at + 1)
+      pos = at + (next === 10 || escapable.has(next) ? 2 : 1)
+      continue
+    }
+    let size = 1
+    const display = char === 36 && code(at + 1) === 36
+    let close: number
+    if (char === 96) {
+      while (code(at + size) === 96) size++
+      // A run after an escaped backtick opens nothing, as in @lezer/markdown.
+      const run = code(at - 1) === 96 ? -1 : closingRun(size, at + size)
+      close = run < 0 ? -1 : run + size
+    } else {
+      size = display ? 2 : 1
+      const found = display
+        ? inlineDisplayMathEnd(text, at - offset)
+        : inlineMathEnd(text, at - offset, closers)
+      close = found < 0 ? -1 : offset + found
+      // An opener without a closer read up to the pair limit, unless its
+      // first unit already ruled it out.
+      const first = code(at + 1)
+      const ruled = !display && (first === 32 || first === 9 || at + 1 >= end)
+      read.reach = Math.max(
+        read.reach,
+        close >= 0 ? close : ruled ? at + 2 : Math.min(end, at + 4 + pairLimit),
+      )
+    }
+    if (close < 0) {
+      // Every backtick of an unpaired run opens nothing; a dollar, only itself.
+      pos = at + (char === 96 ? size : 1)
+      continue
+    }
+    const pair = {
+      from: at,
+      to: close,
+      over: char === 36 && close - at - 2 * size > formulaLimit,
+    }
+    if (pair.to > to) return pair
+    pos = pair.to
+  }
+  return null
+}

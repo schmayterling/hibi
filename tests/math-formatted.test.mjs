@@ -683,6 +683,133 @@ test('chunked parses with math match whole-document trees', () => {
   }
 })
 
+/** A paragraph over 64 KiB, which the formatted view parses in windows. */
+function giantParagraph(length, seed) {
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+  }
+  const units = [
+    (i) => `w${i} words $$x_${i}`,
+    (i) => `+y_${i}$$ more words`,
+    (i) => `see \`$$\` and \`a$\` code ${i}`,
+    (i) => `cost \\$$ and \\$5 here ${i}`,
+    (i) => `inline $a_${i}$ and $$b$$ then`,
+    (i) => `code \`\`spans ${i}`,
+    () => `across\`\` lines $c$`,
+  ]
+  const lines = []
+  for (let i = 0, size = 0; size < length; i++) {
+    const line =
+      i === 900
+        ? `long $$q\n${'q'.repeat(4_000)}\n${'q'.repeat(4_000)}$$ end`
+        : i === 1800
+          ? `over $$${'z'.repeat(10_500)}$$ after`
+          : units[Math.floor(random() * units.length)](i)
+    lines.push(line)
+    size += line.length + 1
+  }
+  return `# T\n\n${lines.join('\n')}\n\n## after\n`
+}
+
+/** Code spans and math fully inside `from`-`to`. */
+function pairsIn(tree, from, to) {
+  const found = []
+  tree.iterate({
+    from,
+    to,
+    enter(node) {
+      if (
+        /^(InlineMath|InlineMathLines|InlineCode)$/.test(node.name) &&
+        node.from >= from &&
+        node.to <= to
+      )
+        found.push(`${node.name}:${node.from}-${node.to}`)
+    },
+  })
+  return found
+}
+
+const stringInput = (text) => ({
+  length: text.length,
+  lineChunks: false,
+  chunk: (from) => text.slice(from),
+  read: (from, to) => text.slice(from, to),
+})
+
+function chunkedParse(text, demand, options = {}, fragments = []) {
+  const probe = { scannedUnits: 0, parsedUnits: 0, reusedNodes: 0 }
+  const parse = new ChunkedMarkdownParser(formatted, formatted, {
+    ...options,
+    probe,
+  }).startChunkedParse(stringInput(text), fragments, demand)
+  let tree = null
+  while (!tree) tree = parse.advance()
+  return { tree, probe }
+}
+
+test('giant paragraphs pair math and code spans across window seams as the whole paragraph does', () => {
+  let text = giantParagraph(150_000, 41)
+  const exact = formatted.parse(text)
+  for (const options of [{}, { chunkSize: 64, groupSize: 4, giantBlock: 1024 }])
+    for (let k = 1; k < 25; k++) {
+      const at = Math.floor((text.length * k) / 25)
+      const demand = { from: at, to: Math.min(text.length, at + 3000) }
+      const { tree } = chunkedParse(text, demand, options)
+      assert.deepEqual(
+        pairsIn(tree, demand.from, demand.to),
+        pairsIn(exact, demand.from, demand.to),
+        `${JSON.stringify(options)} at ${at}`,
+      )
+    }
+  // Edits keep the pairing: in the viewport, and far above it, where a new
+  // `$$` flips every pair after it.
+  const at = Math.floor(text.length / 2)
+  const demand = { from: at, to: at + 3000 }
+  let { tree } = chunkedParse(text, demand)
+  for (const [pos, insert] of [
+    [at + 1500, 'x'],
+    [at + 1500, '$$'],
+    [at + 1600, '`'],
+    [at + 1700, '\\'],
+    [20, '$$'],
+    [20, '`'],
+  ]) {
+    text = text.slice(0, pos) + insert + text.slice(pos)
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+      { fromA: pos, toA: pos, fromB: pos, toB: pos + insert.length },
+    ])
+    ;({ tree } = chunkedParse(text, demand, {}, fragments))
+    assert.deepEqual(
+      pairsIn(tree, demand.from, demand.to),
+      pairsIn(formatted.parse(text), demand.from, demand.to),
+      `after ${JSON.stringify(insert)} at ${pos}`,
+    )
+  }
+})
+
+test('typing in a giant paragraph reads its seams in bounded work, whatever its length', () => {
+  const work = []
+  for (const length of [1 << 20, 4 << 20]) {
+    let text = giantParagraph(length, 7)
+    const at = Math.floor(text.length * 0.6)
+    const demand = { from: at, to: at + 3000 }
+    let { tree } = chunkedParse(text, demand)
+    for (const insert of ['x', '$$', 'y']) {
+      const pos = at + 1500
+      text = text.slice(0, pos) + insert + text.slice(pos)
+      const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+        { fromA: pos, toA: pos, fromB: pos, toB: pos + insert.length },
+      ])
+      let probe
+      ;({ tree, probe } = chunkedParse(text, demand, {}, fragments))
+      work.push(probe.seamUnits)
+    }
+  }
+  // About a viewport's window and one pair limit of reading ahead, not the paragraph.
+  for (const units of work) assert.ok(units <= 4 * 65_536, JSON.stringify(work))
+})
+
 test('random notes of quotes, lists and math agree with the rich view tokenizers', () => {
   // Lines keep their container's prefix: lazy continuation lines are where
   // Marked and CommonMark containers differ, not math.

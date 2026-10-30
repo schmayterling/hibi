@@ -1,4 +1,5 @@
 import { Tags } from 'lucide-react'
+import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer'
@@ -7,7 +8,6 @@ import { defineAddon } from '../api'
 import { createTagAnalysis } from './analysis'
 import manifest from './manifest'
 import { TagsPanel } from './Panel'
-import { richTags } from './rich-decorations'
 import {
   scheduleTagCounts,
   type TagJob,
@@ -15,6 +15,11 @@ import {
   tagVersion,
 } from './schedule'
 import css from './style.css?inline'
+
+// The Tiptap editor loads only when it is the selected engine.
+const rich = codemirrorFormattedView
+  ? undefined
+  : await import('./rich-decorations')
 
 let stop: (() => void) | undefined
 export default defineAddon({
@@ -159,7 +164,7 @@ export default defineAddon({
         document && isMarkdownDocument(document.name) ? keyFor(document) : null,
       )
     })
-    context.editor.registerRich(richTags(browse))
+    if (rich) context.editor.registerRich(rich.richTags(browse))
     const removeFormatted = formattedRegistry.register({
       id: 'tags.highlights',
       load: () =>

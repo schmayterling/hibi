@@ -9,7 +9,11 @@ import { markedGithubFootnote } from 'marked-github-footnote'
 import { exportOptions } from '../src/addons/documentation/options.ts'
 import { prepareSite, siteFiles } from '../src/addons/documentation/site.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -394,6 +398,8 @@ test('source footnotes preview and save without changing markdown', {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  // The view shortcut needs the started app.
+  await waitForFormattedEditor(app, page)
   await pressShortcut(app, `${mod}+Shift+]`)
   const editor = page.getByRole('textbox', { name: /markdown editor/i })
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })

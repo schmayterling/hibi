@@ -177,16 +177,19 @@ const stayFolded = EditorState.transactionFilter.of((transaction) => {
     transaction.annotation(Transaction.userEvent) === undefined &&
     formattedSyntaxTree(startState)
   if (!selection || !tree) return transaction
+  // Nested callouts share their end. The outermost folded title shows; an
+  // inner one sits in that body, where the caret would show it.
   const out = (pos: number) => {
+    let to = pos
     for (
       let node: SyntaxNode | null = tree.resolve(pos, -1);
       node;
       node = node.parent
     ) {
       const body = node.name === 'Blockquote' && foldedBody(startState, node)
-      if (body && pos === body.to) return body.from
+      if (body && pos === body.to) to = body.from
     }
-    return pos
+    return to
   }
   let moved = false
   const ranges = selection.ranges.map((range) => {

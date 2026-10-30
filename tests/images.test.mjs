@@ -238,7 +238,7 @@ test('local images resolve from the note, validate content, and retain their Mar
 })
 
 unit(
-  'formatted view shows raw HTML images and reveals their source at the caret',
+  'formatted view shows raw HTML images at their size and place, and reveals their source at the caret',
   {
     timeout: 30000,
   },
@@ -249,7 +249,14 @@ unit(
     const note = join(folder, 'note.md')
     await writeFile(
       note,
-      '<img src="assets/pixel.png" alt="block">\n\ntext <img src=assets/pixel.png alt="inline">',
+      [
+        '<img src="assets/pixel.png" alt="block">',
+        '### Heading',
+        '<img src="assets/pixel.png" alt="tag">',
+        '### Heading',
+        '![markdown](assets/pixel.png)',
+        'text <img src=assets/pixel.png alt="inline" width=3 height=2>',
+      ].join('\n\n'),
     )
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -277,11 +284,39 @@ unit(
           ...document.querySelectorAll('.rich-pane img:not(.cm-widgetBuffer)'),
         ]
         return (
-          images.map((image) => image.alt).join() === 'block,inline' &&
+          images.map((image) => image.alt).join() ===
+            'block,tag,markdown,inline' &&
           images.every((image) => image.complete && image.naturalWidth === 1)
         )
       })
     await loaded()
+    // A tag alone on its line sits where a Markdown image would, and a tag
+    // sizes its image.
+    const { gaps, size } = await page.evaluate(() => {
+      const content = document.querySelector(
+        '.rich-pane .hibi-formatted .cm-content',
+      )
+      const headings = [...content.querySelectorAll('.hibi-lp-heading')].map(
+        (heading) => heading.closest('.cm-line'),
+      )
+      const box = (alt) =>
+        content.querySelector(`img[alt="${alt}"]`).getBoundingClientRect()
+      const inline = content.querySelector('img[alt="inline"]')
+      return {
+        gaps: ['tag', 'markdown'].map(
+          (alt, index) =>
+            box(alt).top - headings[index].getBoundingClientRect().bottom,
+        ),
+        size: [
+          inline.getAttribute('width'),
+          inline.getAttribute('height'),
+          box('inline').width,
+          box('inline').height,
+        ],
+      }
+    })
+    assert.equal(gaps[0], gaps[1])
+    assert.deepEqual(size, ['3', '2', 3, 2])
     // At the caret, a tag shows as source with its image still beside it.
     const shown = async (key, source, hidden) => {
       await editor.press(key)
@@ -304,7 +339,7 @@ unit(
     )
     await shown(
       'ControlOrMeta+End',
-      '<img src=assets/pixel.png alt="inline">',
+      '<img src=assets/pixel.png alt="inline" width=3 height=2>',
       'alt="block"',
     )
   },

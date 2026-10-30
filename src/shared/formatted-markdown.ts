@@ -6,7 +6,7 @@ import {
   parser,
 } from '@lezer/markdown'
 import { protectMarkdownParser } from './markdown-flavor-guard.ts'
-import { ContainerHTML } from './markdown-html-syntax.ts'
+import { ContainerHTML, HTMLImage } from './markdown-html-syntax.ts'
 
 /** Facts collected while finding a code span's closing fence, kept on its opening mark. */
 export const inlineCodeInfo = new NodeProp<{
@@ -102,7 +102,7 @@ const UnicodeEmphasis: MarkdownConfig = {
   ],
 }
 
-const coreParser = codeParser.configure(UnicodeEmphasis)
+const coreParser = codeParser.configure([UnicodeEmphasis, HTMLImage])
 
 /** The same core grammar and contributed syntax in the formatted view and its worker. */
 export function formattedMarkdownParser(

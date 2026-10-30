@@ -62,17 +62,30 @@ export class MediaWidget extends WidgetType {
   readonly source: string
   readonly alt: string
   readonly title: string
-  constructor(source: string, alt: string, title: string) {
+  /** Size in pixels from the note, such as an `<img>` tag's; 0 keeps the media's own. */
+  readonly width: number
+  readonly height: number
+  constructor(
+    source: string,
+    alt: string,
+    title: string,
+    width = 0,
+    height = 0,
+  ) {
     super()
     this.source = source
     this.alt = alt
     this.title = title
+    this.width = width
+    this.height = height
   }
   override eq(other: MediaWidget) {
     return (
       other.source === this.source &&
       other.alt === this.alt &&
-      other.title === this.title
+      other.title === this.title &&
+      other.width === this.width &&
+      other.height === this.height
     )
   }
   toDOM(view: EditorView) {
@@ -90,6 +103,8 @@ export class MediaWidget extends WidgetType {
         container.replaceChildren(media)
       }
       media.title = this.title
+      if (this.width) media.width = this.width
+      if (this.height) media.height = this.height
       delete media.dataset.tooltip
       if (media instanceof HTMLVideoElement) {
         media.controls = true

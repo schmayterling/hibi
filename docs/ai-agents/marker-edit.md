@@ -61,7 +61,7 @@ Local run artifacts: `.scratch/before.json`, `.scratch/after-retry.json`, `.scra
 
 Unresolved at that point: none. The review below found more.
 
-Public guide commit: [98efba0](https://github.com/hibigarden/docs/commit/98efba08b3aa81f66f67cbad5a1fc5809ce1fba0), based on the previously pinned docs revision. The app pins that commit; no second PR was opened.
+Public guide commit: [98efba0](https://github.com/hibigarden/docs/commit/98efba08b3aa81f66f67cbad5a1fc5809ce1fba0), based on the previously pinned docs revision. The branch pinned it until the review merged main's published pin (`e49aa86f`, #683); see the review below.
 
 The full-repository `npm run check` aggregate is excluded by the lane rules. Validation uses the requested suites and touched-source checks instead.
 
@@ -109,5 +109,5 @@ All suites ran serially through `in-dir.sh` and `electron-lock.sh` with `HIBI_EX
 
 Unresolved:
 
-- The guide commit `98efba0` is on the `may/marker-edit` branch of hibigarden/docs. It branches from `5080a602` and is not on docs main, which is at `e49aa86f` (#11 and #12). Until that branch is merged into docs main, the next docs pin conflicts with this `docs-revision` and drops the guide. `nix/package.nix` keeps the `5080a602` hash until the docs-pin workflow refreshes it, as after #464 and #337.
+- The guide commit `98efba0` is on the `may/marker-edit` branch of hibigarden/docs. It branches from `5080a602` and is not on docs main. Main's #683 pinned the published docs `e49aa86f` with its Nix hash, so this branch now keeps that pin rather than an unpublished commit, and the app's guide lacks the marker paragraph until that docs branch is merged into docs main and pinned.
 - The tiptap composition case flaked as described above.

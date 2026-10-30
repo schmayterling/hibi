@@ -38,8 +38,10 @@ export function linkControls(callbacks: Callbacks) {
       } | null = null
       menuOwner: symbol | null = null
       generation = 0
-      /** The start of the link whose dismissed actions stay hidden while the caret stays in it. */
-      dismissed: number | null = null
+      /** The link whose dismissed actions stay hidden while the caret stays in it. */
+      dismissed: { from: number; to: number } | null = null
+      /** Until the caret moves, the link a note opens with it in counts as dismissed. */
+      caretMoved = false
       focusPending = false
       leave: ReturnType<typeof setTimeout> | undefined
 
@@ -108,8 +110,13 @@ export function linkControls(callbacks: Callbacks) {
       }
       /** Hides the shown link's actions until the caret leaves it or a pointer comes back. */
       dismiss() {
-        this.dismissed = this.target?.capture.link?.from ?? null
+        this.dismissed = this.range(this.target?.capture)
         this.hide()
+      }
+      /** The link of `capture`, which its dismissed actions stay scoped to. */
+      range(capture: Capture | null | undefined) {
+        const link = capture?.link
+        return link ? { from: link.from, to: link.to } : null
       }
       /** The link at `at`, or the one that ends there, past its closing syntax. */
       linkAt(at: number) {
@@ -159,8 +166,10 @@ export function linkControls(callbacks: Callbacks) {
       outside = (event: PointerEvent) => {
         const target = event.target instanceof Node ? event.target : null
         // A press in the editor may show dismissed actions again.
-        if (target && this.view.dom.contains(target)) this.dismissed = null
-        else if (!target || !this.panel.contains(target)) this.hide()
+        if (target && this.view.dom.contains(target)) {
+          this.dismissed = null
+          this.caretMoved = true
+        } else if (!target || !this.panel.contains(target)) this.hide()
       }
       point(x: number, y: number) {
         const range = document.caretRangeFromPoint(x, y)
@@ -198,11 +207,16 @@ export function linkControls(callbacks: Callbacks) {
         )
           return
         const capture = this.linkAt(at)
-        // Dismissed actions stay hidden until the caret leaves their link.
-        if (capture?.link?.from !== this.dismissed) this.dismissed = null
+        // Dismissed actions stay hidden until the caret leaves their link,
+        // its destination included.
+        if (
+          this.dismissed &&
+          (at < this.dismissed.from || at > this.dismissed.to)
+        )
+          this.dismissed = null
         if (
           !capture?.link ||
-          this.dismissed !== null ||
+          this.dismissed ||
           // Nor do they cover an open menu.
           menus.snapshot() ||
           otherPopupOpen(this.view.contentDOM)
@@ -253,6 +267,10 @@ export function linkControls(callbacks: Callbacks) {
           return
         }
         const at = this.view.state.selection.main.head
+        if (!this.caretMoved) {
+          const range = this.range(this.linkAt(at))
+          if (range) this.dismissed = range
+        }
         const selection = document.getSelection()
         const link =
           selection?.anchorNode?.parentElement?.closest('.hibi-lp-link')
@@ -261,7 +279,7 @@ export function linkControls(callbacks: Callbacks) {
         else this.hide()
       }
       edit(capture: Capture) {
-        this.dismissed = capture.link?.from ?? null
+        this.dismissed = this.range(capture)
         void callbacks
           .edit(capture)
           .catch(callbacks.error)
@@ -277,6 +295,7 @@ export function linkControls(callbacks: Callbacks) {
         )
           return false
         this.dismissed = null
+        this.caretMoved = true
         this.focusPending = true
         this.caret()
         if (this.panel.matches(':popover-open')) {
@@ -384,13 +403,27 @@ export function linkControls(callbacks: Callbacks) {
           this.panel.matches(':popover-open')
         if (update.docChanged && focused) this.hide()
         else if (update.docChanged || moved) this.forget()
-        // A dismissed link stays dismissed while edited, until its start goes.
-        if (update.docChanged && this.dismissed !== null)
-          this.dismissed = update.changes.mapPos(
-            this.dismissed,
+        // A note's opening caret is placed before the editor has focus; the
+        // moves made with it are the user's.
+        if (
+          (update.selectionSet || update.docChanged) &&
+          this.view.dom.contains(document.activeElement)
+        )
+          this.caretMoved = true
+        // A dismissed link stays dismissed while edited, until either end goes.
+        if (update.docChanged && this.dismissed) {
+          const from = update.changes.mapPos(
+            this.dismissed.from,
             1,
             MapMode.TrackAfter,
           )
+          const to = update.changes.mapPos(
+            this.dismissed.to,
+            -1,
+            MapMode.TrackBefore,
+          )
+          this.dismissed = from === null || to === null ? null : { from, to }
+        }
         if (update.state.readOnly !== update.startState.readOnly) this.enable()
         if (
           update.docChanged ||

@@ -482,8 +482,15 @@ test('codemirror Escape keeps link actions hidden until the caret leaves the lin
   await settle(page)
   assert.equal(await panel.isVisible(), false, 'after moving')
   assert.match(await read(), /^See \[d\w*x\w*\]\(/)
-  // Back in the link after leaving it, they show again.
   const text = await read()
+  // Nor does the caret walking on through the destination to the link's end.
+  await place(editor, text.indexOf('https://old') + 3)
+  await settle(page)
+  assert.equal(await panel.isVisible(), false, 'in the destination')
+  await place(editor, text.indexOf(')') + 1)
+  await settle(page)
+  assert.equal(await panel.isVisible(), false, 'at the link end')
+  // Back in the link after leaving it, they show again.
   await place(editor, text.indexOf('here'))
   await place(editor, text.indexOf('[d') + 2)
   await panel.waitFor()
@@ -714,4 +721,28 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
     'https://old.example/',
   ])
+})
+
+test('codemirror link actions wait for the caret to move after a note opens', {
+  timeout: 60000,
+}, async (t) => {
+  // The note opens with its caret at the end of the table cell's link.
+  const { page, editor, panel } = await open(t)
+  await settle(page)
+  assert.equal(await panel.isVisible(), false, 'on open')
+  // The keyboard still reaches the link's actions there.
+  await page.keyboard.press('Shift+F10')
+  const menu = page.getByRole('menu', { name: 'Link actions', exact: true })
+  await menu.getByRole('menuitem', { name: 'Copy link', exact: true }).waitFor()
+  await page.keyboard.press('Escape')
+  await menu.waitFor({ state: 'hidden' })
+  await settle(page)
+  assert.equal(await panel.isVisible(), false, 'after the menu')
+  // A caret move into a link shows them.
+  await place(editor, note.indexOf('docs') + 2)
+  await panel.waitFor()
+  assert.equal(
+    await panel.locator('.hibi-link-destination').textContent(),
+    'https://old.example',
+  )
 })

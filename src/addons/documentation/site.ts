@@ -102,6 +102,7 @@ const renderedHtml = (
       '*': ['class', 'style', 'title', 'role', 'aria-*'],
       a: ['href', 'rel', 'id', 'data-footnote-ref', 'data-footnote-backref'],
       blockquote: ['data-alert', 'data-fold'],
+      details: ['open', 'data-alert', 'data-fold'],
       h2: ['id'],
       li: ['id'],
       section: ['data-footnotes'],
@@ -132,6 +133,10 @@ const renderedHtml = (
     transformTags: {
       blockquote: (_tag, attrs) => ({
         tagName: 'blockquote',
+        attribs: alertAttributes(attrs),
+      }),
+      details: (_tag, attrs) => ({
+        tagName: 'details',
         attribs: alertAttributes(attrs),
       }),
       a: (

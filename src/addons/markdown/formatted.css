@@ -1,23 +1,16 @@
-/* GitHub alerts in the formatted view, with the colors of alerts.css.
-   Boxes around code blocks in alerts paint them too. */
+/* GitHub alerts in the formatted view, with the colors of alerts.css. Each
+   callout's paint and title read its type's color by name, so a callout
+   inside another keeps its own. Boxes around code blocks in alerts paint
+   them too. Other types take var(--status-info). */
+.hibi-formatted {
+  --hibi-alert-tip: var(--status-success);
+  --hibi-alert-important: var(--accent);
+  --hibi-alert-warning: var(--status-warning);
+  --hibi-alert-caution: var(--status-danger);
+}
 .hibi-formatted :is(.cm-line, .hibi-lp-codenest).hibi-lp-alert {
-  --alert-color: var(--status-info);
-  --alert-tint: color-mix(in srgb, var(--alert-color) 6%, transparent);
   color: var(--ink);
 }
-.hibi-formatted :is(.cm-line, .hibi-lp-codenest).hibi-lp-alert-tip {
-  --alert-color: var(--status-success);
-}
-.hibi-formatted :is(.cm-line, .hibi-lp-codenest).hibi-lp-alert-important {
-  --alert-color: var(--accent);
-}
-.hibi-formatted :is(.cm-line, .hibi-lp-codenest).hibi-lp-alert-warning {
-  --alert-color: var(--status-warning);
-}
-.hibi-formatted :is(.cm-line, .hibi-lp-codenest).hibi-lp-alert-caution {
-  --alert-color: var(--status-danger);
-}
 .hibi-formatted .cm-line.hibi-lp-alert-title {
-  color: var(--alert-color, var(--status-info));
   font-weight: 600;
 }

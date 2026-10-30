@@ -198,9 +198,12 @@ test('alert quotes lay out as the alerts.css box; other quotes keep their bar', 
   assert.equal(tip.width, '19px')
   assert.equal(tip.class, 'hibi-lp-alert hibi-lp-alert-tip')
   assert.deepEqual(tip.padding, { top: 12, bottom: 12, right: 16 })
+  // Inside the padding of the containers around it, right and below.
+  const paint = tip.paint('24px', '16px', '16px', '12px')
+  assert.match(paint, /24px 16px \/ 3px calc\(100% - 16px - 12px\)/)
   assert.match(
-    tip.paint('24px', '16px'),
-    /24px 16px \/ 3px calc\(100% - 16px\)/,
+    paint,
+    /24px 16px \/ calc\(100% - 24px - 16px\) calc\(100% - 16px - 12px\)/,
   )
   assert.deepEqual(shape('> plain quote\n> [!NOTE] text'), [undefined])
   // A nested alert lays out its own box inside the outer quote.

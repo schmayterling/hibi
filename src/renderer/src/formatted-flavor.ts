@@ -302,7 +302,8 @@ export function registerFormattedFlavor(
                     const paint = guard(shape.paint)
                     return {
                       ...shape,
-                      paint: (left, top) => paint(left, top) ?? '',
+                      paint: (left, top, right, bottom) =>
+                        paint(left, top, right, bottom) ?? '',
                     }
                   },
                 }

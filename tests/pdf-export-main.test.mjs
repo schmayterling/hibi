@@ -94,7 +94,7 @@ function runtime(options = {}) {
       },
     },
     PRINT_CSP:
-      "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'",
+      "default-src 'none'; img-src data: https:; font-src data:; style-src 'unsafe-inline'",
     printPageSize: () => 'Letter',
     getDocument: () => document,
     getDocumentPath: () => '/notes/garden.md',
@@ -134,16 +134,19 @@ test('print window disables scripts and releases its private page after success'
       state.permission(null, 'camera', (allowed) =>
         assert.equal(allowed, false),
       )
-      for (const url of [
-        'https://example.com/pixel.png',
-        'file:///private/secret',
-        'hibi-print://other/',
+      for (const details of [
+        { url: 'https://example.com/pixel.png', resourceType: 'stylesheet' },
+        { url: 'http://example.com/pixel.png', resourceType: 'image' },
+        { url: 'file:///private/secret', resourceType: 'image' },
+        { url: 'hibi-print://other/', resourceType: 'mainFrame' },
       ]) {
-        state.request({ url }, ({ cancel }) => assert.equal(cancel, true))
+        state.request(details, ({ cancel }) => assert.equal(cancel, true))
       }
-      state.request({ url: state.url }, ({ cancel }) =>
-        assert.equal(cancel, false),
-      )
+      for (const details of [
+        { url: state.url, resourceType: 'mainFrame' },
+        { url: 'https://example.com/pixel.png', resourceType: 'image' },
+      ])
+        state.request(details, ({ cancel }) => assert.equal(cancel, false))
       const page = await state.handler({ url: state.url })
       assert.equal(await page.text(), '<h1>garden</h1>')
       assert.match(

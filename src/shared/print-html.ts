@@ -4,9 +4,9 @@ const letterCountries = new Set(['US', 'CA', 'MX', 'PH', 'CL', 'CO', 'VE'])
 export const printPageSize = (country: string) =>
   letterCountries.has(country.toUpperCase()) ? 'Letter' : 'A4'
 
-/** No scripts, network, frames or forms; only inline styles and data images and fonts. */
+/** No scripts, frames or forms; only inline styles, data fonts, and data or HTTPS images. */
 export const PRINT_CSP =
-  "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+  "default-src 'none'; img-src data: https:; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 
 const escapeHtml = (value: string) =>
   value

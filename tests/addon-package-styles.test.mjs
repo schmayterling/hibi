@@ -318,14 +318,11 @@ test('package stylesheets and themes install, attach in order, and leave with th
   await page.evaluate(() =>
     document.fonts.load('16px remote-font').catch(() => {}),
   )
-  await page.waitForFunction(
-    () =>
-      window.violations.some((entry) =>
-        entry.startsWith('img-src https://example.invalid'),
-      ) &&
-      window.violations.some((entry) =>
-        entry.startsWith('font-src https://example.invalid'),
-      ),
+  // HTTPS images are allowed everywhere; remote fonts stay blocked.
+  await page.waitForFunction(() =>
+    window.violations.some((entry) =>
+      entry.startsWith('font-src https://example.invalid'),
+    ),
   )
 
   // Declared themes follow the activation; a saved selection survives a stop.

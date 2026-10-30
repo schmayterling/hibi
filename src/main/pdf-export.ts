@@ -53,7 +53,13 @@ async function renderPdf(html: string, owner: BrowserWindow) {
       callback(false),
     )
     partition.webRequest.onBeforeRequest((details, callback) =>
-      callback({ cancel: details.url !== url }),
+      callback({
+        cancel:
+          details.url !== url &&
+          !(
+            details.resourceType === 'image' && /^https:\/\//i.test(details.url)
+          ),
+      }),
     )
     partition.on('will-download', denyDownload)
     partition.protocol.handle(

@@ -601,6 +601,11 @@ test('codemirror link menu holds the editor actions of addons too', {
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Enter')
   await menu.waitFor({ state: 'hidden' })
+  // Opening a link keeps the app busy for a moment; the editor then has its
+  // focus back.
+  await page.waitForFunction(() =>
+    document.activeElement?.closest('.rich-pane .cm-editor'),
+  )
   assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
     'https://old.example/',
   ])

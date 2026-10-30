@@ -2221,7 +2221,13 @@ export function SourceEditor({
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:source-caret', { bubbles: true }),
               )
-            if (update.docChanged || update.selectionSet || update.focusChanged)
+            // CodeMirror reports a regained focus a moment late, which must
+            // not close a menu opened in the meantime.
+            if (
+              update.docChanged ||
+              update.selectionSet ||
+              (update.focusChanged && !update.view.hasFocus)
+            )
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:editor-interactions-invalidate'),
               )

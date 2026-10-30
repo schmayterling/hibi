@@ -8,7 +8,7 @@ Base Markdown includes GitHub tables, task lists, strikethrough, automatic links
 
 Automatic mode keeps enabled parsers ready, so typing syntax does not rebuild the editor or reset undo. Explicit flavor changes and schema-addon enable/disable rebuild the rich editor, preserve source, and reset that pane's undo history. Detected unsupported syntax makes the rich pane read-only; source remains editable.
 
-Declare lightweight `Addon.flavors` descriptors so bundled syntax can be detected while disabled. Register full contributions during `start`, including `richExtensions`, `markedOptions`, and `export` parsers/styles as needed. Async `start` is supported. Shutdown removes contributions and ignores late registrations.
+Declare lightweight `Addon.flavors` descriptors so bundled syntax can be detected while disabled. Register full contributions during `start`, including `syntax`, `render`, `markedOptions`, and `export` parsers/styles as needed. Async `start` is supported. Shutdown removes contributions and ignores late registrations.
 
 `context.editor.renderMarkdown(source, documentId?)` applies projections and file preferences, returning `{ html, css }`. Sanitize HTML before insertion. The exported site does this while preserving safe MathML/SVG. Keep styles and fonts self-contained; the export's content policy blocks network assets.
 

@@ -26,9 +26,9 @@ context.editor.registerSyntax({
 })
 ```
 
-The host stores local IDs as `addon-id.feature-id`. `matches` receives lexer tokens and must run synchronously without changing them. `level` selects a block or inline literal fallback. `extensions` lists associated Tiptap extension names.
+The host stores local IDs as `addon-id.feature-id`. `matches` receives lexer tokens and must run synchronously without changing them. `level` selects a block or inline literal fallback.
 
-Add `slash: { markdown, cursor?, keywords?, description?, rich? }` to offer insertion through the slash menu. `markdown` is inserted in source view, and `cursor` is its optional caret offset. `rich` receives a Tiptap command chain for normal view; omit it if the syntax has no rich insertion. The menu reads enabled syntax from `context.editor.getSyntaxFeatures()`, so registering or disabling syntax updates the available commands.
+Add `slash: { markdown, cursor?, keywords?, description? }` to offer insertion through the slash menu. `markdown` is inserted in both views, and `cursor` is its optional caret offset. The menu reads enabled syntax from `context.editor.getSyntaxFeatures()`, so registering or disabling syntax updates the available commands.
 
 Also register tokenizers through the flavor's `export.extensions`, so disabled rich syntax has complete tokens to preserve as literal text. Keep tokenizers registered when preferences change.
 

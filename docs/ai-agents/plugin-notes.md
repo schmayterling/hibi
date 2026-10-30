@@ -14,7 +14,7 @@ Body edits preserve metadata verbatim. Field edits use the [YAML document API](h
 
 ### Slash commands
 
-`commands.ts` owns the block commands. `rich.ts` attaches a ProseMirror plugin through `registerRich`; `source.ts` uses `registerSource`. Both use `menu.ts` and the shared command-list styles.
+`commands.ts` owns the block commands. `source.ts` installs the menu through `registerSource` and `registerFormatted`. Both use `menu.ts` and the shared command-list styles.
 
 Read other plugins' slash actions through `context.commands.getSlashCommands()` and hide unavailable actions. Apply whole-note transforms and slash-query removal together. Source transforms retain Undo; rich whole-note actions rebuild the editor as `context.editor.updateMarkdown` does. Keep the menu out of code, frontmatter, URLs, and paths. Vim normal-mode `/` must remain search. Never execute workspace content as plugin code.
 
@@ -28,7 +28,7 @@ The status display retains the last completed command. For example, `22k` progre
 
 ### Block dragging
 
-Use the existing `registerRich`, shared menu, and scoped style APIs. Moves must preserve formatting, use the editor's Undo history, and obey the document schema. Disable moves for read-only editors. Removing the plugin must remove its handle, menu, listeners, and editor plugin without rebuilding document history.
+Use the formatted view's contribution registry, shared menu, and scoped style APIs. Moves must preserve formatting, use the editor's Undo history, and obey the document schema. Disable moves for read-only editors. Removing the plugin must remove its handle, menu, listeners, and editor plugin without rebuilding document history.
 
 ### Word count and typing speed
 

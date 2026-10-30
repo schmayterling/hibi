@@ -253,10 +253,15 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     await t.test('wide code can scroll horizontally', async () => {
       assert.ok(
         await block.evaluate(async (pre, box) => {
-          // A redraw may replace the box; wait for the new one.
-          while (box && !pre.isConnected) {
-            pre = document.querySelector(box) ?? pre
-            if (!pre.isConnected) await new Promise(requestAnimationFrame)
+          // A redraw may replace the box, and a new box is only as wide as
+          // the view until its long lines are drawn; wait for one that is.
+          const started = performance.now()
+          for (;;) {
+            if (!pre.isConnected) pre = document.querySelector(box) ?? pre
+            if (pre.isConnected && pre.scrollWidth > pre.clientWidth) break
+            if (performance.now() - started > 8000)
+              throw new Error('no wide code box is drawn')
+            await new Promise(requestAnimationFrame)
           }
           return pre.scrollLeft > 0
         }, box),

@@ -85,6 +85,13 @@ const applyPalette = (scheme) =>
     style.textContent = css
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, palette(scheme))
 
 async function open(name) {

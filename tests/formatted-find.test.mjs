@@ -29,6 +29,35 @@ async function measureFindLayout(rich) {
   )
 }
 
+// The highlight window is measured in a frame after CodeMirror's, and the find
+// worker answers for it later: wait until the highlights stop changing.
+async function settleFindHighlights(rich) {
+  await measureFindLayout(rich)
+  await rich.evaluate(
+    (element) =>
+      new Promise((resolve) => {
+        let quiet = 0
+        const observer = new MutationObserver(() => {
+          quiet = 0
+        })
+        observer.observe(element, {
+          attributes: true,
+          characterData: true,
+          childList: true,
+          subtree: true,
+        })
+        const frame = () => {
+          if (++quiet < 5) requestAnimationFrame(frame)
+          else {
+            observer.disconnect()
+            resolve()
+          }
+        }
+        requestAnimationFrame(frame)
+      }),
+  )
+}
+
 // The rich editor highlights matches overlapping the lines on screen and about
 // a screen of text, at least 2,000 characters, to each side.
 async function denseHighlights(page, rich, query = 'needle') {
@@ -1106,7 +1135,7 @@ test('formatted find moving to an adjacent match restyles highlights without rew
   const { page, rich, input, count } = await openFind(t, dense)
   await input.fill('needle')
   await count('1/10000')
-  await measureFindLayout(rich)
+  await settleFindHighlights(rich)
   await rich.evaluate((element) => {
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
     const nodes = []

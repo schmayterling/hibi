@@ -178,6 +178,47 @@ test('print window disables scripts and releases its private page after success'
   assert.equal(state.writes[0].bytes.toString(), '%PDF-1.7')
 })
 
+test('a remote image that never arrives stops the page load after 15 seconds and still prints', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let loading
+  const parsed = new Promise((resolve) => {
+    loading = resolve
+  })
+  let stops = 0
+  const { api, owner, state } = runtime({
+    load: (window) =>
+      new Promise((_resolve, reject) => {
+        window.webContents.stop = () => {
+          stops++
+          reject(
+            new Error("ERR_ABORTED (-3) loading 'hibi-print://print-page/'"),
+          )
+        }
+        window.webContents.emit('dom-ready')
+        loading()
+      }),
+  })
+  let result = 'pending'
+  api.exportPdf(owner, 'tab', '<img src="https://example.com/stuck.png">').then(
+    (path) => {
+      result = path
+    },
+    (error) => {
+      result = error.message
+    },
+  )
+  await parsed
+  t.mock.timers.tick(14999)
+  assert.equal(stops, 0)
+  t.mock.timers.tick(1)
+  for (let turn = 0; turn < 20 && result === 'pending'; turn++)
+    await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(stops, 1)
+  assert.equal(result, '/notes/garden.pdf')
+  assert.equal(state.writes.length, 1)
+  assert.equal(state.windows[0].destroyed, true)
+})
+
 test('canceled dialog and open-document target never create a print window or write', async () => {
   for (const dialog of [{ canceled: true }, { filePath: '/notes/garden.md' }]) {
     const { api, owner, state } = runtime({ dialog })

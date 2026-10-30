@@ -42,6 +42,7 @@ async function renderPdf(html: string, owner: BrowserWindow) {
   // but release its page, protocol and listeners after every print.
   const partition = session.fromPartition('hibi-print', { cache: false })
   let window: BrowserWindow | undefined
+  let stall: ReturnType<typeof setTimeout> | undefined
   let cancel!: () => void
   const interrupted = new Promise<never>((_resolve, reject) => {
     cancel = () => reject(new Error('PDF export was canceled.'))
@@ -102,7 +103,21 @@ async function renderPdf(html: string, owner: BrowserWindow) {
     app.once('before-quit', cancel)
     return await Promise.race([
       (async () => {
-        await window.loadURL(url)
+        let stopped = false
+        // An image host that never answers would hold the page load forever,
+        // so after 15 seconds stop loading and print the images that arrived.
+        contents.once('dom-ready', () => {
+          stall = setTimeout(() => {
+            stopped = true
+            contents.stop()
+          }, 15_000)
+        })
+        await window
+          .loadURL(url)
+          .catch((error) => {
+            if (!stopped) throw error
+          })
+          .finally(() => clearTimeout(stall))
         return contents.printToPDF({
           pageSize: printPageSize(app.getLocaleCountryCode()),
           printBackground: true,
@@ -114,6 +129,7 @@ async function renderPdf(html: string, owner: BrowserWindow) {
       interrupted,
     ])
   } finally {
+    clearTimeout(stall)
     owner.removeListener('close', cancel)
     app.removeListener('before-quit', cancel)
     if (window && !window.isDestroyed()) window.destroy()

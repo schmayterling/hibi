@@ -142,7 +142,6 @@ test('split panes align corresponding carets in both directions without feedback
   const page = await app.firstWindow()
   await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
-
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
@@ -201,7 +200,6 @@ test('split panes align corresponding carets in both directions without feedback
     true,
   )
   const rich = page.getByRole('textbox', { name: /document editor/i })
-
   // The formatted viewport virtualizes distant headings; reveal the same source location before clicking.
   // Focused, the formatted view leads linked scrolling, which otherwise scrolls it back to the source caret.
   await rich.evaluate((element) => {
@@ -215,12 +213,10 @@ test('split panes align corresponding carets in both directions without feedback
     })
   })
   await rich.locator('.hibi-lp-h2').filter({ hasText: 'section 45' }).click()
-  // Accepted difference: the codemirror split pane stays editable, with its caret.
+  // The split pane stays editable, with its caret.
   assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await page.locator('.rich-pane .editor-cursor').waitFor()
-
   await page.waitForFunction(() => {
-    const editor = document.querySelector('.rich-pane .tiptap')?.editor
     const view = document.querySelector('.rich-pane .cm-content')?.cmTile.root
       .view
     const caret = view?.coordsAtPos(view.state.selection.main.head)
@@ -254,24 +250,21 @@ test('split panes align corresponding carets in both directions without feedback
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     markdown,
   )
-  {
-    await page.evaluate(() => window.hibi.flushDocumentChanges())
-    const before = await page.evaluate(() => window.hibi.getDocument())
-    await page.keyboard.insertText('x')
-    await page.evaluate(() => window.hibi.flushDocumentChanges())
-    const typed = await page.evaluate(() => window.hibi.getDocument())
-    // Typing in the codemirror split pane makes one source edit, and undo takes it back.
-    assert.equal(typed.markdown.length, markdown.length + 1)
-    assert.equal(typed.markdown.replace('x', ''), markdown)
-    assert.equal(typed.contentVersion, before.contentVersion + 1)
-    await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
-    await waitForAsync(
-      page,
-      async (markdown) =>
-        (await window.hibi.getDocument()).markdown === markdown,
-      markdown,
-    )
-  }
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  const before = await page.evaluate(() => window.hibi.getDocument())
+  await page.keyboard.insertText('x')
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  const typed = await page.evaluate(() => window.hibi.getDocument())
+  // Typing in the split pane makes one source edit, and undo takes it back.
+  assert.equal(typed.markdown.length, markdown.length + 1)
+  assert.equal(typed.markdown.replace('x', ''), markdown)
+  assert.equal(typed.contentVersion, before.contentVersion + 1)
+  await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await waitForAsync(
+    page,
+    async (markdown) => (await window.hibi.getDocument()).markdown === markdown,
+    markdown,
+  )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await page.evaluate(() =>
     Promise.all(

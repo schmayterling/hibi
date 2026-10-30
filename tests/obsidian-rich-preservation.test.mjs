@@ -3,10 +3,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { getSchema } from '@tiptap/core'
-import { MarkdownManager } from '@tiptap/markdown'
-import { StarterKit } from '@tiptap/starter-kit'
-import { preserveRichSource } from '../src/renderer/src/rich-source-preservation.ts'
 import {
   electron,
   waitForDocumentEditor,
@@ -86,7 +82,7 @@ async function openFormattedPreservation(t, original, addons = {}) {
   return { app, page, rich, file, folder, cdp, expected, caret, save }
 }
 
-test('codemirror: native block insertion keeps CRLF and untouched Markdown', {
+test('native block insertion keeps CRLF and untouched Markdown', {
   timeout: 30000,
 }, async (t) => {
   const original = '# top\r\n\r\n## next\r\n'
@@ -118,7 +114,7 @@ test('codemirror: native block insertion keeps CRLF and untouched Markdown', {
 })
 
 for (const math of [false, true]) {
-  test(`codemirror: math enabled preserves exact source ${math ? 'with' : 'without'} equations through editing and undo`, {
+  test(`math enabled preserves exact source ${math ? 'with' : 'without'} equations through editing and undo`, {
     timeout: 45000,
   }, async (t) => {
     const equations = math
@@ -191,7 +187,7 @@ for (const math of [false, true]) {
   })
 }
 
-test('codemirror: formatted edits and autosave preserve exact Obsidian syntax and entities', {
+test('formatted edits and autosave preserve exact Obsidian syntax and entities', {
   timeout: 45000,
 }, async (t) => {
   const spacing = 'Spacing: one&nbsp;two and three\u00a0four.'

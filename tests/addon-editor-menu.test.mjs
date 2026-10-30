@@ -154,14 +154,9 @@ test('editor command shares rich and source action menus with guarded selection'
       throw error
     })
   // Focus returning to the editor, as when its window regains focus, keeps the menu.
-  await rich.evaluate((element, engine) => {
-    element.dispatchEvent(new FocusEvent('focus'))
-    // ProseMirror's unchanged-selection transaction is a Tiptap-only oracle.
-    if (engine === 'tiptap') {
-      const { view } = element.editor
-      view.dispatch(view.state.tr.setSelection(view.state.selection))
-    }
-  }, 'codemirror')
+  await rich.evaluate((element) =>
+    element.dispatchEvent(new FocusEvent('focus')),
+  )
   await menu
     .getByRole('menuitem', { name: 'Inspect editor selection' })
     .click()

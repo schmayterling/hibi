@@ -614,14 +614,10 @@ test('hidden renderer crash shows recovery and clean tray quit stays hidden', {
   )
   assert.equal(recovered.markdown, 'recover hidden draft')
   assert.equal(recovered.dirty, true)
-  await app.evaluate(
-    (_, engine) =>
-      globalThis.backgroundTestContents.executeJavaScript(
-        engine === 'tiptap'
-          ? `document.querySelector('.tiptap').editor.commands.setContent('<p></p>')`
-          : `window.hibi.updateDocument('')`,
-      ),
-    'codemirror',
+  await app.evaluate(() =>
+    globalThis.backgroundTestContents.executeJavaScript(
+      `window.hibi.updateDocument('')`,
+    ),
   )
   await waitForAsync(
     app,

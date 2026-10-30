@@ -119,13 +119,6 @@ test('custom body preference scopes match native text', {
       exact: true,
     })
     return editor.evaluate((element) => {
-      if (element.editor) {
-        element.editor.commands.setTextSelection(
-          element.editor.state.doc.content.size,
-        )
-        element.blur()
-        return element.editor.getText().replace(/\s+/g, ' ').trim()
-      }
       const view = element.cmTile.root.view
       view.dispatch({ selection: { anchor: view.state.doc.length } })
       element.blur()

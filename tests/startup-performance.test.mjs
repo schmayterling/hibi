@@ -81,11 +81,6 @@ test('production entry keeps editor implementations behind demand imports', asyn
   )
   assert.ok(
     chunks.some((chunk) =>
-      chunk.modules.includes('src/renderer/src/Editor.tsx'),
-    ),
-  )
-  assert.ok(
-    chunks.some((chunk) =>
       chunk.modules.includes('src/renderer/src/SourceEditor.tsx'),
     ),
   )
@@ -270,7 +265,6 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   await page.evaluate(
     () => new Promise((resolve) => requestIdleCallback(resolve)),
   )
-
   assert.equal(
     await page
       .getByRole('textbox', { name: 'Document editor', exact: true })
@@ -278,7 +272,6 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
     true,
   )
   assert.equal(await page.locator('.rich-pane .cm-editor').count(), 1)
-
   assert.equal(await page.locator('.source-pane .cm-editor').count(), 0)
   const chunks = JSON.parse(
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
@@ -306,11 +299,9 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
     initial,
     /src\/renderer\/src\/(?:SettingsScreen|VersionHistory)\.tsx/,
   )
-
-  // The formatted engine uses SourceEditor; its separate source pane stays unmounted.
+  // The formatted view uses SourceEditor; its separate source pane stays unmounted.
   assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
   assert.doesNotMatch(initial, /node_modules\/(?:@tiptap\/|prosemirror-)/)
-
   assert.doesNotMatch(initial, /src\/renderer\/src\/FormatEditor\.tsx/)
   await page.evaluate(() => {
     const editor = document.querySelector('.editor-surface')
@@ -517,12 +508,12 @@ test('unrelated enabled formats defer source parsers until first source use', {}
   )
 })
 
-test('the default engine starts every built-in editor addon without tiptap or prosemirror', {
+test('every built-in editor addon starts without tiptap or prosemirror', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-codemirror-'))
-  // Optional addons with Tiptap features; markdown, mermaid, tags, text extras
-  // and slash commands start by default.
+  // Optional addons that had Tiptap features; markdown, mermaid, tags, text
+  // extras and slash commands start by default.
   const optional = ['math', 'typst', 'block-drag', 'dictionary', 'word-count']
   await writeFile(
     join(profile, 'addons.json'),

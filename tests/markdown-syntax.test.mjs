@@ -17,12 +17,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  clickMenu,
-  pressShortcut,
-  replaceRichText,
-  replaceSourceText,
-} from './keyboard.mjs'
+import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
@@ -157,7 +152,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
     .click()
   assert.equal(await rich.locator('h2, .hibi-lp-h2').innerText(), 'two')
   assert.match(await rich.innerText(), /\*\*bold\*\* H~2~O/)
-  // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
+  // The split pane stays editable.
   assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(() =>
@@ -207,7 +202,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
       const state = await page.evaluate(async () => ({
         markdown: (await window.hibi.getDocument()).markdown,
         disabled: localStorage.getItem('hibi:markdown-syntax-disabled'),
-        rich: document.querySelector('.tiptap')?.innerHTML,
+        rich: document.querySelector('.rich-pane .cm-content')?.innerHTML,
       }))
       throw new Error(`syntax did not settle: ${JSON.stringify(state)}`, {
         cause,
@@ -253,14 +248,12 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   // Keep the detected flavor present while exercising rich input rules.
   // Set the editor selection directly; DOM selection changes are asynchronous.
   await rich.evaluate((element) => {
-    if (element.matches('.cm-content')) {
-      const view = element.cmTile.root.view
-      view.dispatch({
-        selection: { anchor: view.state.doc.length },
-        scrollIntoView: true,
-      })
-      view.focus()
-    } else element.editor.commands.focus('end')
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: { anchor: view.state.doc.length },
+      scrollIntoView: true,
+    })
+    view.focus()
   })
   await rich.press('Enter')
   await rich.press('Enter')

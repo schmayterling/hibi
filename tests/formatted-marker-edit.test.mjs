@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 
 const cases = [
   ['emphasis', 'lead *word* tail', '*', 'word'],
@@ -51,7 +51,7 @@ async function open(t) {
     await app.close()
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -116,7 +116,7 @@ async function clickAt(rich, pos, clickCount = 1) {
   await rich.page().mouse.click(point.x, point.y, { clickCount })
 }
 
-test('codemirror: revealed markers are ordinary editable source', {
+test('revealed markers are ordinary editable source', {
   timeout: 300000,
 }, async (t) => {
   const { page, rich, cdp } = await open(t)

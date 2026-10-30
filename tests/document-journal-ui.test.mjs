@@ -71,13 +71,8 @@ test('journal barriers preserve immediate saves, retries, renderer recovery, and
   assert.equal(recovered.text, 'recover this unsaved change')
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`
-      const element = document.querySelector('[aria-label="Document editor"]')
-      if (element.editor)
-        element.editor.commands.setContent('native close must keep this final edit', { contentType: 'markdown' })
-      else {
-        const view = element.cmTile.root.view
-        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'native close must keep this final edit' }, userEvent: 'input.type' })
-      }
+      const view = document.querySelector('[aria-label="Document editor"]').cmTile.root.view
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'native close must keep this final edit' }, userEvent: 'input.type' })
     `),
   )
   const closed = new Promise((resolve) => page.once('close', resolve))
@@ -91,8 +86,8 @@ test('journal barriers preserve immediate saves, retries, renderer recovery, and
   )
 })
 
-// Native CM inputs exercise the same preload/main journal without PM command
-// transactions. Separate fixtures keep receipt recovery and capacity failures independent.
+// Native inputs exercise the preload/main journal. Separate fixtures keep
+// receipt recovery and capacity failures independent.
 async function cmPressureFixture(t, loseOldestReceipt = false) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-journal-pressure-'))
   const file = join(profile, 'note.md')
@@ -150,7 +145,7 @@ async function cmPressureFixture(t, loseOldestReceipt = false) {
   return { app, page, rich, file }
 }
 
-test('codemirror J09: native inputs beyond the receipt horizon recover exact accepted text through a checkpoint', {
+test('J09: native inputs beyond the receipt horizon recover exact accepted text through a checkpoint', {
   timeout: 65000,
 }, async (t) => {
   const { app, page, rich, file } = await cmPressureFixture(t, true)
@@ -184,7 +179,7 @@ test('codemirror J09: native inputs beyond the receipt horizon recover exact acc
   )
 })
 
-test('codemirror J07: saturated native input preserves accepted source and history through drain, save and resumed editing', {
+test('J07: saturated native input preserves accepted source and history through drain, save and resumed editing', {
   timeout: 65000,
 }, async (t) => {
   const { app, page, rich, file } = await cmPressureFixture(t)

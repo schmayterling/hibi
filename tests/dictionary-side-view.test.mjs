@@ -15,23 +15,17 @@ import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
 async function placeCaret(editor, offset = 'end') {
   await editor.evaluate((element, offset) => {
-    if (element.editor)
-      element.editor.commands.focus(offset === 'end' ? offset : offset + 1)
-    else {
-      const view = element.cmTile.root.view
-      view.dispatch({
-        selection: {
-          anchor: offset === 'end' ? view.state.doc.length : offset,
-        },
-      })
-      view.focus()
-    }
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: {
+        anchor: offset === 'end' ? view.state.doc.length : offset,
+      },
+    })
+    view.focus()
   }, offset)
 }
 async function undoRich(editor) {
-  if (await editor.evaluate((element) => !!element.editor))
-    await editor.evaluate((element) => element.editor.commands.undo())
-  else await editor.press('ControlOrMeta+z')
+  await editor.press('ControlOrMeta+z')
 }
 
 test('side view follows the caret offline, replaces in one undo step, and pack suggestions accept with Tab', {

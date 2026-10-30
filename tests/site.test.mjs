@@ -382,7 +382,6 @@ test('app and exported site share heading destinations and retain legacy links',
   const folder = await mkdtemp(join(tmpdir(), 'hibi-heading-anchors-'))
   const texts = ['api_v2', 'title', 'title', 'é 日本語', '!!!', 'apiv2']
   const anchors = ['api_v2', 'title', 'title-1', 'é-日本語', '', 'apiv2-1']
-  const html = texts.map((text) => `<h2>${text}</h2>`).join('')
   const { app, page } = await openSite(t, folder, {
     name: 'heading destinations',
     pages: [
@@ -441,17 +440,16 @@ test('app and exported site share heading destinations and retain legacy links',
     )
   }
 
-  for (const window of [page])
-    await window.evaluate(() => {
-      globalThis.headingTargets = []
-      HTMLElement.prototype.scrollIntoView = function () {
-        const heading = this.closest('h1,h2,h3,h4,h5,h6')
-        if (heading)
-          globalThis.headingTargets.push(
-            [...document.querySelectorAll('.tiptap h2')].indexOf(heading),
-          )
-      }
-    })
+  await page.evaluate(() => {
+    globalThis.headingTargets = []
+    HTMLElement.prototype.scrollIntoView = function () {
+      const heading = this.closest('h1,h2,h3,h4,h5,h6')
+      if (heading)
+        globalThis.headingTargets.push(
+          [...document.querySelectorAll('.tiptap h2')].indexOf(heading),
+        )
+    }
+  })
 
   await t.test(
     'site assigns canonical ids without losing legacy ids',
@@ -497,17 +495,11 @@ test('app and exported site share heading destinations and retain legacy links',
     'app resolves the same canonical and legacy destinations',
     async () => {
       for (const index of [0, 1, 2, 3, 5]) {
-        await desktop.evaluate(() => {
-          globalThis.headingTargets = []
-        })
         await rich
           .getByRole('link', { name: `jump ${index}`, exact: true })
           .click({ modifiers: ['Shift'] })
         await assertDesktopTarget(index)
       }
-      await desktop.evaluate(() => {
-        globalThis.headingTargets = []
-      })
       await rich
         .getByRole('link', { name: 'legacy jump', exact: true })
         .click({ modifiers: ['Shift'] })

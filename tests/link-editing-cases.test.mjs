@@ -44,9 +44,6 @@ test('link editing prefills, cancels, saves and undoes titles, references, autol
   const read = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
   await page.getByRole('link', { name: 'titled', exact: true }).waitFor()
-  // Known tiptap gap, also on main: saving these destinations dispatches no
-  // edit. Not fixed there, as the default moves to codemirror and tiptap goes.
-  const tiptapGap = ['escaped', 'https://old.example/auto', 'cell']
   for (const [label, href] of [
     ['titled', 'https://old.example/title'],
     ['escaped', 'https://old.example/a(b)?x=1&y=2'],
@@ -54,7 +51,7 @@ test('link editing prefills, cancels, saves and undoes titles, references, autol
     ['https://old.example/auto', 'https://old.example/auto'],
     ['cell', 'https://old.example/cell'],
   ]) {
-    await t.test(label, { skip: false }, async (subtest) => {
+    await t.test(label, async (subtest) => {
       subtest.after(async () => {
         await page.keyboard.press('Escape')
       })

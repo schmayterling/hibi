@@ -12,9 +12,12 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
+import { frozenSnapshot } from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// What the formatted view drew while it matched the removed rich view.
+const check = frozenSnapshot('formatted-math')
 
 const parityNote = `# Math parity
 
@@ -80,15 +83,11 @@ async function open(name) {
   await pressShortcut(app, `${mod}+o`)
 }
 
-/** Reload the window with the formatted engine switch and marker setting. */
-async function engine(codemirror, markers = true) {
+/** Reload the window with the marker setting. */
+async function markers(shown) {
   await page.evaluate(
-    ({ codemirror, markers }) => {
-      if (codemirror)
-      else localStorage.setItem('hibi:formatted-engine', 'tiptap')
-      localStorage.setItem('markdown-markers', String(markers))
-    },
-    { codemirror, markers },
+    (shown) => localStorage.setItem('markdown-markers', String(shown)),
+    shown,
   )
   await page.reload()
   await waitForDocumentEditor(app, page)
@@ -115,7 +114,11 @@ before(
     }
     await writeFile(join(folder, 'notes', 'many.md'), many)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     // Closing with edited notes answers the unsaved-changes prompt.
     await app.evaluate(({ dialog }) => {
@@ -136,44 +139,70 @@ after(
   { timeout: 30000 },
 )
 
-/** Formula boxes and a screenshot of the formatted pane. */
-async function capture(name) {
+/**
+ * Formula boxes, and what the pane draws in place of its pixels: each line's
+ * and inline element's tag, classes and computed paint, and its box in the
+ * pane, with each formula one element.
+ */
+async function capture() {
   await page.evaluate(async () => {
     await document.fonts.ready
   })
-  const boxes = await page.evaluate(() =>
-    [...document.querySelectorAll('.rich-pane .katex')].map((katex) => {
-      const box = katex.getBoundingClientRect()
-      const pane = katex.closest('.rich-pane').getBoundingClientRect()
-      return {
-        left: Math.round(box.left - pane.left),
-        top: Math.round(box.top - pane.top),
-        width: Math.round(box.width),
-        height: Math.round(box.height),
-      }
-    }),
-  )
-  const image = await page
-    .locator('.rich-pane')
-    .screenshot({ path: `test-results/formatted-math-${name}.png` })
-  return { boxes, image }
+  return page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    const origin = pane.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
+    const keys = [
+      'color',
+      'backgroundColor',
+      'fontSize',
+      'fontWeight',
+      'fontStyle',
+      'verticalAlign',
+      'textDecorationLine',
+      'opacity',
+    ]
+    const drawn = [
+      ...pane.querySelectorAll('.cm-content > *, .cm-content > * *'),
+    ].filter((element) => !element.parentElement.closest('.katex'))
+    return {
+      boxes: [...pane.querySelectorAll('.katex')].map((katex) => {
+        const box = katex.getBoundingClientRect()
+        return {
+          left: Math.round(box.left - origin.left),
+          top: Math.round(box.top - origin.top),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+        }
+      }),
+      drawn: drawn.map((element) => {
+        const style = getComputedStyle(element)
+        return {
+          element: [
+            element.tagName.toLowerCase(),
+            ...[...element.classList]
+              .filter((name) => !/^cm-(active|focused)/.test(name))
+              .sort(),
+          ].join('.'),
+          ...Object.fromEntries(keys.map((key) => [key, style[key]])),
+        }
+      }),
+      lines: drawn.map((element) => {
+        const box = element.getBoundingClientRect()
+        return {
+          left: round(box.left - origin.left),
+          top: round(box.top - origin.top),
+          width: round(box.width),
+          height: round(box.height),
+        }
+      }),
+    }
+  })
 }
 
-test('formulas render in the formatted view as in the rich view, in light and dark', {
+test('formulas keep the rich view’s recorded boxes and drawing, in light and dark', {
   timeout: 120000,
 }, async () => {
-  await engine(false)
-  await open('parity.md')
-  await page.locator('.tiptap h1', { hasText: 'Math parity' }).waitFor()
-  await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex').length === 9,
-  )
-  const rich = {}
-  for (const scheme of ['hibi-light', 'hibi-dark']) {
-    await applyPalette(scheme)
-    rich[scheme] = await capture(`rich-${scheme}`)
-  }
-  await engine(true)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Math parity' })
@@ -203,51 +232,22 @@ test('formulas render in the formatted view as in the rich view, in light and da
     })),
     { inline: 6, block: 3, error: '\\frac{1', literal: true },
   )
-  const report = []
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
     await page.evaluate(
       () => new Promise((done) => requestAnimationFrame(() => done())),
     )
-    const formatted = await capture(`formatted-${scheme}`)
-    assert.equal(formatted.boxes.length, rich[scheme].boxes.length)
-    formatted.boxes.forEach((box, index) => {
-      const other = rich[scheme].boxes[index]
-      for (const key of Object.keys(box))
-        assert.ok(
-          Math.abs(box[key] - other[key]) <= 1,
-          `${scheme} formula ${index} ${key}: ${JSON.stringify({ box, other })}`,
-        )
+    const formatted = await capture()
+    check(`parity ${scheme} formulas`, formatted.boxes, {
+      perPlatform: true,
+      tolerance: 1,
     })
-    const difference = await app.evaluate(
-      ({ nativeImage }, images) => {
-        const [a, b] = images.map((image) =>
-          nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-        )
-        const size = a.getSize(),
-          other = b.getSize()
-        if (size.width !== other.width || size.height !== other.height) return 1
-        const left = a.toBitmap(),
-          right = b.toBitmap()
-        let changed = 0
-        for (let i = 0; i < left.length; i += 4)
-          if (
-            Math.abs(left[i] - right[i]) > 8 ||
-            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-            Math.abs(left[i + 2] - right[i + 2]) > 8
-          )
-            changed++
-        return changed / (left.length / 4)
-      },
-      [rich[scheme].image, formatted.image].map((image) =>
-        image.toString('base64'),
-      ),
-    )
-    report.push({ scheme, difference })
+    check(`parity ${scheme} drawn`, formatted.drawn)
+    check(`parity ${scheme} boxes`, formatted.lines, {
+      perPlatform: true,
+      tolerance: 1,
+    })
   }
-  console.log(JSON.stringify(report))
-  for (const { scheme, difference } of report)
-    assert.ok(difference < 0.002, `${scheme}: ${difference}`)
 })
 
 test('the caret reveals formula source, typing edits it and undo restores it', {
@@ -446,42 +446,32 @@ test('a one-line display formula or image in a quote keeps one quote indent and 
   )
   // The tops of the numerator's glyphs reach past the formula's box, inside
   // the clip that lets a wide formula scroll sideways.
-  for (const cm of [true, false]) {
-    if (!cm) await engine(false)
-    const formula = page.locator('.rich-pane [data-type="block-math"]')
-    await formula.locator('.katex').waitFor()
-    for (const { id } of bundledColorschemes) {
-      await applyPalette(id)
-      const clipped = await formula.screenshot()
-      const unclip = await page.addStyleTag({
-        content: '.katex-display { overflow: visible !important }',
-      })
-      const whole = await formula.screenshot()
-      await unclip.evaluate((style) => style.remove())
-      // Glyph pixels, not the quote paint's dithering.
-      const cut = await app.evaluate(
-        ({ nativeImage }, images) => {
-          const [a, b] = images.map((image) =>
-            nativeImage
-              .createFromBuffer(Buffer.from(image, 'base64'))
-              .toBitmap(),
-          )
-          let changed = 0
-          for (let i = 0; i < a.length; i += 4)
-            if ([0, 1, 2].some((c) => Math.abs(a[i + c] - b[i + c]) > 32))
-              changed++
-          return a.length === b.length ? changed : -1
-        },
-        [clipped, whole].map((image) => image.toString('base64')),
-      )
-      assert.equal(
-        cut,
-        0,
-        `${cm ? 'codemirror' : 'tiptap'} ${id}: no glyph ink is clipped`,
-      )
-    }
+  const formula = page.locator('.rich-pane [data-type="block-math"]')
+  await formula.locator('.katex').waitFor()
+  for (const { id } of bundledColorschemes) {
+    await applyPalette(id)
+    const clipped = await formula.screenshot()
+    const unclip = await page.addStyleTag({
+      content: '.katex-display { overflow: visible !important }',
+    })
+    const whole = await formula.screenshot()
+    await unclip.evaluate((style) => style.remove())
+    // Glyph pixels, not the quote paint's dithering.
+    const cut = await app.evaluate(
+      ({ nativeImage }, images) => {
+        const [a, b] = images.map((image) =>
+          nativeImage.createFromBuffer(Buffer.from(image, 'base64')).toBitmap(),
+        )
+        let changed = 0
+        for (let i = 0; i < a.length; i += 4)
+          if ([0, 1, 2].some((c) => Math.abs(a[i + c] - b[i + c]) > 32))
+            changed++
+        return a.length === b.length ? changed : -1
+      },
+      [clipped, whole].map((image) => image.toString('base64')),
+    )
+    assert.equal(cut, 0, `${id}: no glyph ink is clipped`)
   }
-  await engine(true)
   await applyPalette('hibi-light')
 })
 
@@ -590,7 +580,7 @@ test('display math across lines, blank or holding dollars draws as display math,
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {
   timeout: 90000,
 }, async () => {
-  await engine(true, false)
+  await markers(false)
   await open('edit.md')
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -665,7 +655,7 @@ test('with markers hidden, clicking a formula opens its prompt and replaces the 
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.startsWith('Text $a+b$ end.'),
   )
-  await engine(true, true)
+  await markers(true)
 })
 
 test('applying an unchanged prompt keeps a formula across quote lines as written', {
@@ -676,7 +666,7 @@ test('applying an unchanged prompt keeps a formula across quote lines as written
   const note =
     '> Quoted $$a\n> +b$$ formula\n\n> $$\n> c\n> +d\n> $$\n\nlast line\n'
   await writeFile(join(folder, 'notes', 'quoted-prompt.md'), note)
-  await engine(true, false)
+  await markers(false)
   await open('quoted-prompt.md')
   const formulas = page.locator('.rich-pane [data-type="block-math"]')
   await page.locator('.rich-pane .cm-line', { hasText: 'Quoted' }).waitFor()
@@ -693,7 +683,7 @@ test('applying an unchanged prompt keeps a formula across quote lines as written
     await prompt.waitFor({ state: 'hidden' })
     assert.equal(await documentText(), note)
   }
-  await engine(true, true)
+  await markers(true)
 })
 
 test('2,000 formulas: only formulas near the viewport render and typing renders none', {

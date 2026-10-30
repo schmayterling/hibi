@@ -24,13 +24,7 @@ const globalInput =
 
 export function planChecks(
   root,
-  {
-    changed,
-    previousTests,
-    force = false,
-    outputAvailable = true,
-    platform = process.platform,
-  },
+  { changed, previousTests, force = false, outputAvailable = true },
 ) {
   const untracked = paths(
     git(root, 'ls-files', '-z', '--others', '--exclude-standard'),
@@ -135,30 +129,6 @@ export function planChecks(
   const selected = full
     ? tests
     : tests.filter((test) => {
-        if (test === 'tests/dev-reload.test.mjs')
-          return (
-            platform !== 'win32' &&
-            changed.some(
-              (file) =>
-                /^(scripts\/dev[^/]*\.mjs$|electron\.vite\.config\.[^/]+$|package(?:-lock)?\.json$|scripts\/ci\.mjs$|\.github\/actions\/ci(?:\/|$))/.test(
-                  file,
-                ) ||
-                [
-                  'scripts/addon-development.ts',
-                  'scripts/addon-packages.ts',
-                  'scripts/patch-electron-vite.mjs',
-                  'scripts/electron-runtime.mjs',
-                  'scripts/build-site.mjs',
-                  'scripts/docs.mjs',
-                  'scripts/addon-reference.mjs',
-                  'src/main/addon-development.ts',
-                  'src/renderer/src/addon-development.ts',
-                  'src/renderer/src/addon-reload.ts',
-                  'src/shared/addon-development.ts',
-                  'tests/dev-reload.test.mjs',
-                ].includes(file),
-            )
-          )
         if (!previousTests.includes(test)) return true
         if (documentationOnly)
           return [

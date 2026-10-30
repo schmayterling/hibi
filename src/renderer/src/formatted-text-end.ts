@@ -12,6 +12,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import { parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
 import { prefixOf } from './formatted-commands.ts'
+import { placedSelection } from './reading-position.ts'
 import { sourceHistoryEffects } from './source-session.ts'
 
 /** Blocks the rich editor reads; it drops link reference definitions. */
@@ -343,6 +344,12 @@ export function openAtEnd(view: EditorView, later = false) {
 export const openSelection = (syntax: OpenSyntax) => [
   openSyntax.of(syntax),
   selected,
+  // A note opens at its top: blocks that render above the caret it opened
+  // with keep the top in place, not the caret.
+  placedSelection.compute(
+    [selected],
+    (state) => state.field(selected)?.opened === true,
+  ),
   sourceHistoryEffects.of((state) => [select.of(state.field(selected))]),
   ViewPlugin.define((view) => ({
     update(update) {

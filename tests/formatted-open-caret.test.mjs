@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -61,6 +61,8 @@ const notes = {
   'frontmatter-paragraph': '---\ntitle: x\n---\n\nlast\n',
   empty: '',
   blank: '\n\n',
+  // Taller than the pane; it opens at its top.
+  'tall-table': `${'line\n\n'.repeat(60)}| aa   | bb   |\n| ---- | ---- |\n| cell | tail |\n`,
   // Accepted differences, below.
   html: 'plain\n\n<div>\nlast\n</div>\n',
   'html-comment': 'plain\n\n<!-- last -->\n',
@@ -172,6 +174,7 @@ function caret() {
     selection: root?.editor?.state.selection.toJSON().type,
     anchor: root?.cmTile?.root.view.state.selection.main.anchor,
     head: root?.cmTile?.root.view.state.selection.main.head,
+    top: root?.closest('.rich-pane')?.scrollTop,
   }
 }
 
@@ -291,6 +294,9 @@ for (const engine of ['tiptap', 'codemirror'])
       } else if (expected) check(name, key(observed), expected)
       else if (engine === 'codemirror')
         check(name, key(observed), native.get(name))
+      // Wherever its caret is, a note opens at its top.
+      if (observed.focus === 'editor')
+        check(name, { name, top: observed.top }, { name, top: 0 })
     }
     // Typing replaces a selected block, Enter adds a paragraph after it, and
     // Backspace or Delete removes it with the blank line before it. The rich
@@ -478,3 +484,172 @@ for (const engine of ['tiptap', 'codemirror'])
       }
     assert.deepEqual(differences, [])
   })
+
+// A note opens at its top: the caret it opens with is not where the reader
+// is, so diagrams drawn above it keep the top in place. The Mermaid language
+// and renderer are held until the caret is placed, and the pane is made a
+// little shorter than the note, so the formatted view reads where the reader
+// is while the caret is still on screen above the diagrams' placeholders, as
+// when they load late.
+test('codemirror: a note opens at its top while diagrams above its caret draw', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-open-top-'))
+  const profile = join(folder, 'profile')
+  await mkdir(profile)
+  const file = join(folder, 'diagrams.md')
+  const markdown =
+    '# Diagrams\n\nText before.\n\n```mermaid\ngraph TD\n  A[One] --> B[Two]\n  B --> C[Three]\n  C --> D[Four]\n  D --> E[Five]\n  E --> F[Six]\n```\n\nBetween.\n\n```mermaid\ngraph TD\n  G[Seven] --> H[Eight]\n  H --> I[Nine]\n```\n\nAfter.\n'
+  await writeFile(file, markdown)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(30000)
+  await selectFormattedEngine(app, page, 'codemirror')
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const held = [
+    'src/addons/mermaid/language.ts',
+    'node_modules/pele/dist/esm/lazy.js',
+  ].map(
+    (module) =>
+      `/${chunks.find((chunk) => chunk.modules.includes(module)).file}`,
+  )
+  await app.evaluate(({ app, protocol, net }, held) => {
+    const { join } = process.getBuiltinModule('node:path')
+    const { pathToFileURL } = process.getBuiltinModule('node:url')
+    globalThis.chunkGates = Object.fromEntries(
+      held.map((path) => {
+        const gate = { entered: false }
+        gate.ready = new Promise((resolve) => {
+          gate.release = resolve
+        })
+        return [path, gate]
+      }),
+    )
+    protocol.unhandle('app')
+    protocol.handle('app', async (request) => {
+      const { pathname } = new URL(request.url)
+      const gate = globalThis.chunkGates[pathname]
+      if (gate) {
+        gate.entered = true
+        await gate.ready
+      }
+      return net.fetch(
+        pathToFileURL(
+          join(
+            app.getAppPath(),
+            'out/renderer',
+            pathname === '/' ? 'index.html' : pathname,
+          ),
+        ).href,
+      )
+    })
+  }, held)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Network.setCacheDisabled', { cacheDisabled: true })
+  await page.reload({ waitUntil: 'commit' })
+  await waitForDocumentEditor(app, page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [file],
+    })
+  }, file)
+  await clickMenu(app, 'Open…')
+  const end = markdown.trimEnd().length
+  const place = () =>
+    page.evaluate(() => {
+      const pane = document.querySelector('.rich-pane')
+      const content = pane.querySelector('.hibi-formatted .cm-content')
+      const view = content.cmTile.root.view
+      const { head } = view.state.selection.main
+      const caret = view.coordsAtPos(head)
+      const shown = pane.getBoundingClientRect()
+      return {
+        top: pane.scrollTop,
+        height: pane.scrollHeight,
+        client: pane.clientHeight,
+        content: view.contentHeight,
+        head,
+        focused: view.hasFocus,
+        caretShown:
+          !!caret && caret.top >= shown.top && caret.bottom <= shown.bottom,
+        drawn: content.querySelectorAll('.mermaid-diagram svg').length,
+      }
+    })
+  await page.waitForFunction(
+    (end) =>
+      document.querySelector('.rich-pane .hibi-formatted .cm-content')?.cmTile
+        ?.root.view.state.selection.main.head === end,
+    end,
+  )
+  for (let read = 0; ; read++) {
+    const entered = await app.evaluate(() =>
+      Object.values(globalThis.chunkGates).every((gate) => gate.entered),
+    )
+    if (entered) break
+    assert.ok(read < 100, 'the Mermaid language and renderer are requested')
+    await page.waitForTimeout(100)
+  }
+  const shown = await place()
+  const target = Math.floor(shown.content) - 8
+  await app.evaluate(({ BrowserWindow }, by) => {
+    const window = BrowserWindow.getAllWindows().find((window) =>
+      window.webContents.getURL().startsWith('app://hibi/'),
+    )
+    const [width, height] = window.getContentSize()
+    window.setContentSize(width, height - by)
+  }, shown.client - target)
+  await page.waitForFunction(
+    (target) => document.querySelector('.rich-pane').clientHeight === target,
+    target,
+  )
+  await page.waitForTimeout(300)
+  const opened = await place()
+  t.diagnostic(JSON.stringify({ shown, opened }))
+  // The diagrams draw only once their renderer arrives, and the caret is on
+  // screen above their placeholders in a pane that scrolls.
+  assert.equal(opened.head, end, JSON.stringify(opened))
+  assert.equal(opened.drawn, 0, JSON.stringify(opened))
+  assert.ok(opened.height > opened.client, JSON.stringify(opened))
+  assert.ok(opened.caretShown, JSON.stringify(opened))
+  const release = (path) =>
+    app.evaluate(
+      (_electron, path) => globalThis.chunkGates[path].release(),
+      path,
+    )
+  await release(held[0])
+  await page.waitForTimeout(500)
+  await release(held[1])
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(
+        '.rich-pane .hibi-formatted .mermaid-diagram svg',
+      ).length === 2,
+  )
+  let drawn = await place()
+  for (let read = 0; read < 20; read++) {
+    await page.waitForTimeout(100)
+    const now = await place()
+    if (JSON.stringify(now) === JSON.stringify(drawn) && read >= 5) break
+    drawn = now
+  }
+  t.diagnostic(JSON.stringify({ drawn }))
+  // The drawn note is taller than the pane, so it could have scrolled.
+  assert.ok(drawn.height > drawn.client + 100, JSON.stringify(drawn))
+  assert.deepEqual(
+    { top: drawn.top, head: drawn.head, focused: drawn.focused },
+    { top: 0, head: end, focused: true },
+  )
+})

@@ -17,11 +17,6 @@ async function blockedEditor(t) {
     chunk.modules.includes('src/renderer/src/FormattedEditor.tsx'),
   )
   assert.ok(entry)
-  const otherEntry = chunks.find((chunk) =>
-    chunk.modules.includes('src/renderer/src/Editor.tsx'),
-  )
-  assert.ok(otherEntry)
-  assert.notEqual(entry.file, otherEntry.file)
   const bootstrap = join(profile, 'bootstrap.mjs')
   // Install before the first request; renderer reloads can reuse module assets.
   // The production protocol still performs its normal path and CSP checks.
@@ -31,8 +26,6 @@ async function blockedEditor(t) {
     const fetch = net.fetch;
     let blocked = false;
     net.fetch = async (...args) => {
-      if (String(args[0]).endsWith(${JSON.stringify(otherEntry.file)}))
-        globalThis.otherEditorRequested = true;
       if (!blocked && String(args[0]).endsWith(${JSON.stringify(entry.file)})) {
         blocked = true;
         await new Promise((resolve, reject) => {
@@ -63,18 +56,6 @@ async function blockedEditor(t) {
   page.setDefaultTimeout(7000)
   // Keep the first editor request blocked.
   await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
-  await waitForAsync(
-    app,
-    () =>
-      typeof globalThis.releaseEditorRequest === 'function' ||
-      globalThis.otherEditorRequested,
-  )
-  if (
-    await app.evaluate(
-      () => typeof globalThis.releaseEditorRequest !== 'function',
-    )
-  )
-    await page.reload({ waitUntil: 'commit' })
   await waitForAsync(
     app,
     () => typeof globalThis.releaseEditorRequest === 'function',

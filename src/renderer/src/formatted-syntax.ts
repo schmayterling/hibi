@@ -890,13 +890,13 @@ export function formattedSyntax(
   return {
     extension: [
       field,
-      keepRead,
       formattedBlockParser.of((state) =>
         Object.assign(syntax.chunkedFor(state).scan.configure({}), {
           parseInline: () => [],
         }),
       ),
       driver(syntax, options),
+      keepRead,
     ],
     tree: (state) => state.field(field).tree,
     parser: (state) => syntax.chunkedFor(state).full,

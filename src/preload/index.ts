@@ -396,6 +396,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(MEDIA_CHANNELS.resolve, source, revision, request),
     cancelDocumentMedia: (request) =>
       ipcRenderer.invoke(MEDIA_CHANNELS.cancel, request),
+    refreshRemoteImage: (source) =>
+      ipcRenderer.invoke(MEDIA_CHANNELS.refreshRemote, source),
     onDocumentMediaScopeChanged: (callback) =>
       subscribe(MEDIA_CHANNELS.scopeChanged, callback),
     openDroppedFile: (file, includeEntries = true) =>

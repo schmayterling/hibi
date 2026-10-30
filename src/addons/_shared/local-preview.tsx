@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import { withCachedImages } from '../../renderer/src/document-media'
 import { errorMessage } from '../../shared/errors'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -79,7 +80,7 @@ export function localPreview(
       }
     }, [value, enabled, document.id])
     useEffect(() => {
-      if (host.current) host.current.innerHTML = result?.html ?? ''
+      host.current?.replaceChildren(withCachedImages(result?.html ?? ''))
     }, [result])
     return (
       <div className="format-preview">

@@ -8,8 +8,14 @@ import {
 import type { SyntaxNodeRef } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import type { DocumentMedia } from '../../../shared/media.ts'
-import { observeDocumentMedia } from '../document-media.ts'
-import { documentRuntime } from '../document-runtime.ts'
+import { menus } from '../../../ui/menu-store.ts'
+import type { MenuItem } from '../../../ui/menus'
+import {
+  observeDocumentMedia,
+  refreshRemoteImage,
+  remoteImageSource,
+} from '../document-media.ts'
+import type { EditorActionsRequest } from '../editor-interactions'
 import {
   type FormattedContribution,
   formattedDocument,
@@ -44,48 +50,6 @@ export function imageOf(state: EditorState, node: SyntaxNodeRef) {
     title: title ? text(title.from + 1, title.to - 1) : '',
     label: { from: node.from + 2, to: close.from },
   }
-}
-
-/**
- * Loaded remote images each open tab has drawn, most recent last. Remote
- * image requests skip the HTTP cache, so holding an image keeps it in the
- * page's memory: drawn again after scrolling back or switching tabs, it shows
- * without another download. A tab lets go of its images when it closes.
- */
-const held = new Map<string, Map<string, HTMLImageElement>>()
-/** At most this many per tab, so a note full of remote images stays bounded. */
-const HELD_PER_TAB = 200
-let watching = false
-
-/** Holds a destroyed widget's loaded remote image for its tab; false if it is not one. */
-function hold(view: EditorView, media: Element) {
-  const { tabId } = view.state.facet(formattedDocument)
-  if (
-    !tabId ||
-    !(media instanceof HTMLImageElement) ||
-    !media.complete ||
-    !media.naturalWidth ||
-    !/^https:/i.test(media.src)
-  )
-    return false
-  if (!watching) {
-    watching = true
-    // The runtime drops a closed tab's session, and its images go with it.
-    documentRuntime.subscribeCatalog(() => {
-      for (const id of held.keys())
-        if (!documentRuntime.session(id)) held.delete(id)
-    })
-  }
-  let images = held.get(tabId)
-  if (!images) {
-    images = new Map()
-    held.set(tabId, images)
-  }
-  images.delete(media.src)
-  images.set(media.src, media)
-  const [oldest = ''] = images.keys()
-  if (images.size > HELD_PER_TAB) images.delete(oldest)
-  return true
 }
 
 /** A drawn widget's media resolution, rebound when the note's revision changes. */
@@ -208,9 +172,8 @@ export class MediaWidget extends WidgetType {
   }
   override destroy(dom: HTMLElement) {
     const media = dom.firstElementChild
+    if (media instanceof HTMLElement) clear(media)
     const entry = bindings.get(dom)
-    if (media instanceof HTMLElement && !(entry && hold(entry.view, media)))
-      clear(media)
     if (!entry) return
     drawn.get(entry.view)?.delete(entry.binding)
     // A replacement widget in the same update reuses the resolved media.
@@ -253,6 +216,47 @@ const revisions = ViewPlugin.fromClass(
   },
 )
 
+/** Right-clicking a remote image offers to fetch it again, first among the editor's actions. */
+const refreshMenu = ViewPlugin.fromClass(
+  class {
+    view: EditorView
+    scope = menus.scope(() => {})
+    constructor(view: EditorView) {
+      this.view = view
+      view.dom.addEventListener('contextmenu', this.context, true)
+    }
+    context = (event: MouseEvent) => {
+      const image =
+        event.target instanceof HTMLImageElement ? event.target : null
+      const source = image && remoteImageSource(image)
+      if (!image || !source || (event.ctrlKey && event.metaKey)) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      const { clientX: x, clientY: y } = event
+      const items: MenuItem[] = [
+        {
+          id: 'refresh-image',
+          label: 'Refresh image',
+          onSelect: () => refreshRemoteImage(source),
+        },
+      ]
+      const request = new CustomEvent<EditorActionsRequest>(
+        'hibi:editor-actions-request',
+        {
+          cancelable: true,
+          detail: { position: this.view.posAtDOM(image), x, y, items },
+        },
+      )
+      if (this.view.contentDOM.dispatchEvent(request))
+        this.scope.api.open({ label: 'Image actions', anchor: { x, y }, items })
+    }
+    destroy() {
+      this.view.dom.removeEventListener('contextmenu', this.context, true)
+      this.scope.dispose()
+    }
+  },
+)
+
 const marker = { class: 'hibi-lp-marker' }
 
 /**
@@ -262,7 +266,7 @@ const marker = { class: 'hibi-lp-marker' }
 export const contribution: FormattedContribution = {
   id: 'core.images',
   feature: 'core.images',
-  extension: revisions,
+  extension: [revisions, refreshMenu],
   views: [
     {
       nodes: ['Image'],

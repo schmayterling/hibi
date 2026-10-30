@@ -13,6 +13,39 @@ const entries = new Map<string, Entry>()
 let unsubscribe: (() => void) | undefined
 let unsubscribeScope: (() => void) | undefined
 
+const REMOTE_IMAGE = 'app://hibi/remote-image?'
+/** Refreshed remote images, which take a new address so the page draws the new copy. */
+const refreshes = new Map<string, number>()
+
+/** The address the main process serves a remote image at, from the note's image cache. */
+export const remoteImageUrl = (source: string) =>
+  `${REMOTE_IMAGE}src=${encodeURIComponent(source)}${refreshes.has(source) ? `&refresh=${refreshes.get(source)}` : ''}`
+
+/** The remote source an image shows, or null for any other image. */
+export const remoteImageSource = (image: HTMLImageElement) =>
+  image.src.startsWith(REMOTE_IMAGE)
+    ? new URL(image.src).searchParams.get('src')
+    : null
+
+/** Fetches a remote image again now, then draws the new copy wherever it shows. */
+export async function refreshRemoteImage(source: string) {
+  await window.hibi.refreshRemoteImage(source)
+  refreshes.set(source, (refreshes.get(source) ?? 0) + 1)
+  for (const image of document.images)
+    if (remoteImageSource(image) === source) image.src = remoteImageUrl(source)
+}
+
+/** Sanitized HTML ready to show, its remote images drawn from the image cache. */
+export function withCachedImages(html: string) {
+  const template = document.createElement('template')
+  template.innerHTML = html
+  for (const image of template.content.querySelectorAll('img')) {
+    const source = image.getAttribute('src') ?? ''
+    if (/^https:\/\//i.test(source)) image.src = remoteImageUrl(source)
+  }
+  return template.content
+}
+
 function resolve(entry: Entry) {
   const generation = ++entry.generation
   // A node removed in the same update must never start native I/O.
@@ -50,12 +83,14 @@ export function observeDocumentMedia(
   revision: number,
   listener: (media: DocumentMedia | null) => void,
 ) {
-  // Remote images load directly; only local media needs the main process.
   if (
     /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(source) ||
     /^https:\/\//i.test(source)
   ) {
-    listener({ kind: 'image', url: source })
+    listener({
+      kind: 'image',
+      url: /^https:/i.test(source) ? remoteImageUrl(source) : source,
+    })
     return () => {}
   }
   const key = JSON.stringify([source, revision])

@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify'
 import { FileDown, Play } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { withCachedImages } from '../../renderer/src/document-media'
 import { errorMessage } from '../../shared/errors'
 import { Button, SettingRow } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -76,7 +77,7 @@ function HtmlPreview({ html }: { html: string }) {
   useEffect(() => {
     if (!host.current) return
     // Rendered content is sanitized before crossing this one HTML insertion boundary.
-    host.current.innerHTML = html
+    host.current.replaceChildren(withCachedImages(html))
   }, [html])
   return <div ref={host} className="format-content" />
 }

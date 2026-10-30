@@ -1,0 +1,344 @@
+import { createHash } from 'node:crypto'
+import { constants } from 'node:fs'
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { Readable } from 'node:stream'
+import { downloadUrl } from '../shared/addon-package.ts'
+import { writeText } from './files.ts'
+import { imageMime } from './images.ts'
+import { isPathInside } from './workspace-paths.ts'
+
+const HOUR = 60 * 60 * 1000
+/** A host can't fill the disk: a larger image is neither kept nor shown. */
+const MAX_IMAGE_BYTES = 64 * 1024 * 1024
+/** Past this, a folder's least recently checked images are deleted. */
+const MAX_FOLDER_BYTES = 512 * 1024 * 1024
+/** A host that sends nothing for this long has failed, so a kept copy shows. */
+const QUIET_MS = 15_000
+// The formats a page's images ask for, so hosts send what they would draw.
+const ACCEPT =
+  'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+const READ = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+
+/** Where a note's remote images are kept. */
+export type RemoteImagePlace = {
+  note: string | null
+  workspace: string | null
+  /** The app's data folder, for notes outside the workspace. */
+  data: string
+}
+
+/** What is known about a kept image, stored beside it as JSON. */
+type Kept = {
+  url: string
+  type: string
+  size: number
+  checked: number
+  etag?: string
+  modified?: string
+}
+
+/** A folder Hibi made, never a link to one elsewhere. */
+async function folder(path: string) {
+  await mkdir(path, { mode: 0o700 }).catch(() => {})
+  const stat = await lstat(path).catch(() => null)
+  return stat?.isDirectory() ? path : null
+}
+
+/**
+ * Where `source` is kept: in the workspace's `.hibi/cache/images`, which git
+ * skips, for a note in the workspace; otherwise, or when the workspace's
+ * cache can't be used, in the app's data folder.
+ */
+async function imagePath(source: unknown, place: RemoteImagePlace) {
+  let url: URL
+  try {
+    url = downloadUrl(source)
+  } catch {
+    return null
+  }
+  let directory: string | null = null
+  if (
+    place.workspace &&
+    place.note &&
+    isPathInside(place.workspace, place.note)
+  ) {
+    const metadata = await folder(join(place.workspace, '.hibi'))
+    const cache = metadata && (await folder(join(metadata, 'cache')))
+    if (cache) {
+      await writeFile(join(cache, '.gitignore'), '*\n', { flag: 'wx' }).catch(
+        () => {},
+      )
+      directory = await folder(join(cache, 'images'))
+    }
+  }
+  directory ??= await folder(join(place.data, 'image-cache'))
+  const name = createHash('sha256').update(url.href).digest('hex')
+  return directory ? { url, path: join(directory, name) } : null
+}
+
+async function readKept(path: string, url: string): Promise<Kept | null> {
+  try {
+    const [text, stat] = await Promise.all([
+      readFile(`${path}.json`, { encoding: 'utf8', flag: READ }),
+      lstat(path),
+    ])
+    const kept = JSON.parse(text) as Kept
+    return kept.url === url &&
+      /^image\/[\w.+-]+$/.test(kept.type) &&
+      Number.isFinite(kept.checked) &&
+      typeof (kept.etag ?? '') === 'string' &&
+      typeof (kept.modified ?? '') === 'string' &&
+      stat.isFile() &&
+      stat.size === kept.size
+      ? kept
+      : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Downloads `url` to `path`, or learns from `kept`'s validators that it has
+ * not changed. Requests carry no cookies, skip Chromium's own cache, and
+ * follow at most five redirects, each to an HTTPS address.
+ */
+async function download(
+  path: string,
+  url: URL,
+  kept: Kept | null,
+  fetch: typeof globalThis.fetch,
+): Promise<Kept> {
+  const quiet = new AbortController()
+  const stopped = new Promise<never>((_resolve, reject) =>
+    quiet.signal.addEventListener('abort', () => reject(quiet.signal.reason), {
+      once: true,
+    }),
+  )
+  stopped.catch(() => {})
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const wait = <T>(operation: Promise<T>) => {
+    clearTimeout(timer)
+    timer = setTimeout(() => quiet.abort(), QUIET_MS)
+    return Promise.race([operation, stopped])
+  }
+  try {
+    let target = url
+    for (let redirects = 0; ; redirects++) {
+      const response = await wait(
+        fetch(target, {
+          signal: quiet.signal,
+          redirect: 'manual',
+          credentials: 'omit',
+          cache: 'no-store',
+          headers: {
+            Accept: ACCEPT,
+            ...(kept?.etag ? { 'If-None-Match': kept.etag } : {}),
+            ...(kept?.modified ? { 'If-Modified-Since': kept.modified } : {}),
+          },
+        }),
+      )
+      const location = response.headers.get('location')
+      if (
+        location &&
+        redirects < 5 &&
+        [301, 302, 303, 307, 308].includes(response.status)
+      ) {
+        await response.body?.cancel()
+        target = downloadUrl(new URL(location, target).href)
+        continue
+      }
+      const etag = response.headers.get('etag')
+      const modified = response.headers.get('last-modified')
+      const validators = {
+        ...(etag && etag.length <= 1024 ? { etag } : {}),
+        ...(modified && modified.length <= 1024 ? { modified } : {}),
+      }
+      if (response.status === 304 && kept) {
+        await response.body?.cancel()
+        const checked = { ...kept, ...validators, checked: Date.now() }
+        await writeText(`${path}.json`, JSON.stringify(checked))
+        return checked
+      }
+      const length = Number(response.headers.get('content-length'))
+      if (!response.ok || !response.body || length > MAX_IMAGE_BYTES) {
+        await response.body?.cancel()
+        throw new Error(`The image host answered ${response.status}.`)
+      }
+      const declared = /^image\/[\w.+-]+$/i
+        .exec(
+          response.headers.get('content-type')?.split(';')[0]?.trim() ?? '',
+        )?.[0]
+        .toLowerCase()
+      const reader = response.body.getReader()
+      let size = 0
+      let head = Buffer.alloc(0)
+      let type = ''
+      // The image replaces the kept one only once all of it is here.
+      await writeText(
+        path,
+        (async function* () {
+          for (;;) {
+            const { done, value } = await wait(reader.read())
+            if (done) break
+            size += value.length
+            if (size > MAX_IMAGE_BYTES)
+              throw new Error('The image is too large to keep.')
+            if (head.length < 4096)
+              head = Buffer.concat([head, value.subarray(0, 4096)])
+            yield value
+          }
+          type = imageMime(head) ?? declared ?? ''
+          if (
+            !type ||
+            !size ||
+            (length &&
+              !response.headers.get('content-encoding') &&
+              size !== length)
+          )
+            throw new Error('The image did not arrive.')
+        })(),
+      )
+      const stored = {
+        url: url.href,
+        type,
+        size,
+        checked: Date.now(),
+        ...validators,
+      }
+      await writeText(`${path}.json`, JSON.stringify(stored))
+      return stored
+    }
+  } finally {
+    clearTimeout(timer)
+    quiet.abort()
+  }
+}
+
+/** Each kept image's latest check, which concurrent draws of it share. */
+const checks = new Map<string, Promise<Kept | null>>()
+
+/**
+ * The kept copy at `path`, fetched again when it is a day old or `force`
+ * asks. When the host can't be reached or refuses, the last copy stays.
+ */
+function check(
+  { url, path }: { url: URL; path: string },
+  force: boolean,
+  fetch: typeof globalThis.fetch,
+) {
+  const running = checks.get(path)
+  if (running && !force) return running
+  const current: Promise<Kept | null> = (async () => {
+    await running
+    const kept = await readKept(path, url.href)
+    const age = Date.now() - (kept?.checked ?? 0)
+    if (kept && !force && age >= 0 && age < 24 * HOUR) return kept
+    try {
+      const fetched = await download(path, url, force ? null : kept, fetch)
+      void prune(dirname(path))
+      return fetched
+    } catch {
+      return kept
+    }
+  })().finally(() => {
+    if (checks.get(path) === current) checks.delete(path)
+  })
+  checks.set(path, current)
+  return current
+}
+
+const pruned = new Map<string, number>()
+
+/**
+ * At most hourly, deletes a folder's least recently checked images past its
+ * size, and what interrupted downloads left.
+ */
+async function prune(directory: string) {
+  if (Date.now() - (pruned.get(directory) ?? 0) < HOUR) return
+  pruned.set(directory, Date.now())
+  try {
+    const images: { name: string; size: number; checked: number }[] = []
+    // One file at a time, so saves never wait behind the folder.
+    for (const name of await readdir(directory)) {
+      const stat = await lstat(join(directory, name)).catch(() => null)
+      if (name.endsWith('.tmp') && stat && Date.now() - stat.mtimeMs > HOUR)
+        await rm(join(directory, name), { force: true })
+      if (!/^[\da-f]{64}$/.test(name)) continue
+      const about = await lstat(join(directory, `${name}.json`)).catch(
+        () => null,
+      )
+      images.push({
+        name,
+        size: stat?.size ?? 0,
+        checked: about?.mtimeMs ?? 0,
+      })
+    }
+    let total = images.reduce((sum, image) => sum + image.size, 0)
+    images.sort((left, right) => left.checked - right.checked)
+    for (const { name, size } of images) {
+      if (total <= MAX_FOLDER_BYTES) break
+      total -= size
+      await rm(join(directory, `${name}.json`), { force: true })
+      await rm(join(directory, name), { force: true })
+    }
+  } catch {
+    /* A later download prunes again. */
+  }
+}
+
+/**
+ * A remote image for the app's pages: the kept copy while it is under a day
+ * old, else what its host sends now, which is kept. Offline, or when the host
+ * fails, the last copy shows; with none, the image fails to load.
+ */
+export async function remoteImageResponse(
+  source: unknown,
+  place: RemoteImagePlace,
+  fetch: typeof globalThis.fetch,
+): Promise<Response> {
+  const image = await imagePath(source, place)
+  const kept = image && (await check(image, false, fetch))
+  const file =
+    image &&
+    kept &&
+    (await open(image.path, READ | (constants.O_NONBLOCK ?? 0)).catch(
+      () => null,
+    ))
+  const stat = file && (await file.stat().catch(() => null))
+  if (!kept || !file || !stat?.isFile()) {
+    await file?.close()
+    return new Response(null, { status: 404 })
+  }
+  return new Response(
+    Readable.toWeb(file.createReadStream()) as ReadableStream<Uint8Array>,
+    {
+      headers: {
+        'Content-Type': kept.type,
+        'Content-Length': String(stat.size),
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy':
+          "sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+      },
+    },
+  )
+}
+
+/** Fetches a remote image again now, whatever its age; a failure keeps the copy. */
+export async function refreshRemoteImage(
+  source: unknown,
+  place: RemoteImagePlace,
+  fetch: typeof globalThis.fetch,
+) {
+  const image = await imagePath(source, place)
+  if (image) await check(image, true, fetch)
+}

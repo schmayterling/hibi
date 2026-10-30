@@ -192,6 +192,7 @@ import {
   openRemoteDocument,
 } from './links'
 import { LocalDiagnostics } from './local-diagnostics/runtime'
+import { manualFetch } from './manual-fetch'
 import {
   attachMedia,
   documentMedia,
@@ -206,6 +207,7 @@ import {
   observeKnownWorkspaces,
   setKnownWorkspace,
 } from './recent-workspaces'
+import { refreshRemoteImage, remoteImageResponse } from './remote-images'
 import {
   CONTENT_SECURITY_POLICY,
   isTrustedRendererUrl,
@@ -858,6 +860,13 @@ async function readAfterFileOperation<T>(
   return read(window)
 }
 
+/** The current note's remote images are kept with its workspace, or else with the app. */
+const remoteImagePlace = () => ({
+  note: getDocumentPath(),
+  workspace: workspaceRoot(),
+  data: app.getPath('userData'),
+})
+
 function serveAsset(request: Request): Promise<Response> {
   return localDiagnostics.observeAsset(request.url, () =>
     serveAssetResponse(request),
@@ -873,6 +882,12 @@ async function serveAssetResponse(request: Request): Promise<Response> {
       parsed.pathname.startsWith('/document-media/')
     )
       return await serveDocumentMedia(request)
+    if (parsed.hostname === 'hibi' && parsed.pathname === '/remote-image')
+      return await remoteImageResponse(
+        parsed.searchParams.get('src'),
+        remoteImagePlace(),
+        manualFetch,
+      )
     const isAddon = parsed.pathname.startsWith('/installed-addons/')
     const path = isAddon
       ? await installedAsset(request.url)
@@ -1555,10 +1570,10 @@ if (!app.requestSingleInstanceLock()) {
         event.preventDefault(),
       )
 
-      // App pages are app://hibi, so every https image is cross-site. Image
-      // hosts get no cookies or cache validators to follow a reader with, so
-      // remote images download again instead of coming from the cache, and
-      // don't show offline.
+      // App pages are app://hibi, so every https image is cross-site. Notes'
+      // remote images come from Hibi's image cache; images loaded straight
+      // from a host give it no cookies or cache validators to follow a reader
+      // with.
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: ['https://*/*'] },
         ({ resourceType, requestHeaders }, callback) =>
@@ -2294,6 +2309,10 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         if (typeof request === 'string' && request.length <= 128)
           documentMedia.cancel(request)
+      })
+      handle(MEDIA_CHANNELS.refreshRemote, (event, source: unknown) => {
+        trustedWindow(event)
+        return refreshRemoteImage(source, remoteImagePlace(), manualFetch)
       })
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),

@@ -12,13 +12,9 @@ import {
 } from './document'
 import { runFileDialog } from './file-operation-dialog'
 import { writeText } from './files'
-import {
-  documentMediaPath,
-  imageSources,
-  readDocumentImage,
-  remoteImageRequestHeaders,
-  withoutSetCookie,
-} from './images'
+import { documentMediaPath, imageSources, readDocumentImage } from './images'
+import { manualFetch } from './manual-fetch'
+import { remoteImageResponse } from './remote-images'
 import { workspaceRoot } from './workspace'
 
 const MAX_PRINT_HTML = 64 * 1024 * 1024
@@ -42,7 +38,11 @@ export async function readPdfImage(source: unknown, revision: unknown) {
     : null
 }
 
-async function renderPdf(html: string, owner: BrowserWindow) {
+async function renderPdf(
+  html: string,
+  owner: BrowserWindow,
+  note: string | null,
+) {
   const url = `hibi-print://${randomUUID()}/`
   // Electron owns sessions for the app's lifetime. Reuse one in-memory partition,
   // but release its page, protocol and listeners after every print.
@@ -68,17 +68,13 @@ async function renderPdf(html: string, owner: BrowserWindow) {
           ),
       }),
     )
-    // Image hosts get no cookies or cache validators and keep no cookies
-    // between exports, as in the app's own session.
-    partition.webRequest.onBeforeSendHeaders(
-      { urls: ['https://*/*'] },
-      ({ requestHeaders }, callback) =>
-        callback({ requestHeaders: remoteImageRequestHeaders(requestHeaders) }),
-    )
-    partition.webRequest.onHeadersReceived(
-      { urls: ['https://*/*'] },
-      ({ responseHeaders = {} }, callback) =>
-        callback({ responseHeaders: withoutSetCookie(responseHeaders) }),
+    // Remote images come from the note's image cache, as in the app.
+    partition.protocol.handle('https', (request) =>
+      remoteImageResponse(
+        request.url,
+        { note, workspace: workspaceRoot(), data: app.getPath('userData') },
+        manualFetch,
+      ),
     )
     partition.on('will-download', denyDownload)
     partition.protocol.handle(
@@ -152,9 +148,8 @@ async function renderPdf(html: string, owner: BrowserWindow) {
     app.removeListener('before-quit', cancel)
     if (window && !window.isDestroyed()) window.destroy()
     partition.protocol.unhandle('hibi-print')
+    partition.protocol.unhandle('https')
     partition.webRequest.onBeforeRequest(null)
-    partition.webRequest.onBeforeSendHeaders(null)
-    partition.webRequest.onHeadersReceived(null)
     partition.setPermissionCheckHandler(null)
     partition.setPermissionRequestHandler(null)
     partition.removeListener('will-download', denyDownload)
@@ -192,6 +187,6 @@ export async function exportPdf(
     hasOpenDocumentPath(await realpath(path).catch(() => path))
   )
     throw new Error('Choose a different file name to keep the open document.')
-  await writeText(path, await renderPdf(html, window))
+  await writeText(path, await renderPdf(html, window, note))
   return path
 }

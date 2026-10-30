@@ -256,6 +256,8 @@ export type DesktopApi = {
     request: string,
   ) => Promise<import('./media').DocumentMediaResolution | null>
   cancelDocumentMedia: (request: string) => Promise<void>
+  /** Fetches a remote image again now, keeping the cached copy if that fails. */
+  refreshRemoteImage: (source: string) => Promise<void>
   onDocumentMediaScopeChanged: (
     callback: (revision: number) => void,
   ) => () => void

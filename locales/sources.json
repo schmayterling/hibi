@@ -6084,6 +6084,9 @@
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
   ],
+  "a012994d9241": [
+    "src/main/document.ts"
+  ],
   "34f17c8d67af": [
     "src/main/import-files.ts"
   ],

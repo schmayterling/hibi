@@ -138,6 +138,7 @@ import {
   formattedFollowLink,
   formattedRefresh,
   formattedRenderInputs,
+  opensContextMenu,
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedReferences } from './formatted-references'
@@ -488,20 +489,10 @@ function isolateFeatures(
 // only after the menu opens: the menu then acts there and stays open. Table
 // cells' editors take it too.
 const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
-  // macOS opens the menu on a Control+click too.
-  const control =
-    event.button === 0 &&
-    event.ctrlKey &&
-    !event.metaKey &&
-    !event.shiftKey &&
-    /Mac/.test(navigator.platform)
   const widget =
     event.target instanceof Element &&
     event.target.closest('[contenteditable="false"]')
-  if (
-    (event.button !== 2 && !control) ||
-    (widget && view.contentDOM.contains(widget))
-  )
+  if (!opensContextMenu(event) || (widget && view.contentDOM.contains(widget)))
     return null
   const pressed = view.posAtCoords({
     x: event.clientX,
@@ -511,7 +502,8 @@ const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
   const { from, to } = view.state.selection.main
   // A press in the selection keeps it.
   if (from < to && pressed >= from && pressed <= to) {
-    if (!control) return null
+    // A right press keeps it by itself; a macOS Control+click does not.
+    if (event.button === 2) return null
     // A click collapses it on release; this keeps it. Focused now,
     // the editor does not select it again on release either, as it
     // does after taking focus.

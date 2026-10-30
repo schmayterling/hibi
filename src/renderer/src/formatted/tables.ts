@@ -39,6 +39,7 @@ import {
   formattedRenderInputs,
   formattedSyntaxTree,
   formattedViews,
+  opensContextMenu,
 } from '../formatted-contributions.ts'
 import { blockAt } from '../formatted-toolbar-state.ts'
 import {
@@ -2118,10 +2119,12 @@ class TableView {
    */
   private press = (event: MouseEvent) => {
     const view = this.editing?.editor.view
-    // A right press in a cell not edited leaves the caret, which the page
-    // would move only after the editor actions menu opened, closing it. The
-    // menu acts at the press; the editor takes focus as from any press.
-    if (event.button === 2 && !view?.dom.contains(event.target as Node)) {
+    // A right press (or macOS Control+click) in a cell not edited leaves the
+    // caret, which the page would move only after the editor actions menu
+    // opened, closing it. The menu acts at the press; the editor takes focus
+    // as from any press.
+    if (opensContextMenu(event)) {
+      if (view?.dom.contains(event.target as Node)) return
       event.preventDefault()
       if (!this.view.dom.contains(document.activeElement)) this.view.focus()
       return
@@ -2148,7 +2151,12 @@ class TableView {
    * selects the clicked cell; from a cell it extends, as a shift-click does.
    */
   private select = (event: MouseEvent) => {
-    if (event.button !== 0 || !this.current || !writable(this.view.state))
+    if (
+      event.button !== 0 ||
+      opensContextMenu(event) ||
+      !this.current ||
+      !writable(this.view.state)
+    )
       return
     if (this.handle) {
       event.preventDefault()

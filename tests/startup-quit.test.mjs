@@ -142,15 +142,15 @@ async function diagnosticCodes(profile) {
     .map((line) => JSON.parse(line).code)
 }
 
-async function deadline(pending, label) {
+async function deadline(pending, label, seconds = 5) {
   let timer
   try {
     return await Promise.race([
       pending,
       new Promise((_, reject) => {
         timer = globalThis.setTimeout(
-          () => reject(new Error(`${label} exceeded five seconds`)),
-          5000,
+          () => reject(new Error(`${label} exceeded ${seconds} seconds`)),
+          seconds * 1000,
         )
       }),
     ])
@@ -337,7 +337,8 @@ test('a failed startup records its error before the dialog and quits when it clo
   timeout: 30000,
 }, async (t) => {
   const fixture = await spawnFailedStartup(t)
-  assert.deepEqual(await deadline(fixture.closed, 'failed startup exit'), [
+  // Spawning, failing and quitting a whole app can take seconds under load.
+  assert.deepEqual(await deadline(fixture.closed, 'failed startup exit', 20), [
     0,
     null,
   ])

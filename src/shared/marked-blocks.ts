@@ -173,6 +173,20 @@ type SetextFrame = {
 }
 const setextFrames = new WeakMap<Tokenizer, SetextFrame>()
 const scanningQuotes = new WeakSet<Tokenizer>()
+// Tokenizers whose quotes keep Marked's own tab handling.
+const untabbedQuotes = new WeakSet<Tokenizer>()
+
+/**
+ * A quote read with Marked's decisions and tab handling, one line at a time
+ * and only as far as it goes: Marked's quote rule first scans the rest of a
+ * lazy extent, which is quadratic for a reader called at every quote.
+ */
+export function readNativeQuote(source: string) {
+  const tokenizer = new BlockTokenizer()
+  new marked.Lexer({ gfm: true, tokenizer })
+  untabbedQuotes.add(tokenizer)
+  return tokenizer.blockquote(source)
+}
 const invalidSetext = /[\r\u2028\u2029]/g
 
 // A candidate beyond custom blocks also belongs to later paragraphs in this
@@ -382,7 +396,7 @@ function readQuote(
     }
     const found = quoteFrames.get(this)
     if (found) adopt(found)
-    else if (scan.tabs) {
+    else if (scan.tabs && !untabbedQuotes.has(this)) {
       release = installQuoteState(this, rows() - chunkLines.length, lastToken())
       state = quoteFrames.get(this)!
       scope = state.scope

@@ -85,6 +85,42 @@ test('quotes that stop early leave the rest of the extent unscanned', () => {
   }
 })
 
+test('alerts read their quote only as far as it goes', () => {
+  // Marked's quote rule scans the rest of a lazy extent before it reads the
+  // first line: for every alert, millions of units here.
+  const rules = new Set([
+    Lexer.rules.block.normal.blockquote.source,
+    Lexer.rules.block.gfm.blockquote.source,
+  ])
+  const exec = RegExp.prototype.exec
+  let units = 0
+  RegExp.prototype.exec = function (text) {
+    if (rules.has(this.source)) units += text.length
+    return exec.call(this, text)
+  }
+  try {
+    for (const unit of [
+      '> [!NOTE]\n> # h\nlazy\n',
+      '> [!tip]-\n> ```\n> c\n> ```\nlazy\n',
+      '> > [!NOTE]\n> > # h\n> lazy\n',
+      '>\t> [!NOTE]\n>\t> # h\n> lazy\n',
+    ]) {
+      const source = unit.repeat(2000)
+      units = 0
+      blockScanCounters.quoteLines = 0
+      const html = parser().parse(source)
+      assert.equal(html.match(/class="github-alert"/g)?.length, 2000, unit)
+      assert.ok(units < source.length, `${JSON.stringify(unit)}: ${units}`)
+      assert.ok(
+        blockScanCounters.quoteLines < 2000 * 20,
+        `${JSON.stringify(unit)}: ${blockScanCounters.quoteLines}`,
+      )
+    }
+  } finally {
+    RegExp.prototype.exec = exec
+  }
+})
+
 test('empty quote markers retain native lazy-line boundaries', () => {
   for (const first of ['>', '> ', '>  ', ' >', '  > ', '> p']) {
     for (const next of [

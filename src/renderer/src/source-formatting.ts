@@ -1326,9 +1326,14 @@ export function sourceFormatting(
       return inspect().state(id)
     },
     inspect,
-    capture(coords?: { x: number; y: number }) {
+    capture(coords?: { x: number; y: number } | number) {
       const doc = view.state.doc,
-        position = coords ? view.posAtCoords(coords) : null,
+        position =
+          typeof coords === 'number'
+            ? coords
+            : coords
+              ? view.posAtCoords(coords)
+              : null,
         selection =
           position == null
             ? view.state.selection
@@ -1355,11 +1360,12 @@ export function sourceFormatting(
           : target
             ? decodeHTMLStrict(target.href)
             : null
-      const block = !coords && !!selectedBlock(view.state)
+      const block = coords === undefined && !!selectedBlock(view.state)
       return {
         text: view.state.sliceDoc(selection.main.from, selection.main.to),
         /** The destination of the captured link; reference links resolve through the host. */
         href,
+        link: target && link ? { from: link.from, to: link.to } : null,
         insertMarkdown(insert: string) {
           if (!view.dom.isConnected || view.state.doc !== doc || !editable())
             return false

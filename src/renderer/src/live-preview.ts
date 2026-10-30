@@ -454,6 +454,8 @@ type LineInfo = {
   gap: number
   /** The line only holds the space between two blocks. */
   margin: boolean
+  /** Space in px below a code line that the box around its code keeps. */
+  below: number
   /** Classes of contributed containers around the line, whose paint can use them. */
   nest: string[]
 }
@@ -574,6 +576,7 @@ function inline(
         attributes: {},
         gap: 0,
         margin: false,
+        below: 0,
         nest: [],
       }
       lines.set(pos, info)
@@ -1019,20 +1022,24 @@ function inline(
   blocks = noBlocks
   const wrappers: Range<BlockWrapper>[] = []
   // A code block scrolls sideways as one box, inside the indentation and
-  // paint of the quotes and lists around it, which a box around it keeps.
+  // paint of the quotes and lists around it, which a box around it keeps,
+  // with the space below the containers that end with the block.
   for (const { from, to, shown } of codeBlocks.values()) {
     // Wrappers include blocks at their end. Leave the closing fence outside
     // so its hidden box receives the bottom gutter before the next paragraph.
     const end = Math.min(doc.length, Math.max(from + 1, to))
     if (end <= from || shown < 0) continue
     wrappers.push(codeScroll.range(from, end))
-    const info = lines.get(shown)
+    const last = lines.get(doc.lineAt(to).from)
+    // Their paint stops above the space their own containers keep.
+    const info = last?.below ? last : lines.get(shown)
     const style = info?.style.filter(
       (entry) =>
         entry.startsWith('--hibi-indent:') ||
         entry.startsWith('--hibi-paint:') ||
         entry.startsWith('padding-right:'),
     )
+    if (last?.below) style?.push(`padding-bottom: ${last.below}px`)
     if (style?.length)
       wrappers.push(
         BlockWrapper.create({
@@ -1166,7 +1173,10 @@ function containers(
   const paint: string[] = []
   let top = 0,
     bottom = 0,
-    right = 0
+    right = 0,
+    // The padding of the containers around one below its last line, which
+    // lies outside it, as their padding right of it does.
+    below = 0
   for (const container of info.containers) {
     const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
     const shape = blocks.shapes(container)
@@ -1182,11 +1192,12 @@ function containers(
       info.classes.push(shape.class)
       info.nest.push(shape.class)
     }
-    if (shape?.paint) paint.push(shape.paint(left, offset))
+    if (shape?.paint)
+      paint.push(shape.paint(left, offset, `${right}px`, `${below}px`))
     else if (container.name === 'Blockquote') {
       info.classes.push('hibi-lp-quote')
       paint.push(
-        `linear-gradient(var(--border), var(--border)) ${left} ${offset} / 1px calc(100% - ${offset}) no-repeat`,
+        `linear-gradient(var(--border), var(--border)) ${left} ${offset} / 1px calc(100% - ${offset} - ${below}px) no-repeat`,
       )
     }
     if (
@@ -1198,8 +1209,10 @@ function containers(
     const padding = shape?.padding
     if (padding) {
       if (first) top += padding.top ?? 0
-      if (padding.bottom && lastLine(doc, container, layout) === at)
+      if (padding.bottom && lastLine(doc, container, layout) === at) {
         bottom += padding.bottom + innerBottom(container, doc, at)
+        below += padding.bottom
+      }
       right += padding.right ?? 0
     }
     widths.push(
@@ -1214,7 +1227,9 @@ function containers(
       edges?.push([key, `calc(${widths.join(' + ')})`])
   }
   info.gap += top
-  if (bottom) info.style.push(`padding-bottom: ${bottom}px`)
+  // A code line keeps its box's own padding; the space goes below the box.
+  if (info.code !== null) info.below = bottom
+  else if (bottom) info.style.push(`padding-bottom: ${bottom}px`)
   if (right) info.style.push(`padding-right: ${right}px`)
   info.classes.push('hibi-lp-nested')
   info.style.push(`--hibi-indent: calc(${widths.join(' + ')})`)
@@ -2227,7 +2242,8 @@ export function livePreview(
     EditorView.atomicRanges.of(hidden),
     EditorView.atomicRanges.of(runs),
     // Lines the layout hides whole, with the line breaks around them, so the
-    // caret never rests on one.
+    // caret never rests on one; lines hidden from the end of the line above,
+    // as a folded callout's body, with the line break after them.
     EditorView.atomicRanges.of((view) => {
       const { doc } = view.state
       const lines: Range<Decoration>[] = []
@@ -2238,6 +2254,13 @@ export function livePreview(
             lines.push(
               hide.range(Math.max(0, a - 1), Math.min(doc.length, b + 1)),
             )
+          else if (
+            value.spec.block &&
+            !value.spec.widget &&
+            a < b &&
+            doc.lineAt(a).to === a
+          )
+            lines.push(hide.range(a, Math.min(doc.length, b + 1)))
         })
       return Decoration.set(lines, true)
     }),

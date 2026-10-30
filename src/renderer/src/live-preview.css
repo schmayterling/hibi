@@ -180,3 +180,32 @@
   font-style: normal;
   text-decoration: none;
 }
+
+.hibi-link-actions {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 8px;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 16px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-popover);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-ui);
+}
+.hibi-link-destination {
+  max-height: 6em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.hibi-link-buttons {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.hibi-link-buttons .ui-button {
+  flex: 1;
+  padding: 4px 8px;
+}

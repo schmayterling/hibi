@@ -271,10 +271,12 @@ export type FormattedContainer = {
   class?: string
   /**
    * CSS background layers behind the line, from the container's left edge
-   * (`left`) to the line end; `top` is the space above the container's first
-   * line, which lies outside it, and 0 on its other lines. Both are CSS lengths.
+   * (`left`) to `right` before the line end; `top` is the space above the
+   * container's first line and `bottom` the padding of its containers below
+   * its last line, which lie outside it, and both are 0 on its other lines.
+   * All are CSS lengths.
    */
-  paint?: (left: string, top: string) => string
+  paint?: (left: string, top: string, right: string, bottom: string) => string
   /**
    * Space inside the container in px: above its first line, below its last
    * shown line and right of every line. Its first and last blocks' margins

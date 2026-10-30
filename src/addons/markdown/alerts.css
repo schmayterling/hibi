@@ -1,4 +1,4 @@
-blockquote.github-alert {
+:is(blockquote, details).github-alert {
   --alert-color: var(--status-info);
   margin: 1em 0;
   padding: var(--space-3) var(--space-4);
@@ -61,6 +61,20 @@ blockquote.github-alert {
 /* A folded callout's box is as tall below its title as above it. */
 .github-alert > .github-alert-title:has(+ .github-alert-body[hidden]) {
   margin-bottom: 0;
+}
+@media screen {
+  details.github-alert:not([open]) > .github-alert-title {
+    margin-bottom: 0;
+  }
+}
+/* A print cannot open a folded callout, so it shows the body, without the marker. */
+@media print {
+  details.github-alert::details-content {
+    content-visibility: visible;
+  }
+  details.github-alert > .github-alert-title {
+    list-style: none;
+  }
 }
 .github-alert-body > :first-child {
   margin-top: 0;

@@ -434,11 +434,15 @@ test('lost diagnostic credit cannot delay save, canceled close or acknowledged r
         ),
       ]
       foreign.destroy()
-      globalThis.diagnosticBatches = 0
+      globalThis.diagnosticBatches = new Map()
       ipcMain.removeHandler('hibi:local-diagnostics')
       ipcMain.handle('hibi:local-diagnostics', (event, operation, ...args) => {
         if (operation === 'batch') {
-          globalThis.diagnosticBatches++
+          const token = args[0]
+          globalThis.diagnosticBatches.set(
+            token,
+            (globalThis.diagnosticBatches.get(token) ?? 0) + 1,
+          )
           return new Promise(() => {})
         }
         return handler(event, operation, ...args)
@@ -501,8 +505,14 @@ test('lost diagnostic credit cannot delay save, canceled close or acknowledged r
     ),
   )
   assert.equal(recovered.markdown, 'PRIVATE RECOVERED TEXT 雪')
-  assert.equal(await app.evaluate(() => globalThis.diagnosticBatches), 1)
+  // The recovered generation emits its own pre-entry record. Each generation
+  // still holds at most one unacknowledged batch, independently of the old one.
+  await waitForAsync(app, () => globalThis.diagnosticBatches.size === 2)
   await new Promise((resolve) => setTimeout(resolve, 350))
+  assert.deepEqual(
+    await app.evaluate(() => [...globalThis.diagnosticBatches.values()]),
+    [1, 1],
+  )
   const logs = (
     await Promise.all(
       (

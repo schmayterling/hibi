@@ -76,6 +76,7 @@ import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, type RegisteredFlavor, renderMarkdownAsync } from './flavors'
 import { codemirrorFormattedView } from './formatted-engine'
+import { reportRendererFailure } from './local-diagnostics'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
@@ -1381,6 +1382,8 @@ export function useAddons(
       }
       const fail = (error: unknown) => {
         if (disposed) return
+        if (addon.manifest.startup === 'background')
+          reportRendererFailure('BACKGROUND_STARTUP_FAILED', error)
         stop()
         if (mounted.current)
           setSettled((current) => new Map(current).set(id, false))

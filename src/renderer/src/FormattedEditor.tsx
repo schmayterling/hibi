@@ -436,17 +436,18 @@ export function MarkdownEditor({
     if (sourceOutline.reveal(outlineTarget.id))
       handledOutline.current = outlineTarget
   }, [sourceOutline, outlineTarget])
-  const { attachSource, attachRich, attachFiles } = useFormattingToolbar(
-    null,
-    paneMode,
-    focusedPane,
-    disabled || mode !== paneMode,
-    onAttach,
-    focusOwnedByEditor,
-    markdownDocument,
-    format,
-    focused,
-  )
+  const { attachSource, attachRich, attachFiles, editLink } =
+    useFormattingToolbar(
+      null,
+      paneMode,
+      focusedPane,
+      disabled || mode !== paneMode,
+      onAttach,
+      focusOwnedByEditor,
+      markdownDocument,
+      format,
+      focused,
+    )
   // Like the rich editor, a new view takes focus with the caret at the end,
   // unless the user already moved focus or the caret elsewhere.
   const placed = useRef(false)
@@ -653,6 +654,7 @@ export function MarkdownEditor({
                 waitForFont
                 onLink={followLink}
                 onFormatting={attachRich}
+                onEditLink={editLink}
                 sourceExtensions={editorExtensions}
                 showLineNumbers={false}
                 onReady={(status) => setFormattedReady(status === 'ready')}

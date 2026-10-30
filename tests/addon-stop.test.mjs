@@ -53,6 +53,55 @@ test('native cleanup is awaited, bounded, and late rejection stays handled', asy
   assert.equal(timers.size, 0)
 })
 
+test('a failed native stop is reported and cannot cancel the quit', async (t) => {
+  const index = await readFile(
+    new URL('../src/main/index.ts', import.meta.url),
+    'utf8',
+  )
+  const source = index.slice(
+    index.indexOf('let nativeStopping:'),
+    index.indexOf('const openOwnedAddonWindow'),
+  )
+  let handler,
+    attempts = 0,
+    quits = 0
+  const failure = new Error('storage still open')
+  const logs = []
+  t.mock.method(console, 'error', (...args) => logs.push(args))
+  const event = { preventDefault() {} }
+  const app = {
+    on(_name, listener) {
+      handler = listener
+    },
+    quit() {
+      quits++
+      handler(event)
+    },
+  }
+  const pending = new Function(
+    'app',
+    'stopNativeAddons',
+    'globalShortcuts',
+    'background',
+    stripTypeScriptTypes(source) + '; return () => nativeStopping;',
+  )(
+    app,
+    async () => {
+      attempts++
+      throw failure
+    },
+    { clear() {} },
+    { dispose() {} },
+  )
+  handler(event)
+  await pending()
+  await new Promise(setImmediate)
+  // Every window is already closed at will-quit; nothing is left to request a retry.
+  assert.equal(attempts, 1)
+  assert.equal(quits, 1)
+  assert.ok(logs.some((args) => args.includes(failure)))
+})
+
 test('quit resumes after a never-resolving native stop reaches its deadline', async (t) => {
   const index = await readFile(
     new URL('../src/main/index.ts', import.meta.url),
@@ -117,6 +166,7 @@ test('quit resumes after a never-resolving native stop reaches its deadline', as
   assert.equal(prevented, 1)
   timer()
   await pending()
+  await new Promise(setImmediate)
   assert.equal(quit, 1)
   assert.equal(cleaned, 2)
 })

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -93,6 +93,163 @@ test('github alert markers survive sanitized site export', async () => {
     exportOptions(),
   )
   assert.doesNotMatch(hostile.pages[0].html, /data-alert|data-fold|onmouseover/)
+})
+
+test('foldable callouts survive sanitized site export as disclosures', () => {
+  const page = (html) =>
+    prepareSite(
+      { name: 'Notes', pages: [{ path: 'README.md', markdown: '', html }] },
+      exportOptions(),
+    ).pages[0].html
+  const html = page(
+    [
+      '<details class="github-alert" data-alert="tip" data-fold="-"><summary class="github-alert-title">Closed tip</summary><div class="github-alert-body"><p>Hidden body.</p></div></details>',
+      '<details class="github-alert" data-alert="note" data-fold="+" open=""><summary class="github-alert-title">Open note</summary><div class="github-alert-body"><p>Shown body.</p></div></details>',
+    ].join('\n'),
+  )
+  assert.match(
+    html,
+    /<details class="github-alert" data-alert="tip" data-fold="-"><summary class="github-alert-title">Closed tip<\/summary>/,
+  )
+  assert.match(
+    html,
+    /<details class="github-alert" open data-alert="note" data-fold="\+"><summary class="github-alert-title">Open note<\/summary>/,
+  )
+  const hostile = page(
+    '<details class="github-alert" data-alert="<script>" data-fold="x" ontoggle="window.attack=true" open>fake</details>',
+  )
+  assert.doesNotMatch(hostile, /data-alert|data-fold|ontoggle/)
+  assert.match(hostile, /<details class="github-alert" open/)
+})
+
+test('workspace HTML export shows foldable callouts as disclosures, open for +', {
+  timeout: 60000,
+}, async (t) => {
+  const temp = await mkdtemp(join(tmpdir(), 'hibi-alert-folds-'))
+  const root = join(temp, 'notes')
+  await mkdir(root)
+  const output = join(temp, 'doc.html')
+  await writeFile(
+    join(root, 'folds.md'),
+    [
+      '> [!TIP]- Closed tip',
+      '> Hidden tip body.',
+      '',
+      '> [!NOTE]+ Open note',
+      '> Shown note body.',
+      '>',
+      '> > [!WARNING]- Nested warning',
+      '> > Nested warning body.',
+      '',
+      '> [!CAUTION] Fixed caution',
+      '> Fixed caution body.',
+      '',
+    ].join('\n'),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(temp, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(temp, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(20000)
+  await waitForDocumentEditor(app, page)
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await app.evaluate(
+    ({ dialog }, { root, output }) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [root],
+      })
+      dialog.showSaveDialog = async () => ({
+        canceled: false,
+        filePath: output,
+      })
+      dialog.showMessageBox = async () => ({ response: 1 })
+    },
+    { root, output },
+  )
+  await pressShortcut(app, `${mod}+Shift+o`)
+  await page.getByRole('button', { name: /new workspace file/i }).waitFor()
+  await pressShortcut(app, `${mod}+k`)
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('export workspace to html')
+  await page.getByRole('option').first().click()
+  await page
+    .getByRole('dialog', { name: /^export workspace$/i })
+    .getByRole('button', { name: /^export$/i })
+    .click()
+  await page.getByText(/exported 1 page\b/i).waitFor()
+  const next = app.waitForEvent('window')
+  await app.evaluate(({ BrowserWindow }, output) => {
+    const window = new BrowserWindow({
+      show: false,
+      focusable: false,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        backgroundThrottling: false,
+      },
+    })
+    void window.loadFile(output)
+  }, output)
+  const site = await next
+  const callout = (type) => site.locator(`.github-alert[data-alert="${type}"]`)
+  await callout('tip').waitFor({ state: 'attached' })
+  const shape = (type) =>
+    callout(type).evaluate((element) => ({
+      tag: element.localName,
+      open: element.open ?? null,
+      title: element.querySelector(':scope > .github-alert-title')?.localName,
+      bar: getComputedStyle(element).borderLeftWidth,
+    }))
+  assert.deepEqual(await shape('tip'), {
+    tag: 'details',
+    open: false,
+    title: 'summary',
+    bar: '3px',
+  })
+  assert.deepEqual(await shape('note'), {
+    tag: 'details',
+    open: true,
+    title: 'summary',
+    bar: '3px',
+  })
+  assert.deepEqual(await shape('warning'), {
+    tag: 'details',
+    open: false,
+    title: 'summary',
+    bar: '3px',
+  })
+  assert.deepEqual(await shape('caution'), {
+    tag: 'blockquote',
+    open: null,
+    title: 'p',
+    bar: '3px',
+  })
+  const shown = (text) => site.getByText(text, { exact: true }).isVisible()
+  assert.equal(await shown('Hidden tip body.'), false)
+  assert.equal(await shown('Shown note body.'), true)
+  assert.equal(await shown('Nested warning body.'), false)
+  assert.equal(await shown('Fixed caution body.'), true)
+  // A print shows what folds.
+  await site.emulateMedia({ media: 'print' })
+  assert.equal(await shown('Hidden tip body.'), true)
+  assert.equal(await shown('Nested warning body.'), true)
+  assert.equal(
+    await callout('tip')
+      .locator('summary')
+      .evaluate((summary) => getComputedStyle(summary).listStyleType),
+    'none',
+  )
+  await site.emulateMedia({ media: 'screen' })
+  await callout('tip').locator('summary').click()
+  assert.equal(await shown('Hidden tip body.'), true)
+  await site.close()
 })
 
 it('github alerts edit in rich view, preview in split, and export with markers and theme colors', {

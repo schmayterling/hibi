@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import {
   selectFormattedEngine,
@@ -660,7 +667,11 @@ test('Cancel on one note still opens the other files from Finder', {
   await writeFile(file, 'outside text\n')
   const later = join(notes, 'later.md')
   await writeFile(later, 'later note\n')
-  // One request opens both files, and Cancel answers the note's prompt.
+  // The note's folder under another name; a junction needs no rights on Windows.
+  const linked = join(dirname(notes), 'linked')
+  await symlink(notes, linked, 'junction')
+  // One request names the note twice and opens the other file, and Cancel
+  // answers the note's only prompt.
   await answer(2)
   const done = await replied(app, 'document:external')
   await app.evaluate(
@@ -671,7 +682,7 @@ test('Cancel on one note still opens the other files from Finder', {
         ['electron', 'app', ...paths],
         process.cwd(),
       ),
-    [file, later],
+    [file, join(linked, 'note.md'), later],
   )
   await done()
   await idle()

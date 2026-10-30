@@ -7,7 +7,6 @@ import { textExtrasMarkdown } from './syntax'
 
 const flavor: MarkdownFlavor = {
   ...flavorInfo,
-  serialization: 'block-local',
   export: { extensions: [textExtrasMarkdown], css },
 }
 let stopFormatted: (() => void)[] = []

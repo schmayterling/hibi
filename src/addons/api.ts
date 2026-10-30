@@ -489,23 +489,6 @@ export type MarkdownProjection = {
   serialize: (content: string) => string
   readOnly?: boolean
 }
-/** Host context for a paragraph escaping rule, independent of the editor library. */
-export type MarkdownParagraphRuleContext = {
-  /** Parent node type; table paragraphs receive 'table'. */
-  parentType?: string | null
-  /** Protected literal text, keyed by opaque sentinels. */
-  literals: ReadonlyMap<string, string>
-}
-/** Escape paragraph Markdown in flavor and rule order, before core block-prefix escaping. */
-export type MarkdownParagraphRule = {
-  /** Replace these literal text characters with sentinels during inline rendering. */
-  characters?: string
-  /** Replace only whole sentinels that need escaping; the host restores the rest afterward.
-   * Preserve declared characters, using backslash escapes or HTML entities when needed.
-   * Errors, damaged sentinels, or dropped declared characters abort serialization and saving with the flavor id.
-   */
-  escape: (source: string, ctx: MarkdownParagraphRuleContext) => string
-}
 /** Composable parser contributions. Declare descriptors on Addon.flavors for discovery. */
 export type MarkdownFlavor = {
   id: string
@@ -534,15 +517,8 @@ export type MarkdownFlavor = {
    * formatted contribution. Other flavors and source editing keep working.
    */
   render?: readonly FormattedNodeView[]
-  /** Rules receive rendered Markdown with declared text characters protected by ctx.literals (sentinel to character), including in tables; preserve node markup. */
-  paragraphRules?: readonly MarkdownParagraphRule[]
   /** Verbatim flavors require source editing. Literal fallback is for semantic syntax only. */
   preservation?: SourcePreservation & { fallback: 'source' | 'literal' }
-  /** Opt in only when top-level blocks serialize independently with standard blank-line joining.
-   * Cache context includes index, the previous block, and document attributes.
-   * Omission preserves full-document serialization for existing addons.
-   */
-  serialization?: 'block-local'
   /** Static exports run the same syntax parsers; their HTML is sanitized by the site. */
   export?: {
     extensions?: readonly MarkedExtension[]

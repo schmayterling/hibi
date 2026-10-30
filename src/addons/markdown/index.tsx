@@ -43,7 +43,6 @@ const github: MarkdownFlavor = {
   description:
     'Alerts, footnotes, tables, task lists, strikethrough, and automatic links.',
   detect: () => true,
-  serialization: 'block-local',
   markedOptions: { gfm: true },
   export: {
     extensions: [alertMarkdown, markedGithubFootnote()],
@@ -54,7 +53,6 @@ const github: MarkdownFlavor = {
 
 const obsidian: MarkdownFlavor = {
   ...obsidianInfo,
-  serialization: 'block-local',
   export: { extensions: [obsidianMarkdown] },
 }
 

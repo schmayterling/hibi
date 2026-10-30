@@ -1,17 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import { resolveOwn } from './resolve-own.mjs'
 
-let path
-try {
-  path = fileURLToPath(import.meta.resolve('@electron/notarize'))
-} catch (error) {
-  if (
-    error.code === 'ERR_MODULE_NOT_FOUND' &&
-    process.env.NODE_ENV === 'production'
-  )
-    process.exit(0)
-  throw error
-}
+const path = resolveOwn('@electron/notarize')
 const source = await readFile(path, 'utf8')
 // notarize 2.5.0 never calls promise-retry's retry callback after stapling fails.
 const before = `(0, promise_retry_1.default)(() => (0, staple_1.stapleApp)({ appPath }), {

@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import { resolveOwn } from './resolve-own.mjs'
 
 // CodeMirror view 6.43 gives the space below a block wrapper's lines, such as
 // a code box's scrollbar, to the block after the wrapper. A viewport starting
@@ -7,18 +7,7 @@ import { fileURLToPath } from 'node:url'
 // space to nothing: the note lost the scrollbar's height until the wrapper was
 // drawn again. A block that starts the measured range outside any wrapper now
 // keeps the space above it from when it was measured with what precedes it.
-let path
-try {
-  path = fileURLToPath(import.meta.resolve('@codemirror/view'))
-} catch (error) {
-  // Packaged apps already contain the patched renderer and omit dev dependencies.
-  if (
-    error.code === 'ERR_MODULE_NOT_FOUND' &&
-    process.env.NODE_ENV === 'production'
-  )
-    process.exit(0)
-  throw error
-}
+const path = resolveOwn('@codemirror/view')
 const patches = [
   [
     `                    if (spaceAbove > 0)

@@ -31,6 +31,9 @@ async function open(t, addons) {
     await app.close()
     await rm(root, { recursive: true, force: true })
   })
+  // The app registers its clipboard handler before its first window; an
+  // earlier replacement makes its own registration fail, and with it startup.
+  const page = await app.firstWindow()
   await app.evaluate(({ dialog, shell, ipcMain }, file) => {
     ipcMain.removeHandler('clipboard:write-text')
     ipcMain.handle('clipboard:write-text', (_event, value) => {
@@ -42,7 +45,6 @@ async function open(t, addons) {
       globalThis.openedLinks.push(url)
     }
   }, file)
-  const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
   const editor = await selectFormattedEngine(app, page, 'codemirror')
   await clickMenu(app, 'Open…')

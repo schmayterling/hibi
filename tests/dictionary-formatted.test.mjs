@@ -451,3 +451,35 @@ Footnote [^Happy] here
     assert.equal(await markdown(page), note)
   }
 })
+
+test('in the formatted view a right-click offers the dictionary for the pressed word', {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today\n\nThe zorp is here'
+  const { page, open } = await launch(t, { 'note.md': note })
+  await open('note.md')
+  const formatted = page.locator('.rich-pane .formatted-editor .cm-content')
+  await page
+    .locator('.rich-pane .cm-line', { hasText: 'I am Happy today' })
+    .waitFor()
+  // The caret is elsewhere until the press puts it in the word.
+  await caret(page, note.length)
+  const word = await formatted.evaluate(
+    (element, at) => element.cmTile.root.view.coordsAtPos(at),
+    note.indexOf('Happy') + 2,
+  )
+  await page.mouse.click(word.left, (word.top + word.bottom) / 2, {
+    button: 'right',
+  })
+  const define = page
+    .getByRole('menu', { name: 'Editor actions' })
+    .getByRole('menuitem', { name: /^Define word/ })
+  await define.waitFor()
+  // The menu stays open after the page has moved its caret.
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  await define.click({ timeout: 1000 })
+  await page
+    .getByRole('dialog', { name: 'Define “Happy”' })
+    .getByText('Music makes me feel happy.')
+    .waitFor()
+})

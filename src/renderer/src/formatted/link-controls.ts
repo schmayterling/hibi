@@ -6,6 +6,9 @@ import {
   type ViewUpdate,
 } from '@codemirror/view'
 import { menus } from '../../../ui/menu-store'
+import type { MenuItem } from '../../../ui/menus'
+import { otherPopupOpen } from '../completion-broker'
+import type { EditorActionsRequest } from '../editor-interactions'
 import { formattedSyntaxTree } from '../formatted-contributions'
 import { formattingBefore } from '../formatted-toolbar-state'
 import { readDOMPosition } from '../native-dom-selection'
@@ -188,7 +191,13 @@ export function linkControls(callbacks: Callbacks) {
         const capture = this.linkAt(at)
         // Dismissed actions stay hidden until the caret leaves their link.
         if (capture?.link?.from !== this.dismissed) this.dismissed = null
-        if (!capture?.link || this.dismissed !== null) {
+        if (
+          !capture?.link ||
+          this.dismissed !== null ||
+          // Nor do they cover an open menu.
+          menus.snapshot() ||
+          otherPopupOpen(this.view.contentDOM)
+        ) {
           this.hide()
           return
         }
@@ -284,26 +293,29 @@ export function linkControls(callbacks: Callbacks) {
           Promise.resolve(capture.href).then((href) => {
             if (href) this.act(id, capture, href)
           })
-        this.scope.api.open({
-          label: 'Link actions',
-          anchor: { x, y },
-          items: [
-            {
-              id: 'edit-link',
-              label: 'Edit link…',
-              disabled: readOnly,
-              onSelect: () => this.edit(capture),
-            },
-            { id: 'open-link', label: 'Open link', onSelect: run('open') },
-            { id: 'copy-link', label: 'Copy link', onSelect: run('copy') },
-            {
-              id: 'remove-link',
-              label: 'Remove link',
-              disabled: readOnly,
-              onSelect: run('remove'),
-            },
-          ],
-        })
+        const items: MenuItem[] = [
+          {
+            id: 'edit-link',
+            label: 'Edit link…',
+            disabled: readOnly,
+            onSelect: () => this.edit(capture),
+          },
+          { id: 'open-link', label: 'Open link', onSelect: run('open') },
+          { id: 'copy-link', label: 'Copy link', onSelect: run('copy') },
+          {
+            id: 'remove-link',
+            label: 'Remove link',
+            disabled: readOnly,
+            onSelect: run('remove'),
+          },
+        ]
+        // Addon and editor actions join the link's in the editor's menu.
+        const request = new CustomEvent<EditorActionsRequest>(
+          'hibi:editor-actions-request',
+          { cancelable: true, detail: { position: at, x, y, items } },
+        )
+        if (!this.view.contentDOM.dispatchEvent(request)) return true
+        this.scope.api.open({ label: 'Link actions', anchor: { x, y }, items })
         this.menuOwner = menus.snapshot()?.owner ?? null
         return true
       }

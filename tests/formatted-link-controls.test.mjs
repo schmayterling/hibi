@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -10,10 +10,17 @@ import { clickMenu, pressShortcut } from './keyboard.mjs'
 const note =
   'See [docs](https://old.example "Keep title") here. Bare https://bare.example/path.\n\n| name |\n| --- |\n| [&amp;](https://cell.example) |\n'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-async function open(t) {
+async function open(t, addons) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-link-controls-'))
   const file = join(root, 'note.md')
   await writeFile(file, note)
+  if (addons) {
+    await mkdir(join(root, 'profile'))
+    await writeFile(
+      join(root, 'profile', 'addons.json'),
+      JSON.stringify(addons),
+    )
+  }
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
@@ -535,4 +542,67 @@ test('codemirror link actions show with the caret at a link end', {
     .waitFor()
   await page.keyboard.press('Escape')
   await menu.waitFor({ state: 'hidden' })
+})
+
+test('codemirror link menu holds the editor actions of addons too', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, panel } = await open(t, { dictionary: true })
+  // Lookups never reach the services.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('host-network:get-text')
+    ipcMain.handle('host-network:get-text', () => ({
+      ok: false,
+      code: 'http-status',
+      status: 404,
+    }))
+  })
+  const link = page.getByRole('link', { name: 'docs', exact: true })
+  const menu = page.getByRole('menu', { name: 'Editor actions', exact: true })
+  // The link's actions lead; the addon's follow apart from them.
+  const items = () =>
+    menu
+      .getByRole('menuitem')
+      .evaluateAll((items) =>
+        items.map(
+          (item) => `${item.style.marginTop ? '| ' : ''}${item.textContent}`,
+        ),
+      )
+  const expected = [
+    'Edit link…',
+    'Open link',
+    'Copy link',
+    'Remove link',
+    '| Define word',
+    'Find synonyms',
+    'Add word to dictionary',
+  ]
+  await link.click({ button: 'right' })
+  await menu
+    .getByRole('menuitem', { name: 'Define word', exact: true })
+    .waitFor()
+  assert.deepEqual(await items(), expected)
+  assert.equal(await panel.isVisible(), false)
+  await menu.getByRole('menuitem', { name: 'Copy link', exact: true }).click()
+  await menu.waitFor({ state: 'hidden' })
+  assert.equal(
+    await app.evaluate(() => globalThis.copiedLink),
+    'https://old.example',
+  )
+  // Shift+F10 at the caret opens the same menu, whose keys reach every action.
+  await link.click()
+  await page.keyboard.press('Shift+F10')
+  await menu
+    .getByRole('menuitem', { name: 'Define word', exact: true })
+    .waitFor()
+  assert.deepEqual(await items(), expected)
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await menu.waitFor({ state: 'hidden' })
+  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
+    'https://old.example/',
+  ])
+  await page.keyboard.press('Shift+F10')
+  await menu.getByRole('menuitem', { name: 'Define word', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Define “docs”' }).waitFor()
 })

@@ -2055,6 +2055,34 @@ export function SourceEditor({
               return position != null && followLink(view, position)
             },
           }),
+          // A right-click places the caret at once, which the page would place
+          // only after the menu opens: the menu then acts there and stays open.
+          EditorView.mouseSelectionStyle.of((view, event) => {
+            if (
+              event.button !== 2 ||
+              (event.target instanceof Element &&
+                event.target.closest('[contenteditable="false"]'))
+            )
+              return null
+            const pressed = view.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            })
+            const { from, to } = view.state.selection.main
+            // A press in the selection keeps it.
+            if (
+              pressed === null ||
+              (from < to && pressed >= from && pressed <= to)
+            )
+              return null
+            let at = pressed
+            return {
+              get: () => EditorSelection.single(at),
+              update: (update) => {
+                at = update.changes.mapPos(at)
+              },
+            }
+          }),
           keymap.of([
             { key: 'Ctrl-a', run: sourceCommands.selectAll },
             ...sourceCommands.defaultKeymap,

@@ -685,6 +685,48 @@ function paragraphRule(pattern: RegExp) {
   return interrupt
 }
 
+const definitionRules = new WeakMap<Tokenizer['rules'], Tokenizer['rules']>()
+// CommonMark separates a definition's label, destination and title, and ends
+// it, with spaces or tabs; Marked's rule accepts spaces only.
+const definitionGaps = [
+  [String.raw`\]: *(?:\n[ \t]*)?`, String.raw`\]:[ \t]*(?:\n[ \t]*)?`],
+  [
+    String.raw`(?: +(?:\n[ \t]*)?| *\n[ \t]*)`,
+    String.raw`(?:[ \t]+(?:\n[ \t]*)?|[ \t]*\n[ \t]*)`,
+  ],
+  [String.raw`)? *(?:\n+|$)`, String.raw`)?[ \t]*(?:\n+|$)`],
+] as const
+function withDefinitionRules<T>(tokenizer: Tokenizer, read: () => T): T {
+  const rules = tokenizer.rules
+  let fixed = definitionRules.get(rules)
+  if (!fixed) {
+    const { def } = rules.block
+    // Only Marked's CommonMark rule; pedantic mode keeps its own.
+    fixed = definitionGaps.every(([gap]) => def.source.includes(gap))
+      ? {
+          ...rules,
+          block: {
+            ...rules.block,
+            def: new RegExp(
+              definitionGaps.reduce(
+                (source, [gap, wide]) => source.replace(gap, () => wide),
+                def.source,
+              ),
+              def.flags,
+            ),
+          },
+        }
+      : rules
+    definitionRules.set(rules, fixed).set(fixed, fixed)
+  }
+  tokenizer.rules = fixed
+  try {
+    return read()
+  } finally {
+    tokenizer.rules = rules
+  }
+}
+
 /** Reference titles cannot cross CommonMark paragraph boundaries. */
 export function endsReferenceTitle(
   source: string,
@@ -1365,6 +1407,15 @@ export class BlockTokenizer extends Tokenizer {
   }
 
   override def(source: string, read = Tokenizer.prototype.def) {
+    return withDefinitionRules(this, () =>
+      BlockTokenizer.prototype.readDefinition.call(this, source, read),
+    )
+  }
+
+  private readDefinition(
+    source: string,
+    read: typeof Tokenizer.prototype.def,
+  ): ReturnType<Tokenizer['def']> {
     let token = read.call(this, source)
     const title = token?.title && this.rules.block.def.exec(token.raw)?.[3]
     if (title && token) {

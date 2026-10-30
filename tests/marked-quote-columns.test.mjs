@@ -84,3 +84,31 @@ test('fence bodies remove the opening indentation by column', () => {
           assert.deepEqual(code(markdown.parse(source)), oracle(source), source)
         }
 })
+
+test('reference definitions take tabs between their parts', () => {
+  // CommonMark separates a definition's label, destination and title with
+  // spaces or tabs; Marked's rule took spaces only.
+  for (const definition of [
+    '[a]:\t/u',
+    '[a]: /u\t"t"',
+    '[a]:\t/u\t"t"\t',
+    '[a]: /u\t',
+    '[a]:\n\t/u\n\t"t"',
+  ])
+    for (const prefix of ['', '> '])
+      for (const eol of ['\n', '\r\n']) {
+        const source = `${definition
+          .split('\n')
+          .map((line) => prefix + line)
+          .join(eol)}${eol}${eol}[a]`
+        const link = /<a href="([^"]*)"(?: title="([^"]*)")?>a<\/a>/.exec(
+          micromark(source, {
+            extensions: [gfmSyntax()],
+            htmlExtensions: [gfmHtml()],
+          }),
+        )
+        const { links } = new Marked({ gfm: true }, blockMarkdown).lexer(source)
+        assert.equal(links.a?.href ?? null, link?.[1] ?? null, source)
+        assert.equal(links.a?.title || null, link?.[2] ?? null, source)
+      }
+})

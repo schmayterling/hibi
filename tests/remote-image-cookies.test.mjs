@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -20,12 +21,14 @@ async function imageHost(t) {
   )
   const cookies = []
   const validators = []
+  const paths = []
   const server = createServer(
     {
       cert: await readFile('tests/fixtures/host-network-localhost-cert.pem'),
       key: await readFile('tests/fixtures/host-network-localhost-key.pem'),
     },
     (request, response) => {
+      paths.push(request.url)
       cookies.push(request.headers.cookie ?? null)
       const validator = [
         request.headers['if-none-match'],
@@ -36,7 +39,10 @@ async function imageHost(t) {
       validators.push(validator || null)
       response.writeHead(validator ? 304 : 200, {
         'Content-Type': 'image/png',
-        'Cache-Control': 'no-cache',
+        // Images under /cached/ may be reused for an hour.
+        'Cache-Control': request.url.startsWith('/cached/')
+          ? 'max-age=3600'
+          : 'no-cache',
         ETag: '"reader-42"',
         'Last-Modified': 'Wed, 01 Jan 2025 00:00:00 GMT',
         'Set-Cookie': 'tracker=1; SameSite=None; Secure',
@@ -50,6 +56,7 @@ async function imageHost(t) {
     folder,
     cookies,
     validators,
+    paths,
     origin: `https://127.0.0.1:${server.address().port}`,
     /** Starts the app, or restarts it on the same profile. */
     async launch() {
@@ -140,6 +147,69 @@ test('remote https images skip the cache, so hosts get no validators to recogniz
   await show(host.page, src)
   assert.deepEqual(host.validators, [null, null, null])
   assert.deepEqual(host.cookies, [null, null, null])
+})
+
+test('a remote image drawn again after scrolling back or switching tabs is not downloaded again', {
+  timeout: 90000,
+}, async (t) => {
+  const { app, page, origin, folder, paths } = await imageHost(t)
+  await trust(app, origin)
+  const editor = await selectFormattedEngine(app, page, 'codemirror')
+  const filler = Array.from(
+    { length: 300 },
+    (_, line) => `Line ${line} between the images.`,
+  ).join('\n\n')
+  await writeFile(
+    join(folder, 'images.md'),
+    `![top](${origin}/cached/top.png)\n\n${filler}\n\n![bottom](${origin}/cached/bottom.png)\n`,
+  )
+  await writeFile(join(folder, 'other.md'), 'Another note')
+  const open = async (name) => {
+    await app.evaluate(
+      ({ dialog }, note) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [note],
+        })
+      },
+      join(folder, name),
+    )
+    await pressShortcut(
+      app,
+      `${process.platform === 'darwin' ? 'Meta' : 'Control'}+o`,
+    )
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  }
+  const shown = (alt) =>
+    page.waitForFunction((alt) => {
+      const image = document.querySelector(
+        `.rich-pane .hibi-formatted img[alt="${alt}"]`,
+      )
+      return image?.complete && image.naturalWidth > 0
+    }, alt)
+  // Without a reference, an image the view no longer draws is collected.
+  const cdp = await page.context().newCDPSession(page)
+  const collect = () => cdp.send('HeapProfiler.collectGarbage')
+  await open('images.md')
+  await shown('top')
+  await editor.focus()
+  await editor.press('ControlOrMeta+End')
+  await shown('bottom')
+  await collect()
+  await editor.press('ControlOrMeta+Home')
+  await shown('top')
+  await open('other.md')
+  await collect()
+  await page.getByRole('tab', { name: 'images.md', exact: true }).click()
+  await shown('top')
+  assert.deepEqual(paths.filter((path) => path.startsWith('/cached/')).sort(), [
+    '/cached/bottom.png',
+    '/cached/top.png',
+  ])
 })
 
 test('PDF exports send image hosts no cookies or validators and keep no cookies between exports', {

@@ -256,6 +256,7 @@ unit(
         '### Heading',
         '![markdown](assets/pixel.png)',
         'text <img src=assets/pixel.png alt="inline" width=3 height=2>',
+        'wide <img src=assets/pixel.png alt="wide" width=4000 height=1000>',
       ].join('\n\n'),
     )
     const app = await electron.launch({
@@ -285,14 +286,14 @@ unit(
         ]
         return (
           images.map((image) => image.alt).join() ===
-            'block,tag,markdown,inline' &&
+            'block,tag,markdown,inline,wide' &&
           images.every((image) => image.complete && image.naturalWidth === 1)
         )
       })
     await loaded()
     // A tag alone on its line sits where a Markdown image would, and a tag
-    // sizes its image.
-    const { gaps, size } = await page.evaluate(() => {
+    // sizes its image, keeping its shape in a narrower column.
+    const { gaps, size, wide } = await page.evaluate(() => {
       const content = document.querySelector(
         '.rich-pane .hibi-formatted .cm-content',
       )
@@ -313,10 +314,35 @@ unit(
           box('inline').width,
           box('inline').height,
         ],
+        wide: [box('wide').width, box('wide').height],
       }
     })
+    // A triple-click on a tag's image selects the tag, as on a Markdown image.
+    const image = await page
+      .locator('.rich-pane img[alt="wide"]:not(.cm-widgetBuffer)')
+      .boundingBox()
+    await page.mouse.click(
+      image.x + image.width / 2,
+      image.y + image.height / 2,
+      { clickCount: 3 },
+    )
+    assert.equal(
+      await page.evaluate(() => {
+        const { view } = document.querySelector(
+          '.rich-pane [aria-label="Document editor"]',
+        ).cmTile.root
+        const { from, to } = view.state.selection.main
+        return view.state.sliceDoc(from, to)
+      }),
+      '<img src=assets/pixel.png alt="wide" width=4000 height=1000>',
+    )
     assert.equal(gaps[0], gaps[1])
     assert.deepEqual(size, ['3', '2', 3, 2])
+    assert.ok(wide[0] < 4000, `wide image fits the column: ${wide}`)
+    assert.ok(
+      Math.abs(wide[1] - wide[0] / 4) < 1,
+      `wide image keeps 4:1: ${wide}`,
+    )
     // At the caret, a tag shows as source with its image still beside it.
     const shown = async (key, source, hidden) => {
       await editor.press(key)
@@ -339,7 +365,7 @@ unit(
     )
     await shown(
       'ControlOrMeta+End',
-      '<img src=assets/pixel.png alt="inline" width=3 height=2>',
+      '<img src=assets/pixel.png alt="wide" width=4000 height=1000>',
       'alt="block"',
     )
   },

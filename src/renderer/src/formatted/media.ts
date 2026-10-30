@@ -9,6 +9,7 @@ import type { SyntaxNodeRef } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import type { DocumentMedia } from '../../../shared/media.ts'
 import { observeDocumentMedia } from '../document-media.ts'
+import { documentRuntime } from '../document-runtime.ts'
 import {
   type FormattedContribution,
   formattedDocument,
@@ -43,6 +44,48 @@ export function imageOf(state: EditorState, node: SyntaxNodeRef) {
     title: title ? text(title.from + 1, title.to - 1) : '',
     label: { from: node.from + 2, to: close.from },
   }
+}
+
+/**
+ * Loaded remote images each open tab has drawn, most recent last. Remote
+ * image requests skip the HTTP cache, so holding an image keeps it in the
+ * page's memory: drawn again after scrolling back or switching tabs, it shows
+ * without another download. A tab lets go of its images when it closes.
+ */
+const held = new Map<string, Map<string, HTMLImageElement>>()
+/** At most this many per tab, so a note full of remote images stays bounded. */
+const HELD_PER_TAB = 200
+let watching = false
+
+/** Holds a destroyed widget's loaded remote image for its tab; false if it is not one. */
+function hold(view: EditorView, media: Element) {
+  const { tabId } = view.state.facet(formattedDocument)
+  if (
+    !tabId ||
+    !(media instanceof HTMLImageElement) ||
+    !media.complete ||
+    !media.naturalWidth ||
+    !/^https:/i.test(media.src)
+  )
+    return false
+  if (!watching) {
+    watching = true
+    // The runtime drops a closed tab's session, and its images go with it.
+    documentRuntime.subscribeCatalog(() => {
+      for (const id of held.keys())
+        if (!documentRuntime.session(id)) held.delete(id)
+    })
+  }
+  let images = held.get(tabId)
+  if (!images) {
+    images = new Map()
+    held.set(tabId, images)
+  }
+  images.delete(media.src)
+  images.set(media.src, media)
+  const [oldest = ''] = images.keys()
+  if (images.size > HELD_PER_TAB) images.delete(oldest)
+  return true
 }
 
 /** A drawn widget's media resolution, rebound when the note's revision changes. */
@@ -105,6 +148,11 @@ export class MediaWidget extends WidgetType {
       media.title = this.title
       if (this.width) media.width = this.width
       if (this.height) media.height = this.height
+      // A column narrower than the width scales the height with it.
+      if (this.width && this.height) {
+        media.style.aspectRatio = `${this.width} / ${this.height}`
+        media.style.height = 'auto'
+      }
       delete media.dataset.tooltip
       if (media instanceof HTMLVideoElement) {
         media.controls = true
@@ -149,8 +197,9 @@ export class MediaWidget extends WidgetType {
   }
   override destroy(dom: HTMLElement) {
     const media = dom.firstElementChild
-    if (media instanceof HTMLElement) clear(media)
     const entry = bindings.get(dom)
+    if (media instanceof HTMLElement && !(entry && hold(entry.view, media)))
+      clear(media)
     if (!entry) return
     drawn.get(entry.view)?.delete(entry.binding)
     // A replacement widget in the same update reuses the resolved media.

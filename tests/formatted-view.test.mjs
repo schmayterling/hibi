@@ -13,7 +13,7 @@ import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-test('codemirror: notes open in the formatted view and edit their markdown', {
+test('notes open in the formatted view and edit their markdown', {
   timeout: 90000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-view-'))
@@ -1045,17 +1045,13 @@ test('behind the switch, a composition in a table cell goes on through edits fro
 // triple-001 in formatted-engine-gaps.md: the rich editor node-selects a
 // block it draws as one node, and the formatted view selects its source.
 const atoms = {
-  html: ['<div>\nhtmlword here\n</div>', 'rawHtmlBlock', 'htmlword'],
-  comment: ['<!-- commentword -->', 'rawHtmlBlock', 'commentword'],
-  rule: ['***', 'horizontalRule', 'hr, .hibi-lp-rule'],
-  image: ['![alt](pic.png)', 'image', 'img[alt="alt"]'],
-  math: ['$$\nx^2\n$$', 'blockMath', '[data-type="block-math"]'],
-  mermaid: [
-    '```mermaid\ngraph TD\n  A --> B\n```',
-    'mermaidBlock',
-    '.mermaid-block',
-  ],
-  typst: ['```typst\n= typsthead\n```', 'typstBlock', '.typst-block'],
+  html: ['<div>\nhtmlword here\n</div>', 'htmlword'],
+  comment: ['<!-- commentword -->', 'commentword'],
+  rule: ['***', 'hr, .hibi-lp-rule'],
+  image: ['![alt](pic.png)', 'img[alt="alt"]'],
+  math: ['$$\nx^2\n$$', '[data-type="block-math"]'],
+  mermaid: ['```mermaid\ngraph TD\n  A --> B\n```', '.mermaid-block'],
+  typst: ['```typst\n= typsthead\n```', '.typst-block'],
 }
 const atomNote = `first words\n\n${Object.values(atoms)
   .map(([source]) => source)
@@ -1166,12 +1162,11 @@ test('a triple-click on a block drawn as one node selects it, and typed text rep
       const root = document.querySelector(
         '.rich-pane [aria-label="Document editor"]',
       )
-      if (root.editor) return root.editor.state.selection.node?.type.name
       const view = root.cmTile.root.view
       const { from, to } = view.state.selection.main
       return view.state.sliceDoc(from, to)
     })
-  for (const [kind, [source, node, at]] of Object.entries(atoms)) {
+  for (const [kind, [source, at]] of Object.entries(atoms)) {
     await page
       .locator('.rich-pane p, .rich-pane .cm-line', { hasText: 'last words' })
       .last()

@@ -2,22 +2,14 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test, { after } from 'node:test'
-import { Editor } from '@tiptap/core'
-import { Image } from '@tiptap/extension-image'
-import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
-import { TaskItem } from '@tiptap/extension-task-item'
-import { TaskList } from '@tiptap/extension-task-list'
-import { Markdown } from '@tiptap/markdown'
-import { NativeTableKit } from '../src/addons/markdown/table-tokenizer.ts'
-import { mathFlavor, mathTokens } from '../src/addons/math/syntax.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
+import test from 'node:test'
 import {
   electron,
   waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const atoms = {
@@ -54,55 +46,12 @@ const actions = [
   'unlink',
   'indent',
 ]
-const native = new Map()
-const mathExtensions = [InlineMath, BlockMath].map((extension) => {
-  const syntax = mathTokens.extensions.find(
-    ({ name }) => name === extension.name,
-  )
-  return extension.extend({
-    markdownTokenizer: {
-      name: syntax.name,
-      level: syntax.level,
-      start: syntax.start,
-      tokenize: syntax.tokenizer,
-    },
-  })
-})
-const configuration = markdownConfiguration([
-  {
-    id: 'markdown',
-    markedOptions: { gfm: true },
-    richExtensions: [
-      Image,
-      NativeTableKit,
-      TaskList,
-      TaskItem.configure({ nested: true }),
-    ],
-  },
-  {
-    ...mathFlavor,
-    richExtensions: mathExtensions,
-    export: { extensions: [mathTokens] },
-  },
-])
-const oracle = new Editor({
-  element: null,
-  content: 'seed',
-  contentType: 'markdown',
-  extensions: [
-    ...configuration.core,
-    Markdown.configure({
-      marked: configuration.parser,
-      markedOptions: configuration.options,
-    }),
-    ...configuration.addons,
-  ],
-})
-after(() => oracle.destroy())
-const parse = (source) => {
-  oracle.commands.setContent(source, { contentType: 'markdown' })
-  return oracle.getJSON()
-}
+/**
+ * What the removed rich view did, recorded before its removal: its toolbar
+ * states and cell texts, and whether its parser read the formatted view's
+ * source as the document its own action made.
+ */
+const rich = frozenOracle('formatted-atom-actions-rich')
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
 function toolbar() {
@@ -127,14 +76,11 @@ async function snapshot(page) {
     const root = document.querySelector(
       '.rich-pane [aria-label="Document editor"]',
     )
-    const state = root.editor?.state
-    const range = root.cmTile?.root.view.state.selection.main
+    const range = root.cmTile.root.view.state.selection.main
     const source = (await window.hibi.getDocument()).markdown
     return {
       source: source.replace(/assets\/pic(?:-\d+)?\.png/g, 'assets/pic.png'),
-      selected: state
-        ? state.selection.toJSON().type === 'node'
-        : range.from !== range.to,
+      selected: range.from !== range.to,
     }
   })
 }
@@ -201,22 +147,24 @@ test('toolbar actions on selected atoms preserve their containers', {
         const root = document.querySelector(
           '.rich-pane [aria-label="Document editor"]',
         )
-        const selection = root.editor?.state.selection
         const range = root.cmTile?.root.view.state.selection.main
-        return selection
-          ? selection.toJSON().type === 'node'
-          : range && !range.empty
+        return range && !range.empty
       })
     await page.evaluate(async () => {
       for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame)
     })
   }
   const compare = (key, value) => {
-    // Match document structure; each engine may spell padding and blank lines differently.
-    if (value.source !== undefined) {
-      value = { document: parse(value.source), selected: value.selected }
-    }
-    assert.deepEqual(value, native.get(key), key)
+    // Sources match the rich view's in document structure: each view may
+    // spell padding and blank lines differently.
+    if (value.source === undefined)
+      assert.deepEqual(value, rich({ kind: 'native', key }), key)
+    else
+      assert.equal(
+        rich({ kind: 'model', key, ...value }),
+        true,
+        `${key}: ${JSON.stringify(value)}`,
+      )
   }
   const table =
     'plain\n\n| aa   | bb   |\n| ---- | ---- |\n| cell |      |\n| next | tail |\n\nafter\n'
@@ -236,21 +184,10 @@ test('toolbar actions on selected atoms preserve their containers', {
       const cell = cells.nth(start)
       await cell.scrollIntoViewIfNeeded()
       await cell.click()
-      // The rich editor reads a click's DOM caret on selectionchange.
       await page.waitForFunction((start) => {
-        const root = document.querySelector(
-          '.rich-pane [aria-label="Document editor"]',
-        )
         const cell = [
           ...document.querySelectorAll('.rich-pane th, .rich-pane td'),
         ][start]
-        if (root.editor) {
-          const { selection } = root.editor.state
-          return (
-            selection.empty &&
-            cell.contains(root.editor.view.domAtPos(selection.head).node)
-          )
-        }
         return cell.contains(document.activeElement)
       }, start)
       for (const key of keys) await page.keyboard.press(key)
@@ -316,10 +253,9 @@ test('toolbar actions on selected atoms preserve their containers', {
             for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame)
           })
           const after = await snapshot(page)
-          // atom-list-001: rich's numbered-list edit either refuses the change
-          // or keeps two-space continuation and then refuses typed replacement.
+          // atom-list-001: the rich view's numbered-list edit refused the change
+          // or kept two-space continuation, so this result is the formatted view's own.
           const numbered = container === 'list' && action === 'numbered-list'
-          const nativeConverts = ['divider', 'image', 'comment'].includes(kind)
           if (numbered) {
             const expected = ordered(block)
             assert.equal(after.source, expected, `${name}: ${action} source`)
@@ -340,13 +276,17 @@ test('toolbar actions on selected atoms preserve their containers', {
           await page.keyboard.type('Z')
           const typed = await snapshot(page)
           if (numbered) {
-            {
-              const expected = ordered('Z')
-              assert.deepEqual(
-                { document: parse(typed.source), selected: typed.selected },
-                { document: parse(expected), selected: false },
-              )
-            }
+            // As the rich view reads the ordered item holding the typed text.
+            assert.equal(
+              rich({
+                kind: 'literal',
+                key: `${name}: ${action} then type`,
+                source: typed.source,
+              }),
+              true,
+              typed.source,
+            )
+            assert.equal(typed.selected, false)
           } else compare(`${name}: ${action} then type`, typed)
         })
     }

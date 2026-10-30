@@ -7,7 +7,8 @@ import test from 'node:test'
 import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
-import { after, before, electron } from './electron.mjs'
+import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
+import { frozenOracle, frozenSnapshot } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const note = `# Formatted view parity
@@ -105,6 +106,10 @@ closing paragraph.
 `
 
 let app, folder, page, harness, server
+// What the formatted view drew while it matched the removed rich view, and
+// the rich view's own styles for the compared text.
+const check = frozenSnapshot('live-preview')
+const richStyle = frozenOracle('live-preview-rich')
 
 const palette = (id) => {
   const scheme = bundledColorschemes.find((entry) => entry.id === id)
@@ -186,12 +191,13 @@ before(
       args: [
         resolve('.'),
         '--disable-lcd-text',
+        '--force-device-scale-factor=1',
         `--user-data-dir=${join(folder, 'profile')}`,
       ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await selectFormattedEngine(app, page, 'tiptap')
+    await waitForDocumentEditor(app, page)
     await open(file, 'Formatted view parity')
     const size = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getContentSize(),
@@ -224,7 +230,7 @@ before(
   },
   { timeout: 90000 },
 )
-/** Open a note in the app's rich view. */
+/** Open a note in the app's formatted view. */
 async function open(file, title) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({
@@ -250,7 +256,7 @@ async function open(file, title) {
       },
       [process.platform === 'darwin' ? 'meta' : 'control'],
     )
-  await page.locator('.tiptap h1', { hasText: title }).waitFor()
+  await page.locator('.rich-pane .hibi-lp-h1', { hasText: title }).waitFor()
 }
 
 after(
@@ -265,12 +271,12 @@ after(
   { timeout: 30000 },
 )
 
-/** Computed styles and text geometry for matching elements in both editors. */
+/** Computed styles and text geometry for matching elements. */
 const sample = (target, selectors, title) =>
   target.evaluate(
     ({ selectors, title }) => {
       const root = [...document.querySelectorAll('.rich-pane')].find((pane) =>
-        pane.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+        pane.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
       const pane = root.getBoundingClientRect()
       const textBox = (element, text) => {
@@ -293,11 +299,12 @@ const sample = (target, selectors, title) =>
         range.setStart(...point(index))
         range.setEnd(...point(index + text.length))
         const box = range.getBoundingClientRect()
+        const round = (value) => Math.round(value * 10) / 10
         return {
-          width: box.width,
-          left: box.left - pane.left,
-          top: box.top - pane.top,
-          height: box.height,
+          width: round(box.width),
+          left: round(box.left - pane.left),
+          top: round(box.top - pane.top),
+          height: round(box.height),
         }
       }
       return Object.fromEntries(
@@ -327,25 +334,6 @@ const sample = (target, selectors, title) =>
     { selectors, title },
   )
 
-const rich = {
-  title: { selector: '.tiptap h1', text: 'Formatted view parity' },
-  paragraph: { selector: '.tiptap p', text: 'A paragraph with' },
-  second: { selector: '.tiptap p', text: 'It continues' },
-  bold: { selector: '.tiptap strong', text: 'bold' },
-  italic: { selector: '.tiptap em', text: 'italic' },
-  struck: { selector: '.tiptap s', text: 'struck' },
-  code: { selector: '.tiptap p code', text: 'inline code' },
-  link: { selector: '.tiptap a', text: 'link' },
-  lists: { selector: '.tiptap h2', text: 'Lists' },
-  item: { selector: '.tiptap li', text: 'first item' },
-  nested: { selector: '.tiptap li li', text: 'nested item' },
-  ordered: { selector: '.tiptap ol li', text: 'two' },
-  quote: { selector: '.tiptap blockquote p', text: 'A quote' },
-  block: { selector: '.tiptap pre code', text: 'const answer' },
-  third: { selector: '.tiptap h3', text: 'Third level' },
-  closing: { selector: '.tiptap p', text: 'Closing paragraph' },
-  after: { selector: '.tiptap p', text: 'After the rule' },
-}
 const formatted = {
   title: { selector: '.hibi-lp-h1', text: 'Formatted view parity' },
   paragraph: { selector: '.cm-line', text: 'A paragraph with' },
@@ -366,10 +354,105 @@ const formatted = {
   after: { selector: '.cm-line', text: 'After the rule' },
 }
 
-/** Compare a note in the rich view and the formatted view: styles, text positions and pixels. */
-async function parity(title, doc, rich, formatted, name) {
+/**
+ * What a pane draws in place of its pixels: each line's and inline
+ * element's tag, classes and paint, and its box in the pane. Colors are per
+ * color scheme; the rest is the same in both.
+ */
+const drawing = (target, title) =>
+  target.evaluate((title) => {
+    const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+      root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
+    )
+    const origin = pane.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
+    const sides = ['Top', 'Right', 'Bottom', 'Left']
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft']
+    const result = { drawn: [], paint: [], boxes: [] }
+    for (const element of pane.querySelectorAll(
+      '.cm-content > *, .cm-content > * *',
+    )) {
+      const style = getComputedStyle(element)
+      const before = getComputedStyle(element, '::before')
+      const edges = sides.filter(
+        (side) => style[`border${side}Style`] !== 'none',
+      )
+      const radius = corners.map((corner) => style[`border${corner}Radius`])
+      const listed = style.display === 'list-item'
+      const painted = !['none', 'normal'].includes(before.content)
+      result.drawn.push({
+        element: [
+          element.tagName.toLowerCase(),
+          ...[...element.classList]
+            .filter((name) => !/^cm-(active|focused)/.test(name))
+            .sort(),
+        ].join('.'),
+        display: style.display,
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        verticalAlign: style.verticalAlign,
+        textDecorationLine: style.textDecorationLine,
+        opacity: style.opacity,
+        ...(listed && { listStyleType: style.listStyleType }),
+        ...(edges.length && {
+          borders: edges.map(
+            (side) =>
+              `${side} ${style[`border${side}Width`]} ${style[`border${side}Style`]}`,
+          ),
+        }),
+        ...(radius.some((value) => value !== '0px') && {
+          radius: radius.join(' '),
+        }),
+        ...(painted && {
+          before: [
+            before.content,
+            before.top,
+            before.right,
+            before.bottom,
+            before.left,
+          ].join(' '),
+        }),
+      })
+      result.paint.push({
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        ...(style.backgroundImage !== 'none' && {
+          backgroundImage: style.backgroundImage,
+        }),
+        ...(edges.length && {
+          borders: edges.map((side) => style[`border${side}Color`]),
+        }),
+        ...(style.textDecorationLine !== 'none' && {
+          decoration: style.textDecorationColor,
+        }),
+        ...(listed && {
+          marker: getComputedStyle(element, '::marker').color,
+        }),
+        ...(painted && {
+          before: `${before.backgroundColor} ${before.backgroundImage}`,
+        }),
+      })
+      const box = element.getBoundingClientRect()
+      result.boxes.push([
+        round(box.left - origin.left),
+        round(box.top - origin.top),
+        round(box.width),
+        round(box.height),
+      ])
+    }
+    return result
+  }, title)
+
+/**
+ * Check a note in the formatted view against the rich view's recorded styles
+ * for the compared text, and against the text positions and drawing the
+ * formatted view recorded while it matched the rich view within a pixel.
+ */
+async function parity(title, doc, formatted, name) {
   const richPane = page.locator('.rich-pane', {
-    has: page.locator('.tiptap h1', { hasText: title }),
+    has: page.locator('.hibi-lp-h1', { hasText: title }),
   })
   const pane = await richPane.evaluate((element) => {
     const box = element.getBoundingClientRect()
@@ -380,11 +463,11 @@ async function parity(title, doc, rich, formatted, name) {
     { doc, pane },
   )
   // The panes scroll alike: where scrollbars take space, as on Linux and
-  // Windows, the app's thin scrollbar is in both screenshots.
+  // Windows, the app's thin scrollbar is in both.
   const scrolling = (target) =>
     target.evaluate((title) => {
       const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
-        root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+        root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
       const style = getComputedStyle(pane)
       return {
@@ -393,41 +476,32 @@ async function parity(title, doc, rich, formatted, name) {
         scrollbarColor: style.scrollbarColor,
       }
     }, title)
-  const report = []
   for (const id of ['hibi-light', 'hibi-dark']) {
     const scheme = palette(id)
     await applyPalette(page, scheme)
     await applyPalette(harness, scheme)
     await harness.evaluate(() => window.livePreview.settle())
     assert.deepEqual(await scrolling(harness), await scrolling(page), id)
-    // A note that fits the pane is as tall in both views, so a scrollbar
-    // shows in both screenshots or in neither. (The formatted view lays out
-    // the lines it shows, so a longer note's height is not compared.)
-    const height = (target) =>
-      target.evaluate((title) => {
-        const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
-          root
-            .querySelector(':is(h1, .hibi-lp-h1)')
-            ?.textContent.includes(title),
-        )
-        return {
-          pane: pane.clientHeight,
-          note: pane.querySelector('.cm-content').getBoundingClientRect()
-            .height,
-        }
-      }, title)
-    const tall = { rich: await height(page), formatted: await height(harness) }
-    if (tall.rich.note <= tall.rich.pane)
-      assert.ok(
-        Math.abs(tall.rich.note - tall.formatted.note) <= 1,
-        `${id}: ${JSON.stringify(tall)}`,
+    // A note that fits the pane is as tall as the rich view's was. (The
+    // formatted view lays out the lines it shows, so a longer note's height
+    // is not compared.)
+    const tall = await harness.evaluate((title) => {
+      const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+        root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
-    const before = await sample(page, rich, title)
+      const note = pane.querySelector('.cm-content').getBoundingClientRect()
+      return { pane: pane.clientHeight, note: note.height }
+    }, title)
+    check(`${name} note`, tall.note <= tall.pane ? tall.note : 'scrolls', {
+      perPlatform: true,
+      tolerance: 1,
+    })
     const after = await sample(harness, formatted, title)
-    for (const key of Object.keys(rich)) {
-      const a = before[key],
-        b = after[key]
-      assert.ok(a?.box && b?.box, `${key}: ${JSON.stringify({ a, b })}`)
+    const text = {}
+    for (const key of Object.keys(formatted)) {
+      const b = after[key]
+      assert.ok(b?.box, `${key}: ${JSON.stringify(b)}`)
+      const rich = richStyle({ note: name, scheme: id, key })
       for (const property of [
         'fontFamily',
         'fontSize',
@@ -436,116 +510,31 @@ async function parity(title, doc, rich, formatted, name) {
         'color',
         'letterSpacing',
       ])
-        assert.equal(b[property], a[property], `${id} ${key} ${property}`)
-      report.push({
-        id,
-        key,
-        dx: Math.round((b.box.left - a.box.left) * 10) / 10,
-        dy: Math.round((b.box.top - a.box.top) * 10) / 10,
-        dw: Math.round((b.box.width - a.box.width) * 10) / 10,
-        dh: Math.round((b.box.height - a.box.height) * 10) / 10,
-      })
+        assert.equal(b[property], rich[property], `${id} ${key} ${property}`)
+      text[key] = b.box
     }
-    const images = [
-      await richPane.screenshot({
-        path: `test-results/live-preview-${name}-rich-${id}.png`,
-      }),
-      await harness.locator('.rich-pane').screenshot({
-        path: `test-results/live-preview-${name}-formatted-${id}.png`,
-      }),
-    ].map((image) => image.toString('base64'))
-    const { difference, box } = await app.evaluate(
-      ({ nativeImage }, images) => {
-        const [a, b] = images.map((image) =>
-          nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-        )
-        const size = a.getSize()
-        const other = b.getSize()
-        if (size.width !== other.width || size.height !== other.height)
-          return { difference: 1, box: [size, other] }
-        const left = a.toBitmap(),
-          right = b.toBitmap()
-        let changed = 0,
-          box = null
-        for (let i = 0; i < left.length; i += 4)
-          if (
-            Math.abs(left[i] - right[i]) > 8 ||
-            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-            Math.abs(left[i + 2] - right[i + 2]) > 8
-          ) {
-            changed++
-            const x = (i / 4) % size.width,
-              y = Math.floor(i / 4 / size.width)
-            box = box
-              ? [
-                  Math.min(box[0], x),
-                  Math.min(box[1], y),
-                  Math.max(box[2], x),
-                  Math.max(box[3], y),
-                ]
-              : [x, y, x, y]
-          }
-        return { difference: changed / (left.length / 4), box }
-      },
-      images,
-    )
-    // Where the screenshots differ, in their pixels: left, top, right, bottom.
-    report.push({ id, key: 'pixels', difference, box })
+    // Full phrase bounds, within a pixel of where they were recorded.
+    check(`${name} text`, text, { perPlatform: true, tolerance: 1 })
+    const drawn = await drawing(harness, title)
+    check(`${name} drawn`, drawn.drawn)
+    check(`${name} ${id} paint`, drawn.paint)
+    check(`${name} boxes`, drawn.boxes, { perPlatform: true, tolerance: 1 })
   }
-  console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
-  // keep the pixel gate strict; failures also report full phrase bounds.
-  for (const { id, key, difference } of report)
-    if (key === 'pixels')
-      assert.ok(
-        difference < 0.002,
-        `${id}: ${difference} ${JSON.stringify(report)}`,
-      )
-  // full phrase bounds match the rich view within a pixel.
-  const offsets = report.filter(
-    (entry) =>
-      entry.key !== 'pixels' &&
-      [entry.dx, entry.dy, entry.dw, entry.dh].some(
-        (value) => Math.abs(value) > 1,
-      ),
-  )
-  assert.deepEqual(offsets, [], JSON.stringify(report))
 }
 
-test('the codemirror formatted view matches the rich view in light and dark', {
+test('the formatted view keeps the rich view’s styles and its recorded drawing in light and dark', {
   timeout: 60000,
 }, async () => {
-  await parity('Formatted view parity', note, rich, formatted, 'parity')
+  await parity('Formatted view parity', note, formatted, 'parity')
 })
 
-test('blocks inside quotes and lists match the rich view in light and dark', {
+test('blocks inside quotes and lists keep the rich view’s styles and their recorded drawing in light and dark', {
   timeout: 60000,
 }, async () => {
   await open(join(folder, 'notes', 'nested.md'), 'Nested blocks')
   await parity(
     'Nested blocks',
     nested,
-    {
-      title: { selector: '.tiptap h1', text: 'Nested blocks' },
-      quotedCode: {
-        selector: '.tiptap blockquote pre code',
-        text: 'const nested',
-      },
-      parent: { selector: '.tiptap li p', text: 'parent' },
-      childCode: { selector: '.tiptap li pre code', text: 'const child' },
-      quotedItem: { selector: '.tiptap blockquote li', text: 'quoted item' },
-      anotherItem: { selector: '.tiptap blockquote li', text: 'another item' },
-      quoteItem: { selector: '.tiptap li p', text: 'item with a quote' },
-      deepCode: {
-        selector: '.tiptap li blockquote pre code',
-        text: 'const deep',
-      },
-      quotedRule: {
-        selector: '.tiptap blockquote p',
-        text: 'after the quoted rule',
-      },
-      rule: { selector: '.tiptap p', text: 'words after a rule' },
-      closing: { selector: '.tiptap p', text: 'closing paragraph' },
-    },
     {
       title: { selector: '.hibi-lp-h1', text: 'Nested blocks' },
       quotedCode: { selector: '.hibi-lp-codetext', text: 'const nested' },
@@ -574,42 +563,13 @@ test('blocks inside quotes and lists match the rich view in light and dark', {
   ])
 })
 
-test('list markers alone on their lines sit beside the item text as in the rich view', {
+test('list markers alone on their lines keep the item text beside them, in their recorded drawing', {
   timeout: 60000,
 }, async () => {
   await open(join(folder, 'notes', 'markers.md'), 'Marker lines')
   await parity(
     'Marker lines',
     markers,
-    {
-      title: { selector: '.tiptap h1', text: 'Marker lines' },
-      first: { selector: '.tiptap li', text: 'first under its marker' },
-      second: { selector: '.tiptap li', text: 'second item' },
-      one: { selector: '.tiptap ol li', text: 'one under its marker' },
-      two: { selector: '.tiptap ol li', text: 'two' },
-      quoted: {
-        selector: '.tiptap blockquote li',
-        text: 'quoted under its marker',
-      },
-      quotedSecond: {
-        selector: '.tiptap blockquote li',
-        text: 'quoted second',
-      },
-      quotedOne: {
-        selector: '.tiptap blockquote ol li',
-        text: 'quoted one under its marker',
-      },
-      quotedTwo: { selector: '.tiptap blockquote ol li', text: 'quoted two' },
-      deep: {
-        selector: '.tiptap blockquote blockquote li',
-        text: 'deep under its marker',
-      },
-      deepSecond: {
-        selector: '.tiptap blockquote blockquote li',
-        text: 'deep second',
-      },
-      closing: { selector: '.tiptap p', text: 'closing paragraph' },
-    },
     {
       title: { selector: '.hibi-lp-h1', text: 'Marker lines' },
       first: { selector: '.hibi-lp-list-item', text: 'first under its marker' },
@@ -634,7 +594,7 @@ test('list markers alone on their lines sit beside the item text as in the rich 
   )
 })
 
-test('notes end as in the rich view, so both views scroll alike', {
+test('notes end at their recorded heights, so a pane scrolls only for a taller note', {
   timeout: 120000,
 }, async () => {
   // Zero, one and several final line breaks, and last blocks that paint or are replaced.
@@ -657,16 +617,17 @@ test('notes end as in the rich view, so both views scroll alike', {
   const measure = (target, title) =>
     target.evaluate((title) => {
       const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
-        root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+        root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
       const note = pane.querySelector('.cm-content')
       const top = note.getBoundingClientRect().top
       const block = [...note.children].find((child) =>
         child.textContent.includes('tail'),
       )
+      const round = (value) => Math.round(value * 10) / 10
       return {
-        note: note.getBoundingClientRect().height,
-        block: block.getBoundingClientRect().bottom - top,
+        note: round(note.getBoundingClientRect().height),
+        block: round(block.getBoundingClientRect().bottom - top),
         scrolls: pane.scrollHeight > pane.clientHeight,
       }
     }, title)
@@ -677,7 +638,7 @@ test('notes end as in the rich view, so both views scroll alike', {
     await writeFile(file, doc)
     await open(file, title)
     const richPane = page.locator('.rich-pane', {
-      has: page.locator('.tiptap h1', { hasText: title }),
+      has: page.locator('.hibi-lp-h1', { hasText: title }),
     })
     const size = await richPane.evaluate((element) => {
       const box = element.getBoundingClientRect()
@@ -689,36 +650,21 @@ test('notes end as in the rich view, so both views scroll alike', {
         size: { ...size, height },
       })
     await mount(size.height)
-    const rich = await measure(page, title)
-    const formatted = await measure(harness, title)
-    const report = `${name}: ${JSON.stringify({ rich, formatted })}`
-    assert.ok(Math.abs(rich.note - formatted.note) <= 1, report)
-    // Space after the last block lies outside it, as a quote's bar shows.
-    assert.ok(Math.abs(rich.block - formatted.block) <= 1, report)
+    const { note, block } = await measure(harness, title)
+    // As tall as the rich view's note, within a pixel when recorded; space
+    // after the last block lies outside it, as a quote's bar shows.
+    check(
+      `ending ${name}`,
+      { note, block },
+      { perPlatform: true, tolerance: 1 },
+    )
     // Panes a little shorter than the note scroll; a little taller do not.
-    const style = await richPane.getAttribute('style')
-    const scrolling = { rich: [], formatted: [] }
-    for (const height of [
-      Math.floor(rich.note) - 2,
-      Math.ceil(rich.note) + 2,
-    ]) {
-      await richPane.evaluate((element, height) => {
-        Object.assign(element.style, {
-          flex: 'none',
-          height: `${height}px`,
-          minHeight: '0',
-        })
-      }, height)
+    const scrolling = []
+    for (const height of [Math.floor(note) - 2, Math.ceil(note) + 2]) {
       await mount(height)
-      scrolling.rich.push((await measure(page, title)).scrolls)
-      scrolling.formatted.push((await measure(harness, title)).scrolls)
+      scrolling.push((await measure(harness, title)).scrolls)
     }
-    await richPane.evaluate((element, style) => {
-      if (style === null) element.removeAttribute('style')
-      else element.setAttribute('style', style)
-    }, style)
-    assert.deepEqual(scrolling.rich, [true, false], name)
-    assert.deepEqual(scrolling.formatted, scrolling.rich, name)
+    assert.deepEqual(scrolling, [true, false], name)
   }
 })
 

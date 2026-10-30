@@ -223,11 +223,9 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     })
     .waitFor()
   // CodeMirror draws a block's scroll box again when lines draw above it,
-  // so its checks find the box anew; the rich editor keeps its pre.
+  // so its checks find the box anew.
   const box = '.rich-pane .hibi-lp-codescroll'
-  const block = page
-    .locator(box ?? '.tiptap:has(h1:text-is("Wide code")) pre')
-    .first()
+  const block = page.locator(box).first()
   await block.waitFor()
   await block.evaluate(async (pre, box) => {
     // A redraw may replace the box; wait for the new one.
@@ -443,7 +441,6 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
 
   page.setDefaultTimeout(10000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  const rich = page.locator('.rich-pane .cm-content')
   const show = async (markdown, place) => {
     await loadMarkdown(app, page, markdown)
     await page
@@ -451,7 +448,7 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
       .first()
       .waitFor({ state: 'attached' })
     const box = '.rich-pane .hibi-lp-codescroll'
-    const block = page.locator(box ?? '.tiptap pre').first()
+    const block = page.locator(box).first()
     await block.evaluate(place, box)
     assert.equal(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,

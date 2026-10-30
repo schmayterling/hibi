@@ -159,7 +159,6 @@ test('copyable messages, dialog code and addon documents opt back in', {
       </dialog>
       <textarea data-copy>Editable text</textarea>
       <div contenteditable="plaintext-only" data-copy>Editable addon</div>
-      <div class="tiptap" contenteditable="false" data-copy>Read-only preview</div>
       <div class="cm-content" contenteditable="false" data-copy>Read-only source</div>
       <div class="addon-view-content"><span data-chrome>Addon sidebar label</span></div>
     `

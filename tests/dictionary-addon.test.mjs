@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import native from 'node:test'
 import {
   electron,
   waitForAddonShortcut,
@@ -15,19 +14,14 @@ import { waitForAsync } from './poll.mjs'
 
 async function placeCaret(editor, offset) {
   await editor.evaluate((element, offset) => {
-    if (element.editor) element.editor.commands.focus(offset + 1)
-    else {
-      const view = element.cmTile.root.view
-      view.dispatch({ selection: { anchor: offset } })
-      view.focus()
-    }
+    const view = element.cmTile.root.view
+    view.dispatch({ selection: { anchor: offset } })
+    view.focus()
   }, offset)
 }
 
 async function undoRich(editor) {
-  if (await editor.evaluate((element) => !!element.editor))
-    await editor.evaluate((element) => element.editor.commands.undo())
-  else await editor.press('ControlOrMeta+z')
+  await editor.press('ControlOrMeta+z')
 }
 
 const fixture = (name) =>
@@ -275,20 +269,17 @@ async function dictionaryCase(t) {
 }
 
 test(
-  'dictionary looks up the caret word and replaces it with one undo step in both editors',
+  'dictionary looks up the caret word and replaces it with one undo step',
   { timeout: 60000 },
   dictionaryCase,
 )
 
-native(
-  'codemirror: dictionary source lookup remains independent of formatted hooks',
-  { timeout: 60000 },
-  async (t) => {
-    t.formattedEngine = 'codemirror'
-    t.dictionarySource = true
-    await dictionaryCase(t)
-  },
-)
+test('dictionary source lookup remains independent of formatted hooks', {
+  timeout: 60000,
+}, async (t) => {
+  t.dictionarySource = true
+  await dictionaryCase(t)
+})
 
 async function dictionarySplitCase(t) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-split-'))
@@ -532,12 +523,9 @@ test(
   dictionarySplitCase,
 )
 
-native(
-  'codemirror: dictionary source split replacement keeps pane identity and rejects closed targets',
-  { timeout: 90000 },
-  async (t) => {
-    t.formattedEngine = 'codemirror'
-    t.dictionarySource = true
-    await dictionarySplitCase(t)
-  },
-)
+test('dictionary source split replacement keeps pane identity and rejects closed targets', {
+  timeout: 90000,
+}, async (t) => {
+  t.dictionarySource = true
+  await dictionarySplitCase(t)
+})

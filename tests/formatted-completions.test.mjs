@@ -168,9 +168,8 @@ test('formatted completions keep exact source, history, composition, privacy and
       content.evaluate(async (dom) => {
         // Native composition can update selection while the document IPC yields.
         const { markdown } = await window.hibi.getDocument()
-        const cm = dom.matches('.cm-content')
-        const view = cm ? dom.cmTile.root.view : dom.editor.view
-        const selection = cm ? view.state.selection.main : view.state.selection
+        const view = dom.cmTile.root.view
+        const selection = view.state.selection.main
         const event = window.formattedCompletion.lastKey
         const native = dom.ownerDocument.getSelection()
         return {
@@ -185,9 +184,9 @@ test('formatted completions keep exact source, history, composition, privacy and
           markdown,
           anchor: selection.anchor,
           head: selection.head,
-          started: cm ? view.compositionStarted : view.composing,
-          changed: cm ? view.composing : false,
-          armed: cm && view.inputState.tabFocusMode > 0,
+          started: view.compositionStarted,
+          changed: view.composing,
+          armed: view.inputState.tabFocusMode > 0,
           key: event?.key,
           isComposing: event?.isComposing,
           prevented: event?.defaultPrevented,
@@ -199,20 +198,13 @@ test('formatted completions keep exact source, history, composition, privacy and
         pane === 'source' ? '.source-pane .cm-content' : undefined,
       )
       await content.evaluate((dom) => {
-        if (dom.matches('.cm-content')) {
-          dom.cmTile.root.view.dispatch({ selection: { anchor: 3 } })
-          dom.cmTile.root.view.focus()
-        } else {
-          dom.editor.commands.setTextSelection(4)
-          dom.editor.view.focus()
-        }
+        dom.cmTile.root.view.dispatch({ selection: { anchor: 3 } })
+        dom.cmTile.root.view.focus()
       })
       await page.waitForFunction(
         (selector) => {
           const dom = document.querySelector(selector)
-          const cm = dom.matches('.cm-content')
-          const view = cm ? dom.cmTile.root.view : dom.editor.view
-          return !(cm ? view.compositionStarted : view.composing)
+          return !dom.cmTile.root.view.compositionStarted
         },
         pane === 'source'
           ? '.source-pane .cm-content'
@@ -274,8 +266,7 @@ test('formatted completions keep exact source, history, composition, privacy and
         },
       )
     }
-    const cm = await content.evaluate((dom) => dom.matches('.cm-content'))
-    for (const started of cm ? [false, true] : [true]) {
+    for (const started of [false, true]) {
       await t.test(
         `${pane}: composing guard before the first paint (${started ? 'started' : 'event'})`,
         async () => {
@@ -285,15 +276,14 @@ test('formatted completions keep exact source, history, composition, privacy and
           // This is one synchronous dispatch: no paint or text change can
           // intervene between compositionstart and the command key.
           const result = await content.evaluate((dom, started) => {
-            const cm = dom.matches('.cm-content')
-            const view = cm ? dom.cmTile.root.view : dom.editor.view
+            const view = dom.cmTile.root.view
             if (started)
               dom.dispatchEvent(
                 new CompositionEvent('compositionstart', { bubbles: true }),
               )
             const phase = {
-              started: cm ? view.compositionStarted : view.composing,
-              changed: cm ? view.composing : false,
+              started: view.compositionStarted,
+              changed: view.composing,
             }
             const event = new KeyboardEvent('keydown', {
               key: 'Tab',
@@ -411,16 +401,9 @@ test('formatted completions keep exact source, history, composition, privacy and
       () => window.formattedCompletion.events[0],
     )
     const live = await rich.evaluate((element) => {
-      if (element.matches('.cm-content')) {
-        const { state } = element.cmTile.root.view
-        const head = state.selection.main.head
-        return { head, before: state.sliceDoc(0, head) }
-      }
-      const { state } = element.editor
-      return {
-        head: state.selection.head,
-        before: state.doc.textBetween(0, state.selection.head),
-      }
+      const { state } = element.cmTile.root.view
+      const head = state.selection.main.head
+      return { head, before: state.sliceDoc(0, head) }
     })
     assert.equal(event.selection.head, live.head)
     assert.equal(event.before, live.before)

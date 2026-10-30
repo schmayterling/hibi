@@ -197,13 +197,12 @@ for (const size of sizes)
         '[role="tab"][aria-selected="true"]',
       )
       const source = document.querySelector(
-          '.cm-content[contenteditable="true"]',
-        ),
-        rich = document.querySelector('.tiptap[contenteditable="true"]')
+        '.cm-content[contenteditable="true"]',
+      )
       return (
         active?.textContent.includes(name) &&
         document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
-        (source?.closest('[data-source-ready="true"]') || rich)
+        source?.closest('[data-source-ready="true"]')
       )
     }, basename(file))
     const openMs = performance.now() - started
@@ -219,7 +218,7 @@ for (const size of sizes)
         .click()
       await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     }
-    if (!baseline && true) {
+    if (!baseline) {
       await t.test(
         'formatted mib notes stay editable and preserve their source',
         async () => {
@@ -289,81 +288,6 @@ for (const size of sizes)
           assert.equal(await page.locator('.large-markdown-preview').count(), 0)
         },
       )
-    } else if (!baseline) {
-      await page.evaluate(() => {
-        window.scaleSourceView = document.querySelector(
-          '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
-        ).cmTile.root.view
-      })
-      await page.getByRole('button', { name: 'normal', exact: true }).click()
-      const preview = page.locator('.large-markdown-preview')
-      await preview.locator('.format-content').waitFor()
-      assert.ok(
-        (await preview.locator('.format-content').textContent()).length <= 4096,
-      )
-      assert.equal(
-        await page.locator('.tiptap[contenteditable="true"]').count(),
-        0,
-      )
-      await preview
-        .getByRole('button', { name: 'Next part', exact: true })
-        .click()
-      await page.waitForFunction(
-        () =>
-          Number(
-            document
-              .querySelector('.large-markdown-preview')
-              ?.getAttribute('data-preview-from'),
-          ) > 0,
-      )
-      await preview.locator('.format-content').waitFor()
-      assert.ok(
-        (await preview.locator('.format-content').textContent()).length <= 4096,
-      )
-      await preview
-        .getByRole('button', { name: 'Previous part', exact: true })
-        .click()
-      await page.waitForFunction(
-        () =>
-          document
-            .querySelector('.large-markdown-preview')
-            ?.getAttribute('data-preview-from') === '0',
-      )
-      if (size === 2) {
-        await page.evaluate(() => {
-          const view = window.scaleSourceView
-          view.dispatch({
-            changes: { from: 0, to: 1, insert: 'Q' },
-            userEvent: 'input.type',
-          })
-          view.dispatch({
-            changes: { from: 0, to: 1, insert: '#' },
-            userEvent: 'input.type',
-          })
-          return window.hibi.flushDocumentChanges()
-        })
-        await preview.locator('.format-content').waitFor()
-        await page.waitForFunction(() =>
-          document
-            .querySelector('.large-markdown-preview .format-content')
-            ?.textContent.replace(/^# /, '')
-            .startsWith('scale-start'),
-        )
-      }
-      await page
-        .getByRole('button', { name: 'Source view', exact: true })
-        .click()
-      await preview.waitFor({ state: 'detached' })
-      assert.equal(
-        await page.evaluate(
-          () =>
-            document.querySelector(
-              '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
-            ).cmTile.root.view === window.scaleSourceView,
-        ),
-        true,
-      )
-      assert.ok(await page.evaluate(() => window.scaleRichUnits <= 4096))
     }
     if (size === 50 && !baseline) {
       const statuses = await page.evaluate(async () => {

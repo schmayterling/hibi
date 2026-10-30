@@ -227,9 +227,7 @@ test('custom source stays locked while its addon enables and survives rich editi
       return {
         source: (await window.hibi.getDocument()).markdown,
         rendered: element.innerText,
-        nativeText: element.matches('.cm-content')
-          ? element.cmTile.root.view.state.doc.toString()
-          : element.editor.state.doc.textContent,
+        nativeText: element.cmTile.root.view.state.doc.toString(),
       }
     })
   t.diagnostic(

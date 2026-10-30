@@ -123,9 +123,7 @@ const selection = (page) =>
       return visible(range).length
     }
     const dom = getSelection()
-    const model = root.editor
-      ? root.editor.state.selection.toJSON()
-      : root.cmTile.root.view.state.selection.main.toJSON()
+    const model = root.cmTile.root.view.state.selection.main.toJSON()
     return {
       anchor: offset(dom.anchorNode, dom.anchorOffset),
       head: offset(dom.focusNode, dom.focusOffset),
@@ -243,9 +241,7 @@ for (const item of cases)
                 ]
             return null
           }
-          const model = root.editor
-            ? root.editor.state.selection
-            : root.cmTile.root.view.state.selection.main
+          const model = root.cmTile.root.view.state.selection.main
           const dom = getSelection()
           const [anchorNode, anchorOffset] = find(anchor)
           const [focusNode, focusOffset] = find(head)
@@ -403,20 +399,15 @@ for (const item of adjacency)
     const root = page.locator('.rich-pane [aria-label="Document editor"]')
     await root.focus()
     await withHeldClock(page, () =>
-      root.evaluate(
-        (element, { engine, edits }) => {
-          {
-            const { view } = element.cmTile.root
-            view.dispatch({ selection: { anchor: edits[0][0] } })
-            for (const [from, insert] of edits)
-              view.dispatch({
-                changes: { from, insert },
-                userEvent: 'input.type',
-              })
-          }
-        },
-        { engine: 'codemirror', edits: item.edits },
-      ),
+      root.evaluate((element, edits) => {
+        const { view } = element.cmTile.root
+        view.dispatch({ selection: { anchor: edits[0][0] } })
+        for (const [from, insert] of edits)
+          view.dispatch({
+            changes: { from, insert },
+            userEvent: 'input.type',
+          })
+      }, item.edits),
     )
     await saved(item.after)
     for (const text of item.undone) {

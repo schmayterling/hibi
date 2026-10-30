@@ -97,7 +97,7 @@ test('edit menu undo then redo restores text in the rich view, the source view a
 })
 
 /** A fresh app with an empty note in the rich view. */
-async function launch(t, engine, readOnlyFixture = false) {
+async function launch(t, readOnlyFixture = false) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-edit-history-'))
   if (readOnlyFixture) {
     const folder = join(profile, 'installed-addons', 'readonly-probe')
@@ -147,7 +147,7 @@ async function launch(t, engine, readOnlyFixture = false) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await page.getByRole('button', { name: /dismiss this screen/i }).click()
@@ -190,7 +190,7 @@ async function launch(t, engine, readOnlyFixture = false) {
 test("the edit menu keeps electron's own items beside undo and redo", {
   timeout: 60000,
 }, async (t) => {
-  const { app } = await launch(t, 'codemirror')
+  const { app } = await launch(t)
   const [items, native] = await app.evaluate(({ Menu }) => {
     const shape = (items) =>
       items
@@ -210,30 +210,10 @@ test("the edit menu keeps electron's own items beside undo and redo", {
   assert.deepEqual(items, native)
 })
 
-test('edit menu redo leaves a read-only editor alone, as its shortcut does', {
-  timeout: 60000,
-}, async (t) => {
-  const { rich, menu, markdown, settle, typeAndUndo } = await launch(
-    t,
-    'tiptap',
-  )
-  const undone = await typeAndUndo()
-  await rich.evaluate((element) => {
-    element.editor.view.focus()
-    element.editor.setEditable(false)
-  })
-  await menu('Redo')
-  await settle()
-  assert.equal(await markdown(), undone)
-})
-
 test('edit menu redo in docked devtools leaves the note alone', {
   timeout: 60000,
 }, async (t) => {
-  const { app, menu, markdown, settle, typeAndUndo } = await launch(
-    t,
-    'codemirror',
-  )
+  const { app, menu, markdown, settle, typeAndUndo } = await launch(t)
   const undone = await typeAndUndo()
   await app.evaluate(async ({ BrowserWindow }) => {
     const [window] = BrowserWindow.getAllWindows()
@@ -262,13 +242,13 @@ test('edit menu redo in docked devtools leaves the note alone', {
 })
 
 for (const route of ['menu', 'shortcut']) {
-  test('codemirror: read-only ' +
+  test('read-only ' +
     route +
     ' redo preserves source and history until editing resumes', {
     timeout: 60000,
   }, async (t) => {
     const { app, page, rich, menu, markdown, settle, typeAndUndo } =
-      await launch(t, 'codemirror', true)
+      await launch(t, true)
     await page.waitForFunction(() => !!window.readonlyCodeMirror)
     const undone = await typeAndUndo()
     await page.evaluate(() => window.hibi.flushDocumentChanges())

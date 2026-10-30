@@ -8,8 +8,6 @@ import { Marked } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
 import { exportOptions } from '../src/addons/documentation/options.ts'
 import { prepareSite, siteFiles } from '../src/addons/documentation/site.ts'
-import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
-import { hasDocumentFootnotes } from '../src/renderer/src/document-shell.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
@@ -29,107 +27,14 @@ test('footnote definitions are distinguished from code and ordinary links', () =
   assert.equal(hasFootnoteDefinitions('An unresolved note[^source].'), false)
 })
 
-test('legacy synchronous footnote fallback sees definitions behind invalid titles', async () => {
+test('footnote definitions behind invalid titles are found once the block grammar loads', async () => {
   const repro = '[ref]: /x "a\n\n[^1]: note\n"\n\ntext[^1]'
-  const code = '```md\n[^source]: note\n```'
   // Plain marked misses this definition; the lazy block grammar finds it.
   assert.equal(hasFootnoteDefinitions(repro), false)
-  const runtime = { sourceFor: (document) => document.source }
-  const note = (markdown) => ({ markdown, source: { utf16Length: 0 } })
-  const [invalidTitle, fenced, plain] = [repro, code, source].map(note)
-  // Before the block grammar loads, unplaced definitions keep rich views closed.
-  assert.equal(hasDocumentFootnotes(runtime, invalidTitle), true)
-  assert.equal(hasDocumentFootnotes(runtime, fenced), true)
   await import('../src/renderer/src/markdown-detectors.ts')
   assert.equal(hasFootnoteDefinitions(repro), true)
-  assert.equal(hasDocumentFootnotes(runtime, invalidTitle), true)
-  assert.equal(hasDocumentFootnotes(runtime, fenced), false)
-  assert.equal(hasDocumentFootnotes(runtime, plain), true)
-})
-
-test('shell renders lex each unchanged source once across panes and unsaved edits', async (t) => {
-  await import('../src/renderer/src/markdown-detectors.ts')
-  let lexes = 0
-  const { lexer } = Marked.prototype
-  Marked.prototype.lexer = function (...input) {
-    lexes++
-    return lexer.apply(this, input)
-  }
-  t.after(() => {
-    Marked.prototype.lexer = lexer
-  })
-  const runtime = new DocumentRuntime({
-    enqueue() {},
-    onError(error) {
-      throw error
-    },
-  })
-  t.after(() => runtime.dispose())
-  const tabs = ['notes', 'example'].map((id) => ({
-    id,
-    name: `${id}.md`,
-    dirty: false,
-  }))
-  const open = (tabId, markdown) =>
-    runtime.activate({
-      tabId,
-      tabs,
-      tabsEnabled: true,
-      id: `file-${tabId}`,
-      ephemeral: false,
-      markdown,
-      savedMarkdown: markdown,
-      name: `${tabId}.md`,
-      dirty: false,
-      revision: 1,
-      contentVersion: 0,
-      canAutosave: true,
-    })
-  // A fenced example still passes the cheap marker test.
-  open('example', '```md\n[^source]: note\n```')
-  let shell = open('notes', source)
-  // The app checks its latest active source, then each rendered pane.
-  const render = (split) =>
-    [
-      runtime.get(),
-      ...(split ? [runtime.get('notes'), runtime.get('example')] : [shell]),
-    ].map((document) => hasDocumentFootnotes(runtime, document))
-  for (let i = 0; i < 20; i++) assert.deepEqual(render(false), [true, true])
-  assert.equal(lexes, 1)
-  for (let i = 0; i < 20; i++)
-    assert.deepEqual(render(true), [true, true, false])
-  assert.equal(lexes, 2)
-
-  // Unsaved edits keep the disk revision but publish a new source.
-  runtime.replace(`${source.replace('[^source]:', '```\n[^source]:')}\n\`\`\``)
-  assert.equal(runtime.get().revision, 1)
-  assert.equal(runtime.get().dirty, true)
-  assert.deepEqual(render(false), [false, true])
-  shell = runtime.get()
-  for (let i = 0; i < 20; i++) assert.deepEqual(render(false), [false, false])
-  for (let i = 0; i < 20; i++)
-    assert.deepEqual(render(true), [false, false, false])
-  assert.equal(lexes, 3)
-
-  // A save acknowledgment changes shell metadata, not the source.
-  const edited = runtime.get()
-  runtime.acknowledgeSave(
-    { ...edited, savedMarkdown: edited.markdown },
-    runtime.beginSave(),
-  )
-  shell = runtime.get()
-  assert.notEqual(shell, edited)
-  assert.equal(shell.dirty, false)
-  for (let i = 0; i < 20; i++)
-    assert.deepEqual(render(true), [false, false, false])
-  assert.equal(lexes, 3)
-
-  runtime.session().undo()
-  shell = runtime.get()
-  assert.equal(shell.markdown, source)
-  for (let i = 0; i < 20; i++)
-    assert.deepEqual(render(true), [true, true, false])
-  assert.equal(lexes, 4)
+  assert.equal(hasFootnoteDefinitions('```md\n[^source]: note\n```'), false)
+  assert.equal(hasFootnoteDefinitions(source), true)
 })
 
 test('footnotes render once per reference and retain export anchors', async () => {
@@ -489,26 +394,28 @@ test('source footnotes preview and save without changing markdown', {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  // The footnote preview stands in for the Tiptap editor, which cannot draw
-  // footnotes; the formatted view draws them itself.
-  await selectFormattedEngine(app, page, 'tiptap')
   await pressShortcut(app, `${mod}+Shift+]`)
   const editor = page.getByRole('textbox', { name: /markdown editor/i })
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, editor, source)
   await page.getByRole('button', { name: /^side-by-side$/i }).click()
-  const preview = page.locator('.markdown-footnote-preview')
-  await preview.locator('[data-footnotes]').waitFor()
-  assert.equal(
-    await page.getByRole('button', { name: /^normal$/i }).isDisabled(),
-    true,
+  // The formatted view beside the source draws the footnotes.
+  const preview = page.locator('.rich-pane')
+  await preview
+    .locator('.hibi-lp-footnote-ref', { hasText: 'source' })
+    .first()
+    .waitFor()
+  assert.deepEqual(
+    await preview.locator('.hibi-lp-footnote-ref').allTextContents(),
+    ['source', 'source'],
   )
-  assert.equal(await preview.locator('[data-footnote-ref]').count(), 2)
   assert.equal(
-    await preview.locator('li#fn-source strong').innerText(),
+    await preview
+      .locator('.cm-line', { hasText: 'line.' })
+      .locator('.hibi-lp-strong')
+      .innerText(),
     'First',
   )
-  assert.equal(await preview.locator('[data-footnote-backref]').count(), 2)
   assert.equal(await windowMarkdown(page), source)
 
   await app.evaluate(({ dialog }, filePath) => {
@@ -523,15 +430,14 @@ test('source footnotes preview and save without changing markdown', {
     editor,
     'Unsafe[^note].\n\n[^note]: <img src="x" onerror="window.footnoteAttack=true">',
   )
-  await preview.locator('li#fn-note img').waitFor({ state: 'attached' })
-  assert.equal(
-    await preview.locator('li#fn-note img').getAttribute('onerror'),
-    null,
-  )
-  assert.equal(
-    await preview.locator('li#fn-note img').getAttribute('src'),
-    null,
-  )
+  // The definition's markup stays literal source, never a live element.
+  await preview
+    .locator('.hibi-lp-html', {
+      hasText: '<img src="x" onerror="window.footnoteAttack=true">',
+    })
+    .waitFor()
+  await preview.locator('.hibi-lp-footnote-ref', { hasText: 'note' }).waitFor()
+  assert.equal(await preview.locator('img').count(), 0)
   assert.equal(await page.evaluate(() => window.footnoteAttack), undefined)
   assert.deepEqual(errors, [])
 })

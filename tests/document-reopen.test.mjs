@@ -638,3 +638,43 @@ test('reopening a dirty document prompts before discarding external or local tex
     ['Save changes to note.md?', 'This file changed outside Hibi.'],
   )
 })
+
+test('Cancel on one note still opens the other files from Finder', {
+  timeout: 120000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, notes, file, read, idle, content } = setupState
+  const { select, answer, prompts, state, type } = setupState
+  const note = (await read()).tabId
+  const draft = await type('local draft')
+  await writeFile(file, 'outside text\n')
+  const later = join(notes, 'later.md')
+  await writeFile(later, 'later note\n')
+  // One request opens both files, and Cancel answers the note's prompt.
+  await answer(2)
+  const done = await replied(app, 'document:external')
+  await app.evaluate(
+    ({ app }, paths) =>
+      app.emit(
+        'second-instance',
+        {},
+        ['electron', 'app', ...paths],
+        process.cwd(),
+      ),
+    [file, later],
+  )
+  await done()
+  await idle()
+  assert.deepEqual(await prompts(), ['Save changes to note.md?'])
+  await content('later note\n')
+  // Cancel kept the note's edits and the outside text.
+  await select(note)
+  assert.deepEqual(await prompts(), [])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(file, 'utf8'), 'outside text\n')
+})

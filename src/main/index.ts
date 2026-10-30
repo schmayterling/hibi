@@ -2571,9 +2571,9 @@ if (!app.requestSingleInstanceLock()) {
             try {
               if (!isDocumentName(path))
                 throw new Error('Unsupported document format.')
+              // Cancel keeps one note as it is; the other files still open.
               const opened = await loadDocument(window, path)
-              if (!opened) break
-              document = opened
+              if (opened) document = opened
             } catch (error) {
               errors.push(
                 `${basename(path)}: ${error instanceof Error ? error.message : 'Could not open file.'}`,

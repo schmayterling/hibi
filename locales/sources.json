@@ -2811,6 +2811,9 @@
   "40cd6293d193": [
     "src/renderer/src/AddonPanel.tsx"
   ],
+  "49f28ffe7747": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
   "460e661f4720": [
     "src/renderer/src/ToolbarSettings.tsx"
   ],
@@ -2823,6 +2826,9 @@
   "a71a84873c4e": [
     "src/renderer/src/SettingsScreen.tsx",
     "src/renderer/src/main.tsx"
+  ],
+  "5a9023c9b2c0": [
+    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "721eb80bb358": [
     "src/renderer/src/WorkspacesSidebar.tsx"
@@ -3345,6 +3351,9 @@
   ],
   "9a9bb3ad8cbc": [
     "src/renderer/src/addon-views.ts"
+  ],
+  "3f7e8edecd18": [
+    "src/main/window-controls.ts"
   ],
   "38f048094b0e": [
     "src/main/workspace-settings.ts"
@@ -7295,6 +7304,9 @@
   ],
   "19734a1b58ca": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "9b22ad2bf7bf": [
+    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "653913ac0e67": [
     "src/addons/word-count/hibi-addon.json"

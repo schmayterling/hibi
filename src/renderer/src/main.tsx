@@ -2918,6 +2918,7 @@ function App() {
         } as CSSProperties
       }
       data-platform={info?.platform}
+      data-window-controls-hidden={info?.windowControlsHidden}
       data-screen={settingsOpen ? 'settings' : 'editor'}
       data-zen={zen && !settingsOpen}
       data-typing={typing && hideTitlebar}

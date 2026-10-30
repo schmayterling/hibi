@@ -43,6 +43,7 @@ import type {
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
+import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
 import {
   type KnownWorkspace,
   toRecentWorkspaces,
@@ -482,6 +483,10 @@ if (process.isMainFrame) {
       ),
     setAppearance: (appearance) =>
       ipcRenderer.invoke(APPEARANCE_CHANNEL, appearance),
+    getHideWindowControls: () =>
+      ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.get),
+    setHideWindowControls: (hidden) =>
+      ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.set, hidden),
     getAddonStates: () => ipcRenderer.invoke(ADDON_CHANNELS.states),
     setAddonEnabled: (id, enabled, includeRequired) =>
       ipcRenderer.invoke(ADDON_CHANNELS.enable, id, enabled, includeRequired),

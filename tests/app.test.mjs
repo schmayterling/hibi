@@ -140,6 +140,8 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'writeClipboardText',
         'copyWorkspacePaths',
         'setAppearance',
+        'getHideWindowControls',
+        'setHideWindowControls',
         'getAddonStates',
         'setAddonEnabled',
         'readAddonStorage',

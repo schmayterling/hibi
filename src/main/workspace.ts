@@ -1051,7 +1051,7 @@ export async function deleteKnownWorkspace(
     if (currentId) removedCaches.add(currentId)
   }
   await shell.trashItem(item.path)
-  closeDeletedDocuments(window, item.path)
+  await closeDeletedDocuments(window, item.path)
   if (root === item.path || root?.startsWith(`${item.path}${sep}`)) {
     cancelWorkspaceLoad()
     watcher?.close()

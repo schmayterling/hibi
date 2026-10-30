@@ -577,14 +577,21 @@ function containsPath(parent: string, file: string | null) {
   if (!file) return false
   return isPathInside(parent, file)
 }
-function removeTabs(
+async function removeTabs(
   window: BrowserWindow,
   ids: Set<string>,
   preferredTab?: string,
 ) {
   storeTab()
-  const order = [...tabs.keys()]
-  const currentIndex = order.indexOf(activeTab)
+  if (ids.has(activeTab)) {
+    const order = [...tabs.keys()]
+    const next =
+      (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
+      order.slice(order.indexOf(activeTab) + 1).find((id) => !ids.has(id)) ??
+      order.findLast((id) => !ids.has(id))
+    // The tab shown next is checked for outside changes, as a tab switch does.
+    if (next) await selectDocumentTab(window, next, false)
+  }
   for (const id of ids) {
     tabs.delete(id)
     dirtyTabs.delete(id)
@@ -592,18 +599,9 @@ function removeTabs(
   back = back.filter((id) => !ids.has(id))
   forward = forward.filter((id) => !ids.has(id))
   if (ids.has(activeTab)) {
-    const next =
-      (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
-      order.slice(currentIndex + 1).find((id) => tabs.has(id)) ??
-      [...tabs.keys()].at(-1)
-    if (next) {
-      activateTab(next)
-      advanceRevision()
-    } else {
-      activeTab = randomUUID()
-      activeTabOpen = false
-      clearDocument(window, false)
-    }
+    activeTab = randomUUID()
+    activeTabOpen = false
+    clearDocument(window, false)
   }
   refreshDirtyIndicator(window)
   return getDocument()
@@ -658,7 +656,10 @@ export function moveDocumentTab(id: unknown, beforeId: unknown) {
   for (const [key, value] of entries) tabs.set(key, value)
   return getDocument()
 }
-export function closeDeletedDocuments(window: BrowserWindow, parent: string) {
+export async function closeDeletedDocuments(
+  window: BrowserWindow,
+  parent: string,
+) {
   return removeTabs(
     window,
     new Set(

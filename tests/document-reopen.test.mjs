@@ -8,12 +8,21 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import nodeTest from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
+
+// Newer cases run in the CodeMirror formatted view only; Tiptap is being removed.
+function codemirrorTest(name, options, run) {
+  nodeTest(`codemirror: ${name}`, options, (t) => {
+    t.formattedEngine = 'codemirror'
+    return run(t)
+  })
+}
 
 // Resolves once main has finished the next request on this channel.
 async function replied(app, channel) {
@@ -966,3 +975,52 @@ test('a link to the note itself, its explorer row and dropping it check for outs
     ephemeral: false,
   })
 })
+
+codemirrorTest(
+  'closing a tab checks the tab shown next for outside changes',
+  {
+    timeout: 150000,
+  },
+  async (t) => {
+    const setupState = await setup(t)
+    const { app, page, notes, file, read, idle, open, content } = setupState
+    const { answer, prompts, state, type } = setupState
+    const note = (await read()).tabId
+    const close = async () => {
+      const done = await replied(app, 'document:close-tab')
+      await page.getByRole('button', { name: /^close other\.md$/i }).click()
+      await done()
+      await idle()
+      return prompts()
+    }
+    await writeFile(join(notes, 'other.md'), 'other note\n')
+    await answer(2, join(notes, 'other.md'))
+    await open()
+    await content('other note\n')
+    // A clean tab shows its file's latest text, as a tab switch does.
+    await writeFile(file, 'outside text\n')
+    assert.deepEqual(await close(), [])
+    assert.deepEqual(await state(), {
+      tabId: note,
+      markdown: 'outside text\n',
+      dirty: false,
+      ephemeral: false,
+    })
+    await content('outside text\n')
+    // Edits whose file changed ask once; Cancel keeps the edits and the file.
+    const draft = await type('local draft')
+    await open()
+    await content('other note\n')
+    await writeFile(file, 'another outside text\n')
+    await answer(1)
+    assert.deepEqual(await close(), ['note.md changed outside Hibi.'])
+    assert.deepEqual(await state(), {
+      tabId: note,
+      markdown: draft,
+      dirty: true,
+      ephemeral: false,
+    })
+    await content(draft)
+    assert.equal(await readFile(file, 'utf8'), 'another outside text\n')
+  },
+)

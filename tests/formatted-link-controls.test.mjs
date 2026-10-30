@@ -696,6 +696,64 @@ test('codemirror editor actions menu groups its actions and keeps menu keys', {
   )
 })
 
+test('codemirror table cell link menu holds the editor actions of addons too', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, editor } = await open(t, { dictionary: true })
+  await offline(app)
+  await place(
+    editor,
+    0,
+    'Intro\n\n| name |\n| --- |\n| [cats](https://cell.example) and dogs |\n',
+  )
+  const menu = page.getByRole('menu', { name: 'Editor actions', exact: true })
+  const expected = [
+    'Edit link…',
+    'Open link',
+    'Copy link',
+    'Remove link',
+    '| Define word',
+    'Find synonyms',
+    'Add word to dictionary',
+  ]
+  // From outside the cell, and from its editor.
+  await page.getByRole('link', { name: 'cats', exact: true }).click({
+    button: 'right',
+  })
+  await menu
+    .getByRole('menuitem', { name: 'Define word', exact: true })
+    .waitFor()
+  await settle(page)
+  assert.equal(await menu.isVisible(), true)
+  assert.deepEqual(await groupedItems(menu), expected)
+  await menu.getByRole('menuitem', { name: 'Copy link', exact: true }).click()
+  await menu.waitFor({ state: 'hidden' })
+  assert.equal(
+    await app.evaluate(() => globalThis.copiedLink),
+    'https://cell.example',
+  )
+  // In the cell's editor, away from its caret, the menu stays open.
+  await page.getByRole('link', { name: 'cats', exact: true }).click()
+  const cell = page
+    .locator('.hibi-lp-cell-editor')
+    .getByRole('link', { name: 'cats', exact: true })
+  await cell.waitFor()
+  await page.keyboard.press('End')
+  await cell.click({ button: 'right' })
+  await menu
+    .getByRole('menuitem', { name: 'Define word', exact: true })
+    .waitFor()
+  await settle(page)
+  assert.equal(await menu.isVisible(), true)
+  assert.deepEqual(await groupedItems(menu), expected)
+  await page.keyboard.press('Escape')
+  await menu.waitFor({ state: 'hidden' })
+  // Shift+F10 in the cell opens it too, and its addon actions run.
+  await page.keyboard.press('Shift+F10')
+  await menu.getByRole('menuitem', { name: 'Define word', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Define “cats”' }).waitFor()
+})
+
 test('codemirror read-only link actions open and copy but refuse edits', {
   timeout: 60000,
 }, async (t) => {

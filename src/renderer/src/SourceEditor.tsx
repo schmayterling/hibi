@@ -133,6 +133,7 @@ import { definitionOf } from './formatted/footnote-definitions'
 import { linkControls } from './formatted/link-controls'
 import {
   followsLink,
+  formattedCellExtensions,
   formattedDocument,
   formattedFollowLink,
   formattedRefresh,
@@ -146,6 +147,7 @@ import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
+import { readDOMPosition } from './native-dom-selection'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -481,6 +483,49 @@ function isolateFeatures(
     (part) => !failing.some((failure) => failure.part === part),
   )
 }
+
+// A right-click places the caret at once, which the page would place
+// only after the menu opens: the menu then acts there and stays open. Table
+// cells' editors take it too.
+const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
+  // macOS opens the menu on a Control+click too.
+  const control =
+    event.button === 0 &&
+    event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    /Mac/.test(navigator.platform)
+  const widget =
+    event.target instanceof Element &&
+    event.target.closest('[contenteditable="false"]')
+  if (
+    (event.button !== 2 && !control) ||
+    (widget && view.contentDOM.contains(widget))
+  )
+    return null
+  const pressed = view.posAtCoords({
+    x: event.clientX,
+    y: event.clientY,
+  })
+  if (pressed === null) return null
+  const { from, to } = view.state.selection.main
+  // A press in the selection keeps it.
+  if (from < to && pressed >= from && pressed <= to) {
+    if (!control) return null
+    // A click collapses it on release; this keeps it. Focused now,
+    // the editor does not select it again on release either, as it
+    // does after taking focus.
+    view.focus()
+    return { get: () => view.state.selection, update: () => false }
+  }
+  let at = pressed
+  return {
+    get: () => EditorSelection.single(at),
+    update: (update) => {
+      at = update.changes.mapPos(at)
+    },
+  }
+})
 
 export function SourceEditor({
   document,
@@ -1331,6 +1376,11 @@ export function SourceEditor({
         trigger,
       }
     }
+    // A table cell's editor, inside the view, holds its focus while editing.
+    const holdsFocus = () => {
+      const page = editor.contentDOM.ownerDocument
+      return page.hasFocus() && editor.contentDOM.contains(page.activeElement)
+    }
     const captureInteraction = (
       position: number,
       allowBlurred = false,
@@ -1343,7 +1393,7 @@ export function SourceEditor({
       const selected = editor.state.selection
       if (
         view.current !== editor ||
-        (!editor.hasFocus && !allowBlurred) ||
+        (!holdsFocus() && !allowBlurred) ||
         editor.composing ||
         !context.editTarget ||
         context.disabled ||
@@ -2058,45 +2108,8 @@ export function SourceEditor({
               return position != null && followLink(view, position)
             },
           }),
-          // A right-click places the caret at once, which the page would place
-          // only after the menu opens: the menu then acts there and stays open.
-          EditorView.mouseSelectionStyle.of((view, event) => {
-            // macOS opens the menu on a Control+click too.
-            const control =
-              event.button === 0 &&
-              event.ctrlKey &&
-              !event.metaKey &&
-              !event.shiftKey &&
-              /Mac/.test(navigator.platform)
-            if (
-              (event.button !== 2 && !control) ||
-              (event.target instanceof Element &&
-                event.target.closest('[contenteditable="false"]'))
-            )
-              return null
-            const pressed = view.posAtCoords({
-              x: event.clientX,
-              y: event.clientY,
-            })
-            if (pressed === null) return null
-            const { from, to } = view.state.selection.main
-            // A press in the selection keeps it.
-            if (from < to && pressed >= from && pressed <= to) {
-              if (!control) return null
-              // A click collapses it on release; this keeps it. Focused now,
-              // the editor does not select it again on release either, as it
-              // does after taking focus.
-              view.focus()
-              return { get: () => view.state.selection, update: () => false }
-            }
-            let at = pressed
-            return {
-              get: () => EditorSelection.single(at),
-              update: (update) => {
-                at = update.changes.mapPos(at)
-              },
-            }
-          }),
+          rightPress,
+          formatted ? formattedCellExtensions.of(() => rightPress) : [],
           keymap.of([
             { key: 'Ctrl-a', run: sourceCommands.selectAll },
             ...sourceCommands.defaultKeymap,
@@ -2236,11 +2249,15 @@ export function SourceEditor({
                 new Event('hibi:source-caret', { bubbles: true }),
               )
             // CodeMirror reports a regained focus a moment late, which must
-            // not close a menu opened in the meantime.
+            // not close a menu opened in the meantime; nor does focus that
+            // moves into a table cell's editor.
             if (
               update.docChanged ||
               update.selectionSet ||
-              (update.focusChanged && !update.view.hasFocus)
+              (update.focusChanged &&
+                !update.view.contentDOM.contains(
+                  update.view.root.activeElement,
+                ))
             )
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:editor-interactions-invalidate'),
@@ -2636,12 +2653,26 @@ export function SourceEditor({
             return
           detachInteractions = attachEditorInteractions({
             element: editor.contentDOM,
-            positionAt: (x, y) => editor.posAtCoords({ x, y }, false),
+            positionAt: (x, y) => {
+              // A table cell's text has its own positions.
+              const range = editor.contentDOM.ownerDocument.caretRangeFromPoint(
+                x,
+                y,
+              )
+              const cell =
+                range &&
+                readDOMPosition(editor, range.startContainer, range.startOffset)
+              return cell?.mapped
+                ? cell.at
+                : editor.posAtCoords({ x, y }, false)
+            },
             anchorAt: (position) => editor.coordsAtPos(position),
             selectionPosition: () => editor.state.selection.main.head,
             capture: captureInteraction,
             apply: applyInteraction,
-            focus: () => editor.focus(),
+            focus: () => {
+              if (!holdsFocus()) editor.focus()
+            },
             error: (error) => setInputError(String(error)),
           })
         })

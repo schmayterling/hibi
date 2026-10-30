@@ -370,6 +370,11 @@ test('code and definition continuations bound paragraph merge work', () => {
   }
 })
 
+// Each shape at one MiB does work that grows with the note: the quote line
+// checks, through Marked's shared quote start rule, and the setext scan
+// units. Cpu time, which other work on the machine stretches far less than
+// wall time, stays far below the minutes a quadratic parse takes.
+const alert = '> [!NOTE]\n> # h\nlazy\n'
 for (const [shape, unit] of Object.entries({
   giant,
   lazy,
@@ -379,22 +384,35 @@ for (const [shape, unit] of Object.entries({
   heading,
   fence,
   nested,
+  alert,
 })) {
   const source = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
   for (const operation of ['export', 'count']) {
-    test(`one MiB ${shape} quote ${operation} stays under 20 seconds`, () => {
-      const start = performance.now()
-      const result =
-        operation === 'export'
-          ? parser().parse(source, { async: false })
-          : countText(richText(source, syntax))
-      const elapsed = performance.now() - start
+    test(`one MiB ${shape} quote ${operation} does linear work`, () => {
+      const start = new Lexer().tokenizer.rules.other.blockquoteStart
+      let checks = 0
+      start.test = function (text) {
+        checks++
+        return RegExp.prototype.test.call(this, text)
+      }
+      blockScanCounters.units = 0
+      const cpu = process.cpuUsage()
+      let result
+      try {
+        result =
+          operation === 'export'
+            ? parser().parse(source, { async: false })
+            : countText(richText(source, syntax))
+      } finally {
+        delete start.test
+      }
+      const { user, system } = process.cpuUsage(cpu)
       const units = source.length / unit.length
       if (operation === 'export') {
         const pattern =
           shape === 'giant'
             ? /<m>/g
-            : shape === 'lazy' || shape === 'heading'
+            : shape === 'lazy' || shape === 'heading' || shape === 'alert'
               ? /<h1>/g
               : shape === 'list'
                 ? /<ul>/g
@@ -416,7 +434,13 @@ for (const [shape, unit] of Object.entries({
           result.words,
           units * (shape === 'lazy' || shape === 'nested' ? 3 : 2),
         )
-      assert.ok(elapsed < 20000, `${operation}: ${elapsed.toFixed(0)}ms`)
+      assert.ok(checks < source.length * 4, `quote line checks: ${checks}`)
+      assert.ok(
+        blockScanCounters.units < source.length * 8,
+        `setext units: ${blockScanCounters.units}`,
+      )
+      const seconds = (user + system) / 1e6
+      assert.ok(seconds < 30, `${operation}: ${seconds.toFixed(1)} s of cpu`)
     })
   }
 }

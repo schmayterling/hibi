@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import native from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  waitForAddonCommand,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import {
   selectFormattedEngine,
   testFormattedEngines as test,
@@ -315,6 +319,7 @@ async function dictionarySplitCase(t) {
   await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
+  await waitForAddonCommand(page, 'dictionary.synonyms')
   const responses = {
     'https://api.datamuse.com/words?rel_syn=happy&max=24': await fixture(
       'datamuse-synonyms-happy.json',

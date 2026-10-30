@@ -1122,6 +1122,18 @@ export function waitForAppState(page, check, timeout = 10000) {
   return waitForAsync(page, check, undefined, { timeout, polling: 100 })
 }
 
+/** A background addon has its commands, shortcuts and menu items only once it has started. */
+export function waitForAddonCommand(page, id) {
+  return waitForAsync(
+    page,
+    async (id) =>
+      (await window.hibi.getAddonHotkeys()).some(
+        (binding) => binding.id === id,
+      ),
+    id,
+  )
+}
+
 export async function crashAndReload(application) {
   // Drain pending locator disposal before replacing Playwright's debug target.
   await (await application.firstWindow()).evaluate(() => undefined)

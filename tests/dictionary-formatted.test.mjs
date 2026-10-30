@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  waitForAddonCommand,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -82,6 +86,7 @@ async function launch(t, files, engine = 'codemirror') {
     )
     await waitForDocumentEditor(app, page)
   }
+  await waitForAddonCommand(page, 'dictionary.synonyms')
   return { app, page, open }
 }
 

@@ -151,9 +151,15 @@ function quoteScan(
 }
 
 // A nested re-read takes its lines from the enclosing reader as it asks for
-// them, and reports how many it consumed. A tab in a line the enclosing
-// reader has not put under column state ends the feed; the retry installs it.
-type QuoteHandoff = { lines: QuoteFeed; taken: number; tabs?: boolean }
+// them, and reports how many it consumed and the length of the raw it read.
+// A tab in a line the enclosing reader has not put under column state ends
+// the feed; the retry installs it.
+type QuoteHandoff = {
+  lines: QuoteFeed
+  taken: number
+  length?: number
+  tabs?: boolean
+}
 let quoteFeed: QuoteHandoff | undefined
 // A quote's raw text that its extensions re-read, and the source it was read
 // from: the raw is no suffix of the frame, so its row comes from the source.
@@ -252,6 +258,21 @@ function plainSplice(
       lines[index] = lines[index]!.slice(spaces)
   }
   return { length: own.length - from, value: lines.join('\n') }
+}
+
+// The lines of a nested re-read's input that Marked counts as read: it keeps
+// the input after the new quote's raw, less one newline, by length, so a raw
+// that a list re-read changed takes other lines than the quote itself read.
+function readLines(lines: QuoteFeed, length: number) {
+  let index = 0,
+    at = 0,
+    line = lines(0)
+  while (line !== undefined && at + line.length <= length) {
+    at += line.length
+    line = lines(++index)
+  }
+  if (line?.[length - at] === '\n') index += lines(index + 1) === '' ? 2 : 1
+  return index
 }
 
 // Find the native list boundary without running child tokenizers or inline
@@ -561,9 +582,16 @@ function readQuote(
         }
         tokens[tokens.length - 1] = quote
         let used = inner.taken - prefix.length
-        // Marked counts the lines its re-read leaves from the text after it:
-        // a last quote line that strips to nothing counts as none.
-        const rest = used >= 0 ? lineAt(used) : undefined
+        if (!scope?.columns) {
+          const read =
+            readLines(inner.lines, inner.length ?? quote.raw.length) -
+            prefix.length
+          if (!scope?.columns) used = read
+        }
+        // Under tab columns the raw and the widened input need not share
+        // lengths: count the lines the re-read took. A last quote line that
+        // strips to nothing still counts, as Marked leaves no text after it.
+        const rest = scope?.columns && used >= 0 ? lineAt(used) : undefined
         if (
           rest !== undefined &&
           lineAt(used + 1) === undefined &&
@@ -619,6 +647,7 @@ function readQuote(
   if (adopted) state!.origins.set(token, origin!)
   // Under its own column state the raw stays a slice of the source.
   if (release) token.raw = source.slice(0, token.raw.length)
+  if (handoff) handoff.length = token.raw.length
   return token
 }
 

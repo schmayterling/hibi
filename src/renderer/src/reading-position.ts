@@ -1,4 +1,13 @@
+import { Facet } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
+
+/**
+ * Whether the view placed the selection itself, as a note opens with its
+ * caret at the end, so it is not where the reader is.
+ */
+export const placedSelection = Facet.define<boolean, boolean>({
+  combine: (values) => values.some(Boolean),
+})
 
 const scrollRequests = new WeakMap<EditorView, number>()
 
@@ -35,7 +44,8 @@ function readingPosition(view: EditorView): Reading | null {
     bottom: window.innerHeight,
   }
   let pos = view.state.selection.main.head
-  let at = view.coordsAtPos(pos, 1)
+  // A caret the view placed is not where the reader is.
+  let at = view.state.facet(placedSelection) ? null : view.coordsAtPos(pos, 1)
   if (!at || at.top < top || at.top > bottom) {
     const { documentTop } = view
     let block = view.lineBlockAtHeight(top - documentTop)

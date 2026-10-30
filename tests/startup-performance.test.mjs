@@ -129,6 +129,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
+  assert.doesNotMatch(
+    modules,
+    /src\/(?:renderer\/src\/local-diagnostics-report|shared\/local-diagnostics(?:-budget)?)\.ts/,
+  )
   assert.doesNotMatch(modules, /markdown-flavor-guard\.ts|flavor-syntax\.ts/)
   assert.doesNotMatch(
     modules,

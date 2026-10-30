@@ -211,7 +211,9 @@ export async function applyAddonRevocations(): Promise<void> {
 }
 
 export async function stopNativeAddons() {
-  await Promise.all([...natives.values()].map(stopNativeAddon))
+  await Promise.all(
+    [...natives.values()].map((native) => stopNativeAddon(native, true)),
+  )
 }
 
 export function getAddonStartupNotices() {

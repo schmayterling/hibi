@@ -442,7 +442,12 @@ Footnote [^Happy] here
       (notices) => window.noWordNotices > notices,
       notices,
     )
-    assert.equal(await page.getByRole('dialog').count(), 0, `offset ${at}`)
+    // A reference can show link actions without opening a dictionary dialog.
+    assert.equal(
+      await page.getByRole('dialog', { name: /^Synonyms for / }).count(),
+      0,
+      `offset ${at}`,
+    )
     assert.equal(await markdown(page), note)
   }
 })

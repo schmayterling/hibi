@@ -8,6 +8,12 @@ let queue = Promise.resolve()
 port.on('message', (job: { seq: number; method: string; input: unknown }) => {
   queue = queue.then(async () => {
     try {
+      if (job.method === 'close') {
+        if (database) (await database).close()
+        port.postMessage({ seq: job.seq, result: null })
+        port.close()
+        return
+      }
       if (!database) {
         const opening = CustomWordDatabase.open(workerData.profile)
         database = opening

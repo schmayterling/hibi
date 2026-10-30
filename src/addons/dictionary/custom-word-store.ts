@@ -1,4 +1,5 @@
 import { Worker } from 'node:worker_threads'
+import { reportOwnedFailure } from '../../main/local-diagnostics/owned.ts'
 
 type WordMethod = 'metadata' | 'get' | 'page' | 'lookup' | 'complete' | 'change'
 
@@ -6,6 +7,7 @@ type WordMethod = 'metadata' | 'get' | 'page' | 'lookup' | 'complete' | 'change'
 export class CustomWordStore {
   private worker: Worker | undefined
   private closed = false
+  private closing: Promise<void> | undefined
   private seq = 0
   private pending = new Map<
     number,
@@ -40,7 +42,6 @@ export class CustomWordStore {
     const operation = this.queue
       .catch(() => {})
       .then(() => {
-        if (this.closed) throw new Error('Dictionary packs are closed.')
         if (!isCurrent())
           throw new Error(
             'This addon was disabled. Enable it in Settings → Addons to continue.',
@@ -52,7 +53,10 @@ export class CustomWordStore {
       this.queued--
     })
   }
-  private send(method: WordMethod, input?: unknown): Promise<unknown> {
+  private send(
+    method: WordMethod | 'close',
+    input?: unknown,
+  ): Promise<unknown> {
     if (!this.worker) {
       const worker = new Worker(this.path, {
         workerData: { profile: this.profile },
@@ -99,11 +103,44 @@ export class CustomWordStore {
     for (const pending of this.pending.values()) pending.reject(error)
     this.pending.clear()
   }
-  async close() {
+  close(): Promise<void> {
     this.closed = true
+    this.closing ??= this.finishClose().catch((error) => {
+      this.closing = undefined
+      throw error
+    })
+    return this.closing
+  }
+  private async finishClose() {
+    // Already admitted writes finish before SQLite checkpoints and closes.
+    await this.queue.catch(() => {})
     const worker = this.worker
     if (!worker) return
-    this.fail(worker, new Error('Dictionary packs are closed.'))
-    await worker.terminate()
+    let exited!: (code: number) => void
+    const exit = new Promise<void>((resolve, reject) => {
+      exited = (code) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`Dictionary worker exited (${code})`))
+      worker.once('exit', exited)
+    })
+    // A close error leaves the worker alive for a later quit/disable retry.
+    void exit.catch(() => {})
+    reportOwnedFailure('SQLITE_CLOSE_STARTED', 'dictionary')
+    const timer = setTimeout(
+      () => reportOwnedFailure('SQLITE_CLOSE_WAITING', 'dictionary'),
+      1500,
+    )
+    try {
+      await this.send('close')
+      await exit
+      reportOwnedFailure('SQLITE_CLOSED', 'dictionary')
+    } catch (error) {
+      reportOwnedFailure('SQLITE_CLOSE_FAILED', 'dictionary', error)
+      throw error
+    } finally {
+      clearTimeout(timer)
+      worker.removeListener('exit', exited)
+    }
   }
 }

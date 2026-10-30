@@ -48,7 +48,6 @@ import { CodeSyntaxSettings } from './CodeSyntaxSettings'
 import { colorschemes } from './colorschemes'
 import { DependencySettings } from './DependencySettings'
 import type { CursorSettings } from './EditorCursor'
-import { ToolbarSettings } from './EditorToolbar'
 import { FormatsSettings } from './FormatsSettings'
 import { codemirrorFormattedView } from './formatted-engine'
 import { HibiSettings } from './HibiSettings'
@@ -65,6 +64,7 @@ import {
   settingsNavigation,
 } from './settings-categories'
 import { settingsCategory, settingsPages } from './settings-pages'
+import { ToolbarSettings } from './ToolbarSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 
 class PluginSettingsBoundary extends Component<

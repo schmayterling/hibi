@@ -57,6 +57,13 @@ async function open(name, doc, token) {
   }, file)
   await pressShortcut(app, `${mod}+o`)
   await page.locator('.rich-pane .cm-line', { hasText: token }).waitFor()
+  // A note's text shows before its view takes input and before the block
+  // drag addon adds its handle; a pointer already resting there gets no
+  // handle until it moves again.
+  await page
+    .locator('.rich-pane .block-drag-handle')
+    .waitFor({ state: 'attached' })
+  await page.locator('.rich-pane .cm-content[aria-readonly="false"]').waitFor()
 }
 async function menu(token) {
   const line = page.locator('.rich-pane .cm-line', { hasText: token })

@@ -116,6 +116,9 @@ export function attachEditorInteractions(adapter: Adapter) {
   } | null = null
   let commandRelease: (() => void) | null = null
   let releaseMenu: (() => void) | null = null
+  // The focused editor, the main one or a table cell's within it, which
+  // names the open menu and its selected action.
+  let described: HTMLElement | null = null
   let menuGeneration = 0
   let selected = 0
   let disposed = false
@@ -126,11 +129,14 @@ export function attachEditorInteractions(adapter: Adapter) {
       releaseMenu = null
       // Another popup's, such as completions', stays.
       if (
-        adapter.element
-          .getAttribute('aria-activedescendant')
+        described
+          ?.getAttribute('aria-activedescendant')
           ?.startsWith(`${menu.id}-`)
       )
-        adapter.element.removeAttribute('aria-activedescendant')
+        described.removeAttribute('aria-activedescendant')
+      if (described?.getAttribute('aria-controls') === menu.id)
+        described.removeAttribute('aria-controls')
+      described = null
     }
     if (element.matches(':popover-open')) element.hidePopover()
   }
@@ -205,8 +211,7 @@ export function attachEditorInteractions(adapter: Adapter) {
     }
     // The editor keeps its focus; assistive technology follows the selected action.
     const current = actions[selected]
-    if (current)
-      adapter.element.setAttribute('aria-activedescendant', current.id)
+    if (current) described?.setAttribute('aria-activedescendant', current.id)
     current?.scrollIntoView({ block: 'nearest' })
   }
   const accept = (index: number) => {
@@ -287,6 +292,13 @@ export function attachEditorInteractions(adapter: Adapter) {
       if (!releaseMenu) {
         adapter.element.dispatchEvent(new Event('hibi:editor-actions-open'))
         releaseMenu = claimEditorPopup(adapter.element, menu)
+        const focused = adapter.element.ownerDocument.activeElement
+        described =
+          focused instanceof HTMLElement && adapter.element.contains(focused)
+            ? focused
+            : adapter.element
+        // The menu is outside the editor: its active descendant needs the link.
+        described.setAttribute('aria-controls', menu.id)
       }
       shown = { request, items }
       selected = Math.min(selected, items.length - 1)

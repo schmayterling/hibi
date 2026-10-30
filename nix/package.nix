@@ -15,7 +15,7 @@ let
     owner = "hibigarden";
     repo = "docs";
     rev = lib.fileContents ../docs-revision;
-    hash = "sha256-vhKbDOXQMcFQjxj1ow1SQF16BqiMdCvhILntFPtHZPQ=";
+    hash = "sha256-r5Jtrpaf4Nq8yiipu+kzAqK3Mu2D4z4fU9lxLEJGYFo=";
   };
 
   mimeTypes = [
@@ -52,9 +52,11 @@ buildNpmPackage {
   };
 
   # npm ci runs with --ignore-scripts, so postinstall never happens.
-  # Only the vim patch changes app behaviour; the other two are dev/macOS.
+  # Only the vim and codemirror patches change app behaviour; the others are
+  # dev/macOS.
   preBuild = ''
     node scripts/patch-vim.mjs
+    node scripts/patch-codemirror-view.mjs
   '';
 
   npmBuildScript = "build:app";

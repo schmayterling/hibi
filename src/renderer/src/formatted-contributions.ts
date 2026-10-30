@@ -250,6 +250,15 @@ export const formattedLinkAttributes = (
   role: 'link',
 })
 
+/** A press that opens the context menu: a right press, or a Control+click on macOS. */
+export const opensContextMenu = (event: MouseEvent) =>
+  event.button === 2 ||
+  (event.button === 0 &&
+    event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    /Mac/.test(navigator.platform))
+
 /** A click that follows the link under it: Shift-click, or Ctrl+Cmd-click as in the rich view. */
 export const followsLink = (event: MouseEvent) =>
   event.shiftKey || (event.ctrlKey && event.metaKey)

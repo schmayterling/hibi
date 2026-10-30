@@ -322,13 +322,27 @@ test('the completion broker keeps a provider’s Tab preference per item', async
   broker.dispose()
 })
 
-test('ranking a full set of pack matches stays well under the typing budget', () => {
+test('ranking a full set of pack matches stays well under the typing budget', (t) => {
   const words = Array.from(
     { length: 32 },
     (_, i) => `prefix${'x'.repeat(i % 7)}${i}`,
   )
   const found = ['en', 'tl', 'fr'].map((lang) => ({ lang, words }))
-  const start = performance.now()
-  for (let i = 0; i < 200; i++) rankWords('pre', found)
-  assert.ok((performance.now() - start) / 200 < 1)
+  // Count work, then CPU time: wall-clock stretches with machine load.
+  const normalize = t.mock.method(String.prototype, 'normalize')
+  assert.equal(rankWords('pre', found).length, 8)
+  normalize.mock.restore()
+  const candidates = found.length * words.length
+  assert.ok(
+    normalize.mock.callCount() <= 2 * candidates + 1,
+    `${normalize.mock.callCount()} normalizations for ${candidates} candidates`,
+  )
+  let best = Infinity
+  for (let batch = 0; batch < 5; batch++) {
+    const started = process.cpuUsage()
+    for (let i = 0; i < 40; i++) rankWords('pre', found)
+    const { user, system } = process.cpuUsage(started)
+    best = Math.min(best, (user + system) / 40)
+  }
+  assert.ok(best < 1000, `${best} µs of cpu per ranking`)
 })

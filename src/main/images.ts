@@ -33,6 +33,14 @@ export function imageMime(data: Buffer): string | null {
   return null
 }
 
+/** Response headers without Set-Cookie, so a remote image host stores no cookie. */
+export const withoutSetCookie = (headers: Record<string, string[]>) =>
+  Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() !== 'set-cookie',
+    ),
+  )
+
 export function imageSources(markdown: string): Set<string> {
   const sources = new Set<string>()
   marked.walkTokens(lexMarkdown(markdown), (token) => {

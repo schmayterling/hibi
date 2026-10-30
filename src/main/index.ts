@@ -179,7 +179,7 @@ import { HostCredentials } from './host-credentials'
 import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
-import { readDocumentImage } from './images'
+import { readDocumentImage, withoutSetCookie } from './images'
 import { cancelImport, runCancellableImport } from './import-cancellation'
 import { listLicenses, readLicense } from './licenses'
 import {
@@ -1549,8 +1549,10 @@ if (!app.requestSingleInstanceLock()) {
         event.preventDefault(),
       )
 
-      // App pages are app://hibi, so every https image is cross-site. Without
-      // cookies, image hosts can't follow a reader from note to note.
+      // App pages are app://hibi, so every https image is cross-site. Image
+      // hosts get no cookies to follow a reader with, but they can still
+      // recognize a repeat request when the cache revalidates an image
+      // (ETag, Last-Modified), which webRequest never sees.
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: ['https://*/*'] },
         ({ resourceType, requestHeaders }, callback) => {
@@ -1572,10 +1574,10 @@ if (!app.requestSingleInstanceLock()) {
       session.defaultSession.webRequest.onHeadersReceived(
         { urls: ['https://*/*', ...(devOrigin ? [`${devOrigin}/*`] : [])] },
         ({ resourceType, url, responseHeaders = {} }, callback) => {
-          const headers = { ...responseHeaders }
-          if (resourceType === 'image' && url.startsWith('https:'))
-            for (const name of Object.keys(headers))
-              if (name.toLowerCase() === 'set-cookie') delete headers[name]
+          const headers =
+            resourceType === 'image' && url.startsWith('https:')
+              ? withoutSetCookie(responseHeaders)
+              : { ...responseHeaders }
           if (devPolicy && url.startsWith(`${devOrigin}/`))
             headers['Content-Security-Policy'] = [devPolicy]
           callback({ responseHeaders: headers })

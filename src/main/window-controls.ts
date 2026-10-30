@@ -13,8 +13,6 @@ export const windowControlsHidden = () => hidden
 export const getHideWindowControls = () => preference
 
 function readPreference(value: unknown): boolean {
-  // Accept preferences written before the file had a named field.
-  if (typeof value === 'boolean') return value
   if (
     value !== null &&
     typeof value === 'object' &&

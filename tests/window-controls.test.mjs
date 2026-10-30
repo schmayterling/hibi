@@ -254,8 +254,6 @@ for (const [name, contents, initial] of [
   })
 
 for (const [name, contents, hidden] of [
-  ['legacy true', 'true', true],
-  ['legacy false', 'false', false],
   ['invalid hidden value', '{"hidden":"true"}', false],
   ['missing hidden field', '{}', false],
 ])

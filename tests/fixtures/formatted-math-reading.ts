@@ -87,7 +87,8 @@ Object.assign(window, {
       })
       await document.fonts.ready
       if (focused) view.focus()
-      for (let attempt = 0; attempt < 20; attempt++) {
+      let last = ''
+      for (let attempt = 0; attempt < 50; attempt++) {
         view.dispatch({
           effects: EditorView.scrollIntoView(anchor, {
             y: 'start',
@@ -95,14 +96,18 @@ Object.assign(window, {
           }),
         })
         await frame()
-        const top = view.coordsAtPos(anchor, 1)?.top
-        if (
-          top !== undefined &&
-          Math.abs(top - pane.getBoundingClientRect().top - 180) < 1
-        )
-          return
+        const paneTop = pane.getBoundingClientRect().top
+        const top = view.coordsAtPos(anchor, 1)?.top ?? Number.NaN
+        // The jump lands before the view parses and draws the formulas around it.
+        const drawn = [...pending.keys()]
+          .filter((dom) => dom.isConnected)
+          .map((dom) => dom.getBoundingClientRect())
+        const above = drawn.filter((box) => box.bottom <= top).length
+        const below = drawn.filter((box) => box.top > top).length
+        if (Math.abs(top - paneTop - 180) < 1 && above && below) return
+        last = JSON.stringify({ offset: top - paneTop, above, below })
       }
-      throw new Error('the reading line did not settle')
+      throw new Error(`the reading line did not settle: ${last}`)
     },
     /** Idle parsing and height estimates must not move an already placed reader. */
     async idle() {

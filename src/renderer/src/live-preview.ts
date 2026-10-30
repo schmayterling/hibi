@@ -1437,41 +1437,54 @@ function spacing(
  * paragraph, which shows on the next line, and other blank lines hold the
  * margin below what comes before them. Laid out while the view draws the
  * last block's end; returns the space below the last line, outside every
- * block.
+ * block, wherever the view is: the note keeps its height when its end comes
+ * into view, so a reader who scrolled to the bottom stays there.
  */
 function ending(view: EditorView, tree: Tree, line: (pos: number) => LineInfo) {
   const doc = view.state.doc
   const last = blockChild(tree.topNode, true)
   if (!last) return 0
   const end = doc.lineAt(last.to)
-  const { viewport } = view
   // Text after the last block that is not parsed yet may hold more blocks.
-  if (
-    end.to < viewport.from ||
-    end.to > viewport.to ||
-    uncovered(tree, end.to, doc.length)
-  )
-    return 0
+  if (uncovered(tree, end.to, doc.length)) return 0
+  const { viewport } = view
+  // Where the lines to lay out end: none while the last block's end is not drawn.
+  const drawn =
+    end.to >= viewport.from && end.to <= viewport.to ? viewport.to : -1
   const paragraph = blockSpace('Paragraph')
   let margin = bottomMargin(last),
     below = margin,
     shown = false
   const gaps: [number, number][] = []
   for (let number = end.number + 1; number <= doc.lines; number++) {
-    const blank = doc.line(number)
-    if (blank.from > viewport.to) {
-      below = 0
-      break
+    let blank = doc.line(number)
+    // Past those, a run of empty lines before the last line alternates
+    // between a margin and an empty paragraph: skip it in pairs.
+    if (!blank.text && blank.from > drawn) {
+      const { from } = blank
+      // Lines from here to `at` are empty while they hold only line breaks.
+      const run =
+        firstWhere(
+          number,
+          doc.lines,
+          (at) => doc.line(at).to - from > at - number,
+        ) - number
+      if (run > 1) {
+        number += run - (run % 2)
+        margin = below = paragraph.bottom
+        blank = doc.line(number)
+      }
     }
     if (blank.text.trim()) return 0
     if (shown) {
       shown = false
       margin = below = paragraph.bottom
     } else if (!blank.text && number < doc.lines) {
-      gaps.push([blank.from, Math.max(margin, paragraph.top)])
+      if (blank.from <= drawn)
+        gaps.push([blank.from, Math.max(margin, paragraph.top)])
       shown = true
     } else {
-      gaps.push([blank.from, margin])
+      if (blank.from <= drawn) gaps.push([blank.from, margin])
       below = 0
     }
   }

@@ -757,6 +757,60 @@ test('blank lines after the last block are laid out only where the view shows th
   assert.deepEqual(heights, [16, 28, 16, 28])
 })
 
+test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {
+  timeout: 60000,
+}, async () => {
+  let doc = ''
+  for (let block = 0; block < 200; block++)
+    doc += `Paragraph ${block} with a few words of prose.\n\n`
+  const result = await harness.evaluate(async (doc) => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await window.livePreview.mount(doc, { width: 900, height: 600 })
+    const view = window.livePreview.view()
+    const frame = () => new Promise(requestAnimationFrame)
+    const scroll = async (target) => {
+      pane.scrollTop = target
+      // Until nothing moves for a few frames.
+      let still = 0
+      let last = ''
+      for (let i = 0; i < 60 && still < 4; i++) {
+        await frame()
+        const now = `${pane.scrollTop} ${view.viewport.from} ${view.viewport.to} ${view.contentDOM.offsetHeight}`
+        still = now === last ? still + 1 : 0
+        last = now
+      }
+    }
+    // Down first, so the editor has drawn and measured every line.
+    const step = Math.round(pane.clientHeight * 0.8)
+    for (
+      let target = 0;
+      target < pane.scrollHeight - pane.clientHeight;
+      target += step
+    )
+      await scroll(target)
+    await scroll(pane.scrollHeight)
+    const height = pane.scrollHeight
+    await scroll(pane.scrollTop - 3000)
+    const away = {
+      height: pane.scrollHeight,
+      drawn: view.viewport.to === doc.length,
+    }
+    await scroll(pane.scrollHeight)
+    return {
+      height,
+      away,
+      bottom: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
+    }
+  }, doc)
+  const report = JSON.stringify(result)
+  assert.equal(result.away.drawn, false, report)
+  // Before, the space came only with the end in view: the note grew under a
+  // reader already at the bottom, who stopped short of it.
+  assert.equal(result.away.height, result.height, report)
+  assert.ok(Math.abs(result.bottom) <= 1, report)
+})
+
 test('scrolling up through known code blocks keeps the scroll position and full height', {
   timeout: 120000,
 }, async (t) => {

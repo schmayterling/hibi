@@ -884,6 +884,63 @@ test('the space below the last line stays while the end is out of view, so scrol
   assert.ok(Math.abs(result.bottom) <= 1, report)
 })
 
+test('a reader who scrolls back to the end of a giant last block stays at the bottom', {
+  timeout: 240000,
+}, async () => {
+  let prose = ''
+  for (let block = 0; block < 200; block++)
+    prose += `Paragraph ${block} with a few words of prose.\n\n`
+  // Parsed only near the view: away from it, a list loses its layout and
+  // the space below it; a paragraph's joined lines are estimated.
+  for (const tail of [
+    Array.from(
+      { length: 3000 },
+      (_, i) => `words of one giant paragraph, line ${i}`,
+    ).join('\n'),
+    Array.from(
+      { length: 3000 },
+      (_, i) => `- item ${i} with a few words in it`,
+    ).join('\n'),
+  ]) {
+    const result = await harness.evaluate(async (doc) => {
+      const pane = document.querySelector('.rich-pane')
+      pane.scrollTop = 0
+      await window.livePreview.mount(doc, { width: 900, height: 600 })
+      const view = window.livePreview.view()
+      const frame = () => new Promise(requestAnimationFrame)
+      const scroll = async (target) => {
+        pane.scrollTop = target
+        let still = 0
+        let last = ''
+        for (let i = 0; i < 60 && still < 4; i++) {
+          await frame()
+          const now = `${pane.scrollTop} ${view.viewport.from} ${view.viewport.to} ${view.contentDOM.offsetHeight}`
+          still = now === last ? still + 1 : 0
+          last = now
+        }
+      }
+      const stride = Math.round(pane.clientHeight * 0.8)
+      for (
+        let target = 0;
+        target < pane.scrollHeight - pane.clientHeight;
+        target += stride
+      )
+        await scroll(target)
+      await scroll(pane.scrollHeight)
+      await scroll(pane.scrollTop - 40000)
+      await scroll(pane.scrollHeight)
+      // Idle parsing near the end lands too.
+      for (let i = 0; i < 30; i++) await frame()
+      return {
+        length: doc.length,
+        height: pane.scrollHeight,
+        bottom: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
+      }
+    }, `${prose}${tail}\n\n`)
+    assert.ok(Math.abs(result.bottom) <= 1, JSON.stringify(result))
+  }
+})
+
 test('scrolling up through known code blocks keeps the scroll position and full height', {
   timeout: 120000,
 }, async (t) => {

@@ -1231,3 +1231,93 @@ codemirrorTest(
     assert.equal(await readFile(file, 'utf8'), 'outside text\n')
   },
 )
+
+codemirrorTest(
+  'clicking a split pane while the window waits to close does not change which note Save writes',
+  {
+    timeout: 150000,
+  },
+  async (t) => {
+    const setupState = await setup(t)
+    const { app, page, notes, file, read, idle, open, content } = setupState
+    const { select, answer, prompts, type } = setupState
+    const note = (await read()).tabId
+    await writeFile(join(notes, 'other.md'), 'other note\n')
+    await answer(2, join(notes, 'other.md'))
+    await open()
+    await content('other note\n')
+    const other = (await read()).tabId
+    const otherDraft = await type('other draft')
+    await select(note)
+    await type('local draft')
+    const { revision } = await read()
+    await splitTab(app, page, other)
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      other,
+    )
+    await idle()
+    await prompts()
+    // An autosave of note.md holds the file-operation lock while its read waits.
+    await gateReadAndReply(app, file)
+    const autosave = page.evaluate(
+      ([id, revision]) => window.hibi.autosaveDocument(id, revision),
+      [note, revision],
+    )
+    await app.evaluate(() => globalThis.reopenGate.reading)
+    // The close asks about other.md and waits for Save. A pane click that
+    // reaches main while the close waits runs once that prompt is open.
+    await app.evaluate(({ dialog, ipcMain }) => {
+      const asked = Promise.withResolvers()
+      const answered = Promise.withResolvers()
+      const focusing = Promise.withResolvers()
+      const focused = Promise.withResolvers()
+      dialog.showMessageBox = async (_window, options) => {
+        globalThis.reopenPrompts.push(options)
+        asked.resolve()
+        await answered.promise
+        return { response: 0 }
+      }
+      const channel = 'document:focus-tab'
+      const original = ipcMain._invokeHandlers.get(channel)
+      ipcMain._invokeHandlers.set(channel, async (...args) => {
+        ipcMain._invokeHandlers.set(channel, original)
+        focusing.resolve()
+        await asked.promise
+        try {
+          return await original(...args)
+        } finally {
+          focused.resolve()
+        }
+      })
+      globalThis.closeRace = {
+        focusing: focusing.promise,
+        focused: focused.promise,
+        save: answered.resolve,
+      }
+    })
+    await app.evaluate(
+      ({ BrowserWindow }) =>
+        new Promise((resolve) => {
+          const window = BrowserWindow.getAllWindows()[0]
+          window.once('close', () => resolve())
+          window.close()
+        }),
+    )
+    await page
+      .locator(
+        '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
+      )
+      .click()
+    await app.evaluate(() => globalThis.closeRace.focusing)
+    await app.evaluate(() => globalThis.reopenGate.releaseRead())
+    assert.equal((await autosave).status, 'saved')
+    await app.evaluate(() => globalThis.closeRace.focused)
+    assert.deepEqual(await prompts(), ['Save changes to other.md?'])
+    const closed = new Promise((resolve) => page.once('close', resolve))
+    await app.evaluate(() => globalThis.closeRace.save())
+    await closed
+    assert.equal(await readFile(join(notes, 'other.md'), 'utf8'), otherDraft)
+  },
+)

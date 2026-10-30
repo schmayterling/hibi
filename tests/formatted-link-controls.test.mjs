@@ -733,6 +733,21 @@ test('codemirror table cell link menu holds the editor actions of addons too', {
     await app.evaluate(() => globalThis.copiedLink),
     'https://cell.example',
   )
+  // macOS opens it on a Control+click too, and the cell is not edited.
+  if (process.platform === 'darwin') {
+    await page.getByRole('link', { name: 'cats', exact: true }).click({
+      modifiers: ['Control'],
+    })
+    await menu
+      .getByRole('menuitem', { name: 'Define word', exact: true })
+      .waitFor()
+    await settle(page)
+    assert.equal(await menu.isVisible(), true)
+    assert.deepEqual(await groupedItems(menu), expected)
+    assert.equal(await page.locator('.hibi-lp-cell-editor').count(), 0)
+    await page.keyboard.press('Escape')
+    await menu.waitFor({ state: 'hidden' })
+  }
   // In the cell's editor, away from its caret, the menu stays open.
   await page.getByRole('link', { name: 'cats', exact: true }).click()
   const cell = page

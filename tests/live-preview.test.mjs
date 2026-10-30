@@ -1100,6 +1100,123 @@ test('stepping up after a jump to the end, known code blocks never draw as plain
   assert.equal(plain, 0)
 })
 
+test('a long code line pasted into a note draws whole, with its end in reach and no blank space below it', {
+  timeout: 60000,
+}, async (t) => {
+  const doc =
+    '# Pasted code\n\nWords before the code.\n\n```js\nconst short = 1\n```\n\nWords after the code.\n'
+  const pasted = `const long = "${'abcdefghij'.repeat(20_000)}";`
+  for (const caret of [false, true])
+    await t.test(
+      caret ? 'with the caret at its end' : 'elsewhere',
+      async () => {
+        const result = await harness.evaluate(
+          async ({ doc, pasted, caret }) => {
+            await window.livePreview.mount(
+              doc,
+              { width: 900, height: 600 },
+              { editable: true },
+            )
+            const view = window.livePreview.view()
+            const frames = async (count) => {
+              for (let i = 0; i < count; i++)
+                await new Promise(requestAnimationFrame)
+            }
+            // The note is drawn and measured, so the editor takes the new line
+            // for wrapped text until it draws it.
+            const at = doc.indexOf('const short = 1') + 'const short = 1'.length
+            view.dispatch({
+              changes: { from: at, insert: `\n${pasted}` },
+              ...(caret
+                ? {
+                    selection: { anchor: at + 1 + pasted.length },
+                    scrollIntoView: true,
+                    userEvent: 'input.paste',
+                  }
+                : {}),
+            })
+            await frames(6)
+            const box = view.contentDOM.querySelector('.hibi-lp-codescroll')
+            const lines = [...box.querySelectorAll('.cm-line')]
+            const short = lines.find(
+              (line) => line.textContent === 'const short = 1',
+            )
+            const long = lines.find((line) => line !== short)
+            box.scrollLeft = box.scrollWidth
+            await frames(3)
+            const walker = document.createTreeWalker(long, NodeFilter.SHOW_TEXT)
+            let last = null
+            for (let node = walker.nextNode(); node; node = walker.nextNode())
+              last = node
+            const range = document.createRange()
+            range.setStart(last, last.length - 1)
+            range.setEnd(last, last.length)
+            const end = range.getBoundingClientRect()
+            const shown = box.getBoundingClientRect()
+            return {
+              drawn: long.textContent.length,
+              // The short line is not drawn when the long one is too tall.
+              rows: [
+                short?.getBoundingClientRect().height ?? 0,
+                long.getBoundingClientRect().height,
+              ],
+              end: [end.left, end.right],
+              box: [shown.left, shown.right],
+            }
+          },
+          { doc, pasted, caret },
+        )
+        const report = JSON.stringify(result)
+        // Before, a line gap sized as the line's wrapped rows hid all but a
+        // screen's width of it and kept itself: the box grew tens of thousands
+        // of pixels of blank space, and its end could not be scrolled to.
+        assert.equal(result.drawn, pasted.length, report)
+        assert.ok(Math.abs(result.rows[1] - result.rows[0]) <= 1, report)
+        assert.ok(
+          result.end[0] >= result.box[0] && result.end[1] <= result.box[1] + 1,
+          report,
+        )
+      },
+    )
+})
+
+test('long lines that wrap stay behind line gaps: a huge paragraph or wrapping code draws only near the screen', {
+  timeout: 60000,
+}, async () => {
+  const words = 'word '.repeat(40_000)
+  const code = 'const wrapped = 42; '.repeat(10_000)
+  const drawn = await harness.evaluate(
+    async ({ words, code }) => {
+      const show = async (doc, start) => {
+        await window.livePreview.mount(doc, { width: 900, height: 600 })
+        for (let i = 0; i < 4; i++) await new Promise(requestAnimationFrame)
+        const view = window.livePreview.view()
+        return [...view.contentDOM.querySelectorAll('.cm-line')].find((line) =>
+          line.textContent.startsWith(start),
+        )?.textContent.length
+      }
+      const paragraph = await show(`# Wrapping\n\n${words}\n\nAfter.\n`, 'word')
+      const style = document.createElement('style')
+      style.textContent =
+        '.rich-pane :is(pre, .hibi-lp-codeblock) { white-space: pre-wrap; overflow-wrap: anywhere; }'
+      document.head.append(style)
+      try {
+        return {
+          paragraph,
+          code: await show(`\`\`\`js\n${code}\n\`\`\`\n`, 'const wrapped'),
+        }
+      } finally {
+        style.remove()
+      }
+    },
+    { words, code },
+  )
+  const report = JSON.stringify(drawn)
+  // Lines that wrap draw a margin around the screen, not the whole line.
+  assert.ok(drawn.paragraph > 0 && drawn.paragraph < words.length / 4, report)
+  assert.ok(drawn.code > 0 && drawn.code < code.length / 4, report)
+})
+
 test('typing beside a multi-line link destination edits the text', {
   timeout: 60000,
 }, async () => {

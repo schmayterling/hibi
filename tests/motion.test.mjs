@@ -206,8 +206,10 @@ test('split panes align corresponding carets in both directions without feedback
   const cm = t.formattedEngine === 'codemirror'
   if (cm) {
     // The formatted viewport virtualizes distant headings; reveal the same source location before clicking.
+    // Focused, the formatted view leads linked scrolling, which otherwise scrolls it back to the source caret.
     await rich.evaluate((element) => {
       const view = element.cmTile.root.view
+      view.focus()
       view.dispatch({
         selection: {
           anchor: view.state.doc.toString().indexOf('## section 45'),

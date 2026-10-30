@@ -336,6 +336,8 @@ export function MarkdownEditor({
   onOutlineUnavailable?: (reason: string | null) => void
   onActiveOutline: (id: string | null) => void
   outlineTarget: OutlineRequest | null
+  /** A heading destination, such as `#setup`, from a link that opened this note. */
+  linkAnchor?: { anchor: string } | null
   outlineActive: boolean
 }) {
   const markdownDocument = format?.editing === 'markdown'

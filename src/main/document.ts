@@ -515,13 +515,15 @@ export async function focusDocumentTab(
     expected.revision !== version.document.revision
   )
     throw new Error('This pane has edits pending synchronization. Try again.')
-  // Focusing a pane over an outside change asks once, as a tab switch does;
-  // only the prompt holds the file-operation lock.
-  if (await changedOutside(id, true)) {
-    await locked((window) => confirmTabDiscard(window, id, saveRetained))
-    if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
-      throw new Error('This pane has edits pending synchronization. Try again.')
-  }
+  // Focusing a pane over an outside change asks once, as a tab switch does.
+  // The check and its prompt hold the file-operation lock, so no other file
+  // operation runs between them; the focus itself does not.
+  await locked(async (window) => {
+    if (await changedOutside(id, true))
+      await confirmTabDiscard(window, id, saveRetained)
+  })
+  if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
+    throw new Error('This pane has edits pending synchronization. Try again.')
   if (id !== activeTab) {
     activateTab(id)
     refreshDirtyIndicator(window)
@@ -577,14 +579,33 @@ function containsPath(parent: string, file: string | null) {
   if (!file) return false
   return isPathInside(parent, file)
 }
-function removeTabs(
+async function removeTabs(
   window: BrowserWindow,
   ids: Set<string>,
   preferredTab?: string,
 ) {
   storeTab()
-  const order = [...tabs.keys()]
-  const currentIndex = order.indexOf(activeTab)
+  if (ids.has(activeTab)) {
+    const order = [...tabs.keys()]
+    const next =
+      (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
+      order.slice(order.indexOf(activeTab) + 1).find((id) => !ids.has(id)) ??
+      order.findLast((id) => !ids.has(id))
+    const closing = source.snapshot()
+    // The tab shown next is checked for outside changes, as a tab switch does.
+    if (next)
+      await selectDocumentTab(window, next, false).catch((error: unknown) => {
+        // Edits made meanwhile keep the closing tab open. A next tab whose file
+        // cannot be checked still shows its text, and the close says why.
+        if (!source.ownsCurrentSnapshot(closing) || !tabs.has(next)) throw error
+        activateTab(next)
+        advanceRevision()
+        window.webContents.send(
+          HISTORY_CHANNELS.notice,
+          error instanceof Error ? error.message : String(error),
+        )
+      })
+  }
   for (const id of ids) {
     tabs.delete(id)
     dirtyTabs.delete(id)
@@ -592,18 +613,9 @@ function removeTabs(
   back = back.filter((id) => !ids.has(id))
   forward = forward.filter((id) => !ids.has(id))
   if (ids.has(activeTab)) {
-    const next =
-      (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
-      order.slice(currentIndex + 1).find((id) => tabs.has(id)) ??
-      [...tabs.keys()].at(-1)
-    if (next) {
-      activateTab(next)
-      advanceRevision()
-    } else {
-      activeTab = randomUUID()
-      activeTabOpen = false
-      clearDocument(window, false)
-    }
+    activeTab = randomUUID()
+    activeTabOpen = false
+    clearDocument(window, false)
   }
   refreshDirtyIndicator(window)
   return getDocument()
@@ -658,7 +670,10 @@ export function moveDocumentTab(id: unknown, beforeId: unknown) {
   for (const [key, value] of entries) tabs.set(key, value)
   return getDocument()
 }
-export function closeDeletedDocuments(window: BrowserWindow, parent: string) {
+export async function closeDeletedDocuments(
+  window: BrowserWindow,
+  parent: string,
+) {
   return removeTabs(
     window,
     new Set(
@@ -909,7 +924,12 @@ export async function saveDocument(
   destination = await realpath(chosen).catch(
     async (error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
-      return join(await realpath(dirname(chosen)), basename(chosen))
+      const folder = await realpath(dirname(chosen)).catch(missingFile)
+      if (!folder)
+        throw new Error(
+          `The folder for ${basename(chosen)} was moved or deleted outside Hibi. Use Save as to keep this text.`,
+        )
+      return join(folder, basename(chosen))
     },
   )
   if (isOpenInOtherTab(destination))

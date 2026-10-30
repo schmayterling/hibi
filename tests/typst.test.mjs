@@ -14,7 +14,12 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  redoKey,
+  replaceSourceText,
+} from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT, waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { recordToasts } from './toasts.mjs'
@@ -467,19 +472,11 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     ['undo', '$ x^3 $'],
     ['redo', '$ x^4 $'],
   ]) {
-    // Shift produces uppercase Z; a synthetic Ctrl+Shift+z runs undo in CM.
     if (t.formattedEngine === 'tiptap')
       await page.evaluate((command) => {
         document.querySelector('.tiptap').editor.commands[command]()
       }, command)
-    else
-      await rich.press(
-        command === 'undo'
-          ? 'ControlOrMeta+z'
-          : process.platform === 'win32'
-            ? 'Control+y'
-            : 'ControlOrMeta+Shift+Z',
-      )
+    else await rich.press(command === 'undo' ? 'ControlOrMeta+z' : redoKey)
     const expected = markdown.replace(
       '$ sum_(k=1)^n k = (n(n+1))/2 $',
       equation,

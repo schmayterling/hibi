@@ -676,6 +676,12 @@ function App() {
   const [outlineTarget, setOutlineTarget] = useState<OutlineRequest | null>(
     null,
   )
+  // The heading a followed link names, for the view of the note it opened.
+  const [linkAnchor, setLinkAnchor] = useState<{
+    tabId: string
+    revision: number
+    anchor: string
+  } | null>(null)
   function selectSidebarView(
     view: string,
     input?: unknown,
@@ -2005,8 +2011,18 @@ function App() {
       headings[index]?.scrollIntoView({ block: 'start' })
       return
     }
+    const fragment = href.indexOf('#')
     void applyDocumentOperation(
-      () => window.hibi.openDocumentLink(href, target.revision),
+      async () => {
+        const next = await window.hibi.openDocumentLink(href, target.revision)
+        if (next && fragment > 0)
+          setLinkAnchor({
+            tabId: next.tabId,
+            revision: next.revision,
+            anchor: href.slice(fragment),
+          })
+        return next
+      },
       true,
       true,
     )
@@ -2793,6 +2809,13 @@ function App() {
               }
               onActiveOutline={paneReports[side].activeOutline}
               outlineTarget={active ? outlineTarget : null}
+              linkAnchor={
+                active &&
+                linkAnchor?.tabId === paneDocument.tabId &&
+                linkAnchor.revision === paneDocument.revision
+                  ? linkAnchor
+                  : null
+              }
               document={paneDocument}
               format={paneFormat}
               formatName={paneSourceName}

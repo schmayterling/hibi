@@ -149,6 +149,14 @@ export function linkScroll(
     else return
     schedule()
   }
+  // CodeMirror panes report caret and focus changes as hibi:source-caret.
+  // Their selectionchange also fires when a view redraws an unchanged
+  // selection, as after the other pane scrolls it, which hands no control.
+  const nativeSelection = () => {
+    const focused = document.activeElement
+    if (focused && sourceView(focused)) return
+    selection()
+  }
   const observer = new ResizeObserver(schedule)
   for (const pane of [first, second]) {
     pane.addEventListener('wheel', intent, { passive: true })
@@ -159,7 +167,7 @@ export function linkScroll(
     if (richContent) observer.observe(richContent)
     const sourceContent = second.querySelector('.cm-content')
     if (sourceContent) observer.observe(sourceContent)
-    document.addEventListener('selectionchange', selection)
+    document.addEventListener('selectionchange', nativeSelection)
     document.addEventListener('hibi:rich-content', selection)
     first.addEventListener('hibi:source-caret', selection)
     second.addEventListener('hibi:source-caret', selection)
@@ -179,7 +187,7 @@ export function linkScroll(
       pane.removeEventListener('wheel', intent)
       pane.removeEventListener('pointerdown', intent)
     }
-    document.removeEventListener('selectionchange', selection)
+    document.removeEventListener('selectionchange', nativeSelection)
     document.removeEventListener('hibi:rich-content', selection)
     first.removeEventListener('hibi:source-caret', selection)
     second.removeEventListener('hibi:source-caret', selection)

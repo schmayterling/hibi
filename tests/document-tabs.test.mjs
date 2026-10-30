@@ -18,6 +18,7 @@ import {
 import {
   clickMenu,
   pressShortcut,
+  redoKey,
   replaceRichText,
   splitTab,
 } from './keyboard.mjs'
@@ -1331,9 +1332,7 @@ for (const failure of [false, true]) {
     // History keeps working against the saved text.
     await right.press('ControlOrMeta+z')
     await marked(b.id, 'Unsaved changes')
-    await right.press(
-      process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+z',
-    )
+    await right.press(redoKey)
     await marked(b.id, null)
     await replaceRichText(page, right, 'dirty b again')
     await marked(b.id, 'Unsaved changes')

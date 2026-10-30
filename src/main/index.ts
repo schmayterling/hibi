@@ -926,7 +926,9 @@ async function showStartupError(
   })
   // The modal runs no main-process tasks: write the record before it opens.
   await localDiagnostics.flush()
-  if (quitting || closing || window?.isDestroyed()) return
+  // A window closed meanwhile still ends the failed start here: on macOS,
+  // closing the last window would otherwise leave Hibi running without one.
+  if (quitting) return
   // Electron quits on these signals through a main-thread task the modal never
   // runs. Removing the last Node listener restores the default action: exit.
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
@@ -2625,8 +2627,13 @@ if (!app.requestSingleInstanceLock()) {
               if (opened) document = opened
               else kept.add(file)
             } catch (error) {
+              const message =
+                error instanceof Error ? error.message : 'Could not open file.'
+              // A message that already names the file is not prefixed with it.
               errors.push(
-                `${basename(path)}: ${error instanceof Error ? error.message : 'Could not open file.'}`,
+                message.includes(basename(path))
+                  ? message
+                  : `${basename(path)}: ${message}`,
               )
             }
           }

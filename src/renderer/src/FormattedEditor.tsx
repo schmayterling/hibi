@@ -87,6 +87,7 @@ export function MarkdownEditor({
   onOutlineUnavailable,
   onActiveOutline,
   outlineTarget,
+  linkAnchor,
   outlineActive,
 }: Parameters<typeof RichMarkdownEditor>[0]) {
   const markdownDocument = format?.editing === 'markdown'
@@ -371,6 +372,15 @@ export function MarkdownEditor({
     if (pendingAnchor.current !== null)
       setAnchor({ target: pendingAnchor.current })
   }
+  // A link to a heading through a note's file, this note's too, reopens the
+  // note, so the view the link shows moves to the heading.
+  const followedAnchor = useRef<typeof linkAnchor>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each link is followed once, when its note shows.
+  useEffect(() => {
+    if (!linkAnchor || followedAnchor.current === linkAnchor) return
+    followedAnchor.current = linkAnchor
+    followLink(linkAnchor.anchor)
+  }, [linkAnchor])
   const richView = () => {
     const element = content.current?.querySelector<HTMLElement>(
       '.rich-pane .cm-content',

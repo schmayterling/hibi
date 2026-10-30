@@ -2122,7 +2122,9 @@ if (!app.requestSingleInstanceLock()) {
         DOCUMENT_CHANNELS.focusTab,
         (event, id: unknown, expected: unknown) =>
           readAfterFileOperation(event, (window) =>
-            focusDocumentTab(window, id, expected),
+            focusDocumentTab(window, id, expected, (prompt) =>
+              runFileOperation(event, prompt),
+            ),
           ),
       )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>

@@ -498,6 +498,9 @@ export async function focusDocumentTab(
   window: BrowserWindow,
   id: unknown,
   expected: unknown,
+  locked: (
+    prompt: (window: BrowserWindow) => Promise<unknown>,
+  ) => Promise<unknown>,
 ): Promise<DocumentFocus> {
   storeTab()
   if (typeof id !== 'string' || !tabs.has(id))
@@ -512,6 +515,13 @@ export async function focusDocumentTab(
     expected.revision !== version.document.revision
   )
     throw new Error('This pane has edits pending synchronization. Try again.')
+  // Focusing a pane over an outside change asks once, as a tab switch does;
+  // only the prompt holds the file-operation lock.
+  if (await changedOutside(id, true)) {
+    await locked((window) => confirmTabDiscard(window, id, saveRetained))
+    if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
+      throw new Error('This pane has edits pending synchronization. Try again.')
+  }
   if (id !== activeTab) {
     activateTab(id)
     refreshDirtyIndicator(window)

@@ -6,7 +6,7 @@ import {
   selectFormattedEngine,
   testFormattedEngines as test,
 } from './formatted-engine.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
 
 // Resolves once main has finished the next request on this channel.
 async function replied(app, channel) {
@@ -762,4 +762,68 @@ test('switching to a clean tab whose file was deleted keeps its text', {
     ephemeral: false,
   })
   await content('original text\n')
+})
+
+test('focusing a split pane asks once to replace edits whose file changed', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, content } = setupState
+  const { select, answer, prompts, state, type } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  const other = (await read()).tabId
+  await select(note)
+  const draft = await type('local draft')
+  await splitTab(app, page, other)
+  const active = (id) =>
+    waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      id,
+    )
+  await active(other)
+  await idle()
+  const focus = async (side, id) => {
+    const done = await replied(app, 'document:focus-tab')
+    await page
+      .locator(
+        `.editor-page[data-side="${side}"] .rich-pane [aria-label="Document editor"]`,
+      )
+      .click()
+    await done()
+    await idle()
+    await active(id)
+  }
+  // An outside change asks once; Cancel keeps the edits and the file.
+  await writeFile(file, 'outside text\n')
+  await answer(1)
+  await focus('left', note)
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(file, 'utf8'), 'outside text\n')
+  await focus('right', other)
+  await focus('left', note)
+  assert.deepEqual(await prompts(), [])
+  // A later outside change asks again, and Replace saves the edits.
+  await focus('right', other)
+  await writeFile(file, 'another outside text\n')
+  await answer(0)
+  await focus('left', note)
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: false,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(file, 'utf8'), draft)
 })

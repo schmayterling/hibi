@@ -746,3 +746,30 @@ test('codemirror link actions wait for the caret to move after a note opens', {
     'https://old.example',
   )
 })
+
+test('codemirror Escape in a composition leaves link actions to the input method', {
+  timeout: 60000,
+}, async (t) => {
+  const { page, editor, panel, read } = await open(t)
+  await place(editor, note.indexOf('docs') + 2)
+  await panel.waitFor()
+  // The input method's Escape cancels its composition, not the actions.
+  const ime = await page.context().newCDPSession(page)
+  await ime.send('Input.imeSetComposition', {
+    text: 'か',
+    selectionStart: 1,
+    selectionEnd: 1,
+  })
+  await page.keyboard.press('Escape')
+  await ime.send('Input.imeSetComposition', {
+    text: '',
+    selectionStart: 0,
+    selectionEnd: 0,
+  })
+  await settle(page)
+  assert.equal(await read(), note)
+  assert.equal(await panel.isVisible(), true)
+  // Escape after it hides them.
+  await page.keyboard.press('Escape')
+  await panel.waitFor({ state: 'hidden' })
+})

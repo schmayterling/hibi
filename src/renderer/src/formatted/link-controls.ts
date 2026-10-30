@@ -351,6 +351,8 @@ export function linkControls(callbacks: Callbacks) {
         }
       }
       key = (event: KeyboardEvent) => {
+        // A composition's keys are its input method's: its Escape cancels it.
+        if (event.isComposing || this.view.composing) return
         if (event.key === 'F10' && event.shiftKey) {
           const at = this.view.state.selection.main.head
           const rect = this.view.coordsAtPos(at)

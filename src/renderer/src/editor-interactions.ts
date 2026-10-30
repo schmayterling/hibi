@@ -341,6 +341,8 @@ export function attachEditorInteractions(adapter: Adapter) {
     if (openMenu(position, event.clientX, event.clientY)) event.preventDefault()
   }
   const keyDown = (event: KeyboardEvent) => {
+    // A composition's keys are its input method's.
+    if (event.isComposing) return
     if (
       event.key === 'F10' &&
       event.shiftKey &&

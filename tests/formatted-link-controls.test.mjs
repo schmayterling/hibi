@@ -50,6 +50,13 @@ async function open(t, addons) {
   if (addons?.dictionary) await waitForAddonCommand(page, 'dictionary.synonyms')
   await clickMenu(app, 'Open…')
   await page.getByRole('link', { name: 'docs', exact: true }).waitFor()
+  // The note shows before its view takes input. A table cell editor dropped
+  // meanwhile takes focus back once it does, in a focused window.
+  await page
+    .locator(
+      '.rich-pane .hibi-formatted .cm-content[aria-readonly="false"]:not(.hibi-lp-cell-editor *)',
+    )
+    .waitFor()
   const panel = page.getByRole('dialog', { name: 'Link actions', exact: true })
   const dialog = page.getByRole('dialog', { name: 'Edit link', exact: true })
   const read = () =>

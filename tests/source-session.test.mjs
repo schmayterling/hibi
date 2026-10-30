@@ -315,6 +315,42 @@ test('two source views share text and history but keep separate selections', () 
   f.session.dispose()
 })
 
+test('the view that undoes or redoes scrolls to what it restores; other views keep their place', () => {
+  const f = fixture('abcd')
+  const scrolled = (view) => {
+    const update = view.update
+    const log = []
+    view.update = (transactions) => {
+      log.push(transactions.some((transaction) => transaction.scrollIntoView))
+      update.call(view, transactions)
+    }
+    return log
+  }
+  const left = f.attach('left'),
+    right = f.attach('right'),
+    hidden = f.attach('hidden')
+  const logs = [left, right, hidden].map(({ view }) => scrolled(view))
+  hidden.bridge.setVisible(false)
+  left.dispatch(type(1, 'X', 1))
+  logs.forEach((log) => {
+    log.length = 0
+  })
+  assert.equal(left.bridge.undo(), true)
+  assert.equal(right.bridge.redo(), true)
+  // Session history and other edits move no view.
+  f.session.undo()
+  left.dispatch(type(1, 'Y', 2))
+  hidden.bridge.setVisible(true)
+  assert.deepEqual(logs, [
+    [true, false, false, false],
+    [false, true, false, false],
+    [false],
+  ])
+  assert.deepEqual(f.errors, [])
+  for (const pane of [left, right, hidden]) pane.dispose()
+  f.session.dispose()
+})
+
 test('select-all commands and keymaps preserve exact source selection without view effects', () => {
   for (const bindings of [commands.standardKeymap, commands.defaultKeymap])
     assert.equal(

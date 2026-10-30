@@ -413,15 +413,26 @@ export function createSourceSession(
   // A hidden view keeps one composed echo until it is shown or read.
   let visible = true,
     pending: ChangeSet | null = null,
-    flush = () => {},
+    flush: (scroll?: boolean) => void = () => {},
     // A view that could not show an echo takes no edits until it is rebuilt.
     failed = false,
     // Only an attached view that is not read-only undoes or redoes, by any route.
-    attached: Pick<EditorView, 'state'> | null = null
+    attached: Pick<EditorView, 'state'> | null = null,
+    // While this view undoes or redoes, its echo shows what that restores.
+    stepping = false
   const writable = () => !failed && !!attached && !attached.state.readOnly
+  const step = (run: () => unknown) => {
+    if (!writable()) return false
+    stepping = true
+    try {
+      return !!run()
+    } finally {
+      stepping = false
+    }
+  }
   const history = {
-    undo: () => writable() && !!session.undo(),
-    redo: () => writable() && !!session.redo(),
+    undo: () => step(() => session.undo()),
+    redo: () => step(() => session.redo()),
   }
   const { undo, redo } = history
   /** Editor changes as this view commits them, in its opening's line breaks. */
@@ -592,7 +603,7 @@ export function createSourceSession(
       let echo = '',
         selection: EditorSelection | null = null,
         effects: readonly StateEffect<unknown>[] = []
-      flush = () => {
+      flush = (scroll = false) => {
         if (!pending || failed) return
         try {
           for (const effect of effects)
@@ -609,6 +620,7 @@ export function createSourceSession(
               sourceOperationEcho.of(echo),
               Transaction.addToHistory.of(false),
             ],
+            scrollIntoView: scroll,
             filter: false,
           })
           pending = selection = null
@@ -659,7 +671,9 @@ export function createSourceSession(
             : []
         snapshot = prepared.after
         group = ''
-        if (visible) flush()
+        // As the editors' own history does, the view that undid or redid
+        // scrolls to the selection; others keep their place.
+        if (visible) flush(stepping)
       })
       const unsubscribeStorage = session.subscribeStorage((change) => {
         if (snapshot !== change.before)

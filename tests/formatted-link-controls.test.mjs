@@ -606,3 +606,105 @@ test('codemirror link menu holds the editor actions of addons too', {
   await menu.getByRole('menuitem', { name: 'Define word', exact: true }).click()
   await page.getByRole('dialog', { name: 'Define “docs”' }).waitFor()
 })
+
+test('codemirror read-only link actions open and copy but refuse edits', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, editor, panel, dialog, read } = await open(t)
+  const link = page.getByRole('link', { name: 'docs', exact: true })
+  // The note turns read-only as while an addon it needs reloads.
+  const readOnly = (on) =>
+    editor.evaluate((element, on) => {
+      const view = element.cmTile.root.view
+      if (!on) return window.restoreInput()
+      const [compartment, access] = [...view.state.config.compartments].find(
+        ([, value]) =>
+          Array.isArray(value) &&
+          value.length === 2 &&
+          value.every((part) => part.facet && typeof part.value === 'boolean'),
+      )
+      window.restoreInput = () =>
+        view.dispatch({ effects: compartment.reconfigure(access) })
+      view.dispatch({
+        effects: compartment.reconfigure(
+          access.map((part) => part.facet.of(!part.value)),
+        ),
+      })
+      return view.state.readOnly
+    }, on)
+  const states = (scope, role, names) =>
+    Promise.all(
+      names.map(async (name) =>
+        (await scope.getByRole(role, { name, exact: true }).isDisabled())
+          ? `${name} disabled`
+          : name,
+      ),
+    )
+  // An edit begun before the note turned read-only saves nothing.
+  await link.click()
+  await panel.waitFor()
+  await panel.getByRole('button', { name: 'Edit link', exact: true }).click()
+  await dialog.waitFor()
+  assert.equal(await readOnly(true), true)
+  await dialog.getByLabel('Link destination').fill('https://new.example')
+  await dialog.getByRole('button', { name: 'Save', exact: true }).click()
+  await dialog.waitFor({ state: 'hidden' })
+  await settle(page)
+  assert.equal(await read(), note)
+  // A shown panel offers only what changes nothing once the note is read-only.
+  const buttons = ['Edit link', 'Open link', 'Copy link', 'Remove link']
+  await readOnly(false)
+  await page.mouse.move(4, 4)
+  await panel.waitFor({ state: 'hidden' })
+  await link.hover()
+  await panel.waitFor()
+  assert.deepEqual(await states(panel, 'button', buttons), buttons)
+  await readOnly(true)
+  const offered = [
+    'Edit link disabled',
+    'Open link',
+    'Copy link',
+    'Remove link disabled',
+  ]
+  assert.deepEqual(await states(panel, 'button', buttons), offered)
+  // As does a panel shown while read-only, whose copy still works.
+  await page.mouse.move(4, 4)
+  await panel.waitFor({ state: 'hidden' })
+  await link.hover()
+  await panel.waitFor()
+  assert.deepEqual(await states(panel, 'button', buttons), offered)
+  await panel.getByRole('button', { name: 'Copy link', exact: true }).click()
+  assert.equal(
+    await app.evaluate(() => globalThis.copiedLink),
+    'https://old.example',
+  )
+  // The menu offers the same.
+  const items = ['Edit link…', 'Open link', 'Copy link', 'Remove link']
+  const menu = page.getByRole('menu', { name: 'Link actions', exact: true })
+  await link.click({ button: 'right' })
+  await menu.waitFor()
+  assert.deepEqual(await states(menu, 'menuitem', items), [
+    'Edit link… disabled',
+    'Open link',
+    'Copy link',
+    'Remove link disabled',
+  ])
+  await page.keyboard.press('Escape')
+  await menu.waitFor({ state: 'hidden' })
+  // Removal chosen from a menu opened before the note turned read-only removes nothing.
+  await readOnly(false)
+  await link.click({ button: 'right' })
+  await menu.waitFor()
+  assert.deepEqual(await states(menu, 'menuitem', items), items)
+  await readOnly(true)
+  await menu.getByRole('menuitem', { name: 'Remove link', exact: true }).click()
+  await menu.waitFor({ state: 'hidden' })
+  await settle(page)
+  assert.equal(await read(), note)
+  // Last, as opening a link makes the app busy, which ends this read-only spell.
+  await link.hover()
+  await panel.getByRole('button', { name: 'Open link', exact: true }).click()
+  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [
+    'https://old.example/',
+  ])
+})

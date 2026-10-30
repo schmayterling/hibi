@@ -123,6 +123,15 @@ export function linkControls(callbacks: Callbacks) {
           ? callbacks.capture(text.to < at ? text.to : at - 1)
           : capture
       }
+      /** A read-only note offers only the actions that change nothing. */
+      enable() {
+        for (const button of this.panel.querySelectorAll<HTMLButtonElement>(
+          'button',
+        ))
+          button.disabled =
+            this.view.state.readOnly &&
+            ['edit', 'remove'].includes(button.dataset.action ?? '')
+      }
       act(id: Action, capture: Capture, href: string) {
         if (id === 'edit') this.edit(capture)
         else if (id === 'copy')
@@ -220,12 +229,7 @@ export function linkControls(callbacks: Callbacks) {
             }
             this.target = { capture, href, doc }
             this.preview.textContent = href
-            for (const button of this.panel.querySelectorAll<HTMLButtonElement>(
-              'button',
-            ))
-              button.disabled =
-                this.view.state.readOnly &&
-                ['edit', 'remove'].includes(button.dataset.action ?? '')
+            this.enable()
             if (!this.panel.matches(':popover-open')) this.panel.showPopover()
             const bounds = this.panel.getBoundingClientRect()
             this.panel.style.left = `${Math.max(8, Math.min(rect.left, innerWidth - bounds.width - 8))}px`
@@ -387,6 +391,7 @@ export function linkControls(callbacks: Callbacks) {
             1,
             MapMode.TrackAfter,
           )
+        if (update.state.readOnly !== update.startState.readOnly) this.enable()
         if (
           update.docChanged ||
           moved ||

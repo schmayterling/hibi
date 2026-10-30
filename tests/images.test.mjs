@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import unit from 'node:test'
 import { pathToFileURL } from 'node:url'
+import { crc32, deflateSync } from 'node:zlib'
 import {
   documentMediaPath,
   imageSources,
@@ -236,6 +237,94 @@ test('local images resolve from the note, validate content, and retain their Mar
     `data:image/png;base64,${png.toString('base64')}`,
   )
 })
+
+/** A black PNG of this size, one bit per pixel. */
+function blankPng(width, height) {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data])
+    const head = Buffer.alloc(4)
+    head.writeUInt32BE(data.length)
+    const crc = Buffer.alloc(4)
+    crc.writeUInt32BE(crc32(body))
+    return Buffer.concat([head, body, crc])
+  }
+  const header = Buffer.alloc(13)
+  header.writeUInt32BE(width, 0)
+  header.writeUInt32BE(height, 4)
+  header[8] = 1
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', header),
+    chunk(
+      'IDAT',
+      deflateSync(Buffer.alloc((Math.ceil(width / 8) + 1) * height)),
+    ),
+    chunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
+unit(
+  'a width or height alone keeps an <img> tag image in shape in a narrower column',
+  {
+    timeout: 30000,
+  },
+  async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-html-image-shape-'))
+    await mkdir(join(folder, 'assets'))
+    await writeFile(join(folder, 'assets', 'wide.png'), blankPng(1600, 900))
+    const note = join(folder, 'note.md')
+    await writeFile(
+      note,
+      [
+        '<img src="assets/wide.png" alt="broad" width=1600>',
+        '<img src="assets/wide.png" alt="high" height=900>',
+      ].join('\n\n'),
+    )
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(6500)
+    await selectFormattedEngine(app, page, 'codemirror')
+    await app.evaluate(({ dialog }, note) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [note],
+      })
+    }, note)
+    await pressShortcut(
+      app,
+      `${process.platform === 'darwin' ? 'Meta' : 'Control'}+o`,
+    )
+    const boxes = await page.waitForFunction(() => {
+      const images = ['broad', 'high'].map((alt) =>
+        document.querySelector(`.rich-pane img[alt="${alt}"]`),
+      )
+      if (!images.every((image) => image?.complete && image.naturalWidth))
+        return null
+      window.loadedAt ??= performance.now()
+      const sizes = images.map((image) => {
+        const { width, height } = image.getBoundingClientRect()
+        return [width, height]
+      })
+      // A height alone sizes its image as it loads; give that a moment.
+      return sizes[1][1] < 900 || performance.now() - window.loadedAt > 1500
+        ? sizes
+        : null
+    })
+    for (const [width, height] of await boxes.jsonValue()) {
+      assert.ok(width < 1600, `fits the column: ${width}×${height}`)
+      assert.ok(
+        Math.abs(height - (width * 900) / 1600) < 1,
+        `keeps 16:9: ${width}×${height}`,
+      )
+    }
+  },
+)
 
 unit(
   'formatted view shows raw HTML images at their size and place, and reveals their source at the caret',

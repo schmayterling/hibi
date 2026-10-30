@@ -149,9 +149,20 @@ export class MediaWidget extends WidgetType {
       if (this.width) media.width = this.width
       if (this.height) media.height = this.height
       // A column narrower than the width scales the height with it.
-      if (this.width && this.height) {
-        media.style.aspectRatio = `${this.width} / ${this.height}`
-        media.style.height = 'auto'
+      if (this.width && this.height) keepShape(media, this.width, this.height)
+      // A height alone takes its width from the image's own shape.
+      else if (this.height && media instanceof HTMLImageElement) {
+        const image = media
+        image.onload = () => {
+          if (image.naturalWidth && image.naturalHeight)
+            keepShape(
+              image,
+              Math.round(
+                (this.height * image.naturalWidth) / image.naturalHeight,
+              ),
+              this.height,
+            )
+        }
       }
       delete media.dataset.tooltip
       if (media instanceof HTMLVideoElement) {
@@ -209,6 +220,17 @@ export class MediaWidget extends WidgetType {
   override ignoreEvent(event: Event) {
     return event.target instanceof Element && !!event.target.closest('video')
   }
+}
+
+/** Sizes media to `width` with this shape, so a narrower column scales its height too. */
+function keepShape(
+  media: HTMLImageElement | HTMLVideoElement,
+  width: number,
+  height: number,
+) {
+  media.width = width
+  media.style.aspectRatio = `${width} / ${height}`
+  media.style.height = 'auto'
 }
 
 function clear(media: Element) {

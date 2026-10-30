@@ -163,6 +163,9 @@ function quoteScan(
 // reader has not put under column state ends the feed; the retry installs it.
 type QuoteHandoff = { lines: QuoteFeed; taken: number; tabs?: boolean }
 let quoteFeed: QuoteHandoff | undefined
+// A quote's raw text that its extensions re-read, and the source it was read
+// from: the raw is no suffix of the frame, so its row comes from the source.
+let quoteSource: { raw: string; source: string } | undefined
 
 type SetextFrame = {
   source: string
@@ -941,7 +944,10 @@ function installQuoteState(
             tokens: Token[],
           ) {
             const previous = state.extension
-            const line = quoteOrigin(state, source)
+            const line = quoteOrigin(
+              state,
+              quoteSource?.raw === source ? quoteSource.source : source,
+            )
             state.extension = { source, line }
             const input = quoteExtensionInput(tokenizer, state, source, line)
             try {
@@ -1102,7 +1108,14 @@ export class BlockTokenizer extends Tokenizer {
     return withQuoteScan(this, () =>
       withLeafBlocks(this, () => {
         const quote = read.call(this, source)
-        return quote && extendQuote(quote, this.lexer)
+        if (!quote) return quote
+        const previous = quoteSource
+        quoteSource = { raw: quote.raw, source }
+        try {
+          return extendQuote(quote, this.lexer)
+        } finally {
+          quoteSource = previous
+        }
       }),
     )
   }

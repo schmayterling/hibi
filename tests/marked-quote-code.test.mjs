@@ -811,3 +811,21 @@ test('quote extensions keep physical title columns and consumed fence indentatio
         }
     }
 })
+
+test('re-reading a nested quote with quote extensions keeps later physical rows', () => {
+  // An extension that re-reads a nested quote reads its raw text, which is
+  // not the rest of the frame. Later blocks in the frame keep their rows.
+  for (const sample of [
+    '> > x\n>\n>\t>\t\tcode',
+    '> > x\n>\n>\t>\t[!NOTE]\n>\t>\n>\t>\t\tcode\n>\t>\t\tmore',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      const markdown = new Marked({ gfm: true }, alertMarkdown, blockMarkdown)
+      assert.deepEqual(
+        code(markdown.parse(source)),
+        code(micromark(source).replaceAll('\r\n', '\n')),
+        source,
+      )
+    }
+})

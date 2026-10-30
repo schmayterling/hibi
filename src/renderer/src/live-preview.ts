@@ -1432,6 +1432,32 @@ function spacing(
 }
 
 /**
+ * The space below a text's last line, found from the lines after its last
+ * block, which start at `from`, and the margin below that block; null when
+ * text follows the block. Each line before the last can be whitespace, so
+ * the lines are read once per text, and edits above them keep the space.
+ */
+const endSpaces = new WeakMap<
+  Text,
+  { from: number; margin: number; below: number | null }
+>()
+
+/** An edit that ends above the lines after the last block leaves their space as it was. */
+function keepEndSpace(update: ViewUpdate) {
+  const known = endSpaces.get(update.startState.doc)
+  if (!known) return
+  let above = true
+  update.changes.iterChangedRanges((_, to) => {
+    if (to >= known.from) above = false
+  })
+  if (above)
+    endSpaces.set(update.state.doc, {
+      ...known,
+      from: update.changes.mapPos(known.from),
+    })
+}
+
+/**
  * Blank lines after the last block, as the rich view shows them: an empty
  * line with another line break after it is the margin above an empty
  * paragraph, which shows on the next line, and other blank lines hold the
@@ -1452,30 +1478,44 @@ function ending(view: EditorView, tree: Tree, line: (pos: number) => LineInfo) {
   const drawn =
     end.to >= viewport.from && end.to <= viewport.to ? viewport.to : -1
   const paragraph = blockSpace('Paragraph')
-  let margin = bottomMargin(last),
+  const after = bottomMargin(last)
+  const known = endSpaces.get(doc)
+  const space =
+    known?.from === end.to && known.margin === after ? known.below : undefined
+  // Text after the last block, such as a definition, leaves no space.
+  if (space === null) return 0
+  let margin = after,
     below = margin,
     shown = false
   const gaps: [number, number][] = []
   for (let number = end.number + 1; number <= doc.lines; number++) {
     let blank = doc.line(number)
-    // Past those, a run of empty lines before the last line alternates
-    // between a margin and an empty paragraph: skip it in pairs.
-    if (!blank.text && blank.from > drawn) {
-      const { from } = blank
-      // Lines from here to `at` are empty while they hold only line breaks.
-      const run =
-        firstWhere(
-          number,
-          doc.lines,
-          (at) => doc.line(at).to - from > at - number,
-        ) - number
-      if (run > 1) {
+    if (blank.from > drawn) {
+      // Past those, only the space is left, once found for this text.
+      if (space !== undefined) {
+        below = space
+        break
+      }
+      // A run of empty lines before the last line alternates between a
+      // margin and an empty paragraph: skip it in pairs.
+      if (!blank.text && number + 1 < doc.lines && !doc.line(number + 1).text) {
+        const { from } = blank
+        // Lines from here to `at` are empty while they hold only line breaks.
+        const run =
+          firstWhere(
+            number,
+            doc.lines,
+            (at) => doc.line(at).to - from > at - number,
+          ) - number
         number += run - (run % 2)
         margin = below = paragraph.bottom
         blank = doc.line(number)
       }
     }
-    if (blank.text.trim()) return 0
+    if (blank.text.trim()) {
+      endSpaces.set(doc, { from: end.to, margin: after, below: null })
+      return 0
+    }
     if (shown) {
       shown = false
       margin = below = paragraph.bottom
@@ -1488,6 +1528,8 @@ function ending(view: EditorView, tree: Tree, line: (pos: number) => LineInfo) {
       below = 0
     }
   }
+  if (space === undefined)
+    endSpaces.set(doc, { from: end.to, margin: after, below })
   for (const [at, height] of gaps) {
     const info = line(at)
     info.classes.push('hibi-lp-gap')
@@ -2102,6 +2144,7 @@ export function livePreview(
           }
       }
       update(update: ViewUpdate) {
+        if (update.docChanged) keepEndSpace(update)
         const tree = syntax.tree(update.state)
         // Candidate text keeps its markers while an input method composes.
         const reveal = update.view.composing

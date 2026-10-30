@@ -757,6 +757,60 @@ test('blank lines after the last block are laid out only where the view shows th
   assert.deepEqual(heights, [16, 28, 16, 28])
 })
 
+test('whitespace lines after the last block are read once per text, not on every redraw', {
+  timeout: 60000,
+}, async () => {
+  const spaces = []
+  for (const tail of ['\n '.repeat(10000), '\n\n '.repeat(5000)]) {
+    const doc = `# Blank tail\n\ntail${tail}`
+    await harness.evaluate(async (doc) => {
+      await window.livePreview.mount(doc, { width: 800, height: 600 })
+      window.livePreview.scrollTo(doc.length)
+    }, doc)
+    // Once idle parsing reaches the end, the space below comes from every line after the last block.
+    await harness.waitForFunction(() =>
+      window.livePreview.covered(0, window.livePreview.view().state.doc.length),
+    )
+    const result = await harness.evaluate(async () => {
+      const preview = window.livePreview
+      await preview.settle()
+      const view = preview.view()
+      // Reads of any text, so the edit's new text counts too.
+      const text = Object.getPrototypeOf(Object.getPrototypeOf(view.state.doc))
+      const read = text.line
+      let calls = 0
+      text.line = function (number) {
+        calls++
+        return read.call(this, number)
+      }
+      const count = (run) => {
+        calls = 0
+        run()
+        return calls
+      }
+      try {
+        return {
+          refresh: count(() => preview.refresh()),
+          // Above the last block: the lines after it stay as they were.
+          edit: count(() =>
+            view.dispatch({ changes: { from: 0, insert: 'x' } }),
+          ),
+          space: view.contentDOM.style.getPropertyValue('--hibi-end'),
+        }
+      } finally {
+        text.line = read
+      }
+    })
+    const report = JSON.stringify(result)
+    // The view shows a few dozen of the 10,000 lines.
+    assert.ok(result.refresh < 200, report)
+    assert.ok(result.edit < 200, report)
+    spaces.push(result.space)
+  }
+  // Only an empty line before the last opens an empty paragraph there.
+  assert.deepEqual(spaces, ['', '16px'])
+})
+
 test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {
   timeout: 60000,
 }, async () => {

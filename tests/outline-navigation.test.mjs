@@ -420,10 +420,10 @@ test('source outline resolves references through its worker and preserves native
   await expectLabels(['**literal** [label][ref]', 'real'])
   await replaceSourceText(page, source, original)
   await expectLabels(nativeLabels)
-  const nested = original.replace(
-    '$$\n# hidden math\n$$',
-    () => '> $$\n> # hidden math\n> $$',
-  )
+  // The renamed heading after the quote shows when the outline has read it.
+  const nested = original
+    .replace('$$\n# hidden math\n$$', () => '> $$\n> # hidden math\n> $$')
+    .replace('# real', '# real after quote')
   await replaceSourceText(page, source, nested)
   await waitForAsync(
     page,
@@ -438,7 +438,7 @@ test('source outline resolves references through its worker and preserves native
   const unavailable = outline.getByText(
     /Source outline could not read this note.*Switch to visual mode/,
   )
-  await expectLabels(nativeLabels)
+  await expectLabels([...nativeLabels.slice(0, -1), 'real after quote'])
   assert.equal(await unavailable.count(), 0)
   await replaceSourceText(page, source, original)
   await expectLabels(nativeLabels)

@@ -217,6 +217,7 @@ import {
   installedAddons,
   installedAsset,
   openAddonsFolder,
+  outdatedAddons,
 } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
 import {
@@ -1619,6 +1620,7 @@ if (!app.requestSingleInstanceLock()) {
         () => ({
           states: getAddonStates(),
           packages: installedAddons(),
+          outdated: outdatedAddons(),
           notices: getAddonStartupNotices(),
         }),
         addonsReady,
@@ -1891,6 +1893,10 @@ if (!app.requestSingleInstanceLock()) {
       handle(SIDELOAD_CHANNELS.list, (event) => {
         trustedWindow(event)
         return installedAddons()
+      })
+      handle(SIDELOAD_CHANNELS.outdated, (event) => {
+        trustedWindow(event)
+        return outdatedAddons()
       })
       handle(SIDELOAD_CHANNELS.resources, (_event, id: unknown) =>
         installedAddonResources(id),

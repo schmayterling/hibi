@@ -2,15 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   startupDiagnostics,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 test('sidebar starts hidden, stays open while typing, and navigates the page outline in either editor', {
@@ -28,7 +26,7 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   await page
     .getByRole('textbox', { name: /document editor/i })
@@ -90,12 +88,8 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
     .waitFor()
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await outline.getByRole('treeitem', { name: /^alpha$/i, exact: true }).click()
-  await page.waitForFunction(
-    (engine) =>
-      document.activeElement?.classList.contains(
-        engine === 'tiptap' ? 'tiptap' : 'cm-content',
-      ),
-    t.formattedEngine,
+  await page.waitForFunction(() =>
+    document.activeElement?.classList.contains('cm-content'),
   )
   // Accepted difference: the formatted view reveals the heading's `# ` as
   // editable text under the caret, so the heading's rendered text is the
@@ -103,10 +97,7 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
   await t.test('outline navigation exposes rendered heading text', async () => {
     const heading =
       'window.getSelection()?.anchorNode?.parentElement?.closest(\'h1, [role="heading"]\')'
-    if (t.formattedEngine !== 'codemirror') {
-      assert.equal(await page.evaluate(`${heading}?.textContent`), 'alpha')
-      return
-    }
+
     const cdp = await page.context().newCDPSession(page)
     try {
       const { result } = await cdp.send('Runtime.evaluate', {
@@ -166,7 +157,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   await page.getByRole('button', { name: /^source view$/i }).click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -215,7 +206,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
   await active('beta')
   await page.getByRole('button', { name: /^normal$/i }).click()
   await page
-    .locator('.rich-pane .tiptap p, .rich-pane .cm-line')
+    .locator('.rich-pane .cm-line')
     .filter({ hasText: /^alpha body$/ })
     .click()
   await active('alpha')
@@ -230,7 +221,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
     .click()
   await active('final')
   await page
-    .locator('.rich-pane .tiptap p, .rich-pane .cm-line')
+    .locator('.rich-pane .cm-line')
     .filter({ hasText: /^deep body$/ })
     .click()
   await active('deep')

@@ -26,7 +26,6 @@ async function open(t, text) {
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem(
       'cursor-settings',
       JSON.stringify({ style: 'underline', speed: 'slow', animation: 'blink' }),

@@ -18,7 +18,7 @@ test('addon storage bridge retains global values and clears sessions on disable'
       name: 'Storage probe',
       description: 'Storage bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',

@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('normal view edits and removes an existing link from the toolbar and the palette', {
@@ -33,11 +30,11 @@ test('normal view edits and removes an existing link from the toolbar and the pa
   }, fixture)
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  const editor = await selectFormattedEngine(app, page, t.formattedEngine)
+  const editor = await waitForFormattedEditor(app, page)
   await clickMenu(app, 'Open…')
   await page.waitForFunction(() =>
     document
-      .querySelector('.rich-pane :is(.tiptap, .cm-content)')
+      .querySelector('.rich-pane .cm-content')
       ?.textContent.includes('docs'),
   )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).waitFor()

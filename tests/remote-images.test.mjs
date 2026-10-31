@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -238,6 +239,21 @@ test('notes outside the workspace, and workspaces with a linked .hibi, keep imag
   assert.deepEqual(await host.draw(), drawn('first'))
   assert.deepEqual(await readdir(elsewhere), [])
   assert.equal(host.requests.length, 1)
+})
+
+test("a workspace cache folder Hibi can't write to, such as in a shared folder, leaves images to the app data folder", async (t) => {
+  const host = await setup(t)
+  const images = join(host.workspace, '.hibi', 'cache', 'images')
+  await mkdir(images, { recursive: true })
+  await chmod(images, 0o500)
+  assert.deepEqual(await host.draw(), drawn('first'))
+  assert.deepEqual(await host.draw(), drawn('first'))
+  assert.equal(host.requests.length, 1)
+  assert.deepEqual(await readdir(images), [])
+  assert.deepEqual(await readdir(join(host.place.data, 'image-cache')), [
+    NAME,
+    `${NAME}.json`,
+  ])
 })
 
 test('draws at once share one download, and a refresh downloads again without validators', async (t) => {

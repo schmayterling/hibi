@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
+  access,
   lstat,
   mkdir,
   open,
@@ -46,11 +47,20 @@ type Kept = {
   modified?: string
 }
 
-/** A folder Hibi made, never a link to one elsewhere. */
+/**
+ * A folder Hibi made and can write to, never a link to one elsewhere: a
+ * read-only one, such as in a shared folder, would fail every download.
+ */
 async function folder(path: string) {
   await mkdir(path, { mode: 0o700 }).catch(() => {})
   const stat = await lstat(path).catch(() => null)
-  return stat?.isDirectory() ? path : null
+  return stat?.isDirectory() &&
+    (await access(path, constants.W_OK).then(
+      () => true,
+      () => false,
+    ))
+    ? path
+    : null
 }
 
 /**

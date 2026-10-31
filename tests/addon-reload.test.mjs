@@ -2,15 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -57,7 +55,7 @@ const manifest = (id, name, fields = {}) => ({
   name,
   description: 'Addon reload fixture',
   kind: 'extension',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   authors: [{ displayName: 'Test' }],
   entry: 'index.js',
@@ -182,7 +180,7 @@ test('reload restarts an addon and its consumers in place, refuses open windows 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => window.consumerSaw === 1)
   const reload = (id, scope) => sendReload(app, id, scope)
@@ -461,7 +459,7 @@ test('a reviewed replacement stays enabled and reloads in place unless its acces
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() =>
     window.hibi.setAddonTrustSettings({
       allowUnsigned: true,
@@ -656,7 +654,7 @@ async function launchRetryFixtures(t) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   const counts = () => page.evaluate(() => ({ ...window.starts }))
   const live = (...ids) =>
@@ -755,11 +753,11 @@ test('reloading an editor extension restores the selection and focus once it set
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  if (t.formattedEngine === 'codemirror') {
-    cdp = await page.context().newCDPSession(page)
-    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  }
+  await waitForFormattedEditor(app, page)
+
+  cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+
   await waitForDocumentEditor(app, page)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   await editor.click()
@@ -781,7 +779,7 @@ test('reloading an editor extension restores the selection and focus once it set
         () =>
           getSelection().toString() === 'ad me' &&
           document.activeElement?.matches(
-            '.rich-pane :is(.ProseMirror, .cm-content)[contenteditable="true"]',
+            '.rich-pane .cm-content[contenteditable="true"]',
           ),
       )
       .catch(async (error) => {
@@ -806,33 +804,16 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
     manifest('slow-consumer', 'Slow consumer', {
       startup: 'background',
       requires: { addons: [{ id: 'frontmatter' }] },
-      capabilities: undefined,
     }),
     {
-      // The restarted consumer adds a syntax flavor, so the editor rebuilds after the user's choice
-      // with a widget that renders text before it. The formatted view refuses the legacy SDK, so
-      // there the flavor arrives without the widget.
-      'index.js': `export default (sdk) => ({
-        async start(context) {
+      // The restarted consumer starts in the background, so the editor stays
+      // interactive while the reload holds it read-only.
+      'index.js': `export default () => ({
+        async start() {
           window.consumerStarts = (window.consumerStarts || 0) + 1;
           if (window.holdConsumer) {
             window.holdConsumer = false;
             await new Promise((resolve) => { window.releaseConsumer = resolve; });
-            const richExtensions = [];
-            try {
-              const { tiptap } = sdk;
-              richExtensions.push(tiptap.Extension.create({
-                name: 'lateWidget',
-                addDecorations: () => ({
-                  create: () => [tiptap.Decoration.Widget(0, () => {
-                    const element = document.createElement('div');
-                    element.textContent = 'Rendered widget text ';
-                    return element;
-                  }, { key: 'late-widget' })],
-                }),
-              }));
-            } catch {}
-            context.editor.registerFlavor({ id: 'late', name: 'Late', kind: 'syntax', description: 'Rebuilds the editor', detect: () => false, richExtensions });
           }
         },
       });`,
@@ -857,11 +838,11 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  if (t.formattedEngine === 'codemirror') {
-    cdp = await page.context().newCDPSession(page)
-    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  }
+  await waitForFormattedEditor(app, page)
+
+  cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => window.consumerStarts === 1)
   const editor = page.getByRole('textbox', { name: /document editor/i })
@@ -880,14 +861,12 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   })
   await sendReload(app, 'frontmatter')
   await page.waitForFunction(() => !!window.releaseConsumer)
-  await page.waitForFunction((cm) => {
+  await page.waitForFunction(() => {
     const editor = document.querySelector(
       '[role="textbox"][aria-label="Document editor"]',
     )
-    return cm
-      ? editor?.isContentEditable === false
-      : editor?.getAttribute('aria-readonly') === 'true'
-  }, t.formattedEngine === 'codemirror')
+    return editor?.isContentEditable === false
+  })
   await t.test('reloading editor exposes aria-readonly', async () => {
     assert.equal(await editor.getAttribute('aria-readonly'), 'true')
   })
@@ -899,37 +878,25 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   await page.keyboard.type('xyz')
   assert.equal(await markdown(), before)
   await page.evaluate(() => {
-    document.querySelector(
-      '.rich-pane :is(.ProseMirror, .cm-content)',
-    ).dataset.chosenIn = ''
+    document.querySelector('.rich-pane .cm-content').dataset.chosenIn = ''
     window.releaseConsumer()
   })
-  await page.waitForFunction((cm) => {
+  await page.waitForFunction(() => {
     const editor = document.querySelector(
       '[role="textbox"][aria-label="Document editor"]',
     )
-    return cm
-      ? editor?.isContentEditable === true
-      : editor?.getAttribute('aria-readonly') === 'false'
-  }, t.formattedEngine === 'codemirror')
+    return editor?.isContentEditable === true
+  })
   await t.test('unlocked editor exposes aria-readonly', async () => {
     assert.equal(await editor.getAttribute('aria-readonly'), 'false')
   })
-  if (t.formattedEngine === 'codemirror') {
-    // The selection, read-only gate and subsequent native input are checked on both engines below.
-    assert.equal(
-      await page.locator('.rich-pane .cm-content[data-chosen-in]').count(),
-      1,
-    )
-    assert.equal(await editor.getByText('Rendered widget text').count(), 0)
-  } else {
-    assert.equal(
-      await page.locator('.ProseMirror[data-chosen-in]').count(),
-      0,
-      'the editor rebuilt after the selection was chosen',
-    )
-    await editor.getByText('Rendered widget text').waitFor()
-  }
+
+  // The selection, read-only gate and subsequent native input are checked below.
+  assert.equal(
+    await page.locator('.rich-pane .cm-content[data-chosen-in]').count(),
+    1,
+  )
+
   await t.test(
     'reload keeps the selection moved while input was read-only',
     async () => {

@@ -273,11 +273,32 @@ test('right sidebar starts empty, remembers its view and width, and collapses in
   await page.waitForFunction(
     () => document.querySelector('.app').dataset.rightSidebar === 'false',
   )
+  // A reopened outline reads its headings again, after idle time; Escape
+  // before they arrive still closes the drawer.
+  await page.evaluate(() => {
+    const held = []
+    const request = window.requestIdleCallback
+    window.requestIdleCallback = (callback) => {
+      held.push(callback)
+      return 0
+    }
+    window.releaseIdle = () => {
+      window.requestIdleCallback = request
+      for (const callback of held) request(callback)
+    }
+  })
   await rightToggle.click()
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  )
   await page.keyboard.press('Escape')
   await page.waitForFunction(
     () => document.querySelector('.app').dataset.rightSidebar === 'false',
   )
+  await page.evaluate(() => window.releaseIdle())
   await leftToggle.click()
   await page.mouse.click(580, 380)
   await rightToggle.click()

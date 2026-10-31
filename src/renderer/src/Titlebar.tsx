@@ -18,7 +18,7 @@ import { useMenus } from '../../ui/MenuHost'
 import type { viewShortcut } from './AddonSidebar'
 import type { ViewEntry } from './addon-views'
 import { DocumentTabs } from './DocumentTabs'
-import type { ViewMode } from './Editor'
+import type { ViewMode } from './FormattedEditor'
 
 const icons = {
   normal: FileText,

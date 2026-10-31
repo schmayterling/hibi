@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { renderedReplaceEdits } from '../src/shared/rendered-replace.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -339,7 +342,7 @@ async function openFind(
         return post.call(this, message, ...rest)
       }
     }, markdown.replace(/\r\n?/g, '\n').length)
-  const rich = await selectFormattedEngine(app, page, 'codemirror', {
+  const rich = await waitForFormattedEditor(app, page, {
     reload: instrument || renderedProbe,
   })
   await page.getByRole('button', { name: 'Source view', exact: true }).click()

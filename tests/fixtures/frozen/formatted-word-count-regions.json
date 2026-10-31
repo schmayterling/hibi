@@ -1,0 +1,4 @@
+{
+  "\n\nb": "1 word · 2 characters",
+  "before\n\n$$\nx\n\ny\n$$\n\nafter": "2 words · 13 characters"
+}

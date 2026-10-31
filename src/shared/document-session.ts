@@ -225,6 +225,10 @@ export class DocumentSession {
   historyDepth() {
     return { undo: this.#undo.length, redo: this.#redo.length }
   }
+  /** The view whose selection the next undo or redo restores: the one that made its edit. */
+  historyView(direction: 'undo' | 'redo') {
+    return (direction === 'undo' ? this.#undo : this.#redo).at(-1)?.viewId
+  }
   /** Release older history without changing source, selection or saved identity. */
   limitHistory(
     bytes: number,

@@ -18,7 +18,7 @@ test('installed addon uses host credential status without reading stored secrets
       name: 'Credential probe',
       description: 'Host credential bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',

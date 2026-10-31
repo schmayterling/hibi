@@ -8,7 +8,7 @@ import {
 } from 'react'
 import { Button, IconButton } from '../../ui/Controls'
 import type { ToolbarItem, ToolbarPreferences } from '../../ui/toolbar'
-import type { ViewMode } from './Editor'
+import type { ViewMode } from './FormattedEditor'
 import { toolbar } from './toolbar'
 import './toolbar.css'
 

@@ -315,6 +315,44 @@ test('two source views share text and history but keep separate selections', () 
   f.session.dispose()
 })
 
+test('a view that undoes or redoes its own edit scrolls to what that restores; other views keep their place', () => {
+  const f = fixture('abcd')
+  const scrolled = (view) => {
+    const update = view.update
+    const log = []
+    view.update = (transactions) => {
+      log.push(transactions.some((transaction) => transaction.scrollIntoView))
+      update.call(view, transactions)
+    }
+    return log
+  }
+  const left = f.attach('left'),
+    right = f.attach('right'),
+    hidden = f.attach('hidden')
+  const logs = [left, right, hidden].map(({ view }) => scrolled(view))
+  hidden.bridge.setVisible(false)
+  left.dispatch(type(1, 'X', 1))
+  logs.forEach((log) => {
+    log.length = 0
+  })
+  assert.equal(left.bridge.undo(), true)
+  // A step of another view's edit restores none of this view's selection.
+  assert.equal(right.bridge.redo(), true)
+  right.dispatch(type(1, 'Y', 2))
+  assert.equal(right.bridge.undo(), true)
+  // Session history moves no view either.
+  f.session.undo()
+  hidden.bridge.setVisible(true)
+  assert.deepEqual(logs, [
+    [true, false, false, false, false],
+    [false, false, false, true, false],
+    [false],
+  ])
+  assert.deepEqual(f.errors, [])
+  for (const pane of [left, right, hidden]) pane.dispose()
+  f.session.dispose()
+})
+
 test('select-all commands and keymaps preserve exact source selection without view effects', () => {
   for (const bindings of [commands.standardKeymap, commands.defaultKeymap])
     assert.equal(

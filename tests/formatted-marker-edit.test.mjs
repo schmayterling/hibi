@@ -2,8 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 
 const cases = [
   ['emphasis', 'lead *word* tail', '*', 'word'],
@@ -31,7 +30,7 @@ const cases = [
   ['callout header', '> [!NOTE] word\n> body', '[!NOTE]', 'word'],
 ]
 
-async function open(t, engine) {
+async function open(t) {
   await mkdir(resolve('.scratch'), { recursive: true })
   const folder = await mkdtemp(resolve('.scratch/marker-edit-'))
   const file = resolve(folder, 'note.md')
@@ -52,7 +51,7 @@ async function open(t, engine) {
     await app.close()
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -117,11 +116,10 @@ async function clickAt(rich, pos, clickCount = 1) {
   await rich.page().mouse.click(point.x, point.y, { clickCount })
 }
 
-test('codemirror: revealed markers are ordinary editable source', {
+test('revealed markers are ordinary editable source', {
   timeout: 300000,
 }, async (t) => {
-  const { page, rich, cdp } = await open(t, 'codemirror')
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
+  const { page, rich, cdp } = await open(t)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   for (const [name, body, marker, word, last] of cases) {
@@ -497,29 +495,4 @@ test('codemirror: revealed markers are ordinary editable source', {
     },
   )
   assert.deepEqual(errors, [])
-})
-
-test('tiptap: formatting hints remain generated noneditable markers (accepted difference)', {
-  timeout: 90000,
-}, async (t) => {
-  const { page, rich } = await open(t, 'tiptap')
-  assert.equal(await page.locator('.rich-pane .hibi-formatted').count(), 0)
-  await rich.locator('strong').click()
-  const hints = rich.locator('.markdown-marker')
-  await hints.first().waitFor()
-  assert.equal(await hints.count(), 2)
-  assert.deepEqual(
-    await hints.evaluateAll((markers) =>
-      markers.map((marker) => ({
-        text: marker.textContent,
-        hint: marker.getAttribute('data-marker'),
-        editable: marker.getAttribute('contenteditable'),
-      })),
-    ),
-    [
-      { text: '', hint: '**', editable: 'false' },
-      { text: '', hint: '**', editable: 'false' },
-    ],
-  )
-  assert.equal(await rich.textContent(), 'lead word tailend')
 })

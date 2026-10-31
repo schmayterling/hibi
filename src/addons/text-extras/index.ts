@@ -1,4 +1,3 @@
-import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { defineAddon, type MarkdownFlavor } from '../api'
 import { flavorInfo } from './flavor-info'
@@ -6,13 +5,8 @@ import manifest from './manifest'
 import css from './styles.css?inline'
 import { textExtrasMarkdown } from './syntax'
 
-// The Tiptap editor loads only when it is the selected engine.
-const rich = codemirrorFormattedView ? undefined : await import('./nodes')
-
 const flavor: MarkdownFlavor = {
   ...flavorInfo,
-  serialization: 'block-local',
-  richExtensions: rich ? [rich.Subscript, rich.Subtext] : [],
   export: { extensions: [textExtrasMarkdown], css },
 }
 let stopFormatted: (() => void)[] = []
@@ -37,19 +31,11 @@ export default defineAddon({
         group: 'Text extras',
         description: id === 'subscript' ? 'H~2~O' : '-# small text',
         level: id === 'subscript' ? 'inline' : 'block',
-        extensions: [id],
         matches: (token) => token.type === id,
         slash:
           id === 'subscript'
-            ? {
-                markdown: '~~',
-                cursor: 1,
-                rich: (chain) => chain.toggleMark('subscript'),
-              }
-            : {
-                markdown: '-# ',
-                rich: (chain) => chain.setNode('subtext'),
-              },
+            ? { markdown: '~~', cursor: 1 }
+            : { markdown: '-# ' },
       })
   },
   stop() {

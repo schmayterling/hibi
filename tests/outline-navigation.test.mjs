@@ -2,15 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   stopElectronTree,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -40,8 +38,8 @@ test('large outline follows rich and source carets with bounded rows and ignores
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   await page.setViewportSize({ width: 1100, height: 800 })
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  const cm = t.formattedEngine === 'codemirror'
+  await waitForFormattedEditor(app, page)
+
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -54,14 +52,14 @@ test('large outline follows rich and source carets with bounded rows and ignores
     })
   }, file)
   await clickMenu(app, 'Open…')
-  if (cm) {
-    await waitForAsync(
-      page,
-      async () => (await window.hibi.getDocument()).name === 'headings.md',
-    )
-    await rich.press('ControlOrMeta+End')
-    await rich.evaluate((element) => element.blur())
-  }
+
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'headings.md',
+  )
+  await rich.press('ControlOrMeta+End')
+  await rich.evaluate((element) => element.blur())
+
   await rich.getByRole('heading', { name: 'node 999', exact: true }).waitFor()
   await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
   await page.getByRole('button', { name: /^right sidebar views$/i }).click()
@@ -88,21 +86,11 @@ test('large outline follows rich and source carets with bounded rows and ignores
   }
   for (const label of ['node 999', 'node 100', 'node 500', 'top']) {
     await rich.evaluate((element, label) => {
-      if (element.matches('.cm-content')) {
-        const view = element.cmTile.root.view
-        const text = label === 'top' ? '# top\n' : `## ${label}\n`
-        const anchor = view.state.doc.toString().indexOf(text)
-        if (anchor < 0) throw new Error('missing heading')
-        view.dispatch({ selection: { anchor }, scrollIntoView: true })
-        return
-      }
-      const editor = element.editor
-      let position
-      editor.state.doc.descendants((node, offset) => {
-        if (node.type.name === 'heading' && node.textContent === label)
-          position = offset + 1
-      })
-      editor.commands.setTextSelection(position)
+      const view = element.cmTile.root.view
+      const text = label === 'top' ? '# top\n' : `## ${label}\n`
+      const anchor = view.state.doc.toString().indexOf(text)
+      if (anchor < 0) throw new Error('missing heading')
+      view.dispatch({ selection: { anchor }, scrollIntoView: true })
     }, label)
     await expectSelected(label)
   }
@@ -124,25 +112,14 @@ test('large outline follows rich and source carets with bounded rows and ignores
         callback({ didTimeout: false, timeRemaining: () => 20 })
       pending.clear()
     }
-    const content = document.querySelector('.rich-pane .cm-content')
-    if (content) {
-      const view = content.cmTile.root.view
-      const insert = '# replacement\n\n'
-      view.dispatch({
-        changes: { from: 0, insert },
-        selection: { anchor: view.state.doc.length + insert.length },
-      })
-      window.outlineSelectionBeforeStaleClick = view.state.selection.main.head
-      return
-    }
-    const editor = document.querySelector('.tiptap').editor
-    editor.commands.insertContentAt(0, {
-      type: 'heading',
-      attrs: { level: 1 },
-      content: [{ type: 'text', text: 'replacement' }],
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    const insert = '# replacement\n\n'
+    view.dispatch({
+      changes: { from: 0, insert },
+      selection: { anchor: view.state.doc.length + insert.length },
     })
-    editor.commands.setTextSelection(editor.state.doc.content.size - 1)
-    window.outlineSelectionBeforeStaleClick = editor.state.selection.head
+    window.outlineSelectionBeforeStaleClick = view.state.selection.main.head
   })
   await page.waitForFunction(() => window.pendingOutlineReads.size > 0)
   // The previous top heading was at position zero. A new heading now occupies
@@ -155,10 +132,8 @@ test('large outline follows rich and source carets with bounded rows and ignores
       ),
   )
   assert.equal(
-    await rich.evaluate((element) =>
-      element.matches('.cm-content')
-        ? element.cmTile.root.view.state.selection.main.head
-        : element.editor.state.selection.head,
+    await rich.evaluate(
+      (element) => element.cmTile.root.view.state.selection.main.head,
     ),
     await page.evaluate(() => window.outlineSelectionBeforeStaleClick),
   )
@@ -171,13 +146,10 @@ test('large outline follows rich and source carets with bounded rows and ignores
   await page.evaluate(() => {
     window.releaseOutlineReads()
     // Reveal the newly published first rows in the virtualized sidebar.
-    const content = document.querySelector('.rich-pane .cm-content')
-    if (content)
-      content.cmTile.root.view.dispatch({
-        selection: { anchor: 1 },
-        scrollIntoView: true,
-      })
-    else document.querySelector('.tiptap').editor.commands.setTextSelection(1)
+    document.querySelector('.rich-pane .cm-content').cmTile.root.view.dispatch({
+      selection: { anchor: 1 },
+      scrollIntoView: true,
+    })
   })
   await outline
     .getByRole('treeitem', { name: 'replacement', exact: true })
@@ -185,20 +157,16 @@ test('large outline follows rich and source carets with bounded rows and ignores
   await outline.getByRole('treeitem', { name: 'top', exact: true }).click()
   assert.equal(
     await rich.evaluate((element) =>
-      element.matches('.cm-content')
-        ? element.cmTile.root.view.state.doc
-            .lineAt(element.cmTile.root.view.state.selection.main.head)
-            .text.replace(/^# /, '')
-        : element.editor.state.selection.$from.parent.textContent,
+      element.cmTile.root.view.state.doc
+        .lineAt(element.cmTile.root.view.state.selection.main.head)
+        .text.replace(/^# /, ''),
     ),
     'top',
   )
-  if (cm)
-    await pressShortcut(
-      app,
-      process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
-    )
-  else await rich.evaluate((element) => element.editor.commands.undo())
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   // Simulate a page with no idle time so outline work must honor its timeout.
   await page.evaluate(() => {
@@ -252,8 +220,8 @@ test('source outline resolves references through its worker and preserves native
   const errors = []
   page.on('pageerror', (error) => errors.push(error.stack ?? String(error)))
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  const cm = t.formattedEngine === 'codemirror'
+  await waitForFormattedEditor(app, page)
+
   await page.evaluate(() => {
     localStorage.setItem(
       'hibi:markdown-syntax-disabled',
@@ -305,11 +273,11 @@ test('source outline resolves references through its worker and preserves native
     })
   })
   await clickMenu(app, 'Open…')
-  if (cm) {
-    // Read rendered labels with the caret outside the heading.
-    await waitForDocumentEditor(app, page)
-    await rich.evaluate((element) => element.blur())
-  }
+
+  // Read rendered labels with the caret outside the heading.
+  await waitForDocumentEditor(app, page)
+  await rich.evaluate((element) => element.blur())
+
   const documentWorkers = page
     .workers()
     .filter((worker) => worker.url().includes('/document.worker-'))
@@ -354,16 +322,12 @@ test('source outline resolves references through its worker and preserves native
         )
       })
   }
-  if (cm)
-    await t.test(
-      'formatted references render their resolved heading labels',
-      checkFormattedHeadings,
-    )
-  else await checkFormattedHeadings()
+  await t.test(
+    'formatted references render their resolved heading labels',
+    checkFormattedHeadings,
+  )
   // Keep the historical label oracle even if formatted rendering fails.
-  const nativeLabels = cm
-    ? expectedLabels
-    : await rich.locator('h1').allTextContents()
+  const nativeLabels = expectedLabels
   await page.getByRole('button', { name: /^source view$/i }).click()
   const source = page.getByRole('textbox', {
     name: 'Markdown editor',
@@ -393,7 +357,7 @@ test('source outline resolves references through its worker and preserves native
     )
   }
   await expectLabels(nativeLabels)
-  if (cm) {
+  {
     const requests = (
       await Promise.all(
         establishedWorkers
@@ -410,13 +374,6 @@ test('source outline resolves references through its worker and preserves native
         )),
     )
     await assertWorkerReuse()
-  } else {
-    assert.ok(
-      await page.evaluate(() =>
-        window.outlineReferenceRequests.includes('ref'),
-      ),
-    )
-    assert.equal(await page.evaluate(() => window.outlineWorkers.length), 1)
   }
 
   await replaceSourceText(page, source, original.replace('[ref]:', '[gone]:'))
@@ -439,15 +396,14 @@ test('source outline resolves references through its worker and preserves native
     'CodeMirror retains both dollar signs in the nested math fixture',
   )
   const unavailable = outline.getByText(
-    /Source outline could not read this note.*Switch to visual mode/,
+    'The outline could not read this note’s syntax.',
   )
   await expectLabels([...nativeLabels.slice(0, -1), 'real after quote'])
   assert.equal(await unavailable.count(), 0)
   await replaceSourceText(page, source, original)
   await expectLabels(nativeLabels)
   assert.equal(await unavailable.count(), 0)
-  if (cm) await assertWorkerReuse()
-  else assert.equal(await page.evaluate(() => window.outlineWorkers.length), 1)
+  await assertWorkerReuse()
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     original,

@@ -18,9 +18,9 @@ import {
   compatibleAddonManifest,
   type FormattedExtension,
   type MarkdownExtension,
-  type RichExtension,
   type SourceExtension,
   type StatusItem,
+  type ToastApi,
   type ViewApi,
   type ViewInstance,
   type ViewRegistration,
@@ -46,6 +46,7 @@ import {
   parseSyntaxDescriptors,
   validatePreservation,
 } from '../../shared/preservation'
+import type { OutdatedAddon } from '../../shared/sideload'
 import { startupSpan } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { useDialogService } from '../../ui/DialogProvider'
@@ -75,7 +76,6 @@ import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, type RegisteredFlavor, renderMarkdownAsync } from './flavors'
-import { codemirrorFormattedView } from './formatted-engine'
 import { reportRendererFailure } from './local-diagnostics'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
@@ -293,6 +293,54 @@ export async function renderExportDocument(
   )
 }
 
+/**
+ * Hibi no longer runs addons made for API 1 or 2. One notice per new set of
+ * them leads to the addon manager, which keeps listing them.
+ */
+function outdatedNotice(
+  outdated: readonly OutdatedAddon[],
+  open: (id: string) => void,
+) {
+  const first = outdated[0]
+  return {
+    message:
+      outdated.length === 1
+        ? `${first?.name} needs an update for addon API 3.`
+        : `${outdated.length} addons need an update for addon API 3.`,
+    action: {
+      label: 'Open addon manager',
+      run: () => first && open(first.id),
+    },
+  }
+}
+
+function announceOutdated(
+  outdated: readonly OutdatedAddon[],
+  show: ToastApi['show'],
+  open: (id: string) => void,
+) {
+  const key = 'hibi:outdated-addons-announced'
+  const current = outdated.map((addon) => `${addon.id}@${addon.version}`)
+  let announced: unknown = []
+  try {
+    announced = JSON.parse(localStorage.getItem(key) ?? '[]')
+  } catch {
+    // A malformed record announces again.
+  }
+  localStorage.setItem(key, JSON.stringify(current))
+  if (
+    !outdated.length ||
+    (Array.isArray(announced) &&
+      current.every((item) => announced.includes(item)))
+  )
+    return null
+  return show({
+    ...outdatedNotice(outdated, open),
+    variant: 'error',
+    duration: 0,
+  })
+}
+
 export function useAddons(
   environment: Environment,
   documentName?: string,
@@ -318,6 +366,21 @@ export function useAddons(
     runAction: (command) => latest.current.runAction(command),
   }).current
   const [states, setStates] = useState<AddonState[]>([])
+  const [outdated, setOutdated] = useState<readonly OutdatedAddon[]>([])
+  const outdatedToast = useRef<ReturnType<ToastApi['show']> | null>(null)
+  // An update or uninstall settles what the notice named.
+  useEffect(() => {
+    const notice = outdatedToast.current
+    if (!notice) return
+    if (outdated.length)
+      notice.update(
+        outdatedNotice(outdated, (id) => latest.current.openAddonSettings(id)),
+      )
+    else {
+      notice.dismiss()
+      outdatedToast.current = null
+    }
+  }, [outdated])
   const [loaded, setLoaded] = useState(false)
   const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(
     new Map(),
@@ -374,10 +437,8 @@ export function useAddons(
           : activation === 'source'
             ? activeView !== 'normal'
             : activation === 'formatted'
-              ? codemirrorFormattedView && activeView !== 'markdown'
-              : activation === 'rich'
-                ? activeView !== 'markdown'
-                : true)
+              ? activeView !== 'markdown'
+              : true)
       )
     },
     [activeView, requested],
@@ -662,19 +723,6 @@ export function useAddons(
   const [markdownExtensions, setMarkdownExtensions] = useState<
     MarkdownExtension[]
   >([])
-  const rich = useRef(
-    new Map<string, RichExtension & { addonId: string }>(),
-  ).current
-  const [richExtensions, setRichExtensions] = useState<RichExtension[]>([])
-  const publishRich = useCallback(() => {
-    setRichExtensions((current) => {
-      const next = [...rich.values()].sort((a, b) => a.id.localeCompare(b.id))
-      return current.length === next.length &&
-        current.every((entry, index) => entry === next[index])
-        ? current
-        : next
-    })
-  }, [rich])
   const sources = useRef(
     new Map<
       string,
@@ -857,7 +905,7 @@ export function useAddons(
   useEffect(() => {
     void window.hibi.bootstrap
       .addons()
-      .then(async ({ states, packages: installed, notices }) => {
+      .then(async ({ states, packages: installed, outdated, notices }) => {
         try {
           if (localStorage.getItem('hibi:dictionary:typing')) {
             const { migrateDictionaryTyping } = await import(
@@ -880,6 +928,12 @@ export function useAddons(
         }
         setStates(states)
         addonRegistry.hydrate(installed)
+        setOutdated(outdated)
+        outdatedToast.current = announceOutdated(
+          outdated,
+          toastService.api.show,
+          (id) => latest.current.openAddonSettings(id),
+        )
         for (const message of notices)
           toastService.api.show({
             message,
@@ -1020,39 +1074,6 @@ export function useAddons(
       const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
-      const compatibility =
-        codemirrorFormattedView && addonRegistry.origin(id) !== 'built-in'
-          ? import('./formatted-addon-compatibility').then(
-              ({ createFormattedCompatibility }) =>
-                disposed
-                  ? null
-                  : createFormattedCompatibility(
-                      id,
-                      addon.manifest.name,
-                      toastScope.api,
-                      () => latest.current.openAddonSettings(id),
-                    ),
-            )
-          : null
-      if (compatibility)
-        cleanups.add(() => {
-          void compatibility.then((scope) => scope?.dispose())
-        })
-      const registerCompatibility = (
-        register: (
-          scope: NonNullable<Awaited<typeof compatibility>>,
-        ) => () => void,
-      ) => {
-        let removed = false
-        let remove: (() => void) | undefined
-        void compatibility?.then((scope) => {
-          if (!removed && scope) remove = register(scope)
-        })
-        return () => {
-          removed = true
-          remove?.()
-        }
-      }
       const registerView: ViewApi['register'] = (view) => {
         let registered: ViewRegistration | undefined
         let removed = false
@@ -1211,15 +1232,8 @@ export function useAddons(
           if (entry.fail && failedFeatures.has(`${presentation}:${key}`))
             return () => {}
           sources.set(`${presentation}:${key}`, entry)
-          const removeCompatibility =
-            presentation === 'formatted'
-              ? registerCompatibility((scope) =>
-                  scope.register('formatted', extension.id),
-                )
-              : () => {}
           if (mounted.current) publishSources()
           return () => {
-            removeCompatibility()
             sources.delete(`${presentation}:${key}`)
             if (!disposed && mounted.current) publishSources()
           }
@@ -1350,9 +1364,6 @@ export function useAddons(
           if (extension.addonId === id) extensions.delete(key)
         for (const [key, extension] of sources)
           if (extension.addonId === id) sources.delete(key)
-        for (const [key, extension] of rich)
-          if (extension.addonId === id) rich.delete(key)
-        if (mounted.current) publishRich()
         for (const [key, item] of status)
           if (item.addonId === id) status.delete(key)
         if (mounted.current) setStatusItems([...status.values()])
@@ -1848,21 +1859,14 @@ export function useAddons(
               registerFlavor(flavor) {
                 if (disposed) return () => {}
                 assertSchemaActivation()
-                const remove = batch.register(`flavor:${flavor.id}`, () => {
-                  const removeFlavor = flavors.register(
+                const remove = batch.register(`flavor:${flavor.id}`, () =>
+                  flavors.register(
                     id,
                     flavor,
                     (error) => latest.current.error(error),
                     addonRegistry.origin(id) !== 'built-in',
-                  )
-                  const removeCompatibility = registerCompatibility((scope) =>
-                    scope.registerFlavor(flavor),
-                  )
-                  return () => {
-                    removeFlavor()
-                    removeCompatibility()
-                  }
-                })
+                  ),
+                )
                 return track(remove)
               },
               renderMarkdown(source, documentId) {
@@ -1965,60 +1969,6 @@ export function useAddons(
                   }
                 })
                 return track(remove)
-              },
-              registerRich(extension) {
-                if (disposed) return () => {}
-                assertInputActivation()
-                const key = `${id}.${extension.id}`
-                if (!/^[a-z][a-z0-9-]*$/.test(extension.id) || rich.has(key))
-                  throw new Error(
-                    `This addon supplied a duplicate or invalid editor feature: ${key}.`,
-                  )
-                const entry = {
-                  id: key,
-                  addonId: id,
-                  ...(extension.preview === 'deferred'
-                    ? { preview: extension.preview }
-                    : {}),
-                  attach(...args: Parameters<RichExtension['attach']>) {
-                    if (disposed) return () => {}
-                    try {
-                      const detach = performanceDiagnostics.measure(
-                        id,
-                        `rich attachment:${extension.id}`,
-                        () => extension.attach(...args),
-                      )
-                      return () => {
-                        try {
-                          performanceDiagnostics.measure(
-                            id,
-                            `rich cleanup:${extension.id}`,
-                            detach,
-                          )
-                        } catch (error) {
-                          latest.current.error(error)
-                        }
-                      }
-                    } catch (error) {
-                      throw new Error(
-                        `${addon.manifest.name} could not start its rich editor feature.`,
-                        { cause: error },
-                      )
-                    }
-                  },
-                }
-                return batch.register(`rich:${extension.id}`, () => {
-                  rich.set(key, entry)
-                  const removeCompatibility = registerCompatibility((scope) =>
-                    scope.register('rich', extension.id),
-                  )
-                  if (mounted.current) publishRich()
-                  return () => {
-                    removeCompatibility()
-                    if (rich.delete(key) && !disposed && mounted.current)
-                      publishRich()
-                  }
-                })
               },
               runCommand: (command) =>
                 disposed ? Promise.resolve(false) : app.runCommand(command),
@@ -2397,8 +2347,6 @@ export function useAddons(
     publishSources,
     status,
     app,
-    rich,
-    publishRich,
     dialogService,
     toastService,
     ready,
@@ -2591,12 +2539,14 @@ export function useAddons(
           await reviewAddonInstall(dialogService.api, session, openSettings)
         }
       } finally {
-        const [states, packages, { reloadAddons }] = await Promise.all([
+        const [states, packages, old, { reloadAddons }] = await Promise.all([
           window.hibi.getAddonStates(),
           window.hibi.getInstalledAddons(),
+          window.hibi.getOutdatedAddons(),
           import('./addon-reload'),
         ])
         setStates(states)
+        setOutdated(old)
         // A replacement that kept its enabled setting restarts with its new files before the start effect sees them.
         const replaced = addonRegistry
           .hydrate(packages)
@@ -2714,11 +2664,13 @@ export function useAddons(
         next.delete(id)
         return next
       })
-      const [states, packages] = await Promise.all([
+      const [states, packages, old] = await Promise.all([
         window.hibi.getAddonStates(),
         window.hibi.getInstalledAddons(),
+        window.hibi.getOutdatedAddons(),
       ])
       setStates(states)
+      setOutdated(old)
       addonRegistry.hydrate(packages)
     } catch (error) {
       latest.current.error(error)
@@ -2834,11 +2786,12 @@ export function useAddons(
     commands: visibleCommands,
     captureCommandContext,
     markdownExtensions,
-    richExtensions,
     sourceExtensions,
     formattedExtensions,
     statusItems,
     sidebarViews,
+    /** Installs made for addon API 1 or 2, which only an update or uninstall resolves. */
+    outdated,
     setEnabled,
     install,
     remove,

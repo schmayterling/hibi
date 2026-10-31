@@ -113,6 +113,12 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 type Revealed = { from: number; to: number }
 
 /**
+ * The longest line the editor draws whole once any of it shows: a longer one
+ * gets line gaps (CodeMirror's margin for wrapped lines, on each side).
+ */
+const wholeLine = 20000
+
+/**
  * The visible ranges, and the lines the editor keeps drawn outside its
  * viewport for the main selection's ends. Drawn without the formatted
  * view's styles, such a line, as a heading the caret is in, measures at
@@ -129,10 +135,10 @@ function drawnRanges(view: EditorView): readonly Revealed[] {
     ) {
       const { from, to } = view.lineBlockAt(pos)
       // ponytail: the editor draws such a block whole, and every viewport
-      // change styles it again, so one longer than the viewport's text stays
-      // plain and can still move the text below it. Keeping its decorations
-      // through updates that only move the viewport would lift this.
-      if (to - from <= viewport.to - viewport.from) extra.push({ from, to })
+      // change styles it again, so one longer than a line it draws whole on
+      // screen stays plain and can still move the text below it. Keeping its
+      // decorations through updates that only move the viewport would lift this.
+      if (to - from <= wholeLine) extra.push({ from, to })
     }
   if (!extra.length) return view.visibleRanges
   return [...view.visibleRanges, ...extra].sort((a, b) => a.from - b.from)
@@ -1141,6 +1147,9 @@ function inline(
       )
   }
   for (const { from, to, level } of headings.values()) {
+    // The entries around the editor name headings outside the viewport, as
+    // one drawn for the selection.
+    if (to < view.viewport.from || from > view.viewport.to) continue
     wrappers.push(
       BlockWrapper.create({
         tagName: 'div',

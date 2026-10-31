@@ -110,7 +110,12 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
+  // The toolbar stays shown, for its table actions.
   await waitForFormattedEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:toolbar', JSON.stringify({ autoHide: false })),
+  )
+  await waitForFormattedEditor(app, page, { reload: true })
   await page.waitForFunction(() => !!window.historyApp)
   const command = (name) => () =>
     page.evaluate((name) => window.historyApp.runCommand(name), name)
@@ -208,6 +213,26 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   await step('redo of typing in a middle cell', redoKey, middle)
   await step('addon undo in a middle cell', command('undo'), table)
   await step('addon redo in a middle cell', command('redo'), middle)
+
+  // A toolbar table action redoes with the caret where it left it, as Tab
+  // does: a row before puts it in the new row's first cell.
+  await open('table-toolbar', table, '.rich-pane td')
+  for (let row = 0; row < 40; row++) await page.keyboard.press('ArrowUp')
+  const bar = page.getByRole('navigation', { name: /editor toolbar/i })
+  const rowBefore = bar.locator('[data-toolbar-id="format.row-before"]')
+  const hidden = await rowBefore.evaluate(
+    (element) =>
+      !!element.closest('.toolbar-menu') &&
+      !element.closest('.toolbar-menu').matches(':popover-open'),
+  )
+  if (hidden)
+    await bar
+      .getByRole('button', { name: /^more formatting actions$/i, exact: true })
+      .click()
+  await rowBefore.click()
+  const rowed = await changed(table)
+  await step('undo of a toolbar row', undoKey, table, '.rich-pane', [41, 1])
+  await step('redo of a toolbar row', redoKey, rowed, '.rich-pane', [41, 0])
 
   // A cell taller than the pane shows the caret, not only the cell's top.
   const words = Array.from({ length: 600 }, (_, word) => `w${word}`).join(' ')

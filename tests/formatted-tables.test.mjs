@@ -190,10 +190,12 @@ after(
 )
 
 /**
- * Every rendered table in a pane, by its header text: its cells' boxes, text
+ * Every table in view in a pane, by its header text: its cells' boxes, text
  * and styles, and where it is from the document's top, or above the closing
  * paragraph when the pane is scrolled down (the formatted view estimates the
- * height of text it has not rendered).
+ * height of text it has not rendered). Tables out of view are left out: how
+ * far past the view the formatted view renders depends on when it last
+ * measured.
  */
 const tables = (target, fromEnd) =>
   target.evaluate((fromEnd) => {
@@ -202,8 +204,9 @@ const tables = (target, fromEnd) =>
     const closing = [...pane.querySelectorAll('p, .cm-line')]
       .find((element) => element.textContent.startsWith('Closing paragraph'))
       ?.getBoundingClientRect().top
-    return [...pane.querySelectorAll('table')].map((table) => {
+    return [...pane.querySelectorAll('table')].flatMap((table) => {
       const frame = table.getBoundingClientRect()
+      if (frame.bottom <= origin.top || frame.top >= origin.bottom) return []
       return {
         header: table.rows[0].innerText,
         at: [
@@ -267,7 +270,7 @@ const scroll = (target, fraction) =>
       await new Promise(requestAnimationFrame)
   }, fraction)
 
-/** Each top-level block the pane draws: its tag, classes and computed paint, and its box. */
+/** Each top-level block the pane draws in view: its tag, classes and computed paint, and its box. */
 const drawn = (target) =>
   target.evaluate(() => {
     const pane = document.querySelector('.rich-pane')
@@ -281,7 +284,14 @@ const drawn = (target) =>
       'textDecorationLine',
       'opacity',
     ]
-    const blocks = [...pane.querySelectorAll('.cm-content > *')]
+    // As with tables, how far past the view blocks render depends on when
+    // the formatted view last measured.
+    const blocks = [...pane.querySelectorAll('.cm-content > *')].filter(
+      (element) => {
+        const box = element.getBoundingClientRect()
+        return box.bottom > origin.top && box.top < origin.bottom
+      },
+    )
     return {
       blocks: blocks.map((element) => {
         const style = getComputedStyle(element)

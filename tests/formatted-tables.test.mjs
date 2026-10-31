@@ -4621,3 +4621,50 @@ test('toolbar formatting preserves genuine DOM picks across table redraws', {
         assert.deepEqual(await snapshot(), action)
       })
 })
+
+test('a caret moved in a cell while its table is stale reaches the formatted view', {
+  timeout: 60000,
+}, async () => {
+  const doc =
+    'intro\n\n| a | b |\n| - | - |\n' +
+    Array.from(
+      { length: 20000 },
+      (_, index) => `| row ${index} | right${index} |`,
+    ).join('\n') +
+    '\n\nafter'
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    doc,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: /^right0$/ }).click()
+  await harness.keyboard.press('End')
+  // Typing below the table leaves its spans old while the parse settles.
+  const settling = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    const cell = document.activeElement.cmTile.root.view
+    view.dispatch({ changes: { from: text.indexOf('row 5 '), insert: '`' } })
+    const settling = window.tables.settling()
+    cell.dispatch({ selection: { anchor: 2 }, userEvent: 'select' })
+    return settling
+  })
+  assert.equal(settling, true)
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.evaluate(() => window.tables.settle())
+  const heads = await harness.evaluate(() => {
+    const view = window.tables.view()
+    return {
+      main: view.state.selection.main.head,
+      cell: view.state.doc.toString().indexOf(' right0 ') + 2,
+      editor:
+        document.activeElement.cmTile?.root?.view.state.selection.main.head,
+    }
+  })
+  assert.deepEqual([heads.editor, heads.main], [2, heads.cell])
+})

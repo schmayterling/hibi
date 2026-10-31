@@ -1,6 +1,8 @@
 import type { EditorView } from '@codemirror/view'
 import { type RefObject, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { tableShows } from './formatted/tables'
+import { focusedEditor } from './native-dom-selection'
 import {
   editorPosition,
   sourceView as findSourceView,
@@ -37,7 +39,10 @@ export function MirrorCursor({
         '.rich-pane .cm-content',
       )
       const richView = richElement && findSourceView(richElement)
-      const richFocus = focused === richElement
+      // The formatted view has the focus in its own content or in a table
+      // cell's editor, whose caret it follows.
+      const editor = richView ? focusedEditor(richView) : null
+      const richFocus = !!editor
       const sourceFocus = focused === sourceElement
       if (
         !document.hasFocus() ||
@@ -46,7 +51,8 @@ export function MirrorCursor({
         (!richFocus && !sourceFocus) ||
         richView.compositionStarted ||
         sourceView.compositionStarted ||
-        !(richFocus ? richView : sourceView).state.selection.main.empty
+        editor?.compositionStarted ||
+        !(editor ?? sourceView).state.selection.main.empty
       ) {
         setPosition(null)
         return
@@ -65,10 +71,14 @@ export function MirrorCursor({
         to,
         sourcePosition(from, from.state.selection.main.head),
       )
-      // Collapsed metadata and offscreen text have no secondary caret.
+      // Collapsed metadata and offscreen text have no secondary caret. A
+      // table is left out of the visible ranges too, but its cells show it.
       if (
         target !== null &&
-        to.visibleRanges.some(({ from, to }) => target >= from && target <= to)
+        (to.visibleRanges.some(
+          ({ from, to }) => target >= from && target <= to,
+        ) ||
+          (to === richView && tableShows(to, target)))
       )
         caret = to.coordsAtPos(target)
       const bounds = pane.getBoundingClientRect()

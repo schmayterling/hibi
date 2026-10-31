@@ -17,6 +17,7 @@ import { appearanceColors, titleBarColors } from './appearance'
 import { writeText } from './files'
 import { isTrustedRendererUrl } from './security'
 import { testPause } from './test-pauses'
+import { windowControlsHidden } from './window-controls'
 import { createBrowserWindow } from './window-creation'
 
 type Entry = AddonWindowContext & {
@@ -219,7 +220,10 @@ async function create(
             titleBarStyle: 'hiddenInset',
             trafficLightPosition: { x: 12, y: 11 },
           }
-        : { titleBarStyle: 'hidden', titleBarOverlay: titleBarColors() }),
+        : {
+            titleBarStyle: 'hidden',
+            titleBarOverlay: windowControlsHidden() ? false : titleBarColors(),
+          }),
     ...(process.platform === 'darwin' ? {} : { autoHideMenuBar: true }),
     backgroundColor: appearanceColors().background,
     webPreferences: {
@@ -238,6 +242,7 @@ async function create(
     title: options.title ?? name,
     titleBar: options.titleBar,
     platform: process.platform,
+    windowControlsHidden: options.titleBar === 'hibi' && windowControlsHidden(),
     window,
     keepAlive: options.keepAlive,
     hidden: !request.show,
@@ -362,7 +367,11 @@ export function releaseAddonWindows(hidden = false): void {
 export function refreshAddonWindowColors(): void {
   for (const { window, titleBar } of entries.values()) {
     window.setBackgroundColor(appearanceColors().background)
-    if (titleBar === 'hibi' && process.platform !== 'darwin')
+    if (
+      titleBar === 'hibi' &&
+      process.platform !== 'darwin' &&
+      !windowControlsHidden()
+    )
       window.setTitleBarOverlay(titleBarColors())
   }
 }

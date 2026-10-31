@@ -21,6 +21,8 @@ const appInput =
   /^(src\/|build\/|scripts\/|docs\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|\.nvmrc$|\.npmrc$)/
 const globalInput =
   /^(\.github\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|biome\.json$|\.gitattributes$|\.nvmrc$|\.npmrc$|scripts\/ci\.mjs$)/
+// Typechecked by the tsconfigs but never bundled into the app.
+const typedInput = /^tests\/fixtures\/local-diagnostics-off\//
 
 export function planChecks(
   root,
@@ -53,6 +55,7 @@ export function planChecks(
   const changes = new Set(changed ?? [])
   const build =
     full || !outputAvailable || [...changes].some((file) => appInput.test(file))
+  const typecheck = build || [...changes].some((file) => typedInput.test(file))
   const documentationOnly =
     changes.size > 0 &&
     [...changes].every(
@@ -150,7 +153,7 @@ export function planChecks(
       return module && !module.dynamic && !module.serial
     }),
   )
-  return { full, build, tests: selected, unitTests, allTests: tests }
+  return { full, build, typecheck, tests: selected, unitTests, allTests: tests }
 }
 
 export function shardTests(selected, all, index, total) {
@@ -247,7 +250,7 @@ function runCI() {
   npm('run', 'lint')
   npm('run', 'docs:check')
   npm('run', 'copy:check')
-  if (plan.build) {
+  if (plan.typecheck)
     for (const target of ['node', 'web'])
       npm(
         'exec',
@@ -260,8 +263,7 @@ function runCI() {
         '--tsBuildInfoFile',
         `.cache/ci/${target}.tsbuildinfo`,
       )
-    npm('run', 'build:app')
-  }
+  if (plan.build) npm('run', 'build:app')
   // TAP prints each failure's details immediately; spec defers them to the end.
   if (unitTests.length)
     run(['--test', '--test-reporter=tap', '--test-concurrency=4', ...unitTests])

@@ -388,9 +388,6 @@ export function failingParts<Part>(
   return failing
 }
 
-/** How far above a pane's kept top line its scroll position was, per session and view. */
-const keptMargins = new WeakMap<DocumentSession, Map<string, number>>()
-
 /** Accepted CM transactions enter the same source/history/recovery authority as visual edits. */
 export function createSourceSession(
   session: DocumentSession,
@@ -722,21 +719,16 @@ export function createSourceSession(
         // A closing or synchronizing session keeps no place.
         return
       }
-      let margins = keptMargins.get(session)
-      if (!margins) {
-        margins = new Map()
-        keptMargins.set(session, margins)
-      }
-      margins.set(viewId, margin)
+      session.keptMargins.set(viewId, margin)
     },
     /** The place this pane kept, in this replica's positions; taking it forgets it. */
     place() {
       const selection = session.selection(`${viewId}\0selection`),
         top = session.selection(`${viewId}\0top`),
-        margin = keptMargins.get(session)?.get(viewId)
+        margin = session.keptMargins.get(viewId)
       session.releaseView(`${viewId}\0selection`)
       session.releaseView(`${viewId}\0top`)
-      keptMargins.get(session)?.delete(viewId)
+      session.keptMargins.delete(viewId)
       if (margin === undefined) return null
       try {
         const kept = editorSelection(snapshot, selection),

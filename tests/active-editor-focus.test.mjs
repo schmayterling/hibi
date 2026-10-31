@@ -14,7 +14,6 @@ for (const [mode, pane] of [
   ['side-by-side', 'rich'],
   ['side-by-side', 'source'],
 ]) {
-  // The legacy split preview is read-only.
   test(`app actions restore the visible ${mode} ${pane} editor`, {
     timeout: 60000,
   }, async (t) => {

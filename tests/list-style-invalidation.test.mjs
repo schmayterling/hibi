@@ -21,7 +21,10 @@ test('list spacing preserves nested blocks without restyling unrelated siblings'
   await waitForDocumentEditor(app, page)
   const css = await readFile('src/renderer/src/styles.css', 'utf8')
   const from = css.indexOf('/* Items and nested lists')
-  const to = css.indexOf(':is(.tiptap, .format-content) blockquote {', from)
+  const to = css.indexOf(
+    ':is(.site-article, .format-content) blockquote {',
+    from,
+  )
   assert.ok(from >= 0 && to > from)
   await page.evaluate(
     async (css) => {
@@ -85,7 +88,7 @@ test('list spacing preserves nested blocks without restyling unrelated siblings'
     const doc = document.getElementById('list-style-check').contentDocument
     const markup =
       '<ul><li><p>first</p><h2>heading</h2><p>second</p><ul><li><p>nested</p><p>next</p></li></ul></li><li><label><input type="checkbox"></label><div><p>task</p><p>next task</p><ol><li>ordered</li></ol></div></li></ul>'
-    return ['tiptap', 'format-content'].map((kind) => {
+    return ['site-article', 'format-content'].map((kind) => {
       const root = doc.createElement('section')
       root.className = kind
       root.innerHTML = markup
@@ -123,7 +126,7 @@ test('list spacing preserves nested blocks without restyling unrelated siblings'
       const sheet = doc.createElement('style')
       sheet.textContent = css + '\n' + alerts
       doc.head.append(sheet)
-      return ['tiptap', 'format-content'].map((kind) => {
+      return ['site-article', 'format-content'].map((kind) => {
         const root = doc.createElement('section')
         root.className = kind
         root.style.setProperty('--text-editor', '16px')

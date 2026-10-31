@@ -206,7 +206,12 @@ export class MediaWidget extends WidgetType {
       bind: (revision) => {
         // The new resolution starts before the old one is let go.
         const previous = release
-        release = observeDocumentMedia(this.source, revision, render)
+        release = observeDocumentMedia(
+          this.source,
+          revision,
+          render,
+          view.state.facet(formattedDocument).tabId,
+        )
         previous?.()
       },
       release: () => {
@@ -285,13 +290,13 @@ function clear(media: Element) {
   }
 }
 
-/** Drawn media follow a new document revision without being drawn again. */
+/** Drawn media follow a new document revision or tab without being drawn again. */
 const revisions = ViewPlugin.fromClass(
   class {
     update(update: ViewUpdate) {
-      const { revision } = update.state.facet(formattedDocument)
-      if (revision === update.startState.facet(formattedDocument).revision)
-        return
+      const { revision, tabId } = update.state.facet(formattedDocument)
+      const previous = update.startState.facet(formattedDocument)
+      if (revision === previous.revision && tabId === previous.tabId) return
       for (const binding of drawn.get(update.view) ?? []) binding.bind(revision)
     }
   },

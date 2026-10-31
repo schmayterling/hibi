@@ -84,9 +84,11 @@ export function localPreview(
     }, [value, enabled, document.id])
     useEffect(() => {
       if (!host.current) return
-      host.current.replaceChildren(withCachedImages(result?.html ?? ''))
+      host.current.replaceChildren(
+        withCachedImages(result?.html ?? '', document.tabId),
+      )
       host.current.oncontextmenu = openRemoteImageMenu
-    }, [result])
+    }, [result, document.tabId])
     return (
       <div className="format-preview">
         <PreviewActions target={toolbar}>

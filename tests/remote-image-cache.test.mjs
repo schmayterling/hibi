@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { crc32, deflateSync } from 'node:zlib'
 import { electron, waitForFormattedEditor } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 /** A black PNG this many pixels wide and one high. */
@@ -241,4 +241,125 @@ test('right-clicking a remote image refreshes it, and notes outside a workspace 
     return image?.complete && image.naturalWidth === 5
   })
   assert.equal(host.requests.length, 3)
+})
+
+test('pages show remote images, but their scripts can read neither the bytes nor the pixels', {
+  timeout: 90000,
+}, async (t) => {
+  // The test host has a private address, which addon network access refuses.
+  const host = await imageHost(t)
+  const note = join(host.folder, 'note.md')
+  await writeFile(note, `# Note\n\n![garden](${host.source})\n`)
+  await host.launch()
+  await host.open(note)
+  await host.shown(1)
+  const reads = await host.page.evaluate(async () => {
+    const image = document.querySelector(
+      '.rich-pane .hibi-formatted img[alt="garden"]',
+    )
+    const context = document.createElement('canvas').getContext('2d')
+    context.drawImage(image, 0, 0)
+    const read = async (work) => {
+      try {
+        await work()
+        return 'read'
+      } catch {
+        return 'refused'
+      }
+    }
+    return {
+      bytes: await read(async () => (await fetch(image.src)).arrayBuffer()),
+      pixels: await read(() => context.getImageData(0, 0, 1, 1)),
+    }
+  })
+  assert.deepEqual(reads, { bytes: 'refused', pixels: 'refused' })
+})
+
+test("a pane keeps its own note's remote images where that note keeps them, whichever note is active", {
+  timeout: 120000,
+}, async (t) => {
+  const host = await imageHost(t)
+  const { origin } = new URL(host.source)
+  const workspace = join(host.folder, 'garden')
+  await mkdir(workspace)
+  const inside = join(workspace, 'inside.md')
+  await writeFile(inside, `# Inside\n\n![inside](${origin}/inside.png)\n`)
+  // Far enough down that the image is first drawn when the pane scrolls to it.
+  const filler = Array.from(
+    { length: 300 },
+    (_, line) => `Line ${line} above the image.`,
+  ).join('\n\n')
+  const loose = join(host.folder, 'loose.md')
+  await writeFile(
+    loose,
+    `# Loose\n\n${filler}\n\n![loose](${origin}/loose.png)\n`,
+  )
+  await host.launch()
+  await host.open(inside, workspace)
+  const tab = () =>
+    host.page.evaluate(async () => (await window.hibi.getDocument()).tabId)
+  const insideTab = await tab()
+  await host.open(loose)
+  const looseTab = await tab()
+  await host.page.getByRole('tab', { name: 'inside.md', exact: true }).click()
+  await waitForAsync(
+    host.page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    insideTab,
+  )
+  await splitTab(host.app, host.page, looseTab)
+  const left = host.page.locator('.editor-page[data-side="left"]')
+  const right = host.page.locator('.editor-page[data-side="right"]')
+  await right.locator('.hibi-formatted .cm-content').waitFor()
+  await left.locator('[aria-label="Document editor"]').click()
+  await waitForAsync(
+    host.page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    insideTab,
+  )
+  // Scrolled without taking focus, the loose note's pane draws its image
+  // while the workspace note stays active.
+  await right.evaluate((pane) => {
+    let node = pane.querySelector('.cm-content')
+    while (
+      node &&
+      !(
+        node.scrollHeight > node.clientHeight + 1 &&
+        /auto|scroll/.test(getComputedStyle(node).overflowY)
+      )
+    )
+      node = node.parentElement
+    node.scrollTop = node.scrollHeight
+  })
+  const shown = (width) =>
+    right.evaluate(
+      (pane, width) =>
+        new Promise((done) => {
+          const check = () => {
+            const image = pane.querySelector('img[alt="loose"]')
+            if (image?.complete && image.naturalWidth === width) done()
+            else requestAnimationFrame(check)
+          }
+          check()
+        }),
+      width,
+    )
+  await shown(1)
+  assert.equal(await tab(), insideTab)
+  const images = join(workspace, '.hibi', 'cache', 'images')
+  const data = join(host.profile, 'image-cache')
+  assert.deepEqual(host.requests.sort(), ['/inside.png', '/loose.png'])
+  assert.equal((await readdir(images)).length, 2)
+  assert.equal((await readdir(data)).length, 2)
+
+  // Refresh image on that pane refreshes the loose note's copy.
+  host.width = 3
+  await right.locator('img[alt="loose"]').click({ button: 'right' })
+  await host.page
+    .getByRole('menuitem', { name: 'Refresh image', exact: true })
+    .click()
+  await shown(3)
+  assert.equal(host.requests.length, 3)
+  assert.equal((await readdir(images)).length, 2)
+  assert.equal((await readdir(data)).length, 2)
 })

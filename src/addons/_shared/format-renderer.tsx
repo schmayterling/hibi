@@ -75,14 +75,14 @@ async function htmlResult(
   return { html: parsed.body.innerHTML, css }
 }
 
-function HtmlPreview({ html }: { html: string }) {
+function HtmlPreview({ html, tab }: { html: string; tab: string }) {
   const host = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!host.current) return
     // Rendered content is sanitized before crossing this one HTML insertion boundary.
-    host.current.replaceChildren(withCachedImages(html))
+    host.current.replaceChildren(withCachedImages(html, tab))
     host.current.oncontextmenu = openRemoteImageMenu
-  }, [html])
+  }, [html, tab])
   return <div ref={host} className="format-content" />
 }
 
@@ -311,7 +311,7 @@ export function startFormat(context: AddonContext, spec: FormatSpec) {
             <FormatPdf data={result.pdf} />
           </Suspense>
         ) : enabled && html ? (
-          <HtmlPreview html={html} />
+          <HtmlPreview html={html} tab={document.tabId} />
         ) : null}
       </div>
     )

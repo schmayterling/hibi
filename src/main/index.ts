@@ -861,9 +861,9 @@ async function readAfterFileOperation<T>(
   return read(window)
 }
 
-/** The current note's remote images are kept with its workspace, or else with the app. */
-const remoteImagePlace = () => ({
-  note: getDocumentPath(),
+/** Remote images of the note in `tab` are kept with its workspace, or else with the app. */
+const remoteImagePlace = (tab: unknown) => ({
+  note: typeof tab === 'string' ? getDocumentPathForTab(tab) : null,
   workspace: workspaceRoot(),
   data: app.getPath('userData'),
 })
@@ -883,10 +883,10 @@ async function serveAssetResponse(request: Request): Promise<Response> {
       parsed.pathname.startsWith('/document-media/')
     )
       return await serveDocumentMedia(request)
-    if (parsed.hostname === 'hibi' && parsed.pathname === '/remote-image')
+    if (parsed.hostname === 'remote-image')
       return await remoteImageResponse(
         parsed.searchParams.get('src'),
-        remoteImagePlace(),
+        remoteImagePlace(parsed.searchParams.get('tab')),
         manualFetch,
       )
     const isAddon = parsed.pathname.startsWith('/installed-addons/')
@@ -2316,10 +2316,13 @@ if (!app.requestSingleInstanceLock()) {
         if (typeof request === 'string' && request.length <= 128)
           documentMedia.cancel(request)
       })
-      handle(MEDIA_CHANNELS.refreshRemote, (event, source: unknown) => {
-        trustedWindow(event)
-        return refreshRemoteImage(source, remoteImagePlace(), manualFetch)
-      })
+      handle(
+        MEDIA_CHANNELS.refreshRemote,
+        (event, source: unknown, tab: unknown) => {
+          trustedWindow(event)
+          return refreshRemoteImage(source, remoteImagePlace(tab), manualFetch)
+        },
+      )
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )

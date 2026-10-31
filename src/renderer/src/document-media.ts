@@ -15,13 +15,18 @@ const entries = new Map<string, Entry>()
 let unsubscribe: (() => void) | undefined
 let unsubscribeScope: (() => void) | undefined
 
-const REMOTE_IMAGE = 'app://hibi/remote-image?'
+// Another origin than the app's: the page shows these images but, as with
+// images from any other site, its scripts can't read them.
+const REMOTE_IMAGE = 'app://remote-image/?'
 /** Refreshed remote images, which take a new address so the page draws the new copy. */
 const refreshes = new Map<string, number>()
 
-/** The address the main process serves a remote image at, from the note's image cache. */
-export const remoteImageUrl = (source: string) =>
-  `${REMOTE_IMAGE}src=${encodeURIComponent(source)}${refreshes.has(source) ? `&refresh=${refreshes.get(source)}` : ''}`
+/**
+ * The address the main process serves a remote image at, from the image cache
+ * of the note open in tab `tab`.
+ */
+export const remoteImageUrl = (source: string, tab: string | null) =>
+  `${REMOTE_IMAGE}src=${encodeURIComponent(source)}${tab ? `&tab=${encodeURIComponent(tab)}` : ''}${refreshes.has(source) ? `&refresh=${refreshes.get(source)}` : ''}`
 
 /** The remote source an image shows, or null for any other image. */
 export const remoteImageSource = (image: HTMLImageElement) =>
@@ -29,21 +34,25 @@ export const remoteImageSource = (image: HTMLImageElement) =>
     ? new URL(image.src).searchParams.get('src')
     : null
 
+const remoteImageTab = (image: HTMLImageElement) =>
+  new URL(image.src).searchParams.get('tab')
+
 /** Fetches a remote image again now, then draws the new copy wherever it shows. */
-async function refreshRemoteImage(source: string) {
-  await window.hibi.refreshRemoteImage(source)
+async function refreshRemoteImage(source: string, tab: string | null) {
+  await window.hibi.refreshRemoteImage(source, tab)
   refreshes.set(source, (refreshes.get(source) ?? 0) + 1)
   for (const image of document.images)
-    if (remoteImageSource(image) === source) image.src = remoteImageUrl(source)
+    if (remoteImageSource(image) === source)
+      image.src = remoteImageUrl(source, remoteImageTab(image))
 }
 
-/** Sanitized HTML ready to show, its remote images drawn from the image cache. */
-export function withCachedImages(html: string) {
+/** Sanitized HTML ready to show in tab `tab`, its remote images drawn from the image cache. */
+export function withCachedImages(html: string, tab: string) {
   const template = document.createElement('template')
   template.innerHTML = html
   for (const image of template.content.querySelectorAll('img')) {
     const source = image.getAttribute('src') ?? ''
-    if (/^https:\/\//i.test(source)) image.src = remoteImageUrl(source)
+    if (/^https:\/\//i.test(source)) image.src = remoteImageUrl(source, tab)
   }
   return template.content
 }
@@ -58,11 +67,12 @@ export function remoteImageMenu(event: MouseEvent) {
   const image = event.target instanceof HTMLImageElement ? event.target : null
   const source = image && remoteImageSource(image)
   if (!image || !source || (event.ctrlKey && event.metaKey)) return null
+  const tab = remoteImageTab(image)
   const items: MenuItem[] = [
     {
       id: 'refresh-image',
       label: 'Refresh image',
-      onSelect: () => refreshRemoteImage(source),
+      onSelect: () => refreshRemoteImage(source, tab),
     },
   ]
   const anchor = { x: event.clientX, y: event.clientY }
@@ -113,11 +123,15 @@ function resolve(entry: Entry) {
   })
 }
 
-/** Share display resolution and one path-filtered workspace subscription across media views. */
+/**
+ * Share display resolution and one path-filtered workspace subscription across
+ * media views. Remote images come from the image cache of the note in `tab`.
+ */
 export function observeDocumentMedia(
   source: string,
   revision: number,
   listener: (media: DocumentMedia | null) => void,
+  tab: string | null = null,
 ) {
   if (
     /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(source) ||
@@ -125,7 +139,7 @@ export function observeDocumentMedia(
   ) {
     listener({
       kind: 'image',
-      url: /^https:/i.test(source) ? remoteImageUrl(source) : source,
+      url: /^https:/i.test(source) ? remoteImageUrl(source, tab) : source,
     })
     return () => {}
   }

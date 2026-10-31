@@ -330,7 +330,7 @@ test('held remote images keep no editor view alive, and a closed tab holds none'
   assert.equal(
     await live(
       'HTMLImageElement.prototype',
-      "function () { return this.filter((image) => image.src.startsWith('app://hibi/remote-image?')).length }",
+      "function () { return this.filter((image) => image.src.startsWith('app://remote-image/?')).length }",
       (count) => count === 0,
     ),
     0,

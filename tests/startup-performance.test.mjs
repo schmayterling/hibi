@@ -107,13 +107,14 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Catalog baseline: 677,008 bytes once the Tiptap editor was removed. Each
   // addition to the startup closure adds its bytes here, with the reason.
   // Keeping Settings open while a file, tab or new note opens adds 88 bytes (#742),
-  // scrolling undo and redo to the selection they restore adds 65 (#737), and
-  // keeping an addon's failure notice when a note opens adds 27 (#750). The
-  // dictionary's declared commands, which work before it starts, and commands
-  // that wait for their addon's editor features add 1,431 (#746).
+  // scrolling undo and redo to the selection they restore adds 65 (#737),
+  // keeping an addon's failure notice when a note opens adds 27 (#750), and
+  // running an addon's undo and redo in the view the user works in adds 491 (#745).
+  // The dictionary's declared commands, which work before it starts, and
+  // commands that wait for their addon's editor features add 1,431 (#746).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 1431,
+    bytes <= 677008 + 88 + 65 + 27 + 491 + 1431,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

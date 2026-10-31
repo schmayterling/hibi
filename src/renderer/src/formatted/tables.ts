@@ -1391,6 +1391,17 @@ class TableView {
     const editing = this.editing
     if (!editing) return
     this.editing = null
+    // The page selection of an editor that lost focus would fall back to
+    // before the table, which the formatted view reads as its caret while it
+    // takes no input, as a tab switch makes it: the caret left its cell.
+    const page = editing.element.ownerDocument.getSelection()
+    if (
+      page?.anchorNode &&
+      !editing.editor.view.hasFocus &&
+      editing.element.contains(page.anchorNode) &&
+      editing.element.contains(page.focusNode)
+    )
+      page.removeAllRanges()
     editing.editor.destroy()
     // The cell renders statically again unless its table is being removed.
     if (redraw && editing.line < this.lines && editing.element.isConnected)
@@ -1776,24 +1787,47 @@ class TableView {
       default:
         return false
     }
-    const { line } = cell
+    const next = result.cell && {
+      line: result.cell.line < 0 ? cell.line : result.cell.line,
+      column: result.cell.column,
+    }
     this.stopEditing()
+    const changes = this.view.state.changes(result.changes)
+    // The caret moves to that cell with the change, so that redo brings it
+    // back there, as the rich editor's history does.
+    const anchor =
+      next && this.cellStart(changes.apply(this.view.state.doc), next)
     this.view.dispatch({
-      changes: result.changes,
+      changes,
+      ...(anchor === null || anchor === undefined
+        ? {}
+        : { selection: { anchor } }),
       annotations: [
         Transaction.userEvent.of('input.format'),
         isolateHistory.of('full'),
       ],
     })
     // Editing goes on in the cell the action leaves the caret in.
-    if (result.cell && this.dom.isConnected)
-      this.edit(
-        result.cell.line < 0 ? line : result.cell.line,
-        result.cell.column,
-        'start',
-      )
+    if (next && this.dom.isConnected) this.edit(next.line, next.column, 'start')
     else this.view.focus()
     return true
+  }
+
+  /** Where `edit` puts a caret at a cell's start in `doc`, the document with this table changed. */
+  private cellStart(doc: Text, { line, column }: Cell) {
+    const index = line === 1 ? 0 : line
+    const number = this.view.state.doc.lineAt(this.range().from).number + index
+    if (number > doc.lines) return null
+    const { from, text } = doc.line(number)
+    const start = this.widget.rowStart(index, text)
+    const span = cellSpan(
+      parseRow(text.slice(start), start),
+      column,
+      text.length,
+    )
+    return span
+      ? from + span.from + padding(text.slice(span.from, span.to)).start
+      : null
   }
 
   /** The source edit that deletes the table, with the blank line after it. */

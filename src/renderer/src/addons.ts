@@ -719,30 +719,36 @@ export function useAddons(
     [started, whenStarted, idleStarts],
   )
   /**
-   * Resolves once the view's editor shows the owner's editor features, which
-   * follow its start, or once those features leave or the view closes.
+   * Resolves once the view's current editor shows the owner's editor features,
+   * which follow its start, or once those features leave or the view closes.
    */
   const featuresShown = useCallback(
     (owner: string, view: CommandExecutionContext['view']) => {
       const selection = view && editorViewRegistry.getSelection(view)
       if (!view || !selection?.ok) return
-      // The formatted view is the rich editor.
-      const presentation =
-        selection.value.editor === 'source' ? 'source' : 'formatted'
-      const missing = () =>
-        documentRuntime.isLiveView(view) &&
-        [...sources.values()].some(
+      const missing = () => {
+        if (!documentRuntime.isLiveView(view)) return false
+        // The view can switch between its source and formatted editors, and
+        // waits while the one it switched to mounts.
+        const current = editorViewRegistry.getSelection(view)
+        if (!current.ok) return true
+        // The formatted view is the rich editor.
+        const presentation =
+          current.value.editor === 'source' ? 'source' : 'formatted'
+        return [...sources.values()].some(
           (feature) =>
             feature.addonId === owner &&
             feature.presentation === presentation &&
             !feature.views.has(view.viewId),
         )
+      }
       if (!missing()) return
       return new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(timer)
           featureWaits.delete(check)
           stopViews()
+          stopEditors()
           resolve()
         }
         const check = () => {
@@ -751,6 +757,7 @@ export function useAddons(
         // ponytail: an editor that never shows a feature delays the command 5 s; editors could report the features they skip.
         const timer = setTimeout(done, 5000)
         const stopViews = documentRuntime.subscribeViews(check)
+        const stopEditors = editorViewRegistry.subscribe(check)
         featureWaits.add(check)
       })
     },

@@ -3008,14 +3008,25 @@ export function SourceEditor({
       if (errors.length) setExtensionError(String(errors[0]))
       else setInstalledExtensions({ bridge, extensions: sourceExtensions })
     }
-    // Input waits only for the features it needs. Background ones join once
-    // they are set up, however long that takes.
+    // Background features set up at the same moment join in one install.
+    let joining = false
+    const join = () => {
+      if (joining) return
+      joining = true
+      queueMicrotask(() => {
+        joining = false
+        install()
+      })
+    }
+    // Input waits only for the features it needs. Background ones each join
+    // once they are set up, however long the others take.
     void Promise.allSettled(
       created.filter((_, index) => !sourceExtensions[index]?.background),
     ).then(() => {
       install()
-      if (sourceExtensions.some((_, index) => !(index in results)))
-        void Promise.allSettled(created).then(install)
+      created.forEach((promise, index) => {
+        if (!(index in results)) void promise.then(join, join)
+      })
     })
     return () => {
       canceled = true

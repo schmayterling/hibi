@@ -411,7 +411,7 @@ test('finishing a file operation preserves newer settings input focus', {
   )
 })
 
-test('settings opened while a file or tab opens stay open when it finishes', {
+test('settings opened while a file, tab or new note opens stay open when it finishes', {
   timeout: 30000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-busy-settings-'))
@@ -461,6 +461,7 @@ test('settings opened while a file or tab opens stay open when it finishes', {
       () => page.getByRole('tab', { name: 'one.md', exact: true }).click(),
       'one.md',
     ],
+    ['document:new', () => clickMenu(app, 'New'), 'untitled.md'],
   ]) {
     await page.locator('.app[aria-busy="false"]').waitFor()
     await app.evaluate(({ ipcMain }, channel) => {

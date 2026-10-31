@@ -1414,6 +1414,7 @@ function App() {
       startBusy()
       setSavingTab(saving ? (currentDocument.current?.tabId ?? null) : null)
       setError('')
+      const intent = settingsIntent.current
       try {
         const next = await (command === 'new'
           ? window.hibi.newDocument()
@@ -1429,7 +1430,7 @@ function App() {
               next,
               command === 'new' || command === 'open',
             )
-          if (command === 'new' || command === 'open') showDocument()
+          if (command === 'new' || command === 'open') showDocument(intent)
           refreshWorkspaceView()
         }
         return Boolean(next)
@@ -2154,12 +2155,13 @@ function App() {
           })
           .result.then(async (id) => {
             if (!id || busyRef.current) return
+            const intent = settingsIntent.current
             startBusy()
             try {
               const next = await window.hibi.restoreVersion(id)
               if (!next) return
               await acceptOperationDocument(next, true)
-              showDocument()
+              showDocument(intent)
             } catch (error) {
               setError(String(error))
             } finally {

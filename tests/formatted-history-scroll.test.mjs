@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
-import { clickMenu, pressShortcut, redoKey } from './keyboard.mjs'
+import { clickMenu, pressShortcut, redoKey, splitTab } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const undoKey = 'ControlOrMeta+z'
@@ -281,6 +281,132 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   const sourced = await changed(paragraphs)
   await step('undo in the source view', undoKey, paragraphs, source)
   await step('redo in the source view', redoKey, sourced, source)
+
+  assert.deepEqual(differences, [])
+})
+
+// Opening or closing a split gives the note's pane another view id. Its
+// history stays its own: undo restores the caret of the pane's edit and
+// shows it, as before the split.
+test('codemirror: a pane undoes its own edits after a split opens or closes', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-history-split-'))
+  const profile = join(folder, 'profile')
+  await mkdir(profile)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await selectFormattedEngine(app, page, 'codemirror')
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const markdown = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+  const open = async (name, text) => {
+    const file = join(folder, `${name}.md`)
+    await writeFile(file, text)
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      `${name}.md`,
+    )
+    await waitForDocumentEditor(app, page)
+  }
+  // The caret of the note's pane and whether it shows there.
+  const caret = (pane) =>
+    page.evaluate((pane) => {
+      const root = document.querySelector(pane)
+      const view = root.querySelector('.cm-content').cmTile.root.view
+      const bounds = root.getBoundingClientRect()
+      const box = view.coordsAtPos(view.state.selection.main.head)
+      return {
+        head: view.state.selection.main.head,
+        shown:
+          !!box && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1,
+      }
+    }, pane)
+  // Type at the end of the note in the pane, and the caret before that.
+  // Focus the pane's view, scroll it to its top when asked, and let it measure.
+  const focus = (pane, top) =>
+    page.evaluate(
+      async ({ pane, top }) => {
+        const root = document.querySelector(pane)
+        root.querySelector('.cm-content').cmTile.root.view.focus()
+        if (top) root.scrollTop = 0
+        for (let frame = 0; frame < 2; frame++)
+          await new Promise(requestAnimationFrame)
+      },
+      { pane, top },
+    )
+  const typeAtEnd = async (pane, text) => {
+    await focus(pane, false)
+    await page.keyboard.press('ControlOrMeta+End')
+    const before = await caret(pane)
+    const from = await markdown()
+    await page.keyboard.type(text)
+    await waitForAsync(
+      page,
+      async (from) => (await window.hibi.getDocument()).markdown !== from,
+      from,
+    )
+    return { at: before.head, from }
+  }
+  const differences = []
+  // Undo in the pane, scrolled to its top, away from the caret it restores.
+  const undo = async (name, pane, { at, from }) => {
+    await focus(pane, true)
+    await page.keyboard.press(undoKey)
+    await waitForAsync(
+      page,
+      async (from) => (await window.hibi.getDocument()).markdown === from,
+      from,
+    )
+    let last = null
+    for (let read = 0; read < 30; read++) {
+      await page.waitForTimeout(100)
+      const now = await caret(pane)
+      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    t.diagnostic(JSON.stringify({ name, at, ...last }))
+    if (!last.shown || last.head !== at)
+      differences.push(`${name}: ${JSON.stringify({ at, ...last })}`)
+  }
+
+  await open('warmup', 'warmup\n')
+  await open('other', 'other\n')
+  await open('paragraphs', paragraphs)
+  const edit = await typeAtEnd('.rich-pane', 'x')
+  const tabs = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  await splitTab(app, page, tabs.find((tab) => tab.name === 'other.md').id)
+  const left = '.editor-page[data-side="left"] .rich-pane'
+  await page.locator(`${left} .cm-content`).waitFor()
+  await page.locator('.editor-page[data-side="right"] .cm-content').waitFor()
+  await undo('undo in a split of an edit from before it', left, edit)
+
+  const split = await typeAtEnd(left, 'y')
+  await page.getByRole('button', { name: 'Close split' }).click()
+  await page.locator('.editor-page[data-side]').first().waitFor({
+    state: 'detached',
+  })
+  await waitForDocumentEditor(app, page)
+  await undo('undo after a split closed of an edit in it', '.rich-pane', split)
 
   assert.deepEqual(differences, [])
 })

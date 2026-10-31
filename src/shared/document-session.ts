@@ -177,6 +177,34 @@ export class DocumentSession {
   releaseView(viewId: string) {
     if (viewId !== 'default') this.#viewSelections.delete(viewId)
   }
+  /**
+   * A view's selections and history steps follow it to a new id, as a pane's
+   * do when a split opens or closes, so its steps stay its own. The ids of
+   * what it hosts, `${id}:…` and `${id}\0…`, follow with it.
+   */
+  renameView(from: string, to: string) {
+    if (from === to) return
+    const renamed = (id: string) =>
+      id === from || id.startsWith(`${from}:`) || id.startsWith(`${from}\0`)
+        ? to + id.slice(from.length)
+        : id
+    const follow = (groups: HistoryGroup[]) =>
+      groups.map((group) => {
+        const viewId = renamed(group.viewId)
+        return viewId === group.viewId
+          ? group
+          : Object.freeze({ ...group, viewId })
+      })
+    this.#undo = follow(this.#undo)
+    this.#redo = follow(this.#redo)
+    const moved = [...this.#viewSelections].filter(([id]) => renamed(id) !== id)
+    for (const [id] of moved) this.#viewSelections.delete(id)
+    // The default view's selection is the session's, which it keeps.
+    if (from === 'default') this.#viewSelections.set(to, this.#selection)
+    for (const [id, selection] of moved)
+      if (renamed(id) === 'default') this.#selection = selection
+      else this.#viewSelections.set(renamed(id), selection)
+  }
   subscribeSelection = (listener: () => void) => {
     this.#selectionListeners.add(listener)
     return () => {

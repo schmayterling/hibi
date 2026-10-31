@@ -490,6 +490,38 @@ test('formatted split lines up a formatted table row with its source line', {
   await waitForAsync(page, sourceLinedUp, true, {
     label: "the source line of the row of the cell editor's caret",
   })
+  // Columns sized narrower than half the content leave its middle beside
+  // the table's cells.
+  for (const column of await page
+    .locator(
+      '.rich-pane .hibi-lp-table th .hibi-lp-table-resizer[data-axis="column"]',
+    )
+    .all()) {
+    await column.focus()
+    for (let step = 0; step < 12; step++)
+      await page.keyboard.press('Shift+ArrowLeft')
+  }
+  await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.dispatchEvent(new WheelEvent('wheel'))
+    const row = pane.querySelector('tr[data-line="40"]').getBoundingClientRect()
+    const bounds = pane.getBoundingClientRect()
+    pane.scrollTop += row.top + row.height / 2 - bounds.top - bounds.height / 2
+  })
+  assert.ok(
+    await page.evaluate(() => {
+      const content = document
+        .querySelector('.rich-pane .cm-content')
+        .getBoundingClientRect()
+      const cells = document
+        .querySelector('.rich-pane .hibi-lp-table > table')
+        .getBoundingClientRect()
+      return cells.right < content.left + content.width / 2
+    }),
+  )
+  await waitForAsync(page, sourceLinedUp, false, {
+    label: 'the source line of the row at the middle beside a narrow table',
+  })
   await source(page, text)
 })
 

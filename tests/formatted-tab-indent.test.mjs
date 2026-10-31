@@ -57,23 +57,12 @@ test('Tab in code uses its indentation and leaves code when Tab does not indent'
   // The caret before the code's `y`, at the start of its line.
   const place = async () => {
     await editor.evaluate((element) => {
-      if (element.matches('.cm-content')) {
-        const view = element.cmTile.root.view
-        view.dispatch({
-          selection: { anchor: view.state.doc.toString().lastIndexOf('y') },
-          scrollIntoView: true,
-        })
-        view.focus()
-        return
-      }
-      const { editor } = element
-      let at = 0
-      editor.state.doc.descendants((node, position) => {
-        if (node.type.name === 'codeBlock')
-          at = position + 1 + node.textContent.lastIndexOf('y')
+      const view = element.cmTile.root.view
+      view.dispatch({
+        selection: { anchor: view.state.doc.toString().lastIndexOf('y') },
+        scrollIntoView: true,
       })
-      editor.commands.setTextSelection(at)
-      editor.view.focus()
+      view.focus()
     })
     await waitForAsync(page, () =>
       [...document.querySelectorAll('.cm-line.hibi-lp-codeblock')].some(

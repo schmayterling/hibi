@@ -49,6 +49,10 @@ test('incremental checks select dependencies and fall back safely for cold, clea
   assert.deepEqual(direct.tests, ['tests/one.test.mjs'])
   assert.deepEqual(direct.unitTests, ['tests/one.test.mjs'])
   assert.equal(direct.build, false)
+  assert.equal(direct.typecheck, false)
+  const standIn = plan(['tests/fixtures/local-diagnostics-off/runtime.ts'])
+  assert.equal(standIn.typecheck, true)
+  assert.equal(standIn.build, false)
   assert.ok(
     plan(['tests/fixtures/image.png']).tests.includes('tests/io.test.mjs'),
   )

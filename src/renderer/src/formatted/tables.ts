@@ -187,14 +187,25 @@ class TableWidget extends WidgetType {
   rowStart(index: number, text: string) {
     return index ? rowStart(text, this.quotes) : this.start
   }
+  /** The row parsed last: mapping a cell's text to positions reads one row many times. */
+  private parsed: { index: number; row: ReturnType<typeof parseRow> } | null =
+    null
   /** Cells and pipes of table line `index`, relative to its start. */
   row(index: number) {
+    if (this.parsed?.index === index) return this.parsed.row
     const { text } = this.line(index)
     const start = this.rowStart(index, text)
-    return parseRow(text.slice(start), start)
+    const row = parseRow(text.slice(start), start)
+    this.parsed = { index, row }
+    return row
   }
   toDOM(view: EditorView) {
     return new TableView(view, this).dom
+  }
+  // A position in the table is where its cell shows it, not the table's edge.
+  override coordsAt(dom: HTMLElement, pos: number) {
+    const table = tableViews.get(dom)
+    return table?.coordsAt(table.range().from + pos) ?? null
   }
   override updateDOM(dom: HTMLElement, view: EditorView) {
     const table = tableViews.get(dom)
@@ -1036,41 +1047,78 @@ class TableView {
     if (!element) return false
     const editor =
       this.editing?.element === element ? this.editing.editor.view : null
-    const band = visibleBand(element)
-    // Of a cell taller than the view, its editor shows the caret, and its
-    // text the position.
-    const tall = element.getBoundingClientRect().height > band.bottom - band.top
-    if (tall && editor)
+    const { top, bottom } = visibleBand(element)
+    // Of a cell taller than the view, its editor shows the caret, and
+    // CodeMirror its text at the position, once the cell is in view.
+    const tall = element.getBoundingClientRect().height > bottom - top
+    if (tall && editor) {
       editor.dispatch({
         effects: EditorView.scrollIntoView(editor.state.selection.main.head),
       })
-    else {
-      element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-      if (tall) this.scrollText(pos, band)
+      return true
     }
-    return true
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    return !tall
   }
 
-  /** Scroll the text at a position of a rendered cell into the visible band. */
-  private scrollText(pos: number, band: { top: number; bottom: number }) {
+  /** Where a position inside the table shows: in its cell's editor, or in its drawn row's text. */
+  coordsAt(pos: number) {
+    if (!this.current) return this.near(pos)
+    if (pos <= this.widget.from || pos >= this.widget.to) return null
+    const editing = this.editing
+    const span = editing && this.span(editing)
+    if (editing && span && pos >= span.from && pos <= span.to)
+      return editing.editor.view.coordsAtPos(pos - span.from)
     const point = this.point(pos)
-    if (point?.node.nodeType !== Node.TEXT_NODE) return
+    if (!point) return null
     const range = this.dom.ownerDocument.createRange()
     range.setStart(point.node, point.offset)
-    const rect = range.getClientRects()[0]
-    if (!rect) return
-    for (let node = this.dom.parentElement; node; node = node.parentElement) {
-      if (
-        !/auto|scroll/.test(getComputedStyle(node).overflowY) ||
-        node.scrollHeight <= node.clientHeight
+    // An empty cell's paragraph has no text to measure.
+    const box =
+      range.getClientRects()[0] ??
+      (point.node instanceof Element
+        ? point.node.getBoundingClientRect()
+        : null)
+    return box?.height
+      ? { left: box.left, right: box.left, top: box.top, bottom: box.bottom }
+      : null
+  }
+
+  /**
+   * A changed table shows its old text until its layout comes. A position
+   * is then in the edited cell's editor, which has the text now, or near
+   * enough in the row drawn for its line: the table's edges would move a
+   * pane that lines the position up, as linked scrolling and the reading
+   * place do while text is typed.
+   */
+  private near(pos: number) {
+    const { doc } = this.view.state
+    const { from } = this.range()
+    const index = doc.lineAt(pos).number - doc.lineAt(from).number
+    if (pos <= from || index >= this.lines) return null
+    const editing = this.editing
+    if (editing && pos >= editing.from && pos <= editing.to) {
+      const text = doc.sliceString(editing.from, editing.to)
+      const start = this.widget.rowStart(editing.line, text)
+      const span = cellSpan(
+        parseRow(text.slice(start), start),
+        editing.column,
+        text.length,
       )
-        continue
-      // A few pixels clear of the edge, as CodeMirror scrolls to a caret.
-      if (rect.top < band.top) node.scrollTop -= band.top - rect.top + 5
-      else if (rect.bottom > band.bottom)
-        node.scrollTop += rect.bottom - band.bottom + 5
-      return
+      const editor = editing.editor.view
+      if (
+        span &&
+        pos >= editing.from + span.from &&
+        pos <= editing.from + span.to &&
+        editor.state.sliceDoc() === text.slice(span.from, span.to)
+      )
+        return editor.coordsAtPos(pos - editing.from - span.from)
     }
+    const row = index > 1 ? this.rendered.get(index - 2)?.element : this.head
+    const box = row?.getBoundingClientRect()
+    return box?.height
+      ? { left: box.left, right: box.left, top: box.top, bottom: box.bottom }
+      : null
   }
 
   /** Edit one cell's inline source without normalizing its table's padding. */

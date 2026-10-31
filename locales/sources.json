@@ -1392,6 +1392,9 @@
   "45e0434567cb": [
     "src/renderer/src/AddonViewContent.tsx"
   ],
+  "17ff660bf768": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
   "ab4f0719fbd3": [
     "src/renderer/src/main.tsx"
   ],
@@ -1525,6 +1528,9 @@
   ],
   "0af861157fe6": [
     "src/renderer/src/autosave.ts"
+  ],
+  "5a0e41fb509b": [
+    "src/main/window-controls.ts"
   ],
   "93a0e14c0592": [
     "src/site/search-worker-client.ts"
@@ -2790,6 +2796,9 @@
     "src/renderer/src/SettingsScreen.tsx",
     "src/renderer/src/main.tsx"
   ],
+  "5a9023c9b2c0": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
   "721eb80bb358": [
     "src/renderer/src/WorkspacesSidebar.tsx"
   ],
@@ -3316,6 +3325,9 @@
   "9a9bb3ad8cbc": [
     "src/renderer/src/addon-views.ts"
   ],
+  "3f7e8edecd18": [
+    "src/main/window-controls.ts"
+  ],
   "38f048094b0e": [
     "src/main/workspace-settings.ts"
   ],
@@ -3369,6 +3381,9 @@
   ],
   "e139c41b9472": [
     "src/addons/vim/engine.ts"
+  ],
+  "73b6e48a1b55": [
+    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "184b93e3f146": [
     "src/addons/diagnostics/Settings.tsx"
@@ -4025,6 +4040,9 @@
   ],
   "22ae1d4736ab": [
     "src/addons/diagnostics/Settings.tsx"
+  ],
+  "edcb430f6947": [
+    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "b5658fc8edda": [
     "src/renderer/src/AddonSidebar.tsx",
@@ -4857,6 +4875,15 @@
   ],
   "243854b4d0c7": [
     "src/ui/Sidebar.tsx"
+  ],
+  "75a99619eb2c": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
+  "47e44bb60ade": [
+    "src/renderer/src/WindowControlsSettings.tsx"
+  ],
+  "4c2ad2b22b61": [
+    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "159713231bf6": [
     "src/renderer/src/UpdateSettings.tsx"
@@ -7208,6 +7235,9 @@
   ],
   "19734a1b58ca": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "9b22ad2bf7bf": [
+    "src/renderer/src/WindowControlsSettings.tsx"
   ],
   "653913ac0e67": [
     "src/addons/word-count/hibi-addon.json"

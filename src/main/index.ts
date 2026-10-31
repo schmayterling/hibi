@@ -76,6 +76,7 @@ import { startupMark, startupSpan } from '../shared/startup'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
+import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { followAccessibilitySupport } from './accessibility-support'
@@ -236,6 +237,12 @@ import {
   setUpdateStartupCheck,
   startUpdateChecks,
 } from './updates'
+import {
+  getHideWindowControls,
+  loadWindowControls,
+  saveHideWindowControls,
+  windowControlsHidden,
+} from './window-controls'
 import { createBrowserWindow } from './window-creation'
 import {
   cancelWorkspaceSelection,
@@ -546,6 +553,7 @@ let fileOperation: Promise<unknown> | null = null
 const pendingFileOperations = new Set<Promise<void>>()
 let closing = false
 let quitting = false
+let windowControlsRestartRequested = false
 let recordingHotkey = false
 const globalShortcuts = new GlobalShortcuts(globalShortcut)
 const addonHotkeys = new AddonHotkeys(
@@ -652,6 +660,9 @@ app.on('before-quit', () => {
   quitting = true
   // With no main window to confirm, kept-alive addon windows must not block quitting.
   if (!mainWindow) releaseAddonWindows()
+})
+app.once('quit', () => {
+  if (windowControlsRestartRequested) app.relaunch()
 })
 let devRestartRequested = false
 function cancelDevRestart() {
@@ -988,7 +999,10 @@ function createWindow(): void {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin'
       ? { trafficLightPosition: { x: 12, y: 11 } }
-      : { titleBarOverlay: titleBarColors(), autoHideMenuBar: true }),
+      : {
+          titleBarOverlay: windowControlsHidden() ? false : titleBarColors(),
+          autoHideMenuBar: true,
+        }),
     backgroundColor: appearanceColors().background,
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
@@ -1186,7 +1200,10 @@ function createWindow(): void {
       .finally(() => {
         confirmingClose = false
         if (!allowClose) closing = false
-        if (!quitting) cancelDevRestart()
+        if (!quitting) {
+          windowControlsRestartRequested = false
+          cancelDevRestart()
+        }
       })
   })
   window.once('ready-to-show', () => {
@@ -1501,7 +1518,10 @@ if (!app.requestSingleInstanceLock()) {
       ])
       // Handle rejection immediately while appearance and renderer loading overlap it.
       void preferences.catch(() => {})
-      await startupSpan('appearance', loadAppearance)
+      await Promise.all([
+        startupSpan('appearance', loadAppearance),
+        startupSpan('window-controls', loadWindowControls),
+      ])
       applyAppIcon()
       const handle = (
         channel: string,
@@ -1618,6 +1638,7 @@ if (!app.requestSingleInstanceLock()) {
         version: app.getVersion(),
         electron: process.versions.electron,
         platform: process.platform,
+        windowControlsHidden: windowControlsHidden(),
       })
       handle(
         BOOTSTRAP_CHANNELS.document,
@@ -1721,10 +1742,24 @@ if (!app.requestSingleInstanceLock()) {
         const window = trustedWindow(event)
         const saved = saveAppearance(value)
         window.setBackgroundColor(appearanceColors().background)
-        if (process.platform !== 'darwin')
+        if (process.platform !== 'darwin' && !windowControlsHidden())
           window.setTitleBarOverlay(titleBarColors())
         refreshAddonWindowColors()
         await saved
+      })
+      handle(WINDOW_CONTROLS_CHANNELS.get, () => getHideWindowControls())
+      handle(WINDOW_CONTROLS_CHANNELS.set, (_event, value: unknown) =>
+        saveHideWindowControls(value),
+      )
+      handle(WINDOW_CONTROLS_CHANNELS.restart, () => {
+        if (
+          process.platform !== 'linux' ||
+          getHideWindowControls() === windowControlsHidden()
+        )
+          return
+        if (closing || quitting) throw fileOperationUnavailable()
+        windowControlsRestartRequested = true
+        app.quit()
       })
       handle(ABOUT_CHANNELS.licenses, (event) => {
         trustedWindow(event)
@@ -2054,9 +2089,24 @@ if (!app.requestSingleInstanceLock()) {
       )
       // Addon windows reach only their owner's native handlers.
       ipcMain.handle(ADDON_WINDOW_CHANNELS.context, (event) => {
-        const { addonId, id, input, title, titleBar, platform } =
-          addonWindowSender(event)
-        return { addonId, id, input, title, titleBar, platform }
+        const {
+          addonId,
+          id,
+          input,
+          title,
+          titleBar,
+          platform,
+          windowControlsHidden,
+        } = addonWindowSender(event)
+        return {
+          addonId,
+          id,
+          input,
+          title,
+          titleBar,
+          platform,
+          windowControlsHidden,
+        }
       })
       ipcMain.handle(ADDON_WINDOW_CHANNELS.states, (event) => {
         addonWindowSender(event)
@@ -2792,7 +2842,7 @@ if (!app.requestSingleInstanceLock()) {
       nativeTheme.on('updated', () => {
         applyAppIcon()
         mainWindow?.setBackgroundColor(appearanceColors().background)
-        if (process.platform !== 'darwin')
+        if (process.platform !== 'darwin' && !windowControlsHidden())
           mainWindow?.setTitleBarOverlay(titleBarColors())
         refreshAddonWindowColors()
       })

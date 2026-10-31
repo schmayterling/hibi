@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 import type { Plugin } from 'vite'
@@ -10,31 +11,25 @@ if (!output?.startsWith('/') || resolve(output) === resolve('.'))
 const disabled = process.env.HIBI_O11Y_TEST_MODE === 'off'
 const probe = process.env.HIBI_O11Y_TEST_PROBE === '1'
 const stress = process.env.HIBI_O11Y_TEST_STRESS === '1'
+// Stand-ins typecheck against the modules they replace, so drift fails
+// `npm run typecheck` instead of the off build's start.
 const stubs = new Map(
   [
-    [
-      'src/main/local-diagnostics/runtime.ts',
-      'export class LocalDiagnostics { start() {} observeWindow() {} observeAsset(url, load) { return load() } menuItems() { return [] } report() {} async flush() {} }',
-    ],
-    [
-      'src/main/local-diagnostics/owned.ts',
-      'export const diagnosticServiceName = role => "hibi " + role; export const attachDiagnosticService = () => {}; export const expectDiagnosticStop = () => {}; export const reportOwnedFailure = () => {}; export const reportAnalysisProcessFailure = () => {};',
-    ],
-    [
-      'src/preload/local-diagnostics.ts',
-      'export class DiagnosticProducer { configuration = Promise.resolve(null); record() { return false } }; export const installStartupDiagnostics = () => () => {}',
-    ],
-    [
-      'src/renderer/src/local-diagnostics.ts',
-      'export const installRendererDiagnostics = () => () => {}; export const reportRendererFailure = () => {};',
-    ],
-  ].map(([path = '', source = '']) => [resolve(path), source]),
+    ['src/main/local-diagnostics/runtime.ts', 'runtime.ts'],
+    ['src/main/local-diagnostics/owned.ts', 'owned.ts'],
+    ['src/preload/local-diagnostics.ts', 'preload.ts'],
+    ['src/renderer/src/local-diagnostics.ts', 'renderer.ts'],
+  ].map(([path = '', file = '']) => [
+    resolve(path),
+    resolve('tests/fixtures/local-diagnostics-off', file),
+  ]),
 )
 const control = (): Plugin => ({
   name: 'test-only-diagnostic-control',
   enforce: 'pre',
   load(id) {
-    return disabled ? stubs.get(id) : undefined
+    const stub = disabled && stubs.get(id)
+    return stub ? readFileSync(stub, 'utf8') : undefined
   },
   transform(code, id) {
     if (!stress || id !== resolve('src/main/local-diagnostics/runtime.ts'))

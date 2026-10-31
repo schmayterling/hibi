@@ -104,9 +104,14 @@ export type AppInfo = {
   version: string
   electron: string
   platform: string
+  /** Applied at launch; a saved window-controls preference may still await restart. */
+  windowControlsHidden: boolean
 }
 
 export type DesktopApi = {
+  getHideWindowControls: () => Promise<boolean>
+  setHideWindowControls: (hidden: boolean) => Promise<void>
+  restartForWindowControls: () => Promise<void>
   getBackgroundMode: () => Promise<boolean>
   setBackgroundMode: (enabled: boolean) => Promise<boolean>
   onOpenSettings: (callback: () => void) => () => void

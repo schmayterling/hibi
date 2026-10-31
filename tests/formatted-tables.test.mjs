@@ -2302,6 +2302,121 @@ test('unfinished syntax never resolves or writes cells with old spans', {
   assert.deepEqual([now.cell, now.editor], ['20000:1', 'right19998'])
 })
 
+// Linked scrolling and the reading place line positions up with what
+// coordsAtPos gives; until a changed table's layout comes, the table's edges
+// would move the pane by up to half the table at each edit.
+test('positions in a changed table measure at its rows until its layout comes', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 30 }, (_, i) => `| r${i} | v${i} |`)
+  const doc = `intro\n\n| a | b |\n| - | - |\n${rows.join('\n')}\n\n${'more text\n\n'.repeat(20000)}after`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    doc,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: /^v5$/ }).click()
+  await harness.keyboard.press('End')
+  const result = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const editor = document.querySelector('.hibi-lp-cell-editor .cm-content')
+      .cmTile.root.view
+    // Typing in the cell, then an edit above the table, as from the other pane.
+    editor.dispatch(editor.state.replaceSelection('Z'), {
+      userEvent: 'input.type',
+    })
+    view.dispatch({ changes: { from: 0, insert: '~~~\n' } })
+    const text = view.state.doc.toString()
+    const caret = view.coordsAtPos(view.state.selection.main.head)
+    const own = editor.coordsAtPos(editor.state.selection.main.head)
+    const other = view.coordsAtPos(text.indexOf('r20 |') + 1)
+    const row = document
+      .querySelector('.hibi-lp-table tr[data-line="22"]')
+      .getBoundingClientRect()
+    return {
+      settling: window.tables.settling(),
+      caret: caret && [caret.left, caret.top, caret.bottom],
+      own: [own.left, own.top, own.bottom],
+      other: other && [other.top, other.bottom],
+      row: [row.top, row.bottom],
+    }
+  })
+  assert.equal(result.settling, true)
+  // The edited cell's caret is its editor's.
+  assert.deepEqual(result.caret, result.own)
+  // Another row's position is in that row, not at the table's edges.
+  assert.ok(
+    result.other &&
+      result.other[0] >= result.row[0] - 1 &&
+      result.other[1] <= result.row[1] + 1,
+    JSON.stringify(result),
+  )
+})
+
+// Each text node of a cell maps its offsets through the cell's row: parsing
+// the row for each of them made a position in a long cell cost the row's
+// length for every text node before it (176 ms for 1,000 bold runs).
+test('a position in a long cell reads its row once', {
+  timeout: 30000,
+}, async () => {
+  const runs = Array.from({ length: 300 }, (_, i) => `x **b${i}** y`)
+  await mount(`| long |\n| --- |\n| ${runs.join(' ')} |\n`)
+  const slices = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const at = view.state.doc.toString().indexOf('b299**') + 1
+    view.coordsAtPos(at)
+    const slice = String.prototype.slice
+    let count = 0
+    String.prototype.slice = function (...args) {
+      count++
+      return slice.apply(this, args)
+    }
+    try {
+      view.coordsAtPos(at)
+    } finally {
+      String.prototype.slice = slice
+    }
+    return count
+  })
+  assert.ok(slices < 20, `${slices} string slices`)
+})
+
+// The edited cell's editor has the cell's text now and lays it out itself, so
+// a position in that cell measures through the editor.
+test('a position in the edited cell measures through its editor', {
+  timeout: 30000,
+}, async () => {
+  await mount('| a | b |\n| - | - |\n| one | two |\n')
+  await harness.locator('.hibi-lp-table td', { hasText: /^two$/ }).click()
+  await harness.locator('.hibi-lp-cell-editor .cm-content').waitFor()
+  const result = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const editor = document.querySelector('.hibi-lp-cell-editor .cm-content')
+      .cmTile.root.view
+    const own = editor.coordsAtPos.bind(editor)
+    let calls = 0
+    editor.coordsAtPos = (...args) => {
+      calls++
+      return own(...args)
+    }
+    const box = view.coordsAtPos(view.state.doc.toString().indexOf('two') + 1)
+    delete editor.coordsAtPos
+    const caret = own(editor.state.doc.toString().indexOf('two') + 1)
+    return {
+      calls,
+      box: box && [box.left, box.top, box.bottom],
+      caret: caret && [caret.left, caret.top, caret.bottom],
+    }
+  })
+  assert.equal(result.calls, 1, JSON.stringify(result))
+  assert.deepEqual(result.box, result.caret)
+})
+
 test('a cell editor whose table a redraw removes gives focus back to the formatted view', {
   timeout: 30000,
 }, async () => {

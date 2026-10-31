@@ -14,7 +14,7 @@ const stubs = new Map(
   [
     [
       'src/main/local-diagnostics/runtime.ts',
-      'export class LocalDiagnostics { start() {} observeWindow() {} menuItems() { return [] } }',
+      'export class LocalDiagnostics { start() {} observeWindow() {} observeAsset(url, load) { return load() } menuItems() { return [] } report() {} async flush() {} }',
     ],
     [
       'src/main/local-diagnostics/owned.ts',
@@ -22,7 +22,7 @@ const stubs = new Map(
     ],
     [
       'src/preload/local-diagnostics.ts',
-      'export class DiagnosticProducer { configuration = Promise.resolve(null); record() { return false } }',
+      'export class DiagnosticProducer { configuration = Promise.resolve(null); record() { return false } }; export const installStartupDiagnostics = () => () => {}',
     ],
     [
       'src/renderer/src/local-diagnostics.ts',

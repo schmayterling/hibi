@@ -95,31 +95,15 @@ try {
               },
               { capture: true },
             )
-            if (element.editor) {
-              const editor = element.editor,
-                dispatch = editor.view.props.dispatchTransaction
-              editor.view.setProps({
-                dispatchTransaction(transaction) {
-                  const start = performance.now()
-                  try {
-                    dispatch.call(this, transaction)
-                  } finally {
-                    if (transaction.docChanged)
-                      measured.cpu.push(performance.now() - start)
-                  }
-                },
-              })
-            } else {
-              const view = element.cmTile.root.view,
-                dispatch = view.dispatchTransactions
-              view.dispatchTransactions = function (transactions, editor) {
-                const start = performance.now()
-                try {
-                  dispatch.call(this, transactions, editor)
-                } finally {
-                  if (transactions.some((t) => t.docChanged))
-                    measured.cpu.push(performance.now() - start)
-                }
+            const view = element.cmTile.root.view,
+              dispatch = view.dispatchTransactions
+            view.dispatchTransactions = function (transactions, editor) {
+              const start = performance.now()
+              try {
+                dispatch.call(this, transactions, editor)
+              } finally {
+                if (transactions.some((t) => t.docChanged))
+                  measured.cpu.push(performance.now() - start)
               }
             }
           }, selector)
@@ -162,7 +146,11 @@ try {
         const saveStart = performance.now()
         const saved = await page.evaluate(() => window.hibi.saveDocument(true))
         const saveMs = performance.now() - saveStart
-        assert.equal(await readFile(savedPath, 'utf8'), saved.markdown)
+        // A large note saves with a receipt instead of its text.
+        const markdown = saved?.saveReceipt
+          ? (await page.evaluate(() => window.hibi.getDocument())).markdown
+          : saved?.markdown
+        assert.equal(await readFile(savedPath, 'utf8'), markdown)
         await page.evaluate(() => window.hibi.setAddonEnabled('typst', true))
         const compilation = []
         for (let i = 0; i < 3; i++) {

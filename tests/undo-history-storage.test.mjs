@@ -257,3 +257,42 @@ test('kept histories follow notes renamed or moved inside Hibi', async (t) => {
   // b.md's history stayed where it was.
   assert.equal(await exists(kept(root, '/notes/b.md')), true)
 })
+
+test('moves made before their histories follow apply in order, and an unreadable folder strands none', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  const work = join(root, 'work')
+  await fs.mkdir(join(work, 'a', 'locked'), { recursive: true })
+  await fs.writeFile(join(work, 'a', 'n.md'), note.source)
+  await api.storeUndoHistory(join(work, 'a', 'n.md'), note.file, note.history)
+  // A folder only its owner can't list moves along.
+  await fs.chmod(join(work, 'a', 'locked'), 0o000)
+  t.after(() => fs.chmod(join(work, 'c', 'locked'), 0o755).catch(() => {}))
+  // The folder moves twice before the first move's history follows.
+  await fs.rename(join(work, 'a'), join(work, 'b'))
+  const first = api.relocateUndoHistory(join(work, 'a'), join(work, 'b'))
+  await fs.rename(join(work, 'b'), join(work, 'c'))
+  await Promise.all([
+    first,
+    api.relocateUndoHistory(join(work, 'b'), join(work, 'c')),
+  ])
+  assert.equal(await exists(kept(root, join(work, 'a', 'n.md'))), false)
+  assert.deepEqual(
+    await api.readUndoHistory(join(work, 'c', 'n.md'), reopened(note.source)),
+    note.history,
+  )
+  // A later launch follows the next move from what this one kept.
+  const later = await main(root)
+  await later.relocateUndoHistory(join(work, 'c'), join(work, 'd'))
+  assert.deepEqual(
+    await later.readUndoHistory(join(work, 'd', 'n.md'), reopened(note.source)),
+    note.history,
+  )
+  // Clearing forgets which notes had histories, too.
+  await later.clearUndoHistory()
+  assert.deepEqual(
+    (await fs.readdir(root)).filter((name) => name.startsWith('undo-history')),
+    [],
+  )
+})

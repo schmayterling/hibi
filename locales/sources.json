@@ -2828,6 +2828,9 @@
   "1aa4cb0bcca7": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
+  "83196172ab2e": [
+    "src/renderer/src/document-media.ts"
+  ],
   "be7e2f201293": [
     "src/addons/_shared/format-renderer.tsx"
   ],
@@ -4658,6 +4661,9 @@
   "e2b488cb6e0d": [
     "src/renderer/src/WorkspaceSidebar.tsx"
   ],
+  "0fe4661fbe52": [
+    "src/renderer/src/document-media.ts"
+  ],
   "306960dcad4c": [
     "src/renderer/src/WorkspaceSidebar.tsx",
     "src/renderer/src/main.tsx"
@@ -6020,6 +6026,15 @@
   ],
   "a012994d9241": [
     "src/main/document.ts"
+  ],
+  "74aad67eb4f1": [
+    "src/main/remote-images.ts"
+  ],
+  "2921bff36537": [
+    "src/main/remote-images.ts"
+  ],
+  "05a4f77d9d16": [
+    "src/main/remote-images.ts"
   ],
   "34f17c8d67af": [
     "src/main/import-files.ts"

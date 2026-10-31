@@ -6,6 +6,10 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import {
+  openRemoteImageMenu,
+  withCachedImages,
+} from '../../renderer/src/document-media'
 import { errorMessage } from '../../shared/errors'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -79,8 +83,13 @@ export function localPreview(
       }
     }, [value, enabled, document.id])
     useEffect(() => {
-      if (host.current) host.current.innerHTML = result?.html ?? ''
-    }, [result])
+      if (!host.current) return
+      host.current.replaceChildren(
+        withCachedImages(result?.html ?? '', document.tabId),
+      )
+      host.current.oncontextmenu = openRemoteImageMenu
+      host.current.onkeydown = openRemoteImageMenu
+    }, [result, document.tabId])
     return (
       <div className="format-preview">
         <PreviewActions target={toolbar}>

@@ -1008,25 +1008,32 @@ export function formattedSyntax(
           if (text.length <= giantBlock)
             return parseInline.call(this, text, offset)
           // A giant leaf, such as a pasted log, reads it only in whole lines
-          // around the ends, as the view reads giant blocks in windows.
+          // around the ends, as the view reads giant blocks in windows. A
+          // line longer than a chunk, such as minified code, is cut.
           const windows: [number, number][] = []
           const seen = { reach: 0 }
           // The code span or formula holding `to`, reading on from `from`.
           const pair = (from: number, to: number) =>
             readSeams(text, offset, offset + from, offset + to, null, seen)
+          const lineStart = (at: number) => {
+            const start = text.lastIndexOf('\n', at) + 1
+            return at - start > chunkSize ? at : start
+          }
+          const lineEnd = (at: number) => {
+            const next = text.indexOf('\n', at)
+            const end = next < 0 ? text.length : next
+            return end - at > chunkSize ? at : end
+          }
           for (const pos of ends) {
             const at = pos - offset
-            let start = text.lastIndexOf('\n', Math.max(0, at - chunkSize)) + 1
-            let next = text.indexOf('\n', at + chunkSize)
-            let end = next < 0 ? text.length : next
+            let start = lineStart(Math.max(0, at - chunkSize))
+            let end = lineEnd(Math.min(text.length, at + chunkSize))
             // A code span or formula a window cuts is read whole, as the
             // view's windows take it, so its markers pair as in the paragraph.
             for (let cut = pair(0, start); cut; cut = pair(0, start))
-              start = text.lastIndexOf('\n', cut.from - offset) + 1
-            for (let cut = pair(start, end); cut; cut = pair(start, end)) {
-              next = text.indexOf('\n', cut.to - offset)
-              end = next < 0 ? text.length : next
-            }
+              start = lineStart(cut.from - offset)
+            for (let cut = pair(start, end); cut; cut = pair(start, end))
+              end = lineEnd(cut.to - offset)
             const last = windows.at(-1)
             if (last && start <= last[1]) last[1] = Math.max(last[1], end)
             else windows.push([start, end])

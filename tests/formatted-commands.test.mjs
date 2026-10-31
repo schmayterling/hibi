@@ -1758,3 +1758,45 @@ test('an edit read takes a code span a giant paragraph window cuts whole', () =>
   const next = state.update(blockBreak(state, tree)).state
   assert.equal(next.sliceDoc(caret - 6, caret + 5), 'aaaa b\n\nbbb')
 })
+
+test('edit reads parse inline syntax only around the selection in a long line', () => {
+  // A minified line of a quarter of a megabyte after some paragraphs.
+  const filler = Array.from({ length: 4096 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const json = `{${Array.from({ length: 16384 }, (_, n) => `"k${n}":"v${n}"`).join(',')}}`
+  const start = filler.length + 2
+  const caret = start + (json.length >> 1)
+  const syntax = formattedSyntax({ slice: 1 })
+  // The characters a read passes to the inline parser.
+  const read = (line) => {
+    const state = EditorState.create({
+      doc: `${filler}\n\n${line}`,
+      selection: { anchor: caret },
+      extensions: syntax.extension,
+    })
+    const inline = MarkdownParser.prototype.parseInline
+    let parsed = 0
+    MarkdownParser.prototype.parseInline = function (text, offset) {
+      parsed += text.length
+      return inline.call(this, text, offset)
+    }
+    try {
+      return { state, tree: syntax.editTree(state), parsed }
+    } finally {
+      MarkdownParser.prototype.parseInline = inline
+    }
+  }
+  const { parsed } = read(json)
+  assert.ok(parsed > 0 && parsed < 16384, `${parsed} characters read inline`)
+  // A code span the window cuts inside the line is read whole, so its
+  // closing backtick does not open another with a later one.
+  const ticked = [...json]
+  for (const pos of [-6000, -1000, 1000]) ticked[caret - start + pos] = '`'
+  const { state, tree } = read(ticked.join(''))
+  const next = state.update(blockBreak(state, tree)).state
+  assert.equal(
+    next.sliceDoc(caret - 3, caret + 5),
+    `${state.sliceDoc(caret - 3, caret)}\n\n${state.sliceDoc(caret, caret + 3)}`,
+  )
+})

@@ -284,7 +284,7 @@ unit(
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
-    await selectFormattedEngine(app, page, 'codemirror')
+    await waitForFormattedEditor(app, page)
     await app.evaluate(({ dialog }, note) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -367,7 +367,7 @@ async function openTallRemoteImage(t, delay) {
   )
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, note) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,

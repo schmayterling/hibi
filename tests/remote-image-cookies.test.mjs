@@ -4,8 +4,11 @@ import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -186,7 +189,7 @@ test('a remote image drawn again after scrolling back or switching tabs is not d
   const host = await imageHost(t)
   const { app, page, origin, folder, paths } = host
   await trust(app, origin)
-  const editor = await selectFormattedEngine(app, page, 'codemirror')
+  const editor = await waitForFormattedEditor(app, page)
   const filler = Array.from(
     { length: 300 },
     (_, line) => `Line ${line} between the images.`,
@@ -223,7 +226,7 @@ test('held remote images keep no editor view alive, and a closed tab holds none'
   const host = await imageHost(t)
   const { app, page, origin, folder, paths } = host
   await trust(app, origin)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   // Each image is drawn only while the view is at its own section.
   const filler = Array.from(
     { length: 300 },

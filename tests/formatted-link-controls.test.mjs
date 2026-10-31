@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync } from './electron.mjs'
+import { electron, waitForAddonShortcut, waitForAsync } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
@@ -47,6 +47,9 @@ async function open(t, addons) {
   }, file)
   page.setDefaultTimeout(8000)
   const editor = await selectFormattedEngine(app, page, 'codemirror')
+  // The dictionary starts in the background; its menu items come with it.
+  if (addons?.dictionary)
+    await waitForAddonShortcut(page, 'dictionary.synonyms')
   await clickMenu(app, 'Open…')
   await page.getByRole('link', { name: 'docs', exact: true }).waitFor()
   const panel = page.getByRole('dialog', { name: 'Link actions', exact: true })

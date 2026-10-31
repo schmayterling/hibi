@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  waitForAddonShortcut,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -40,6 +44,8 @@ async function launch(t, files, engine = 'codemirror') {
     await page.reload()
     await waitForDocumentEditor(app, page)
   }
+  // The dictionary starts in the background; a lookup before it does is lost.
+  await waitForAddonShortcut(page, 'dictionary.synonyms')
   const responses = {
     'https://en.wiktionary.org/api/rest_v1/page/definition/happy':
       await fixture('wiktionary-happy.json'),

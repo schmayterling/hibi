@@ -54,6 +54,7 @@ import {
   indent,
   lineBreak,
   lineInput,
+  tabSyntax,
 } from './formatted-commands'
 import {
   blockMarkedNodes,
@@ -2335,7 +2336,7 @@ export function livePreview(
       return true
     }
   const tab = (outdent: boolean) => (view: EditorView) => {
-    const tree = syntax.tree(view.state)
+    const tree = tabSyntax(view.state, syntax.tree(view.state))
     let item = false
     for (
       let node: SyntaxNode | null = tree.resolveInner(

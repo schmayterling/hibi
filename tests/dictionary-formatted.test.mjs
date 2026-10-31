@@ -15,7 +15,7 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
 
-/** Launch with the dictionary, autocomplete and the `engine` formatted view, and answer lookups from fixtures. */
+/** Launch with the dictionary and autocomplete, and answer lookups from fixtures. */
 async function launch(t, files) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-formatted-'))
   for (const [name, text] of Object.entries(files))

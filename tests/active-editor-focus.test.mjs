@@ -389,7 +389,7 @@ test('finishing a file operation preserves newer settings input focus', {
   )
 })
 
-test('settings opened while a file, tab or new note opens stay open when it finishes', {
+test('settings opened while a restored version, file, tab or new note opens stay open when it finishes', {
   timeout: 30000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-busy-settings-'))
@@ -428,7 +428,43 @@ test('settings opened while a file, tab or new note opens stay open when it fini
     async () => (await window.hibi.getDocument()).name === 'one.md',
   )
   // Settings opened while an open waits on the main process outlive it.
-  for (const [channel, start, name] of [
+  for (const [channel, start, name, dirty = null] of [
+    [
+      'history:restore',
+      async () => {
+        // A saved change makes a version to restore from the history dialog.
+        const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+        await page
+          .locator('.rich-pane .cm-content, .source-pane .cm-content')
+          .first()
+          .click()
+        await page.keyboard.press(`${mod}+End`)
+        await page.keyboard.type(' more')
+        await pressShortcut(app, `${mod}+s`)
+        await waitForAsync(
+          page,
+          async () => (await window.hibi.listVersions()).length > 0,
+        )
+        await pressShortcut(app, `${mod}+k`)
+        await page
+          .getByRole('combobox', { name: /search commands/i })
+          .fill('version history')
+        await page.getByRole('option').first().waitFor()
+        await page.keyboard.press('Enter')
+        const history = page.getByRole('dialog', { name: /^version history$/i })
+        await history
+          .getByRole('navigation', { name: /saved versions/i })
+          .getByRole('button')
+          .last()
+          .click()
+        await history
+          .getByRole('button', { name: /restore to editor/i })
+          .click()
+      },
+      'one.md',
+      // The restored version is an unsaved change.
+      true,
+    ],
     [
       'workspace:open-file',
       () => tree.getByRole('treeitem', { name: 'two.md', exact: true }).click(),
@@ -461,8 +497,11 @@ test('settings opened while a file, tab or new note opens stay open when it fini
     await app.evaluate(() => globalThis.releaseHeldOpen())
     await waitForAsync(
       page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      name,
+      async ([name, dirty]) => {
+        const note = await window.hibi.getDocument()
+        return note.name === name && (dirty === null || note.dirty === dirty)
+      },
+      [name, dirty],
     )
     await page.locator('.app[aria-busy="false"]').waitFor()
     await page.evaluate(async () => {

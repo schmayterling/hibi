@@ -106,6 +106,8 @@ export function parseUndoHistory(value: unknown): UndoHistory {
   if (
     !history ||
     !Array.isArray(history.steps) ||
+    // A session keeps at most 128 steps; more is not a history Hibi wrote.
+    history.steps.length > 1024 ||
     !safePosition(history.units) ||
     !safePosition(history.version) ||
     !Number.isSafeInteger(history.saved) ||
@@ -219,28 +221,29 @@ export const restoredHistory =
       (step.parent === -1 ? top : children[step.parent]!).push(index)
     const path: number[] = []
     for (let index = saved; index !== -1; index = steps[index]!.parent)
-      path.unshift(index)
+      path.push(index)
+    path.reverse()
     const onPath = new Set(path)
-    const next = (index: number) => {
-      const choices = index === -1 ? top : children[index]!
-      return choices.find((child) => onPath.has(child)) ?? choices.at(-1)
-    }
+    // By state index + 1, the step its chain goes on with.
+    const next = [top, ...children].map(
+      (choices) => choices.find((child) => onPath.has(child)) ?? choices.at(-1),
+    )
     // A redo stack from `start` on.
     const chain = (start: number | undefined) => {
       const redo: HistoryGroup[] = []
-      for (let index = start; index !== undefined; index = next(index))
-        redo.unshift(groups[index]!)
-      return redo
+      for (let index = start; index !== undefined; index = next[index + 1])
+        redo.push(groups[index]!)
+      return redo.reverse()
     }
     const branches: (readonly [object, HistoryGroup[]])[] = []
     for (let parent = -1; parent < steps.length; parent++)
       for (const child of parent === -1 ? top : children[parent]!)
-        if (child !== next(parent))
+        if (child !== next[parent + 1])
           branches.push([parent === -1 ? root : keys[parent]!, chain(child)])
     return {
       root,
       undo: path.map((index) => groups[index]!),
-      redo: chain(next(saved)),
+      redo: chain(next[saved + 1]),
       branches,
     }
   }

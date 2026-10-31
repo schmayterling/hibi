@@ -25,7 +25,7 @@ export async function writeInputProfile(profile, enabledAddons, analysisLoad) {
         name: 'Analysis benchmark',
         description: 'Benchmark-only analysis load',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         authors: [{ displayName: 'Hibi benchmark' }],
         capabilities: [],

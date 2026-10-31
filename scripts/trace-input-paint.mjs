@@ -320,7 +320,7 @@ async function installProbe(profile) {
       name: 'Input paint probe',
       description: 'Benchmark-only input timing callbacks',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Benchmark' }],
       capabilities: ['source'],

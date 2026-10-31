@@ -92,7 +92,7 @@ async function installProbe(profile, format) {
       id: 'engine-benchmark',
       name: 'Engine benchmark',
       description: 'Temporary measurement observer',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       kind: 'extension',
       authors: [{ displayName: 'Hibi benchmark' }],

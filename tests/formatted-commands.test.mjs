@@ -1731,3 +1731,30 @@ test('a repeated edit read keeps the blocks of the last read', () => {
   const kept = second.filter((node) => first.has(node)).length
   assert.ok(kept > second.length / 2, `${kept} of ${second.length} kept`)
 })
+
+test('an edit read takes a code span a giant paragraph window cuts whole', () => {
+  // A log pasted as one paragraph: a code span from 200 lines above the
+  // caret to 60 above it, so the window around the caret starts inside it,
+  // and another from the caret's line on.
+  const lines = Array.from(
+    { length: 3000 },
+    (_, n) => `plain words on line ${n}`,
+  )
+  lines[1800] = 'open ` tick'
+  lines[1940] = 'close ` tick'
+  lines[2000] = 'aaaa bbbb ` cccc'
+  lines[2030] = 'later ` tick'
+  const doc = lines.join('\n')
+  const syntax = formattedSyntax({ slice: 1 })
+  const caret = doc.indexOf('aaaa bbbb') + 6
+  const state = EditorState.create({
+    doc,
+    selection: { anchor: caret },
+    extensions: syntax.extension,
+  })
+  const tree = syntax.editTree(state)
+  assert.notEqual(tree, syntax.tree(state), 'the parse had not reached it')
+  // As the whole paragraph pairs it, the caret is in no code span.
+  const next = state.update(blockBreak(state, tree)).state
+  assert.equal(next.sliceDoc(caret - 6, caret + 5), 'aaaa b\n\nbbb')
+})

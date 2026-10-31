@@ -351,6 +351,21 @@ test('codemirror: undo and redo scroll to the selection they restore', {
         .sourceReady === 'true',
   )
   const source = '.source-pane .cm-scroller'
+  // A view shown for the first time estimates its line heights until it
+  // measures them in view, which can come after the switch: a scroll before
+  // that lands where the estimates put it, and moves when they are measured.
+  await page.evaluate(async (scroller) => {
+    const { view } = document
+      .querySelector(scroller)
+      .querySelector('.cm-content').cmTile.root
+    const measure = () =>
+      new Promise((done) => view.requestMeasure({ read() {}, write: done }))
+    for (let height = -1; ; ) {
+      await measure()
+      if (view.inView && view.contentHeight === height) break
+      height = view.inView ? view.contentHeight : -1
+    }
+  }, source)
   // The pane's scroll position once it holds over two frames: a view
   // measures, and so scrolls, in the frame after a change.
   const settled = (scroller) =>

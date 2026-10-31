@@ -123,7 +123,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // save wrote, so a note's undo history outlives closing it, adds 2,856
   // (#782); storing and restoring that history loads later.
   // Going to a step of that tree, and restoring a saved version as an edit
-  // undo takes back, adds 659 (#739); the History view loads later.
+  // undo takes back, adds 659 (#786); the History view loads later.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=

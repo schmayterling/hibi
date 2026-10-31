@@ -14,7 +14,7 @@ const stubs = new Map(
   [
     [
       'src/main/local-diagnostics/runtime.ts',
-      'export class LocalDiagnostics { start() {} observeWindow() {} observeAsset() {} menuItems() { return [] } report() {} async flush() {} }',
+      'export class LocalDiagnostics { start() {} observeWindow() {} observeAsset(url, load) { return load() } menuItems() { return [] } report() {} async flush() {} }',
     ],
     [
       'src/main/local-diagnostics/owned.ts',

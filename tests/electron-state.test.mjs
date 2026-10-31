@@ -131,7 +131,7 @@ test('editor readiness requires settled app, addons and editable active pane', {
   await page.setContent(`
     <div class="app" aria-busy="false">
       <div id="document-editor-panel" class="editor-page" aria-busy="false">
-        <div class="source-pane"><div class="tiptap" role="textbox" aria-label="Document editor" aria-readonly="false" contenteditable="true">ready</div></div>
+        <div class="editor-panes" data-source-ready="true"><div class="rich-pane"><div class="cm-content" role="textbox" aria-label="Document editor" aria-readonly="false" contenteditable="true">ready</div></div></div>
       </div>
       <div id="split-document-editor-panel"><div role="textbox" aria-label="Document editor" contenteditable="true">inactive</div></div>
     </div>
@@ -142,7 +142,7 @@ test('editor readiness requires settled app, addons and editable active pane', {
   for (const [selector, attribute, value] of [
     ['.app', 'aria-busy', 'true'],
     ['#document-editor-panel', 'aria-busy', 'true'],
-    ['.source-pane', 'inert', ''],
+    ['.rich-pane', 'inert', ''],
     ['#document-editor-panel [role="textbox"]', 'contenteditable', 'false'],
   ]) {
     const target = page.locator(selector)
@@ -161,9 +161,9 @@ test('editor readiness requires settled app, addons and editable active pane', {
       dom.editorPanelBusy,
       selector === '#document-editor-panel' ? 'true' : 'false',
     )
-    assert.equal(dom.tiptapReadOnly, 'false')
+    assert.equal(dom.formattedReadOnly, 'false')
     assert.equal(
-      dom.tiptapContentEditable,
+      dom.formattedContentEditable,
       attribute === 'contenteditable' ? 'false' : 'true',
     )
     await target.evaluate(

@@ -25,7 +25,7 @@ test('installed addon queries workspace metadata through scoped bridge', {
       name: 'Query probe',
       description: 'Workspace query bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',

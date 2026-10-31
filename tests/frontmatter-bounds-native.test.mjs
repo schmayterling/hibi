@@ -47,9 +47,6 @@ test('bounded metadata stays present, preserves crlf counts and suppresses sourc
   const page = await app.firstWindow()
   page.setDefaultTimeout(20000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   const cdp = await page.context().newCDPSession(page)

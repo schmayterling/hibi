@@ -8,7 +8,7 @@ import { replaceSourceText } from './keyboard.mjs'
 
 for (const hidden of [true, false]) {
   for (const applied of [false, true]) {
-    test(`codemirror: ${hidden ? 'hidden' : 'shown'} formatted echo failing ${applied ? 'after' : 'before'} rendering stays read-only until retry`, {
+    test(`${hidden ? 'hidden' : 'shown'} formatted echo failing ${applied ? 'after' : 'before'} rendering stays read-only until retry`, {
       timeout: 60000,
     }, async (t) => {
       const profile = await mkdtemp(join(tmpdir(), 'hibi-echo-failure-'))
@@ -31,9 +31,6 @@ for (const hidden of [true, false]) {
         if (message.type() === 'error') errors.push(message.text())
       })
       await waitForDocumentEditor(app, page)
-      await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-      )
       await page.reload()
       await waitForDocumentEditor(app, page)
       // Hidden windows have no focus; typing needs a focused editor.

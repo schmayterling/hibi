@@ -1470,26 +1470,6 @@ button.ui-button.update-download-button:disabled {
 .tiptap p {
   margin: 0 0 1em;
 }
-.markdown-footnote-preview {
-  min-height: 100%;
-  padding: var(--editor-padding);
-  font-size: var(--text-editor);
-  line-height: 1.75;
-  overflow-wrap: anywhere;
-}
-.markdown-footnote-preview > :first-child {
-  margin-top: 0;
-}
-.markdown-footnote-preview p {
-  margin: 0 0 1em;
-}
-.tiptap p.is-editor-empty:first-child::before {
-  content: attr(data-placeholder);
-  float: left;
-  height: 0;
-  color: var(--muted);
-  pointer-events: none;
-}
 :is(.tiptap, .format-content) h1,
 :is(.tiptap, .format-content) h2,
 :is(.tiptap, .format-content) h3,
@@ -1536,11 +1516,6 @@ button.ui-button.update-download-button:disabled {
 :is(.tiptap, .format-content) :is(li, li > label + div) > :is(ul, ol) {
   margin-top: 0.3em;
 }
-/* Node views wrap their block, so the wrapper carries the item spacing. */
-:is(.tiptap, .format-content) li .tableWrapper > table,
-:is(.tiptap, .format-content) li [data-node-view-wrapper] {
-  margin-block: 0;
-}
 :is(.tiptap, .format-content) blockquote {
   margin-inline: 0;
   padding-left: 20px;
@@ -1574,14 +1549,6 @@ button.ui-button.update-download-button:disabled {
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
-.tiptap [data-raw-html="block"] {
-  max-height: 12em;
-}
-.tiptap [data-raw-html].ProseMirror-selectednode {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: var(--radius-control);
-}
 .format-unavailable {
   color: var(--muted);
   font-size: var(--text-ui);
@@ -1613,48 +1580,8 @@ button.ui-button.update-download-button:disabled {
 :is(.tiptap, .format-content) th {
   background: var(--surface);
 }
-/* Table sizes are editor decorations; rows grow when their content needs more room. */
-.tiptap .tableWrapper[data-columns-sized="all"] > table {
-  width: auto;
-}
-.tiptap tr {
-  height: var(--table-row-height);
-}
 .tiptap :is(th, td) {
   position: relative;
-}
-.tiptap :is(th, td)[data-resize-handle]::after {
-  content: "";
-  position: absolute;
-  background: var(--accent);
-  opacity: 0.65;
-  pointer-events: none;
-}
-.tiptap :is(th, td)[data-resize-handle="column"]::after {
-  inset: -1px -2px -1px auto;
-  width: 3px;
-}
-.tiptap :is(th, td)[data-resize-handle="row"]::after {
-  inset: auto -1px -2px;
-  height: 3px;
-}
-.tiptap[data-table-resize="column"] {
-  cursor: col-resize;
-}
-.tiptap[data-table-resize="row"] {
-  cursor: row-resize;
-}
-.tiptap ul[data-type="taskList"] {
-  padding-left: 0;
-  list-style: none;
-}
-.tiptap ul[data-type="taskList"] li {
-  display: flex;
-  gap: 10px;
-}
-.tiptap ul[data-type="taskList"] li > div {
-  flex: 1;
-  min-width: 0;
 }
 .tiptap input[type="checkbox"] {
   accent-color: var(--accent);
@@ -1779,11 +1706,9 @@ summary {
   width: max-content;
   padding-inline: 4px;
 }
-.ProseMirror-search-match,
 .cm-editor .cm-searchMatch {
   background: color-mix(in oklch, var(--accent) 22%, transparent);
 }
-.ProseMirror-active-search-match,
 .cm-editor .cm-searchMatch-selected {
   background: color-mix(in oklch, var(--accent) 40%, transparent);
   outline: 1px solid var(--accent);

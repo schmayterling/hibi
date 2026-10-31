@@ -360,6 +360,23 @@ test('formatted split lines up a source line inside a table with its cell', {
       ) < 6
     )
   })
+  // A position in each column of the row is in that column's cell.
+  const columns = await page.evaluate(
+    (positions) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      const cells = document.querySelectorAll(
+        '.rich-pane tr[data-line="22"] td',
+      )
+      return positions.map((at, column) => {
+        const point = view.coordsAtPos(at)
+        const box = cells[column].getBoundingClientRect()
+        return !!point && point.left >= box.left && point.left <= box.right
+      })
+    },
+    [text.indexOf('r20 |') + 1, text.indexOf('v20 |') + 1],
+  )
+  assert.deepEqual(columns, [true, true])
   await source(page, text)
 })
 

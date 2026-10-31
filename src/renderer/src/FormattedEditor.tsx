@@ -295,10 +295,14 @@ export function MarkdownEditor({
     },
     [onOutlineUnavailable],
   )
-  // Entries of a stopped outline would go stale with the next edit.
+  // Entries of a stopped outline would go stale with the next edit. A sidebar
+  // that closed drops them too, or it reopens with rows that the restarted
+  // outline replaces, taking keyboard focus with the row it held.
   useEffect(() => {
-    if (!outlineRead) reportOutline([])
-  }, [outlineRead, reportOutline])
+    if (outlineRead) return
+    reportOutline([])
+    onOutline([])
+  }, [outlineRead, reportOutline, onOutline])
   useEffect(() => {
     if (!outlineActive) return
     onOutline(outline.current.headings)

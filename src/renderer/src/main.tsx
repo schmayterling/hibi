@@ -1414,6 +1414,7 @@ function App() {
       startBusy()
       setSavingTab(saving ? (currentDocument.current?.tabId ?? null) : null)
       setError('')
+      const intent = settingsIntent.current
       try {
         const next = await (command === 'new'
           ? window.hibi.newDocument()
@@ -1429,7 +1430,7 @@ function App() {
               next,
               command === 'new' || command === 'open',
             )
-          if (command === 'new' || command === 'open') showDocument()
+          if (command === 'new' || command === 'open') showDocument(intent)
           refreshWorkspaceView()
         }
         return Boolean(next)
@@ -1529,6 +1530,7 @@ function App() {
     if (busyRef.current) return false
     startBusy()
     setError('')
+    const intent = settingsIntent.current
     try {
       const next = await window.hibi.openWorkspaceFile(path, target)
       if (next) {
@@ -1540,7 +1542,7 @@ function App() {
         )
         if (!owner || selected?.definition.owner !== owner)
           addonViews.selectDocument()
-        setSettingsOpen(false)
+        setSettingsOpen(settingsOpenedSince(intent))
         refreshWorkspaceView()
         if (sidebarResize.overlay) setSidebarOpen(false)
       }
@@ -1753,13 +1755,14 @@ function App() {
   ) {
     if (busyRef.current || dialogs.isOpen()) return
     startBusy()
+    const intent = settingsIntent.current
     try {
       const next = await operation()
       if (!next) return
       await acceptOperationDocument(next, replaceLocal)
       refreshWorkspaceView()
       if (revealDocument) {
-        showDocument()
+        showDocument(intent)
         settingsNavigation.current.forward = []
       }
       if (next.tabs.length === 0)
@@ -2152,12 +2155,13 @@ function App() {
           })
           .result.then(async (id) => {
             if (!id || busyRef.current) return
+            const intent = settingsIntent.current
             startBusy()
             try {
               const next = await window.hibi.restoreVersion(id)
               if (!next) return
               await acceptOperationDocument(next, true)
-              showDocument()
+              showDocument(intent)
             } catch (error) {
               setError(String(error))
             } finally {

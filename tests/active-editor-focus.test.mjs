@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -409,4 +409,94 @@ test('finishing a file operation preserves newer settings input focus', {
     () =>
       document.activeElement?.getAttribute('aria-label') === 'Markdown editor',
   )
+})
+
+test('settings opened while a file, tab or new note opens stay open when it finishes', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-busy-settings-'))
+  const folder = join(root, 'workspace')
+  await mkdir(folder)
+  await writeFile(join(folder, 'one.md'), 'first note')
+  await writeFile(join(folder, 'two.md'), 'second note')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      globalThis.releaseHeldOpen?.()
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [folder],
+    })
+  }, folder)
+  await pressShortcut(
+    app,
+    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+o`,
+  )
+  const tree = page.getByRole('tree', { name: /workspace files/i })
+  await tree.getByRole('treeitem', { name: 'one.md', exact: true }).click()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'one.md',
+  )
+  // Settings opened while an open waits on the main process outlive it.
+  for (const [channel, start, name] of [
+    [
+      'workspace:open-file',
+      () => tree.getByRole('treeitem', { name: 'two.md', exact: true }).click(),
+      'two.md',
+    ],
+    [
+      'document:select-tab',
+      () => page.getByRole('tab', { name: 'one.md', exact: true }).click(),
+      'one.md',
+    ],
+    ['document:new', () => clickMenu(app, 'New'), 'untitled.md'],
+  ]) {
+    await page.locator('.app[aria-busy="false"]').waitFor()
+    await app.evaluate(({ ipcMain }, channel) => {
+      const handler = ipcMain._invokeHandlers.get(channel)
+      if (!handler) throw new Error(`${channel} is unavailable.`)
+      const held = Promise.withResolvers()
+      globalThis.releaseHeldOpen = held.resolve
+      ipcMain.removeHandler(channel)
+      ipcMain.handle(channel, async (...args) => {
+        await held.promise
+        ipcMain.removeHandler(channel)
+        ipcMain.handle(channel, handler)
+        return handler(...args)
+      })
+    }, channel)
+    await start()
+    await page.locator('.app[aria-busy="true"]').waitFor()
+    await clickMenu(app, 'Settings')
+    await app.evaluate(() => globalThis.releaseHeldOpen())
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+    await page.locator('.app[aria-busy="false"]').waitFor()
+    await page.evaluate(async () => {
+      await new Promise(requestAnimationFrame)
+      await new Promise(requestAnimationFrame)
+    })
+    assert.equal(
+      await page.locator('.app').getAttribute('data-screen'),
+      'settings',
+      `${channel} closed settings`,
+    )
+    await page.getByRole('button', { name: /^back to app$/i }).click()
+    await page.locator('.app[data-screen="editor"]').waitFor()
+  }
 })

@@ -750,6 +750,32 @@ export class DocumentSession {
       steps: [...this.#kept()].filter(([group]) => group.order <= saved.order),
     }
   }
+  /** Every kept step with the state it leaves from, the oldest state and the current one. */
+  historyTree() {
+    return {
+      root: this.#root,
+      current: this.#at().step,
+      steps: [...this.#kept()],
+    }
+  }
+  /**
+   * Redo follows the branch whose first step is `step`, from the current
+   * state; the steps redo followed become a branch. Returns whether it could.
+   */
+  followBranch(step: object) {
+    if (this.#redo.at(-1)?.step === step) return true
+    const from = this.#at().step
+    const chains = this.#branches.get(from) ?? []
+    const chain = chains.find((kept) => kept.at(-1)?.step === step)
+    if (this.#disposed || this.#dispatching || !chain) return false
+    const rest = chains.filter((kept) => kept !== chain)
+    if (this.#redo.length) rest.push(this.#redo)
+    if (rest.length) this.#branches.set(from, rest)
+    else this.#branches.delete(from)
+    this.#redo = chain
+    this.#publish()
+    return true
+  }
   /**
    * Takes steps kept from an earlier session that end at this session's
    * opening state, while no trimming has moved past it: `build` makes them

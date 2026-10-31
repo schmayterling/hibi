@@ -4,7 +4,7 @@ import { history, isolateHistory, redo, undo } from '@codemirror/commands'
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
 import { NodeType, Tree } from '@lezer/common'
-import { GFM, parser } from '@lezer/markdown'
+import { GFM, MarkdownParser, parser } from '@lezer/markdown'
 import {
   ChunkedMarkdownParser,
   uncovered,
@@ -21,8 +21,8 @@ import {
   indent,
   lineBreak,
   lineInput,
-  tabSyntax,
 } from '../src/renderer/src/formatted-commands.ts'
+import { formattedPrefix } from '../src/renderer/src/formatted-contributions.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { codeIndentLines } from '../src/renderer/src/indentation.ts'
 import { sourceEditorTextCooperatively } from '../src/renderer/src/source-session.ts'
@@ -1439,7 +1439,7 @@ test('multiline input keeps selections through partial inline markers valid', ()
   }
 })
 
-test('Tab reads the blocks of a selection or caret past the parsed text with the block grammar', () => {
+test('edit keys read the blocks of a selection or caret past the parsed text', () => {
   // One millisecond of parsing per transaction leaves most of a large note unparsed.
   const partly = (doc, anchor, head = anchor, slice = 1) => {
     const syntax = formattedSyntax({ slice })
@@ -1448,26 +1448,26 @@ test('Tab reads the blocks of a selection or caret past the parsed text with the
       selection: { anchor, head },
       extensions: syntax.extension,
     })
-    return { state, tree: syntax.tree(state) }
+    return { state, tree: syntax.tree(state), edit: syntax.editTree(state) }
   }
-  const tab = (doc, anchor, head) => {
-    const { state, tree } = partly(doc, anchor, head)
-    const blocks = tabSyntax(state, tree)
-    assert.notEqual(blocks, tree, 'the parse had not reached the selection')
-    return state.update(indent(state, blocks, false, Decoration.none)).state
+  const run = (command, doc, anchor, head, slice) => {
+    const { state, tree, edit } = partly(doc, anchor, head, slice)
+    assert.notEqual(edit, tree, 'the parse had not reached the selection')
+    return state.update(command(state, edit)).state
   }
+  const tab = (state, tree) => indent(state, tree, false, Decoration.none)
   const code = Array.from({ length: 16384 }, (_, line) =>
     `${line}`.padEnd(63, 'x'),
   ).join('\n')
   const fence = `\`\`\`\n${code}\n\`\`\``
-  // Every selected code line, and a caret at the start of the last one.
+  // Tab indents every selected code line, and a caret at the start of the last one.
   assert.equal(
-    tab(fence, 4, code.length + 4).doc.toString(),
+    run(tab, fence, 4, code.length + 4).doc.toString(),
     `\`\`\`\n${code.replaceAll(/^/gm, '\t')}\n\`\`\``,
   )
   const last = fence.lastIndexOf('\n', fence.length - 5) + 1
   assert.equal(
-    tab(fence, last).doc.toString(),
+    run(tab, fence, last).doc.toString(),
     `${fence.slice(0, last)}\t${fence.slice(last)}`,
   )
   // A caret in the last item of a long list nests it, with its own child,
@@ -1477,19 +1477,70 @@ test('Tab reads the blocks of a selection or caret past the parsed text with the
     (_, item) => `- item ${item} ${'y'.repeat(48)}`,
   ).join('\n')
   assert.equal(
-    tab(`${items}\n- last\n  - child`, items.length + 4).doc.toString(),
+    run(tab, `${items}\n- last\n  - child`, items.length + 4).doc.toString(),
     `${items}\n  - last\n    - child`,
   )
-  // Only blocks: the inline syntax of the text is not read.
+  // The other edit keys after a megabyte of paragraphs; `‸` marks the caret.
+  const filler = Array.from({ length: 65536 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const start = filler.length + 2
+  const key = (command, before, after) => {
+    const next = run(
+      command,
+      `${filler}\n\n${before.replace('‸', '')}`,
+      start + before.indexOf('‸'),
+    )
+    const head = next.selection.main.head
+    assert.equal(
+      `${next.sliceDoc(start, head)}‸${next.sliceDoc(head)}`,
+      after,
+      before,
+    )
+  }
+  key(
+    blockBreak,
+    '```js\nlet a = 1‸\nlet b = 2\n```',
+    '```js\nlet a = 1\n‸\nlet b = 2\n```',
+  )
+  key(blockBreak, '- one\n- two‸', '- one\n- two\n- ‸')
+  key(blockBreak, '> quoted‸ text', '> quoted\n> ‸ text')
+  key(blockBreak, 'some **bo‸ld** text', 'some **bo**\n\n**‸ld** text')
+  key(lineBreak, '- one\n- two‸', '- one\n- two  \n  ‸')
+  key(lineBreak, '> quoted‸ text', '> quoted  \n> ‸ text')
+  const backspace = (state, tree) =>
+    deleteBackward(state, tree, Decoration.none)
+  const forward = (state, tree) => deleteForward(state, tree, Decoration.none)
+  key(backspace, '```\ncode\n```\n‸after', '```\ncode\n```\n‸after')
+  key(forward, 'before‸\n```\ncode\n```', 'before‸\n```\ncode\n```')
+  key(exitBlock, 'start\n\n```\nco‸de\n```', 'start\n\n```\ncode\n```\n\n‸')
+  // The quote markers of earlier lines shift the caret past the quote's text.
+  key(blockBreak, '> a\n> b\n> **bol‸d**', '> a\n> b\n> **bol**\n> **‸d**')
+  // Frontmatter is not Markdown, as in the view: its fence opens no code.
+  const front = '---\nnote: |\n  ```\n---\n'
+  const syntax = formattedSyntax({ slice: 1 })
+  const doc = `${front}${filler}\n\n- one\n- two`
+  const state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: [syntax.extension, formattedPrefix.of(() => front.length)],
+  })
+  assert.equal(
+    state
+      .update(blockBreak(state, syntax.editTree(state)))
+      .state.sliceDoc(doc.length - 5),
+    '- two\n- ',
+  )
+  // Inline syntax is read only in the leaf blocks at the selection's ends.
   const prose = 'para **bold** text\n\n'.repeat(65536)
-  const { state, tree } = partly(prose, 0, prose.length)
-  const names = new Set()
-  tabSyntax(state, tree).iterate({ enter: (node) => void names.add(node.name) })
-  assert.ok(names.has('Paragraph'))
-  assert.equal(names.has('StrongEmphasis'), false)
+  let strong = 0
+  partly(prose, 0, prose.length).edit.iterate({
+    enter: (node) => void (node.name === 'StrongEmphasis' && strong++),
+  })
+  assert.equal(strong, 1)
   // A parsed selection keeps the view's own tree.
   const small = partly('```\nx\n```', 4, 4, Number.POSITIVE_INFINITY)
-  assert.equal(tabSyntax(small.state, small.tree), small.tree)
+  assert.equal(small.edit, small.tree)
   // A caret at the start of the first chunk not parsed yet: the view's first
   // parse of a long nested list ends at the start of a child item's line.
   const nested = Array.from(
@@ -1505,16 +1556,247 @@ test('Tab reads the blocks of a selection or caret past the parsed text with the
   }
   const line = first.state.doc.lineAt(edge)
   assert.deepEqual([line.from, line.text], [edge, '  - child'])
-  const atEdge = partly(nested, edge, edge, Number.POSITIVE_INFINITY)
-  const read = tabSyntax(atEdge.state, atEdge.tree)
-  assert.notEqual(read, atEdge.tree, 'the caret starts an unparsed chunk')
-  const nestedTab = atEdge.state.update(
-    indent(atEdge.state, read, false, Decoration.none),
-  ).state.doc
-  // The item nests under the one before, with its child.
   const parent = first.state.doc.line(line.number - 1).text
+  const nestedTab = run(tab, nested, edge, edge, Number.POSITIVE_INFINITY).doc
+  // The item nests under the one before, with its child.
   assert.deepEqual(
     [nestedTab.line(line.number - 1).text, nestedTab.line(line.number).text],
     [`  ${parent}`, '    - child'],
+  )
+})
+
+test('edit reads keep the last read where the note did not change', () => {
+  const filler = Array.from({ length: 65536 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const doc = `${filler}\n\nsome **bold** text\n\n- one\n- two`
+  const syntax = formattedSyntax({ slice: 1 })
+  const blocks = (tree) => {
+    const found = []
+    tree.iterate({
+      enter: (node) =>
+        void (node.type.is('Block') && found.push(node.from, node.to)),
+    })
+    return found.join()
+  }
+  // A read must give the blocks a read without the last one gives.
+  const read = (state) => {
+    const tree = syntax.editTree(state)
+    const other = formattedSyntax({ slice: 1 })
+    const copy = EditorState.create({
+      doc: state.doc,
+      selection: state.selection,
+      extensions: other.extension,
+    })
+    assert.ok(blocks(tree) === blocks(other.editTree(copy)), 'stale blocks')
+    return tree
+  }
+  let state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: syntax.extension,
+  })
+  const first = read(state)
+  // The same note and selection read the same.
+  assert.equal(syntax.editTree(state), first)
+  state = state.update(blockBreak(state, first)).state
+  assert.equal(state.sliceDoc(doc.length - 5), '- two\n- ')
+  // Bold text the last read skipped is read again for its inline syntax once
+  // the caret is in it.
+  const bold = doc.lastIndexOf('**bo') + 4
+  state = state.update({ selection: { anchor: bold } }).state
+  state = state.update(blockBreak(state, read(state))).state
+  assert.equal(
+    state.sliceDoc(bold - 9, bold + 15),
+    'some **bo**\n\n**ld** text',
+  )
+  // Text typed elsewhere between two reads moves the blocks after it.
+  state = state.update({
+    changes: { from: 0, insert: '# ' },
+    selection: { anchor: state.doc.length + 2 },
+  }).state
+  read(state)
+  // A fence opened before the list makes the rest code.
+  state = state.update({
+    changes: { from: state.doc.length - 14, insert: '```\n' },
+    selection: { anchor: state.doc.length + 4 },
+  }).state
+  state = state.update(blockBreak(state, read(state))).state
+  assert.equal(state.sliceDoc(state.doc.length - 19), '```\n- one\n- two\n- \n')
+  // Delete pressed twice at the start of a line, where the default command
+  // deletes: the caret is where the changed text starts, and the blocks
+  // after it move back.
+  const tail = 'abc def\n\n- one\n- two\n\n```\ncode\n```\n\n> quote\n'
+  const at = state.doc.toString().indexOf('some **bo')
+  state = state.update({
+    changes: { from: at, to: state.doc.length, insert: tail },
+    selection: { anchor: at },
+  }).state
+  for (let n = 0; n < 2; n++) {
+    assert.equal(deleteForward(state, read(state), Decoration.none), null)
+    state = state.update({ changes: { from: at, to: at + 1 } }).state
+  }
+  read(state)
+})
+
+test('Backspace and Delete read the syntax only where they use it', () => {
+  const state = (doc, anchor, head = anchor) =>
+    EditorState.create({ doc, selection: { anchor, head } })
+  let reads = 0
+  const read = () => {
+    reads++
+    return parser.parse('')
+  }
+  const doc = 'one two\n\nthree'
+  // A caret inside a line, and a selection, which the default command deletes.
+  for (const [anchor, head] of [
+    [4, 4],
+    [2, 12],
+  ]) {
+    assert.equal(
+      deleteBackward(state(doc, anchor, head), read, Decoration.none),
+      null,
+    )
+    assert.equal(
+      deleteForward(state(doc, anchor, head), read, Decoration.none),
+      null,
+    )
+  }
+  assert.equal(reads, 0)
+  // At the start of a line and the end of one, the blocks decide.
+  deleteBackward(state(doc, 9), read, Decoration.none)
+  assert.equal(reads, 1)
+  deleteForward(state(doc, 7), read, Decoration.none)
+  assert.ok(reads > 1)
+})
+
+test('edit reads parse inline syntax only around the selection in a giant paragraph', () => {
+  // A log pasted as one paragraph of half a megabyte.
+  const doc = Array.from(
+    { length: 8192 },
+    (_, n) => `[2026-10-31] INFO a_b: id=${n} **bold text** [l](y)`,
+  ).join('\n')
+  const syntax = formattedSyntax({ slice: 1 })
+  const caret = doc.lastIndexOf('**bold') + 4
+  // The characters a read passes to the inline parser.
+  const read = (anchor, head = anchor) => {
+    const state = EditorState.create({
+      doc,
+      selection: { anchor, head },
+      extensions: syntax.extension,
+    })
+    const inline = MarkdownParser.prototype.parseInline
+    let parsed = 0
+    MarkdownParser.prototype.parseInline = function (text, offset) {
+      parsed += text.length
+      return inline.call(this, text, offset)
+    }
+    try {
+      return { state, tree: syntax.editTree(state), parsed }
+    } finally {
+      MarkdownParser.prototype.parseInline = inline
+    }
+  }
+  // Whole lines within a few kilobytes of the caret, not the paragraph.
+  const { state, tree, parsed } = read(caret)
+  assert.ok(parsed > 0 && parsed < 16384, `${parsed} characters read inline`)
+  const next = state.update(blockBreak(state, tree)).state
+  assert.equal(next.sliceDoc(caret - 4, caret + 15), '**bo**\n\n**ld text**')
+  // A selection of all of it reads around both of its ends.
+  const all = read(0, doc.length).parsed
+  assert.ok(all > 0 && all < 32768, `${all} characters read inline`)
+})
+
+test('a repeated edit read keeps the blocks of the last read', () => {
+  const doc = Array.from({ length: 65536 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const syntax = formattedSyntax({ slice: 1 })
+  const subtrees = (tree, into = new Set()) => {
+    for (const child of tree.children) {
+      into.add(child)
+      if (child instanceof Tree) subtrees(child, into)
+    }
+    return into
+  }
+  let state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: syntax.extension,
+  })
+  const first = subtrees(syntax.editTree(state))
+  // The caret moves, and the text does not change.
+  state = state.update({ selection: { anchor: doc.length - 5 } }).state
+  const second = [...subtrees(syntax.editTree(state))]
+  const kept = second.filter((node) => first.has(node)).length
+  assert.ok(kept > second.length / 2, `${kept} of ${second.length} kept`)
+})
+
+test('an edit read takes a code span a giant paragraph window cuts whole', () => {
+  // A log pasted as one paragraph: a code span from 200 lines above the
+  // caret to 60 above it, so the window around the caret starts inside it,
+  // and another from the caret's line on.
+  const lines = Array.from(
+    { length: 3000 },
+    (_, n) => `plain words on line ${n}`,
+  )
+  lines[1800] = 'open ` tick'
+  lines[1940] = 'close ` tick'
+  lines[2000] = 'aaaa bbbb ` cccc'
+  lines[2030] = 'later ` tick'
+  const doc = lines.join('\n')
+  const syntax = formattedSyntax({ slice: 1 })
+  const caret = doc.indexOf('aaaa bbbb') + 6
+  const state = EditorState.create({
+    doc,
+    selection: { anchor: caret },
+    extensions: syntax.extension,
+  })
+  const tree = syntax.editTree(state)
+  assert.notEqual(tree, syntax.tree(state), 'the parse had not reached it')
+  // As the whole paragraph pairs it, the caret is in no code span.
+  const next = state.update(blockBreak(state, tree)).state
+  assert.equal(next.sliceDoc(caret - 6, caret + 5), 'aaaa b\n\nbbb')
+})
+
+test('edit reads parse inline syntax only around the selection in a long line', () => {
+  // A minified line of a quarter of a megabyte after some paragraphs.
+  const filler = Array.from({ length: 4096 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const json = `{${Array.from({ length: 16384 }, (_, n) => `"k${n}":"v${n}"`).join(',')}}`
+  const start = filler.length + 2
+  const caret = start + (json.length >> 1)
+  const syntax = formattedSyntax({ slice: 1 })
+  // The characters a read passes to the inline parser.
+  const read = (line) => {
+    const state = EditorState.create({
+      doc: `${filler}\n\n${line}`,
+      selection: { anchor: caret },
+      extensions: syntax.extension,
+    })
+    const inline = MarkdownParser.prototype.parseInline
+    let parsed = 0
+    MarkdownParser.prototype.parseInline = function (text, offset) {
+      parsed += text.length
+      return inline.call(this, text, offset)
+    }
+    try {
+      return { state, tree: syntax.editTree(state), parsed }
+    } finally {
+      MarkdownParser.prototype.parseInline = inline
+    }
+  }
+  const { parsed } = read(json)
+  assert.ok(parsed > 0 && parsed < 16384, `${parsed} characters read inline`)
+  // A code span the window cuts inside the line is read whole, so its
+  // closing backtick does not open another with a later one.
+  const ticked = [...json]
+  for (const pos of [-6000, -1000, 1000]) ticked[caret - start + pos] = '`'
+  const { state, tree } = read(ticked.join(''))
+  const next = state.update(blockBreak(state, tree)).state
+  assert.equal(
+    next.sliceDoc(caret - 3, caret + 5),
+    `${state.sliceDoc(caret - 3, caret)}\n\n${state.sliceDoc(caret, caret + 3)}`,
   )
 })

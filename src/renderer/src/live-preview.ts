@@ -54,7 +54,6 @@ import {
   indent,
   lineBreak,
   lineInput,
-  tabSyntax,
 } from './formatted-commands'
 import {
   blockMarkedNodes,
@@ -2336,7 +2335,7 @@ export function livePreview(
       return true
     }
   const tab = (outdent: boolean) => (view: EditorView) => {
-    const tree = tabSyntax(view.state, syntax.tree(view.state))
+    const tree = syntax.editTree(view.state)
     let item = false
     for (
       let node: SyntaxNode | null = tree.resolveInner(
@@ -2503,27 +2502,41 @@ export function livePreview(
       keymap.of([
         {
           key: 'Enter',
-          run: run((view) => blockBreak(view.state, syntax.tree(view.state))),
+          run: run((view) =>
+            blockBreak(view.state, syntax.editTree(view.state)),
+          ),
         },
         {
           key: 'Shift-Enter',
-          run: run((view) => lineBreak(view.state, syntax.tree(view.state))),
+          run: run((view) =>
+            lineBreak(view.state, syntax.editTree(view.state)),
+          ),
         },
         {
           key: 'Backspace',
           run: run((view) =>
-            deleteBackward(view.state, syntax.tree(view.state), hidden(view)),
+            deleteBackward(
+              view.state,
+              () => syntax.editTree(view.state),
+              hidden(view),
+            ),
           ),
         },
         {
           key: 'Delete',
           run: run((view) =>
-            deleteForward(view.state, syntax.tree(view.state), hidden(view)),
+            deleteForward(
+              view.state,
+              () => syntax.editTree(view.state),
+              hidden(view),
+            ),
           ),
         },
         {
           key: 'Mod-Enter',
-          run: run((view) => exitBlock(view.state, syntax.tree(view.state))),
+          run: run((view) =>
+            exitBlock(view.state, syntax.editTree(view.state)),
+          ),
         },
         { key: 'Tab', run: tab(false), shift: tab(true) },
         { key: 'ArrowLeft', run: arrow(false) },

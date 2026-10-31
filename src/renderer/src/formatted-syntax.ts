@@ -6,9 +6,11 @@ import {
   MapMode,
   StateEffect,
   StateField,
+  Text,
 } from '@codemirror/state'
-import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import {
+  type ChangedRange,
   type Input,
   IterMode,
   NodeProp,
@@ -18,9 +20,10 @@ import {
 import {
   type MarkdownConfig,
   type MarkdownExtension,
-  type MarkdownParser,
+  MarkdownParser,
   parseCode,
 } from '@lezer/markdown'
+import { readSeams } from '../../addons/math/seams.ts'
 import type { BoundaryReceive } from '../../shared/document-worker-protocol.ts'
 import { formattedMarkdownParser } from '../../shared/formatted-markdown.ts'
 import {
@@ -865,6 +868,13 @@ export type FormattedSyntax = {
   tree: (state: EditorState) => Tree
   /** The same configured grammar for a bounded source-block proof. */
   parser: (state: EditorState) => MarkdownParser
+  /**
+   * The syntax edit keys read at the selection: the view's tree, or for a
+   * selection or caret in text not parsed yet, as in a large note just
+   * opened, the note's blocks, with inline syntax only in the leaf blocks at
+   * the selection's ends. A list item keeps the children below it.
+   */
+  editTree: (state: EditorState) => Tree
   /** Complete only missing syntax for the selected range. */
   selectionTree: (
     state: EditorState,
@@ -881,12 +891,65 @@ export type FormattedSyntax = {
   config: (state: EditorState) => BoundaryConfig | null
 }
 
+/**
+ * What a read of `b` cannot take from a read of `a`: the text from the first
+ * to the last chunk that differs, and the selection's ends `from` and `to` in
+ * `b`, whose leaf blocks are read again for their inline syntax.
+ */
+function edited(a: Text, b: Text, from: number, to: number) {
+  const short = Math.min(a.length, b.length)
+  let start = 0
+  for (const i = a.iter(), j = b.iter(); start < short; ) {
+    if (i.next().done || j.next().done || i.value !== j.value) break
+    start += i.value.length
+  }
+  let end = 0
+  for (const i = a.iter(-1), j = b.iter(-1); start + end < short; ) {
+    if (i.next().done || j.next().done || i.value !== j.value) break
+    end += i.value.length
+  }
+  end = Math.min(end, short - start)
+  const ranges: ChangedRange[] = []
+  if (start < a.length - end || start < b.length - end)
+    ranges.push({
+      fromA: start,
+      toA: a.length - end,
+      fromB: start,
+      toB: b.length - end,
+    })
+  for (const pos of new Set([from, to])) {
+    const shift = pos > start ? b.length - a.length : 0
+    if (pos <= start || pos >= b.length - end)
+      ranges.push({
+        fromA: pos - shift,
+        toA: pos - shift,
+        fromB: pos,
+        toB: pos,
+      })
+  }
+  // An end at the start of the changed text comes before it, or the text
+  // after the change would map back without its offset.
+  return ranges.sort(
+    (x, y) => x.fromB - y.fromB || x.toB - y.toB || x.toA - y.toA,
+  )
+}
+
 /** Chunked Markdown syntax for one formatted editor configuration. */
 export function formattedSyntax(
   options: FormattedSyntaxOptions = {},
 ): FormattedSyntax {
   const syntax = syntaxField(options)
   const { field } = syntax
+  /** The last edit read of text the view had not parsed, for the next key. */
+  let read: {
+    grammar: ChunkedMarkdownParser
+    doc: Text
+    prefix: number
+    from: number
+    to: number
+    text: Text
+    tree: Tree
+  } | null = null
   return {
     extension: [
       field,
@@ -897,9 +960,111 @@ export function formattedSyntax(
       ),
       driver(syntax, options),
       keepRead,
+      // The kept read holds the whole note's blocks; it goes once the view's
+      // tree covers the selection.
+      EditorView.updateListener.of(({ state }) => {
+        const { from, to } = state.selection.main
+        if (
+          read &&
+          !uncovered(
+            state.field(field).tree,
+            Math.max(0, from - 1),
+            Math.min(state.doc.length, to + 1),
+          )
+        )
+          read = null
+      }),
     ],
     tree: (state) => state.field(field).tree,
     parser: (state) => syntax.chunkedFor(state).full,
+    editTree: (state) => {
+      const { tree, prefix } = state.field(field)
+      const { from, to } = state.selection.main
+      const { doc } = state
+      if (
+        !uncovered(tree, Math.max(0, from - 1), Math.min(doc.length, to + 1))
+      ) {
+        read = null
+        return tree
+      }
+      const grammar = syntax.textFor(state)
+      if (
+        read?.grammar === grammar &&
+        read.doc === doc &&
+        read.prefix === prefix &&
+        read.from === from &&
+        read.to === to
+      )
+        return read.tree
+      const parseInline = MarkdownParser.prototype.parseInline
+      const { chunkSize, giantBlock } = grammar
+      const parser = Object.assign(grammar.full.configure({}), {
+        // Inline syntax only in the leaf blocks at the selection's ends.
+        parseInline(this: MarkdownParser, text: string, offset: number) {
+          const ends = [from, to].filter(
+            (pos) => offset <= pos && pos <= offset + text.length,
+          )
+          if (!ends.length) return []
+          if (text.length <= giantBlock)
+            return parseInline.call(this, text, offset)
+          // A giant leaf, such as a pasted log, reads it only in whole lines
+          // around the ends, as the view reads giant blocks in windows. A
+          // line longer than a chunk, such as minified code, is cut.
+          const windows: [number, number][] = []
+          const seen = { reach: 0 }
+          // The code span or formula holding `to`, reading on from `from`.
+          const pair = (from: number, to: number) =>
+            readSeams(text, offset, offset + from, offset + to, null, seen)
+          const lineStart = (at: number) => {
+            const start = text.lastIndexOf('\n', at) + 1
+            return at - start > chunkSize ? at : start
+          }
+          const lineEnd = (at: number) => {
+            const next = text.indexOf('\n', at)
+            const end = next < 0 ? text.length : next
+            return end - at > chunkSize ? at : end
+          }
+          for (const pos of ends) {
+            const at = pos - offset
+            let start = lineStart(Math.max(0, at - chunkSize))
+            let end = lineEnd(Math.min(text.length, at + chunkSize))
+            // A code span or formula a window cuts is read whole, as the
+            // view's windows take it, so its markers pair as in the paragraph.
+            for (let cut = pair(0, start); cut; cut = pair(0, start))
+              start = lineStart(cut.from - offset)
+            for (let cut = pair(start, end); cut; cut = pair(start, end))
+              end = lineEnd(cut.to - offset)
+            const last = windows.at(-1)
+            if (last && start <= last[1]) last[1] = Math.max(last[1], end)
+            else windows.push([start, end])
+          }
+          return windows.flatMap(([start, end]) =>
+            parseInline.call(this, text.slice(start, end), offset + start),
+          )
+        },
+      })
+      // A prefix that is not Markdown, such as frontmatter, reads as blank lines.
+      const text = prefix
+        ? doc.replace(
+            0,
+            prefix,
+            Text.of(
+              doc.sliceString(0, prefix).replace(/[^\n]/g, ' ').split('\n'),
+            ),
+          )
+        : doc
+      // The last read's blocks are kept where the text did not change.
+      const fragments =
+        read?.grammar === grammar
+          ? TreeFragment.applyChanges(
+              TreeFragment.addTree(read.tree),
+              edited(read.text, text, from, to),
+            )
+          : []
+      const result = parser.parse(new DocInput(text), fragments)
+      read = { grammar, doc, prefix, from, to, text, tree: result }
+      return result
+    },
     selectionTree: (state, from, to, budget) => {
       const value = state.field(field)
       if (from === to || !uncovered(value.tree, from, to)) return value.tree

@@ -1,4 +1,3 @@
-import { DocInput } from '@codemirror/language'
 import {
   countColumn,
   EditorSelection,
@@ -18,10 +17,7 @@ import {
   markdownLiteral as literal,
 } from '../../shared/markdown-literal.ts'
 import { uncovered } from './chunked-markdown.ts'
-import {
-  formattedBlockParser,
-  formattedFormatting,
-} from './formatted-contributions.ts'
+import { formattedFormatting } from './formatted-contributions.ts'
 import { codeIndentLines, detectIndentUnit, tabIndent } from './indentation.ts'
 import { sourceWhitespace } from './source-whitespace.ts'
 
@@ -1630,10 +1626,14 @@ function contentStart(line: Line, hidden: Hidden) {
   return start
 }
 
+/** The syntax a key reads, or how to read it once a case needs it. */
+const syntaxOf = (tree: Tree | (() => Tree)) =>
+  typeof tree === 'function' ? tree() : tree
+
 /** Backspace in formatted text. Null leaves the key to the default command. */
 export function deleteBackward(
   state: EditorState,
-  tree: Tree,
+  read: Tree | (() => Tree),
   hidden: Hidden,
 ): TransactionSpec | null {
   const range = state.selection.main
@@ -1656,6 +1656,7 @@ export function deleteBackward(
     return remove(previous.to, line.from, previous.to)
   }
   if (pos === start) {
+    const tree = syntaxOf(read)
     const heading = around(tree, pos, [
       'ATXHeading1',
       'ATXHeading2',
@@ -1744,7 +1745,7 @@ export function deleteBackward(
 /** Delete at the end of a text block joins the next block, the mirror of Backspace. */
 export function deleteForward(
   state: EditorState,
-  tree: Tree,
+  read: Tree | (() => Tree),
   hidden: Hidden,
 ): TransactionSpec | null {
   const range = state.selection.main
@@ -1757,7 +1758,7 @@ export function deleteForward(
   if (
     pos === line.to &&
     line.number < state.doc.lines &&
-    delimiterLine(state, tree, state.doc.line(line.number + 1))
+    delimiterLine(state, syntaxOf(read), state.doc.line(line.number + 1))
   )
     return { selection: range }
   if (pos !== line.to || line.number === state.doc.lines) {
@@ -1796,7 +1797,7 @@ export function deleteForward(
     next = state.doc.line(next.number + 1)
   if (blank(next.text) || blank(line.text)) return null
   if (
-    around(tree, next.from, [
+    around(syntaxOf(read), next.from, [
       'FencedCode',
       'CodeBlock',
       'HorizontalRule',
@@ -1811,20 +1812,6 @@ export function deleteForward(
     selection: EditorSelection.cursor(pos),
     userEvent: 'delete.forward',
   }
-}
-
-/**
- * The syntax Tab reads at the selection. A selection or caret in text the
- * view has not parsed yet, as in a large note just opened, reads the note's
- * blocks with the block grammar alone, so a list item keeps the children
- * below it.
- */
-export function tabSyntax(state: EditorState, tree: Tree) {
-  const { from, to } = state.selection.main
-  const { length } = state.doc
-  if (!uncovered(tree, Math.max(0, from - 1), Math.min(length, to + 1)))
-    return tree
-  return state.facet(formattedBlockParser)(state).parse(new DocInput(state.doc))
 }
 
 /**

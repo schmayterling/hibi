@@ -55,14 +55,17 @@ const patches = [
   // and could keep itself, as its height was most of the line's, so the end of
   // the line could not be scrolled to. Such lines get no gap once measuring
   // finds that the drawn line does not wrap; a gap drawn for one from an
-  // estimate goes at that measure.
+  // estimate goes at that measure. Between measures, a line measured under 8
+  // rows high keeps none either: wrapped, a line this long is dozens of rows,
+  // and a gap there would only be dropped again at the next measure, which
+  // draws the whole line anew on every edit while it is far off screen.
   [
     `            if (structure.total < doubleMargin)
                 return;
 `,
     `            if (structure.total < doubleMargin)
                 return;
-            if (wrapping && mayMeasure && this.isUnwrapped(line, mayMeasure))
+            if (wrapping && (mayMeasure ? this.isUnwrapped(line, mayMeasure) : line.height < 8 * this.heightOracle.lineHeight))
                 return;
 `,
   ],

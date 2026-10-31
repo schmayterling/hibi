@@ -289,7 +289,9 @@ test('draws at once share one download, and a refresh downloads again without va
   assert.equal(host.requests.length, 3)
 })
 
-test('a host trickling bytes holds back neither the kept copy nor a refresh, which stops its check', async (t) => {
+test('a host trickling bytes holds back neither the kept copy nor a refresh, which stops its check', {
+  timeout: 30_000,
+}, async (t) => {
   const host = await setup(t)
   assert.deepEqual(await host.draw(), drawn('first'))
   await host.age(25)
@@ -313,12 +315,24 @@ test('a host trickling bytes holds back neither the kept copy nor a refresh, whi
     Promise.race([work, delay(10_000).then(() => 'still waiting')])
   assert.deepEqual(await settled(host.draw()), drawn('first'))
   assert.equal(host.requests.length, 2)
-  // A draw that comes later, as after a reload, shares the check's deadline
-  // and shows the copy at once.
-  const later = performance.now()
-  assert.deepEqual(await settled(host.draw()), drawn('first'))
-  const waited = performance.now() - later
-  assert.ok(waited < 2000, `waited ${waited} ms`)
+  // A draw that comes later, as after a reload, shares the check's deadline,
+  // which has passed, so it shows the copy at once. With time stopped, only
+  // timers already due run: a deadline of its own would never come, and the
+  // draw could only end with the check.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let later
+  let checking
+  host.draw().then((drawing) => {
+    later = drawing
+    checking = !host.requests[1].init.signal.aborted
+  })
+  while (!later) {
+    t.mock.timers.tick(0)
+    await new Promise(setImmediate)
+  }
+  t.mock.timers.reset()
+  assert.deepEqual(later, drawn('first'))
+  assert.equal(checking, true, 'the draw waited for the check to end')
   assert.equal(host.requests.length, 2)
   host.answer = () =>
     new Response(png('second'), { headers: { 'Content-Type': 'image/png' } })
@@ -348,6 +362,46 @@ test("a refresh during an image's first download keeps that download, so its dra
   await refreshed
   assert.equal(host.requests.length, 1)
   assert.deepEqual(await host.draw(), drawn('first'))
+})
+
+test("a refresh restarts an image's first download that a host has held past the deadline", {
+  timeout: 30_000,
+}, async (t) => {
+  const host = await setup(t)
+  // A byte at a time, so the first download never ends on its own.
+  let ended = false
+  t.after(() => {
+    ended = true
+  })
+  host.answer = () =>
+    new Response(
+      new ReadableStream({
+        async pull(controller) {
+          await delay(200)
+          if (ended) controller.close()
+          else controller.enqueue(new Uint8Array([0]))
+        },
+      }),
+      { headers: { 'Content-Type': 'image/png' } },
+    )
+  const draw = host.draw()
+  await waitFor(() => host.requests.length === 1)
+  // Past the deadline, without waiting for it.
+  const now = Date.now()
+  t.mock.method(Date, 'now', () => now + 4000)
+  host.answer = () =>
+    new Response(png('second'), { headers: { 'Content-Type': 'image/png' } })
+  assert.equal(
+    await Promise.race([
+      refreshRemoteImage(SOURCE, host.place, host.fetch),
+      delay(10_000).then(() => 'still waiting'),
+    ]),
+    undefined,
+  )
+  assert.ok(host.requests[0].init.signal.aborted)
+  // The stopped download's draw had nothing to show; the next has the refresh.
+  assert.equal((await draw).status, 404)
+  assert.deepEqual(await host.draw(), drawn('second'))
 })
 
 test('a full cache folder deletes the images checked longest ago', async (t) => {

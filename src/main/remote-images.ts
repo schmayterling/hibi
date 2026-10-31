@@ -287,9 +287,14 @@ function check(
   const result: Promise<Kept | null> = (async () => {
     if (running) {
       // An image's first download is already its newest copy, and stopping
-      // it would leave its draws with nothing: a refresh waits for it. Any
-      // other running check, such as one a slow host holds, makes way.
-      if (!(await readKept(path, url.href))) return running.result
+      // it would leave its draws with nothing: a refresh waits for it while
+      // it is young. One a host has held longer, like any other running
+      // check, makes way.
+      if (
+        !(await readKept(path, url.href)) &&
+        Date.now() - running.started < STALE_MS
+      )
+        return running.result
       running.stop.abort()
       await running.result
     }

@@ -1,7 +1,6 @@
 type ClipboardCopy = { html: string; text: string; trusted: boolean }
 let lastCopied: ClipboardCopy | null = null
 const snapshots = new WeakMap<object, ClipboardCopy>()
-export const trustedClipboardElements = new WeakSet<Element>()
 
 /** Strip native clipboard envelopes without rewriting the fragment. */
 export function clipboardHtml(html: string) {

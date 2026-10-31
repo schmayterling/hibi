@@ -2,7 +2,7 @@
   "id": "dictionary",
   "name": "Dictionary and thesaurus",
   "description": "Look up definitions and synonyms in English, Chinese, Cantonese, Japanese, Filipino, French, and German. Words you look up are sent to Wiktionary and Datamuse.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.0",
   "authors": [

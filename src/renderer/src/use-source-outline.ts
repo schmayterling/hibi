@@ -6,18 +6,10 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
-import type {
-  MarkdownExtension,
-  MarkdownFlavor,
-  RichExtension,
-} from '../../addons/api'
-import {
-  builtInFlavors,
-  builtInRichAttachments,
-} from '../../shared/built-in-grammar'
+import type { MarkdownExtension, MarkdownFlavor } from '../../addons/api'
 import { addonRegistry } from './addon-registry'
 import { documentRuntime } from './document-runtime'
-import { flavors as flavorRegistry, type RegisteredFlavor } from './flavors'
+import type { RegisteredFlavor } from './flavors'
 import { markdownSyntax } from './markdown-syntax'
 import type { OutlineHeading } from './OutlineSidebar'
 import type {
@@ -34,69 +26,8 @@ import {
   sourcePosition,
 } from './source-view'
 
-// Addons whose syntax features the built-in grammar models.
-const grammarOwners = new Set(
-  [...builtInFlavors.values()].map(({ owner }) => owner),
-)
-
-/** Built-in grammar options, or null while any addon grammar or rich attachment is active. */
-export function builtInMarkdownSyntax(
-  flavors: readonly MarkdownFlavor[],
-  markdownExtensions: readonly MarkdownExtension[],
-  richExtensions: readonly RichExtension[],
-) {
-  if (
-    !richExtensions.every(
-      (extension) =>
-        'addonId' in extension &&
-        typeof extension.addonId === 'string' &&
-        builtInRichAttachments.get(extension.id) === extension.addonId &&
-        addonRegistry.origin(extension.addonId) === 'built-in',
-    ) ||
-    flavors.some((flavor) => {
-      const entry = flavorRegistry.snapshot().find((entry) => entry === flavor)
-      return (
-        !entry ||
-        builtInFlavors.get(entry.id)?.owner !== entry.addonId ||
-        addonRegistry.origin(entry.addonId) !== 'built-in'
-      )
-    }) ||
-    markdownExtensions.some(
-      (extension) =>
-        extension.id !== 'frontmatter.metadata' ||
-        !('addonId' in extension) ||
-        extension.addonId !== 'frontmatter' ||
-        addonRegistry.origin('frontmatter') !== 'built-in',
-    ) ||
-    markdownSyntax
-      .snapshot()
-      .some(
-        (feature) =>
-          !markdownSyntax.isCore(feature.id) &&
-          feature.scope !== 'document' &&
-          (!grammarOwners.has(feature.owner) ||
-            addonRegistry.origin(feature.owner) !== 'built-in'),
-      )
-  )
-    return null
-  return {
-    gfm: Object.assign(
-      { gfm: false },
-      ...flavors.map((flavor) => flavor.markedOptions),
-    ).gfm,
-    alerts: flavors.some((flavor) => flavor.id === 'markdown.github'),
-    textExtras: flavors.some(
-      (flavor) => flavor.id === 'text-extras.text-extras',
-    ),
-    math: flavors.some((flavor) => flavor.id === 'math.latex'),
-    frontmatter: markdownExtensions.some(
-      (extension) => extension.id === 'frontmatter.metadata',
-    ),
-  }
-}
-
 /** Names the addons whose block syntax the outline cannot follow, and what to do. */
-function blockedOutline(owners: readonly string[], legacy: boolean) {
+function blockedOutline(owners: readonly string[]) {
   const names = new Intl.ListFormat('en', { type: 'conjunction' }).format(
     owners.map(
       (id) =>
@@ -107,21 +38,15 @@ function blockedOutline(owners: readonly string[], legacy: boolean) {
   return {
     message:
       owners.length === 1
-        ? legacy
-          ? `The outline can’t find headings in source view while ${names} is on. Switch to visual mode to see them, or turn off ${names} in Settings → Addon Manager.`
-          : `The outline can’t find headings while ${names} is on. Turn off ${names} in Settings → Addon Manager to see them.`
-        : legacy
-          ? `The outline can’t find headings in source view while ${names} are on. Switch to visual mode to see them, or turn off these addons in Settings → Addon Manager.`
-          : `The outline can’t find headings while ${names} are on. Turn off these addons in Settings → Addon Manager to see them.`,
+        ? `The outline can’t find headings while ${names} is on. Turn off ${names} in Settings → Addon Manager to see them.`
+        : `The outline can’t find headings while ${names} are on. Turn off these addons in Settings → Addon Manager to see them.`,
   }.message
 }
 
 /**
  * Reads a note's headings from its source session in idle slices while
  * `active`. `view` is the CodeMirror pane whose caret selects the active
- * heading and which `reveal` moves to a heading. `legacy` is set where the
- * visual editor reads Marked and Tiptap syntax; the outline refuses block
- * syntax only that editor reads. Without `referenceSyntax`, the source view
+ * heading and which `reveal` moves to a heading. Without `referenceSyntax`, the source view
  * resolves no references and labels keep reference links as text.
  */
 export function useSourceOutline({
@@ -132,7 +57,6 @@ export function useSourceOutline({
   flavors,
   markdownExtensions,
   referenceSyntax,
-  legacy,
   view: currentView,
   onOutline,
   onOutlineUnavailable,
@@ -145,7 +69,6 @@ export function useSourceOutline({
   flavors: readonly MarkdownFlavor[]
   markdownExtensions: readonly MarkdownExtension[]
   referenceSyntax: SourceReferenceSyntax | undefined
-  legacy: boolean
   view: () => EditorView | null | undefined
   onOutline: (headings: OutlineHeading[]) => void
   onOutlineUnavailable: ((reason: string | null) => void) | undefined
@@ -188,9 +111,7 @@ export function useSourceOutline({
       },
       (error) => {
         if (stopped) return
-        onOutlineUnavailable?.(
-          'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
-        )
+        onOutlineUnavailable?.('The outline could not read this note’s syntax.')
         console.error('Source outline failed:', error)
       },
     )
@@ -205,7 +126,7 @@ export function useSourceOutline({
       const grammar = sourceOutlineGrammar(
           flavors as readonly RegisteredFlavor[],
           markdownExtensions,
-          { origin: addonRegistry.origin, legacy },
+          { origin: addonRegistry.origin },
         ),
         outlineSyntax = grammar.options,
         renderLabel = createOutlineLabelRenderer(grammar.labels)
@@ -215,8 +136,8 @@ export function useSourceOutline({
         onActiveOutline(null)
         onOutlineUnavailable?.(
           grammar.blocked.length
-            ? blockedOutline(grammar.blocked, legacy)
-            : 'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
+            ? blockedOutline(grammar.blocked)
+            : 'The outline could not read this note’s syntax.',
         )
         return () => {}
       }
@@ -240,6 +161,7 @@ export function useSourceOutline({
       let disposed = false,
         timer: ReturnType<typeof setTimeout> | null = null,
         idle: number | null = null,
+        continued = 0,
         work: ReturnType<SourceOutlineModel['read']> | null = null,
         referenceValue: SourceOutlineInput,
         referenceAbort = new AbortController(),
@@ -268,13 +190,33 @@ export function useSourceOutline({
         if (timer !== null) clearTimeout(timer)
         if (idle !== null) cancelIdleCallback(idle)
         timer = idle = null
+        continued++
         work?.return(undefined as never)
         work = null
       }
+      // When the read last waited for the page to be idle.
+      let idled = 0
       const queue = () => {
+        const start = () => {
+          idled = performance.now()
+          read()
+        }
         if (typeof requestIdleCallback === 'function')
-          idle = requestIdleCallback(read, { timeout: 16 })
-        else timer = setTimeout(read, 16)
+          idle = requestIdleCallback(start, { timeout: 16 })
+        else timer = setTimeout(start, 16)
+      }
+      // A started read continues on the next task. Nested timers wait at least
+      // 4 ms and idle callbacks up to a frame, which left large outlines idle
+      // after most of their 2 ms slices, labels and references. Every 50 ms it
+      // waits for an idle period once, so idle callbacks queued meanwhile run.
+      const continuation = new MessageChannel()
+      continuation.port1.onmessage = (event: MessageEvent<number>) => {
+        if (event.data === continued) read()
+      }
+      const resume = () => {
+        if (performance.now() - idled < 50)
+          continuation.port2.postMessage(++continued)
+        else queue()
       }
       const failed = (error: unknown) => {
         cancel()
@@ -282,9 +224,7 @@ export function useSourceOutline({
         sourceOutline.current = null
         onOutline([])
         onActiveOutline(null)
-        onOutlineUnavailable?.(
-          'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
-        )
+        onOutlineUnavailable?.('The outline could not read this note’s syntax.')
         console.error('Source outline failed:', error)
       }
       const read = () => {
@@ -333,7 +273,7 @@ export function useSourceOutline({
                   )
                     return
                   referenceValue = result
-                  queue()
+                  resume()
                 },
                 failed,
               )
@@ -369,14 +309,12 @@ export function useSourceOutline({
                   return
                 }
                 referenceValue = result.value
-                queue()
+                resume()
               })
               return
             }
           } while (performance.now() - started < 2)
-          // Continue a started read on the next task; waiting for idle between
-          // every short slice makes large outlines stall on busy pages.
-          timer = setTimeout(read, 0)
+          resume()
         } catch (error) {
           failed(error)
         }
@@ -405,6 +343,7 @@ export function useSourceOutline({
       return () => {
         disposed = true
         cancel()
+        continuation.port1.close()
         sourceOutline.current = null
         reportActive.current = () => {}
         removeOperations()
@@ -425,7 +364,6 @@ export function useSourceOutline({
     flavors,
     markdownExtensions,
     referenceSyntax,
-    legacy,
     syntaxVersion,
     onOutline,
     onOutlineUnavailable,

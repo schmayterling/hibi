@@ -2,15 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   stopElectronTree,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 test('native module worker loads metadata lazily, shares find, and releases parser owners', {
@@ -40,7 +38,7 @@ test('native module worker loads metadata lazily, shares find, and releases pars
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   await waitForDocumentEditor(app, page)
   await replaceRichText(
@@ -266,13 +264,14 @@ test('a cold reference lookup resolves the outline of a 50 MiB source note', {
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await page.setViewportSize({ width: 1100, height: 800 })
-  await waitForDocumentEditor(app, page)
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   await clickMenu(app, 'Open…')
+  // The formatted view shows a note this large.
   await page
-    .getByRole('textbox', { name: 'Markdown editor', exact: true })
+    .locator('.rich-pane .cm-content', { hasText: 'plain text body' })
     .waitFor()
   await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
   await page.getByRole('button', { name: /^right sidebar views$/i }).click()

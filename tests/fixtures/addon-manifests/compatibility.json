@@ -1,12 +1,17 @@
 [
   {
-    "name": "api 1",
+    "name": "api 1 asks for an update",
     "fields": {
       "apiVersion": 1
     },
-    "expected": {
-      "apiVersion": 3
-    }
+    "error": "an update to addon API 3"
+  },
+  {
+    "name": "api 2 asks for an update",
+    "fields": {
+      "apiVersion": 2
+    },
+    "error": "an update to addon API 3"
   },
   {
     "name": "omitted optional metadata",

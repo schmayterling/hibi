@@ -13,10 +13,13 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
+import { frozenSnapshot, overlayScrollbars } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// What the formatted view drew while it matched the removed rich view.
+const check = frozenSnapshot('formatted-tags')
 
 const parityNote = `# Tags parity #heading
 
@@ -61,9 +64,9 @@ a hard break
 `
 
 /**
- * The rich view's text model decodes escapes and entities and keeps inline
- * HTML as raw chips; the formatted view finds tags in the source text, as
- * the workspace index does.
+ * The removed rich view's text model decoded escapes and entities and kept
+ * inline HTML as raw chips; the formatted view finds tags in the source text,
+ * as the workspace index does.
  */
 const differencesNote = `# Differences
 
@@ -102,6 +105,13 @@ const applyPalette = (scheme) =>
     style.textContent = css
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, palette(scheme))
 
 const tree = () => page.getByRole('tree', { name: /workspace files/i })
@@ -138,23 +148,6 @@ async function open(name) {
     async (name) => (await window.hibi.getDocument()).name === name,
     name,
   )
-}
-
-/** Reload the window with or without the formatted engine switch, unless it is set so. */
-async function engine(codemirror) {
-  if (
-    (await page.evaluate(
-      () => localStorage.getItem('hibi:formatted-engine') !== 'tiptap',
-    )) === codemirror
-  )
-    return
-  await page.evaluate((codemirror) => {
-    if (codemirror) localStorage.setItem('hibi:formatted-engine', 'codemirror')
-    else localStorage.setItem('hibi:formatted-engine', 'tiptap')
-  }, codemirror)
-  await page.reload()
-  await waitForDocumentEditor(app, page)
-  if (!(await tree().count())) await openWorkspace()
 }
 
 /** Run a palette command by its label. */
@@ -216,7 +209,11 @@ before(
     ])
       await writeFile(join(folder, 'notes', name), tagged(count))
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     // Closing with edited notes answers the unsaved-changes prompt.
     await app.evaluate(({ dialog }) => {
@@ -230,10 +227,10 @@ before(
     await page
       .locator('style[data-addon-style="text-extras.text-extras"]')
       .waitFor({ state: 'attached' })
-    // Tall enough that every line of the parity note renders.
-    await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].setContentSize(1100, 2000),
-    )
+    // Tall enough that every line of the parity note renders. macOS keeps a
+    // shown window, as hosted runners show them, within the screen; the
+    // page's own viewport can be taller.
+    await page.setViewportSize({ width: 1100, height: 2000 })
     await openWorkspace()
   },
   { timeout: 90000 },
@@ -247,35 +244,11 @@ after(
   { timeout: 30000 },
 )
 
-test('tags render in the formatted view as in the rich view, in light and dark', {
+test('tags render in the formatted view with the rich view’s recorded styles and sizes, in light and dark', {
   timeout: 180000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page)
   const expected = noteTags(parityNote)
-  await engine(false)
-  await open('parity.md')
-  await page.waitForFunction(
-    (count) => document.querySelectorAll('.tiptap .hibi-tag').length === count,
-    expected.length,
-  )
-  const rich = {}
-  for (const scheme of ['hibi-light', 'hibi-dark']) {
-    await applyPalette(scheme)
-    rich[scheme] = await sampleTags('.tiptap .hibi-tag')
-    await page
-      .locator('.rich-pane')
-      .screenshot({ path: `test-results/formatted-tags-rich-${scheme}.png` })
-  }
-  // Small text renders as small text in both views, its tags inside it, also
-  // where a listed one holds only a tag.
-  const small = ['small', 'smalllist', 'smallonly', 'smallquote']
-  assert.deepEqual(await smallTags('.tiptap .hibi-tag'), small)
-  await open('differences.md')
-  await page.locator('.tiptap h1', { hasText: 'Differences' }).waitFor()
-  const richDifferences = (await sampleTags('.tiptap .hibi-tag')).map(
-    ({ tag }) => tag,
-  )
-
-  await engine(true)
   await open('parity.md')
   await page.waitForFunction(
     (count) =>
@@ -283,43 +256,44 @@ test('tags render in the formatted view as in the rich view, in light and dark',
         .length === count,
     expected.length,
   )
-  assert.deepEqual(
-    await smallTags('.rich-pane .hibi-formatted .hibi-tag'),
-    small,
-  )
+  // Small text renders as small text, its tags inside it, also where a listed
+  // one holds only a tag.
+  assert.deepEqual(await smallTags('.rich-pane .hibi-formatted .hibi-tag'), [
+    'small',
+    'smalllist',
+    'smallonly',
+    'smallquote',
+  ])
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
     await page.evaluate(
       () => new Promise((done) => requestAnimationFrame(() => done())),
     )
     const formatted = await sampleTags('.rich-pane .hibi-formatted .hibi-tag')
-    await page.locator('.rich-pane').screenshot({
-      path: `test-results/formatted-tags-formatted-${scheme}.png`,
-    })
-    // The same tags, in the same order, as the rich view and the workspace index.
-    assert.deepEqual(
-      formatted.map(({ tag }) => tag),
-      rich[scheme].map(({ tag }) => tag),
-    )
+    // The tags the workspace index finds, in the rich view's order, with its
+    // attributes, computed styles and sizes.
     assert.deepEqual(
       [...new Set(formatted.map(({ tag }) => tag))].sort(),
       expected,
     )
-    for (const [index, tag] of formatted.entries()) {
-      const { width, height, ...style } = rich[scheme][index]
-      const { width: formattedWidth, height: formattedHeight, ...shown } = tag
-      assert.deepEqual(shown, style, `${scheme} ${tag.text}`)
-      assert.ok(
-        Math.abs(formattedWidth - width) <= 0.5 &&
-          Math.abs(formattedHeight - height) <= 0.5,
-        `${scheme} ${tag.text}: ${formattedWidth}x${formattedHeight} vs ${width}x${height}`,
-      )
-    }
+    check(
+      `parity ${scheme} tags`,
+      formatted.map(({ width, height, ...style }) => style),
+    )
+    check(
+      `parity ${scheme} sizes`,
+      // Hibi's fonts have no CJK glyphs: each system's fallback font sets
+      // that tag's width, so only its height is compared.
+      formatted.map(({ tag, width, height }) =>
+        tag === '日本語' ? { height } : { width, height },
+      ),
+      { tolerance: 0.5 },
+    )
   }
 
-  // Where the rich view decodes escapes and entities or keeps inline HTML
-  // as a chip, the formatted view shows the text as written and its tags
-  // are the ones the workspace index finds.
+  // Where the rich view decoded escapes and entities or kept inline HTML as
+  // a chip, the formatted view shows the text as written and its tags are the
+  // ones the workspace index finds.
   await open('differences.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Differences' })
@@ -328,14 +302,6 @@ test('tags render in the formatted view as in the rich view, in light and dark',
   const formattedDifferences = (
     await sampleTags('.rich-pane .hibi-formatted .hibi-tag')
   ).map(({ tag }) => tag)
-  console.log(
-    JSON.stringify({
-      rich: richDifferences,
-      formatted: formattedDifferences,
-      index: noteTags(differencesNote),
-    }),
-  )
-  assert.deepEqual(richDifferences, ['escaped', 'foo_bar', 'numeric', 'nbsp'])
   assert.deepEqual(formattedDifferences, ['afterescape', 'foo', 'html'])
   assert.deepEqual(noteTags(differencesNote), [
     'afterescape',
@@ -348,7 +314,6 @@ test('tags render in the formatted view as in the rich view, in light and dark',
 test('shift-click on a tag browses it, also in a table cell, and a plain click places the caret', {
   timeout: 90000,
 }, async () => {
-  await engine(true)
   await open('parity.md')
   await page.locator('.rich-pane .hibi-tag[data-tag="alpha"]').waitFor()
   const sidebar = page.getByRole('complementary', {
@@ -390,7 +355,6 @@ test('shift-click on a tag browses it, also in a table cell, and a plain click p
 test('active table tag shift-click survives selection, typing and undo', {
   timeout: 90000,
 }, async () => {
-  await engine(true)
   await open('parity.md')
   const original = await page.evaluate(
     async () => (await window.hibi.getDocument()).markdown,
@@ -438,7 +402,6 @@ test('long names resolve off the input path and keep their complete tag identity
   const name = 'ΟΣ'.repeat(16000)
   const markdown = 'prefix #' + name + ' suffix'
   await writeFile(join(folder, 'notes', 'long-name.md'), markdown)
-  await engine(true)
   await page.evaluate(() => {
     const original = String.prototype.matchAll
     window.longTagScan = {
@@ -492,7 +455,6 @@ test('table tags follow live bold syntax changes in static and active cells', {
     join(folder, 'notes', 'literal-tags.md'),
     '**#hidden** #plain\n\n| h |\n| - |\n| **#hidden** #plain |',
   )
-  await engine(true)
   await open('literal-tags.md')
   await page.waitForFunction(
     () =>
@@ -535,7 +497,6 @@ test('table tags follow live bold syntax changes in static and active cells', {
 test('turning tags off shows them as text in the formatted view, and on styles them again', {
   timeout: 90000,
 }, async () => {
-  await engine(true)
   await open('parity.md')
   const tags = page.locator('.rich-pane .hibi-formatted .hibi-tag')
   await tags.first().waitFor()
@@ -562,22 +523,32 @@ test('turning tags off shows them as text in the formatted view, and on styles t
 test('typing scans only rendered tagged paragraphs in notes of different sizes', {
   timeout: 180000,
 }, async () => {
-  await engine(true)
   await page.evaluate(() => {
     if (window.tagScan) return
     const matchAll = String.prototype.matchAll
-    window.tagScan = { calls: 0, characters: 0 }
+    window.tagScan = { calls: 0, characters: 0, redraws: [] }
     String.prototype.matchAll = function (pattern) {
       if (pattern instanceof RegExp && pattern.source.includes('#(')) {
-        window.tagScan.calls++
-        window.tagScan.characters += this.length
+        const scan = window.tagScan
+        scan.calls++
+        scan.characters += this.length
+        // One redraw scans its tags within one task.
+        if (!scan.redraw) {
+          scan.redraw = { calls: 0, characters: 0 }
+          scan.redraws.push(scan.redraw)
+          queueMicrotask(() => {
+            scan.redraw = null
+          })
+        }
+        scan.redraw.calls++
+        scan.redraw.characters += this.length
       }
       return matchAll.call(this, pattern)
     }
   })
   const reset = () =>
     page.evaluate(() => {
-      window.tagScan = { calls: 0, characters: 0 }
+      window.tagScan = { calls: 0, characters: 0, redraws: [] }
     })
   /** Wait until renders stop, and give what they scanned since the last reset. */
   const settled = async () => {
@@ -674,25 +645,34 @@ test('typing scans only rendered tagged paragraphs in notes of different sizes',
   console.log(JSON.stringify({ short, long }))
   // Both open in the formatted view, below the source-first opening size.
   assert.ok(long.length < 256 * 1024 && long.length > 3.9 * short.length)
-  // Each visible paragraph has two tagged runs (15 characters total); the
-  // heading adds one seven-character run, and each typed key adds one unit.
-  const normalized = (sample) =>
-    sample.typed.map(({ calls, characters, paragraphs }, index) => ({
-      calls: calls - 2 * paragraphs,
-      characters: characters - 15 * paragraphs - (index + 1),
-    }))
-  assert.deepEqual(normalized(long), normalized(short))
+  // Each redraw scans each visible paragraph's two tagged runs (15 characters
+  // total), the heading's seven-character run and every key typed so far.
+  // The formatted view redraws for each parse step it publishes, so a busy
+  // page can redraw a key's text twice, or the text before it once more.
   for (const sample of [short, long]) {
     assert.equal(sample.shown, 2 * sample.paragraphs)
-    assert.deepEqual(
-      normalized(sample),
-      [...'typed'].map(() => ({ calls: 1, characters: 7 })),
-    )
-    for (const key of sample.typed)
-      assert.ok(
-        key.calls > 0 && key.characters < sample.length / 50,
-        JSON.stringify(key),
+    sample.typed.forEach(({ redraws, paragraphs }, index) => {
+      const typed = redraws.map(({ calls, characters }) =>
+        calls === 2 * paragraphs + 1 ? characters - 15 * paragraphs - 7 : NaN,
       )
+      assert.ok(
+        typed.includes(index + 1) &&
+          typed.every((count) => count === index || count === index + 1),
+        JSON.stringify(sample.typed),
+      )
+      for (const redraw of redraws)
+        assert.ok(
+          redraw.characters < sample.length / 50,
+          JSON.stringify(redraw),
+        )
+    })
+    // That happens now and then, not for every key: whatever the note's size,
+    // its keys take at most two redraws more than one each.
+    const redraws = sample.typed.reduce(
+      (count, key) => count + key.redraws.length,
+      0,
+    )
+    assert.ok(redraws <= sample.typed.length + 2, JSON.stringify(sample.typed))
   }
   for (const { jumped, length } of [short, long])
     assert.ok(

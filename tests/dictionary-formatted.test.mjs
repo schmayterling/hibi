@@ -16,10 +16,10 @@ const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
 
 /**
- * Launch with the dictionary, autocomplete and the `engine` formatted view, and answer lookups from fixtures.
+ * Launch with the dictionary and autocomplete, and answer lookups from fixtures.
  * `held` keeps background addons from starting by themselves, so only a command can start them.
  */
-async function launch(t, files, engine = 'codemirror', { held = false } = {}) {
+async function launch(t, files, { held = false } = {}) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-formatted-'))
   for (const [name, text] of Object.entries(files))
     await writeFile(join(profile, name), text)
@@ -40,13 +40,9 @@ async function launch(t, files, engine = 'codemirror', { held = false } = {}) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   await waitForDocumentEditor(app, page)
-  if (engine === 'tiptap')
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-    )
   // Background addons start from an idle callback with a 1 s timeout; held,
   // they wait for `heldStarts`. The script reaches the window from its next load.
-  if (held)
+  if (held) {
     await app.context().addInitScript(() => {
       const idle = window.requestIdleCallback.bind(window)
       const starts = []
@@ -57,7 +53,6 @@ async function launch(t, files, engine = 'codemirror', { held = false } = {}) {
         return 0
       }
     })
-  if (engine === 'tiptap' || held) {
     await page.reload()
     await waitForDocumentEditor(app, page)
   }
@@ -147,7 +142,6 @@ test('in the formatted view the dictionary looks up the caret word, replaces it 
   await page
     .locator('.rich-pane .cm-line', { hasText: 'I am Happy today' })
     .waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
 
   // Define word from the palette.
   await caret(page, 'I am Ha'.length)
@@ -311,25 +305,6 @@ test('the dictionary replaces the word in the formatted split pane it was invoke
   )
 })
 
-/** Put the rich editor's caret `offset` characters into the first `text` of a paragraph. */
-const richCaret = (page, text, offset) =>
-  page.evaluate(
-    ({ text, offset }) => {
-      const editor = document.querySelector('.rich-pane .tiptap').editor
-      let at = null
-      editor.state.doc.descendants((node, pos) => {
-        if (at !== null) return false
-        if (!node.isTextblock) return true
-        const index = node.textContent.indexOf(text)
-        if (index >= 0) at = pos + 1 + index + offset
-        return false
-      })
-      editor.commands.focus()
-      editor.commands.setTextSelection(at)
-    },
-    { text, offset },
-  )
-
 /** Look up the caret word's synonyms and choose `choice`. */
 async function chooseSynonym(app, page, word, choice) {
   await pressShortcut(app, 'Shift+F7')
@@ -347,36 +322,25 @@ Code \`happy\` and tag #happy here
 [ref]: https://x.example
 `
 
-for (const engine of ['tiptap', 'codemirror'])
-  test(`in the ${engine} formatted view, a replaced word in a link's text keeps the link's destination`, {
-    timeout: 90000,
-  }, async (t) => {
-    const { app, page, open } = await launch(
-      t,
-      { 'links.md': linkNote },
-      engine,
-    )
-    await open('links.md')
-    const cases = [
-      ['[Happy](', 'Link Happy', 'Happy', '[Glad]('],
-      ['[Happy][ref]', 'Reference Happy', 'Happy', '[Glad][ref]'],
-      ['`happy`', 'Code happy', 'happy', '`glad`'],
-      ['#happy', 'tag #happy', 'happy', '#glad'],
-    ]
-    for (const [source, rich, word, replaced] of cases) {
-      if (engine === 'codemirror')
-        await caret(page, linkNote.indexOf(source) + 3)
-      else await richCaret(page, rich, rich.length - 2)
-      await chooseSynonym(app, page, word, 'glad')
-      await saved(page, linkNote.replace(source, replaced))
-      if (engine === 'codemirror') await pressShortcut(app, `${mod}+z`)
-      else
-        await page.evaluate(() =>
-          document.querySelector('.rich-pane .tiptap').editor.commands.undo(),
-        )
-      await saved(page, linkNote)
-    }
-  })
+test("in the formatted view, a replaced word in a link's text keeps the link's destination", {
+  timeout: 90000,
+}, async (t) => {
+  const { app, page, open } = await launch(t, { 'links.md': linkNote })
+  await open('links.md')
+  const cases = [
+    ['[Happy](', 'Happy', '[Glad]('],
+    ['[Happy][ref]', 'Happy', '[Glad][ref]'],
+    ['`happy`', 'happy', '`glad`'],
+    ['#happy', 'happy', '#glad'],
+  ]
+  for (const [source, word, replaced] of cases) {
+    await caret(page, linkNote.indexOf(source) + 3)
+    await chooseSynonym(app, page, word, 'glad')
+    await saved(page, linkNote.replace(source, replaced))
+    await pressShortcut(app, `${mod}+z`)
+    await saved(page, linkNote)
+  }
+})
 
 test('in the formatted view a wikilink keeps its target, and destinations, labels and embeds offer no word', {
   timeout: 90000,
@@ -565,29 +529,27 @@ test('in the formatted view a press in a selection keeps it for the dictionary',
 
 // Shift+F7 and the editor's menu reach the dictionary before it starts in the
 // background, start it, and look up the word once it tracks the view.
-for (const engine of ['tiptap', 'codemirror'])
-  test(`in the ${engine} formatted view, Shift+F7 before the dictionary starts finds the caret word's synonyms`, {
-    timeout: 60000,
-  }, async (t) => {
-    const note = 'I am Happy today'
-    const { app, page, open } = await launch(t, { 'note.md': note }, engine, {
-      held: true,
-    })
-    await open('note.md')
-    if (engine === 'codemirror') await caret(page, 'I am Ha'.length)
-    else await richCaret(page, note, 'I am Ha'.length)
-    assert.ok(await page.evaluate(() => window.heldStarts.length))
-    await chooseSynonym(app, page, 'Happy', 'glad')
-    await saved(page, 'I am Glad today')
-  })
+test("in the formatted view, Shift+F7 before the dictionary starts finds the caret word's synonyms", {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today'
+  const { app, page, open } = await launch(
+    t,
+    { 'note.md': note },
+    { held: true },
+  )
+  await open('note.md')
+  await caret(page, 'I am Ha'.length)
+  assert.ok(await page.evaluate(() => window.heldStarts.length))
+  await chooseSynonym(app, page, 'Happy', 'glad')
+  await saved(page, 'I am Glad today')
+})
 
 test('in the formatted view, a right-click before the dictionary starts offers it for the pressed word', {
   timeout: 60000,
 }, async (t) => {
   const note = 'I am Happy today\n\nThe zorp is here'
-  const { page, open } = await launch(t, { 'note.md': note }, 'codemirror', {
-    held: true,
-  })
+  const { page, open } = await launch(t, { 'note.md': note }, { held: true })
   await open('note.md')
   const formatted = page.locator('.rich-pane .formatted-editor .cm-content')
   await page
@@ -619,10 +581,7 @@ test('in the formatted view, a dictionary that starts while a note is open leave
   const { app, page, open } = await launch(
     t,
     { 'note.md': note },
-    'codemirror',
-    {
-      held: true,
-    },
+    { held: true },
   )
   await open('note.md')
   await caret(page, 'I am Ha'.length)

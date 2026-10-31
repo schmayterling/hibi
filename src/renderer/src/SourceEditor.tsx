@@ -1236,6 +1236,7 @@ export function SourceEditor({
     } | null = null
     let closingCompletion = false
     let escaped = false
+    let touched = 0
     let compositionSignal: {
       changes: ChangeSet
       request: CompletionRequest | null
@@ -1995,6 +1996,11 @@ export function SourceEditor({
                 : Promise.resolve({ status: 'unavailable' })
             },
           }),
+          EditorView.domEventObservers({
+            touchstart() {
+              touched = Date.now()
+            },
+          }),
           EditorView.domEventHandlers({
             keydown(event, view) {
               // CodeMirror arms Tab focus for two seconds after an unhandled Escape;
@@ -2056,6 +2062,22 @@ export function SourceEditor({
               return event.inputType === 'historyUndo'
                 ? bridge.undo()
                 : bridge.redo()
+            },
+            focus(_event, view) {
+              // Focus CodeMirror did not give, such as a closing dialog's, leaves
+              // the native selection outside the editor or at its start until
+              // CodeMirror's next selectionchange or focus timer, and keys a busy
+              // renderer runs first land there. A tap places it on purpose.
+              const selection = window.getSelection()
+              const node = selection?.focusNode
+              if (
+                Date.now() - touched > 300 &&
+                (!node ||
+                  !view.contentDOM.contains(node) ||
+                  view.posAtDOM(node, selection.focusOffset) === 0)
+              )
+                view.focus()
+              return false
             },
             blur(_event, view) {
               if (escaped) view.setTabFocusMode(false)

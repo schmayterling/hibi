@@ -1,4 +1,3 @@
-// Kept apart from tab-indent.ts so settings and the CodeMirror editors never load Tiptap.
 import { stored } from '../../ui/stored-preference.ts'
 
 const indentUnits = ['\t', '  ', '    '] as const

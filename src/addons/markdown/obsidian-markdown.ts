@@ -24,7 +24,7 @@ function wikiParts(raw: string) {
   }
 }
 
-export const token = (source: string, embed: boolean) => {
+const token = (source: string, embed: boolean) => {
   const parts = wikiParts(source)
   if (!parts || parts.embed !== embed) return undefined
   return {
@@ -37,7 +37,7 @@ export const token = (source: string, embed: boolean) => {
   }
 }
 
-export const highlightToken = (source: string) => {
+const highlightToken = (source: string) => {
   const match = /^==(\S(?:[^\r\n]*?\S)?)==/.exec(source)
   if (!match) return undefined
   const text = match[1] ?? ''

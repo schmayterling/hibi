@@ -76,10 +76,10 @@ function stackSafeLabels(parser: ReturnType<typeof markdownSourceParser>) {
 
 /** Built-in inline labels use the same token reader locally and in workers. */
 export function createOutlineLabelReader(config: OutlineLabelConfig) {
-  for (const [owner, id, token, extension] of [
-    ['markdown', 'strike', 'del', 'strike'],
-    ['text-extras', 'subscript', 'subscript', 'subscript'],
-    ['math', 'inline', 'inlineMath', 'inlineMath'],
+  for (const [owner, id, token] of [
+    ['markdown', 'strike', 'del'],
+    ['text-extras', 'subscript', 'subscript'],
+    ['math', 'inline', 'inlineMath'],
   ] as const) {
     if (
       !markdownSyntax
@@ -91,7 +91,6 @@ export function createOutlineLabelReader(config: OutlineLabelConfig) {
         label: id,
         group: 'Text',
         level: 'inline',
-        extensions: [extension],
         matches: (value) => value.type === token,
       })
   }

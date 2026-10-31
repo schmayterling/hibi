@@ -179,7 +179,11 @@ import { HostCredentials } from './host-credentials'
 import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
-import { readDocumentImage } from './images'
+import {
+  readDocumentImage,
+  remoteImageRequestHeaders,
+  withoutSetCookie,
+} from './images'
 import { cancelImport, runCancellableImport } from './import-cancellation'
 import { listLicenses, readLicense } from './licenses'
 import {
@@ -213,6 +217,7 @@ import {
   installedAddons,
   installedAsset,
   openAddonsFolder,
+  outdatedAddons,
 } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
 import {
@@ -1551,14 +1556,19 @@ if (!app.requestSingleInstanceLock()) {
         event.preventDefault(),
       )
 
-      // App pages are app://hibi, so every https image is cross-site. Without
-      // cookies, image hosts can't follow a reader from note to note.
+      // App pages are app://hibi, so every https image is cross-site. Image
+      // hosts get no cookies or cache validators to follow a reader with, so
+      // remote images download again instead of coming from the cache, and
+      // don't show offline.
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: ['https://*/*'] },
-        ({ resourceType, requestHeaders }, callback) => {
-          if (resourceType === 'image') delete requestHeaders.Cookie
-          callback({ requestHeaders })
-        },
+        ({ resourceType, requestHeaders }, callback) =>
+          callback({
+            requestHeaders:
+              resourceType === 'image'
+                ? remoteImageRequestHeaders(requestHeaders)
+                : requestHeaders,
+          }),
       )
       const devOrigin = devUrl ? new URL(devUrl).origin : null
       const devPolicy =
@@ -1574,10 +1584,10 @@ if (!app.requestSingleInstanceLock()) {
       session.defaultSession.webRequest.onHeadersReceived(
         { urls: ['https://*/*', ...(devOrigin ? [`${devOrigin}/*`] : [])] },
         ({ resourceType, url, responseHeaders = {} }, callback) => {
-          const headers = { ...responseHeaders }
-          if (resourceType === 'image' && url.startsWith('https:'))
-            for (const name of Object.keys(headers))
-              if (name.toLowerCase() === 'set-cookie') delete headers[name]
+          const headers =
+            resourceType === 'image' && url.startsWith('https:')
+              ? withoutSetCookie(responseHeaders)
+              : { ...responseHeaders }
           if (devPolicy && url.startsWith(`${devOrigin}/`))
             headers['Content-Security-Policy'] = [devPolicy]
           callback({ responseHeaders: headers })
@@ -1610,6 +1620,7 @@ if (!app.requestSingleInstanceLock()) {
         () => ({
           states: getAddonStates(),
           packages: installedAddons(),
+          outdated: outdatedAddons(),
           notices: getAddonStartupNotices(),
         }),
         addonsReady,
@@ -1882,6 +1893,10 @@ if (!app.requestSingleInstanceLock()) {
       handle(SIDELOAD_CHANNELS.list, (event) => {
         trustedWindow(event)
         return installedAddons()
+      })
+      handle(SIDELOAD_CHANNELS.outdated, (event) => {
+        trustedWindow(event)
+        return outdatedAddons()
       })
       handle(SIDELOAD_CHANNELS.resources, (_event, id: unknown) =>
         installedAddonResources(id),

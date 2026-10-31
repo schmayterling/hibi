@@ -79,7 +79,7 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
       name: 'Command probe',
       description: 'Command transport fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',

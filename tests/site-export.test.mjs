@@ -603,7 +603,7 @@ test('command-palette export opens options and writes a configured static folder
       name: 'Site probe',
       description: 'Static export integration.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       capabilities: ['ui'],
       startup: 'background',

@@ -2,34 +2,26 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import native from 'node:test'
+import test from 'node:test'
 import {
   electron,
   waitForAddonShortcut,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 async function placeCaret(editor, offset) {
   await editor.evaluate((element, offset) => {
-    if (element.editor) element.editor.commands.focus(offset + 1)
-    else {
-      const view = element.cmTile.root.view
-      view.dispatch({ selection: { anchor: offset } })
-      view.focus()
-    }
+    const view = element.cmTile.root.view
+    view.dispatch({ selection: { anchor: offset } })
+    view.focus()
   }, offset)
 }
 
 async function undoRich(editor) {
-  if (await editor.evaluate((element) => !!element.editor))
-    await editor.evaluate((element) => element.editor.commands.undo())
-  else await editor.press('ControlOrMeta+z')
+  await editor.press('ControlOrMeta+z')
 }
 
 const fixture = (name) =>
@@ -54,7 +46,7 @@ async function dictionaryCase(t) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   // Its manifest binds the shortcut and lists its menu items before it starts.
@@ -188,16 +180,11 @@ async function dictionaryCase(t) {
   await placeCaret(rich, 7)
   await pressShortcut(app, 'Shift+F7')
   await synonyms.getByRole('button', { name: 'glad', exact: true }).waitFor()
-  if (t.formattedEngine === 'tiptap')
-    await rich.evaluate((element) =>
-      element.editor.commands.insertContentAt(1, 'Oh, '),
-    )
-  else
-    await rich.evaluate((element) =>
-      element.cmTile.root.view.dispatch({
-        changes: { from: 0, insert: 'Oh, ' },
-      }),
-    )
+  await rich.evaluate((element) =>
+    element.cmTile.root.view.dispatch({
+      changes: { from: 0, insert: 'Oh, ' },
+    }),
+  )
   await synonyms.getByRole('button', { name: 'glad', exact: true }).click()
   await page
     .locator('.toast')
@@ -282,20 +269,17 @@ async function dictionaryCase(t) {
 }
 
 test(
-  'dictionary looks up the caret word and replaces it with one undo step in both editors',
+  'dictionary looks up the caret word and replaces it with one undo step',
   { timeout: 60000 },
   dictionaryCase,
 )
 
-native(
-  'codemirror: dictionary source lookup remains independent of formatted hooks',
-  { timeout: 60000 },
-  async (t) => {
-    t.formattedEngine = 'codemirror'
-    t.dictionarySource = true
-    await dictionaryCase(t)
-  },
-)
+test('dictionary source lookup remains independent of formatted hooks', {
+  timeout: 60000,
+}, async (t) => {
+  t.dictionarySource = true
+  await dictionaryCase(t)
+})
 
 async function dictionarySplitCase(t) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-split-'))
@@ -318,7 +302,7 @@ async function dictionarySplitCase(t) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   // Its manifest binds the shortcut and lists its menu items before it starts.
@@ -539,12 +523,9 @@ test(
   dictionarySplitCase,
 )
 
-native(
-  'codemirror: dictionary source split replacement keeps pane identity and rejects closed targets',
-  { timeout: 90000 },
-  async (t) => {
-    t.formattedEngine = 'codemirror'
-    t.dictionarySource = true
-    await dictionarySplitCase(t)
-  },
-)
+test('dictionary source split replacement keeps pane identity and rejects closed targets', {
+  timeout: 90000,
+}, async (t) => {
+  t.dictionarySource = true
+  await dictionarySplitCase(t)
+})

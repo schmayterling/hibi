@@ -5,7 +5,6 @@ import { EditorSelection, EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
 import { NodeType, Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
-import { MarkdownManager } from '@tiptap/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
   blockAtom,
@@ -20,14 +19,10 @@ import {
   lineBreak,
   lineInput,
 } from '../src/renderer/src/formatted-commands.ts'
-import {
-  codeIndentLines,
-  detectIndentUnit,
-  tabIndent,
-} from '../src/renderer/src/indentation.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
+import { codeIndentLines } from '../src/renderer/src/indentation.ts'
 import { sourceEditorTextCooperatively } from '../src/renderer/src/source-session.ts'
 import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
+import { HTMLImage } from '../src/shared/markdown-html-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const markdown = parser.configure(GFM)
@@ -132,6 +127,17 @@ test('a triple-click selects the source of a block the rich editor draws as one 
   // Text keeps its block's text selection.
   assert.equal(at(doc.indexOf('end')), null)
   assert.equal(at(doc.indexOf('text'), true), null)
+  // An `<img>` tag drawn as an image, as a Markdown image.
+  const html = 'see <img src="b.png" alt="b"> after'
+  const htmlState = EditorState.create({ doc: html })
+  const htmlTree = parser.configure([GFM, HTMLImage]).parse(html)
+  const tag = (pos, widget) => {
+    const atom = blockAtom(htmlState, htmlTree, pos, widget)
+    return atom && html.slice(atom.from, atom.to)
+  }
+  assert.equal(tag(html.indexOf('<img') + 3, false), null)
+  assert.equal(tag(html.indexOf('<img'), true), '<img src="b.png" alt="b">')
+  assert.equal(tag(html.indexOf(' after'), true), '<img src="b.png" alt="b">')
 })
 
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {
@@ -282,21 +288,6 @@ test('code indentation strips quote and indented-code prefixes', () => {
 
 test('code indentation strips container prefixes as the rich editor reads them', () => {
   const footnotes = parser.configure([GFM, Footnotes])
-  const { parser: marked, options, core, addons } = markdownConfiguration([])
-  const manager = new MarkdownManager({
-    extensions: [...core, ...addons],
-    marked,
-    markedOptions: options,
-  })
-  /** The rich editor's Tab unit in the first code block of `doc`. */
-  const rich = (doc) => {
-    const code = (node) =>
-      node.type === 'codeBlock'
-        ? (node.content ?? []).map(({ text }) => text).join('')
-        : node.content?.map(code).find((text) => text !== undefined)
-    const text = code(manager.parse(doc.replace('|', '')))
-    return detectIndentUnit(text, codeIndentLines) ?? tabIndent.snapshot().unit
-  }
   const tab = (doc, codeTabs) => {
     const head = doc.indexOf('|')
     const text = doc.replace('|', '')
@@ -328,10 +319,8 @@ test('code indentation strips container prefixes as the rich editor reads them',
     ['10. item\n\n    ```\n    foo|\n    \tbar\n    ```', '\t'],
     ['[^1]: note\n\n    ```js\n    foo|\n    \tbar\n    ```', '\t'],
     ['    foo|\n      bar', '  '],
-  ]) {
-    assert.equal(rich(doc), unit, `rich editor: ${doc}`)
+  ])
     assert.equal(tab(doc), doc.replace('|', `${unit}|`), doc)
-  }
   // The rich editor reads an ordered item's code one column early, with a
   // leading space and three-space unit here; the code's own unit is two.
   assert.equal(
@@ -1201,12 +1190,6 @@ test('multi-line input in a 50 MiB block reads and rewrites only around the care
 })
 
 test('select-all code input keeps matching fences as literal code', () => {
-  const { parser: marked, options, core, addons } = markdownConfiguration([])
-  const manager = new MarkdownManager({
-    extensions: [...core, ...addons],
-    marked,
-    markedOptions: options,
-  })
   for (const [opening, input, closing] of [
     ['```', '```\nX', '````'],
     ['```js', '  `````\nX', '``````'],
@@ -1221,14 +1204,6 @@ test('select-all code input keeps matching fences as literal code', () => {
       next,
       `${closing}${opening.replace(/`+|~+/, '')}\n${normalized}|\n${closing}`,
     )
-    const doc = manager.parse(next.replace('|', ''))
-    assert.equal(doc.content.length, 1)
-    assert.equal(doc.content[0].type, 'codeBlock')
-    assert.equal(
-      doc.content[0].attrs.language,
-      opening.replace(/`+|~+/, '') || null,
-    )
-    assert.equal(doc.content[0].content[0].text, normalized)
   }
 })
 

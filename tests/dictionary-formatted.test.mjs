@@ -52,6 +52,11 @@ async function launch(t, files, { held = false } = {}) {
         starts.push(() => idle(callback, options))
         return 0
       }
+      // A command's wait for its addon's editor features gives up after 5 s;
+      // held, that never happens, so only the features can end the wait.
+      const timeout = window.setTimeout.bind(window)
+      window.setTimeout = (callback, delay, ...rest) =>
+        delay === 5000 ? 0 : timeout(callback, delay, ...rest)
     })
     await page.reload()
     await waitForDocumentEditor(app, page)
@@ -540,6 +545,25 @@ test("in the formatted view, Shift+F7 before the dictionary starts finds the car
   )
   await open('note.md')
   await caret(page, 'I am Ha'.length)
+  assert.ok(await page.evaluate(() => window.heldStarts.length))
+  await chooseSynonym(app, page, 'Happy', 'glad')
+  await saved(page, 'I am Glad today')
+})
+
+// The command waits for the source editor's feature, not the hidden formatted one's.
+test("in the source view, Shift+F7 before the dictionary starts finds the caret word's synonyms", {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today'
+  const { app, page, open } = await launch(
+    t,
+    { 'note.md': note },
+    { held: true },
+  )
+  await open('note.md')
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await caret(page, 'I am Ha'.length, '.source-pane')
   assert.ok(await page.evaluate(() => window.heldStarts.length))
   await chooseSynonym(app, page, 'Happy', 'glad')
   await saved(page, 'I am Glad today')

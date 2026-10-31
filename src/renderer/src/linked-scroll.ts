@@ -1,4 +1,4 @@
-import { mappedPositionAt } from './native-dom-selection'
+import { focusedEditor, mappedPositionAt } from './native-dom-selection'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
 /** Markdown follows text positions; other preview formats keep proportional scrolling. */
@@ -21,13 +21,7 @@ export function linkScroll(
     const bounds = leader.getBoundingClientRect()
     let position = from.state.selection.main.head
     // A table cell's editor, inside the view, has the formatted view's caret.
-    const active = document.activeElement
-    const focused =
-      from.hasFocus ||
-      (document.hasFocus() &&
-        !!active?.classList.contains('cm-content') &&
-        from.contentDOM.contains(active))
-    let point = focused ? from.coordsAtPos(position) : null
+    let point = focusedEditor(from) ? from.coordsAtPos(position) : null
     if (!point || point.top < bounds.top || point.bottom > bounds.bottom) {
       const content = from.contentDOM.getBoundingClientRect()
       const y = bounds.top + bounds.height / 2

@@ -3544,6 +3544,89 @@ test('a long table shows the edited row in its place once the pane scrolled away
   )
 })
 
+test("a scroll to the start of a long table's edited row lands on it in its place once the pane scrolled away from it", {
+  timeout: 120000,
+}, async () => {
+  // Every fifth row breaks a cell over three lines: the rows drawn around the
+  // edited row measure taller than the estimate a scroll would start from.
+  const rows = Array.from(
+    { length: 3000 },
+    (_, i) => `| row ${i} | ${i % 5 ? `v${i}` : 'a<br>b<br>c'} |`,
+  )
+  // As in the test above: the note starts with the table, in a pane that
+  // fits the harness window.
+  const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 606 },
+        { editable: true },
+      ),
+    doc,
+  )
+  await harness.evaluate(async (at) => {
+    const preview = window.tables
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const view = preview.view()
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+    await preview.settle()
+    await preview.settle()
+  }, doc.indexOf('v1801 '))
+  await harness.locator('.hibi-lp-table tr[data-line="1803"] td').nth(1).click()
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('Z')
+  const result = await harness.evaluate(async () => {
+    const preview = window.tables
+    const pane = document.querySelector('.rich-pane')
+    // The cell editor scrolls to its caret after the typing first.
+    await preview.settle()
+    pane.scrollTop = 0
+    const row = () =>
+      document.querySelector('.hibi-lp-table tr[data-line="1803"]')
+    // The window moves to the rows at the top once the table measures there.
+    for (
+      let i = 0;
+      i < 20 && row().previousElementSibling?.dataset.line === '1802';
+      i++
+    )
+      await preview.settle()
+    const away = row().previousElementSibling?.dataset.line
+    // A scroll that puts the caret at the pane's top, as no in-app caller
+    // asks of a cell yet.
+    const view = preview.view()
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(view.state.selection.main.head, {
+        y: 'start',
+      }),
+    })
+    for (let i = 0; i < 4; i++) await preview.settle()
+    const editor = view.constructor.findFromDOM(
+      document.activeElement.closest('.cm-editor'),
+    )
+    const caret = editor.coordsAtPos(editor.state.selection.main.head)
+    const cell = document.activeElement.closest('td')
+    return {
+      away,
+      cell: `${cell.parentElement.dataset.line}:${cell.cellIndex}`,
+      before: row().previousElementSibling?.dataset.line,
+      top: Math.round(caret.top - pane.getBoundingClientRect().top),
+    }
+  })
+  assert.notEqual(result.away, '1802', 'the edited row starts out of its place')
+  assert.deepEqual(
+    [result.cell, result.before],
+    ['1803:1', '1802'],
+    JSON.stringify(result),
+  )
+  // CodeMirror leaves a few pixels between the line and the pane's top.
+  assert.ok(result.top >= 0 && result.top < 20, JSON.stringify(result))
+})
+
 test('a cell editor shows its cell formatted as it opens', {
   timeout: 30000,
 }, async () => {

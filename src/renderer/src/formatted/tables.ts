@@ -1061,14 +1061,14 @@ class TableView {
     return !tall
   }
 
-  /** The row a position of a windowed table is in, when the window has not drawn it. */
+  /** The row a position of a windowed table is in, when the window has not drawn it in its place. */
   private undrawn(pos: number) {
     const line = this.heights && this.locate(pos)?.line
-    return line && line > 1 && !this.rendered.has(line - 2) ? line - 2 : null
+    return line && line > 1 && this.outside(line - 2) ? line - 2 : null
   }
 
   /**
-   * Before the view scrolls to a row the window has not drawn, draw it with
+   * Before the view scrolls to a row the window has not drawn in its place, draw it with
    * as many rows on each side as the pane shows: it then measures where it
    * is, and the window, which covers the pane, keeps it there.
    */
@@ -1079,7 +1079,7 @@ class TableView {
     this.reveal(index, Math.ceil((bottom - top) / MIN.row))
   }
 
-  /** Where a row the window has not drawn would show, from its spacer and the rows' heights, without drawing it. */
+  /** Where a row the window has not drawn in its place would show, from its spacer and the rows' heights, without drawing it. */
   private estimate(pos: number) {
     const index = this.undrawn(pos)
     const heights = this.heights
@@ -1365,7 +1365,12 @@ class TableView {
    * where it is out of its place.
    */
   private drawInPlace(index: number) {
-    if (index < this.start || index >= this.end) this.reveal(index)
+    if (this.outside(index)) this.reveal(index)
+  }
+
+  /** Whether body row `index` is outside the window: undrawn, or the edited row mounted beside it. */
+  private outside(index: number) {
+    return index < this.start || index >= this.end
   }
 
   /** Render a window of rows around row `index`, for editing it or measuring it. */

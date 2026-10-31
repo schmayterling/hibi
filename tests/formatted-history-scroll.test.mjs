@@ -9,7 +9,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import { clickMenu, pressShortcut, redoKey } from './keyboard.mjs'
+import { clickMenu, pressShortcut, redoKey, splitTab } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const undoKey = 'ControlOrMeta+z'
@@ -54,6 +54,26 @@ function showsCell(text) {
     .find((cell) => cell.textContent.trim() === text)
     ?.getBoundingClientRect()
   return !!box && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1
+}
+
+// Whether the formatted view shows this text of a table cell.
+function showsText(text) {
+  const pane = document.querySelector('.rich-pane')
+  const bounds = pane.getBoundingClientRect()
+  for (const cell of pane.querySelectorAll('td')) {
+    const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
+    while (walker.nextNode()) {
+      const node = walker.currentNode
+      const at = node.textContent.indexOf(text)
+      if (at < 0) continue
+      const range = document.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + text.length)
+      const box = range.getBoundingClientRect()
+      return box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1
+    }
+  }
+  return false
 }
 
 // Undo and redo show the selection they bring back, as native editors do,
@@ -265,6 +285,50 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   if (!found) differences.push('find in a long table: not shown')
   await page.keyboard.press('Escape')
 
+  // Find in a cell taller than the pane shows the match, not only the cell's
+  // top, also with no cell editor there: the find field keeps the focus.
+  const deep = `${lines}${rows(80, (row) => (row === 40 ? `${words} needle` : `v${row}`))}`
+  await open('table-tall-find', deep, '.rich-pane td')
+  await page.evaluate(() => {
+    document.querySelector('.rich-pane').scrollTop = 0
+  })
+  await pressShortcut(app, `${mod}+f`)
+  await page
+    .getByRole('textbox', { name: 'Find in document', exact: true })
+    .fill('needle')
+  const deepFound = await page.waitForFunction(showsText, 'needle').then(
+    () => true,
+    () => false,
+  )
+  t.diagnostic(
+    JSON.stringify({ name: 'find in a tall cell', shown: deepFound }),
+  )
+  if (!deepFound) differences.push('find in a tall cell: not shown')
+  await page.keyboard.press('Escape')
+
+  // A match at the start of a tall cell above the pane: the cell comes in
+  // from above with its bottom in view, and the match is above that.
+  const high = `${lines}${rows(80, (row) => (row === 40 ? `needle ${words}` : `v${row}`))}`
+  await open('table-tall-find-above', high, '.rich-pane td')
+  await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = pane.scrollHeight
+  })
+  assert.equal(await page.evaluate(showsText, 'needle'), false)
+  await pressShortcut(app, `${mod}+f`)
+  await page
+    .getByRole('textbox', { name: 'Find in document', exact: true })
+    .fill('needle')
+  const highFound = await page.waitForFunction(showsText, 'needle').then(
+    () => true,
+    () => false,
+  )
+  t.diagnostic(
+    JSON.stringify({ name: 'find in a tall cell above', shown: highFound }),
+  )
+  if (!highFound) differences.push('find in a tall cell above: not shown')
+  await page.keyboard.press('Escape')
+
   // Outside tables the view's own scrolling shows the caret.
   await open('paragraphs', paragraphs, '.rich-pane')
   await page.keyboard.type('x')
@@ -334,6 +398,208 @@ test('codemirror: undo and redo scroll to the selection they restore', {
     source,
   )
   await step('addon redo in the source view', command('redo'), sourced, source)
+
+  assert.deepEqual(differences, [])
+})
+
+// Opening or closing a split gives the note's pane another view id. Its
+// history stays its own: undo restores the caret of the pane's edit and
+// shows it, as before the split.
+test('codemirror: a pane undoes its own edits after a split opens or closes', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-history-split-'))
+  const profile = join(folder, 'profile')
+  await mkdir(profile)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await waitForFormattedEditor(app, page)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const markdown = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+  const open = async (name, text) => {
+    const file = join(folder, `${name}.md`)
+    await writeFile(file, text)
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      `${name}.md`,
+    )
+    await waitForDocumentEditor(app, page)
+  }
+  // The caret of the note's pane and whether it shows there.
+  const caret = (pane) =>
+    page.evaluate((pane) => {
+      const root = document.querySelector(pane)
+      const view = root.querySelector('.cm-content').cmTile.root.view
+      const bounds = root.getBoundingClientRect()
+      const box = view.coordsAtPos(view.state.selection.main.head)
+      return {
+        head: view.state.selection.main.head,
+        shown:
+          !!box && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1,
+      }
+    }, pane)
+  // Type at the end of the note in the pane, and the caret before that.
+  // Focus the pane's view, scroll it to its top when asked, and let it measure.
+  // Focusing the other pane of a split makes its tab the active one: until
+  // that is done the app is busy and its views read-only, and a key does nothing.
+  const focus = (pane, top) =>
+    page.evaluate(
+      async ({ pane, top }) => {
+        const root = document.querySelector(pane)
+        const view = root.querySelector('.cm-content').cmTile.root.view
+        view.focus()
+        if (top) root.scrollTop = 0
+        const ready = () =>
+          root.closest('.editor-page')?.dataset.active === 'true' &&
+          document.querySelector('.app')?.getAttribute('aria-busy') ===
+            'false' &&
+          !view.state.readOnly
+        for (let frame = 0; frame < 2 || !ready(); frame++)
+          await new Promise(requestAnimationFrame)
+      },
+      { pane, top },
+    )
+  const typeAtEnd = async (pane, text) => {
+    await focus(pane, false)
+    await page.keyboard.press('ControlOrMeta+End')
+    const before = await caret(pane)
+    const from = await markdown()
+    await page.keyboard.type(text)
+    await waitForAsync(
+      page,
+      async (from) => (await window.hibi.getDocument()).markdown !== from,
+      from,
+    )
+    return { at: before.head, from }
+  }
+  const differences = []
+  // Undo in the pane, scrolled to its top, away from the caret it restores.
+  const undo = async (name, pane, { at, from }) => {
+    await focus(pane, true)
+    await page.keyboard.press(undoKey)
+    await waitForAsync(
+      page,
+      async (from) => (await window.hibi.getDocument()).markdown === from,
+      from,
+    )
+    let last = null
+    for (let read = 0; read < 30; read++) {
+      await page.waitForTimeout(100)
+      const now = await caret(pane)
+      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    t.diagnostic(JSON.stringify({ name, at, ...last }))
+    if (!last.shown || last.head !== at)
+      differences.push(`${name}: ${JSON.stringify({ at, ...last })}`)
+  }
+
+  // The view a pane shows once it is made again, not the one it had, and
+  // takes input: a key pressed while it is still read-only does nothing.
+  const view = (pane) =>
+    page.evaluateHandle(
+      (pane) => document.querySelector(`${pane} .cm-content`).cmTile.root.view,
+      pane,
+    )
+  const remade = (pane, before) =>
+    page.waitForFunction(
+      ({ pane, before }) => {
+        const view = document.querySelector(`${pane} .cm-content`)?.cmTile.root
+          .view
+        return !!view && view !== before && !view.state.readOnly
+      },
+      { pane, before },
+    )
+  const select = (pane, anchor) =>
+    page.evaluate(
+      ({ pane, anchor }) =>
+        document
+          .querySelector(`${pane} .cm-content`)
+          .cmTile.root.view.dispatch({ selection: { anchor } }),
+      { pane, anchor },
+    )
+  // The caret a pane's view was made with.
+  const kept = async (name, pane, at) => {
+    const { head } = await caret(pane)
+    t.diagnostic(JSON.stringify({ name, at, head }))
+    if (head !== at)
+      differences.push(`${name}: ${JSON.stringify({ at, head })}`)
+  }
+  const idle = () => page.locator('.app[aria-busy="false"]').waitFor()
+  const left = '.editor-page[data-side="left"] .rich-pane'
+  const right = '.editor-page[data-side="right"] .rich-pane'
+  const openSplit = async (name) => {
+    const before = await view('.rich-pane')
+    const { tabs } = await page.evaluate(() => window.hibi.getDocument())
+    await splitTab(app, page, tabs.find((tab) => tab.name === name).id)
+    await remade(left, before)
+    await page.locator(`${right} .cm-content`).waitFor()
+    await idle()
+  }
+  const closeSplit = async () => {
+    const before = await view(left)
+    await page.getByRole('button', { name: 'Close split', exact: true }).click()
+    await remade('.rich-pane', before)
+    await waitForDocumentEditor(app, page)
+  }
+
+  await open('warmup', 'warmup\n')
+  await open('other', 'other\n')
+  await open('paragraphs', paragraphs)
+  const edit = await typeAtEnd('.rich-pane', 'x')
+  await openSplit('other.md')
+  await kept('caret when a split opens', left, edit.at + 1)
+  await undo('undo in a split of an edit from before it', left, edit)
+
+  const split = await typeAtEnd(left, 'y')
+  await closeSplit()
+  await undo('undo after a split closed of an edit in it', '.rich-pane', split)
+
+  // The other pane shows another note before the split closes.
+  await openSplit('other.md')
+  await select(left, 100)
+  await page.getByRole('tab', { name: 'warmup.md', exact: true }).click()
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.editor-page[data-side="right"] .split-tab-heading')
+      ?.textContent.includes('warmup.md'),
+  )
+  await idle()
+  await closeSplit()
+  await kept(
+    'caret after the other pane showed another note',
+    '.rich-pane',
+    100,
+  )
+
+  // One note in both panes: the left pane takes the note's caret, and its
+  // own caret stays when the split closes.
+  await openSplit('paragraphs.md')
+  await kept('caret of the left pane of one note in both', left, 100)
+  await select(left, 200)
+  await select(right, 50)
+  await closeSplit()
+  await kept('caret when a split of one note closes', '.rich-pane', 200)
 
   assert.deepEqual(differences, [])
 })

@@ -280,11 +280,27 @@ function App() {
     focusUnsafe.current = unsafe
     setFocusRecoveryNeeded(unsafe)
   }
-  useEffect(() => {
-    if (!splitLeftId || !splitRightId) return
-    return () => {
-      documentRuntime.session(splitLeftId)?.releaseView('left')
-      documentRuntime.session(splitRightId)?.releaseView('right')
+  // A tab's caret and history steps are its pane's: its own view's alone, or
+  // those of the split pane that shows it. They follow the tab between them,
+  // before its view is made again with the new id.
+  const panes = useRef<Partial<Record<PaneSide, string | undefined>>>({})
+  useLayoutEffect(() => {
+    const before = panes.current
+    const now = { left: splitLeftId, right: splitRightId }
+    panes.current = now
+    const move = (tabId: string, from: string | null, to: string | null) => {
+      if (from && to) documentRuntime.session(tabId)?.renameView(from, to)
+    }
+    // The left pane leaves last: it stays when a split closes.
+    for (const side of ['right', 'left'] as const) {
+      const tab = before[side]
+      if (tab && tab !== now[side])
+        move(tab, side, documentRuntime.primaryViewId(tab))
+    }
+    for (const side of ['left', 'right'] as const) {
+      const tab = now[side]
+      if (tab && tab !== before[side])
+        move(tab, documentRuntime.primaryViewId(tab), side)
     }
   }, [splitLeftId, splitRightId])
   useSyncExternalStore(documentFormats.subscribe, documentFormats.snapshot)

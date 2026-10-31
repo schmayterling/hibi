@@ -13,5 +13,10 @@ type Shape<Module> = {
     : Module[Name]
 }
 
+/** `any` satisfies every shape, so no stand-in export may be `any`. */
+type NoAny<Module> = {
+  [Name in keyof Module]: 0 extends 1 & Module[Name] ? never : Module[Name]
+}
+
 /** Fails to typecheck when `StandIn` lacks or mistypes something `Real` exports. */
-export type Covers<StandIn extends Shape<Real>, Real> = StandIn
+export type Covers<StandIn extends Shape<Real> & NoAny<StandIn>, Real> = StandIn

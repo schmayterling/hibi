@@ -1393,6 +1393,10 @@ class TableView {
         this.leave(true)
         return true
       },
+      place: () => {
+        if (this.editing && this.editing.line > 1)
+          this.drawInPlace(this.editing.line - 2)
+      },
       blurred: (editor) => {
         // A native pick sets focus before selectionchange. Read its completed
         // range in this event turn, while the cell endpoint still exists.

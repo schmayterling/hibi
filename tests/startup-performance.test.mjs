@@ -119,9 +119,12 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // addon's features adds 93 (#766).
   // Marking the app when Linux window controls are hidden, so the title bar
   // gives back their space, adds 109 (#733).
+  // Keeping the redo steps an edit replaces as a branch, and the step each
+  // save wrote, so a note's undo history outlives closing it, adds 2,856
+  // (#739); storing and restoring that history loads later.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109,
+    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109 + 2856,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

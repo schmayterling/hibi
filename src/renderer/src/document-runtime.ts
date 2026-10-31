@@ -31,6 +31,10 @@ type RuntimeOptions = {
   admit?: (operation: SourceOperation) => void
   enqueue: (operation: SourceOperation) => void
   onError: (error: unknown) => void
+  /** A named tab opened as saved: undo steps kept for its file may follow. */
+  opened?: (tabId: string, session: DocumentSession) => void
+  /** A tab's save was acknowledged: its undo steps up to it can be kept. */
+  saved?: (tabId: string) => void
 }
 type Listener = (
   document: DocumentState,
@@ -128,6 +132,7 @@ export class DocumentRuntime {
       progress = id ? this.#saves.get(id) : null
     if (!target || !progress) return null
     const sequence = ++progress.next
+    this.session(id)!.sealHistory()
     const snapshot = this.session(id)!.snapshot()
     progress.pending.set(sequence, new Map([[snapshot.version, snapshot]]))
     return Object.freeze({ target, sequence, epoch: progress.epoch })
@@ -298,6 +303,27 @@ export class DocumentRuntime {
           else this.#history.delete(oldest)
         },
       )
+    }
+  }
+  /** Restores a tab's kept undo steps into the session that asked for them. */
+  restoreHistory(
+    tabId: string,
+    session: DocumentSession,
+    ...restore: Parameters<DocumentSession['restoreHistory']>
+  ) {
+    if (
+      this.#sessions.get(tabId) !== session ||
+      !session.restoreHistory(...restore)
+    )
+      return false
+    this.#retainHistory(session)
+    return true
+  }
+  /** Forgets every open tab's undo steps. */
+  clearHistory() {
+    for (const session of this.#sessions.values()) {
+      session.limitHistory(0, 0)
+      this.#forgetHistory(session)
     }
   }
   sourceFor = (document: DocumentState) => documentSnapshot(document)
@@ -568,6 +594,8 @@ export class DocumentRuntime {
               : prepared.saved
             : document.savedMarkdown,
         )
+        if (!session.state().dirty && document.canAutosave)
+          this.#options.opened?.(document.tabId, session)
       } else {
         if (session.snapshot().document.revision !== document.revision)
           session.reidentify(document)
@@ -672,6 +700,7 @@ export class DocumentRuntime {
         const prepared = loadedDocument(document)
         session.importSaved(prepared ? prepared.saved : document.savedMarkdown)
       }
+      this.#options.saved?.(document.tabId)
       progress.pending.delete(token.sequence)
       progress.acknowledged = token.sequence
       if (current.id === expectedId)
@@ -764,6 +793,8 @@ const errors = new Set<(error: unknown) => void>()
 const reportError = (error: unknown) => {
   for (const listener of errors) listener(error)
 }
+let undoHistory: Promise<typeof import('./undo-history.ts')> | undefined
+const keptHistory = () => (undoHistory ??= import('./undo-history.ts'))
 export const documentRuntime = new DocumentRuntime({
   admit: (operation) => {
     try {
@@ -777,7 +808,17 @@ export const documentRuntime = new DocumentRuntime({
     void window.hibi.appendSourceOperation(operation).catch(reportError)
   },
   onError: reportError,
+  opened: (tabId, session) => {
+    void keptHistory().then((kept) => kept.restore(tabId, session))
+  },
+  saved: (tabId) => {
+    void keptHistory().then((kept) => kept.keep(tabId))
+  },
 })
+if (globalThis.window)
+  window.hibi.onUndoHistoryFlush(async () => {
+    await (await undoHistory)?.flush()
+  })
 export const observeDocumentErrors = (listener: (error: unknown) => void) => {
   errors.add(listener)
   return () => {

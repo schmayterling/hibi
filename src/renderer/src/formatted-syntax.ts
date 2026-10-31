@@ -6,14 +6,15 @@ import {
   MapMode,
   StateEffect,
   StateField,
+  Text,
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import {
+  type ChangedRange,
   type Input,
   IterMode,
   NodeProp,
-  NodeType,
-  Tree,
+  type Tree,
   TreeFragment,
 } from '@lezer/common'
 import {
@@ -889,12 +890,61 @@ export type FormattedSyntax = {
   config: (state: EditorState) => BoundaryConfig | null
 }
 
+/**
+ * What a read of `b` cannot take from a read of `a`: the text from the first
+ * to the last chunk that differs, and the selection's ends `from` and `to` in
+ * `b`, whose leaf blocks are read again for their inline syntax.
+ */
+function edited(a: Text, b: Text, from: number, to: number) {
+  const short = Math.min(a.length, b.length)
+  let start = 0
+  for (const i = a.iter(), j = b.iter(); start < short; ) {
+    if (i.next().done || j.next().done || i.value !== j.value) break
+    start += i.value.length
+  }
+  let end = 0
+  for (const i = a.iter(-1), j = b.iter(-1); start + end < short; ) {
+    if (i.next().done || j.next().done || i.value !== j.value) break
+    end += i.value.length
+  }
+  end = Math.min(end, short - start)
+  const ranges: ChangedRange[] = []
+  if (start < a.length - end || start < b.length - end)
+    ranges.push({
+      fromA: start,
+      toA: a.length - end,
+      fromB: start,
+      toB: b.length - end,
+    })
+  for (const pos of new Set([from, to])) {
+    const shift = pos > start ? b.length - a.length : 0
+    if (pos <= start || pos >= b.length - end)
+      ranges.push({
+        fromA: pos - shift,
+        toA: pos - shift,
+        fromB: pos,
+        toB: pos,
+      })
+  }
+  return ranges.sort((x, y) => x.fromB - y.fromB)
+}
+
 /** Chunked Markdown syntax for one formatted editor configuration. */
 export function formattedSyntax(
   options: FormattedSyntaxOptions = {},
 ): FormattedSyntax {
   const syntax = syntaxField(options)
   const { field } = syntax
+  /** The last edit read of text the view had not parsed, for the next key. */
+  let read: {
+    grammar: ChunkedMarkdownParser
+    doc: Text
+    prefix: number
+    from: number
+    to: number
+    text: Text
+    tree: Tree
+  } | null = null
   return {
     extension: [
       field,
@@ -912,10 +962,23 @@ export function formattedSyntax(
       const { tree, prefix } = state.field(field)
       const { from, to } = state.selection.main
       const { doc } = state
-      if (!uncovered(tree, Math.max(0, from - 1), Math.min(doc.length, to + 1)))
+      if (
+        !uncovered(tree, Math.max(0, from - 1), Math.min(doc.length, to + 1))
+      ) {
+        read = null
         return tree
+      }
+      const grammar = syntax.textFor(state)
+      if (
+        read?.grammar === grammar &&
+        read.doc === doc &&
+        read.prefix === prefix &&
+        read.from === from &&
+        read.to === to
+      )
+        return read.tree
       const parseInline = MarkdownParser.prototype.parseInline
-      const parser = Object.assign(syntax.textFor(state).full.configure({}), {
+      const parser = Object.assign(grammar.full.configure({}), {
         // Inline syntax only in the leaf blocks at the selection's ends.
         parseInline(this: MarkdownParser, text: string, offset: number) {
           const end = offset + text.length
@@ -924,15 +987,27 @@ export function formattedSyntax(
             : []
         },
       })
-      const { type, children, positions, length } = parser.parse(
-        new DocInput(doc),
-        [],
-        [{ from: prefix, to: doc.length }],
-      )
-      // The parse after a prefix, such as frontmatter, counts from the
-      // prefix's end; an anonymous node places it there.
-      const text = new Tree(NodeType.none, children, positions, length)
-      return new Tree(type, [text], [prefix], doc.length)
+      // A prefix that is not Markdown, such as frontmatter, reads as blank lines.
+      const text = prefix
+        ? doc.replace(
+            0,
+            prefix,
+            Text.of(
+              doc.sliceString(0, prefix).replace(/[^\n]/g, ' ').split('\n'),
+            ),
+          )
+        : doc
+      // The last read's blocks are kept where the text did not change.
+      const fragments =
+        read?.grammar === grammar
+          ? TreeFragment.applyChanges(
+              TreeFragment.addTree(read.tree),
+              edited(read.text, text, from, to),
+            )
+          : []
+      const result = parser.parse(new DocInput(text), fragments)
+      read = { grammar, doc, prefix, from, to, text, tree: result }
+      return result
     },
     selectionTree: (state, from, to, budget) => {
       const value = state.field(field)

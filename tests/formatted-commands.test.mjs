@@ -1564,3 +1564,63 @@ test('edit keys read the blocks of a selection or caret past the parsed text', (
     [`  ${parent}`, '    - child'],
   )
 })
+
+test('edit reads keep the last read where the note did not change', () => {
+  const filler = Array.from({ length: 65536 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const doc = `${filler}\n\nsome **bold** text\n\n- one\n- two`
+  const syntax = formattedSyntax({ slice: 1 })
+  const blocks = (tree) => {
+    const found = []
+    tree.iterate({
+      enter: (node) =>
+        void (node.type.is('Block') && found.push(node.from, node.to)),
+    })
+    return found.join()
+  }
+  // A read must give the blocks a read without the last one gives.
+  const read = (state) => {
+    const tree = syntax.editTree(state)
+    const other = formattedSyntax({ slice: 1 })
+    const copy = EditorState.create({
+      doc: state.doc,
+      selection: state.selection,
+      extensions: other.extension,
+    })
+    assert.ok(blocks(tree) === blocks(other.editTree(copy)), 'stale blocks')
+    return tree
+  }
+  let state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: syntax.extension,
+  })
+  const first = read(state)
+  // The same note and selection read the same.
+  assert.equal(syntax.editTree(state), first)
+  state = state.update(blockBreak(state, first)).state
+  assert.equal(state.sliceDoc(doc.length - 5), '- two\n- ')
+  // Bold text the last read skipped is read again for its inline syntax once
+  // the caret is in it.
+  const bold = doc.lastIndexOf('**bo') + 4
+  state = state.update({ selection: { anchor: bold } }).state
+  state = state.update(blockBreak(state, read(state))).state
+  assert.equal(
+    state.sliceDoc(bold - 9, bold + 15),
+    'some **bo**\n\n**ld** text',
+  )
+  // Text typed elsewhere between two reads moves the blocks after it.
+  state = state.update({
+    changes: { from: 0, insert: '# ' },
+    selection: { anchor: state.doc.length + 2 },
+  }).state
+  read(state)
+  // A fence opened before the list makes the rest code.
+  state = state.update({
+    changes: { from: state.doc.length - 14, insert: '```\n' },
+    selection: { anchor: state.doc.length + 4 },
+  }).state
+  state = state.update(blockBreak(state, read(state))).state
+  assert.equal(state.sliceDoc(state.doc.length - 19), '```\n- one\n- two\n- \n')
+})

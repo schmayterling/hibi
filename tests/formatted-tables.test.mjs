@@ -499,9 +499,7 @@ test('the text above a long table growing keeps the row under the pane top in pl
       pane.getBoundingClientRect().top +
       6001 * 61
     const top = () => {
-      const row = document.querySelector(
-        '.hibi-lp-table tr[data-line="6002"]',
-      )
+      const row = document.querySelector('.hibi-lp-table tr[data-line="6002"]')
       return row
         ? Math.round(
             row.getBoundingClientRect().top - pane.getBoundingClientRect().top,
@@ -536,7 +534,10 @@ test('the text above a long table growing keeps the row under the pane top in pl
     { whole: true, moved: 50000, before: result.before, after: result.before },
     JSON.stringify(result),
   )
-  assert.ok(result.before !== null && result.before > -61, JSON.stringify(result))
+  assert.ok(
+    result.before !== null && result.before > -61,
+    JSON.stringify(result),
+  )
 })
 
 /** Mount `doc` in the editable harness. */

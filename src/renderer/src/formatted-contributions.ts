@@ -344,7 +344,12 @@ const coreNodes: Partial<Record<string, readonly string[]>> = {
     'CommentBlock',
     'ProcessingInstructionBlock',
   ],
-  'core.inline-html': ['HTMLTag', 'Comment', 'ProcessingInstruction'],
+  'core.inline-html': [
+    'HTMLTag',
+    'HTMLImage',
+    'Comment',
+    'ProcessingInstruction',
+  ],
 }
 
 export const formattedContributions = {

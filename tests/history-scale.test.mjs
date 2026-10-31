@@ -31,9 +31,14 @@ test('history above its retention budget keeps a distinct version restorable thr
     })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  // A large note opens in the formatted view, as any other does.
+  await waitForDocumentEditor(app, page)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'large.md',
+  )
   await page.evaluate(() => {
-    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
       .view
     view.dispatch({
       changes: { from: 1, to: 2, insert: 'Z' },
@@ -100,7 +105,7 @@ test('history above its retention budget keeps a distinct version restorable thr
       (await window.hibi.getDocument()).contentVersion > version,
     before,
   )
-  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await waitForDocumentEditor(app, page)
   const restored = await page.evaluate(async () => {
     const current = await window.hibi.getDocument()
     return { markdown: current.markdown, dirty: current.dirty }

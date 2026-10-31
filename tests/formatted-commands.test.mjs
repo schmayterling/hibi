@@ -28,6 +28,7 @@ import {
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { sourceEditorTextCooperatively } from '../src/renderer/src/source-session.ts'
 import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
+import { HTMLImage } from '../src/shared/markdown-html-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const markdown = parser.configure(GFM)
@@ -132,6 +133,17 @@ test('a triple-click selects the source of a block the rich editor draws as one 
   // Text keeps its block's text selection.
   assert.equal(at(doc.indexOf('end')), null)
   assert.equal(at(doc.indexOf('text'), true), null)
+  // An `<img>` tag drawn as an image, as a Markdown image.
+  const html = 'see <img src="b.png" alt="b"> after'
+  const htmlState = EditorState.create({ doc: html })
+  const htmlTree = parser.configure([GFM, HTMLImage]).parse(html)
+  const tag = (pos, widget) => {
+    const atom = blockAtom(htmlState, htmlTree, pos, widget)
+    return atom && html.slice(atom.from, atom.to)
+  }
+  assert.equal(tag(html.indexOf('<img') + 3, false), null)
+  assert.equal(tag(html.indexOf('<img'), true), '<img src="b.png" alt="b">')
+  assert.equal(tag(html.indexOf(' after'), true), '<img src="b.png" alt="b">')
 })
 
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {

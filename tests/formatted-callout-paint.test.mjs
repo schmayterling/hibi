@@ -98,8 +98,10 @@ async function measure(engine, measureView) {
     const page = await app.firstWindow()
     page.setDefaultTimeout(20000)
     await selectFormattedEngine(app, page, engine)
-    await app.evaluate(({ BrowserWindow, dialog }, path) => {
-      BrowserWindow.getAllWindows()[0].setContentSize(1000, 2400)
+    // macOS keeps a shown window, as hosted runners show them, within the
+    // screen; the page's own viewport can be taller.
+    await page.setViewportSize({ width: 1000, height: 2400 })
+    await app.evaluate(({ dialog }, path) => {
       // Quitting answers an unsaved-changes prompt, should the editor normalize the note.
       dialog.showMessageBox = async () => ({ response: 1 })
       dialog.showOpenDialog = async () => ({

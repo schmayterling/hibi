@@ -52,6 +52,12 @@ async function open(t, addons) {
     await waitForAddonShortcut(page, 'dictionary.synonyms')
   await clickMenu(app, 'Open…')
   await page.getByRole('link', { name: 'docs', exact: true }).waitFor()
+  // The view takes focus with the caret at the note's end, in the table's
+  // link, once it takes input and its font loads. Until then a blur is undone.
+  await page.waitForFunction(
+    (element) => element.cmTile.root.view.state.selection.main.head > 0,
+    await editor.elementHandle(),
+  )
   const panel = page.getByRole('dialog', { name: 'Link actions', exact: true })
   const dialog = page.getByRole('dialog', { name: 'Edit link', exact: true })
   const read = () =>

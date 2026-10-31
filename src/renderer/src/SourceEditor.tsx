@@ -148,7 +148,7 @@ import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
-import { readDOMPosition } from './native-dom-selection'
+import { mappedPositionAt } from './native-dom-selection'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -2674,19 +2674,10 @@ export function SourceEditor({
             return
           detachInteractions = attachEditorInteractions({
             element: editor.contentDOM,
-            positionAt: (x, y) => {
+            positionAt: (x, y) =>
               // A table cell's text has its own positions.
-              const range = editor.contentDOM.ownerDocument.caretRangeFromPoint(
-                x,
-                y,
-              )
-              const cell =
-                range &&
-                readDOMPosition(editor, range.startContainer, range.startOffset)
-              return cell?.mapped
-                ? cell.at
-                : editor.posAtCoords({ x, y }, false)
-            },
+              mappedPositionAt(editor, x, y) ??
+              editor.posAtCoords({ x, y }, false),
             anchorAt: (position) => editor.coordsAtPos(position),
             selectionPosition: () => editor.state.selection.main.head,
             capture: captureInteraction,

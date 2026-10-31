@@ -433,6 +433,126 @@ test('formatted split lines up a source line in a row a long table has not drawn
   await source(page, text)
 })
 
+// Whether the source pane shows the line of the formatted table row that
+// leads, the row at the formatted pane's middle or the focused cell's, at the
+// height of the text of its first cell.
+function sourceLinedUp(caret) {
+  const pane = document.querySelector('.rich-pane')
+  const bounds = pane.getBoundingClientRect()
+  const middle = bounds.top + bounds.height / 2
+  const row = caret
+    ? document.activeElement?.closest('.rich-pane tr[data-line]')
+    : [...pane.querySelectorAll('tr[data-line]')].find((row) => {
+        const box = row.getBoundingClientRect()
+        return box.top <= middle && box.bottom > middle
+      })
+  if (!row) return false
+  const view = document.querySelector('.source-pane .cm-content').cmTile.root
+    .view
+  const at = view.state.doc
+    .toString()
+    .indexOf(`| r${Number(row.dataset.line) - 2} |`)
+  const point = at < 0 ? null : view.coordsAtPos(at)
+  const cell = row.querySelector('td')
+  const text = document.createRange()
+  text.selectNodeContents(cell.querySelector('p') ?? cell)
+  const drawn = text.getBoundingClientRect()
+  return (
+    !!point &&
+    Math.abs((point.top + point.bottom) / 2 - (drawn.top + drawn.bottom) / 2) <
+      6
+  )
+}
+
+// Lined up, and still once the panes settle: until the source pane follows
+// a scroll, a row can be at its line's height by chance.
+async function staysLinedUp(page, caret, label) {
+  await waitForAsync(page, sourceLinedUp, caret, { label })
+  await frames(page, 10)
+  assert.ok(await page.evaluate(sourceLinedUp, caret), label)
+}
+
+test('formatted split lines up a formatted table row with its source line', {
+  timeout: 90000,
+}, async (t) => {
+  const lines = 'line\n\n'.repeat(30)
+  const text = `${lines}${table(80)}${lines}`
+  const { page } = await open(t, text)
+  // The formatted pane leads. It scrolls to the table, which it draws once
+  // near, then puts a row away from the table's middle at its middle.
+  await page.evaluate((at) => {
+    const pane = document.querySelector('.rich-pane')
+    const view = pane.querySelector('.cm-content').cmTile.root.view
+    pane.dispatchEvent(new WheelEvent('wheel'))
+    pane.scrollTop = view.lineBlockAt(at).top
+  }, text.indexOf('| aa |'))
+  await page
+    .locator('.rich-pane tr[data-line="22"]')
+    .waitFor({ state: 'attached' })
+  await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.dispatchEvent(new WheelEvent('wheel'))
+    const row = pane.querySelector('tr[data-line="22"]').getBoundingClientRect()
+    const bounds = pane.getBoundingClientRect()
+    pane.scrollTop += row.top + row.height / 2 - bounds.top - bounds.height / 2
+  })
+  await staysLinedUp(
+    page,
+    false,
+    "the source line of the row at the formatted pane's middle",
+  )
+  // In a cell's editor, its caret leads, also away from the pane's middle.
+  await page.locator('.rich-pane tr[data-line="60"] td').first().click()
+  await page.keyboard.press('End')
+  await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.dispatchEvent(new WheelEvent('wheel'))
+    const row = pane.querySelector('tr[data-line="60"]').getBoundingClientRect()
+    const bounds = pane.getBoundingClientRect()
+    pane.scrollTop += row.top - bounds.top - bounds.height / 4
+  })
+  await staysLinedUp(
+    page,
+    true,
+    "the source line of the row of the cell editor's caret",
+  )
+  // Columns sized narrower than half the content leave its middle beside
+  // the table's cells.
+  for (const column of await page
+    .locator(
+      '.rich-pane .hibi-lp-table th .hibi-lp-table-resizer[data-axis="column"]',
+    )
+    .all()) {
+    await column.focus()
+    for (let step = 0; step < 12; step++)
+      await page.keyboard.press('Shift+ArrowLeft')
+  }
+  await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.dispatchEvent(new WheelEvent('wheel'))
+    const row = pane.querySelector('tr[data-line="40"]').getBoundingClientRect()
+    const bounds = pane.getBoundingClientRect()
+    pane.scrollTop += row.top + row.height / 2 - bounds.top - bounds.height / 2
+  })
+  assert.ok(
+    await page.evaluate(() => {
+      const content = document
+        .querySelector('.rich-pane .cm-content')
+        .getBoundingClientRect()
+      const cells = document
+        .querySelector('.rich-pane .hibi-lp-table > table')
+        .getBoundingClientRect()
+      return cells.right < content.left + content.width / 2
+    }),
+  )
+  await staysLinedUp(
+    page,
+    false,
+    'the source line of the row at the middle beside a narrow table',
+  )
+  await source(page, text)
+})
+
 test('large formatted split follows distant carets without whole-text geometry reads and preserves undo', {
   timeout: 120000,
 }, async (t) => {

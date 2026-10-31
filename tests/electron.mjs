@@ -1041,7 +1041,7 @@ export async function waitForAsync(
   page,
   predicate,
   arg,
-  { timeout = APP_STATE_TIMEOUT, polling = 30 } = {},
+  { timeout = APP_STATE_TIMEOUT, polling = 30, label = predicate } = {},
 ) {
   const started = performance.now()
   const deadline = started + timeout
@@ -1050,7 +1050,7 @@ export async function waitForAsync(
   let pollTimer
   const timedOut = () =>
     new Error(
-      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${predicate}`,
+      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}`,
     )
   const expired = new Promise((_, reject) => {
     deadlineTimer = setTimeout(() => reject(timedOut()), timeout)
@@ -1132,6 +1132,7 @@ export function waitForAddonShortcut(page, id) {
         (binding) => binding.id === id && binding.effectiveShortcut,
       ),
     id,
+    { label: `the ${id} shortcut is bound` },
   )
 }
 

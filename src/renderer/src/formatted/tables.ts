@@ -970,7 +970,7 @@ class TableView {
       return false
     column = Math.max(0, Math.min(column, this.aligned.length - 1))
     this.stopEditing()
-    if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
+    if (line > 1) this.drawInPlace(line - 2)
     const row = line ? this.rendered.get(line - 2)?.element : this.head
     const element = row?.cells[column]
     const paragraph = element?.firstElementChild
@@ -1041,7 +1041,7 @@ class TableView {
     const cell = this.locate(pos)
     if (!cell) return false
     const { line, column } = cell
-    if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
+    if (line > 1) this.drawInPlace(line - 2)
     const row = line ? this.rendered.get(line - 2)?.element : this.head
     const element = row?.cells[column]
     if (!element) return false
@@ -1359,6 +1359,15 @@ class TableView {
     }
   }
 
+  /**
+   * Render the window around body row `index` unless the row shows in it.
+   * The edited row stays mounted beside a window that scrolled away from it,
+   * where it is out of its place.
+   */
+  private drawInPlace(index: number) {
+    if (index < this.start || index >= this.end) this.reveal(index)
+  }
+
   /** Render a window of rows around row `index`, for editing it or measuring it. */
   private reveal(index: number, around = 10) {
     const from = Math.max(0, index - around)
@@ -1383,6 +1392,10 @@ class TableView {
           return false
         this.leave(true)
         return true
+      },
+      place: () => {
+        if (this.editing && this.editing.line > 1)
+          this.drawInPlace(this.editing.line - 2)
       },
       blurred: (editor) => {
         // A native pick sets focus before selectionchange. Read its completed
@@ -1966,7 +1979,7 @@ class TableView {
   /** Enter the table from an adjacent line: its header or last row, under `x` or at the near edge. */
   enter(down: boolean, x: number | null) {
     const line = down ? 0 : this.lines - 1
-    if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
+    if (line > 1) this.drawInPlace(line - 2)
     const row = line ? this.rendered.get(line - 2)?.element : this.head
     let column = x === null && !down ? this.aligned.length - 1 : 0
     if (x !== null && row)

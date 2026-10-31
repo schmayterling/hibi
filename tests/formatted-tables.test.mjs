@@ -3360,6 +3360,92 @@ test('undo moves the cell editor to the cell whose edit it undoes', {
   assert.equal(now.head, '| alpha'.length)
 })
 
+test('a long table shows the edited row in its place once the pane scrolled away from it', {
+  timeout: 120000,
+}, async () => {
+  const rows = Array.from({ length: 3000 }, (_, i) => `| row ${i} | v${i} |`)
+  // The note starts with the table, as in the scroll tests above. The pane
+  // fits the harness window, which is as tall as the app's, 720 px.
+  const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 606 },
+        { editable: true },
+      ),
+    doc,
+  )
+  await harness.evaluate(async (at) => {
+    const preview = window.tables
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const view = preview.view()
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+    await preview.settle()
+    await preview.settle()
+  }, doc.indexOf('v1801 '))
+  await harness.locator('.hibi-lp-table tr[data-line="1803"] td').nth(1).click()
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('Z')
+  // Scrolled back to the top, the window draws the rows there and keeps the
+  // edited row mounted after them, out of its place.
+  const away = () =>
+    harness.evaluate(async () => {
+      document.querySelector('.rich-pane').scrollTop = 0
+      for (let i = 0; i < 3; i++) await window.tables.settle()
+    })
+  // The focused cell, and whether it is inside the pane once the window is
+  // drawn for where the pane scrolled.
+  const shown = () =>
+    harness.evaluate(async () => {
+      for (let i = 0; i < 3; i++) await window.tables.settle()
+      const cell = document.activeElement?.closest('td')
+      const box = cell?.getBoundingClientRect()
+      const pane = document.querySelector('.rich-pane').getBoundingClientRect()
+      return {
+        cell: cell
+          ? `${cell.parentElement.dataset.line}:${cell.cellIndex}`
+          : null,
+        inside: !!box && box.top >= pane.top && box.bottom <= pane.bottom,
+      }
+    })
+  await away()
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await shown(), { cell: '1803:1', inside: true }, 'undo')
+  // Moving to the row's other cell edits it in its place too.
+  await away()
+  await harness.keyboard.press('Shift+Tab')
+  assert.deepEqual(await shown(), { cell: '1803:0', inside: true }, 'Shift+Tab')
+  // Typing goes on in the cell, which CodeMirror's own scroll to its caret
+  // shows in its place, before the row above it.
+  await away()
+  await harness.keyboard.type('Y')
+  const typed = await harness.evaluate(async () => {
+    for (let i = 0; i < 3; i++) await window.tables.settle()
+    const cell = document.activeElement?.closest('td')
+    const editor = window.tables
+      .view()
+      .constructor.findFromDOM(document.activeElement.closest('.cm-editor'))
+    const caret = editor.coordsAtPos(editor.state.selection.main.head)
+    const pane = document.querySelector('.rich-pane').getBoundingClientRect()
+    return {
+      cell: `${cell.parentElement.dataset.line}:${cell.cellIndex}`,
+      before: cell.parentElement.previousElementSibling?.dataset.line,
+      inside: caret.top >= pane.top && caret.bottom <= pane.bottom,
+    }
+  })
+  assert.deepEqual(
+    typed,
+    { cell: '1803:0', before: '1802', inside: true },
+    'typing',
+  )
+})
+
 test('a cell editor shows its cell formatted as it opens', {
   timeout: 30000,
 }, async () => {

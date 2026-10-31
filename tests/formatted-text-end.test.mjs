@@ -34,6 +34,9 @@ test('a note opens with the caret at the end of its last text block', () => {
     '- item\n\n  > | a | b |\n  > | - | - |\n  > | c | d‸\n',
     '| a | b |\n| - | - |\n| c | d‸ | e |\n',
     '| a | b |\n| - | - |\n| c | ‸|\n',
+    // An empty cell's editor puts the caret in the middle of its padding.
+    '| a | b |\n| - | - |\n| c |  ‸ |\n',
+    '| a | b |\n| - | - |\n| c |   ‸   |\n',
     '| a | b‸ |\n| - | - |\n',
     // A row with fewer cells than columns ends in its last written cell.
     '| a | b |\n| - | - |\n| c‸ |\n',

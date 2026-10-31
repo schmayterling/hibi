@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync } from './electron.mjs'
+import { electron, waitForAddonShortcut, waitForAsync } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
@@ -47,8 +47,17 @@ async function open(t, addons) {
   }, file)
   page.setDefaultTimeout(8000)
   const editor = await selectFormattedEngine(app, page, 'codemirror')
+  // The dictionary starts in the background; its menu items come with it.
+  if (addons?.dictionary)
+    await waitForAddonShortcut(page, 'dictionary.synonyms')
   await clickMenu(app, 'Open…')
   await page.getByRole('link', { name: 'docs', exact: true }).waitFor()
+  // The view takes focus with the caret at the note's end, in the table's
+  // link, once it takes input and its font loads. Until then a blur is undone.
+  await page.waitForFunction(
+    (element) => element.cmTile.root.view.state.selection.main.head > 0,
+    await editor.elementHandle(),
+  )
   const panel = page.getByRole('dialog', { name: 'Link actions', exact: true })
   const dialog = page.getByRole('dialog', { name: 'Edit link', exact: true })
   const read = () =>

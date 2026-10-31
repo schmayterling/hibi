@@ -120,6 +120,37 @@ const stored = (app, origin, partition = null) =>
     [origin, partition],
   )
 
+/** Opens a note from the host's folder as a tab. */
+async function open({ app, page, folder }, name) {
+  await app.evaluate(
+    ({ dialog }, note) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [note],
+      })
+    },
+    join(folder, name),
+  )
+  await pressShortcut(
+    app,
+    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+o`,
+  )
+  await waitForAsync(
+    page,
+    async (name) => (await window.hibi.getDocument()).name === name,
+    name,
+  )
+}
+
+/** Waits until the formatted view draws the loaded image with this description. */
+const shown = (page, alt) =>
+  page.waitForFunction((alt) => {
+    const image = document.querySelector(
+      `.rich-pane .hibi-formatted img[alt="${alt}"]`,
+    )
+    return image?.complete && image.naturalWidth > 0
+  }, alt)
+
 test('remote https images neither send nor store cookies', {
   timeout: 45000,
 }, async (t) => {
@@ -152,7 +183,8 @@ test('remote https images loaded straight from their host skip the cache, so hos
 test('a remote image drawn again after scrolling back or switching tabs is not downloaded again', {
   timeout: 90000,
 }, async (t) => {
-  const { app, page, origin, folder, paths } = await imageHost(t)
+  const host = await imageHost(t)
+  const { app, page, origin, folder, paths } = host
   await trust(app, origin)
   const editor = await selectFormattedEngine(app, page, 'codemirror')
   const filler = Array.from(
@@ -164,52 +196,148 @@ test('a remote image drawn again after scrolling back or switching tabs is not d
     `![top](${origin}/cached/top.png)\n\n${filler}\n\n![bottom](${origin}/cached/bottom.png)\n`,
   )
   await writeFile(join(folder, 'other.md'), 'Another note')
-  const open = async (name) => {
-    await app.evaluate(
-      ({ dialog }, note) => {
-        dialog.showOpenDialog = async () => ({
-          canceled: false,
-          filePaths: [note],
-        })
-      },
-      join(folder, name),
+  // Without a reference, an image the view no longer draws is collected.
+  const cdp = await page.context().newCDPSession(page)
+  const collect = () => cdp.send('HeapProfiler.collectGarbage')
+  await open(host, 'images.md')
+  await shown(page, 'top')
+  await editor.focus()
+  await editor.press('ControlOrMeta+End')
+  await shown(page, 'bottom')
+  await collect()
+  await editor.press('ControlOrMeta+Home')
+  await shown(page, 'top')
+  await open(host, 'other.md')
+  await collect()
+  await page.getByRole('tab', { name: 'images.md', exact: true }).click()
+  await shown(page, 'top')
+  assert.deepEqual(paths.filter((path) => path.startsWith('/cached/')).sort(), [
+    '/cached/bottom.png',
+    '/cached/top.png',
+  ])
+})
+
+test('held remote images keep no editor view alive, and a closed tab holds none', {
+  timeout: 120000,
+}, async (t) => {
+  const host = await imageHost(t)
+  const { app, page, origin, folder, paths } = host
+  await trust(app, origin)
+  await selectFormattedEngine(app, page, 'codemirror')
+  // Each image is drawn only while the view is at its own section.
+  const filler = Array.from(
+    { length: 300 },
+    (_, line) => `Line ${line} between the images.`,
+  ).join('\n\n')
+  const images = [
+    `![s0](${origin}/cached/s0.png)`,
+    `![s1](${origin}/cached/s1.png)`,
+    // A tag with only a height takes its width as it loads.
+    `<img src="${origin}/cached/s2.png" alt="s2" height="40">`,
+    `![s3](${origin}/cached/s3.png)`,
+  ]
+  await writeFile(
+    join(folder, 'images.md'),
+    images.map((image) => `${image}\n\n${filler}`).join('\n\n'),
+  )
+  await writeFile(join(folder, 'other.md'), 'Another note')
+  const cdp = await page.context().newCDPSession(page)
+  /** Counts live objects with a prototype after collections, until `done` or 5 s pass. */
+  const live = async (prototype, count, done) => {
+    const objectGroup = 'live'
+    for (const end = Date.now() + 5000; ; ) {
+      for (let pass = 0; pass < 3; pass++)
+        await cdp.send('HeapProfiler.collectGarbage')
+      const { result } = await cdp.send('Runtime.evaluate', {
+        expression: prototype,
+        objectGroup,
+      })
+      const { objects } = await cdp.send('Runtime.queryObjects', {
+        prototypeObjectId: result.objectId,
+        objectGroup,
+      })
+      const { result: counted } = await cdp.send('Runtime.callFunctionOn', {
+        objectId: objects.objectId,
+        functionDeclaration: count,
+        returnByValue: true,
+      })
+      // The inspector keeps what it found alive until it is released.
+      await cdp.send('Runtime.releaseObjectGroup', { objectGroup })
+      if (done(counted.value) || Date.now() > end) return counted.value
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
+  const views = (done) =>
+    live(
+      "Object.getPrototypeOf(document.querySelector('.rich-pane .cm-content').cmTile.root.view)",
+      'function () { return this.length }',
+      done,
     )
-    await pressShortcut(
-      app,
-      `${process.platform === 'darwin' ? 'Meta' : 'Control'}+o`,
-    )
+  const select = async (name) => {
+    await page.getByRole('tab', { name, exact: true }).click()
     await waitForAsync(
       page,
       async (name) => (await window.hibi.getDocument()).name === name,
       name,
     )
+    await page.waitForFunction(
+      () => !!document.querySelector('.rich-pane .cm-content')?.cmTile,
+    )
   }
-  const shown = (alt) =>
-    page.waitForFunction((alt) => {
-      const image = document.querySelector(
-        `.rich-pane .hibi-formatted img[alt="${alt}"]`,
-      )
-      return image?.complete && image.naturalWidth > 0
-    }, alt)
-  // Without a reference, an image the view no longer draws is collected.
-  const cdp = await page.context().newCDPSession(page)
-  const collect = () => cdp.send('HeapProfiler.collectGarbage')
-  await open('images.md')
-  await shown('top')
-  await editor.focus()
-  await editor.press('ControlOrMeta+End')
-  await shown('bottom')
-  await collect()
-  await editor.press('ControlOrMeta+Home')
-  await shown('top')
-  await open('other.md')
-  await collect()
-  await page.getByRole('tab', { name: 'images.md', exact: true }).click()
-  await shown('top')
-  assert.deepEqual(paths.filter((path) => path.startsWith('/cached/')).sort(), [
-    '/cached/bottom.png',
-    '/cached/top.png',
-  ])
+  await open(host, 'images.md')
+  await shown(page, 's0')
+  // The note's view and any others the window keeps.
+  const before = await views(() => true)
+  const noViewLeft = async (when) => {
+    const after = await views((count) => count <= before)
+    assert.ok(
+      after <= before,
+      `${after} editor views ${when}, ${before} before`,
+    )
+  }
+  // A tab switched away from keeps its images but no view.
+  await open(host, 'other.md')
+  await noViewLeft('after leaving s0')
+  for (const alt of ['s1', 's2', 's3']) {
+    await select('images.md')
+    await page.evaluate((path) => {
+      const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+        .root
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(
+          view.state.doc.toString().indexOf(path),
+          { y: 'center' },
+        ),
+      })
+    }, `/cached/${alt}.png`)
+    await shown(page, alt)
+    await select('other.md')
+    await noViewLeft(`after leaving ${alt}`)
+  }
+  // Closed, the note holds none of its images, nor its last view.
+  await select('images.md')
+  await pressShortcut(
+    app,
+    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+w`,
+  )
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'other.md',
+  )
+  assert.equal(
+    await live(
+      'HTMLImageElement.prototype',
+      "function () { return this.filter((image) => image.src.startsWith('app://hibi/remote-image?')).length }",
+      (count) => count === 0,
+    ),
+    0,
+  )
+  await noViewLeft('after closing the note')
+  // Held while the note was open, each image was downloaded once.
+  assert.deepEqual(
+    paths.filter((path) => path.startsWith('/cached/s')).sort(),
+    ['/cached/s0.png', '/cached/s1.png', '/cached/s2.png', '/cached/s3.png'],
+  )
 })
 
 test('PDF exports draw remote images from the image cache, which sends image hosts no cookies and keeps none', {

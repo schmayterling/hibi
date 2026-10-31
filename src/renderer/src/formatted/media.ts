@@ -15,6 +15,7 @@ import {
   refreshRemoteImage,
   remoteImageSource,
 } from '../document-media.ts'
+import { documentRuntime } from '../document-runtime.ts'
 import type { EditorActionsRequest } from '../editor-interactions'
 import {
   type FormattedContribution,
@@ -50,6 +51,65 @@ export function imageOf(state: EditorState, node: SyntaxNodeRef) {
     title: title ? text(title.from + 1, title.to - 1) : '',
     label: { from: node.from + 2, to: close.from },
   }
+}
+
+/**
+ * Loaded remote images each open tab has drawn, most recent last. The image
+ * cache answers with `no-store`, so a widget drawn again after scrolling back
+ * or switching tabs would wait for its image to load again; while the page
+ * holds the loaded one, it is drawn at once, in shape. A tab lets go of its
+ * images when it closes.
+ */
+const held = new Map<string, Map<string, HTMLImageElement>>()
+/** At most this many per tab, so a note full of remote images stays bounded. */
+const HELD_PER_TAB = 200
+let watching = false
+
+/** Holds a destroyed widget's loaded remote image for its tab; false if it is not one. */
+function hold(view: EditorView, media: Element) {
+  const { tabId } = view.state.facet(formattedDocument)
+  if (
+    !tabId ||
+    // A closing tab's view is destroyed after the runtime drops its session.
+    !documentRuntime.session(tabId) ||
+    !(media instanceof HTMLImageElement) ||
+    // A lazy image kept waiting off screen is not complete, but it is sized
+    // once a copy loaded for an earlier widget arrives.
+    !media.naturalWidth ||
+    !remoteImageSource(media)
+  )
+    return false
+  if (!watching) {
+    watching = true
+    // The runtime drops a closed tab's session, and its images go with it.
+    documentRuntime.subscribeCatalog(() => {
+      for (const [id, images] of held)
+        if (!documentRuntime.session(id)) {
+          // One still loading would stay alive, and keep loading, until its
+          // load ends.
+          for (const image of images.values()) if (!image.complete) clear(image)
+          held.delete(id)
+        }
+    })
+  }
+  let images = held.get(tabId)
+  if (!images) {
+    images = new Map()
+    held.set(tabId, images)
+  }
+  // Out of its widget, the image keeps no destroyed view's DOM alive.
+  media.remove()
+  const previous = images.get(media.src)
+  if (previous && previous !== media && !previous.complete) clear(previous)
+  images.delete(media.src)
+  images.set(media.src, media)
+  const [oldest = ''] = images.keys()
+  if (images.size > HELD_PER_TAB) {
+    const evicted = images.get(oldest)
+    images.delete(oldest)
+    if (evicted && !evicted.complete) clear(evicted)
+  }
+  return true
 }
 
 /** A drawn widget's media resolution, rebound when the note's revision changes. */
@@ -114,20 +174,6 @@ export class MediaWidget extends WidgetType {
       if (this.height) media.height = this.height
       // A column narrower than the width scales the height with it.
       if (this.width && this.height) keepShape(media, this.width, this.height)
-      // A height alone takes its width from the image's own shape.
-      else if (this.height && media instanceof HTMLImageElement) {
-        const image = media
-        image.onload = () => {
-          if (image.naturalWidth && image.naturalHeight)
-            keepShape(
-              image,
-              Math.round(
-                (this.height * image.naturalWidth) / image.naturalHeight,
-              ),
-              this.height,
-            )
-        }
-      }
       delete media.dataset.tooltip
       if (media instanceof HTMLVideoElement) {
         media.controls = true
@@ -145,6 +191,16 @@ export class MediaWidget extends WidgetType {
         media.removeAttribute('title')
         media.dataset.tooltip =
           'Could not load this media. Check the file path. Save the note first if the path is relative to it.'
+      }
+      // A height alone takes its width from the image's own shape before the
+      // image is drawn stretched: at once for an image already in memory, else
+      // as soon as its size reaches its box, and again when a new source loads.
+      if (!this.width && this.height && media instanceof HTMLImageElement) {
+        media.onload = fitLoaded
+        if (!(media.complete && fitHeight(media))) {
+          sizing ??= new ResizeObserver(fitResized)
+          sizing.observe(media)
+        }
       }
     }
     let release: (() => void) | null = null
@@ -172,8 +228,9 @@ export class MediaWidget extends WidgetType {
   }
   override destroy(dom: HTMLElement) {
     const media = dom.firstElementChild
-    if (media instanceof HTMLElement) clear(media)
     const entry = bindings.get(dom)
+    if (media instanceof HTMLElement && !(entry && hold(entry.view, media)))
+      clear(media)
     if (!entry) return
     drawn.get(entry.view)?.delete(entry.binding)
     // A replacement widget in the same update reuses the resolved media.
@@ -196,7 +253,33 @@ function keepShape(
   media.style.height = 'auto'
 }
 
+/** Images with only a height wait here until their size is known. */
+let sizing: ResizeObserver | undefined
+
+/** Gives an image with only a height its own shape's width; false until that shape is known. */
+function fitHeight(image: HTMLImageElement) {
+  if (!image.naturalWidth || !image.naturalHeight) return false
+  const height = Number(image.getAttribute('height'))
+  keepShape(
+    image,
+    Math.round((height * image.naturalWidth) / image.naturalHeight),
+    height,
+  )
+  sizing?.unobserve(image)
+  return true
+}
+
+// Shared handlers, so an image keeps no widget's DOM or view alive.
+const fitLoaded = ({ target }: Event) => {
+  if (target instanceof HTMLImageElement) fitHeight(target)
+}
+const fitResized = (entries: ResizeObserverEntry[]) => {
+  for (const { target } of entries)
+    if (target instanceof HTMLImageElement) fitHeight(target)
+}
+
 function clear(media: Element) {
+  sizing?.unobserve(media)
   media.removeAttribute('src')
   if (media instanceof HTMLVideoElement) {
     media.pause()

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import unit from 'node:test'
@@ -323,6 +324,201 @@ unit(
         `keeps 16:9: ${width}×${height}`,
       )
     }
+  },
+)
+
+/**
+ * Opens a note with a remote 1600×900 `<img>` sized only by its height above
+ * 400 lines, from an https host that answers `delay` ms after each request.
+ */
+async function openTallRemoteImage(t, delay) {
+  const image = blankPng(1600, 900)
+  const requests = []
+  const server = createServer(
+    {
+      cert: await readFile('tests/fixtures/host-network-localhost-cert.pem'),
+      key: await readFile('tests/fixtures/host-network-localhost-key.pem'),
+    },
+    (request, response) => {
+      requests.push(request.url)
+      setTimeout(() => {
+        response.writeHead(200, { 'Content-Type': 'image/png' })
+        response.end(image)
+      }, delay)
+    },
+  )
+  await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-remote-image-shape-'))
+  const note = join(folder, 'note.md')
+  const lines = Array.from(
+    { length: 400 },
+    (_, line) => `Line ${line} below the image.`,
+  )
+  await writeFile(
+    note,
+    `# Title\n\n<img src="https://127.0.0.1:${server.address().port}/wide.png" alt="high" height="900">\n\n${lines.join('\n\n')}\n`,
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    server.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ session }) =>
+    session.defaultSession.setCertificateVerifyProc((_request, done) =>
+      done(0),
+    ),
+  )
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
+  await selectFormattedEngine(app, page, 'codemirror')
+  await app.evaluate(({ dialog }, note) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [note],
+    })
+  }, note)
+  await pressShortcut(
+    app,
+    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+o`,
+  )
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.rich-pane .cm-line')].some(
+      (line) => line.textContent === 'Line 8 below the image.',
+    ),
+  )
+  return { page, requests }
+}
+
+unit(
+  'a remote <img> with only a height, drawn again from memory above the text, is in shape as it is drawn',
+  {
+    timeout: 60000,
+  },
+  async (t) => {
+    const { page } = await openTallRemoteImage(t, 0)
+    await page.waitForFunction(() => {
+      const image = document.querySelector('.rich-pane img[alt="high"]')
+      return !!image?.complete && image.getBoundingClientRect().height < 900
+    })
+    // Far down, its widget is gone and the loaded image is held in memory.
+    await page.evaluate(() => {
+      const pane = document.querySelector('.rich-pane')
+      pane.scrollTop = pane.scrollHeight
+    })
+    await page.waitForFunction(
+      () => !document.querySelector('.rich-pane img[alt="high"]'),
+    )
+    // Back with "Line 8" at the top, the image is drawn again just above it.
+    const { boxes, lines } = await page.evaluate(async () => {
+      const pane = document.querySelector('.rich-pane')
+      const content = pane.querySelector('.cm-content')
+      const { view } = content.cmTile.root
+      // Its size as drawn, before its load event can run.
+      const boxes = []
+      const drawn = new MutationObserver(() => {
+        const image = content.querySelector('img[alt="high"]')
+        if (!image) return
+        const { width, height } = image.getBoundingClientRect()
+        boxes.push([width, height])
+      })
+      drawn.observe(content, { childList: true, subtree: true })
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(
+          view.state.doc.toString().indexOf('Line 8 below'),
+          { y: 'start' },
+        ),
+      })
+      const lines = []
+      for (let frame = 0; frame < 30; frame++) {
+        await new Promise(requestAnimationFrame)
+        const line = [...content.querySelectorAll('.cm-line')].find(
+          (line) => line.textContent === 'Line 12 below the image.',
+        )
+        lines.push(
+          line &&
+            Math.round(
+              line.getBoundingClientRect().top -
+                pane.getBoundingClientRect().top,
+            ),
+        )
+      }
+      drawn.disconnect()
+      return { boxes, lines }
+    })
+    assert.ok(boxes.length, 'drawn again')
+    for (const [width, height] of boxes)
+      assert.ok(
+        Math.abs(height - (width * 900) / 1600) < 1,
+        `keeps 16:9 as drawn: ${JSON.stringify(boxes)}`,
+      )
+    // So the text below it holds still.
+    assert.equal(new Set(lines).size, 1, JSON.stringify(lines))
+  },
+)
+
+unit(
+  'a slow remote <img> with only a height takes its shape above the text as soon as its size is known',
+  {
+    timeout: 60000,
+  },
+  async (t) => {
+    const { page, requests } = await openTallRemoteImage(t, 1500)
+    // Before the image arrives, "Line 8" goes to the top, the image above it.
+    await page.evaluate(() => {
+      const pane = document.querySelector('.rich-pane')
+      const line = [...pane.querySelectorAll('.cm-line')].find(
+        (line) => line.textContent === 'Line 8 below the image.',
+      )
+      pane.scrollTop +=
+        line.getBoundingClientRect().top - pane.getBoundingClientRect().top
+    })
+    // There, out of sight, its line takes the image's shape once it arrives.
+    const shaped = await page.waitForFunction(
+      () => {
+        const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+          .root
+        const { height } = view.lineBlockAt(
+          view.state.doc.toString().indexOf('<img'),
+        )
+        window.arrivalWait ??= performance.now()
+        return height < 900 || performance.now() - window.arrivalWait > 4000
+          ? height
+          : null
+      },
+      null,
+      { timeout: 15000 },
+    )
+    const height = await shaped.jsonValue()
+    assert.ok(height < 900, `image line shaped, not 900 px tall: ${height}`)
+    // Scrolled to, even after a collection, it shows in shape at once and
+    // without another download.
+    const cdp = await page.context().newCDPSession(page)
+    for (let pass = 0; pass < 2; pass++)
+      await cdp.send('HeapProfiler.collectGarbage')
+    const frames = await page.evaluate(async () => {
+      const pane = document.querySelector('.rich-pane')
+      pane.scrollTop = 0
+      const frames = []
+      for (let frame = 0; frame < 20; frame++) {
+        await new Promise(requestAnimationFrame)
+        const image = pane
+          .querySelector('img[alt="high"]')
+          ?.getBoundingClientRect()
+        frames.push(image && [image.width, image.height])
+      }
+      return frames
+    })
+    const drawn = frames.filter(Boolean)
+    assert.ok(drawn.length, JSON.stringify(frames))
+    for (const [width, height] of drawn)
+      assert.ok(
+        Math.abs(height - (width * 900) / 1600) < 1,
+        `keeps 16:9 in every frame: ${JSON.stringify(frames)}`,
+      )
+    assert.deepEqual(requests, ['/wide.png'])
   },
 )
 

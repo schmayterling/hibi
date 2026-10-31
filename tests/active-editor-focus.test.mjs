@@ -292,9 +292,18 @@ for (const engine of ['tiptap', 'codemirror']) {
         .click()
       await focused()
       await clickMenu(app, 'Command palette')
+      // A busy renderer can run typing queued behind the closing dialog
+      // before CodeMirror's own selection repair; type as focus returns.
+      await page.evaluate(() => {
+        const dialog = document.querySelector('dialog.command-palette')
+        dialog.close = function () {
+          delete this.close
+          this.close()
+          document.execCommand('insertText', false, 'x')
+        }
+      })
       await page.keyboard.press('Escape')
       await focused()
-      await page.keyboard.insertText('x')
       await waitForAsync(
         page,
         async (text) => (await window.hibi.getDocument()).markdown === text,

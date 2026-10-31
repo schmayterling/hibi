@@ -570,9 +570,9 @@ test(
     const wide = `\`\`\`js\nconst text = "${'漢'.repeat(20_000)}";\n\`\`\``
     await show(wide, right)
     if (cm) {
-      // CodeMirror may keep a line gap it drew for that line while it was
-      // estimated as wrapped text, so only its start is drawn. A tall line
-      // keeps one.
+      // CodeMirror once kept a line gap it drew for that line while it took
+      // it for wrapped text, so only its start was drawn, and a tall line
+      // kept one. A line that does not wrap gets no gap.
       const tall = await page.addStyleTag({
         content:
           '.rich-pane .hibi-lp-codescroll > .cm-line { padding-bottom: 9000px; }',
@@ -582,8 +582,8 @@ test(
         await page
           .locator('.rich-pane .hibi-lp-codescroll')
           .first()
-          .evaluate((box) => box.textContent.length < 20_000),
-        'a line gap leaves the end of the line undrawn',
+          .evaluate((box) => box.textContent.length > 20_000),
+        'the whole line is drawn',
       )
       await tall.evaluate((style) => style.remove())
     }

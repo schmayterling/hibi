@@ -282,6 +282,8 @@ test('codemirror: undo and redo scroll to the selection they restore', {
     pane.scrollTop = pane.scrollHeight / 2
   }, source)
   const kept = await settled(source)
+  // The caret is off screen there, so a step that showed it would scroll.
+  assert.equal((await page.evaluate(restored, source)).shown, false)
   await page.keyboard.press(undoKey)
   await waitForAsync(
     page,

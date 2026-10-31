@@ -111,6 +111,8 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 })
 
 type Revealed = { from: number; to: number }
+/** A drawn range; `lite` when only its block styles are drawn. */
+type Drawn = Revealed & { lite?: true }
 
 /**
  * The longest line the editor draws whole once any of it shows: a longer one
@@ -124,10 +126,10 @@ const wholeLine = 20000
  * view's styles, such a line, as a heading the caret is in, measures at
  * another height once the pane scrolls away from it and moves the text below.
  */
-function drawnRanges(view: EditorView): readonly Revealed[] {
+function drawnRanges(view: EditorView): readonly Drawn[] {
   const { viewport } = view
   const { anchor, head } = view.state.selection.main
-  const extra: Revealed[] = []
+  const extra: Drawn[] = []
   for (const pos of [anchor, head])
     if (
       (pos < viewport.from || pos > viewport.to) &&
@@ -136,9 +138,12 @@ function drawnRanges(view: EditorView): readonly Revealed[] {
       const { from, to } = view.lineBlockAt(pos)
       // ponytail: the editor draws such a block whole, and every viewport
       // change styles it again, so one longer than a line it draws whole on
-      // screen stays plain and can still move the text below it. Keeping its
+      // screen keeps only the block styles that set its lines' heights, and
+      // its inline formatting can still move the text below it. Keeping its
       // decorations through updates that only move the viewport would lift this.
-      if (to - from <= wholeLine) extra.push({ from, to })
+      extra.push(
+        to - from <= wholeLine ? { from, to } : { from, to, lite: true },
+      )
     }
   if (!extra.length) return view.visibleRanges
   return [...view.visibleRanges, ...extra].sort((a, b) => a.from - b.from)
@@ -866,6 +871,8 @@ function inline(
       to: range.to,
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
+        if (range.lite)
+          return ref.type.is('Block') && builtIn(ref, range) !== false
         const name = ref.name
         let skip = literalText(ref.node, literal)
         if (!skip) {

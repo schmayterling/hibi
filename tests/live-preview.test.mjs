@@ -1178,6 +1178,53 @@ test('a caret paragraph left above keeps its height as the text on screen thins 
   assert.equal(result[1].height, result[0].height, report)
 })
 
+test('a long caret code line left far above keeps its one row', {
+  timeout: 120000,
+}, async () => {
+  // Longer than a line the view styles whole off screen: drawn plain, the
+  // code line would wrap into thousands of pixels.
+  const code = `const value = ${'"x" + '.repeat(4300)}"end";`
+  const paragraphs = Array.from(
+    { length: 400 },
+    (_, i) => `Paragraph ${i} of the note.`,
+  )
+  const doc = `\`\`\`js\n${code}\n\`\`\`\n\n${paragraphs.join('\n\n')}\n`
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 900, height: 600 }, { editable: true })
+    for (let i = 0; i < 500 && !preview.covered(0, doc.length); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    const view = preview.view()
+    const line = view.state.doc.line(2)
+    view.dispatch({ selection: { anchor: line.from + 10 } })
+    await preview.settle()
+    const before = view.lineBlockAt(line.from).height
+    const at = view.lineBlockAt(view.viewport.to).from
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'start' }),
+    })
+    await preview.settle()
+    await preview.settle()
+    // Pushed far down, the line is not drawn and has no coordinates.
+    const box = view.coordsAtPos(at, 1)
+    return {
+      length: line.length,
+      left: view.viewport.from > line.to,
+      before,
+      after: view.lineBlockAt(line.from).height,
+      top: box && box.top - pane.getBoundingClientRect().top,
+    }
+  }, doc)
+  const report = JSON.stringify(result)
+  assert.ok(result.length > 20000, report)
+  assert.equal(result.left, true, report)
+  assert.ok(result.before < 100, report)
+  assert.equal(result.after, result.before, report)
+  assert.ok(result.top >= 0 && result.top < 20, report)
+})
+
 test('stepping up after a jump to the end, known code blocks never draw as plain text', {
   timeout: 120000,
 }, async () => {

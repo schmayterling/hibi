@@ -340,12 +340,13 @@ test('a view that undoes or redoes its own edit scrolls to what that restores; o
   assert.equal(right.bridge.redo(), true)
   right.dispatch(type(1, 'Y', 2))
   assert.equal(right.bridge.undo(), true)
+  assert.equal(right.bridge.redo(), true)
   // Session history moves no view either.
   f.session.undo()
   hidden.bridge.setVisible(true)
   assert.deepEqual(logs, [
-    [true, false, false, false, false],
-    [false, false, false, true, false],
+    [true, false, false, false, false, false],
+    [false, false, false, true, true, false],
     [false],
   ])
   assert.deepEqual(f.errors, [])

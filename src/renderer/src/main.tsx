@@ -33,6 +33,7 @@ import {
   type Hotkeys,
 } from '../../shared/hotkeys'
 import { isMediaFile } from '../../shared/media'
+import { runSourceHistory } from '../../shared/source-history'
 import type { SourceTransferSender } from '../../shared/source-transfer'
 import { startupMark } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
@@ -81,6 +82,7 @@ import { isEditorCommandTargetCurrent } from './editor-command-targets'
 import { focusEditor } from './editor-focus'
 import { setEditorCommandMenu } from './editor-interaction-presence'
 import { editorPreferences, useEditorPreference } from './editor-preferences'
+import { editorViewRegistry } from './editor-view-api'
 import { FlavorPicker } from './FlavorPicker'
 import type { ViewMode } from './FormattedEditor'
 import {
@@ -103,6 +105,7 @@ import { StartupPlaceholder } from './StartupPlaceholder'
 import { StatusBar, type StatusBarVisibility } from './StatusBar'
 import { settingsCategories } from './settings-categories'
 import { settingsPages } from './settings-pages'
+import { sourceView } from './source-view'
 import { Titlebar } from './Titlebar'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
@@ -1365,8 +1368,22 @@ function App() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: recovery reads live refs while this command handler must stay stable across renders.
   const performCommand = useCallback(
     async (command: DocumentCommand) => {
-      if (command === 'undo' || command === 'redo')
-        return Boolean(documentRuntime.session()?.[command]())
+      if (command === 'undo' || command === 'redo') {
+        // The view the user works in takes the step, as its keys do, and
+        // scrolls to what it restores.
+        const active = documentRuntime.captureDocument()
+        const view = documentRuntime.captureActiveView()
+        const surface =
+          view && view.documentId === active?.documentId
+            ? editorViewRegistry.surface(view)
+            : null
+        const editor = surface && sourceView(surface)
+        return Boolean(
+          editor
+            ? runSourceHistory(editor, command)
+            : documentRuntime.session()?.[command](),
+        )
+      }
       const saving = command === 'save' || command === 'saveAs'
       if (saving) saveCancellation.current = { canceled: false }
       const token = saving ? documentRuntime.beginSave() : null

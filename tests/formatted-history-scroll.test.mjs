@@ -57,14 +57,47 @@ function showsCell(text) {
 }
 
 // Undo and redo show the selection they bring back, as native editors do,
-// also when it stays in the table cell being edited. Each step starts with
-// the note scrolled to its top, away from that selection.
+// also when it stays in the table cell being edited, and when an addon asks
+// for them. Each step starts with the note scrolled to its top, away from
+// that selection.
 test('codemirror: undo and redo scroll to the selection they restore', {
   timeout: 180000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-history-scroll-'))
   const profile = join(folder, 'profile')
-  await mkdir(profile)
+  // An addon that runs the app's undo and redo commands, as Vim mode does.
+  const addon = join(profile, 'installed-addons', 'history-commands')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'history-commands',
+      name: 'History commands',
+      description: 'Runs undo and redo',
+      kind: 'extension',
+      apiVersion: 3,
+      capabilities: [],
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['index.js', 'hibi-addon.json'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    'export default () => ({ start(context) { window.historyApp = context.app } })',
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'history-commands': true }),
+  )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -77,7 +110,15 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
+  // The toolbar stays shown, for its table actions.
   await waitForFormattedEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:toolbar', JSON.stringify({ autoHide: false })),
+  )
+  await waitForFormattedEditor(app, page, { reload: true })
+  await page.waitForFunction(() => !!window.historyApp)
+  const command = (name) => () =>
+    page.evaluate((name) => window.historyApp.runCommand(name), name)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const markdown = () =>
@@ -116,11 +157,13 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   // The first note a new window opens may not take focus.
   await open('warmup', 'warmup\n', null)
   const differences = []
-  const step = async (name, key, text, scroller = '.rich-pane') => {
+  // Each step presses `key` or makes a call; its selection must show, in
+  // `cell` when one is given.
+  const step = async (name, key, text, scroller = '.rich-pane', cell) => {
     await page.evaluate((scroller) => {
       document.querySelector(scroller).scrollTop = 0
     }, scroller)
-    await page.keyboard.press(key)
+    await (typeof key === 'string' ? page.keyboard.press(key) : key())
     await waitForAsync(
       page,
       async (text) => (await window.hibi.getDocument()).markdown === text,
@@ -135,18 +178,23 @@ test('codemirror: undo and redo scroll to the selection they restore', {
       last = now
     }
     t.diagnostic(JSON.stringify({ name, ...last }))
-    if (!last.shown) differences.push(`${name}: ${JSON.stringify(last)}`)
+    if (
+      !last.shown ||
+      (cell && JSON.stringify(last.cell) !== JSON.stringify(cell))
+    )
+      differences.push(`${name}: ${JSON.stringify(last)}`)
   }
 
-  // Tab in the last cell adds a row. Undo takes it out with the cell editor's
-  // row, so the editor is made again; redo and the undo after it leave the
-  // editor in its cell.
+  // Tab in the last cell adds a row and edits its first cell. Undo takes it
+  // out with the cell editor's row, so the editor is made again in the cell
+  // Tab left; redo brings the caret back to the new row, as native editors
+  // do, and the undo after it to the cell Tab left.
   await open('table-rows', table, '.rich-pane td')
   await page.keyboard.press('Tab')
   const added = await changed(table)
-  await step('undo of an added row', undoKey, table)
-  await step('redo of an added row', redoKey, added)
-  await step('undo after a redo', undoKey, table)
+  await step('undo of an added row', undoKey, table, '.rich-pane', [81, 1])
+  await step('redo of an added row', redoKey, added, '.rich-pane', [82, 0])
+  await step('undo after a redo', undoKey, table, '.rich-pane', [81, 1])
 
   await open('table-typing', table, '.rich-pane td')
   await page.keyboard.type('x')
@@ -163,6 +211,28 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   assert.deepEqual((await page.evaluate(restored, '.rich-pane')).cell, [41, 1])
   await step('undo of typing in a middle cell', undoKey, table)
   await step('redo of typing in a middle cell', redoKey, middle)
+  await step('addon undo in a middle cell', command('undo'), table)
+  await step('addon redo in a middle cell', command('redo'), middle)
+
+  // A toolbar table action redoes with the caret where it left it, as Tab
+  // does: a row before puts it in the new row's first cell.
+  await open('table-toolbar', table, '.rich-pane td')
+  for (let row = 0; row < 40; row++) await page.keyboard.press('ArrowUp')
+  const bar = page.getByRole('navigation', { name: /editor toolbar/i })
+  const rowBefore = bar.locator('[data-toolbar-id="format.row-before"]')
+  const hidden = await rowBefore.evaluate(
+    (element) =>
+      !!element.closest('.toolbar-menu') &&
+      !element.closest('.toolbar-menu').matches(':popover-open'),
+  )
+  if (hidden)
+    await bar
+      .getByRole('button', { name: /^more formatting actions$/i, exact: true })
+      .click()
+  await rowBefore.click()
+  const rowed = await changed(table)
+  await step('undo of a toolbar row', undoKey, table, '.rich-pane', [41, 1])
+  await step('redo of a toolbar row', redoKey, rowed, '.rich-pane', [41, 0])
 
   // A cell taller than the pane shows the caret, not only the cell's top.
   const words = Array.from({ length: 600 }, (_, word) => `w${word}`).join(' ')
@@ -187,12 +257,10 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   await page
     .getByRole('textbox', { name: 'Find in document', exact: true })
     .fill('needle')
-  const found = await page
-    .waitForFunction(showsCell, 'needle', { timeout: 3000 })
-    .then(
-      () => true,
-      () => false,
-    )
+  const found = await page.waitForFunction(showsCell, 'needle').then(
+    () => true,
+    () => false,
+  )
   t.diagnostic(JSON.stringify({ name: 'find in a long table', shown: found }))
   if (!found) differences.push('find in a long table: not shown')
   await page.keyboard.press('Escape')
@@ -203,6 +271,8 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   const appended = await changed(paragraphs)
   await step('undo of typing in a paragraph', undoKey, paragraphs)
   await step('redo of typing in a paragraph', redoKey, appended)
+  await step('addon undo in a paragraph', command('undo'), paragraphs)
+  await step('addon redo in a paragraph', command('redo'), appended)
 
   // Each view keeps its own caret. Undoing the formatted view's edit from the
   // source view restores no selection there: the source view keeps its place,
@@ -217,22 +287,35 @@ test('codemirror: undo and redo scroll to the selection they restore', {
         .sourceReady === 'true',
   )
   const source = '.source-pane .cm-scroller'
-  const top = (scroller) => document.querySelector(scroller).scrollTop
+  // The pane's scroll position once it holds over two frames: a view
+  // measures, and so scrolls, in the frame after a change.
+  const settled = (scroller) =>
+    page.evaluate(async (scroller) => {
+      const pane = document.querySelector(scroller)
+      const frame = () => new Promise(requestAnimationFrame)
+      let last = null
+      for (let read = 0; read < 50 && pane.scrollTop !== last; read++) {
+        last = pane.scrollTop
+        await frame()
+        await frame()
+      }
+      return pane.scrollTop
+    }, scroller)
   await page.evaluate((scroller) => {
     const pane = document.querySelector(scroller)
     pane.querySelector('.cm-content').cmTile.root.view.focus()
     pane.scrollTop = pane.scrollHeight / 2
   }, source)
-  await page.waitForTimeout(500)
-  const kept = await page.evaluate(top, source)
+  const kept = await settled(source)
+  // The caret is off screen there, so a step that showed it would scroll.
+  assert.equal((await page.evaluate(restored, source)).shown, false)
   await page.keyboard.press(undoKey)
   await waitForAsync(
     page,
     async (text) => (await window.hibi.getDocument()).markdown === text,
     paragraphs,
   )
-  await page.waitForTimeout(500)
-  const place = await page.evaluate(top, source)
+  const place = await settled(source)
   t.diagnostic(JSON.stringify({ name: 'undo of another view', kept, place }))
   if (Math.abs(place - kept) > 1)
     differences.push(`undo of another view: ${kept} became ${place}`)
@@ -244,6 +327,13 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   const sourced = await changed(paragraphs)
   await step('undo in the source view', undoKey, paragraphs, source)
   await step('redo in the source view', redoKey, sourced, source)
+  await step(
+    'addon undo in the source view',
+    command('undo'),
+    paragraphs,
+    source,
+  )
+  await step('addon redo in the source view', command('redo'), sourced, source)
 
   assert.deepEqual(differences, [])
 })

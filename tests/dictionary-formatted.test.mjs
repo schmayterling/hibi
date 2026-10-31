@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
-  waitForAddonCommand,
+  waitForAddonShortcut,
   waitForDocumentEditor,
 } from './electron.mjs'
 import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
@@ -44,6 +44,8 @@ async function launch(t, files, engine = 'codemirror') {
     await page.reload()
     await waitForDocumentEditor(app, page)
   }
+  // The dictionary starts in the background; a lookup before it does is lost.
+  await waitForAddonShortcut(page, 'dictionary.synonyms')
   const responses = {
     'https://en.wiktionary.org/api/rest_v1/page/definition/happy':
       await fixture('wiktionary-happy.json'),
@@ -86,7 +88,6 @@ async function launch(t, files, engine = 'codemirror') {
     )
     await waitForDocumentEditor(app, page)
   }
-  await waitForAddonCommand(page, 'dictionary.synonyms')
   return { app, page, open }
 }
 

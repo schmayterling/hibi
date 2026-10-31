@@ -1041,7 +1041,7 @@ export async function waitForAsync(
   page,
   predicate,
   arg,
-  { timeout = APP_STATE_TIMEOUT, polling = 30 } = {},
+  { timeout = APP_STATE_TIMEOUT, polling = 30, label = predicate } = {},
 ) {
   const started = performance.now()
   const deadline = started + timeout
@@ -1050,7 +1050,7 @@ export async function waitForAsync(
   let pollTimer
   const timedOut = () =>
     new Error(
-      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${predicate}`,
+      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}`,
     )
   const expired = new Promise((_, reject) => {
     deadlineTimer = setTimeout(() => reject(timedOut()), timeout)
@@ -1122,15 +1122,17 @@ export function waitForAppState(page, check, timeout = 10000) {
   return waitForAsync(page, check, undefined, { timeout, polling: 100 })
 }
 
-/** A background addon has its commands, shortcuts and menu items only once it has started. */
-export function waitForAddonCommand(page, id) {
+// A background addon starts after the editor is ready; its commands bind
+// their shortcuts and join the menus only then.
+export function waitForAddonShortcut(page, id) {
   return waitForAsync(
     page,
     async (id) =>
       (await window.hibi.getAddonHotkeys()).some(
-        (binding) => binding.id === id,
+        (binding) => binding.id === id && binding.effectiveShortcut,
       ),
     id,
+    { label: `the ${id} shortcut is bound` },
   )
 }
 

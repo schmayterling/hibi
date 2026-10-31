@@ -84,7 +84,7 @@ test('direct definitions and factories share one descriptor path', {
   globalThis.definitionFactoryCalls = 0
   addonRegistry.hydrate([
     {
-      // No capabilities: a factory would receive the legacy SDK, so a direct object must skip it.
+      // No capabilities: only factories load an SDK, so a direct object must skip the loader.
       manifest: manifest('direct-probe'),
       url: module(
         `${fixture} export default { ...definition, manifest: { id: 'direct-probe' } }`,
@@ -117,10 +117,17 @@ test('direct definitions and factories share one descriptor path', {
   assert.equal(factory.flavors, undefined)
   assert.equal(globalThis.definitionFactoryCalls, 0)
 
+  // The graph lists dynamic import targets; only evaluated modules carry an instance.
+  const sdkLoaded = () =>
+    [...server.moduleGraph.idToModuleMap.values()].some(
+      (node) => node.id.endsWith('/src/addons/sdk-loader.ts') && node.ssrModule,
+    )
   globalThis.definitionId = 'direct-probe'
   await direct.start({})
+  assert.ok(!sdkLoaded(), 'the SDK must not load for direct definitions')
   globalThis.definitionId = 'factory-probe'
   await factory.start({})
+  assert.ok(sdkLoaded(), 'a factory loads the SDK its capabilities select')
   assert.deepEqual(globalThis.definitionStarts, [
     'direct-probe',
     'factory-probe',
@@ -134,13 +141,6 @@ test('direct definitions and factories share one descriptor path', {
   assert.equal(globalThis.definitionFactoryCalls, 1)
   assert.ok(globalThis.definitionSdk.documents)
   assert.equal(globalThis.definitionSdk.React, undefined)
-  // The graph lists dynamic import targets; only evaluated modules carry an instance.
-  assert.ok(
-    ![...server.moduleGraph.idToModuleMap.values()].some(
-      (node) => node.id.endsWith('/src/addons/sdk.ts') && node.ssrModule,
-    ),
-    'the legacy SDK must not load for direct definitions',
-  )
 
   await assert.rejects(find('mismatch-probe').start({}), /do not match/)
   await assert.rejects(find('shape-probe').start({}), /cannot start/)

@@ -450,7 +450,7 @@ test('settings opened while a restored version, file, tab or new note opens stay
     async () => (await window.hibi.getDocument()).name === 'one.md',
   )
   // Settings opened while an open waits on the main process outlive it.
-  for (const [channel, start, name] of [
+  for (const [channel, start, name, dirty = null] of [
     [
       'history:restore',
       async () => {
@@ -484,6 +484,8 @@ test('settings opened while a restored version, file, tab or new note opens stay
           .click()
       },
       'one.md',
+      // The restored version is an unsaved change.
+      true,
     ],
     [
       'workspace:open-file',
@@ -517,8 +519,11 @@ test('settings opened while a restored version, file, tab or new note opens stay
     await app.evaluate(() => globalThis.releaseHeldOpen())
     await waitForAsync(
       page,
-      async (name) => (await window.hibi.getDocument()).name === name,
-      name,
+      async ([name, dirty]) => {
+        const note = await window.hibi.getDocument()
+        return note.name === name && (dirty === null || note.dirty === dirty)
+      },
+      [name, dirty],
     )
     await page.locator('.app[aria-busy="false"]').waitFor()
     await page.evaluate(async () => {

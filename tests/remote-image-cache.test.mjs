@@ -193,11 +193,11 @@ test('Refresh image, from a right-click, Shift+F10 or the menu key, fetches a re
   const host = await imageHost(t)
   const note = join(host.folder, 'loose.md')
   await writeFile(note, `# Loose\n\n![garden](${host.source})\n`)
-  // BBCode previews come from an addon that starts off.
+  // BBCode and HTML previews come from addons that start off.
   await mkdir(host.profile)
   await writeFile(
     join(host.profile, 'addons.json'),
-    JSON.stringify({ bbcode: true }),
+    JSON.stringify({ bbcode: true, html: true }),
   )
   await host.launch()
   await host.open(note)
@@ -284,6 +284,18 @@ test('Refresh image, from a right-click, Shift+F10 or the menu key, fetches a re
     })),
     { focused: true, outline: 'solid' },
   )
+  // An image whose document asks for CORS still draws, as a plain image.
+  const html = join(host.folder, 'page.html')
+  await writeFile(
+    html,
+    `<p><img crossorigin="anonymous" alt="cors" src="${host.source}"></p>`,
+  )
+  await host.open(html)
+  await host.page.waitForFunction(() => {
+    const image = document.querySelector('.format-content img[alt="cors"]')
+    return image?.complete && image.naturalWidth === 8
+  })
+  assert.equal(host.requests.length, 7)
 })
 
 test('pages show remote images, but their scripts can read neither the bytes nor the pixels', {

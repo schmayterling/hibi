@@ -54,6 +54,8 @@ export function withCachedImages(html: string, tab: string) {
     const source = image.getAttribute('src') ?? ''
     if (!/^https:\/\//i.test(source)) continue
     image.src = remoteImageUrl(source, tab)
+    // The cache refuses loads that ask for CORS; a plain load draws the same.
+    image.removeAttribute('crossorigin')
     // Focus lets the keyboard open the image's menu; a focused image needs a
     // name, so one without a description takes its file's.
     image.tabIndex = 0

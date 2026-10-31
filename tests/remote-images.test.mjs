@@ -313,6 +313,13 @@ test('a host trickling bytes holds back neither the kept copy nor a refresh, whi
     Promise.race([work, delay(10_000).then(() => 'still waiting')])
   assert.deepEqual(await settled(host.draw()), drawn('first'))
   assert.equal(host.requests.length, 2)
+  // A draw that comes later, as after a reload, shares the check's deadline
+  // and shows the copy at once.
+  const later = performance.now()
+  assert.deepEqual(await settled(host.draw()), drawn('first'))
+  const waited = performance.now() - later
+  assert.ok(waited < 2000, `waited ${waited} ms`)
+  assert.equal(host.requests.length, 2)
   host.answer = () =>
     new Response(png('second'), { headers: { 'Content-Type': 'image/png' } })
   assert.equal(
@@ -321,6 +328,26 @@ test('a host trickling bytes holds back neither the kept copy nor a refresh, whi
   )
   assert.ok(host.requests[1].init.signal.aborted)
   assert.deepEqual(await host.draw(), drawn('second'))
+})
+
+test("a refresh during an image's first download keeps that download, so its draws don't fail", async (t) => {
+  const host = await setup(t)
+  let release
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const answer = host.answer
+  host.answer = () => held.then(answer)
+  const draw = host.draw()
+  await waitFor(() => host.requests.length === 1)
+  const refreshed = refreshRemoteImage(SOURCE, host.place, host.fetch)
+  // Long enough for a refresh to stop the download, as it would a check.
+  await delay(100)
+  release()
+  assert.deepEqual(await draw, drawn('first'))
+  await refreshed
+  assert.equal(host.requests.length, 1)
+  assert.deepEqual(await host.draw(), drawn('first'))
 })
 
 test('a full cache folder deletes the images checked longest ago', async (t) => {

@@ -1536,3 +1536,24 @@ for (const { presentation, engine, code } of createCases)
     )
     assert.deepEqual(errors, [])
   })
+
+test('a startup failure of an addon formatted feature stays reported when another note opens (codemirror)', {
+  timeout: 120000,
+}, async (t) => {
+  const { app, page } = await open(t, {
+    source: plain,
+    presentation: 'formatted',
+    engine: 'codemirror',
+    code: failingCreate,
+  })
+  const message = 'Bad ext could not start its formatted editor feature.'
+  await reported(page, message)
+  // Opening a note clears the last document error, not an addon's failure.
+  await pressShortcut(app, `${mod}+o`)
+  await page.locator('.app[aria-busy="false"]').waitFor()
+  await frame(page)
+  assert.equal(
+    await page.locator('.toast').filter({ hasText: message }).count(),
+    1,
+  )
+})

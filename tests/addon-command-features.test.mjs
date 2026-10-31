@@ -16,10 +16,11 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 /**
  * Opens a note, then runs the declared command of a background addon whose
  * formatted editor feature does not finish creating until
- * `window.failSlowFeature()`, so the command waits for it. Background starts
- * and the wait's 5 s ceiling are held.
+ * `window.failSlowFeature()`, so the command waits for it. Its source editor
+ * feature is ready at once. Background starts and the wait's 5 s ceiling are
+ * held.
  */
-async function waitingCommand(t) {
+async function waitingCommand(t, { sideBySide = false } = {}) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-addon-command-features-'))
   const directory = join(profile, 'installed-addons', 'slow-feature')
   const file = join(profile, 'note.md')
@@ -56,6 +57,7 @@ async function waitingCommand(t) {
           window.failSlowFeature = () => reject(new Error('The slow feature failed.'));
         });
       } });
+      context.editor.registerSource({ id: 'quick', create: () => [] });
       context.commands.register({ id: 'probe', label: 'Probe slow feature', run() {
         window.slowFeatureRuns = (window.slowFeatureRuns || 0) + 1;
       } });
@@ -114,6 +116,15 @@ async function waitingCommand(t) {
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
+  // Hidden windows have no focus; the panes' own focus needs emulating.
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  if (sideBySide) {
+    await page
+      .getByRole('button', { name: /^side-by-side$/i, exact: true })
+      .click()
+    await page.locator('.source-pane .cm-content').waitFor()
+  }
   await page.locator('.rich-pane .formatted-editor .cm-content').click()
   // The shortcut starts the addon; its command then waits for the feature.
   await pressShortcut(app, 'Control+Alt+Shift+P')
@@ -154,4 +165,21 @@ test('a command waiting for its editor feature gives up once its view closes', {
   await pressShortcut(app, `${mod}+w`)
   await notice(page, 'The command target is no longer available.')
   assert.equal(await page.evaluate(() => window.slowFeatureRuns ?? 0), 0)
+})
+
+test('a command waiting for its editor feature follows its view into the source editor', {
+  timeout: 60000,
+}, async (t) => {
+  const { page } = await waitingCommand(t)
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForAsync(page, () => window.slowFeatureRuns === 1)
+})
+
+// Both editors are already up side by side; only focus moves.
+test('a command waiting for its editor feature follows focus into the source pane beside it', {
+  timeout: 60000,
+}, async (t) => {
+  const { page } = await waitingCommand(t, { sideBySide: true })
+  await page.locator('.source-pane .cm-content').click()
+  await waitForAsync(page, () => window.slowFeatureRuns === 1)
 })

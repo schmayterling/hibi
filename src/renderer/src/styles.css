@@ -1149,7 +1149,10 @@ button.ui-button.update-download-button:disabled {
 .zen-bar button {
   -webkit-app-region: no-drag;
 }
-.app:not([data-platform="darwin"]) .zen-bar {
+.app:not([data-platform="darwin"]):where(
+    :not([data-window-controls-hidden="true"])
+  )
+  .zen-bar {
   padding-right: calc(132px + var(--space-2));
 }
 .status-pill {

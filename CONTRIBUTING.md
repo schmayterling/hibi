@@ -82,8 +82,6 @@ performance and code quality matter in pr review. for changes affecting core cod
 
 rebuild app changes before running focused desktop tests; those tests load production output from `out/`. use the shared launcher in `tests/electron.mjs`, temporary profiles, and fixture documents. never point a test at your working notes or normal profile.
 
-for formatted-editor changes, check both engines using **settings → editor → enable exotic butter (experimental)**. enabling it selects codemirror; disabling it selects tiptap/prosemirror. switching reloads the window after preserving pending edits.
-
 for interface changes, try the affected flow in the app and include screenshots or a short recording when useful. state which checks you ran and what you couldn't verify. don't present an untested change or a single timing sample as proof that everything works or got faster.
 
 ## ai contributions

@@ -16,7 +16,7 @@ test('addon chooser reviews every candidate, supports keyboard selection, and se
   const metadata = {
     name: 'Chooser fixture',
     description: 'A package for installation review.',
-    apiVersion: 2,
+    apiVersion: 3,
     kind: 'extension',
     version: '1.0.0',
     authors: [{ displayName: 'Fixture author' }],

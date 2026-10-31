@@ -2,7 +2,7 @@
   "id": "typst",
   "name": "Typst",
   "description": "Write Typst documents with live previews and PDF export.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.3",
   "authors": [

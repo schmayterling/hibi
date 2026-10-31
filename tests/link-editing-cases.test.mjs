@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForAsync } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const note = `See [titled](https://old.example/title "Keep me"), [escaped](https://old.example/a\\(b\\)?x=1&amp;y=2), [reference][ref] and <https://old.example/auto>.
@@ -42,14 +39,11 @@ test('link editing prefills, cancels, saves and undoes titles, references, autol
   }, fixture)
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await clickMenu(app, 'Open…')
   const read = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
   await page.getByRole('link', { name: 'titled', exact: true }).waitFor()
-  // Known tiptap gap, also on main: saving these destinations dispatches no
-  // edit. Not fixed there, as the default moves to codemirror and tiptap goes.
-  const tiptapGap = ['escaped', 'https://old.example/auto', 'cell']
   for (const [label, href] of [
     ['titled', 'https://old.example/title'],
     ['escaped', 'https://old.example/a(b)?x=1&y=2'],
@@ -57,11 +51,7 @@ test('link editing prefills, cancels, saves and undoes titles, references, autol
     ['https://old.example/auto', 'https://old.example/auto'],
     ['cell', 'https://old.example/cell'],
   ]) {
-    const skip =
-      t.formattedEngine === 'tiptap' &&
-      tiptapGap.includes(label) &&
-      'tiptap saves no edit to this link; known gap until tiptap is removed'
-    await t.test(label, { skip }, async (subtest) => {
+    await t.test(label, async (subtest) => {
       subtest.after(async () => {
         await page.keyboard.press('Escape')
       })

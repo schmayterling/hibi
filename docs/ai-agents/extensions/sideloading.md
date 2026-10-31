@@ -29,16 +29,17 @@ Main sends `ADDON_CHANNELS.reload` with `{ id, scope }` to the main window; `use
 ```json
 {
   "id": "example", "name": "example extension", "kind": "extension",
-  "version": "1.0.0", "apiVersion": 1,
+  "version": "1.0.0", "apiVersion": 3,
+  "capabilities": ["ui"],
   "description": "an example command.",
   "authors": [{ "displayName": "your name" }],
   "entry": "index.js"
 }
 ```
 
-This versioned API v1 package remains compatible. New source addons use API v2; see [compatibility](../development/addons.md#compatibility).
+Hibi loads API 3 packages only; see [compatibility](../development/addons.md#compatibility).
 
-The compiled browser ES module exports a factory receiving the host SDK. Use its React and editor instances instead of bundling copies. Relative imports can refer to package files.
+The compiled browser ES module exports a factory receiving the SDK parts its `capabilities` list. Use its React and editor instances instead of bundling copies. Relative imports can refer to package files.
 
 ```js
 export default ({ React, ui }) => ({
@@ -57,7 +58,7 @@ export default ({ React, ui }) => ({
 })
 ```
 
-The SDK supplies `React`, `ui`, `tiptap`, `codeMirror`, and `markdown.Marked`. Return the usual lifecycle, settings, and flavor contributions without a second manifest. See the [sideload SDK](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2Fsdk.md) and [addon API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md).
+`ui` supplies `React` and `ui`, `source` the CodeMirror SDK as `codeMirror`, `formatted` adds Lezer Markdown to it, and `markdown` supplies `markdown.Marked`. Return the usual lifecycle, settings, and flavor contributions without a second manifest. See the [sideload SDK](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2Fsdk.md) and [addon API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md).
 
 ## Theme package
 

@@ -92,7 +92,7 @@ async function installProbe(profile, format) {
       id: 'engine-benchmark',
       name: 'Engine benchmark',
       description: 'Temporary measurement observer',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       kind: 'extension',
       authors: [{ displayName: 'Hibi benchmark' }],
@@ -237,7 +237,9 @@ async function run(fixture, mode, run) {
       if ((await visual.count()) && (await visual.isEnabled()))
         await visual.click()
       const available = await page
-        .locator('.tiptap[contenteditable="true"]')
+        .locator(
+          '.rich-pane .hibi-formatted .cm-content[contenteditable="true"]',
+        )
         .count()
       if (!available || fixture.format !== 'markdown') {
         sample.status = 'unsupported-visual'
@@ -257,7 +259,10 @@ async function run(fixture, mode, run) {
           'true',
       )
     }
-    const selector = mode === 'source' ? '.source-pane .cm-content' : '.tiptap'
+    const selector =
+      mode === 'source'
+        ? '.source-pane .cm-content'
+        : '.rich-pane .hibi-formatted .cm-content'
     const input = page.locator(selector)
     await input.waitFor()
     await page.waitForFunction(
@@ -266,86 +271,51 @@ async function run(fixture, mode, run) {
     )
     sample.firstEditableMs = performance.now() - openStart
     await page.evaluate(() => window.__engineBenchmark.stopErrorCapture())
-    // These engine handles are used only by this measurement driver. No runtime
+    // These editor handles are used only by this measurement driver. No runtime
     // addon imports are added merely to get a clock around accepted dispatch.
-    await page.evaluate(
-      ({ mode, selector }) => {
-        const dom = document.querySelector(selector),
-          probe = window.__engineBenchmark
-        probe.cpu = []
-        probe.view =
-          mode === 'source' ? dom.cmTile?.root?.view : dom.editor?.view
-        if (!probe.view)
-          throw new Error('Installed editor measurement handle changed.')
-        dom.addEventListener(
-          'beforeinput',
-          () => {
-            probe.lastInput = performance.now()
-          },
-          true,
-        )
-        if (mode === 'source') {
-          const original = probe.view.dispatch
-          probe.view.dispatch = (...args) => {
-            const version = probe.ack.version,
-              start = performance.now()
-            try {
-              return original(...args)
-            } finally {
-              if (probe.ack.version !== version)
-                probe.cpu.push(performance.now() - start)
-            }
-          }
-        } else {
-          const original = probe.view.props.dispatchTransaction
-          probe.view.setProps({
-            dispatchTransaction(transaction) {
-              const start = performance.now()
-              try {
-                return original.call(this, transaction)
-              } finally {
-                if (transaction.docChanged)
-                  probe.cpu.push(performance.now() - start)
-              }
-            },
-          })
-        }
-      },
-      { mode, selector },
-    )
-    for (const position of ['start', 'middle', 'end']) {
-      await page.evaluate(
-        ({ mode, position }) => {
-          const { view } = window.__engineBenchmark
-          if (mode === 'source') {
-            const line =
-              position === 'start'
-                ? 1
-                : position === 'end'
-                  ? view.state.doc.lines
-                  : Math.ceil(view.state.doc.lines / 2)
-            view.dispatch({
-              selection: { anchor: view.state.doc.line(line).from },
-              scrollIntoView: true,
-            })
-          } else {
-            const editor = document.querySelector('.tiptap').editor
-            const size = editor.state.doc.content.size
-            editor.commands.setTextSelection(
-              position === 'start'
-                ? 1
-                : position === 'end'
-                  ? size - 1
-                  : Math.floor(size / 2),
-            )
-            editor.commands.scrollIntoView()
-          }
-          view.focus()
-          window.__engineBenchmark.cpu = []
-          window.__engineBenchmark.samples = []
+    await page.evaluate((selector) => {
+      const dom = document.querySelector(selector),
+        probe = window.__engineBenchmark
+      probe.cpu = []
+      probe.view = dom.cmTile?.root?.view
+      if (!probe.view)
+        throw new Error('Installed editor measurement handle changed.')
+      dom.addEventListener(
+        'beforeinput',
+        () => {
+          probe.lastInput = performance.now()
         },
-        { mode, position },
+        true,
       )
+      const original = probe.view.dispatch
+      probe.view.dispatch = (...args) => {
+        const version = probe.ack.version,
+          start = performance.now()
+        try {
+          return original(...args)
+        } finally {
+          if (probe.ack.version !== version)
+            probe.cpu.push(performance.now() - start)
+        }
+      }
+    }, selector)
+    for (const position of ['start', 'middle', 'end']) {
+      await page.evaluate((position) => {
+        const { view } = window.__engineBenchmark
+        const line =
+          position === 'start'
+            ? 1
+            : position === 'end'
+              ? view.state.doc.lines
+              : Math.ceil(view.state.doc.lines / 2)
+        view.dispatch({
+          selection: { anchor: view.state.doc.line(line).from },
+          scrollIntoView: true,
+        })
+        view.focus()
+        window.__engineBenchmark.cpu = []
+        window.__engineBenchmark.samples = []
+      }, position)
       const driver = [],
         echo = []
       const previous = await page.evaluate(
@@ -380,9 +350,6 @@ async function run(fixture, mode, run) {
           version: p.ack.version,
           sourceText: p.context.editor.getDocument().markdown,
           domNodes: document.getElementsByTagName('*').length,
-          richNodes:
-            document.querySelector('.tiptap')?.editor?.state.doc.childCount ??
-            0,
           heapBytes: performance.memory?.usedJSHeapSize ?? null,
         }
       })
@@ -403,7 +370,6 @@ async function run(fixture, mode, run) {
         driver: distribution(driver),
         nextFrame: distribution(echo),
         domNodes: measurements.domNodes,
-        richNodes: measurements.richNodes,
         heapBytes: measurements.heapBytes,
         version: measurements.version,
       })

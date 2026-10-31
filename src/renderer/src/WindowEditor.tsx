@@ -19,11 +19,10 @@ import { useAddons, useEditorAddons } from './addons'
 import { documentFormats, editorDocument } from './document-formats'
 import { documentRuntime } from './document-runtime'
 import { subscribeDocumentShell } from './document-shell'
-import type { MarkdownEditor, ViewMode } from './Editor'
 import { EditorToolbar } from './EditorToolbar'
 import { editorPreferences, useEditorPreference } from './editor-preferences'
+import type { MarkdownEditor, ViewMode } from './FormattedEditor'
 import { flavors, loadFlavor, selectedFlavors } from './flavors'
-import { codemirrorFormattedView } from './formatted-engine'
 import { LoadingScreen } from './LoadingScreen'
 import { transformMarkdown } from './markdown-projection'
 import './colorschemes'
@@ -134,11 +133,10 @@ function Host({
     available,
   )
   const [Editor, setEditor] = useState<typeof MarkdownEditor>()
-  // The formatted view the main window selects, from the same switch.
   useEffect(() => {
-    void (
-      codemirrorFormattedView ? import('./FormattedEditor') : import('./Editor')
-    ).then(({ MarkdownEditor }) => setEditor(() => MarkdownEditor))
+    void import('./FormattedEditor').then(({ MarkdownEditor }) =>
+      setEditor(() => MarkdownEditor),
+    )
   }, [])
   const [cursor] = useEditorPreference(editorPreferences.cursor)
   const [lineNumbers] = useEditorPreference(editorPreferences.lineNumbers)
@@ -177,10 +175,8 @@ function Host({
               onAttach={async () => null}
               onLink={() => {}}
               flavors={chosen}
-              footnoteDocument={false}
               sourceExtensions={host.sourceExtensions}
               formattedExtensions={host.formattedExtensions}
-              richExtensions={host.richExtensions}
               documentRevision={current.revision}
               showLineNumbers={lineNumbers}
               spellCheck={spellCheck}

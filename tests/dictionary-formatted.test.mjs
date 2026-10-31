@@ -15,8 +15,8 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
 
-/** Launch with the dictionary, autocomplete and the `engine` formatted view, and answer lookups from fixtures. */
-async function launch(t, files, engine = 'codemirror') {
+/** Launch with the dictionary and autocomplete, and answer lookups from fixtures. */
+async function launch(t, files) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-formatted-'))
   for (const [name, text] of Object.entries(files))
     await writeFile(join(profile, name), text)
@@ -37,13 +37,6 @@ async function launch(t, files, engine = 'codemirror') {
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   await waitForDocumentEditor(app, page)
-  if (engine === 'tiptap') {
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-    )
-    await page.reload()
-    await waitForDocumentEditor(app, page)
-  }
   // The dictionary starts in the background; a lookup before it does is lost.
   await waitForAddonShortcut(page, 'dictionary.synonyms')
   const responses = {
@@ -130,7 +123,6 @@ test('in the formatted view the dictionary looks up the caret word, replaces it 
   await page
     .locator('.rich-pane .cm-line', { hasText: 'I am Happy today' })
     .waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
 
   // Define word from the palette.
   await caret(page, 'I am Ha'.length)
@@ -294,25 +286,6 @@ test('the dictionary replaces the word in the formatted split pane it was invoke
   )
 })
 
-/** Put the rich editor's caret `offset` characters into the first `text` of a paragraph. */
-const richCaret = (page, text, offset) =>
-  page.evaluate(
-    ({ text, offset }) => {
-      const editor = document.querySelector('.rich-pane .tiptap').editor
-      let at = null
-      editor.state.doc.descendants((node, pos) => {
-        if (at !== null) return false
-        if (!node.isTextblock) return true
-        const index = node.textContent.indexOf(text)
-        if (index >= 0) at = pos + 1 + index + offset
-        return false
-      })
-      editor.commands.focus()
-      editor.commands.setTextSelection(at)
-    },
-    { text, offset },
-  )
-
 /** Look up the caret word's synonyms and choose `choice`. */
 async function chooseSynonym(app, page, word, choice) {
   await pressShortcut(app, 'Shift+F7')
@@ -330,36 +303,25 @@ Code \`happy\` and tag #happy here
 [ref]: https://x.example
 `
 
-for (const engine of ['tiptap', 'codemirror'])
-  test(`in the ${engine} formatted view, a replaced word in a link's text keeps the link's destination`, {
-    timeout: 90000,
-  }, async (t) => {
-    const { app, page, open } = await launch(
-      t,
-      { 'links.md': linkNote },
-      engine,
-    )
-    await open('links.md')
-    const cases = [
-      ['[Happy](', 'Link Happy', 'Happy', '[Glad]('],
-      ['[Happy][ref]', 'Reference Happy', 'Happy', '[Glad][ref]'],
-      ['`happy`', 'Code happy', 'happy', '`glad`'],
-      ['#happy', 'tag #happy', 'happy', '#glad'],
-    ]
-    for (const [source, rich, word, replaced] of cases) {
-      if (engine === 'codemirror')
-        await caret(page, linkNote.indexOf(source) + 3)
-      else await richCaret(page, rich, rich.length - 2)
-      await chooseSynonym(app, page, word, 'glad')
-      await saved(page, linkNote.replace(source, replaced))
-      if (engine === 'codemirror') await pressShortcut(app, `${mod}+z`)
-      else
-        await page.evaluate(() =>
-          document.querySelector('.rich-pane .tiptap').editor.commands.undo(),
-        )
-      await saved(page, linkNote)
-    }
-  })
+test("in the formatted view, a replaced word in a link's text keeps the link's destination", {
+  timeout: 90000,
+}, async (t) => {
+  const { app, page, open } = await launch(t, { 'links.md': linkNote })
+  await open('links.md')
+  const cases = [
+    ['[Happy](', 'Happy', '[Glad]('],
+    ['[Happy][ref]', 'Happy', '[Glad][ref]'],
+    ['`happy`', 'happy', '`glad`'],
+    ['#happy', 'happy', '#glad'],
+  ]
+  for (const [source, word, replaced] of cases) {
+    await caret(page, linkNote.indexOf(source) + 3)
+    await chooseSynonym(app, page, word, 'glad')
+    await saved(page, linkNote.replace(source, replaced))
+    await pressShortcut(app, `${mod}+z`)
+    await saved(page, linkNote)
+  }
+})
 
 test('in the formatted view a wikilink keeps its target, and destinations, labels and embeds offer no word', {
   timeout: 90000,

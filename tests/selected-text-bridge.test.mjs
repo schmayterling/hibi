@@ -20,7 +20,7 @@ test('installed addon reads one user-selected text grant', {
       name: 'Selected probe',
       description: 'Selected text bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',

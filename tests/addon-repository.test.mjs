@@ -21,7 +21,7 @@ const manifest = (id, fields = {}) =>
     id,
     name: id,
     description: 'Repository fixture',
-    apiVersion: 1,
+    apiVersion: 3,
     version: '1.0.0',
     kind: 'extension',
     authors: [{ displayName: 'Test' }],

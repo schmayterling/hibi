@@ -9,15 +9,6 @@ import {
   literalPair,
 } from './inline-display.ts'
 
-/** The rich editor's inline math: within a line, before no `$`, without spaces at its ends. */
-export function richInlineMath(source: string) {
-  const match = /^\$(?!\$)((?:\\.|[^$\n])+?)\$(?!\$)/.exec(source)
-  const latex = match?.[1]
-  if (!match || !latex || latex.length > formulaLimit || latex.trim() !== latex)
-    return
-  return { type: 'inlineMath' as const, raw: match[0], latex }
-}
-
 /** Each inline section's closer search, by the token list Marked fills for it. */
 const closersOf = new WeakMap<object, Closers>()
 

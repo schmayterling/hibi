@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { history, undo, undoDepth } from '@codemirror/commands'
 import { DocInput } from '@codemirror/language'
@@ -6,17 +7,10 @@ import { EditorState, StateEffect, Text } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
-import { Editor } from '@tiptap/core'
-import { Strike } from '@tiptap/extension-strike'
-import { TaskItem } from '@tiptap/extension-task-item'
-import { TaskList } from '@tiptap/extension-task-list'
-import { Markdown } from '@tiptap/markdown'
-import { NativeTableKit } from '../src/addons/markdown/table-tokenizer.ts'
 import {
   subscriptSyntax,
   subtextSyntax,
 } from '../src/addons/text-extras/formatted-syntax.ts'
-import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { cellLineBreak } from '../src/renderer/src/formatted/table-cells.ts'
 import {
   formattedLiteral,
@@ -27,13 +21,7 @@ import {
   openSelection,
   selectedBlock,
 } from '../src/renderer/src/formatted-text-end.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
-import { markdownSerializer } from '../src/renderer/src/markdown-serialization.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
-import {
-  preserveRichSource,
-  sameRichSourceDocument,
-} from '../src/renderer/src/rich-source-preservation.ts'
 import {
   sourceFormatting,
   storedMarkInput,
@@ -42,7 +30,16 @@ import {
 import { createSourceSession } from '../src/renderer/src/source-session.ts'
 import { ChunkedMarkdownParser } from '../src/shared/chunked-markdown.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
+import { frozenOracle } from './frozen-oracle.mjs'
 
+/**
+ * What the removed rich editor, with the GitHub and text extras flavors,
+ * wrote, read and reported for this suite's notes, selections and actions.
+ */
+const rich = frozenOracle('formatted-toolbar-state')
+/** A note's name in the keys that would repeat it: its text's short digest. */
+const digest = (text) =>
+  createHash('sha256').update(text).digest('hex').slice(0, 12)
 const markdown = parser.configure(GFM)
 const note = [
   '# Title',
@@ -298,12 +295,6 @@ test('formatted unlink removes links by their syntax and leaves other text unedi
 })
 
 test('a partial unlink keeps the link and formatting of the text around it, as the rich editor does', () => {
-  const read = (markdown) => {
-    const editor = richEditor(markdown)
-    const json = JSON.stringify(editor.getJSON())
-    editor.destroy()
-    return json
-  }
   // [note, the text holding the selection, offset, length, split]:
   // selections in one text node of the rich editor. Notes with a split are
   // edited as written, the rest as the rich editor writes them.
@@ -473,15 +464,7 @@ test('a partial unlink keeps the link and formatting of the text around it, as t
       '*a*[*&#32;`b c` d*](https://e.test)',
     ],
   ]) {
-    const editor = richEditor(input)
-    const source = split ? input : editor.getMarkdown()
-    let from
-    editor.state.doc.descendants((node, pos) => {
-      if (from === undefined && node.isText && node.text.includes(text))
-        from = pos + node.text.indexOf(text) + offset
-    })
-    editor.commands.setTextSelection({ from, to: from + length })
-    editor.commands.unsetLink()
+    const source = split ? input : rich({ kind: 'markdown', input })
     const anchor = source.indexOf(text) + offset
     const target = {
       state: EditorState.create({
@@ -501,7 +484,11 @@ test('a partial unlink keeps the link and formatting of the text around it, as t
     const actual = target.state.doc.toString()
     if (split) assert.equal(actual, split)
     // The same text and marks as the rich editor's, though it spells some with HTML.
-    assert.equal(read(actual), JSON.stringify(editor.getJSON()), actual)
+    assert.equal(
+      JSON.stringify(rich({ kind: 'json', markdown: actual })),
+      JSON.stringify(rich({ kind: 'unlink', input, text, offset, length })),
+      actual,
+    )
     const { from: start, to: end } = target.state.selection.main
     assert.equal(
       actual.slice(start, end).replace(/\\(.)/g, '$1'),
@@ -522,7 +509,6 @@ test('a partial unlink keeps the link and formatting of the text around it, as t
     assert.equal(undoDepth(target.state), 1)
     undo(target)
     assert.equal(target.state.doc.toString(), source)
-    editor.destroy()
   }
   // A range across formatting splits at both of its edges.
   const crossing = {
@@ -570,14 +556,6 @@ test('with escaped punctuation turned off, unlinked text spells punctuation as c
         '[https://](https://x.com/&#42;a&#42;)x.com[/&#42;a&#42;](https://x.com/&#42;a&#42;)',
       ],
     ]) {
-      const editor = richEditor(input)
-      let from
-      editor.state.doc.descendants((node, pos) => {
-        if (from === undefined && node.isText && node.text.includes(text))
-          from = pos + node.text.indexOf(text) + offset
-      })
-      editor.commands.setTextSelection({ from, to: from + length })
-      editor.commands.unsetLink()
       const anchor = input.indexOf(text) + offset
       const target = {
         state: EditorState.create({
@@ -595,15 +573,10 @@ test('with escaped punctuation turned off, unlinked text spells punctuation as c
         focus() {},
       }
       assert.equal(sourceFormatting(target).run('unlink'), true)
-      const actual = target.state.doc.toString()
-      assert.equal(actual, result)
-      // The rich editor reads the same text and marks, with no backslash shown.
-      const read = editor.schema.nodeFromJSON(editor.markdown.parse(actual))
-      assert.ok(sameRichSourceDocument(read, editor.state.doc, true), actual)
+      assert.equal(target.state.doc.toString(), result)
       assert.equal(undoDepth(target.state), 1)
       undo(target)
       assert.equal(target.state.doc.toString(), input)
-      editor.destroy()
     }
   } finally {
     markdownSyntax.reset()
@@ -698,67 +671,8 @@ test('formatted toolbar states match the reviewed rich editor outcomes', () => {
   )
 })
 
-/** The rich editor's flavors and the formatted view's syntax for its markdown. */
-const flavors = [
-  {
-    id: 'github',
-    markedOptions: { gfm: true },
-    richExtensions: [
-      Strike,
-      NativeTableKit.configure({ table: { resizable: false } }),
-      TaskList,
-      TaskItem.configure({ nested: true }),
-    ],
-  },
-  { id: 'text-extras', richExtensions: [Subscript, Subtext] },
-]
+/** The formatted view's syntax for the rich editor's markdown. */
 const grammar = parser.configure([GFM, subscriptSyntax, subtextSyntax])
-
-/** A headless rich editor of `content`. */
-function richEditor(content) {
-  const { core, addons, parser, options } = markdownConfiguration(flavors)
-  return new Editor({
-    element: null,
-    extensions: [
-      ...core,
-      Markdown.configure({ marked: parser, markedOptions: options }),
-      ...addons,
-    ],
-    content,
-    contentType: 'markdown',
-  })
-}
-
-// accepted difference toolbar-001: a list or quote is not active for a
-// range with blocks outside every one of them; the rich editor counts the
-// positions of nested lists twice and can report the list.
-const containerTypes = ['bulletList', 'orderedList', 'taskList', 'blockquote']
-/** Whether the rich selection touches a text block outside every `type` node. */
-const outside = (editor, type) => {
-  const { from, to } = editor.state.selection
-  let found = false
-  editor.state.doc.nodesBetween(from, to, (node, pos) => {
-    if (found || !node.isTextblock) return !found
-    const $pos = editor.state.doc.resolve(pos + 1)
-    let inside = false
-    for (let depth = $pos.depth; depth > 0; depth--)
-      if ($pos.node(depth).type.name === type) inside = true
-    if (!inside) found = true
-    return false
-  })
-  return found
-}
-
-/** The rich editor's pressed state for `active`, without the double counting of toolbar-001. */
-const doubleCounted = (editor, active) =>
-  containerTypes.includes(active) &&
-  editor.isActive(active) &&
-  outside(editor, active)
-const richPressed = (editor, active, attrs) =>
-  !!active && editor.isActive(active, attrs) && !doubleCounted(editor, active)
-/** The rich editor's disabled state; its quote toggle refuses a double-counted quote, which the formatted view joins. */
-const richDisabled = (editor, active, allowed) =>
-  !allowed && !(active === 'blockquote' && doubleCounted(editor, active))
 
 /** A seeded generator from the high bits of a 32-bit LCG. */
 function random(seed) {
@@ -770,33 +684,29 @@ function random(seed) {
 }
 
 test('formatted toolbar states match the rich toolbar on random selections', () => {
-  // FormattingToolbar's rich checks.
-  const list = (editor) =>
-    editor.isActive('taskList') ? 'taskItem' : 'listItem'
+  // The actions FormattingToolbar checked in the rich editor. Its recorded
+  // states leave out accepted difference toolbar-001: a list or quote is not
+  // active for a range with blocks outside every one of them, though the rich
+  // editor counted the positions of nested lists twice and could report it.
   const actions = [
-    ['bold', 'bold', (c) => c.toggleBold()],
-    ['italic', 'italic', (c) => c.toggleItalic()],
-    ['strike', 'strike', (c) => c.toggleStrike()],
-    ['inline-code', 'code', (c) => c.toggleCode()],
-    ['subscript', 'subscript', (c) => c.toggleMark('subscript')],
-    ['subtext', 'subtext', (c) => c.setNode('subtext')],
-    ['paragraph', 'paragraph', (c) => c.setParagraph()],
-    ...[1, 2, 3, 4, 5, 6].map((level) => [
-      `heading-${level}`,
-      'heading',
-      (c) => c.toggleHeading({ level }),
-      { level },
-    ]),
-    ['bullet-list', 'bulletList', (c) => c.toggleBulletList()],
-    ['numbered-list', 'orderedList', (c) => c.toggleOrderedList()],
-    ['checklist', 'taskList', (c) => c.toggleTaskList()],
-    ['indent', null, (c, editor) => c.sinkListItem(list(editor))],
-    ['outdent', null, (c, editor) => c.liftListItem(list(editor))],
-    ['quote', 'blockquote', (c) => c.toggleBlockquote()],
-    ['code-block', 'codeBlock', (c) => c.toggleCodeBlock()],
-    ['hard-break', null, (c) => c.setHardBreak()],
-    ['link', 'link', (c) => c.setLink({ href: 'https://example.com' })],
-    ['unlink', null, (c) => c.unsetLink()],
+    'bold',
+    'italic',
+    'strike',
+    'inline-code',
+    'subscript',
+    'subtext',
+    'paragraph',
+    ...[1, 2, 3, 4, 5, 6].map((level) => `heading-${level}`),
+    'bullet-list',
+    'numbered-list',
+    'checklist',
+    'indent',
+    'outdent',
+    'quote',
+    'code-block',
+    'hard-break',
+    'link',
+    'unlink',
   ]
   // accepted difference input-071: block actions stay disabled while the
   // selection's head is in a table cell.
@@ -838,23 +748,10 @@ test('formatted toolbar states match the rich toolbar on random selections', () 
   for (const seed of [0x552c0ffe, 0x552a11ce]) {
     const next = random(seed)
     for (const input of documents) {
-      const editor = richEditor(input)
-      // The rich editor's source and each text's position in both editors.
-      const source = editor.getMarkdown()
+      // The rich editor's source and the source positions at the start, second
+      // character, middle and end of each text it read once in that source.
+      const { source, points } = rich({ kind: 'random points', input })
       const tree = grammar.parse(source)
-      const points = []
-      editor.state.doc.descendants((node, pos) => {
-        if (!node.isText) return
-        const at = source.indexOf(node.text)
-        if (at < 0 || source.indexOf(node.text, at + 1) >= 0) return
-        for (const offset of new Set([
-          0,
-          1,
-          Math.floor(node.text.length / 2),
-          node.text.length,
-        ]))
-          points.push({ rich: pos + offset, formatted: at + offset })
-      })
       const table = (view) => {
         for (
           let node = tree.resolveInner(view.state.selection.main.head, 1);
@@ -865,18 +762,14 @@ test('formatted toolbar states match the rich toolbar on random selections', () 
         return false
       }
       for (let round = 0; round < 40; round++) {
-        const a = points[Math.floor(next() * points.length)]
-        const b = next() < 0.4 ? a : points[Math.floor(next() * points.length)]
-        editor.commands.setTextSelection({
-          from: Math.min(a.rich, b.rich),
-          to: Math.max(a.rich, b.rich),
-        })
+        const a = Math.floor(next() * points.length)
+        const b = next() < 0.4 ? a : Math.floor(next() * points.length)
         const target = {
           state: EditorState.create({
             doc: source,
             selection: {
-              anchor: Math.min(a.formatted, b.formatted),
-              head: Math.max(a.formatted, b.formatted),
+              anchor: Math.min(points[a], points[b]),
+              head: Math.max(points[a], points[b]),
             },
             extensions: [
               formattedTree.of(() => tree),
@@ -886,15 +779,20 @@ test('formatted toolbar states match the rich toolbar on random selections', () 
         }
         const inspection = sourceFormatting(target).inspect()
         const inCell = table(target)
-        for (const [id, active, command, attrs] of actions) {
-          let allowed = false
-          try {
-            allowed = command(editor.can().chain(), editor).run()
-          } catch {}
+        // The rich toolbar's pressed and disabled actions for the same text selected.
+        const recorded = rich({
+          kind: 'random states',
+          note: digest(input),
+          seed,
+          round,
+          a,
+          b,
+        })
+        for (const id of actions) {
           const expected = {
-            pressed: richPressed(editor, active, attrs),
+            pressed: recorded.pressed.includes(id),
             disabled:
-              richDisabled(editor, active, allowed) ||
+              recorded.disabled.includes(id) ||
               (inCell && cellBlocks.includes(id)),
           }
           const { pressed, disabled } = inspection.state(id)
@@ -908,7 +806,6 @@ test('formatted toolbar states match the rich toolbar on random selections', () 
             })
         }
       }
-      editor.destroy()
     }
   }
   assert.ok(comparisons > 30000)
@@ -946,22 +843,7 @@ test("accepted difference toolbar-001 covers the rich editor's double-counted li
       'quoteB',
     ],
   ]) {
-    const editor = richEditor(input)
-    const source = editor.getMarkdown()
-    const position = (text) => {
-      let at
-      editor.state.doc.descendants((node, pos) => {
-        if (at === undefined && node.isText && node.text.includes(text))
-          at = pos + node.text.indexOf(text)
-      })
-      return at
-    }
-    const command = {
-      bulletList: (c) => c.toggleBulletList(),
-      taskList: (c) => c.toggleTaskList(),
-      orderedList: (c) => c.toggleOrderedList(),
-      blockquote: (c) => c.toggleBlockquote(),
-    }[type]
+    const source = rich({ kind: 'markdown', input })
     const formatted = (anchor, head) => {
       const target = {
         state: EditorState.create({
@@ -979,12 +861,8 @@ test("accepted difference toolbar-001 covers the rich editor's double-counted li
       }
       return target
     }
-    // From inside the nested node into the paragraph after the list or quote.
-    editor.commands.setTextSelection({
-      from: position(start) + 1,
-      to: position('plainD') + 3,
-    })
-    assert.equal(editor.isActive(type), true, id)
+    // From inside the nested node into the paragraph after the list or quote,
+    // which the rich editor reported as in the list or quote.
     const outside = formatted(
       source.indexOf(start) + 1,
       source.indexOf('plainD') + 3,
@@ -992,35 +870,34 @@ test("accepted difference toolbar-001 covers the rich editor's double-counted li
     const state = sourceFormatting(outside).inspect().state(id)
     assert.equal(state.pressed, false, id)
     if (type === 'blockquote') {
-      // The rich editor's toggle tries to lift its double-counted quote and
-      // refuses; the formatted view quotes the selected blocks, which join
+      // The rich editor's toggle tried to lift its double-counted quote and
+      // refused; the formatted view quotes the selected blocks, which join
       // the quote around the selection's start.
-      assert.equal(command(editor.can().chain()).run(), false)
       assert.equal(state.disabled, false)
       assert.equal(sourceFormatting(outside).run('quote'), true)
       assert.equal(
         outside.state.doc.toString(),
         '> quoteA\n>\n> > quoteB\n> >\n> quoteC\n> \n> plainD',
       )
-      assert.equal(
-        richEditor(outside.state.doc.toString()).state.doc.toString(),
-        'doc(blockquote(paragraph("quoteA"), blockquote(paragraph("quoteB")), paragraph("quoteC"), paragraph("plainD")))',
-      )
       assert.equal(undoDepth(outside.state), 1)
     } else
-      assert.equal(state.disabled, !command(editor.can().chain()).run(), id)
+      assert.equal(
+        state.disabled,
+        !rich({
+          kind: 'list toggle',
+          input,
+          type,
+          from: [start, 1],
+          to: ['plainD', 3],
+        }),
+        id,
+      )
     // Inside the nested node both editors report it.
-    editor.commands.setTextSelection({
-      from: position(start) + 1,
-      to: position(nested) + 2,
-    })
-    assert.equal(editor.isActive(type), true, id)
     const inside = formatted(
       source.indexOf(start) + 1,
       source.indexOf(nested) + 2,
     )
     assert.equal(sourceFormatting(inside).inspect().state(id).pressed, true, id)
-    editor.destroy()
   }
 })
 
@@ -1160,23 +1037,19 @@ test('formatted toolbar states match the rich toolbar with syntax features turne
     '- itemA\n- itemB\n\n1. oneC\n2. twoD',
     note,
   ]
+  // The actions the rich toolbar checked, recorded without toolbar-001's double counting.
   const actions = [
-    ['bold', 'bold', (c) => c.toggleBold()],
-    ['italic', 'italic', (c) => c.toggleItalic()],
-    ['inline-code', 'code', (c) => c.toggleCode()],
-    ['link', 'link', (c) => c.setLink({ href: 'https://example.com' })],
-    ['unlink', null, (c) => c.unsetLink()],
-    ['paragraph', 'paragraph', (c) => c.setParagraph()],
-    [
-      'heading-2',
-      'heading',
-      (c) => c.toggleHeading({ level: 2 }),
-      { level: 2 },
-    ],
-    ['bullet-list', 'bulletList', (c) => c.toggleBulletList()],
-    ['numbered-list', 'orderedList', (c) => c.toggleOrderedList()],
-    ['quote', 'blockquote', (c) => c.toggleBlockquote()],
-    ['code-block', 'codeBlock', (c) => c.toggleCodeBlock()],
+    'bold',
+    'italic',
+    'inline-code',
+    'link',
+    'unlink',
+    'paragraph',
+    'heading-2',
+    'bullet-list',
+    'numbered-list',
+    'quote',
+    'code-block',
   ]
   const next = random(0x552d15ab)
   const mismatches = []
@@ -1188,40 +1061,26 @@ test('formatted toolbar states match the rich toolbar with syntax features turne
         .snapshot()
         .find(({ id }) => id === feature).nodes
       for (const input of documents) {
-        // The note as the rich editor reads its own saved source back.
-        const source = richEditor(input).getMarkdown()
-        const editor = richEditor(source)
+        // The note as the rich editor read its own saved source back, and the
+        // source positions in each text it read once in that source; a literal
+        // atom's text edges are also the positions beside it.
+        const { source, points } = rich({
+          kind: 'feature points',
+          feature,
+          input,
+        })
         // Task lists are the GitHub flavor's in the rich editor, whatever bullet lists do.
         if (feature === 'core.bullet-lists' && /\[[ x]\]/.test(source)) continue
         const tree = grammar.parse(source)
-        const points = []
-        editor.state.doc.descendants((node, pos, parent) => {
-          if (!node.isText) return
-          const at = source.indexOf(node.text)
-          if (at < 0 || source.indexOf(node.text, at + 1) >= 0) return
-          // A literal atom's text edges are also the positions beside it.
-          const atom = parent?.type.name.startsWith('hibiLiteral')
-          const offsets = atom
-            ? [1, Math.floor(node.text.length / 2), node.text.length - 1]
-            : [0, 1, Math.floor(node.text.length / 2), node.text.length]
-          for (const offset of new Set(offsets))
-            if (!atom || (offset > 0 && offset < node.text.length))
-              points.push({ rich: pos + offset, formatted: at + offset })
-        })
         for (let round = 0; round < 12 && points.length; round++) {
-          const a = points[Math.floor(next() * points.length)]
-          const b =
-            next() < 0.5 ? a : points[Math.floor(next() * points.length)]
-          editor.commands.setTextSelection({
-            from: Math.min(a.rich, b.rich),
-            to: Math.max(a.rich, b.rich),
-          })
+          const a = Math.floor(next() * points.length)
+          const b = next() < 0.5 ? a : Math.floor(next() * points.length)
           const inspection = sourceFormatting({
             state: EditorState.create({
               doc: source,
               selection: {
-                anchor: Math.min(a.formatted, b.formatted),
-                head: Math.max(a.formatted, b.formatted),
+                anchor: Math.min(points[a], points[b]),
+                head: Math.max(points[a], points[b]),
               },
               extensions: [
                 formattedTree.of(() => tree),
@@ -1229,14 +1088,18 @@ test('formatted toolbar states match the rich toolbar with syntax features turne
               ],
             }),
           }).inspect()
-          for (const [id, active, command, attrs] of actions) {
-            let allowed = false
-            try {
-              allowed = command(editor.can().chain()).run()
-            } catch {}
+          const recorded = rich({
+            kind: 'feature states',
+            note: digest(input),
+            feature,
+            round,
+            a,
+            b,
+          })
+          for (const id of actions) {
             const expected = {
-              pressed: richPressed(editor, active, attrs),
-              disabled: richDisabled(editor, active, allowed),
+              pressed: recorded.pressed.includes(id),
+              disabled: recorded.disabled.includes(id),
             }
             const { pressed, disabled } = inspection.state(id)
             comparisons++
@@ -1244,13 +1107,12 @@ test('formatted toolbar states match the rich toolbar with syntax features turne
               mismatches.push({
                 feature,
                 source,
-                selection: [a.formatted, b.formatted],
+                selection: [points[a], points[b]],
                 id,
                 expected,
               })
           }
         }
-        editor.destroy()
       }
     } finally {
       markdownSyntax.reset()
@@ -1466,43 +1328,28 @@ test("formatted toolbar actions write the rich editor's source", async (t) => {
     ['cell', 'cellP'],
     ['all', null],
   ]
-  const list = (editor) =>
-    editor.isActive('taskList') ? 'taskItem' : 'listItem'
-  // The rich toolbar's commands; a caret link action inserts its address, as FormattingToolbar does.
+  // The rich toolbar's actions; a caret link action inserted its address, as FormattingToolbar did.
   const actions = [
-    ['bold', (c) => c.toggleBold()],
-    ['italic', (c) => c.toggleItalic()],
-    ['strike', (c) => c.toggleStrike()],
-    ['subscript', (c) => c.toggleMark('subscript')],
-    ['inline-code', (c) => c.toggleCode()],
-    [
-      'link',
-      (c, editor) =>
-        editor.state.selection.empty && !editor.isActive('link')
-          ? c.insertContent({
-              type: 'text',
-              text: 'https://example.com',
-              marks: [{ type: 'link', attrs: { href: 'https://example.com' } }],
-            })
-          : c.extendMarkRange('link').setLink({ href: 'https://example.com' }),
-    ],
-    ['unlink', (c) => c.unsetLink()],
-    ['subtext', (c) => c.setNode('subtext')],
-    ['paragraph', (c) => c.setParagraph()],
-    ...[1, 2, 3, 4, 5, 6].map((level) => [
-      `heading-${level}`,
-      (c) => c.toggleHeading({ level }),
-    ]),
-    ['bullet-list', (c) => c.toggleBulletList()],
-    ['numbered-list', (c) => c.toggleOrderedList()],
-    ['checklist', (c) => c.toggleTaskList()],
-    ['indent', (c, editor) => c.sinkListItem(list(editor))],
-    ['outdent', (c, editor) => c.liftListItem(list(editor))],
-    ['quote', (c) => c.toggleBlockquote()],
-    ['code-block', (c) => c.toggleCodeBlock()],
-    ['divider', (c) => c.setHorizontalRule()],
-    ['hard-break', (c) => c.setHardBreak()],
-    ['table', (c) => c.insertTable({ rows: 3, cols: 2, withHeaderRow: true })],
+    'bold',
+    'italic',
+    'strike',
+    'subscript',
+    'inline-code',
+    'link',
+    'unlink',
+    'subtext',
+    'paragraph',
+    ...[1, 2, 3, 4, 5, 6].map((level) => `heading-${level}`),
+    'bullet-list',
+    'numbered-list',
+    'checklist',
+    'indent',
+    'outdent',
+    'quote',
+    'code-block',
+    'divider',
+    'hard-break',
+    'table',
   ]
   const marks = ['bold', 'italic', 'strike', 'subscript', 'inline-code', 'link']
   // Each difference's cause, by action and selection.
@@ -1554,44 +1401,22 @@ test("formatted toolbar actions write the rich editor's source", async (t) => {
   const differences = new Map(causes.map(([todo]) => [todo, []]))
   let compared = 0
   const undone = []
+  const source = rich({ kind: 'markdown', input: note })
   for (const [label, text, offset = 1, length = 0] of selections)
-    for (const [id, command] of actions) {
-      const editor = richEditor(note)
-      const source = editor.getMarkdown()
-      const serialize = markdownSerializer(editor.markdown, true)
-      const before = serialize(editor.state.doc).source
+    for (const id of actions) {
       let anchor = 0,
         head = source.length
-      if (text === null) editor.commands.selectAll()
-      else {
-        let from
-        editor.state.doc.descendants((node, pos) => {
-          if (from === undefined && node.isText && node.text.includes(text))
-            from = pos + node.text.indexOf(text) + offset
-        })
-        editor.commands.setTextSelection({ from, to: from + length })
+      if (text !== null) {
         anchor = head = source.indexOf(text) + offset
-        if (length) {
-          // The range's ends in the source, placed by sentinels.
-          const first = 'HIBIACTIONSTART871',
-            last = 'HIBIACTIONEND871'
-          const { from: start, to: end } = editor.state.selection
-          const transaction = editor.state.tr
-            .insert(
-              end,
-              editor.schema.text(last, editor.state.doc.resolve(end).marks()),
-            )
-            .insert(
-              start,
-              editor.schema.text(
-                first,
-                editor.state.doc.resolve(start).nodeAfter?.marks ?? [],
-              ),
-            )
-          const marked = editor.markdown.serialize(transaction.doc.toJSON())
-          anchor = marked.indexOf(first)
-          head = marked.indexOf(last) - first.length
-        }
+        // A range's ends in the rich editor's source, which it placed by sentinels.
+        if (length)
+          ({ anchor, head } = rich({
+            kind: 'action range',
+            note: digest(note),
+            text,
+            offset,
+            length,
+          }))
       }
       const cell = label === 'cell'
       let cellView = null
@@ -1640,23 +1465,20 @@ test("formatted toolbar actions write the rich editor's source", async (t) => {
       }
       const formatting = sourceFormatting(view)
       if (formatting.inspect().state(id).disabled) continue
-      let allowed = false
-      try {
-        allowed = command(editor.can().chain(), editor).run()
-      } catch {}
-      if (!allowed) continue
-      command(editor.chain(), editor).run()
+      // Whether the rich toolbar's command applied, and the source the rich
+      // editor saved after it, keeping the note's own spelling where its
+      // parse proved the same document.
+      const recorded = rich({
+        kind: 'action',
+        note: digest(note),
+        text,
+        offset,
+        length,
+        id,
+      })
+      if (!recorded.allowed) continue
       formatting.run(id, { url: 'https://example.com', alt: 'alt' })
-      let expected = serialize(editor.state.doc).source
-      if (source !== before)
-        expected =
-          preserveRichSource(source, before, expected, (candidate) =>
-            sameRichSourceDocument(
-              editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-              editor.state.doc,
-              true,
-            ),
-          ) ?? (text === null ? expected : source)
+      let expected = recorded.expected
       let actual = view.state.doc.toString()
       compared++
       const undoes =
@@ -1745,32 +1567,23 @@ test('block ranges exclude an untouched leaf at their end', () => {
             head: reverse ? 0 : first.length + 2,
           },
         })
-        const editor = richEditor(source)
-        try {
-          editor.commands.setTextSelection({ from: 1, to: first.length + 1 })
-          if (id === 'heading-2') editor.commands.setHeading({ level: 2 })
-          else editor.commands.toggleOrderedList()
-          assert.equal(target.formatting.run(id), true)
-          assert.equal(target.state.doc.toString(), editor.getMarkdown())
-          assert.ok(
-            sameRichSourceDocument(
-              editor.schema.nodeFromJSON(
-                editor.markdown.parse(target.state.doc.toString()),
-              ),
-              editor.state.doc,
-              true,
-            ),
-          )
-        } finally {
-          editor.destroy()
-        }
+        // The rich editor's source after the action on its first paragraph's text.
+        const expected = rich({
+          kind: 'leaf range',
+          source,
+          from: 1,
+          to: first.length + 1,
+          id,
+        })
+        assert.equal(target.formatting.run(id), true)
+        assert.equal(target.state.doc.toString(), expected)
       }
   const caret = typing('a\n\nb', 3)
   caret.formatting.run('heading-2')
   assert.equal(caret.state.doc.toString(), 'a\n\n## b')
 })
 
-test('list actions preserve raw first blocks and characterize the saved native models', async (t) => {
+test('list actions preserve raw first blocks', async (t) => {
   for (const [first, numbered] of [
     [
       '- ```js\n  keep **literal**\n  ```',
@@ -1792,49 +1605,7 @@ test('list actions preserve raw first blocks and characterize the saved native m
             head: source.indexOf('target') + 6,
           },
         })
-        const editor = richEditor(source)
         try {
-          const before = JSON.parse(JSON.stringify(editor.getJSON()))
-          let from,
-            supported = false,
-            nativeError = null
-          editor.state.doc.descendants((node, pos) => {
-            if (node.isText && node.text === 'target') from = pos
-          })
-          editor.commands.setTextSelection({ from, to: from + 6 })
-          try {
-            supported =
-              id === 'indent'
-                ? editor.commands.sinkListItem('listItem')
-                : id === 'outdent'
-                  ? editor.commands.liftListItem('listItem')
-                  : editor.commands.toggleOrderedList()
-          } catch (error) {
-            nativeError = { name: error.name, message: error.message }
-            assert.match(error.message, /Invalid content for node listItem/)
-            assert.deepEqual(
-              JSON.parse(JSON.stringify(editor.getJSON())),
-              before,
-            )
-            t.diagnostic(
-              JSON.stringify({
-                source,
-                id,
-                nativeError: error.message,
-                before,
-              }),
-            )
-          }
-          assert.equal(supported, id !== 'indent')
-          assert.deepEqual(
-            nativeError,
-            id === 'indent'
-              ? {
-                  name: 'TransformError',
-                  message: 'Invalid content for node listItem',
-                }
-              : null,
-          )
           assert.equal(target.formatting.run(id), true)
           const actual = target.state.doc.toString()
           const expected =
@@ -1889,94 +1660,6 @@ test('list actions preserve raw first blocks and characterize the saved native m
               assert.equal(actual.slice(language.from, language.to), 'js')
             }
           }
-          const item = before.content[0].content[0],
-            next = before.content[0].content[1]
-          const intended = {
-            type: 'doc',
-            content:
-              id === 'outdent'
-                ? [{ type: 'bulletList', content: [item] }, ...next.content]
-                : [
-                    {
-                      type:
-                        id === 'numbered-list' ? 'orderedList' : 'bulletList',
-                      ...(id === 'numbered-list'
-                        ? {
-                            attrs: {
-                              ...editor.schema.nodes.orderedList.defaultAttrs,
-                            },
-                          }
-                        : {}),
-                      content:
-                        id === 'indent'
-                          ? [
-                              {
-                                ...item,
-                                content: [
-                                  ...item.content,
-                                  { type: 'bulletList', content: [next] },
-                                ],
-                              },
-                            ]
-                          : [item, next],
-                    },
-                  ],
-          }
-          if (supported)
-            assert.deepEqual(
-              JSON.parse(JSON.stringify(editor.getJSON())),
-              intended,
-            )
-
-          // The native saved codec has distinct first-block results; keep its exact models alongside the proper source and formatted grammar.
-          const persisted = structuredClone(intended),
-            content = persisted.content[0].content[0].content
-          if (id === 'numbered-list') {
-            if (first.includes('```')) {
-              content[0].content[0].text = ' keep **literal**'
-              content.unshift({ type: 'paragraph' })
-              content.push({ type: 'codeBlock', attrs: { language: null } })
-            } else if (first.startsWith('-     '))
-              content.splice(0, 1, {
-                type: 'paragraph',
-                content: [
-                  { type: 'text', text: 'keep ' },
-                  { type: 'text', marks: [{ type: 'bold' }], text: 'literal' },
-                ],
-              })
-            else content.unshift({ type: 'paragraph' })
-          } else if (id === 'indent' && first.startsWith('-     '))
-            content[0].content[0].text += '\n'
-          const saved = richEditor(actual)
-          try {
-            assert.deepEqual(
-              JSON.parse(JSON.stringify(saved.getJSON())),
-              persisted,
-            )
-            saved.commands.setContent(actual, {
-              contentType: 'markdown',
-              emitUpdate: false,
-            })
-            assert.deepEqual(
-              JSON.parse(JSON.stringify(saved.getJSON())),
-              persisted,
-            )
-            let at
-            saved.state.doc.descendants((node, pos) => {
-              if (node.isText && node.text === 'target') at = pos + 6
-            })
-            saved.commands.setTextSelection(at)
-            saved.view.dispatch(saved.state.tr.insertText('Q'))
-            const typed = structuredClone(persisted)
-            const append = (node) => {
-              if (node.text === 'target') node.text = 'targetQ'
-              for (const child of node.content ?? []) append(child)
-            }
-            append(typed)
-            assert.deepEqual(JSON.parse(JSON.stringify(saved.getJSON())), typed)
-          } finally {
-            saved.destroy()
-          }
           target.dispatch({
             selection: { anchor: target.state.selection.main.head },
           })
@@ -1996,44 +1679,27 @@ test('list actions preserve raw first blocks and characterize the saved native m
           )
         } finally {
           dispose()
-          editor.destroy()
         }
       })
-  await t.test('native indent retains a paragraph and code sibling', () => {
+  await t.test('indent retains a paragraph and code sibling', () => {
     const source = '- lead\n  ```js\n  keep **literal**\n  ```\n- target'
     const { target, bridge, dispose } = sessionTyping(
       source,
       source.indexOf('target'),
     )
-    const editor = richEditor(source)
     try {
-      let at
-      editor.state.doc.descendants((node, pos) => {
-        if (node.isText && node.text === 'target') at = pos
-      })
-      editor.commands.setTextSelection({ from: at, to: at + 6 })
-      const before = editor.getJSON()
-      assert.equal(editor.commands.sinkListItem('listItem'), true)
-      assert.notDeepEqual(editor.getJSON(), before)
       target.dispatch({
         selection: { anchor: source.indexOf('target'), head: source.length },
       })
       assert.equal(target.formatting.run('indent'), true)
       const actual = target.state.doc.toString()
       assert.equal(actual, source.replace('\n- target', '\n  - target'))
-      const saved = richEditor(actual)
-      try {
-        assert.deepEqual(saved.getJSON(), editor.getJSON())
-      } finally {
-        saved.destroy()
-      }
       assert.equal(bridge.undo(), true)
       assert.equal(target.state.doc.toString(), source)
       assert.equal(bridge.redo(), true)
       assert.equal(target.state.doc.toString(), actual)
     } finally {
       dispose()
-      editor.destroy()
     }
   })
 })
@@ -2049,16 +1715,7 @@ test('table spelling changes retain range direction, cell endpoints and next inp
       ),
       selection: { anchor: reverse ? to : 0, head: reverse ? 0 : to },
     })
-    const editor = richEditor(source)
     try {
-      let end
-      editor.state.doc.descendants((node, pos) => {
-        if (node.isText && node.text === 'cell') end = pos + 2
-      })
-      editor.commands.setTextSelection(
-        reverse ? { from: end, to: 1 } : { from: 1, to: end },
-      )
-      editor.commands.toggleBold()
       assert.equal(target.formatting.run('bold'), true)
       const actual = target.state.doc.toString(),
         cell = actual.indexOf('ce') + 2
@@ -2074,8 +1731,6 @@ test('table spelling changes retain range direction, cell endpoints and next inp
       target.dispatch({
         selection: { anchor: target.state.selection.main.head },
       })
-      editor.commands.setTextSelection(editor.state.selection.head)
-      editor.view.dispatch(editor.state.tr.insertText('Q'))
       target.dispatch({
         ...target.state.replaceSelection('Q'),
         userEvent: 'input.type',
@@ -2085,23 +1740,24 @@ test('table spelling changes retain range direction, cell endpoints and next inp
         session.snapshot().materialize(),
         target.state.doc.toString(),
       )
-      assert.ok(
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(
-            editor.markdown.parse(target.state.doc.toString()),
-          ),
-          editor.state.doc,
-          true,
-        ),
+      // The rich editor, given the same bold range and then Q at its head,
+      // read the typed source as its own document.
+      assert.equal(
+        rich({
+          kind: 'table spelling',
+          source,
+          reverse,
+          markdown: target.state.doc.toString(),
+        }),
+        true,
       )
     } finally {
       dispose()
-      editor.destroy()
     }
   }
 })
 
-test('inline actions preserve untouched marked source through the production rich codec', () => {
+test('inline actions preserve untouched marked source, as the production rich codec did', () => {
   for (const prefix of ['__keep__', '_keep_', '``keep``']) {
     const source = `${prefix} and take\n\nuntouched __suffix__`
     const target = typing(source, source.indexOf('take'))
@@ -2111,43 +1767,11 @@ test('inline actions preserve untouched marked source through the production ric
         head: source.indexOf('take') + 4,
       },
     })
-    const editor = richEditor(source)
-    try {
-      const serialize = markdownSerializer(editor.markdown, true),
-        before = serialize(editor.state.doc).source
-      let from
-      editor.state.doc.descendants((node, pos) => {
-        if (node.isText && node.text.includes('take'))
-          from = pos + node.text.indexOf('take')
-      })
-      editor.commands.setTextSelection({ from, to: from + 4 })
-      editor.commands.toggleItalic()
-      const expected = preserveRichSource(
-        source,
-        before,
-        serialize(editor.state.doc).source,
-        (candidate) =>
-          sameRichSourceDocument(
-            editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-            editor.state.doc,
-            true,
-          ),
-      )
-      assert.equal(expected, `${prefix} and *take*\n\nuntouched __suffix__`)
-      assert.equal(target.formatting.run('italic'), true)
-      assert.equal(target.state.doc.toString(), expected)
-      assert.ok(
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(
-            editor.markdown.parse(target.state.doc.toString()),
-          ),
-          editor.state.doc,
-          true,
-        ),
-      )
-    } finally {
-      editor.destroy()
-    }
+    assert.equal(target.formatting.run('italic'), true)
+    assert.equal(
+      target.state.doc.toString(),
+      `${prefix} and *take*\n\nuntouched __suffix__`,
+    )
   }
   const adjacent = typing('plainB **boldC** *italicD* tail', 0)
   adjacent.dispatch({ selection: { anchor: 0, head: 17 } })
@@ -2178,35 +1802,7 @@ test('inner style changes preserve unchanged outer delimiters and source history
           head: reverse ? start : end,
         },
       })
-      const editor = richEditor(source)
       try {
-        const serialize = markdownSerializer(editor.markdown, true),
-          before = serialize(editor.state.doc).source
-        let from
-        editor.state.doc.descendants((node, pos) => {
-          if (node.isText && node.text === 'take') from = pos
-        })
-        editor.commands.setTextSelection(
-          reverse ? { from: from + 4, to: from } : { from, to: from + 4 },
-        )
-        assert.equal(
-          id === 'italic'
-            ? editor.commands.toggleItalic()
-            : editor.commands.toggleBold(),
-          true,
-        )
-        const preserved = preserveRichSource(
-          source,
-          before,
-          serialize(editor.state.doc).source,
-          (candidate) =>
-            sameRichSourceDocument(
-              editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-              editor.state.doc,
-              true,
-            ),
-        )
-        assert.equal(preserved, expected)
         assert.equal(target.formatting.run(id), true)
         assert.equal(target.state.doc.toString(), expected)
         const selection = target.state.selection
@@ -2221,7 +1817,6 @@ test('inner style changes preserve unchanged outer delimiters and source history
         assert.equal(bridge.redo(), true)
         assert.equal(target.state.doc.toString(), expected)
         assert.ok(target.state.selection.eq(selection))
-        editor.view.dispatch(editor.state.tr.insertText('Q'))
         target.dispatch({
           ...target.state.replaceSelection('Q'),
           userEvent: 'input.type',
@@ -2229,66 +1824,28 @@ test('inner style changes preserve unchanged outer delimiters and source history
         const typed = expected.replace('take', 'Q')
         assert.equal(target.state.doc.toString(), typed)
         assert.equal(session.snapshot().version, 4)
-        assert.ok(
-          sameRichSourceDocument(
-            editor.schema.nodeFromJSON(editor.markdown.parse(typed)),
-            editor.state.doc,
-            true,
-          ),
-        )
         assert.equal(bridge.undo(), true)
         assert.equal(target.state.doc.toString(), expected)
         assert.equal(bridge.redo(), true)
         assert.equal(target.state.doc.toString(), typed)
       } finally {
         dispose()
-        editor.destroy()
       }
     }
 })
 
-test('touching styles distinguish accepted canonical source from native guard rejection', () => {
-  for (const [source, anchor, head, from, to, expected, rejected] of [
-    ['take _keep_', 0, 5, 1, 6, '*take keep*', true],
-    ['_keep_ take', 6, 11, 5, 10, '*keep take*', true],
-    ['take *keep*', 0, 5, 1, 6, '*take keep*', false],
-    ['*keep* take', 6, 11, 5, 10, '*keep take*', false],
+test('touching styles write one canonical span', () => {
+  for (const [source, anchor, head, expected] of [
+    ['take _keep_', 0, 5, '*take keep*'],
+    ['_keep_ take', 6, 11, '*keep take*'],
+    ['take *keep*', 0, 5, '*take keep*'],
+    ['*keep* take', 6, 11, '*keep take*'],
   ]) {
-    const editor = richEditor(source),
-      { target, bridge, session, dispose } = sessionTyping(source, anchor)
+    const { target, bridge, session, dispose } = sessionTyping(source, anchor)
     try {
-      const serialize = markdownSerializer(editor.markdown, true),
-        before = serialize(editor.state.doc).source
-      editor.commands.setTextSelection({ from, to })
-      const model = editor.getJSON()
-      assert.equal(editor.commands.toggleItalic(), true)
-      assert.notDeepEqual(editor.getJSON(), model)
-      const canonical = serialize(editor.state.doc).source
-      const preserved = preserveRichSource(
-        source,
-        before,
-        canonical,
-        (candidate) =>
-          sameRichSourceDocument(
-            editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-            editor.state.doc,
-            true,
-          ),
-      )
-      assert.equal(preserved, rejected ? null : expected)
-      assert.equal(editor.state.selection.toJSON().type, 'text')
-      // The app rejects the raw underscore transaction. Its candidate is an intended
-      // formatted result, not an accepted native operation.
       target.dispatch({ selection: { anchor, head } })
       assert.equal(target.formatting.run('italic'), true)
       assert.equal(target.state.doc.toString(), expected)
-      assert.ok(
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(editor.markdown.parse(expected)),
-          editor.state.doc,
-          true,
-        ),
-      )
       const selection = target.state.selection
       assert.equal(session.snapshot().version, 1)
       assert.equal(bridge.undo(), true)
@@ -2298,68 +1855,23 @@ test('touching styles distinguish accepted canonical source from native guard re
       assert.ok(target.state.selection.eq(selection))
     } finally {
       dispose()
-      editor.destroy()
     }
   }
 })
 
-test('retained mark spans distinguish accepted source, native rejection and genuine select-all', () => {
-  for (const [source, anchor, head, id, all, expected, rejected] of [
-    ['__take__ rest', 2, 13, 'italic', false, '***take** rest*', true],
-    ['**take** rest', 2, 13, 'italic', false, '***take** rest*', false],
-    ['__take__', 0, 8, 'italic', true, '__*take*__', false],
-    ['_take_', 0, 6, 'bold', true, '_**take**_', false],
-    ['__take__ rest', 0, 13, 'italic', true, '***take** rest*', false],
+test('retained mark spans write the intended source for a span or the whole note', () => {
+  for (const [source, anchor, head, id, expected] of [
+    ['__take__ rest', 2, 13, 'italic', '***take** rest*'],
+    ['**take** rest', 2, 13, 'italic', '***take** rest*'],
+    ['__take__', 0, 8, 'italic', '__*take*__'],
+    ['_take_', 0, 6, 'bold', '_**take**_'],
+    ['__take__ rest', 0, 13, 'italic', '***take** rest*'],
   ]) {
     const { target, bridge, session, dispose } = sessionTyping(source, anchor)
     target.dispatch({ selection: { anchor, head } })
-    const editor = richEditor(source)
     try {
-      const serialize = markdownSerializer(editor.markdown, true),
-        before = serialize(editor.state.doc).source
-      if (all) editor.commands.selectAll()
-      else
-        editor.commands.setTextSelection({
-          from: 1,
-          to: editor.state.doc.content.size - 1,
-        })
-      const model = editor.getJSON()
-      assert.equal(
-        id === 'italic'
-          ? editor.commands.toggleItalic()
-          : editor.commands.toggleBold(),
-        true,
-      )
-      assert.notDeepEqual(editor.getJSON(), model)
-      const canonical = serialize(editor.state.doc).source
-      const preserved = preserveRichSource(
-        source,
-        before,
-        canonical,
-        (candidate) =>
-          sameRichSourceDocument(
-            editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-            editor.state.doc,
-            true,
-          ),
-      )
-      assert.equal(editor.state.selection.toJSON().type, all ? 'all' : 'text')
-      if (rejected) assert.equal(preserved, null)
-      else if (preserved === null) {
-        // Only an actual AllSelection may use canonical source in the app.
-        assert.equal(all, true)
-        assert.equal(canonical, expected)
-      } else assert.equal(preserved, expected)
-      // Raw TextSelection rejection above does not constrain the source-native action.
       assert.equal(target.formatting.run(id), true)
       assert.equal(target.state.doc.toString(), expected)
-      assert.ok(
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(editor.markdown.parse(expected)),
-          editor.state.doc,
-          true,
-        ),
-      )
       const selection = target.state.selection
       assert.ok(selection.main.anchor < selection.main.head)
       assert.equal(session.snapshot().version, 1)
@@ -2370,12 +1882,11 @@ test('retained mark spans distinguish accepted source, native rejection and genu
       assert.ok(target.state.selection.eq(selection))
     } finally {
       dispose()
-      editor.destroy()
     }
   }
 })
 
-test('formatted link candidates retain source and history when the native source guard rejects them', () => {
+test('formatted link candidates retain source and history', () => {
   for (const [source, expected] of [
     ['__take__ and __keep__', '[**take**](https://example.com) and __keep__'],
     ['_take_ and _keep_', '[*take*](https://example.com) and _keep_'],
@@ -2383,45 +1894,12 @@ test('formatted link candidates retain source and history when the native source
     const start = source.indexOf('take')
     const { target, bridge, session, dispose } = sessionTyping(source, start)
     target.dispatch({ selection: { anchor: start, head: start + 4 } })
-    const editor = richEditor(source)
     try {
-      const serialize = markdownSerializer(editor.markdown, true),
-        before = serialize(editor.state.doc).source
-      editor.commands.setTextSelection({ from: 1, to: 5 })
-      const model = editor.getJSON()
-      assert.equal(
-        editor.commands.setLink({ href: 'https://example.com' }),
-        true,
-      )
-      assert.notDeepEqual(editor.getJSON(), model)
-      assert.equal(editor.state.selection.toJSON().type, 'text')
-      assert.equal(
-        preserveRichSource(
-          source,
-          before,
-          serialize(editor.state.doc).source,
-          (candidate) =>
-            sameRichSourceDocument(
-              editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-              editor.state.doc,
-              true,
-            ),
-        ),
-        null,
-      )
-      // Compare the intended candidate only; the production native view keeps its old model.
       assert.equal(
         target.formatting.run('link', { url: 'https://example.com', alt: '' }),
         true,
       )
       assert.equal(target.state.doc.toString(), expected)
-      assert.ok(
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(editor.markdown.parse(expected)),
-          editor.state.doc,
-          true,
-        ),
-      )
       const selection = target.state.selection
       assert.equal(session.snapshot().version, 1)
       assert.equal(bridge.undo(), true)
@@ -2431,7 +1909,6 @@ test('formatted link candidates retain source and history when the native source
       assert.ok(target.state.selection.eq(selection))
     } finally {
       dispose()
-      editor.destroy()
     }
   }
 })
@@ -2455,26 +1932,7 @@ test('replacing a formatted inline range retains its first marks, source and his
           head: reverse ? start : end,
         },
       })
-      const editor = richEditor(source)
       try {
-        const position = (word, offset) => {
-          let found
-          editor.state.doc.descendants((node, pos) => {
-            if (found === undefined && node.isText && node.text.includes(word))
-              found = pos + node.text.indexOf(word) + offset
-          })
-          assert.notEqual(found, undefined)
-          return found
-        }
-        if (all) editor.commands.selectAll()
-        else {
-          const from = position(word, 0),
-            to = position('rest', 4)
-          editor.commands.setTextSelection(
-            reverse ? { from: to, to: from } : { from, to },
-          )
-        }
-        assert.equal(editor.commands.toggleItalic(), true)
         assert.equal(target.formatting.run('italic'), true)
         const actionSource = session.snapshot().materialize(),
           actionSelection = target.state.selection
@@ -2486,7 +1944,6 @@ test('replacing a formatted inline range retains its first marks, source and his
               : '',
           suffix = source.slice(end)
         for (const text of ['Z', 'Q']) {
-          editor.view.dispatch(editor.state.tr.insertText(text))
           target.type(text)
           const typed =
             prefix + (text === 'Z' ? '***Z***' : '***ZQ***') + suffix
@@ -2495,36 +1952,6 @@ test('replacing a formatted inline range retains its first marks, source and his
             target.state.doc.toString(),
             typed.replace(/\r\n/g, '\n'),
           )
-          const parsed = editor.schema.nodeFromJSON(
-            editor.markdown.parse(typed),
-          )
-          if (all) {
-            const value = text === 'Z' ? 'Z' : 'ZQ'
-            // A headless insertText over AllSelection is plain. The actual browser
-            // input, checked in formatted-actions-native, retains the first run's marks.
-            assert.deepEqual(editor.getJSON(), {
-              type: 'doc',
-              content: [
-                { type: 'paragraph', content: [{ type: 'text', text: value }] },
-              ],
-            })
-            assert.deepEqual(parsed.toJSON(), {
-              type: 'doc',
-              content: [
-                {
-                  type: 'paragraph',
-                  content: [
-                    {
-                      type: 'text',
-                      marks: [{ type: 'bold' }, { type: 'italic' }],
-                      text: value,
-                    },
-                  ],
-                },
-              ],
-            })
-          } else
-            assert.ok(sameRichSourceDocument(parsed, editor.state.doc, true))
           const { head, empty } = target.state.selection.main
           assert.equal(empty, true)
           assert.equal(
@@ -2546,16 +1973,13 @@ test('replacing a formatted inline range retains its first marks, source and his
         assert.ok(target.state.selection.eq(actionSelection))
       } finally {
         dispose()
-        editor.destroy()
       }
     }
 })
 
 test('table range typing keeps its metadata and one source-history group through padding changes', () => {
-  const editor = richEditor(
-    '| a | b |\n| --- | --- |\n| **long** rest | tail |',
-  )
-  const source = editor.getMarkdown(),
+  const input = '| a | b |\n| --- | --- |\n| **long** rest | tail |'
+  const source = rich({ kind: 'markdown', input }),
     from = source.indexOf('long'),
     to = source.indexOf('rest') + 4
   const { target, bridge, session, dispose } = sessionTyping(source, from)
@@ -2570,42 +1994,30 @@ test('table range typing keeps its metadata and one source-history group through
     update(transactions)
   }
   try {
-    const position = (word, end) => {
-      let found
-      editor.state.doc.descendants((node, pos) => {
-        if (found === undefined && node.isText && node.text.includes(word))
-          found = pos + node.text.indexOf(word) + end
-      })
-      assert.notEqual(found, undefined)
-      return found
-    }
-    editor.commands.setTextSelection({
-      from: position('long', 0),
-      to: position('rest', 4),
-    })
-    editor.view.dispatch(editor.state.tr.insertText('Z'))
     target.type('Z')
     const first = session.snapshot().materialize()
     const header = (markdown) =>
       markdown.split('\n').find((line) => line.startsWith('|'))
     assert.ok(header(source))
     assert.notEqual(header(first), header(source))
-    assert.equal(first, editor.getMarkdown())
+    // The rich editor's source after Z replaced the same range.
+    assert.equal(
+      first,
+      rich({
+        kind: 'range typing',
+        input,
+        from: ['long', 0],
+        to: ['rest', 4],
+        text: 'Z',
+      }),
+    )
     assert.deepEqual(events, [true])
-    editor.view.dispatch(editor.state.tr.insertText('Q'))
     target.type('Q')
     const typed = first.replace('**Z**', '**ZQ**'),
       caret = target.state.selection
     assert.equal(session.snapshot().materialize(), typed)
     assert.equal(session.snapshot().version, 2)
     assert.deepEqual(events, [true, true])
-    assert.ok(
-      sameRichSourceDocument(
-        editor.schema.nodeFromJSON(editor.markdown.parse(typed)),
-        editor.state.doc,
-        true,
-      ),
-    )
     assert.equal(bridge.undo(), true)
     assert.equal(session.snapshot().materialize(), source)
     assert.ok(target.state.selection.eq(originalSelection))
@@ -2614,7 +2026,6 @@ test('table range typing keeps its metadata and one source-history group through
     assert.ok(target.state.selection.eq(caret))
   } finally {
     dispose()
-    editor.destroy()
   }
 })
 
@@ -2678,58 +2089,37 @@ test('inline range input leaves composition, structural input and plain text on 
 })
 
 test('ranges ending in a table format every selected block when no cell editor owns them', () => {
+  const input = 'plain\n\n| aa | bb |\n| --- | --- |\n| cell | tail |'
   for (const [first, offset, last, end] of [
     ['plain', 0, 'cell', 2],
     ['aa', 1, 'tail', 2],
   ]) {
-    const editor = richEditor(
-      'plain\n\n| aa | bb |\n| --- | --- |\n| cell | tail |',
+    const source = rich({ kind: 'markdown', input })
+    const target = view(source, first, 0)
+    target.dispatch = target.dispatch.bind(target)
+    target.state = target.state.update({
+      selection: {
+        anchor: source.indexOf(first) + offset,
+        head: source.indexOf(last) + end,
+      },
+      effects: StateEffect.appendConfig.of([
+        history(),
+        tableActions.of({ active: () => true, run: () => false }),
+      ]),
+    }).state
+    assert.equal(sourceFormatting(target).run('bold'), true)
+    // The rich editor's source after bold over the same text.
+    assert.equal(
+      target.state.doc.toString(),
+      rich({
+        kind: 'table bold',
+        input,
+        from: [first, offset],
+        to: [last, end],
+      }),
     )
-    try {
-      const source = editor.getMarkdown()
-      const position = (word, offset) => {
-        let found
-        editor.state.doc.descendants((node, pos) => {
-          if (found === undefined && node.isText && node.text.includes(word))
-            found = pos + node.text.indexOf(word) + offset
-        })
-        assert.notEqual(found, undefined)
-        return found
-      }
-      editor.commands.setTextSelection({
-        from: position(first, offset),
-        to: position(last, end),
-      })
-      const before = editor.state.doc.toJSON()
-      editor.commands.toggleBold()
-      assert.notDeepEqual(editor.state.doc.toJSON(), before)
-      const target = view(source, first, 0)
-      target.dispatch = target.dispatch.bind(target)
-      target.state = target.state.update({
-        selection: {
-          anchor: source.indexOf(first) + offset,
-          head: source.indexOf(last) + end,
-        },
-        effects: StateEffect.appendConfig.of([
-          history(),
-          tableActions.of({ active: () => true, run: () => false }),
-        ]),
-      }).state
-      assert.equal(sourceFormatting(target).run('bold'), true)
-      const actual = target.state.doc.toString()
-      assert.equal(actual, editor.getMarkdown())
-      assert.ok(
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(editor.markdown.parse(actual)),
-          editor.state.doc,
-          true,
-        ),
-      )
-      assert.equal(undo(target), true)
-      assert.equal(target.state.doc.toString(), source)
-    } finally {
-      editor.destroy()
-    }
+    assert.equal(undo(target), true)
+    assert.equal(target.state.doc.toString(), source)
   }
 })
 
@@ -2748,29 +2138,6 @@ test('inline actions keep existing link destinations and reference syntax', () =
       label.state.doc.toString(),
       source.replace('[label]', '[**label**]'),
     )
-    for (const [from, formatted] of [
-      [1, target],
-      [7, label],
-    ]) {
-      const editor = richEditor(source)
-      try {
-        const before = editor.state.doc
-        editor.commands.setTextSelection({ from, to: from + 5 })
-        editor.commands.toggleBold()
-        assert.equal(editor.state.doc.eq(before), false)
-        assert.ok(
-          sameRichSourceDocument(
-            editor.schema.nodeFromJSON(
-              editor.markdown.parse(formatted.state.doc.toString()),
-            ),
-            editor.state.doc,
-            true,
-          ),
-        )
-      } finally {
-        editor.destroy()
-      }
-    }
   }
 })
 

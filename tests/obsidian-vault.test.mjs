@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { noteTargets, wikiHref, wikiTarget } from '../src/shared/note-links.ts'
-import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -68,8 +67,7 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  // Wiki links, embeds and callouts are asserted as the Tiptap editor draws them.
-  await selectFormattedEngine(app, page, 'tiptap')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, root) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
   }, root)
@@ -124,15 +122,21 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
   )
   await page.getByRole('treeitem', { name: 'Start.md' }).click()
   const rich = page.getByRole('textbox', { name: 'Document editor' })
-  const link = rich.locator('a[data-wiki-link="Other"]')
+  const link = rich.locator('.hibi-lp-link[data-wiki-link="Other"]')
   await link.waitFor()
   assert.equal(await link.innerText(), 'Next note')
   const media = rich.locator('.obsidian-embed img')
-  assert.equal(await rich.locator('mark').innerText(), 'important')
-  const callout = rich.locator('[data-alert="tip"]')
+  assert.equal(
+    await rich.locator('.hibi-lp-highlight').innerText(),
+    'important',
+  )
+  // The `-` callout starts folded, under its custom title.
+  const callout = rich.getByRole('button', {
+    name: 'Toggle callout: Custom title',
+    exact: true,
+  })
   await callout.waitFor()
-  assert.equal(await callout.getAttribute('data-fold'), '-')
-  assert.match(await callout.innerText(), /Custom title/)
+  assert.equal(await callout.getAttribute('aria-expanded'), 'false')
   await page.waitForFunction(
     (img) =>
       img?.getAttribute('src')?.startsWith('app://hibi/document-media/') &&

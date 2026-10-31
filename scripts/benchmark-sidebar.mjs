@@ -17,7 +17,7 @@ await writeFile(
     description: 'Shared sidebar rendering benchmark',
     kind: 'extension',
     version: '1.0.0',
-    apiVersion: 2,
+    apiVersion: 3,
     authors: [{ displayName: 'Test' }],
     capabilities: ['ui'],
     entry: 'index.js',

@@ -325,7 +325,7 @@ async function fixture(t) {
     name: 'Sample',
     description: 'Catalog fixture',
     version: '1.0.0',
-    apiVersion: 2,
+    apiVersion: 3,
     kind: 'extension',
     authors: [{ displayName: 'Example' }],
     entry: 'views/window.tsx',

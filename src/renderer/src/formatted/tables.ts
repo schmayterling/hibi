@@ -1061,6 +1061,40 @@ class TableView {
     return !tall
   }
 
+  /** The row a position of a windowed table is in, when the window has not drawn it. */
+  private undrawn(pos: number) {
+    const line = this.heights && this.locate(pos)?.line
+    return line && line > 1 && !this.rendered.has(line - 2) ? line - 2 : null
+  }
+
+  /**
+   * Before the view scrolls to a row the window has not drawn, draw it with
+   * as many rows on each side as the pane shows: it then measures where it
+   * is, and the window, which covers the pane, keeps it there.
+   */
+  drawFor(pos: number) {
+    const index = this.undrawn(pos)
+    if (index === null) return
+    const { top, bottom } = visibleBand(this.dom)
+    this.reveal(index, Math.ceil((bottom - top) / MIN.row))
+  }
+
+  /** Where a row the window has not drawn would show, from its spacer and the rows' heights, without drawing it. */
+  private estimate(pos: number) {
+    const index = this.undrawn(pos)
+    const heights = this.heights
+    if (index === null || !heights) return null
+    const after = index >= this.end
+    const spacer = (after ? this.after : this.before)?.getBoundingClientRect()
+    if (!spacer) return null
+    const top =
+      spacer.top +
+      heights.before(index) -
+      (after ? heights.before(this.end) : 0)
+    const bottom = top + heights.before(index + 1) - heights.before(index)
+    return { left: spacer.left, right: spacer.left, top, bottom }
+  }
+
   /** Where a position inside the table shows: in its cell's editor, or in its drawn row's text. */
   coordsAt(pos: number) {
     if (!this.current) return this.near(pos)
@@ -1070,7 +1104,7 @@ class TableView {
     if (editing && span && pos >= span.from && pos <= span.to)
       return editing.editor.view.coordsAtPos(pos - span.from)
     const point = this.point(pos)
-    if (!point) return null
+    if (!point) return this.estimate(pos)
     const range = this.dom.ownerDocument.createRange()
     range.setStart(point.node, point.offset)
     // An empty cell's paragraph has no text to measure.
@@ -1325,10 +1359,13 @@ class TableView {
     }
   }
 
-  /** Render a window of rows around row `index`, for editing it. */
-  private reveal(index: number) {
-    const from = Math.max(0, index - 10)
-    this.show(from, Math.min(this.widget.rows, Math.max(index + 10, from + 1)))
+  /** Render a window of rows around row `index`, for editing it or measuring it. */
+  private reveal(index: number, around = 10) {
+    const from = Math.max(0, index - around)
+    this.show(
+      from,
+      Math.min(this.widget.rows, Math.max(index + around, from + 1)),
+    )
     this.scrolled()
   }
 
@@ -3317,13 +3354,16 @@ export const contribution: FormattedContribution = {
     tableEditing,
     // CodeMirror scrolls to a block widget's bounds, which for a table is all
     // of it: scrolling to a caret in a table, as after undo, shows its cell.
-    // Other handlers, as reading-position's, see the scroll first.
+    // Other scrolls go where the table's coordsAt puts the position, once
+    // its row is drawn. Other handlers, as reading-position's, see the
+    // scroll first.
     Prec.lowest(
-      EditorView.scrollHandler.of(
-        (view, range, { y }) =>
-          y === 'nearest' &&
-          (tableAt(view, range.head, true)?.scrollTo(range.head) ?? false),
-      ),
+      EditorView.scrollHandler.of((view, range, { y }) => {
+        const table = tableAt(view, range.head, true)
+        if (y === 'nearest') return table?.scrollTo(range.head) ?? false
+        table?.drawFor(range.head)
+        return false
+      }),
     ),
     // Chromium drops typing and compositions over a selection that covers a
     // table widget or starts or ends inside one.

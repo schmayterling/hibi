@@ -218,3 +218,108 @@ test('keeping turned off removes kept histories and keeps no new ones', async (t
   await later.clearUndoHistory()
   assert.equal(await exists(folder(root)), false)
 })
+
+test('kept histories follow notes renamed or moved inside Hibi', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
+  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  assert.deepEqual(
+    await api.readUndoHistory('/notes/b.md', reopened(note.source)),
+    note.history,
+  )
+  // A moved folder takes the histories of every note under it.
+  const before = join(root, 'before'),
+    after = join(root, 'after')
+  await fs.mkdir(join(after, 'inner'), { recursive: true })
+  await fs.writeFile(join(after, 'inner', 'c.md'), note.source)
+  await fs.writeFile(join(after, 'd.md'), note.source)
+  await api.storeUndoHistory(
+    join(before, 'inner', 'c.md'),
+    note.file,
+    note.history,
+  )
+  await api.relocateUndoHistory(before, after)
+  assert.equal(await exists(kept(root, join(before, 'inner', 'c.md'))), false)
+  assert.deepEqual(
+    await api.readUndoHistory(
+      join(after, 'inner', 'c.md'),
+      reopened(note.source),
+    ),
+    note.history,
+  )
+  assert.equal(
+    await api.readUndoHistory(join(after, 'd.md'), reopened(note.source)),
+    null,
+  )
+  // b.md's history stayed where it was.
+  assert.equal(await exists(kept(root, '/notes/b.md')), true)
+})
+
+test('moves made before their histories follow apply in order, and an unreadable folder strands none', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  const work = join(root, 'work')
+  await fs.mkdir(join(work, 'a', 'locked'), { recursive: true })
+  await fs.writeFile(join(work, 'a', 'n.md'), note.source)
+  await api.storeUndoHistory(join(work, 'a', 'n.md'), note.file, note.history)
+  // A folder only its owner can't list moves along.
+  await fs.chmod(join(work, 'a', 'locked'), 0o000)
+  t.after(() => fs.chmod(join(work, 'c', 'locked'), 0o755).catch(() => {}))
+  // The folder moves twice before the first move's history follows.
+  await fs.rename(join(work, 'a'), join(work, 'b'))
+  const first = api.relocateUndoHistory(join(work, 'a'), join(work, 'b'))
+  await fs.rename(join(work, 'b'), join(work, 'c'))
+  await Promise.all([
+    first,
+    api.relocateUndoHistory(join(work, 'b'), join(work, 'c')),
+  ])
+  assert.equal(await exists(kept(root, join(work, 'a', 'n.md'))), false)
+  assert.deepEqual(
+    await api.readUndoHistory(join(work, 'c', 'n.md'), reopened(note.source)),
+    note.history,
+  )
+  // A later launch follows the next move from what this one kept.
+  const later = await main(root)
+  await later.relocateUndoHistory(join(work, 'c'), join(work, 'd'))
+  assert.deepEqual(
+    await later.readUndoHistory(join(work, 'd', 'n.md'), reopened(note.source)),
+    note.history,
+  )
+  // Clearing forgets which notes had histories, too.
+  await later.clearUndoHistory()
+  assert.deepEqual(
+    (await fs.readdir(root)).filter((name) => name.startsWith('undo-history')),
+    [],
+  )
+})
+
+test('a temporary copy a crash left behind is removed by the next store', async (t) => {
+  const root = await profile(t)
+  await fs.mkdir(folder(root), { recursive: true })
+  const left = join(folder(root), `.${'a'.repeat(64)}.json.left.tmp`)
+  await fs.writeFile(left, 'deleted text from a cut-short write')
+  const api = await main(root)
+  const note = saved()
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  assert.equal(await exists(left), false)
+  assert.equal(await exists(kept(root, '/notes/a.md')), true)
+})
+
+test('an unreadable undo history setting keeps nothing until it is set again', async (t) => {
+  const root = await profile(t)
+  const note = saved()
+  for (const text of ['null', '{"keep":', 'not json']) {
+    await fs.writeFile(join(root, 'undo-history-settings.json'), text)
+    const api = await main(root)
+    assert.equal(await api.keepsUndoHistory(), false)
+    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  }
+  const api = await main(root)
+  await api.setKeepUndoHistory(true)
+  assert.equal(await (await main(root)).keepsUndoHistory(), true)
+})

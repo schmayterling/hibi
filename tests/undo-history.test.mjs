@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, redoKey, replaceRichText } from './keyboard.mjs'
+import { renameDocument } from './rename.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
@@ -218,4 +227,46 @@ test('clearing undo history forgets open and kept steps, and keeping it can be t
     ),
     { keep: false },
   )
+})
+
+test('a note renamed inside Hibi keeps its undo history under its new name', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch, profile, file } = await note(t)
+  const hibi = await launch()
+  const { app, page } = hibi
+  const folder = join(profile, 'undo-history')
+  const named = async (path) =>
+    `${createHash('sha256')
+      .update(await realpath(path))
+      .digest('hex')}.json`
+  const kept = (names) =>
+    waitForAsync(
+      app,
+      async (_electron, [folder, names]) => {
+        const { readdir } = process.getBuiltinModule('node:fs/promises')
+        const kept = await readdir(folder).catch(() => [])
+        return kept.sort().join() === names.sort().join()
+      },
+      [folder, names],
+    )
+  await hibi.open('original')
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await kept([await named(file)])
+  await renameDocument(app, page, 'renamed')
+  const renamed = join(profile, 'renamed.md')
+  await kept([await named(renamed)])
+  await pressShortcut(app, `${mod}+w`)
+  await hibi.shows('')
+  await app.evaluate(({ dialog }, renamed) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [renamed],
+    })
+  }, renamed)
+  await hibi.open('first draft')
+  await hibi.restored()
+  await hibi.undo('original')
+  assert.deepEqual(await readdir(folder), [await named(renamed)])
 })

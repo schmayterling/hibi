@@ -2,15 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceSourceText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
-test('preview scrolling can be unlinked, saved, and linked again', {
-  timeout: 90000,
+test('preview scrolling can be unlinked while typing and clicks keep panes aligned', {
+  timeout: 120000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-preview-scroll-'))
   const app = await electron.launch({
@@ -24,8 +22,10 @@ test('preview scrolling can be unlinked, saved, and linked again', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  page.setDefaultTimeout(6000)
+  await waitForDocumentEditor(app, page)
+  page.setDefaultTimeout(10000)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.getByRole('button', { name: /^side-by-side$/i }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -86,18 +86,92 @@ test('preview scrolling can be unlinked, saved, and linked again', {
   assert.ok(Math.abs(fromPreview.after.rich - fromPreview.before.rich) > 100)
   assert.ok(Math.abs(fromPreview.after.source - fromPreview.before.source) < 2)
 
-  // Caret changes must also leave the preview at its chosen reading position.
-  const readingPosition = fromPreview.after.rich
+  // Only scrolling is unlinked. Moving the caret still aligns the preview.
   await source.press(
     process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
   )
+  await page.waitForFunction(
+    (before) => document.querySelector('.rich-pane').scrollTop < before / 2,
+    fromPreview.after.rich,
+  )
   await source.press('ArrowDown')
-  const afterCaret = await scroll('.source-pane .cm-scroller', 0.35)
-  assert.ok(Math.abs(afterCaret.after.rich - readingPosition) < 2)
+
+  const clickPane = async (selector) => {
+    const bounds = await page.locator(selector).boundingBox()
+    await page.mouse.click(bounds.x + 150, bounds.y + bounds.height / 2)
+  }
+  const aligned = async (caret, mirror) =>
+    page.waitForFunction(
+      ([caret, mirror]) => {
+        const first = document.querySelector(caret)?.getBoundingClientRect()
+        const second = document.querySelector(mirror)?.getBoundingClientRect()
+        return (
+          first?.height &&
+          second?.height &&
+          Math.abs(
+            first.top + first.height / 2 - second.top - second.height / 2,
+          ) < 3
+        )
+      },
+      [caret, mirror],
+    )
+
+  await scroll('.source-pane .cm-scroller', 0.35)
+  await clickPane('.source-pane .cm-scroller')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     markdown,
   )
+
+  await scroll('.rich-pane', 0.8)
+  await source.focus()
+  await page.keyboard.insertText('Z\nZ')
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown.replace(
+      'Z\nZ',
+      '',
+    ),
+    markdown,
+  )
+  await source.press('ControlOrMeta+z')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    markdown,
+  )
+  await aligned('.source-pane .editor-cursor', '.rich-pane .mirror-cursor')
+
+  // Clicking the independently scrolled preview also reveals its line in source.
+  await scroll('.rich-pane', 0.6)
+  const sourceBeforeClick = await page
+    .locator('.source-pane .cm-scroller')
+    .evaluate((pane) => pane.scrollTop)
+  await clickPane('.rich-pane')
+  await page.waitForFunction(
+    (before) =>
+      Math.abs(
+        document.querySelector('.source-pane .cm-scroller').scrollTop - before,
+      ) > 100,
+    sourceBeforeClick,
+  )
+  await page.waitForFunction(() => {
+    const mirror = document
+      .querySelector('.source-pane .mirror-cursor')
+      ?.getBoundingClientRect()
+    const view = document.querySelector('.rich-pane .cm-content')?.cmTile.root
+      .view
+    const caret = view?.coordsAtPos(view.state.selection.main.head)
+    return (
+      caret &&
+      mirror?.height &&
+      Math.abs(
+        (caret.top + caret.bottom) / 2 - mirror.top - mirror.height / 2,
+      ) < 3
+    )
+  })
 
   await settings()
   await toggle.check()

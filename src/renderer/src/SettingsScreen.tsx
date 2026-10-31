@@ -48,7 +48,6 @@ import { CodeSyntaxSettings } from './CodeSyntaxSettings'
 import { colorschemes } from './colorschemes'
 import { DependencySettings } from './DependencySettings'
 import type { CursorSettings } from './EditorCursor'
-import { ToolbarSettings } from './EditorToolbar'
 import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { FormatsSettings } from './FormatsSettings'
 import { HibiSettings } from './HibiSettings'
@@ -560,7 +559,7 @@ export function SettingsScreen({
               <SettingRow
                 id="sync-preview-scroll"
                 label="Sync preview scrolling"
-                description="Keep the source and preview aligned in Side-by-side view. Turn off to scroll each pane independently."
+                description="Keep the source and preview aligned while scrolling in Side-by-side view. Turn off to scroll each pane independently. Typing and clicking in either pane still align the other pane."
               >
                 <Toggle
                   id="sync-preview-scroll"

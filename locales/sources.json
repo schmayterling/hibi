@@ -1002,6 +1002,9 @@
   "443373ad0b9d": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "83b12c2216ef": [
+    "src/renderer/src/UndoHistorySettings.tsx"
+  ],
   "1d325ed3925e": [
     "src/addons/math/PackageSettings.tsx"
   ],
@@ -1023,6 +1026,12 @@
   ],
   "954d1afa8200": [
     "src/renderer/src/HotkeyRow.tsx"
+  ],
+  "3708e92f68d3": [
+    "src/renderer/src/UndoHistorySettings.tsx"
+  ],
+  "b6c5c2ce9a63": [
+    "src/renderer/src/UndoHistorySettings.tsx"
   ],
   "830121754331": [
     "src/addons/math/PackageSettings.tsx"
@@ -3322,6 +3331,9 @@
   "89380eae1dad": [
     "src/addons/tags/Panel.tsx"
   ],
+  "45f6b281a9a1": [
+    "src/main/undo-history.ts"
+  ],
   "9a9bb3ad8cbc": [
     "src/renderer/src/addon-views.ts"
   ],
@@ -3359,6 +3371,9 @@
   ],
   "566c3a93a25f": [
     "src/renderer/src/main.tsx"
+  ],
+  "eae999dbe379": [
+    "src/renderer/src/UndoHistorySettings.tsx"
   ],
   "2316810a5de3": [
     "src/addons/keybeats/Settings.tsx"
@@ -4176,6 +4191,9 @@
   "29c10407db3a": [
     "src/renderer/src/AddonSettings.tsx"
   ],
+  "2e2a7404ad86": [
+    "src/renderer/src/UndoHistorySettings.tsx"
+  ],
   "3dd042fdb3dd": [
     "src/addons/discord-presence/Settings.tsx"
   ],
@@ -4745,6 +4763,9 @@
   "78487e18eec0": [
     "src/addons/autocomplete/Settings.tsx"
   ],
+  "91f8c25ef4be": [
+    "src/renderer/src/UndoHistorySettings.tsx"
+  ],
   "298b2b23d1af": [
     "src/renderer/src/addons.ts"
   ],
@@ -4793,6 +4814,9 @@
   "62c003429465": [
     "src/addons/_shared/format-renderer.tsx",
     "src/addons/_shared/local-preview.tsx"
+  ],
+  "bcd1518b89a0": [
+    "src/renderer/src/UndoHistorySettings.tsx"
   ],
   "95e154398a4b": [
     "src/main/document.ts",
@@ -5066,6 +5090,9 @@
   ],
   "d41d8ff626a3": [
     "src/shared/document-session.ts"
+  ],
+  "28cdf59e6b0d": [
+    "src/shared/undo-history.ts"
   ],
   "bddb9129d59e": [
     "src/renderer/src/VersionHistory.tsx"
@@ -6966,6 +6993,12 @@
   "a8283ade3185": [
     "src/main/index.ts",
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "608642c3baa9": [
+    "src/renderer/src/UndoHistorySettings.tsx"
+  ],
+  "2c47ae6f3b4f": [
+    "src/renderer/src/UndoHistorySettings.tsx"
   ],
   "fe199528850a": [
     "src/addons/dictionary/PackSettings.tsx",

@@ -64,6 +64,7 @@ import {
 } from './settings-categories'
 import { settingsCategory, settingsPages } from './settings-pages'
 import { ToolbarSettings } from './ToolbarSettings'
+import { WindowControlsSettings } from './WindowControlsSettings'
 import { WorkspaceSettings } from './WorkspaceSettings'
 
 class PluginSettingsBoundary extends Component<
@@ -691,6 +692,11 @@ export function SettingsScreen({
             </div>
             <h2>Window</h2>
             <div className="settings-group">
+              {info?.platform === 'linux' && (
+                <WindowControlsSettings
+                  appliedHidden={info.windowControlsHidden}
+                />
+              )}
               <SettingRow id="status-bar" label="Status bar">
                 <Select
                   id="status-bar"

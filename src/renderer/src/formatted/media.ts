@@ -9,6 +9,8 @@ import type { SyntaxNodeRef } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import type { DocumentMedia } from '../../../shared/media.ts'
 import {
+  isMenuKey,
+  menuImage,
   observeDocumentMedia,
   remoteImageMenu,
   remoteImageSource,
@@ -18,6 +20,7 @@ import type { EditorActionsRequest } from '../editor-interactions'
 import {
   type FormattedContribution,
   formattedDocument,
+  formattedSyntaxTree,
 } from '../formatted-contributions.ts'
 import './media.css'
 
@@ -302,16 +305,59 @@ const revisions = ViewPlugin.fromClass(
   },
 )
 
-/** Right-clicking a remote image offers to fetch it again, first among the editor's actions. */
+/** The drawn remote image of the image whose source holds the selection, or null. */
+function selectedRemoteImage(view: EditorView) {
+  const tree = formattedSyntaxTree(view.state)
+  const { head } = view.state.selection.main
+  for (const side of [-1, 1] as const)
+    for (
+      let node = tree?.resolveInner(head, side) ?? null;
+      node;
+      node = node.parent
+    ) {
+      if (node.name !== 'Image' && node.name !== 'HTMLImage') continue
+      for (const image of view.contentDOM.querySelectorAll('img')) {
+        const at = view.posAtDOM(image)
+        if (at >= node.from && at <= node.to && remoteImageSource(image))
+          return image
+      }
+      break
+    }
+  return null
+}
+
+/**
+ * Right-clicking a remote image, or Shift+F10 or the menu key with the
+ * selection in one, offers to fetch it again, first among the editor's actions.
+ */
 const refreshMenu = ViewPlugin.fromClass(
   class {
     view: EditorView
     constructor(view: EditorView) {
       this.view = view
       view.dom.addEventListener('contextmenu', this.context, true)
+      view.dom.addEventListener('keydown', this.key, true)
     }
     context = (event: MouseEvent) => {
-      const menu = remoteImageMenu(event)
+      // The menu key's event comes from no button; its menu opens at the selection.
+      if (event.button < 0) this.atSelection(event)
+      else {
+        const image = menuImage(event)
+        if (image) this.open(event, image, event.clientX, event.clientY)
+      }
+    }
+    key = (event: KeyboardEvent) => {
+      if (isMenuKey(event)) this.atSelection(event)
+    }
+    /** Opens the actions of the remote image holding the selection, below it. */
+    atSelection(event: Event) {
+      const image = selectedRemoteImage(this.view)
+      const caret =
+        image && this.view.coordsAtPos(this.view.state.selection.main.head)
+      if (image && caret) this.open(event, image, caret.left, caret.bottom + 6)
+    }
+    open(event: Event, image: HTMLImageElement, x: number, y: number) {
+      const menu = remoteImageMenu(image, { x, y })
       if (!menu) return
       event.preventDefault()
       event.stopImmediatePropagation()
@@ -320,9 +366,9 @@ const refreshMenu = ViewPlugin.fromClass(
         {
           cancelable: true,
           detail: {
-            position: this.view.posAtDOM(menu.image),
-            x: event.clientX,
-            y: event.clientY,
+            position: this.view.posAtDOM(image),
+            x,
+            y,
             items: menu.items,
           },
         },
@@ -331,6 +377,7 @@ const refreshMenu = ViewPlugin.fromClass(
     }
     destroy() {
       this.view.dom.removeEventListener('contextmenu', this.context, true)
+      this.view.dom.removeEventListener('keydown', this.key, true)
     }
   },
 )

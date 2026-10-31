@@ -187,7 +187,7 @@ test('a workspace note keeps remote images in its .hibi cache, draws them from d
   assert.equal(host.requests.length, 2)
 })
 
-test('right-clicking a remote image refreshes it, and notes outside a workspace keep images in the app data folder', {
+test('Refresh image, from a right-click, Shift+F10 or the menu key, fetches a remote image again, and notes outside a workspace keep images in the app data folder', {
   timeout: 90000,
 }, async (t) => {
   const host = await imageHost(t)
@@ -216,6 +216,27 @@ test('right-clicking a remote image refreshes it, and notes outside a workspace 
     .click()
   await host.shown(3)
   assert.deepEqual(host.requests, ['/garden.png', '/garden.png'])
+  // From the keyboard, Shift+F10 or the menu key with the caret in the image
+  // offers it first.
+  const choose = async () => {
+    await host.page
+      .getByRole('menuitem', { name: 'Refresh image', exact: true })
+      .waitFor()
+    await host.page.keyboard.press('Enter')
+  }
+  const editor = host.page.locator('.rich-pane .hibi-formatted .cm-content')
+  await editor.press('ControlOrMeta+End')
+  await editor.press('ArrowUp')
+  for (const [key, width] of [
+    ['Shift+F10', 4],
+    ['ContextMenu', 5],
+  ]) {
+    host.width = width
+    await editor.press(key)
+    await choose()
+    await host.shown(width)
+  }
+  assert.equal(host.requests.length, 4)
 
   // Format previews draw the same copy.
   const post = join(host.folder, 'post.bbcode')
@@ -225,22 +246,30 @@ test('right-clicking a remote image refreshes it, and notes outside a workspace 
     .getByRole('textbox', { name: 'BBCode editor', exact: true })
     .waitFor()
   await host.page.getByRole('button', { name: /^side-by-side$/i }).click()
-  await host.page.waitForFunction(() => {
-    const image = document.querySelector('.bbcode-content img')
-    return image?.complete && image.naturalWidth === 3
-  })
-  assert.equal(host.requests.length, 2)
-  // And refresh it the same way.
-  host.width = 5
+  const previewed = (width) =>
+    host.page.waitForFunction((width) => {
+      const image = document.querySelector('.bbcode-content img')
+      return image?.complete && image.naturalWidth === width
+    }, width)
+  await previewed(5)
+  assert.equal(host.requests.length, 4)
+  // And refresh it the same ways.
+  host.width = 6
   await host.page.locator('.bbcode-content img').click({ button: 'right' })
   await host.page
     .getByRole('menuitem', { name: 'Refresh image', exact: true })
     .click()
-  await host.page.waitForFunction(() => {
-    const image = document.querySelector('.bbcode-content img')
-    return image?.complete && image.naturalWidth === 5
-  })
-  assert.equal(host.requests.length, 3)
+  await previewed(6)
+  for (const [key, width] of [
+    ['Shift+F10', 7],
+    ['ContextMenu', 8],
+  ]) {
+    host.width = width
+    await host.page.locator('.bbcode-content img').press(key)
+    await choose()
+    await previewed(width)
+  }
+  assert.equal(host.requests.length, 7)
 })
 
 test('pages show remote images, but their scripts can read neither the bytes nor the pixels', {

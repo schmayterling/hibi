@@ -88,6 +88,7 @@ export function localPreview(
         withCachedImages(result?.html ?? '', document.tabId),
       )
       host.current.oncontextmenu = openRemoteImageMenu
+      host.current.onkeydown = openRemoteImageMenu
     }, [result, document.tabId])
     return (
       <div className="format-preview">

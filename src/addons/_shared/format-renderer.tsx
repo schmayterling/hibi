@@ -82,6 +82,7 @@ function HtmlPreview({ html, tab }: { html: string; tab: string }) {
     // Rendered content is sanitized before crossing this one HTML insertion boundary.
     host.current.replaceChildren(withCachedImages(html, tab))
     host.current.oncontextmenu = openRemoteImageMenu
+    host.current.onkeydown = openRemoteImageMenu
   }, [html, tab])
   return <div ref={host} className="format-content" />
 }

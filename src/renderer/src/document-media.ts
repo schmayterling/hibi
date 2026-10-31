@@ -52,21 +52,23 @@ export function withCachedImages(html: string, tab: string) {
   template.innerHTML = html
   for (const image of template.content.querySelectorAll('img')) {
     const source = image.getAttribute('src') ?? ''
-    if (/^https:\/\//i.test(source)) image.src = remoteImageUrl(source, tab)
+    if (!/^https:\/\//i.test(source)) continue
+    image.src = remoteImageUrl(source, tab)
+    // Focus lets the keyboard open the image's menu.
+    image.tabIndex = 0
   }
   return template.content
 }
 
 const imageMenu = menus.scope(() => {})
 
-/**
- * The remote image a right-click is on and its actions, or null for any other
- * target. Control-Command-click follows links instead.
- */
-export function remoteImageMenu(event: MouseEvent) {
-  const image = event.target instanceof HTMLImageElement ? event.target : null
-  const source = image && remoteImageSource(image)
-  if (!image || !source || (event.ctrlKey && event.metaKey)) return null
+/** A remote image's actions, or null for any other image. */
+export function remoteImageMenu(
+  image: HTMLImageElement,
+  anchor: { x: number; y: number },
+) {
+  const source = remoteImageSource(image)
+  if (!source) return null
   const tab = remoteImageTab(image)
   const items: MenuItem[] = [
     {
@@ -75,18 +77,52 @@ export function remoteImageMenu(event: MouseEvent) {
       onSelect: () => refreshRemoteImage(source, tab),
     },
   ]
-  const anchor = { x: event.clientX, y: event.clientY }
   return {
-    image,
     items,
-    /** Shows the actions in a menu of their own at the pointer. */
+    /** Shows the actions in a menu of their own at `anchor`. */
     open: () => imageMenu.api.open({ label: 'Image actions', anchor, items }),
   }
 }
 
-/** Right-clicking a remote image in a preview offers to fetch it again. */
-export function openRemoteImageMenu(event: MouseEvent) {
-  const menu = remoteImageMenu(event)
+/**
+ * The image a right-click or the keyboard's menu key is on, or null for any
+ * other target. Control-Command-click follows links instead.
+ */
+export const menuImage = (event: MouseEvent) =>
+  event.target instanceof HTMLImageElement && !(event.ctrlKey && event.metaKey)
+    ? event.target
+    : null
+
+/** Shift+F10, which opens a context menu from the keyboard, as the menu key does. */
+export const isMenuKey = (event: KeyboardEvent) =>
+  event.key === 'F10' &&
+  event.shiftKey &&
+  !event.altKey &&
+  !event.metaKey &&
+  !event.ctrlKey &&
+  !event.isComposing
+
+/**
+ * Right-clicking a remote image in a preview, or Shift+F10 or the menu key
+ * on one with focus, offers to fetch it again.
+ */
+export function openRemoteImageMenu(event: MouseEvent | KeyboardEvent) {
+  const image =
+    event instanceof KeyboardEvent
+      ? isMenuKey(event) && event.target instanceof HTMLImageElement
+        ? event.target
+        : null
+      : menuImage(event)
+  if (!image) return
+  const box = image.getBoundingClientRect()
+  // From the keyboard, whose menu key's event comes from no button, the menu
+  // opens below the image.
+  const menu = remoteImageMenu(
+    image,
+    event instanceof KeyboardEvent || event.button < 0
+      ? { x: box.left, y: box.bottom }
+      : { x: event.clientX, y: event.clientY },
+  )
   if (!menu) return
   event.preventDefault()
   menu.open()

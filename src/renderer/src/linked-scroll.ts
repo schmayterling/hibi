@@ -29,11 +29,15 @@ export function linkScroll(
         from.contentDOM.contains(active))
     let point = focused ? from.coordsAtPos(position) : null
     if (!point || point.top < bounds.top || point.bottom > bounds.bottom) {
-      const x = from.contentDOM.getBoundingClientRect().left + 8
+      const content = from.contentDOM.getBoundingClientRect()
       const y = bounds.top + bounds.height / 2
-      // posAtCoords gives a table's edges for a point in its cells.
+      // posAtCoords gives a table's edges for a point in its cells. The
+      // cells span the content's width, and its left edge can be in the
+      // table's margin, so the table is asked at the content's middle.
       position =
-        mappedPositionAt(from, x, y) ?? from.posAtCoords({ x, y }) ?? position
+        mappedPositionAt(from, content.left + content.width / 2, y) ??
+        from.posAtCoords({ x: content.left + 8, y }) ??
+        position
       point = from.coordsAtPos(position)
     }
     const at = editorPosition(to, sourcePosition(from, position))

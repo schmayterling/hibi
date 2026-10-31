@@ -418,21 +418,24 @@ export function createSourceSession(
     failed = false,
     // Only an attached view that is not read-only undoes or redoes, by any route.
     attached: Pick<EditorView, 'state'> | null = null,
-    // While this view undoes or redoes, its echo shows what that restores.
+    // While this view undoes or redoes its own edit, its echo shows the
+    // selection that restores.
     stepping = false
   const writable = () => !failed && !!attached && !attached.state.readOnly
-  const step = (run: () => unknown) => {
+  const step = (direction: 'undo' | 'redo') => {
     if (!writable()) return false
-    stepping = true
+    // Each view keeps its own caret: a step restores the selection of the
+    // view that made its edit, and leaves another view's where it was.
+    stepping = session.historyView(direction) === viewId
     try {
-      return !!run()
+      return !!session[direction]()
     } finally {
       stepping = false
     }
   }
   const history = {
-    undo: () => step(() => session.undo()),
-    redo: () => step(() => session.redo()),
+    undo: () => step('undo'),
+    redo: () => step('redo'),
   }
   const { undo, redo } = history
   /** Editor changes as this view commits them, in its opening's line breaks. */
@@ -671,8 +674,8 @@ export function createSourceSession(
             : []
         snapshot = prepared.after
         group = ''
-        // As the editors' own history does, the view that undid or redid
-        // scrolls to the selection; others keep their place.
+        // As the editors' own history does, a view that undid or redid its
+        // own edit scrolls to the selection; others keep their place.
         if (visible) flush(stepping)
       })
       const unsubscribeStorage = session.subscribeStorage((change) => {

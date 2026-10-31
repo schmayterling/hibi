@@ -315,7 +315,7 @@ test('two source views share text and history but keep separate selections', () 
   f.session.dispose()
 })
 
-test('the view that undoes or redoes scrolls to what it restores; other views keep their place', () => {
+test('a view that undoes or redoes its own edit scrolls to what that restores; other views keep their place', () => {
   const f = fixture('abcd')
   const scrolled = (view) => {
     const update = view.update
@@ -336,14 +336,16 @@ test('the view that undoes or redoes scrolls to what it restores; other views ke
     log.length = 0
   })
   assert.equal(left.bridge.undo(), true)
+  // A step of another view's edit restores none of this view's selection.
   assert.equal(right.bridge.redo(), true)
-  // Session history and other edits move no view.
+  right.dispatch(type(1, 'Y', 2))
+  assert.equal(right.bridge.undo(), true)
+  // Session history moves no view either.
   f.session.undo()
-  left.dispatch(type(1, 'Y', 2))
   hidden.bridge.setVisible(true)
   assert.deepEqual(logs, [
-    [true, false, false, false],
-    [false, true, false, false],
+    [true, false, false, false, false],
+    [false, false, false, true, false],
     [false],
   ])
   assert.deepEqual(f.errors, [])

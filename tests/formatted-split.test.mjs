@@ -307,6 +307,62 @@ test('formatted split links native wheel scrolling in both directions without fe
   await source(page, text)
 })
 
+// The panes line up positions inside tables too: CodeMirror gives a place
+// in a table the table's edges unless the table says where its cells are.
+test('formatted split lines up a source line inside a table with its cell', {
+  timeout: 90000,
+}, async (t) => {
+  const rows = Array.from(
+    { length: 80 },
+    (_, row) => `| r${row} | v${row} |`,
+  ).join('\n')
+  const lines = 'line\n\n'.repeat(30)
+  const text = `${lines}| aa | bb |\n| -- | -- |\n${rows}\n\n${lines}`
+  const { page } = await open(t, text)
+  // The source leads, with a row away from the table's middle at its middle.
+  await page.evaluate((at) => {
+    const scroller = document.querySelector('.source-pane .cm-scroller')
+    const view = scroller.querySelector('.cm-content').cmTile.root.view
+    scroller.dispatchEvent(new WheelEvent('wheel'))
+    const block = view.lineBlockAt(at)
+    scroller.scrollTop =
+      block.top + block.height / 2 - scroller.clientHeight / 2
+  }, text.indexOf('| r20 |'))
+  // The formatted pane shows the text of the source line at the source's
+  // middle at the same height.
+  await waitForAsync(page, () => {
+    const scroller = document.querySelector('.source-pane .cm-scroller')
+    const content = scroller.querySelector('.cm-content')
+    const view = content.cmTile.root.view
+    const bounds = scroller.getBoundingClientRect()
+    const at = view.posAtCoords({
+      x: content.getBoundingClientRect().left + 8,
+      y: bounds.top + bounds.height / 2,
+    })
+    if (at === null) return false
+    const line = view.state.doc.lineAt(at)
+    const row = /^\| r(\d+) \|/.exec(line.text)
+    const point = view.coordsAtPos(line.from)
+    // The text of the row's first cell, as the source line has it.
+    const cell = row
+      ? document.querySelector(
+          `.rich-pane tr[data-line="${Number(row[1]) + 2}"] td`,
+        )
+      : null
+    const text = cell && document.createRange()
+    text?.selectNodeContents(cell.querySelector('p') ?? cell)
+    const drawn = text?.getBoundingClientRect()
+    return (
+      !!point &&
+      !!drawn &&
+      Math.abs(
+        (point.top + point.bottom) / 2 - (drawn.top + drawn.bottom) / 2,
+      ) < 6
+    )
+  })
+  await source(page, text)
+})
+
 test('large formatted split follows distant carets without whole-text geometry reads and preserves undo', {
   timeout: 120000,
 }, async (t) => {

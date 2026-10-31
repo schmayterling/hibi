@@ -601,5 +601,15 @@ test('codemirror: a pane undoes its own edits after a split opens or closes', {
   await closeSplit()
   await kept('caret when a split of one note closes', '.rich-pane', 200)
 
+  // With the note in both panes, the pane that stays takes the other pane's
+  // steps too: undo after the split closes shows what it takes back, where
+  // the other pane typed, rather than changing text out of view.
+  await openSplit('paragraphs.md')
+  const other = await typeAtEnd(right, 'z')
+  await focus(left, false)
+  await page.keyboard.press('ControlOrMeta+Home')
+  await closeSplit()
+  await undo('undo after a split of one note closed', '.rich-pane', other)
+
   assert.deepEqual(differences, [])
 })

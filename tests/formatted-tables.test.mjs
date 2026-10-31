@@ -463,6 +463,82 @@ test('a 10,000-row table renders the rows in view and one row per edit', {
   }
 })
 
+test('the text above a long table growing keeps the row under the pane top in place', {
+  timeout: 120000,
+}, async () => {
+  const result = await harness.evaluate(async () => {
+    const preview = window.tables
+    const paragraphs = Array.from(
+      { length: 300 },
+      (_, i) => `Paragraph ${i} of the text above.`,
+    )
+    const rows = Array.from({ length: 10000 }, (_, i) => `| row ${i} | v${i} |`)
+    const doc = `${paragraphs.join('\n\n')}\n\n| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+    await preview.mount(doc, { width: 1000, height: 800 }, { editable: true })
+    const view = preview.view()
+    const pane = document.querySelector('.rich-pane')
+    const frame = () => new Promise(requestAnimationFrame)
+    const tableAt = doc.indexOf('| a | b |')
+    const at = doc.indexOf('| row 6000 |') + 2
+    // The table's top into view, aimed again until the table is parsed
+    // and drawn as one block.
+    let table = null
+    for (let i = 0; i < 100; i++) {
+      pane.scrollTop +=
+        view.lineBlockAt(tableAt).top +
+        view.documentTop -
+        pane.getBoundingClientRect().top
+      for (let frames = 0; frames < 4; frames++) await frame()
+      table = document.querySelector('.hibi-lp-table')
+      if (table && view.lineBlockAt(at).from === tableAt) break
+    }
+    // Body row 6000, the table's line 6002, at the pane's top; the caret
+    // stays at the note's start, off screen.
+    pane.scrollTop +=
+      table.getBoundingClientRect().top -
+      pane.getBoundingClientRect().top +
+      6001 * 61
+    const top = () => {
+      const row = document.querySelector(
+        '.hibi-lp-table tr[data-line="6002"]',
+      )
+      return row
+        ? Math.round(
+            row.getBoundingClientRect().top - pane.getBoundingClientRect().top,
+          )
+        : null
+    }
+    const still = async () => {
+      let last
+      for (let i = 0, same = 0; i < 200 && same < 5; i++) {
+        await frame()
+        const now = top()
+        same = now === last ? same + 1 : 0
+        last = now
+      }
+      return last
+    }
+    const before = await still()
+    const tableTop = view.lineBlockAt(tableAt).top
+    // The view estimates the text above again, as when a long paragraph's
+    // reading moves: 50,000 px more above the table.
+    preview.growAbove(50000)
+    const after = await still()
+    return {
+      whole: view.lineBlockAt(at).from === tableAt,
+      moved: Math.round(view.lineBlockAt(tableAt).top - tableTop),
+      before,
+      after,
+    }
+  })
+  assert.deepEqual(
+    result,
+    { whole: true, moved: 50000, before: result.before, after: result.before },
+    JSON.stringify(result),
+  )
+  assert.ok(result.before !== null && result.before > -61, JSON.stringify(result))
+})
+
 /** Mount `doc` in the editable harness. */
 const mount = (doc) =>
   harness.evaluate(

@@ -1,5 +1,3 @@
-import type { Node } from '@tiptap/pm/model'
-
 /** Heading text, with inline formulas apart so the outline can draw them. */
 export type OutlineLabelPart = string | { latex: string }
 
@@ -35,17 +33,4 @@ export function outlineLabel(parts: readonly OutlineLabelPart[]): {
       return text ? [text] : []
     }),
   }
-}
-
-/** A rich heading's text as `textContent` reads it, keeping inline formulas. */
-export function richHeadingLabel(heading: Node) {
-  const parts: OutlineLabelPart[] = []
-  heading.forEach((child) => {
-    parts.push(
-      child.type.name === 'inlineMath'
-        ? { latex: String(child.attrs.latex ?? '') }
-        : child.textContent,
-    )
-  })
-  return outlineLabel(parts)
 }

@@ -11,7 +11,7 @@ const details = (id, extra = {}) => ({
   name: id,
   description: 'Dependency test',
   kind: 'extension',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   authors: [{ displayName: 'Test' }],
   entry: 'index.js',
@@ -675,7 +675,6 @@ test('installer accepts the full typst notice but keeps the 64 kib manifest boun
     'utf8',
   )
   const manifest = details('notice', {
-    apiVersion: 1,
     defaultEnabled: true,
     licenses: [
       {

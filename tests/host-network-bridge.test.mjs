@@ -18,7 +18,7 @@ test('installed addon network bridge asks for each destination and private addre
       name: 'Network probe',
       description: 'Host network bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',

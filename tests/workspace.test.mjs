@@ -9,11 +9,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { checkSidebarResize } from './sidebar-resize.mjs'
 import { uiName } from './ui.mjs'
@@ -69,7 +70,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
     { folder, output },
   )
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()

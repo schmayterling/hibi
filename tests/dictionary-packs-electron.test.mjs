@@ -2,17 +2,18 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { gzipSync } from 'node:zlib'
 import { packs } from '../src/addons/dictionary/packs.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
-async function launch(profile, bytes, engine) {
+async function launch(profile, bytes) {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -35,16 +36,10 @@ async function launch(profile, bytes, engine) {
     )
     const page = await app.firstWindow()
     page.setDefaultTimeout(APP_STATE_TIMEOUT)
-    if (bytes) await selectFormattedEngine(app, page, engine)
+    if (bytes) await waitForFormattedEditor(app, page)
     else {
       await waitForDocumentEditor(app, page)
-      await page
-        .locator(
-          engine === 'tiptap'
-            ? '.rich-pane .tiptap'
-            : '.rich-pane .hibi-formatted .cm-content',
-        )
-        .waitFor()
+      await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
     }
     await app.evaluate(({ ipcMain }) => {
       globalThis.dictionaryOnlineRequests = []
@@ -101,7 +96,7 @@ test('pack dialog install, offline definition, profile restart, path rejection a
       new URL('./fixtures/dictionary-packs/zh.txt', import.meta.url),
     ),
   )
-  let launched = await launch(profile, bytes, t.formattedEngine)
+  let launched = await launch(profile, bytes)
   app = launched.app
   let page = launched.page
   await waitForPack(page, 'absent')
@@ -195,16 +190,10 @@ test('pack dialog install, offline definition, profile restart, path rejection a
     exact: true,
   })
   await rich.click()
-  if (t.formattedEngine === 'tiptap')
-    await rich.evaluate((element) =>
-      element.editor.commands.setTextSelection(1),
-    )
-  else {
-    await rich.focus()
-    await rich.press(
-      process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
-    )
-  }
+  await rich.focus()
+  await rich.press(
+    process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
+  )
   await t.test(
     'offline definition preserves reading, license, privacy and source',
     async () => {
@@ -243,7 +232,7 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   await page.evaluate(() => window.hibi.setAddonEnabled('dictionary', false))
   await app.close()
   app = undefined
-  launched = await launch(profile, undefined, t.formattedEngine)
+  launched = await launch(profile, undefined)
   app = launched.app
   page = launched.page
   await app.evaluate(({ ipcMain }) => {

@@ -7,7 +7,7 @@ function maskCodeSpans(text: string, spans = codeSpans(text)) {
   return characters.join('')
 }
 
-/** Positions are opaque and editor-local. `editor: 'rich'` names either implementation, without an engine discriminator. Derive ranges from selection, before/after, and documentLength, never Markdown text or constants. CodeMirror uses normalized-source UTF-16 offsets; legacy rich uses ProseMirror positions, including node boundaries. */
+/** Positions are opaque UTF-16 offsets local to the named editor: `editor: 'rich'` is the formatted Normal view and `'source'` the source view, both counted in the note's normalized Markdown source. Derive ranges from selection, before/after, and documentLength, never Markdown text or constants. */
 export interface CompletionRequest {
   readonly view: ViewTarget
   readonly contentVersion: number

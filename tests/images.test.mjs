@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import unit from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { crc32, deflateSync } from 'node:zlib'
@@ -12,11 +13,7 @@ import {
   readDocumentImage,
   resolveDocumentMediaPath,
 } from '../src/main/images.ts'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 unit(
@@ -132,7 +129,7 @@ test('local images resolve from the note, validate content, and retain their Mar
   }, first)
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
-  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  const rich = await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Open…')
   await page.waitForFunction(
@@ -185,13 +182,10 @@ test('local images resolve from the note, validate content, and retain their Mar
     ),
     null,
   )
-  if (t.formattedEngine === 'tiptap') {
-    await rich.locator('p').last().click()
-    await page.keyboard.press('End')
-  } else {
-    await rich.focus()
-    await rich.press('ControlOrMeta+End')
-  }
+
+  await rich.focus()
+  await rich.press('ControlOrMeta+End')
+
   await page.keyboard.type(' edited')
   const markdown = (await page.evaluate(() => window.hibi.getDocument()))
     .markdown
@@ -290,7 +284,7 @@ unit(
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
-    await selectFormattedEngine(app, page, 'codemirror')
+    await waitForFormattedEditor(app, page)
     await app.evaluate(({ dialog }, note) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -373,7 +367,7 @@ async function openTallRemoteImage(t, delay) {
   )
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, note) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -553,7 +547,7 @@ unit(
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
-    const editor = await selectFormattedEngine(app, page, 'codemirror')
+    const editor = await waitForFormattedEditor(app, page)
     await app.evaluate(({ dialog }, note) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,

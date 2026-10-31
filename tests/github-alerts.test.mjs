@@ -16,11 +16,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  pressShortcut,
-  replaceRichText,
-  replaceSourceText,
-} from './keyboard.mjs'
+import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('Markdown callouts preserve quote boundaries, titles and fold markers', () => {
@@ -75,7 +71,7 @@ test('github alert markers survive sanitized site export', async () => {
   const files = await siteFiles(template, site)
   const article = files
     .get('index.html')
-    .match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1]
+    .match(/<article class="site-article">([\s\S]*?)<\/article>/)?.[1]
   assert.match(article, /class="github-alert"/)
   assert.match(article, /data-alert="warning"/)
   assert.match(article, /data-fold="-"/)

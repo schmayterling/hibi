@@ -206,6 +206,41 @@ test('formatted split mirrors either caret, hides metadata and selections, and k
   await source(page, text)
 })
 
+test('formatted split mirrors a caret in a table cell either way', {
+  timeout: 90000,
+}, async (t) => {
+  const rows = Array.from(
+    { length: 20 },
+    (_, row) => `| r${row} | v${row} |`,
+  ).join('\n')
+  const text = `# Table\n\n| aa | bb |\n| -- | -- |\n${rows}\n\nafter\n`
+  const { page } = await open(t, text)
+  // The source caret in a cell's text has a formatted caret there.
+  await select(page, 'source', text.indexOf('v10 |') + 1)
+  await mirrored(page, 'source')
+  // The caret of a cell's editor has a source caret in the cell's line.
+  await page.locator('.rich-pane tr[data-line="12"] td').nth(1).click()
+  await waitForAsync(page, () => {
+    const cell = document.activeElement?.closest('.rich-pane td')
+    const rich = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    const source = document.querySelector('.source-pane .cm-content').cmTile
+      .root.view
+    const caret = source.coordsAtPos(rich.state.selection.main.head)
+    const mirror = document
+      .querySelector('.source-pane .mirror-cursor')
+      ?.getBoundingClientRect()
+    return (
+      !!cell &&
+      !!caret &&
+      mirror?.height > 0 &&
+      Math.abs(caret.left - mirror.left) < 2 &&
+      Math.abs(caret.top - mirror.top) < 2
+    )
+  })
+  await source(page, text)
+})
+
 test('formatted split links native wheel scrolling in both directions without feedback or source changes', {
   timeout: 90000,
 }, async (t) => {

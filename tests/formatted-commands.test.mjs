@@ -4,7 +4,7 @@ import { history, isolateHistory, redo, undo } from '@codemirror/commands'
 import { EditorSelection, EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
 import { NodeType, Tree } from '@lezer/common'
-import { GFM, parser } from '@lezer/markdown'
+import { GFM, MarkdownParser, parser } from '@lezer/markdown'
 import {
   ChunkedMarkdownParser,
   uncovered,
@@ -1668,4 +1668,66 @@ test('Backspace and Delete read the syntax only where they use it', () => {
   assert.equal(reads, 1)
   deleteForward(state(doc, 7), read, Decoration.none)
   assert.ok(reads > 1)
+})
+
+test('edit reads parse inline syntax only around the selection in a giant paragraph', () => {
+  // A log pasted as one paragraph of half a megabyte.
+  const doc = Array.from(
+    { length: 8192 },
+    (_, n) => `[2026-10-31] INFO a_b: id=${n} **bold text** [l](y)`,
+  ).join('\n')
+  const syntax = formattedSyntax({ slice: 1 })
+  const caret = doc.lastIndexOf('**bold') + 4
+  // The characters a read passes to the inline parser.
+  const read = (anchor, head = anchor) => {
+    const state = EditorState.create({
+      doc,
+      selection: { anchor, head },
+      extensions: syntax.extension,
+    })
+    const inline = MarkdownParser.prototype.parseInline
+    let parsed = 0
+    MarkdownParser.prototype.parseInline = function (text, offset) {
+      parsed += text.length
+      return inline.call(this, text, offset)
+    }
+    try {
+      return { state, tree: syntax.editTree(state), parsed }
+    } finally {
+      MarkdownParser.prototype.parseInline = inline
+    }
+  }
+  // Whole lines within a few kilobytes of the caret, not the paragraph.
+  const { state, tree, parsed } = read(caret)
+  assert.ok(parsed > 0 && parsed < 16384, `${parsed} characters read inline`)
+  const next = state.update(blockBreak(state, tree)).state
+  assert.equal(next.sliceDoc(caret - 4, caret + 15), '**bo**\n\n**ld text**')
+  // A selection of all of it reads around both of its ends.
+  const all = read(0, doc.length).parsed
+  assert.ok(all > 0 && all < 32768, `${all} characters read inline`)
+})
+
+test('a repeated edit read keeps the blocks of the last read', () => {
+  const doc = Array.from({ length: 65536 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const syntax = formattedSyntax({ slice: 1 })
+  const subtrees = (tree, into = new Set()) => {
+    for (const child of tree.children) {
+      into.add(child)
+      if (child instanceof Tree) subtrees(child, into)
+    }
+    return into
+  }
+  let state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: syntax.extension,
+  })
+  const first = subtrees(syntax.editTree(state))
+  // The caret moves, and the text does not change.
+  state = state.update({ selection: { anchor: doc.length - 5 } }).state
+  const second = [...subtrees(syntax.editTree(state))]
+  const kept = second.filter((node) => first.has(node)).length
+  assert.ok(kept > second.length / 2, `${kept} of ${second.length} kept`)
 })

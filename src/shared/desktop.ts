@@ -318,6 +318,21 @@ export type DesktopApi = {
   listVersions: () => Promise<import('./history').DocumentVersion[]>
   previewVersion: (id: string) => Promise<string>
   restoreVersion: (id: string) => Promise<DocumentState | null>
+  /** Keeps a named tab's undo history up to its last save, if that save is still its file's. */
+  storeUndoHistory: (
+    tabId: string,
+    history: import('./undo-history').UndoHistory,
+  ) => Promise<void>
+  /** The undo history kept for a tab's file, if the tab still holds the text saved at `version`. */
+  readUndoHistory: (
+    tabId: string,
+    version: number,
+  ) => Promise<import('./undo-history').UndoHistory | null>
+  /** Before tabs or the window close, sends the histories of saves not sent yet. */
+  onUndoHistoryFlush: (callback: () => Promise<void>) => () => void
+  getKeepUndoHistory: () => Promise<boolean>
+  setKeepUndoHistory: (keep: boolean) => Promise<void>
+  clearUndoHistory: () => Promise<void>
   /** `updates` notices lead to the update settings. */
   onNotice: (
     callback: (message: string, target?: 'updates') => void,

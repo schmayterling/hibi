@@ -19,6 +19,9 @@ export const sourceOperationLimits = {
 } as const
 const identity = (value: unknown): value is string =>
   typeof value === 'string' && /^[\w.:-]{1,128}$/.test(value)
+/** The memory undo history counts for an edit list. */
+export const editBytes = (changes: readonly RawEdit[]) =>
+  changes.reduce((sum, change) => sum + change.insert.length * 2 + 48, 0)
 export const safePosition = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 0
 const parsedOperations = new WeakSet<SourceOperation>()

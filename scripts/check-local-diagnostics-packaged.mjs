@@ -73,11 +73,11 @@ for (const profile of ['release', 'debug']) {
     ['--hibi-test', `--user-data-dir=${userData}`],
     join(output, 'primary.log'),
     process.env,
-    30000,
+    180000,
   )
   const resultPath = join(userData, 'test-result.json')
   let result
-  for (let i = 0; i < 600; i++) {
+  for (let i = 0; i < 3600; i++) {
     result = await readFile(resultPath, 'utf8')
       .then(JSON.parse)
       .catch(() => null)
@@ -89,12 +89,13 @@ for (const profile of ['release', 'debug']) {
   assert.equal(result.profile, profile)
   const markerPath = join(userData, 'logs', profile, 'run-state.txt')
   const firstRun = JSON.parse(await readFile(markerPath, 'utf8')).run
+  // The first instance waits up to 60 s for this launch before it quits.
   await run(
     executable,
     ['--hibi-test', `--user-data-dir=${userData}`],
     join(output, 'secondary.log'),
     process.env,
-    10000,
+    60000,
   )
   assert.equal(JSON.parse(await readFile(markerPath, 'utf8')).run, firstRun)
   await primary

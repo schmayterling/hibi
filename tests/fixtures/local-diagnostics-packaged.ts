@@ -7,8 +7,13 @@ import '../../src/main/index'
 // This entrypoint is never referenced by the production build. It runs in a
 // separately signed test package with the production fuses left unchanged.
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+// The external runner launches a second instance once the result is written.
+const secondLaunch = new Promise((resolve) =>
+  app.once('second-instance', resolve),
+)
 async function run(window: BrowserWindow) {
   const root = app.getPath('userData')
+  let passed = false
   try {
     const editing =
       await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
@@ -84,6 +89,7 @@ async function run(window: BrowserWindow) {
         })),
       }),
     )
+    passed = true
   } catch {
     await writeFile(
       join(root, 'test-result.json'),
@@ -91,7 +97,9 @@ async function run(window: BrowserWindow) {
     )
     process.exitCode = 1
   }
-  await wait(2000) // Allow the external runner to verify secondary-instance ownership.
+  // Hold the single-instance lock until that launch reaches it, however slowly
+  // it starts, so it cannot take over the profile and run the check again.
+  if (passed) await Promise.race([secondLaunch, wait(60000)])
   app.quit()
 }
 app.once('browser-window-created', (_event, window) => {

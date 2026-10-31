@@ -24,6 +24,11 @@ const MAX_IMAGE_BYTES = 64 * 1024 * 1024
 const MAX_FOLDER_BYTES = 512 * 1024 * 1024
 /** A host that sends nothing for this long has failed, so a kept copy shows. */
 const QUIET_MS = 15_000
+/**
+ * A copy kept before shows once a check takes this long, however steadily its
+ * host trickles bytes; the check carries on.
+ */
+const STALE_MS = 3_000
 // The formats a page's images ask for, so hosts send what they would draw.
 const ACCEPT =
   'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
@@ -126,6 +131,7 @@ async function download(
   url: URL,
   kept: Kept | null,
   fetch: typeof globalThis.fetch,
+  stop: AbortSignal,
 ): Promise<Kept> {
   const quiet = new AbortController()
   const stopped = new Promise<never>((_resolve, reject) =>
@@ -134,6 +140,9 @@ async function download(
     }),
   )
   stopped.catch(() => {})
+  // A refresh that replaces this check ends it, as a quiet host does.
+  if (stop.aborted) quiet.abort()
+  else stop.addEventListener('abort', () => quiet.abort(), { once: true })
   let timer: ReturnType<typeof setTimeout> | undefined
   const wait = <T>(operation: Promise<T>) => {
     clearTimeout(timer)
@@ -233,8 +242,32 @@ async function download(
   }
 }
 
-/** Each kept image's latest check, which concurrent draws of it share. */
-const checks = new Map<string, Promise<Kept | null>>()
+/** What the check of `image` returns, or the copy kept before once the check takes `STALE_MS`. */
+async function checkedOrKept(
+  image: { url: URL; path: string },
+  fetch: typeof globalThis.fetch,
+) {
+  const checked = check(image, false, fetch)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<Kept | null>((resolve) => {
+    timer = setTimeout(
+      () => resolve(readKept(image.path, image.url.href)),
+      STALE_MS,
+    )
+  })
+  try {
+    // Without a copy, only the check can answer.
+    return await Promise.race([checked, late.then((kept) => kept ?? checked)])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Each kept image's latest check, which concurrent draws of it share, and its stop. */
+const checks = new Map<
+  string,
+  { result: Promise<Kept | null>; stop: AbortController }
+>()
 
 /**
  * The kept copy at `path`, fetched again when it is a day old or `force`
@@ -246,24 +279,33 @@ function check(
   fetch: typeof globalThis.fetch,
 ) {
   const running = checks.get(path)
-  if (running && !force) return running
-  const current: Promise<Kept | null> = (async () => {
-    await running
+  if (running && !force) return running.result
+  // A refresh replaces a check still running, such as one a slow host holds.
+  running?.stop.abort()
+  const stop = new AbortController()
+  const result: Promise<Kept | null> = (async () => {
+    await running?.result
     const kept = await readKept(path, url.href)
     const age = Date.now() - (kept?.checked ?? 0)
     if (kept && !force && age >= 0 && age < 24 * HOUR) return kept
     try {
-      const fetched = await download(path, url, force ? null : kept, fetch)
+      const fetched = await download(
+        path,
+        url,
+        force ? null : kept,
+        fetch,
+        stop.signal,
+      )
       void prune(dirname(path), fetched.size - (kept?.size ?? 0))
       return fetched
     } catch {
       return kept
     }
   })().finally(() => {
-    if (checks.get(path) === current) checks.delete(path)
+    if (checks.get(path)?.result === result) checks.delete(path)
   })
-  checks.set(path, current)
-  return current
+  checks.set(path, { result, stop })
+  return result
 }
 
 /** Each folder's last prune, and the bytes it held then plus what downloads added since. */
@@ -324,7 +366,7 @@ export async function remoteImageResponse(
   fetch: typeof globalThis.fetch,
 ): Promise<Response> {
   const image = await imagePath(source, place)
-  const kept = image && (await check(image, false, fetch))
+  const kept = image && (await checkedOrKept(image, fetch))
   const file =
     image &&
     kept &&

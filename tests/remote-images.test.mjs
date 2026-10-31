@@ -289,6 +289,40 @@ test('draws at once share one download, and a refresh downloads again without va
   assert.equal(host.requests.length, 3)
 })
 
+test('a host trickling bytes holds back neither the kept copy nor a refresh, which stops its check', async (t) => {
+  const host = await setup(t)
+  assert.deepEqual(await host.draw(), drawn('first'))
+  await host.age(25)
+  // A byte at a time, each well within the quiet time.
+  let ended = false
+  t.after(() => {
+    ended = true
+  })
+  host.answer = () =>
+    new Response(
+      new ReadableStream({
+        async pull(controller) {
+          await delay(200)
+          if (ended) controller.close()
+          else controller.enqueue(new Uint8Array([0]))
+        },
+      }),
+      { headers: { 'Content-Type': 'image/png' } },
+    )
+  const settled = (work) =>
+    Promise.race([work, delay(10_000).then(() => 'still waiting')])
+  assert.deepEqual(await settled(host.draw()), drawn('first'))
+  assert.equal(host.requests.length, 2)
+  host.answer = () =>
+    new Response(png('second'), { headers: { 'Content-Type': 'image/png' } })
+  assert.equal(
+    await settled(refreshRemoteImage(SOURCE, host.place, host.fetch)),
+    undefined,
+  )
+  assert.ok(host.requests[1].init.signal.aborted)
+  assert.deepEqual(await host.draw(), drawn('second'))
+})
+
 test('a full cache folder deletes the images checked longest ago', async (t) => {
   const host = await setup(t)
   const folder = join(host.place.data, 'image-cache')

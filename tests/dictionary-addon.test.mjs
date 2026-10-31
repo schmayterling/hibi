@@ -57,7 +57,7 @@ async function dictionaryCase(t) {
   await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
-  // The dictionary starts in the background; its menu items come with it.
+  // Its manifest binds the shortcut and lists its menu items before it starts.
   await waitForAddonShortcut(page, 'dictionary.synonyms')
   const responses = {
     'https://en.wiktionary.org/api/rest_v1/page/definition/happy':
@@ -321,7 +321,7 @@ async function dictionarySplitCase(t) {
   await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
-  // The dictionary starts in the background; its menu items come with it.
+  // Its manifest binds the shortcut and lists its menu items before it starts.
   await waitForAddonShortcut(page, 'dictionary.synonyms')
   const responses = {
     'https://api.datamuse.com/words?rel_syn=happy&max=24': await fixture(

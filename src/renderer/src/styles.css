@@ -72,7 +72,7 @@ body {
   textarea,
   [contenteditable]:not([contenteditable="false"]),
   .cm-content,
-  .tiptap,
+  .site-article,
   .rich-pane,
   .format-content,
   .plain-text-preview,
@@ -1454,7 +1454,7 @@ button.ui-button.update-download-button:disabled {
   display: flex;
   flex-direction: column;
 }
-.tiptap {
+.site-article {
   white-space: pre-wrap;
   flex: 1;
   min-height: 100%;
@@ -1466,75 +1466,75 @@ button.ui-button.update-download-button:disabled {
   font-kerning: none;
   overflow-wrap: anywhere;
 }
-.tiptap > :first-child {
+.site-article > :first-child {
   margin-top: 0;
 }
-.tiptap p {
+.site-article p {
   margin: 0 0 1em;
 }
-:is(.tiptap, .format-content) h1,
-:is(.tiptap, .format-content) h2,
-:is(.tiptap, .format-content) h3,
-:is(.tiptap, .format-content) h4,
-:is(.tiptap, .format-content) h5,
-:is(.tiptap, .format-content) h6 {
+:is(.site-article, .format-content) h1,
+:is(.site-article, .format-content) h2,
+:is(.site-article, .format-content) h3,
+:is(.site-article, .format-content) h4,
+:is(.site-article, .format-content) h5,
+:is(.site-article, .format-content) h6 {
   color: var(--syntax-heading);
   line-height: 1.3;
   font-weight: 600;
   margin: 1.4em 0 0.6em;
   letter-spacing: -0.02em;
 }
-:is(.tiptap, .format-content) h1 {
+:is(.site-article, .format-content) h1 {
   font-size: 30px;
 }
-:is(.tiptap, .format-content) h2 {
+:is(.site-article, .format-content) h2 {
   font-size: 24px;
 }
-:is(.tiptap, .format-content) h3 {
+:is(.site-article, .format-content) h3 {
   font-size: 20px;
 }
-:is(.tiptap, .format-content) h4,
-:is(.tiptap, .format-content) h5,
-:is(.tiptap, .format-content) h6 {
+:is(.site-article, .format-content) h4,
+:is(.site-article, .format-content) h5,
+:is(.site-article, .format-content) h6 {
   font-size: 17px;
 }
-:is(.tiptap, .format-content) ul,
-:is(.tiptap, .format-content) ol {
+:is(.site-article, .format-content) ul,
+:is(.site-article, .format-content) ol {
   margin: 0 0 1em;
   padding-left: 1.5em;
 }
 /* Items and nested lists sit 0.3em apart; blocks within an item keep a paragraph-sized gap whatever
    their own font size. Only top margins are used because task items are flex containers, which
    don't collapse child margins. Task item content sits in a div after the checkbox label. */
-:is(.tiptap, .format-content) :is(li, li > label + div) > * {
+:is(.site-article, .format-content) :is(li, li > label + div) > * {
   margin-block: 0;
 }
 /* Repeated exclusions retain the task-content selector's specificity. */
-:is(.tiptap, .format-content) li > :not(label):not(label):not(label) + *,
-:is(.tiptap, .format-content) li > label + div > :not(label) + * {
+:is(.site-article, .format-content) li > :not(label):not(label):not(label) + *,
+:is(.site-article, .format-content) li > label + div > :not(label) + * {
   margin-top: var(--text-editor);
 }
-:is(.tiptap, .format-content) li + li,
-:is(.tiptap, .format-content) :is(li, li > label + div) > :is(ul, ol) {
+:is(.site-article, .format-content) li + li,
+:is(.site-article, .format-content) :is(li, li > label + div) > :is(ul, ol) {
   margin-top: 0.3em;
 }
-:is(.tiptap, .format-content) blockquote {
+:is(.site-article, .format-content) blockquote {
   margin-inline: 0;
   padding-left: 20px;
   border-left: 1px solid var(--border);
   color: var(--syntax-quote);
 }
-:is(.tiptap, .format-content) blockquote > :last-child {
+:is(.site-article, .format-content) blockquote > :last-child {
   margin-bottom: 0;
 }
-:is(.tiptap, .format-content) pre {
+:is(.site-article, .format-content) pre {
   background: var(--code-background);
   color: var(--code-ink);
   padding: var(--space-4);
   border-radius: var(--radius-control);
   overflow: auto;
 }
-:is(.tiptap, .format-content) code {
+:is(.site-article, .format-content) code {
   font-family: var(--font-mono);
   font-size: 0.85em;
   background: var(--code-background);
@@ -1542,11 +1542,11 @@ button.ui-button.update-download-button:disabled {
   border-radius: var(--radius-control);
   padding: 2px 4px;
 }
-:is(.tiptap, .format-content) pre code {
+:is(.site-article, .format-content) pre code {
   padding: 0;
   background: transparent;
 }
-:is(.tiptap, .format-content) a {
+:is(.site-article, .format-content) a {
   color: var(--syntax-link);
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
@@ -1555,37 +1555,37 @@ button.ui-button.update-download-button:disabled {
   color: var(--muted);
   font-size: var(--text-ui);
 }
-:is(.tiptap, .format-content) img,
-:is(.tiptap, .format-content) video {
+:is(.site-article, .format-content) img,
+:is(.site-article, .format-content) video {
   max-width: 100%;
 }
 .document-media {
   display: inline-block;
   max-width: 100%;
 }
-:is(.tiptap, .format-content) hr {
+:is(.site-article, .format-content) hr {
   border: 0;
   border-top: 1px solid var(--border);
   margin-block: 32px;
 }
-:is(.tiptap, .format-content) table {
+:is(.site-article, .format-content) table {
   border-collapse: collapse;
   width: 100%;
   margin-block: 20px;
 }
-:is(.tiptap, .format-content) th,
-:is(.tiptap, .format-content) td {
+:is(.site-article, .format-content) th,
+:is(.site-article, .format-content) td {
   border: 1px solid var(--border);
   padding: 8px 12px;
   text-align: left;
 }
-:is(.tiptap, .format-content) th {
+:is(.site-article, .format-content) th {
   background: var(--surface);
 }
-.tiptap :is(th, td) {
+.site-article :is(th, td) {
   position: relative;
 }
-.tiptap input[type="checkbox"] {
+.site-article input[type="checkbox"] {
   accent-color: var(--accent);
 }
 .source-editor,

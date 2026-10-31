@@ -391,7 +391,7 @@ test('app and exported site share heading destinations and retain legacy links',
       },
     ],
   })
-  await page.locator('.tiptap h2').first().waitFor()
+  await page.locator('.site-article h2').first().waitFor()
   const desktop = await app.firstWindow()
   desktop.setDefaultTimeout(7000)
   await waitForDocumentEditor(app, desktop)
@@ -446,7 +446,7 @@ test('app and exported site share heading destinations and retain legacy links',
       const heading = this.closest('h1,h2,h3,h4,h5,h6')
       if (heading)
         globalThis.headingTargets.push(
-          [...document.querySelectorAll('.tiptap h2')].indexOf(heading),
+          [...document.querySelectorAll('.site-article h2')].indexOf(heading),
         )
     }
   })
@@ -456,7 +456,7 @@ test('app and exported site share heading destinations and retain legacy links',
     async () => {
       assert.deepEqual(
         await page
-          .locator('.tiptap h2')
+          .locator('.site-article h2')
           .evaluateAll((headings) => headings.map((heading) => heading.id)),
         anchors.map((anchor) => `doc-${anchor}`),
       )

@@ -223,14 +223,14 @@ test('formulas keep the rich view’s recorded boxes and drawing, in light and d
   await page.locator('.hibi-formatted .katex-error').waitFor({
     state: 'attached',
   })
-  // The rich view's markup, so the addon's styles and error display apply alike.
+  // The markup the math addon's styles and error display target.
   assert.deepEqual(
     await page.evaluate(() => ({
       inline: document.querySelectorAll(
-        '.hibi-formatted span.tiptap-mathematics-render[data-type="inline-math"][data-latex] > .katex',
+        '.hibi-formatted span.hibi-lp-math[data-type="inline-math"][data-latex] > .katex',
       ).length,
       block: document.querySelectorAll(
-        '.hibi-formatted div.tiptap-mathematics-render[data-type="block-math"][data-latex] > .block-math-inner > .katex-display > .katex',
+        '.hibi-formatted div.hibi-lp-math[data-type="block-math"][data-latex] > .block-math-inner > .katex-display > .katex',
       ).length,
       error: document.querySelector('.hibi-formatted .katex-error')
         ?.textContent,

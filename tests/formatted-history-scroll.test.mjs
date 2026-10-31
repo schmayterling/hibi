@@ -52,6 +52,26 @@ function showsCell(text) {
   return !!box && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1
 }
 
+// Whether the formatted view shows this text of a table cell.
+function showsText(text) {
+  const pane = document.querySelector('.rich-pane')
+  const bounds = pane.getBoundingClientRect()
+  for (const cell of pane.querySelectorAll('td')) {
+    const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
+    while (walker.nextNode()) {
+      const node = walker.currentNode
+      const at = node.textContent.indexOf(text)
+      if (at < 0) continue
+      const range = document.createRange()
+      range.setStart(node, at)
+      range.setEnd(node, at + text.length)
+      const box = range.getBoundingClientRect()
+      return box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1
+    }
+  }
+  return false
+}
+
 // Undo and redo show the selection they bring back, as native editors do,
 // also when it stays in the table cell being edited. Each step starts with
 // the note scrolled to its top, away from that selection.
@@ -191,6 +211,27 @@ test('codemirror: undo and redo scroll to the selection they restore', {
     )
   t.diagnostic(JSON.stringify({ name: 'find in a long table', shown: found }))
   if (!found) differences.push('find in a long table: not shown')
+  await page.keyboard.press('Escape')
+
+  // Find in a cell taller than the pane shows the match, not only the cell's
+  // top, also with no cell editor there: the find field keeps the focus.
+  const deep = `${lines}${rows(80, (row) => (row === 40 ? `${words} needle` : `v${row}`))}`
+  await open('table-tall-find', deep, '.rich-pane td')
+  await page.evaluate(() => {
+    document.querySelector('.rich-pane').scrollTop = 0
+  })
+  await pressShortcut(app, `${mod}+f`)
+  await page
+    .getByRole('textbox', { name: 'Find in document', exact: true })
+    .fill('needle')
+  const deepFound = await page.waitForFunction(showsText, 'needle').then(
+    () => true,
+    () => false,
+  )
+  t.diagnostic(
+    JSON.stringify({ name: 'find in a tall cell', shown: deepFound }),
+  )
+  if (!deepFound) differences.push('find in a tall cell: not shown')
   await page.keyboard.press('Escape')
 
   // Outside tables the view's own scrolling shows the caret.

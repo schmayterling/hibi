@@ -303,13 +303,6 @@ function App() {
         move(tab, documentRuntime.primaryViewId(tab), side)
     }
   }, [splitLeftId, splitRightId])
-  useEffect(() => {
-    if (!splitLeftId || !splitRightId) return
-    return () => {
-      documentRuntime.session(splitLeftId)?.releaseView('left')
-      documentRuntime.session(splitRightId)?.releaseView('right')
-    }
-  }, [splitLeftId, splitRightId])
   useSyncExternalStore(documentFormats.subscribe, documentFormats.snapshot)
   const documentFormat = document
     ? documentFormats.get(document.name)

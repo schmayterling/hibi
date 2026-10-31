@@ -23,6 +23,8 @@ for (const [source, text] of [
     '\n\n\na\n\nb\n\n\nc\n\nd\n\ncareful\nstrike',
   ],
   ['carriage&#13;\n\n# after 👩🏽‍💻\n\né 🇵🇭', 'carriage\r\nafter 👩🏽‍💻\né 🇵🇭'],
+  // A footnote's indented paragraph ending in a space stays in the footnote.
+  ['[^a]: note\n\n    second \n> quote', 'note\nsecond\n\nquote'],
 ])
   test(`native block and grapheme boundaries: ${JSON.stringify(source)}`, () => {
     assert.equal(richText(source, syntax).slice(1), text)

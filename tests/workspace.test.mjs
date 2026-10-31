@@ -420,7 +420,10 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
   await site.setViewportSize({ width: 1000, height: 760 })
   await checkSidebarResize(site, 256, '.site-content', () => site.reload())
   assert.equal(await site.evaluate(() => window.compromised), undefined)
-  assert.equal(await site.locator('article img').getAttribute('src'), null)
+  // Exports keep remote https images, without their event handlers.
+  const remote = site.locator('article img')
+  assert.equal(await remote.getAttribute('src'), 'https://example.com/tracker')
+  assert.equal(await remote.getAttribute('onerror'), null)
   assert.equal(
     await site.getByText(/^bad$/i, { exact: true }).getAttribute('href'),
     null,

@@ -681,20 +681,41 @@ test('the text above a long table growing keeps the row under the pane top in pl
     // reading moves: 50,000 px more above the table.
     preview.growAbove(50000)
     const after = await still()
+    // The same under something that covers the pane's top, as the find bar
+    // does over a narrow pane. A scroll first ends the keeping of the last
+    // change.
+    pane.scrollTop += 30
+    const scrolled = await still()
+    const box = pane.getBoundingClientRect()
+    const cover = document.createElement('div')
+    cover.style.cssText = `position: fixed; z-index: 3; top: ${box.top}px; left: ${box.left + 12}px; width: ${box.width - 24}px; height: 40px`
+    document.body.append(cover)
+    preview.growAbove(100000)
+    const covered = await still()
+    cover.remove()
     return {
       whole: view.lineBlockAt(at).from === tableAt,
       moved: Math.round(view.lineBlockAt(tableAt).top - tableTop),
       before,
       after,
+      scrolled,
+      covered,
     }
   })
   assert.deepEqual(
     result,
-    { whole: true, moved: 50000, before: result.before, after: result.before },
+    {
+      whole: true,
+      moved: 100000,
+      before: result.before,
+      after: result.before,
+      scrolled: result.scrolled,
+      covered: result.scrolled,
+    },
     JSON.stringify(result),
   )
   assert.ok(
-    result.before !== null && result.before > -61,
+    result.before !== null && result.before > -61 && result.scrolled !== null,
     JSON.stringify(result),
   )
 })

@@ -89,9 +89,10 @@ function blockAt(view: EditorView, y: number) {
     box.left +
     Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
     1
-  let element = view.dom.ownerDocument.elementFromPoint(x, y)
-  while (element && element.parentElement !== view.contentDOM)
-    element = element.parentElement
+  // Under what covers the pane's top, as the find bar over a narrow pane.
+  const element = view.dom.ownerDocument
+    .elementsFromPoint(x, y)
+    .find((element) => element.parentElement === view.contentDOM)
   if (!element) return null
   try {
     return view.posAtDOM(element, 0)

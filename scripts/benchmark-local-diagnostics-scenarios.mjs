@@ -146,7 +146,11 @@ try {
         const saveStart = performance.now()
         const saved = await page.evaluate(() => window.hibi.saveDocument(true))
         const saveMs = performance.now() - saveStart
-        assert.equal(await readFile(savedPath, 'utf8'), saved.markdown)
+        // A large note saves with a receipt instead of its text.
+        const markdown = saved?.saveReceipt
+          ? (await page.evaluate(() => window.hibi.getDocument())).markdown
+          : saved?.markdown
+        assert.equal(await readFile(savedPath, 'utf8'), markdown)
         await page.evaluate(() => window.hibi.setAddonEnabled('typst', true))
         const compilation = []
         for (let i = 0; i < 3; i++) {

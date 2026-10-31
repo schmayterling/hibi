@@ -340,7 +340,7 @@ test('drawn caret leaves final formatting and stays text-sized beside tall math'
       .querySelector('.editor-cursor')
       .getBoundingClientRect()
     const formula = document
-      .querySelector('.rich-pane .tiptap-mathematics-render')
+      .querySelector('.rich-pane .hibi-lp-math')
       .getBoundingClientRect()
     return {
       caret: caret.toJSON(),

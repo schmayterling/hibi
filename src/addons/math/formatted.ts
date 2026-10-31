@@ -60,9 +60,9 @@ class FormulaWidget extends WidgetType {
     const { latex, display, host } = this
     // The rich view's math node markup, so the addon's styles apply alike.
     const dom = document.createElement(display ? 'div' : 'span')
-    dom.className = 'tiptap-mathematics-render'
+    dom.className = 'hibi-lp-math'
     if (view.state.facet(EditorView.editable))
-      dom.classList.add('tiptap-mathematics-render--editable')
+      dom.classList.add('hibi-lp-math-editable')
     dom.dataset.type = display ? 'block-math' : 'inline-math'
     dom.setAttribute('data-latex', latex)
     const target = display ? document.createElement('div') : dom
@@ -357,7 +357,7 @@ export function mathContributions(host: MathHost) {
         }),
         EditorView.baseTheme({
           // Display formulas fill the line that held their source, from its top.
-          '.tiptap-mathematics-render[data-type="block-math"]': {
+          '.hibi-lp-math[data-type="block-math"]': {
             display: 'inline-block',
             width: '100%',
             verticalAlign: 'top',
@@ -366,7 +366,7 @@ export function mathContributions(host: MathHost) {
             fontFamily: 'var(--font-mono)',
             fontSize: '0.85em',
           },
-          '.tiptap-mathematics-render': { position: 'relative' },
+          '.hibi-lp-math': { position: 'relative' },
           // The edit control covers its formula and takes the usual focus ring.
           '.hibi-lp-formula-edit': {
             position: 'absolute',

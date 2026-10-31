@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -34,8 +35,8 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  const cm = t.formattedEngine === 'codemirror'
+  await waitForFormattedEditor(app, page)
+
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -43,7 +44,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
   const status = page.locator('[data-status-id="word-count.total"]')
   const grip = page.locator('.rich-pane .block-drag-handle')
-  const heading = page.locator(cm ? '.rich-pane .hibi-lp-h1' : '.tiptap h1')
+  const heading = page.locator('.rich-pane .hibi-lp-h1')
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -57,7 +58,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
             ?.textContent === text,
         text,
       )
-    if (!cm) return matches()
+
     // Keep count failures visible while independently exercising block moves, undo and cleanup.
     await t.test(`formatted count ${++countCase}: ${text}`, async () => {
       try {
@@ -104,9 +105,9 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
   )
 
   await heading.hover()
-  const target = cm
-    ? page.locator('.rich-pane .cm-line').filter({ hasText: 'last paragraph' })
-    : page.locator('.tiptap > p').last()
+  const target = page
+    .locator('.rich-pane .cm-line')
+    .filter({ hasText: 'last paragraph' })
   const box = await target.boundingBox()
   await grip.dragTo(target, { targetPosition: { x: 20, y: box.height - 1 } })
   await waitForAsync(
@@ -123,10 +124,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
     initial,
   )
 
-  await page
-    .locator(cm ? '.rich-pane .hibi-lp-list-item' : '.tiptap li')
-    .first()
-    .hover()
+  await page.locator('.rich-pane .hibi-lp-list-item').first().hover()
   await grip.click()
   await page
     .getByRole('menuitem', { name: 'Move block down', exact: true })

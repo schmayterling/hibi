@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -33,7 +34,7 @@ test('typing stays available and unsaved while a save finishes', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -126,7 +127,7 @@ test('a save leaves other split panes read-only until it finishes', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -220,7 +221,7 @@ test('a save ends busy before its workspace refresh, so addon actions run', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -308,7 +309,7 @@ for (const outcome of ['saved', 'first-fails', 'both-fail', 'clean']) {
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
+    await waitForFormattedEditor(app, page)
     page.setDefaultTimeout(7000)
     await waitForDocumentEditor(app, page)
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
@@ -458,7 +459,7 @@ for (const canceled of [true, false]) {
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
+    await waitForFormattedEditor(app, page)
     page.setDefaultTimeout(7000)
     await waitForDocumentEditor(app, page)
     await replaceRichText(

@@ -51,7 +51,7 @@ async function installFixture(profile, { id, captureSettings }) {
       name: id,
       description: 'Temporary addon retention benchmark fixture.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       startup: 'background',
       capabilities: [],

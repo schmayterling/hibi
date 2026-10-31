@@ -3,7 +3,7 @@
   "name": "__HIBI_NAME__",
   "description": "A starter Hibi addon.",
   "version": "1.0.0",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "capabilities": [],
   "activation": "command",

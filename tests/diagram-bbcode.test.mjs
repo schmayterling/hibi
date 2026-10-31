@@ -3,15 +3,15 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-it('Mermaid and BBCode edit, preview, and export without executing content', {
+test('Mermaid and BBCode edit, preview, and export without executing content', {
   timeout: 90000,
 }, async (t) => {
   const temp = await mkdtemp(join(tmpdir(), 'hibi-diagrams-'))
@@ -32,7 +32,7 @@ it('Mermaid and BBCode edit, preview, and export without executing content', {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
+  await waitForFormattedEditor(app, page)
   page.on('pageerror', (error) => console.error(error.message))
   page.on('console', (message) => {
     if (message.type() === 'error') console.error(message.text())
@@ -259,7 +259,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(15000)
   await waitForDocumentEditor(app, page)
   await prepare?.(page)
@@ -274,7 +274,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   )
   return { app, page }
 }
-it('Mermaid is on by default and keeps diagram links, images, and markup inert', {
+test('Mermaid is on by default and keeps diagram links, images, and markup inert', {
   timeout: 60000,
 }, async (t) => {
   const hostile = `\`\`\`mermaid
@@ -312,118 +312,9 @@ flowchart LR
   assert.equal(await page.evaluate(() => window.compromised), undefined)
 })
 
-test('tiptap: a note full of diagrams draws visible ones first, then idle slices that stop when Mermaid is disabled', {
+test('diagram work stays near the viewport and disabling it cancels pending drawings without changing source', {
   timeout: 90000,
 }, async (t) => {
-  const count = 120
-  const diagrams = Array.from(
-    { length: count },
-    (_, index) =>
-      `\`\`\`mermaid\nflowchart LR\n${Array.from(
-        { length: 20 },
-        (_, step) => `  N${step}[Probe ${index}-${step}] --> N${step + 1}`,
-      ).join('\n')}\n\`\`\`\n`,
-  ).join('\n')
-  const { app, page } = await launchWithNote(
-    t,
-    'hibi-diagram-burst-',
-    { mermaid: true },
-    diagrams,
-    (page) =>
-      // Hold idle work so the test decides when each background pass runs.
-      page.evaluate(() => {
-        window.heldIdle = []
-        window.requestIdleCallback = (callback) =>
-          window.heldIdle.push(callback)
-        window.releaseIdle = () => {
-          for (const callback of window.heldIdle.splice(0))
-            callback({ didTimeout: false, timeRemaining: () => 50 })
-        }
-        window.diagramDraws = 0
-        new MutationObserver((records) => {
-          for (const record of records)
-            if (record.target.matches?.('.mermaid-diagram'))
-              window.diagramDraws += [...record.addedNodes].filter(
-                (node) => node.nodeName === 'svg',
-              ).length
-        }).observe(document.documentElement, {
-          childList: true,
-          subtree: true,
-        })
-      }),
-  )
-  const progress = () =>
-    page.evaluate(() => {
-      const figures = [
-        ...document.querySelectorAll('.mermaid-block .mermaid-diagram'),
-      ]
-      const visible = figures.filter((figure) => {
-        const box = figure.getBoundingClientRect()
-        return box.bottom > 0 && box.top < innerHeight
-      })
-      return {
-        drawn: figures.filter((figure) => figure.firstChild).length,
-        visible: visible.length,
-        pending: visible.filter((figure) => !figure.firstChild).length,
-      }
-    })
-  await page.waitForFunction(
-    (count) => document.querySelectorAll('.mermaid-block').length === count,
-    count,
-  )
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll('.mermaid-block .mermaid-diagram')].every(
-      (figure) => {
-        const box = figure.getBoundingClientRect()
-        return figure.firstChild || box.bottom <= 0 || box.top >= innerHeight
-      },
-    ),
-  )
-  // Without idle time, only the diagrams on screen have drawn.
-  const first = await progress()
-  assert.ok(first.visible > 0 && first.drawn > 0, JSON.stringify(first))
-  assert.equal(first.pending, 0)
-  assert.ok(first.drawn < count, JSON.stringify(first))
-  // One idle pass draws a slice within its budget, not the rest of the note.
-  // The pass is requested after the next frame confirms nothing else is on screen.
-  let second = first
-  for (let turn = 0; turn < 20 && second.drawn === first.drawn; turn++) {
-    await page.evaluate(() => {
-      window.releaseIdle()
-      return new Promise((resolve) => requestAnimationFrame(resolve))
-    })
-    await page.evaluate(() => window.releaseIdle())
-    second = await progress()
-  }
-  assert.ok(
-    second.drawn > first.drawn && second.drawn < count,
-    JSON.stringify(second),
-  )
-  // Disabling Mermaid mid-way cancels every diagram still waiting to draw.
-  await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  await page.locator('#addon-mermaid').click()
-  await page.waitForFunction(
-    () => !document.querySelector('#addon-mermaid').checked,
-  )
-  await page.locator('.mermaid-block').first().waitFor({ state: 'detached' })
-  const draws = await page.evaluate(() => window.diagramDraws)
-  await page.getByRole('button', { name: /^back to app$/i }).click()
-  for (let turn = 0; turn < 3; turn++)
-    await page.evaluate(() => {
-      window.releaseIdle()
-      return new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      )
-    })
-  assert.equal(await page.evaluate(() => window.diagramDraws), draws)
-  assert.equal(await page.locator('.tiptap pre').count(), count)
-})
-
-test('codemirror: diagram work stays near the viewport and disabling it cancels pending drawings without changing source', {
-  timeout: 90000,
-}, async (t) => {
-  t.formattedEngine = 'codemirror'
   const catalog = JSON.parse(
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
   )

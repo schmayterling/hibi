@@ -1,18 +1,13 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
-import { getSchema, Node } from '@tiptap/core'
-import { MarkdownManager } from '@tiptap/markdown'
-import { StarterKit } from '@tiptap/starter-kit'
 import { build } from 'esbuild'
 import { Marked } from 'marked'
 import { parseFrontmatter } from '../src/addons/frontmatter/markdown.ts'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
-import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
+import { obsidianMarkdown } from '../src/addons/markdown/obsidian-markdown.ts'
 import { mathTokens } from '../src/addons/math/syntax.ts'
-import { mermaidMarkdown } from '../src/addons/mermaid/markdown.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
-import { typstMarkdown } from '../src/addons/typst/markdown.ts'
 import {
   typstBlock,
   typstFlavor,
@@ -221,6 +216,7 @@ test('closed typst detection uses CommonMark fence grammar and body indentation'
         source,
       )
   }
+  assert.equal(typstFlavor.detect('```typst\nunclosed'), false)
 })
 
 // Each leaf has the same container boundary as a native code or heading block.
@@ -452,58 +448,6 @@ const flavors = {
       blockMarkdown,
     ),
 }
-
-for (const [name, markdown] of [
-  ['typstBlock', typstMarkdown],
-  ['mermaidBlock', mermaidMarkdown],
-])
-  test(`${name} rich parsing follows native fence boundaries`, () => {
-    const diagram = Node.create({
-      name,
-      group: 'block',
-      atom: true,
-      addAttributes: () => ({ source: { default: '' }, raw: { default: '' } }),
-      ...markdown,
-    })
-    const extensions = [StarterKit.configure({ trailingNode: false }), diagram]
-    const manager = new MarkdownManager({ marked: new Marked(), extensions })
-    const schema = getSchema(extensions)
-    for (const eol of ['\n', '\r\n']) {
-      const language = name === 'typstBlock' ? 'typst' : 'mermaid'
-      const source =
-        `> \`\`\`${language}\n> hello\n> \`\`\`\noutside\n===\n\n# real\n`.replaceAll(
-          '\n',
-          eol,
-        )
-      const json = manager.parse(source)
-      assert.deepEqual(
-        json.content.map((node) => node.type),
-        ['blockquote', 'heading', 'heading'],
-      )
-      const found = []
-      schema.nodeFromJSON(json).descendants((node) => {
-        if (node.type.name === 'heading') found.push(node.textContent)
-      })
-      assert.deepEqual(found, ['outside', 'real'])
-      assert.equal(json.content[0].content[0].type, name)
-      assert.equal(json.content[0].content[0].attrs.source, 'hello')
-      assert.equal(
-        manager.parse(manager.serialize(json)).content[0].content[0].type,
-        name,
-      )
-    }
-    if (name === 'typstBlock') {
-      assert.equal(
-        manager.parse('```typst\nunclosed').content[0].type,
-        'codeBlock',
-      )
-      assert.equal(typstFlavor.detect('```typst\nunclosed'), false)
-      assert.equal(
-        manager.parse('```js\nhello\n```').content[0].type,
-        'codeBlock',
-      )
-    }
-  })
 
 test('typst word counts exclude diagrams and keep following headings', () => {
   const source = '> ```typst\n> diagram body\n> ```\noutside\n===\n\n# real\n'

@@ -1,21 +1,11 @@
-import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { defineAddon } from '../api'
 import manifest from './manifest'
 import css from './slash.css?inline'
-
-// The Tiptap editor loads only when it is the selected engine.
-const rich = codemirrorFormattedView ? undefined : await import('./rich')
 
 export default defineAddon({
   manifest,
   start(context) {
     context.styles.register('menu', css)
-    if (rich)
-      context.editor.registerRich({
-        id: 'menu',
-        preview: 'deferred',
-        attach: (editor) => rich.attachRich(editor, context),
-      })
     context.editor.registerFormatted({
       id: 'menu',
       async create() {

@@ -14,7 +14,8 @@
       "!!test-results",
       "!!package-lock.json",
       "!!locales/en.json",
-      "!!locales/sources.json"
+      "!!locales/sources.json",
+      "!!tests/fixtures/frozen"
     ]
   },
   "formatter": {

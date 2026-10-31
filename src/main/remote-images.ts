@@ -248,11 +248,14 @@ async function checkedOrKept(
   fetch: typeof globalThis.fetch,
 ) {
   const checked = check(image, false, fetch)
+  // Draws share their check's deadline, so one that comes when a check has
+  // already run that long, such as after a reload, shows the copy at once.
+  const started = checks.get(image.path)?.started ?? Date.now()
   let timer: ReturnType<typeof setTimeout> | undefined
   const late = new Promise<Kept | null>((resolve) => {
     timer = setTimeout(
       () => resolve(readKept(image.path, image.url.href)),
-      STALE_MS,
+      Math.max(0, started + STALE_MS - Date.now()),
     )
   })
   try {
@@ -263,10 +266,10 @@ async function checkedOrKept(
   }
 }
 
-/** Each kept image's latest check, which concurrent draws of it share, and its stop. */
+/** Each kept image's latest check, which concurrent draws of it share, its stop, and its start. */
 const checks = new Map<
   string,
-  { result: Promise<Kept | null>; stop: AbortController }
+  { result: Promise<Kept | null>; stop: AbortController; started: number }
 >()
 
 /**
@@ -280,11 +283,21 @@ function check(
 ) {
   const running = checks.get(path)
   if (running && !force) return running.result
-  // A refresh replaces a check still running, such as one a slow host holds.
-  running?.stop.abort()
   const stop = new AbortController()
   const result: Promise<Kept | null> = (async () => {
-    await running?.result
+    if (running) {
+      // An image's first download is already its newest copy, and stopping
+      // it would leave its draws with nothing: a refresh waits for it while
+      // it is young. One a host has held longer, like any other running
+      // check, makes way.
+      if (
+        !(await readKept(path, url.href)) &&
+        Date.now() - running.started < STALE_MS
+      )
+        return running.result
+      running.stop.abort()
+      await running.result
+    }
     const kept = await readKept(path, url.href)
     const age = Date.now() - (kept?.checked ?? 0)
     if (kept && !force && age >= 0 && age < 24 * HOUR) return kept
@@ -304,7 +317,7 @@ function check(
   })().finally(() => {
     if (checks.get(path)?.result === result) checks.delete(path)
   })
-  checks.set(path, { result, stop })
+  checks.set(path, { result, stop, started: Date.now() })
   return result
 }
 

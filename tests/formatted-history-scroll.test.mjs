@@ -437,13 +437,21 @@ test('codemirror: a pane undoes its own edits after a split opens or closes', {
     }, pane)
   // Type at the end of the note in the pane, and the caret before that.
   // Focus the pane's view, scroll it to its top when asked, and let it measure.
+  // Focusing the other pane of a split makes its tab the active one: until
+  // that is done the app is busy and its views read-only, and a key does nothing.
   const focus = (pane, top) =>
     page.evaluate(
       async ({ pane, top }) => {
         const root = document.querySelector(pane)
-        root.querySelector('.cm-content').cmTile.root.view.focus()
+        const view = root.querySelector('.cm-content').cmTile.root.view
+        view.focus()
         if (top) root.scrollTop = 0
-        for (let frame = 0; frame < 2; frame++)
+        const ready = () =>
+          root.closest('.editor-page')?.dataset.active === 'true' &&
+          document.querySelector('.app')?.getAttribute('aria-busy') ===
+            'false' &&
+          !view.state.readOnly
+        for (let frame = 0; frame < 2 || !ready(); frame++)
           await new Promise(requestAnimationFrame)
       },
       { pane, top },

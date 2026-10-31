@@ -1,6 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readdir, readFile, rm, stat, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import {
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  unlink,
+} from 'node:fs/promises'
+import { join, relative } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
 import type { SourceSnapshot } from '../shared/source-buffer'
 import {
@@ -110,6 +118,8 @@ export async function readUndoHistory(
   path: string,
   saved: SourceSnapshot,
 ): Promise<UndoHistory | null> {
+  // A note moved just now has its history under its new name first.
+  await queue.catch(() => {})
   if (!(await keepsUndoHistory())) return null
   const name = fileName(path)
   let text: string
@@ -136,6 +146,31 @@ export async function readUndoHistory(
   }
   await serial(() => remove(name))
   return null
+}
+
+/**
+ * Kept histories follow notes renamed or moved inside Hibi: the note at
+ * `to`, or every note under `to` when a folder moved.
+ */
+export function relocateUndoHistory(from: string, to: string) {
+  return serial(async () => {
+    const files = await measure()
+    if (!files.size) return
+    const moved = (await stat(to).catch(() => null))?.isDirectory()
+      ? (await readdir(to, { recursive: true, withFileTypes: true }))
+          .filter((entry) => entry.isFile())
+          .map((entry) => join(entry.parentPath, entry.name))
+      : [to]
+    for (const path of moved) {
+      const before = fileName(join(from, relative(to, path)))
+      const file = files.get(before)
+      if (!file) continue
+      const after = fileName(path)
+      await rename(join(folder(), before), join(folder(), after))
+      files.delete(before)
+      files.set(after, file)
+    }
+  })
 }
 
 export async function setKeepUndoHistory(keep: unknown) {

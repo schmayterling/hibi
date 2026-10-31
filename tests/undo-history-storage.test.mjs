@@ -218,3 +218,42 @@ test('keeping turned off removes kept histories and keeps no new ones', async (t
   await later.clearUndoHistory()
   assert.equal(await exists(folder(root)), false)
 })
+
+test('kept histories follow notes renamed or moved inside Hibi', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
+  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  assert.deepEqual(
+    await api.readUndoHistory('/notes/b.md', reopened(note.source)),
+    note.history,
+  )
+  // A moved folder takes the histories of every note under it.
+  const before = join(root, 'before'),
+    after = join(root, 'after')
+  await fs.mkdir(join(after, 'inner'), { recursive: true })
+  await fs.writeFile(join(after, 'inner', 'c.md'), note.source)
+  await fs.writeFile(join(after, 'd.md'), note.source)
+  await api.storeUndoHistory(
+    join(before, 'inner', 'c.md'),
+    note.file,
+    note.history,
+  )
+  await api.relocateUndoHistory(before, after)
+  assert.equal(await exists(kept(root, join(before, 'inner', 'c.md'))), false)
+  assert.deepEqual(
+    await api.readUndoHistory(
+      join(after, 'inner', 'c.md'),
+      reopened(note.source),
+    ),
+    note.history,
+  )
+  assert.equal(
+    await api.readUndoHistory(join(after, 'd.md'), reopened(note.source)),
+    null,
+  )
+  // b.md's history stayed where it was.
+  assert.equal(await exists(kept(root, '/notes/b.md')), true)
+})

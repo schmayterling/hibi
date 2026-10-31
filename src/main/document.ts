@@ -42,7 +42,7 @@ import {
   writeText,
 } from './files'
 import { recordVersions } from './history'
-import { flushUndoHistory } from './undo-history'
+import { flushUndoHistory, relocateUndoHistory } from './undo-history'
 import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
@@ -1195,6 +1195,10 @@ export function relocateDocument(from: string, to: string): void {
         : current
   }
   storeTab()
+  // Notes keep their undo history under their new paths.
+  void relocateUndoHistory(from, to).catch((error: unknown) =>
+    console.error('Could not move undo history:', error),
+  )
   if (!activeTabOpen) return
   for (const draft of tabs.values()) {
     draft.path = relocate(draft.path)

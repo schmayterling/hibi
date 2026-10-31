@@ -1,6 +1,7 @@
-import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdir } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 
 /**
  * Clone this checkout's production dependencies into `app`'s node_modules.
@@ -9,23 +10,27 @@ import { dirname, join, relative, resolve } from 'node:path'
  */
 export async function cloneProductionModules(app) {
   const modules = resolve('node_modules')
-  // npm reports problems such as extraneous packages with a failing status.
-  const { stdout } = spawnSync(
-    'npm',
-    ['ls', '--omit=dev', '--all', '--parseable'],
-    { encoding: 'utf8', maxBuffer: 1 << 26 },
-  )
-  const names = (stdout ?? '')
-    .split('\n')
-    .filter((path) => path.startsWith(`${modules}/`))
-    .map((path) => relative(modules, path))
+  // The lockfile, not `npm ls`: through a linked node_modules npm reports
+  // most of the tree missing or extraneous, development packages included.
+  const { packages } = JSON.parse(await readFile('package-lock.json', 'utf8'))
+  let copied = 0
+  for (const [path, entry] of Object.entries(packages)) {
+    const name = path.slice('node_modules/'.length)
     // Nested modules come with the package that holds them.
-    .filter((name) => !name.includes('/node_modules/'))
-  if (!names.length) throw new Error('npm listed no production dependencies.')
-  for (const name of names) {
+    if (!path.startsWith('node_modules/') || name.includes('/node_modules/'))
+      continue
+    if (entry.dev || entry.devOptional) continue
+    const source = join(modules, name)
+    if (!existsSync(source)) {
+      // Optional packages for other platforms are never installed.
+      if (entry.optional) continue
+      throw new Error(`The production dependency ${name} is not installed.`)
+    }
     const target = join(app, 'node_modules', name)
     await mkdir(dirname(target), { recursive: true })
     // APFS clones the files instead of copying them.
-    execFileSync('cp', ['-cR', join(modules, name), target])
+    execFileSync('cp', ['-cR', source, target])
+    copied++
   }
+  if (!copied) throw new Error('The lockfile lists no production dependencies.')
 }

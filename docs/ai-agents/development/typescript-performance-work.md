@@ -11,11 +11,11 @@ The September 18 audits were reviewed against the current checkout. Their timing
 5. Introduce versioned, validated document edits with explicit history and stale-result behavior. Keep navigation mappings separate from exact editing mappings.
 6. Build a concrete review integration on the shared document contract before adding broader view or runtime abstractions.
 
-Each stage needs relevant regression checks and measurements before its performance claims are recorded. Save, close, tab replacement, external changes, composition, and addon disable must preserve content. Existing API v1/v2 addons remain compatible; optional contracts do not justify a breaking API bump.
+Each stage needs relevant regression checks and measurements before its performance claims are recorded. Save, close, tab replacement, external changes, composition, and addon disable must preserve content. Addons kept their API through this work, since optional contracts did not justify a breaking API bump. (Hibi has since moved to addon API 3 only.)
 
 ## Measurement conditions
 
-The startup script includes automation and hidden-window overhead. Its historical first and subsequent input timings use different endpoints and remain labeled separately. The input script uses a consistent driver endpoint and separately instruments synchronous ProseMirror dispatch in isolated benchmark profiles. Physical presentation and packaged foreground startup remain separate measurements.
+The startup script includes automation and hidden-window overhead. Its historical first and subsequent input timings use different endpoints and remain labeled separately. The input script, removed with the Tiptap editor, used a consistent driver endpoint and separately instrumented synchronous ProseMirror dispatch in isolated benchmark profiles. Physical presentation and packaged foreground startup remain separate measurements.
 
 ## Progress
 

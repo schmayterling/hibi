@@ -523,6 +523,7 @@ const atomBlocks = new Set([
 /** Nodes drawn as one node only where a widget replaces them. */
 const atomWidgets = new Set([
   'Image',
+  'HTMLImage',
   'InlineMath',
   'InlineMathLines',
   'FencedCode',

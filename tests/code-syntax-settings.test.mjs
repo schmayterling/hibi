@@ -253,10 +253,15 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     await t.test('wide code can scroll horizontally', async () => {
       assert.ok(
         await block.evaluate(async (pre, box) => {
-          // A redraw may replace the box; wait for the new one.
-          while (box && !pre.isConnected) {
-            pre = document.querySelector(box) ?? pre
-            if (!pre.isConnected) await new Promise(requestAnimationFrame)
+          // A redraw may replace the box, and a new box is only as wide as
+          // the view until its long lines are drawn; wait for one that is.
+          const started = performance.now()
+          for (;;) {
+            if (!pre.isConnected) pre = document.querySelector(box) ?? pre
+            if (pre.isConnected && pre.scrollWidth > pre.clientWidth) break
+            if (performance.now() - started > 8000)
+              throw new Error('no wide code box is drawn')
+            await new Promise(requestAnimationFrame)
           }
           return pre.scrollLeft > 0
         }, box),
@@ -562,10 +567,26 @@ test(
       right,
     )
     // One line of 20,000 wide characters.
-    await show(
-      `\`\`\`js\nconst text = "${'漢'.repeat(20_000)}";\n\`\`\``,
-      right,
-    )
+    const wide = `\`\`\`js\nconst text = "${'漢'.repeat(20_000)}";\n\`\`\``
+    await show(wide, right)
+    if (cm) {
+      // CodeMirror may keep a line gap it drew for that line while it was
+      // estimated as wrapped text, so only its start is drawn. A tall line
+      // keeps one.
+      const tall = await page.addStyleTag({
+        content:
+          '.rich-pane .hibi-lp-codescroll > .cm-line { padding-bottom: 9000px; }',
+      })
+      await show(wide, right)
+      assert.ok(
+        await page
+          .locator('.rich-pane .hibi-lp-codescroll')
+          .first()
+          .evaluate((box) => box.textContent.length < 20_000),
+        'a line gap leaves the end of the line undrawn',
+      )
+      await tall.evaluate((style) => style.remove())
+    }
     // A short first line, then one long line that wraps.
     await page.addStyleTag({
       content:

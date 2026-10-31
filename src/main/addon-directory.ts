@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { app, net } from 'electron'
 import {
   ADDON_DIRECTORY_URL,
@@ -64,7 +65,54 @@ async function loadDirectory(refresh: boolean): Promise<AddonDirectory> {
   return refreshDirectory()
 }
 
-/** Directory files come only from the catalog's own location, without credentials or redirects elsewhere. */
+/**
+ * `net.fetch` cancels every redirect under `redirect: 'manual'`, so this
+ * answers a redirect with a response of its own, without a body, for
+ * `download` to check before it requests the next address.
+ */
+const manualFetch: typeof fetch = (input, init = {}) =>
+  new Promise((resolve, reject) => {
+    const request = net.request({
+      url: input instanceof Request ? input.url : String(input),
+      redirect: 'manual',
+      credentials: 'omit',
+    })
+    for (const [name, value] of new Headers(init.headers))
+      request.setHeader(name, value)
+    init.signal?.addEventListener(
+      'abort',
+      () => {
+        reject(init.signal?.reason)
+        request.abort()
+      },
+      { once: true },
+    )
+    request.on('redirect', (status, _method, location) => {
+      resolve(new Response(null, { status, headers: { location } }))
+      request.abort()
+    })
+    request.on('response', (message) => {
+      const headers = new Headers()
+      for (const [name, value] of Object.entries(message.headers))
+        for (const item of [value].flat()) headers.append(name, item)
+      // As in net.fetch, statuses that never have a body get none.
+      const body = [204, 205, 304].includes(message.statusCode)
+        ? null
+        : (Readable.toWeb(
+            message as unknown as Readable,
+          ) as ReadableStream<Uint8Array>)
+      resolve(new Response(body, { status: message.statusCode, headers }))
+    })
+    request.on('error', reject)
+    request.end()
+  })
+
+/**
+ * Directory files come without credentials from the catalog's origin, which
+ * redirects may not leave. On raw.githubusercontent.com that origin serves
+ * every repository, so it limits where a redirect goes, not which repository
+ * answers; installing still needs each addon's detached Hibi signature.
+ */
 async function fetchDirectoryFile(
   maxBytes: number,
   path?: string,
@@ -87,18 +135,10 @@ async function fetchDirectoryFile(
     stallTimeoutMs: 5000,
     accept: 'application/json',
     allowedOrigins: [new URL(source).origin],
-    ...(override
-      ? {
-          parseUrl: (value: string) => {
-            const url = new URL(value)
-            if (url.href !== source)
-              throw new Error('The test directory redirected.')
-            return url
-          },
-        }
-      : {}),
-    fetch: (input, init) =>
-      net.fetch(input instanceof URL ? input.href : input, init),
+    // A test catalog may be served over http; it too redirects only on its
+    // own origin.
+    ...(override ? { parseUrl: (value: string) => new URL(value) } : {}),
+    fetch: manualFetch,
     write: (chunk) => {
       parts.push(chunk)
     },

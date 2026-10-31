@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
+import { Worker } from 'node:worker_threads'
 import {
   refreshRemoteImage,
   remoteImageResponse,
@@ -296,4 +297,98 @@ test('a full cache folder deletes the images checked longest ago', async (t) => 
     'b'.repeat(64),
     `${'b'.repeat(64)}.json`,
   ])
+})
+
+test('downloads that take a folder past its size delete the images checked longest ago at once', async (t) => {
+  const host = await setup(t)
+  const folder = join(host.place.data, 'image-cache')
+  await mkdir(folder)
+  const old = join(folder, 'a'.repeat(64))
+  await writeFile(old, '')
+  await truncate(old, 500 * 1024 * 1024)
+  await writeFile(`${old}.json`, '{}')
+  const time = new Date(Date.now() - 2 * 60 * 60 * 1000)
+  await utimes(`${old}.json`, time, time)
+  const draft = { ...host.place, note: null }
+  // Under the folder's size, the first download keeps everything.
+  await host.draw(SOURCE, draft)
+  await delay(100)
+  assert.ok((await readdir(folder)).includes('a'.repeat(64)))
+  // The next one passes it within the same hour.
+  host.answer = () =>
+    new Response(png('x'.repeat(13 * 1024 * 1024)), {
+      headers: { 'Content-Type': 'image/png' },
+    })
+  await host.draw('https://images.test/large.png', draft)
+  await waitFor(async () => !(await readdir(folder)).includes('a'.repeat(64)))
+})
+
+test('a host body full of comments is sniffed at once', async (t) => {
+  // A backtracking pattern froze the main process on such a body; the worker
+  // keeps a regression from freezing the test too.
+  const worker = new Worker(
+    `const { parentPort } = require('node:worker_threads')
+    import(${JSON.stringify(new URL('../src/main/images.ts', import.meta.url).href)}).then(({ imageMime }) =>
+      parentPort.postMessage(imageMime(Buffer.from('<!---->'.repeat(600) + 'x'))))`,
+    { eval: true },
+  )
+  t.after(() => worker.terminate())
+  const timer = setTimeout(() => worker.terminate(), 10_000)
+  const [type] = await Promise.race([
+    new Promise((resolve) => worker.once('message', (type) => resolve([type]))),
+    new Promise((resolve) => worker.once('exit', () => resolve(['stalled']))),
+  ])
+  clearTimeout(timer)
+  assert.equal(type, null)
+})
+
+test('a redirect to http is never requested, and an image past 64 MiB is refused before or while it downloads', async (t) => {
+  const host = await setup(t)
+  host.answer = (url) =>
+    url.startsWith('http:')
+      ? new Response(png('plain'), { headers: { 'Content-Type': 'image/png' } })
+      : new Response(null, {
+          status: 301,
+          headers: { Location: 'http://images.test/a.png' },
+        })
+  assert.equal(
+    (await host.draw('https://images.test/insecure.png')).status,
+    404,
+  )
+  assert.deepEqual(
+    host.requests.map(({ url }) => url),
+    ['https://images.test/insecure.png'],
+  )
+  let pulled = 0
+  const large = (headers) => () => {
+    pulled = 0
+    return new Response(
+      new ReadableStream({
+        pull(controller) {
+          pulled++
+          if (pulled === 1) controller.enqueue(png(''))
+          else if (pulled > 66) controller.close()
+          else controller.enqueue(new Uint8Array(1024 * 1024))
+        },
+      }),
+      { headers: { 'Content-Type': 'image/png', ...headers } },
+    )
+  }
+  // A declared length past the limit is refused before the body is read.
+  host.answer = large({ 'Content-Length': String(65 * 1024 * 1024 + 8) })
+  assert.equal(
+    (await host.draw('https://images.test/declared.png')).status,
+    404,
+  )
+  assert.ok(pulled <= 1, `read ${pulled} chunks`)
+  // Without one, the download stops at the limit and nothing is kept.
+  host.answer = large({})
+  assert.equal(
+    (await host.draw('https://images.test/streamed.png')).status,
+    404,
+  )
+  assert.deepEqual(
+    await readdir(join(host.workspace, '.hibi', 'cache', 'images')),
+    [],
+  )
 })

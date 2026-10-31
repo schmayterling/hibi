@@ -244,7 +244,7 @@ function check(
     if (kept && !force && age >= 0 && age < 24 * HOUR) return kept
     try {
       const fetched = await download(path, url, force ? null : kept, fetch)
-      void prune(dirname(path))
+      void prune(dirname(path), fetched.size - (kept?.size ?? 0))
       return fetched
     } catch {
       return kept
@@ -256,15 +256,21 @@ function check(
   return current
 }
 
-const pruned = new Map<string, number>()
+/** Each folder's last prune, and the bytes it held then plus what downloads added since. */
+const pruned = new Map<string, { at: number; bytes: number }>()
 
 /**
- * At most hourly, deletes a folder's least recently checked images past its
- * size, and what interrupted downloads left.
+ * Deletes a folder's least recently checked images past its size, and what
+ * interrupted downloads left: hourly, or at once when downloads since the last
+ * prune would take the folder past its size.
  */
-async function prune(directory: string) {
-  if (Date.now() - (pruned.get(directory) ?? 0) < HOUR) return
-  pruned.set(directory, Date.now())
+async function prune(directory: string, added: number) {
+  const last = pruned.get(directory)
+  if (last) last.bytes += added
+  if (last && Date.now() - last.at < HOUR && last.bytes <= MAX_FOLDER_BYTES)
+    return
+  const current = { at: Date.now(), bytes: 0 }
+  pruned.set(directory, current)
   try {
     const images: { name: string; size: number; checked: number }[] = []
     // One file at a time, so saves never wait behind the folder.
@@ -290,6 +296,8 @@ async function prune(directory: string) {
       await rm(join(directory, `${name}.json`), { force: true })
       await rm(join(directory, name), { force: true })
     }
+    // Downloads that ended during the count may count twice: an early prune.
+    current.bytes += total
   } catch {
     /* A later download prunes again. */
   }

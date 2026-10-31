@@ -348,6 +348,9 @@ async function spawnFailedStartup(t, { block = false } = {}) {
   const child = spawn(
     electronPath,
     [
+      // As Playwright launches it on Linux: the sandbox there needs a setuid
+      // helper that an npm install of Electron does not set up.
+      ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
       '--require',
       hook,
       resolve('.'),

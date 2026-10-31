@@ -5,6 +5,9 @@ import { stripTypeScriptTypes } from 'node:module'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 
+const { remoteImageRequestHeaders, withoutSetCookie } = await import(
+  '../src/main/images.ts'
+)
 const source = stripTypeScriptTypes(
   await readFile(new URL('../src/main/pdf-export.ts', import.meta.url), 'utf8'),
 )
@@ -25,6 +28,12 @@ function runtime(options = {}) {
   partition.webRequest = {
     onBeforeRequest: (handler) => {
       state.request = handler
+    },
+    onBeforeSendHeaders: (...filterAndListener) => {
+      state.sendHeaders = filterAndListener
+    },
+    onHeadersReceived: (...filterAndListener) => {
+      state.receiveHeaders = filterAndListener
     },
   }
   partition.setPermissionCheckHandler = (handler) => {
@@ -107,6 +116,8 @@ function runtime(options = {}) {
       state.writes.push({ path, bytes })
     },
     imageSources: () => new Set(['pixel.png']),
+    remoteImageRequestHeaders,
+    withoutSetCookie,
     documentMediaPath: (source) => decodeURIComponent(source),
     readDocumentImage: async (path) => {
       state.reads.push(path)
@@ -147,6 +158,41 @@ test('print window disables scripts and releases its private page after success'
         { url: 'https://example.com/pixel.png', resourceType: 'image' },
       ])
         state.request(details, ({ cancel }) => assert.equal(cancel, false))
+      // Image hosts get no cookies or cache validators, and keep no cookies
+      // between exports.
+      const [sendFilter, send] = state.sendHeaders
+      const [receiveFilter, receive] = state.receiveHeaders
+      assert.deepEqual(
+        [sendFilter, receiveFilter],
+        [{ urls: ['https://*/*'] }, { urls: ['https://*/*'] }],
+      )
+      send(
+        {
+          requestHeaders: {
+            Cookie: 'reader=42',
+            'If-None-Match': '"reader-42"',
+            'if-modified-since': 'Wed, 01 Jan 2025 00:00:00 GMT',
+            'Cache-Control': 'max-age=0',
+            Accept: 'image/png',
+          },
+        },
+        ({ requestHeaders }) =>
+          assert.deepEqual(requestHeaders, {
+            Accept: 'image/png',
+            'Cache-Control': 'no-cache',
+          }),
+      )
+      receive(
+        {
+          responseHeaders: {
+            'Set-Cookie': ['reader=42; SameSite=None; Secure'],
+            'set-cookie': ['other=1'],
+            'Content-Type': ['image/png'],
+          },
+        },
+        ({ responseHeaders }) =>
+          assert.deepEqual(responseHeaders, { 'Content-Type': ['image/png'] }),
+      )
       const page = await state.handler({ url: state.url })
       assert.equal(await page.text(), '<h1>garden</h1>')
       assert.match(
@@ -170,6 +216,7 @@ test('print window disables scripts and releases its private page after success'
   assert.equal(state.handler, null)
   assert.equal(state.connectionsClosed, true)
   assert.equal(state.request, null)
+  assert.deepEqual([state.sendHeaders, state.receiveHeaders], [[null], [null]])
   assert.equal(state.check, null)
   assert.equal(state.permission, null)
   assert.equal(owner.listenerCount('close'), 0)

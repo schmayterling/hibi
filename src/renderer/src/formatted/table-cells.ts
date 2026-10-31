@@ -205,8 +205,12 @@ function decorateCell(
     const nodeOut = sink(revealed)
     let skip = false
     // A cell draws its line breaks itself, so contributed HTML renderers
-    // add no second one.
-    const nodeViews = lineBreakAt(node) ? [] : views(node.type).views
+    // add no second one. It draws no layout, so an `<img>` tag shows as
+    // its HTML, as a Markdown image shows as written.
+    const nodeViews =
+      lineBreakAt(node) || node.name === 'HTMLImage'
+        ? []
+        : views(node.type).views
     for (const nodeView of nodeViews) {
       const context: FormattedRenderContext = {
         state,

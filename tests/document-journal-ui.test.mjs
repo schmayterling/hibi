@@ -366,8 +366,12 @@ test('codemirror J07: saturated native input preserves accepted source and histo
     'admission bounds accepted edits before source, view and history can advance again',
     () => {
       assert.ok(pressure.observed > 0 && pressure.observed < 12)
-      assert.match(pressure.recovery.status, /pending|failed/)
+      // Every accepted edit waits for its held acknowledgment. A request made
+      // meanwhile, such as a background addon starting, first flushes them and
+      // waits with them ('retrying'), as a failed delivery's retry does.
+      assert.match(pressure.recovery.status, /pending|retrying|failed/)
       assert.equal(pressure.recovery.pendingCount, pressure.observed)
+      assert.equal(pressure.recovery.inFlightCount, pressure.observed)
       assert.ok(pressure.recovery.pendingBytes < 8 * 1024 * 1024)
       assert.ok(pressure.recovery.inFlightBytes < 8 * 1024 * 1024)
       assert.equal(pressure.text.length, 240000)

@@ -441,26 +441,39 @@ function measureColumns(
       changed ||= known !== null
       continue
     }
+    // A line gap the editor drew for text it estimated as wrapped leaves the
+    // rest of the line undrawn, and positions in it measure at the gap's
+    // edge: only the drawn text has columns.
+    let start = line.to,
+      end = line.start
+    for (const range of view.visibleRanges)
+      if (range.from < line.to && range.to > line.start) {
+        start = Math.min(start, Math.max(range.from, line.start))
+        end = Math.max(end, Math.min(range.to, line.to))
+      }
+    if (start >= end) continue
     const left = scroller.getBoundingClientRect().left
     const right = left + scroller.clientWidth
     const width = right - left
     const x = (pos: number) =>
-      view.coordsAtPos(pos, pos < line.to ? 1 : -1)?.left ?? left
+      view.coordsAtPos(pos, pos < end ? 1 : -1)?.left ?? left
     if (
       known &&
-      (known.from <= line.start || x(known.from) <= left) &&
-      (known.to >= line.to || x(known.to) >= right)
+      known.from < end &&
+      known.to > start &&
+      (known.from <= start || x(known.from) <= left) &&
+      (known.to >= end || x(known.to) >= right)
     ) {
       next.set(line.from, known)
       continue
     }
     const from = Math.max(
-      line.start,
-      firstWhere(line.start, line.to, (pos) => x(pos) > left - width) - 1,
+      start,
+      firstWhere(start, end, (pos) => x(pos) > left - width) - 1,
     )
     next.set(line.from, {
       from,
-      to: firstWhere(from, line.to, (pos) => x(pos) >= right + width),
+      to: firstWhere(from, end, (pos) => x(pos) >= right + width),
     })
     changed = true
   }

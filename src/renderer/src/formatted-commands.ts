@@ -1821,7 +1821,9 @@ export function deleteForward(
  */
 export function tabSyntax(state: EditorState, tree: Tree) {
   const { from, to } = state.selection.main
-  if (!uncovered(tree, Math.max(0, from - 1), to)) return tree
+  const { length } = state.doc
+  if (!uncovered(tree, Math.max(0, from - 1), Math.min(length, to + 1)))
+    return tree
   return state.facet(formattedBlockParser)(state).parse(new DocInput(state.doc))
 }
 

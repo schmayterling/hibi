@@ -6,7 +6,10 @@ import { Decoration, WidgetType } from '@codemirror/view'
 import { NodeType, Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { MarkdownManager } from '@tiptap/markdown'
-import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
+import {
+  ChunkedMarkdownParser,
+  uncovered,
+} from '../src/renderer/src/chunked-markdown.ts'
 import {
   blockAtom,
   blockBreak,
@@ -1524,4 +1527,31 @@ test('Tab reads the blocks of a selection or caret past the parsed text with the
   // A parsed selection keeps the view's own tree.
   const small = partly('```\nx\n```', 4, 4, Number.POSITIVE_INFINITY)
   assert.equal(tabSyntax(small.state, small.tree), small.tree)
+  // A caret at the start of the first chunk not parsed yet: the view's first
+  // parse of a long nested list ends at the start of a child item's line.
+  const nested = Array.from(
+    { length: 40000 },
+    (_, item) => `- item ${item} ${'y'.repeat(48)}\n  - child`,
+  ).join('\n')
+  const first = partly(nested, 0, 0, Number.POSITIVE_INFINITY)
+  let edge = 0
+  for (let high = nested.length; edge < high; ) {
+    const mid = (edge + high) >> 1
+    if (uncovered(first.tree, 0, mid + 1)) high = mid
+    else edge = mid + 1
+  }
+  const line = first.state.doc.lineAt(edge)
+  assert.deepEqual([line.from, line.text], [edge, '  - child'])
+  const atEdge = partly(nested, edge, edge, Number.POSITIVE_INFINITY)
+  const read = tabSyntax(atEdge.state, atEdge.tree)
+  assert.notEqual(read, atEdge.tree, 'the caret starts an unparsed chunk')
+  const nestedTab = atEdge.state.update(
+    indent(atEdge.state, read, false, Decoration.none),
+  ).state.doc
+  // The item nests under the one before, with its child.
+  const parent = first.state.doc.line(line.number - 1).text
+  assert.deepEqual(
+    [nestedTab.line(line.number - 1).text, nestedTab.line(line.number).text],
+    [`  ${parent}`, '    - child'],
+  )
 })

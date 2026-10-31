@@ -35,7 +35,15 @@ try {
           if (handler) {
             ipcMain.removeHandler(channel)
             ipcMain.handle(channel, (...args) => {
-              if (args[1] === 'batch') globalThis.diagnosticCalls++
+              // The preload's startup marker is sent once its session starts,
+              // which can be after the editor already takes input.
+              if (
+                args[1] === 'batch' &&
+                JSON.parse(args[3]).some(
+                  (record) => JSON.parse(record).code !== 'RENDERER_PRE_ENTRY',
+                )
+              )
+                globalThis.diagnosticCalls++
               return handler(...args)
             })
           }

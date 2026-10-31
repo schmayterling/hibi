@@ -446,6 +446,14 @@ function sourceLinedUp(caret) {
   )
 }
 
+// Lined up, and still once the panes settle: until the source pane follows
+// a scroll, a row can be at its line's height by chance.
+async function linedUp(page, caret, label) {
+  await waitForAsync(page, sourceLinedUp, caret, { label })
+  await frames(page, 10)
+  assert.ok(await page.evaluate(sourceLinedUp, caret), label)
+}
+
 test('formatted split lines up a formatted table row with its source line', {
   timeout: 90000,
 }, async (t) => {
@@ -474,9 +482,11 @@ test('formatted split lines up a formatted table row with its source line', {
     const bounds = pane.getBoundingClientRect()
     pane.scrollTop += row.top + row.height / 2 - bounds.top - bounds.height / 2
   })
-  await waitForAsync(page, sourceLinedUp, false, {
-    label: "the source line of the row at the formatted pane's middle",
-  })
+  await linedUp(
+    page,
+    false,
+    "the source line of the row at the formatted pane's middle",
+  )
   // In a cell's editor, its caret leads, also away from the pane's middle.
   await page.locator('.rich-pane tr[data-line="60"] td').first().click()
   await page.keyboard.press('End')
@@ -487,9 +497,11 @@ test('formatted split lines up a formatted table row with its source line', {
     const bounds = pane.getBoundingClientRect()
     pane.scrollTop += row.top - bounds.top - bounds.height / 4
   })
-  await waitForAsync(page, sourceLinedUp, true, {
-    label: "the source line of the row of the cell editor's caret",
-  })
+  await linedUp(
+    page,
+    true,
+    "the source line of the row of the cell editor's caret",
+  )
   // Columns sized narrower than half the content leave its middle beside
   // the table's cells.
   for (const column of await page
@@ -519,9 +531,11 @@ test('formatted split lines up a formatted table row with its source line', {
       return cells.right < content.left + content.width / 2
     }),
   )
-  await waitForAsync(page, sourceLinedUp, false, {
-    label: 'the source line of the row at the middle beside a narrow table',
-  })
+  await linedUp(
+    page,
+    false,
+    'the source line of the row at the middle beside a narrow table',
+  )
   await source(page, text)
 })
 

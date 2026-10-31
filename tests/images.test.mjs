@@ -328,6 +328,11 @@ unit(
 async function openTallRemoteImage(t, delay) {
   const image = blankPng(1600, 900)
   const requests = []
+  let markServed
+  /** Settles once the host has sent the image. */
+  const served = new Promise((resolve) => {
+    markServed = resolve
+  })
   const server = createServer(
     {
       cert: await readFile('tests/fixtures/host-network-localhost-cert.pem'),
@@ -337,7 +342,7 @@ async function openTallRemoteImage(t, delay) {
       requests.push(request.url)
       setTimeout(() => {
         response.writeHead(200, { 'Content-Type': 'image/png' })
-        response.end(image)
+        response.end(image, markServed)
       }, delay)
     },
   )
@@ -383,7 +388,7 @@ async function openTallRemoteImage(t, delay) {
       (line) => line.textContent === 'Line 8 below the image.',
     ),
   )
-  return { page, requests }
+  return { page, requests, served }
 }
 
 unit(
@@ -459,7 +464,7 @@ unit(
     timeout: 60000,
   },
   async (t) => {
-    const { page, requests } = await openTallRemoteImage(t, 1500)
+    const { page, requests, served } = await openTallRemoteImage(t, 1500)
     // Before the image arrives, "Line 8" goes to the top, the image above it.
     await page.evaluate(() => {
       const pane = document.querySelector('.rich-pane')
@@ -470,22 +475,32 @@ unit(
         line.getBoundingClientRect().top - pane.getBoundingClientRect().top
     })
     // There, out of sight, its line takes the image's shape once it arrives.
-    const shaped = await page.waitForFunction(
-      () => {
+    // The wait starts when the host has sent it, so a slow machine doesn't
+    // spend it before the image exists. The widget's own <img> can't be
+    // watched: once shaped, the line's widget is redrawn and the loaded
+    // image moves out of the page to the tab's held images.
+    await served
+    const lineHeight = () =>
+      page.evaluate(() => {
         const { view } = document.querySelector('.rich-pane .cm-content').cmTile
           .root
-        const { height } = view.lineBlockAt(
-          view.state.doc.toString().indexOf('<img'),
-        )
-        window.arrivalWait ??= performance.now()
-        return height < 900 || performance.now() - window.arrivalWait > 4000
-          ? height
-          : null
-      },
-      null,
-      { timeout: 15000 },
-    )
-    const height = await shaped.jsonValue()
+        return view.lineBlockAt(view.state.doc.toString().indexOf('<img'))
+          .height
+      })
+    const height = await page
+      .waitForFunction(
+        () => {
+          const { view } = document.querySelector('.rich-pane .cm-content')
+            .cmTile.root
+          const { height } = view.lineBlockAt(
+            view.state.doc.toString().indexOf('<img'),
+          )
+          return height < 900 ? height : null
+        },
+        null,
+        { timeout: 15000 },
+      )
+      .then((shaped) => shaped.jsonValue(), lineHeight)
     assert.ok(height < 900, `image line shaped, not 900 px tall: ${height}`)
     // Scrolled to, even after a collection, it shows in shape at once and
     // without another download.

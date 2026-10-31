@@ -493,6 +493,9 @@ test('a scroll that puts a row a long table has not drawn at the top shows it th
     // Reading where the row is, as code does and CodeMirror does while it
     // measures, places it in the table without drawing it.
     const box = view.coordsAtPos(at)
+    // Below the table's top: one-line rows measure the estimate's height, so
+    // the row draws there.
+    const estimate = box && box.top - table.getBoundingClientRect().top
     await new Promise((done) =>
       view.requestMeasure({ read: () => view.coordsAtPos(at), write: done }),
     )
@@ -522,12 +525,26 @@ test('a scroll that puts a row a long table has not drawn at the top shows it th
     const first = top()
     await preview.settle()
     observer.disconnect()
-    return { drawn, reading, first, later: top(), scrolled: added }
+    const drawnAt =
+      row() &&
+      row().getBoundingClientRect().top - table.getBoundingClientRect().top
+    return {
+      drawn,
+      reading,
+      first,
+      later: top(),
+      scrolled: added,
+      estimated: drawnAt === null ? null : Math.abs(estimate - drawnAt),
+    }
   })
   assert.equal(result.drawn, false, 'the row starts undrawn')
   assert.deepEqual(
     result.reading,
     { added: 0, inside: true },
+    JSON.stringify(result),
+  )
+  assert.ok(
+    result.estimated !== null && result.estimated < 1,
     JSON.stringify(result),
   )
   // CodeMirror leaves a few pixels above the line it scrolls to the top.
@@ -538,6 +555,71 @@ test('a scroll that puts a row a long table has not drawn at the top shows it th
   assert.equal(result.later, result.first, 'the row stays where it was put')
   // The scroll draws the rows of about two panes, not the table's.
   assert.ok(result.scrolled < 200, JSON.stringify(result))
+})
+
+test('a scroll to a row a long table has not drawn lands on it when rows are taller than the estimate', {
+  timeout: 120000,
+}, async () => {
+  const result = await harness.evaluate(async () => {
+    const preview = window.tables
+    // Every fifth row breaks a cell over three lines: drawn, the rows around
+    // the target measure taller than the estimate the scroll started from,
+    // and ten of them on a side cover less than the pane.
+    const rows = Array.from(
+      { length: 10000 },
+      (_, i) => `| row ${i} | ${i % 5 ? `v${i}` : 'a<br>b<br>c'} |`,
+    )
+    const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+    await preview.mount(doc, { width: 1000, height: 800 }, { editable: true })
+    const view = preview.view()
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const table = document.querySelector('.hibi-lp-table')
+    const pane = document.querySelector('.rich-pane')
+    // How far row `index`'s text is below the pane's top and above its bottom.
+    const place = (index) => {
+      const cell = table
+        .querySelector(`tr[data-line="${index + 2}"]`)
+        ?.querySelector('td')
+      if (!cell) return null
+      const text = document.createRange()
+      text.selectNodeContents(cell.querySelector('p') ?? cell)
+      const box = text.getBoundingClientRect()
+      const bounds = pane.getBoundingClientRect()
+      return { top: box.top - bounds.top, bottom: bounds.bottom - box.bottom }
+    }
+    // Scrolls to a row nothing has drawn or measured, as the start or the end
+    // of the pane, and where it is then and one settle later.
+    const scroll = async (index, y) => {
+      const drawn = place(index) !== null
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(doc.indexOf(`row ${index} `), {
+          y,
+        }),
+      })
+      await preview.settle()
+      await preview.settle()
+      const first = place(index)?.[y === 'start' ? 'top' : 'bottom'] ?? null
+      await preview.settle()
+      const later = place(index)?.[y === 'start' ? 'top' : 'bottom'] ?? null
+      return { drawn, first, later }
+    }
+    return {
+      start: await scroll(6001, 'start'),
+      end: await scroll(3001, 'end'),
+    }
+  })
+  for (const side of ['start', 'end']) {
+    const { drawn, first, later } = result[side]
+    assert.equal(drawn, false, `the row starts undrawn: ${side}`)
+    // CodeMirror leaves a few pixels between the line and the pane's edge.
+    assert.ok(
+      first !== null && first >= 0 && first < 20,
+      JSON.stringify(result),
+    )
+    assert.equal(later, first, `the row stays where it was put: ${side}`)
+  }
 })
 
 /** Mount `doc` in the editable harness. */

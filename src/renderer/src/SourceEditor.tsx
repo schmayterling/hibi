@@ -2956,25 +2956,43 @@ export function SourceEditor({
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
-    void Promise.allSettled(
-      sourceExtensions.map(async (feature) => feature.create(context)),
-    ).then((results) => {
+    const created = sourceExtensions.map(async (feature) =>
+      feature.create(context),
+    )
+    // Each feature's outcome by index, absent while it is still being set up.
+    const results: PromiseSettledResult<Extension>[] = []
+    created.forEach((promise, index) => {
+      void promise.then(
+        (value) => {
+          results[index] = { status: 'fulfilled', value }
+        },
+        (reason) => {
+          results[index] = { status: 'rejected', reason }
+        },
+      )
+    })
+    const install = () => {
       if (canceled) return
       const errors: unknown[] = []
       let parts: InstalledFeature[] = []
-      results.forEach((result, index) => {
-        const feature = sourceExtensions[index]!
-        if (result.status === 'fulfilled')
+      sourceExtensions.forEach((feature, index) => {
+        const result = results[index]
+        // One still being set up keeps what it had installed until it is ready.
+        if (!result)
+          parts.push(
+            ...installed.current.filter((part) => part.feature === feature),
+          )
+        else if (result.status === 'fulfilled')
           parts.push({ feature, extension: result.value })
         else if (feature.fail) feature.fail(result.reason)
         else errors.push(result.reason)
       })
-      const install = () =>
+      const reconfigure = () =>
         reconfiguration(
           editor.state,
           addons.current.reconfigure(featureExtensions(parts, formatted)),
         )
-      let transaction = install()
+      let transaction = reconfigure()
       if (!transactionState(transaction)) {
         parts = isolateFeatures(
           editor.state,
@@ -2983,12 +3001,21 @@ export function SourceEditor({
           addons.current,
           formatted,
         )
-        transaction = install()
+        transaction = reconfigure()
       }
       installed.current = parts
       editor.dispatch(transaction)
       if (errors.length) setExtensionError(String(errors[0]))
       else setInstalledExtensions({ bridge, extensions: sourceExtensions })
+    }
+    // Input waits only for the features it needs. Background ones join once
+    // they are set up, however long that takes.
+    void Promise.allSettled(
+      created.filter((_, index) => !sourceExtensions[index]?.background),
+    ).then(() => {
+      install()
+      if (sourceExtensions.some((_, index) => !(index in results)))
+        void Promise.allSettled(created).then(install)
     })
     return () => {
       canceled = true

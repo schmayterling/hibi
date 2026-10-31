@@ -13,6 +13,7 @@ import {
   waitForDocumentEditor,
 } from './electron.mjs'
 import {
+  defaultPane,
   frozenOracle,
   frozenSnapshot,
   overlayScrollbars,
@@ -226,6 +227,23 @@ test('subscripts and small text keep the rich view’s recorded styles and drawi
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Small parity' })
     .waitFor()
   await page.locator('.rich-pane .hibi-lp-subscript').first().waitFor()
+  // The harness suites draw in the default window's pane, so on a screen
+  // that fits the default window the app's pane is that size too.
+  const screen = await app.evaluate(
+    ({ screen }) => screen.getPrimaryDisplay().workAreaSize,
+  )
+  if (screen.height >= 720)
+    assert.deepEqual(
+      await page
+        .locator('.rich-pane', {
+          has: page.locator('.hibi-lp-h1', { hasText: 'Small parity' }),
+        })
+        .evaluate((pane) => {
+          const box = pane.getBoundingClientRect()
+          return { width: box.width, height: box.height }
+        }),
+      defaultPane,
+    )
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
     await settle()

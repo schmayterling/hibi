@@ -467,8 +467,8 @@ async function parity(title, doc, formatted, name) {
     ({ doc, pane }) => window.livePreview.mount(doc, pane),
     { doc, pane: defaultPane },
   )
-  // The panes scroll alike: where scrollbars take space, as on Linux and
-  // Windows, the app's thin scrollbar is in both.
+  // The panes scroll alike, in the app's scrollbar colors. Both hide their
+  // scrollbars while geometry is read (overlayScrollbars).
   const scrolling = (target) =>
     target.evaluate((title) => {
       const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
@@ -477,7 +477,6 @@ async function parity(title, doc, formatted, name) {
       const style = getComputedStyle(pane)
       return {
         overflowY: style.overflowY,
-        scrollbarWidth: style.scrollbarWidth,
         scrollbarColor: style.scrollbarColor,
       }
     }, title)

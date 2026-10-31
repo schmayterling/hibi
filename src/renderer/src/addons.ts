@@ -718,7 +718,10 @@ export function useAddons(
     },
     [started, whenStarted, idleStarts],
   )
-  /** Resolves once the view's editor shows the owner's editor features, which follow its start. */
+  /**
+   * Resolves once the view's editor shows the owner's editor features, which
+   * follow its start, or once those features leave or the view closes.
+   */
   const featuresShown = useCallback(
     (owner: string, view: CommandExecutionContext['view']) => {
       const selection = view && editorViewRegistry.getSelection(view)
@@ -727,6 +730,7 @@ export function useAddons(
       const presentation =
         selection.value.editor === 'source' ? 'source' : 'formatted'
       const missing = () =>
+        documentRuntime.isLiveView(view) &&
         [...sources.values()].some(
           (feature) =>
             feature.addonId === owner &&
@@ -738,6 +742,7 @@ export function useAddons(
         const done = () => {
           clearTimeout(timer)
           featureWaits.delete(check)
+          stopViews()
           resolve()
         }
         const check = () => {
@@ -745,6 +750,7 @@ export function useAddons(
         }
         // ponytail: an editor that never shows a feature delays the command 5 s; editors could report the features they skip.
         const timer = setTimeout(done, 5000)
+        const stopViews = documentRuntime.subscribeViews(check)
         featureWaits.add(check)
       })
     },
@@ -860,7 +866,9 @@ export function useAddons(
         ? current
         : next
     })
-  }, [sources])
+    // A command stops waiting for features that left, as when their addon stops.
+    for (const check of [...featureWaits]) check()
+  }, [sources, featureWaits])
   const publishExtensions = useCallback(() => {
     setMarkdownExtensions((current) => {
       const next = [...extensions.values()].sort(

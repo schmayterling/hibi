@@ -43,6 +43,17 @@ export function readDOMPosition(view: EditorView, node: Node, offset: number) {
   }
 }
 
+/**
+ * The position at a point inside a widget that maps its DOM positions, as
+ * a table cell's text does, where `posAtCoords` gives the widget's edges.
+ */
+export function mappedPositionAt(view: EditorView, x: number, y: number) {
+  const range = view.contentDOM.ownerDocument.caretRangeFromPoint(x, y)
+  const read =
+    range && readDOMPosition(view, range.startContainer, range.startOffset)
+  return read?.mapped ? read.at : null
+}
+
 type Points = Pick<
   Selection,
   'anchorNode' | 'anchorOffset' | 'focusNode' | 'focusOffset'

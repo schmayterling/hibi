@@ -1808,6 +1808,7 @@ class TableView {
     }
     const span = this.span(editing)
     if (span) editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+    editing.editor.resend()
   }
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */

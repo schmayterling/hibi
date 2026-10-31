@@ -536,6 +536,8 @@ export class CellEditor {
   readonly formatting: SourceFormatting
   /** A change from the formatted view is being applied. */
   private remote = false
+  /** The caret moved while the table's spans were old, so the formatted view's selection waits for them. */
+  private unsent = false
   private access = new Compartment()
 
   private host: CellHost
@@ -937,7 +939,11 @@ export class CellEditor {
       return
     }
     for (const transaction of transactions) {
-      if (!view.dom.isConnected || !this.host.current()) return
+      if (!view.dom.isConnected) return
+      if (!this.host.current()) {
+        this.unsent ||= transactions.some((tr) => tr.selection !== undefined)
+        return
+      }
       const span = this.host.span()
       // Where the cell's text starts in the formatted view after the change.
       let start = span ? span.from : null
@@ -973,6 +979,7 @@ export class CellEditor {
       const userEvent = own === 'select.pointer' ? 'select' : own
       const isolate = transaction.annotation(isolateHistory)
       const from = start
+      if (from !== null) this.unsent = false
       this.host.main.dispatch({
         changes,
         ...(from === null
@@ -1050,7 +1057,10 @@ export class CellEditor {
     const span = this.host.span()
     const selected = this.host.main.state.selection.main
     const selection =
-      span && selected.from >= span.from && selected.to <= span.to
+      !this.unsent &&
+      span &&
+      selected.from >= span.from &&
+      selected.to <= span.to
         ? {
             anchor: selected.anchor - span.from,
             head: selected.head - span.from,
@@ -1077,9 +1087,19 @@ export class CellEditor {
     const span = this.host.span()
     if (!span) return
     const { anchor, head } = this.view.state.selection.main
+    this.unsent = false
     this.host.main.dispatch({
       selection: { anchor: span.from + anchor, head: span.from + head },
       annotations: cellInput.of(true),
+    })
+  }
+
+  /** Send the formatted view a caret that moved while the table's spans were old, once they are current. */
+  resend() {
+    if (!this.unsent) return
+    queueMicrotask(() => {
+      if (this.unsent && this.view.dom.isConnected && this.host.current())
+        this.mirror()
     })
   }
 

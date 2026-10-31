@@ -14,11 +14,8 @@ import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 
 test('hotkey validation rejects conflicts and preserves standard editing keys', () => {
@@ -116,7 +113,7 @@ test('hotkey validation rejects conflicts and preserves standard editing keys', 
   )
 })
 
-it('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
+test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-hotkeys-'))
@@ -144,7 +141,7 @@ it('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
     await rm(profile, { recursive: true, force: true })
   })
   let page = await launch()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const storedMod = process.platform === 'darwin' ? 'meta' : 'ctrl'
   const rich = page.getByRole('textbox', { name: /document editor/i })

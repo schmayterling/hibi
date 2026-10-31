@@ -9,11 +9,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { checkSidebarResize } from './sidebar-resize.mjs'
 import { uiName } from './ui.mjs'
@@ -69,7 +70,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
     { folder, output },
   )
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
@@ -420,7 +421,10 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
   await site.setViewportSize({ width: 1000, height: 760 })
   await checkSidebarResize(site, 256, '.site-content', () => site.reload())
   assert.equal(await site.evaluate(() => window.compromised), undefined)
-  assert.equal(await site.locator('article img').getAttribute('src'), null)
+  // Exports keep remote https images, without their event handlers.
+  const remote = site.locator('article img')
+  assert.equal(await remote.getAttribute('src'), 'https://example.com/tracker')
+  assert.equal(await remote.getAttribute('onerror'), null)
   assert.equal(
     await site.getByText(/^bad$/i, { exact: true }).getAttribute('href'),
     null,

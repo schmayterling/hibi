@@ -27,12 +27,12 @@ const { values } = parseArgs({
   options: {
     engine: { type: 'string', default: 'hibi' },
     'bare-markdown': { type: 'boolean' },
-    mode: { type: 'string', default: 'all' },
+    mode: { type: 'string', default: 'source' },
     file: { type: 'string' },
     size: { type: 'string', default: 'all' },
     shape: { type: 'string', default: 'all' },
     position: { type: 'string', default: 'middle' },
-    target: { type: 'string', default: 'both' },
+    target: { type: 'string', default: 'source' },
     'hold-ms': { type: 'string', default: '30000' },
     'settle-ms': { type: 'string', default: '15000' },
     rate: { type: 'string', default: '30' },
@@ -52,7 +52,7 @@ const { values } = parseArgs({
 })
 if (values.help) {
   console.log(
-    'node scripts/trace-input-paint.mjs --engine hibi|bare [--bare-markdown] --mode source|visual|split|split-tabs|all [--file PATH | --size chars|words|all --shape paragraphs|giant|all] --position start|middle|end|all --target source|visual|both --out NEW_DIRECTORY [--quick] [--hold-ms 30000] [--rate 30] [--fixed-chrome] [--background] [--trace-screenshots] [--cpu-profile] [--continue-on-error]',
+    'node scripts/trace-input-paint.mjs --engine hibi|bare [--bare-markdown] --mode source [--file PATH | --size chars|words|all --shape paragraphs|giant|all] --position start|middle|end|all --target source --out NEW_DIRECTORY [--quick] [--hold-ms 30000] [--rate 30] [--fixed-chrome] [--background] [--trace-screenshots] [--cpu-profile] [--continue-on-error]',
   )
   process.exit(0)
 }
@@ -75,6 +75,11 @@ const splitTabsMode = values.mode === 'split-tabs',
   settleMs = Number(values['settle-ms'])
 assert.ok(['hibi', 'bare'].includes(values.engine))
 const bare = values.engine === 'bare'
+// ponytail: visual and split timing read the removed Tiptap editor's DOM; port them to the formatted view first.
+assert.ok(
+  modes.every((mode) => mode === 'source') && values.target === 'source',
+  'Visual and split modes measured the removed Tiptap editor. Use --mode source --target source.',
+)
 assert.ok(
   !splitTabsMode || (!bare && !values.file && values.target === 'both'),
   '--mode split-tabs requires Hibi, generated fixtures, and --target both.',
@@ -206,7 +211,7 @@ const summary = {
         ]),
     ...(bare
       ? [
-          `Engine-only uses CodeMirror ${values['bare-markdown'] ? 'with native Markdown parsing and highlighting' : 'without a language or highlighting extension'} and ProseMirror history with a static, inert split peer. No Hibi runtime, React, addons, canonical journal, or IPC save runs; saved artifacts are engine snapshots written by the benchmark runner.`,
+          `Engine-only uses CodeMirror ${values['bare-markdown'] ? 'with native Markdown parsing and highlighting' : 'without a language or highlighting extension'} with history. No Hibi runtime, React, addons, canonical journal, or IPC save runs; saved artifacts are engine snapshots written by the benchmark runner.`,
         ]
       : []),
     ...(values['fixed-chrome']
@@ -315,7 +320,7 @@ async function installProbe(profile) {
       name: 'Input paint probe',
       description: 'Benchmark-only input timing callbacks',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Benchmark' }],
       capabilities: ['source'],

@@ -13,7 +13,6 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
-import { legacySdk } from '../../addons/sdk-host'
 import type {
   AppInfo,
   DocumentCommand,
@@ -27,7 +26,6 @@ import type {
   WorkspaceId,
   WorkspaceTarget,
 } from '../../shared/foundation-contracts'
-import { headingAnchors } from '../../shared/heading-anchor'
 import {
   type AppCommand,
   actions,
@@ -77,18 +75,14 @@ import { CommandPalette, type PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
 import { documentFormats, editorDocument } from './document-formats'
 import { documentRuntime, observeDocumentErrors } from './document-runtime'
-import {
-  hasDocumentFootnotes,
-  preferSourceOpening,
-  subscribeDocumentShell,
-} from './document-shell'
-import type { ViewMode } from './Editor'
+import { subscribeDocumentShell } from './document-shell'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
 import { focusEditor } from './editor-focus'
 import { setEditorCommandMenu } from './editor-interaction-presence'
 import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { FlavorPicker } from './FlavorPicker'
+import type { ViewMode } from './FormattedEditor'
 import {
   automaticFlavor,
   type FlavorChoice,
@@ -96,7 +90,6 @@ import {
   loadFlavor,
   selectedFlavors,
 } from './flavors'
-import { codemirrorFormattedView } from './formatted-engine'
 import { LoadingScreen } from './LoadingScreen'
 import { installRendererDiagnostics } from './local-diagnostics'
 import { transformMarkdown } from './markdown-projection'
@@ -116,11 +109,6 @@ import { viewNotifications } from './view-notifications'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
 import { WorkspacesSidebar } from './WorkspacesSidebar'
 import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
-
-if (!codemirrorFormattedView) {
-  legacySdk.all = () => import('../../addons/sdk')
-  legacySdk.rich = () => import('@tiptap/core')
-}
 
 startupMark('renderer-entry')
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
@@ -243,12 +231,16 @@ function App() {
   }, [settingTarget, settingsCategory])
   const dialogs = useDialogs()
   const toasts = useToasts()
-  const errorNotice = useRef<ToastHandle | null>(null)
+  // An addon's failure is not the open document's, so each has its own
+  // notice: the next document operation clears a document error only.
+  const errorNotices = useRef<
+    Partial<Record<'document' | 'addon', ToastHandle | null>>
+  >({})
   const setError = useCallback(
-    (message: string) => {
-      errorNotice.current?.dismiss()
+    (message: string, owner: 'document' | 'addon' = 'document') => {
+      errorNotices.current[owner]?.dismiss()
       // Main-process failures arrive wrapped in Electron's IPC error text.
-      errorNotice.current = message
+      errorNotices.current[owner] = message
         ? toasts.show({ message: errorMessage(message), variant: 'error' })
         : null
     },
@@ -322,7 +314,7 @@ function App() {
   const markdownDocument =
     !document || documentFormats.isMarkdown(document.name)
   const [richEditor, setRichEditor] = useState<{
-    Component?: typeof import('./Editor').MarkdownEditor
+    Component?: typeof import('./FormattedEditor').MarkdownEditor
     Adapter?: typeof import('./ActiveDocumentEditor').ActiveDocumentEditor
     error?: Error
   }>({})
@@ -347,9 +339,7 @@ function App() {
     // Publish the demanded module as ordinary state: a first Suspense retry can
     // otherwise hold an already loaded editor behind React's reveal throttle.
     void Promise.all([
-      codemirrorFormattedView
-        ? import('./FormattedEditor')
-        : import('./Editor'),
+      import('./FormattedEditor'),
       import('./ActiveDocumentEditor'),
     ]).then(
       ([{ MarkdownEditor }, { ActiveDocumentEditor }]) => {
@@ -576,19 +566,7 @@ function App() {
     return saved && isDocumentView(saved) ? saved : 'normal'
   })
   const [selectedMode, setSelectedMode] = useState<ViewMode>(defaultView)
-  const [richRequests, setRichRequests] = useState<ReadonlyMap<string, number>>(
-    new Map(),
-  )
   const setMode = useCallback((view: ViewMode) => {
-    const document = currentDocument.current
-    if (document)
-      setRichRequests((current) => {
-        const open = new Set(document.tabs.map((tab) => tab.id))
-        const next = new Map([...current].filter(([id]) => open.has(id)))
-        if (view === 'markdown') next.delete(document.tabId)
-        else next.set(document.tabId, document.revision)
-        return next
-      })
     setSelectedMode(view)
     setSplitTabs((current) =>
       current
@@ -918,10 +896,6 @@ function App() {
           context.view.viewGeneration === current.view.viewGeneration))
     )
   }
-  const sourceFirst =
-    markdownDocument &&
-    preferSourceOpening(documentRuntime, currentDocument.current ?? document) &&
-    richRequests.get(document?.tabId ?? '') !== document?.revision
   const addonHost = useAddons(
     {
       captureCommandContext: captureAddonCommandContext,
@@ -1000,17 +974,15 @@ function App() {
           error instanceof Error
             ? error.message
             : 'The addon could not complete this action.',
+          'addon',
         ),
     },
     document?.name,
-    markdownDocument &&
-      preferSourceOpening(documentRuntime, currentDocument.current ?? document)
-      ? 'markdown'
-      : documentFormat?.views && !documentFormat.views.includes(selectedMode)
-        ? documentFormat.views.includes('side-by-side')
-          ? 'side-by-side'
-          : 'markdown'
-        : selectedMode,
+    documentFormat?.views && !documentFormat.views.includes(selectedMode)
+      ? documentFormat.views.includes('side-by-side')
+        ? 'side-by-side'
+        : 'markdown'
+      : selectedMode,
   )
   useEffect(() => {
     if (
@@ -1059,23 +1031,14 @@ function App() {
       flavors: chosenFlavors,
       projections: addonHost.markdownExtensions,
     }
-  // The CodeMirror formatted view edits footnotes in place.
-  const footnoteDocument =
-    markdownDocument &&
-    !codemirrorFormattedView &&
-    hasDocumentFootnotes(documentRuntime, currentDocument.current ?? document)
   const availableViews = addonHost.sourceOnly
     ? ['markdown' as const]
-    : documentFormats
-        .views(document?.name ?? 'untitled.md')
-        .filter((view) => !footnoteDocument || view !== 'normal')
-  const mode: ViewMode = sourceFirst
-    ? 'markdown'
-    : availableViews.includes(selectedMode)
-      ? selectedMode
-      : availableViews.includes('side-by-side')
-        ? 'side-by-side'
-        : 'markdown'
+    : documentFormats.views(document?.name ?? 'untitled.md')
+  const mode: ViewMode = availableViews.includes(selectedMode)
+    ? selectedMode
+    : availableViews.includes('side-by-side')
+      ? 'side-by-side'
+      : 'markdown'
   useLayoutEffect(() => {
     if (settingsOpen || !settingsFocus.current) return
     const { intent, previous } = settingsFocus.current
@@ -1136,6 +1099,8 @@ function App() {
   }, [addonHost.allReady, addonHost.sidebarViews, rightSidebarView])
   useEffect(() => {
     localStorage.removeItem('sidebar-open')
+    // The editor engine setting went away with the Tiptap editor.
+    localStorage.removeItem('hibi:formatted-engine')
   }, [])
   useEffect(
     () => window.hibi.onWorkspaceHeaderChanged(refreshWorkspaceView),
@@ -2014,29 +1979,8 @@ function App() {
     } else if (side !== 'left') return
     const target = currentDocument.current
     if (!target || target.tabId !== tabId || busyRef.current) return
-    if (href.startsWith('#')) {
-      let anchor: string
-      try {
-        anchor = decodeURIComponent(href.slice(1))
-      } catch {
-        return
-      }
-      const pane = window.document.querySelector<HTMLElement>(
-        split ? `.editor-page[data-side="${side}"]` : '#document-editor-panel',
-      )
-      const headings = Array.from(
-        pane?.querySelectorAll<HTMLElement>('.tiptap :is(h1,h2,h3,h4,h5,h6)') ??
-          [],
-      )
-      const anchors = headingAnchors(
-        headings.map((heading) => heading.textContent ?? ''),
-      )
-      const index = anchors.findIndex(
-        (heading) => heading.anchor === anchor || heading.legacy === anchor,
-      )
-      headings[index]?.scrollIntoView({ block: 'start' })
-      return
-    }
+    // The formatted view follows heading links itself.
+    if (href.startsWith('#')) return
     const fragment = href.indexOf('#')
     void applyDocumentOperation(
       async () => {
@@ -2701,14 +2645,6 @@ function App() {
       : undefined
     const paneMarkdown =
       !paneDocument || documentFormats.isMarkdown(paneDocument.name)
-    const paneSourceFirst =
-      paneMarkdown &&
-      preferSourceOpening(documentRuntime, paneDocument) &&
-      richRequests.get(paneDocument?.tabId ?? '') !== paneDocument?.revision
-    const paneFootnoteDocument =
-      paneMarkdown &&
-      !codemirrorFormattedView &&
-      hasDocumentFootnotes(documentRuntime, paneDocument)
     const PaneEditor = paneMarkdown
       ? richEditor.Component
       : formatEditor.Component
@@ -2720,16 +2656,12 @@ function App() {
       : mode
     const paneViews: readonly ViewMode[] = addonHost.sourceOnly
       ? ['markdown']
-      : documentFormats
-          .views(paneDocument?.name ?? 'untitled.md')
-          .filter((view) => !paneFootnoteDocument || view !== 'normal')
-    const paneMode: ViewMode = paneSourceFirst
-      ? 'markdown'
-      : paneViews.includes(requestedMode)
-        ? requestedMode
-        : paneViews.includes('side-by-side')
-          ? 'side-by-side'
-          : 'markdown'
+      : documentFormats.views(paneDocument?.name ?? 'untitled.md')
+    const paneMode: ViewMode = paneViews.includes(requestedMode)
+      ? requestedMode
+      : paneViews.includes('side-by-side')
+        ? 'side-by-side'
+        : 'markdown'
     const paneChoice = splitFlavors?.[side].choice ?? flavorChoice
     const paneChosen = splitFlavors?.[side].selected ?? chosenFlavors
     const paneSourceName =
@@ -2802,12 +2734,6 @@ function App() {
             )}
           </header>
         )}
-        {paneSourceFirst && selectedMode !== 'markdown' && (
-          <DocumentNotice
-            title="Opened in source view"
-            message="This note opens in source view to keep editing responsive. Choose Normal to prepare its formatted view."
-          />
-        )}
         {(!editorStarted.current || !PaneEditor || !PaneAdapter) && (
           <LoadingScreen />
         )}
@@ -2849,10 +2775,8 @@ function App() {
               onAttach={(files) => attachMedia(files, paneDocument.tabId, side)}
               onLink={(href) => void openLink(href, paneDocument.tabId, side)}
               flavors={paneChosen}
-              footnoteDocument={paneFootnoteDocument}
               sourceExtensions={addonHost.sourceExtensions}
               formattedExtensions={addonHost.formattedExtensions}
-              richExtensions={addonHost.richExtensions}
               documentRevision={paneDocument.revision}
               showLineNumbers={showLineNumbers}
               spellCheck={spellCheck}
@@ -2909,11 +2833,9 @@ function App() {
                 label: paneMarkdown ? flavorStatus.label : paneSourceName,
                 tooltip: !paneMarkdown
                   ? `${paneSourceName} document · click for format settings`
-                  : paneFootnoteDocument
-                    ? 'Edit footnotes in Source view. Side-by-side shows their preview.'
-                    : flavorStatus.unsupported
-                      ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
-                      : `${paneChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
+                  : flavorStatus.unsupported
+                    ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
+                    : `${paneChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
                 onClick: openFlavors,
               },
               {
@@ -3287,6 +3209,7 @@ function App() {
             discover={paletteOpen}
             onBack={leaveSettings}
             onInstallAddon={addonHost.install}
+            outdatedAddons={addonHost.outdated}
             addonRequest={addonRequest}
             onAddonRequestDone={(key) =>
               setAddonRequests((queue) =>

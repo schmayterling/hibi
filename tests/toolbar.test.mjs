@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -28,7 +29,7 @@ test('addon actions follow formatting by default and keep custom toolbar order',
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   await page.evaluate(() => window.hibi.setAddonEnabled('tags', true))
   await page.reload()
@@ -76,7 +77,7 @@ test('toolbar and top bar stay visible by default, auto-hide shares timing, and 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   const rich = page.getByRole('textbox', { name: /document editor/i })
@@ -174,7 +175,7 @@ test('toolbar and top bar stay visible by default, auto-hide shares timing, and 
         const duration = grid.effect.getComputedTiming().duration
         const read = () => {
           const paragraph = document
-            .querySelector('.rich-pane .tiptap p, .rich-pane .cm-line')
+            .querySelector('.rich-pane .cm-line')
             .getBoundingClientRect()
           return {
             height: slot.getBoundingClientRect().height,
@@ -305,7 +306,7 @@ test('markdown toolbar formats both panes without dragging and reorders only in 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() =>
     localStorage.setItem('hibi:toolbar', JSON.stringify({ autoHide: false })),
   )
@@ -652,7 +653,7 @@ test('select all stays in the active pane after changing views or clicking line 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.evaluate(() => localStorage.setItem('line-numbers', 'true'))
@@ -673,10 +674,8 @@ test('select all stays in the active pane after changing views or clicking line 
       const parent = (node) =>
         node instanceof Element ? node : node?.parentElement
       return {
-        anchor: parent(selection.anchorNode)?.closest('.cm-content, .tiptap')
-          ?.className,
-        focus: parent(selection.focusNode)?.closest('.cm-content, .tiptap')
-          ?.className,
+        anchor: parent(selection.anchorNode)?.closest('.cm-content')?.className,
+        focus: parent(selection.focusNode)?.closest('.cm-content')?.className,
         text: selection.toString(),
       }
     })
@@ -710,7 +709,7 @@ test('select all stays in the active pane after changing views or clicking line 
   }
   await rich.click()
   const selected = await select()
-  const editorClass = t.formattedEngine === 'tiptap' ? /tiptap/ : /cm-content/
+  const editorClass = /cm-content/
   assert.match(selected.anchor, editorClass)
   assert.match(selected.focus, editorClass)
   assert.equal(selected.text.match(/first/g).length, 1)

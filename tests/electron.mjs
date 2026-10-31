@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { execFile, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
@@ -735,7 +736,7 @@ export const electron = {
               .evaluate(() => {
                 const editor = document.querySelector('.editor-page')
                 const input = editor?.querySelector(
-                  '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
+                  '.cm-content[contenteditable="true"]',
                 )
                 return !!(
                   input &&
@@ -782,10 +783,8 @@ function startupEntries({ BrowserWindow } = {}) {
   const doc = globalThis.document
   const editor = doc?.querySelector('.editor-page')
   const panel = doc?.querySelector('#document-editor-panel')
-  const tiptap = panel?.querySelector('.tiptap')
-  const input = editor?.querySelector(
-    '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
-  )
+  const formatted = panel?.querySelector('.rich-pane .cm-content')
+  const input = editor?.querySelector('.cm-content[contenteditable="true"]')
   const recovery = doc?.querySelector('.recovery-screen')
   const entries = performance
     .getEntries()
@@ -808,8 +807,8 @@ function startupEntries({ BrowserWindow } = {}) {
       readyState: doc.readyState,
       appBusy: doc.querySelector('.app')?.getAttribute('aria-busy'),
       editorPanelBusy: panel?.getAttribute('aria-busy'),
-      tiptapReadOnly: tiptap?.getAttribute('aria-readonly'),
-      tiptapContentEditable: tiptap?.getAttribute('contenteditable'),
+      formattedReadOnly: formatted?.getAttribute('aria-readonly'),
+      formattedContentEditable: formatted?.getAttribute('contenteditable'),
       editorBusy: editor?.getAttribute('aria-busy'),
       editorInert: editor?.inert,
       editorHidden: editor?.hidden,
@@ -835,9 +834,11 @@ function startupEntries({ BrowserWindow } = {}) {
           ?.textContent?.slice(0, 80),
       },
       loading: doc.querySelectorAll('.loading-screen').length,
-      editable: doc.querySelectorAll('.tiptap[contenteditable="true"]').length,
+      editable: doc.querySelectorAll(
+        '.rich-pane .cm-content[contenteditable="true"]',
+      ).length,
       sourceEditable: doc.querySelectorAll(
-        '.cm-content[contenteditable="true"]',
+        '.source-pane .cm-content[contenteditable="true"]',
       ).length,
       nativeFocus: Document.prototype.hasFocus.call(doc),
       activeElement: active && {
@@ -1034,6 +1035,31 @@ export async function waitForDocumentEditor(
   }
 }
 
+/**
+ * The formatted view's editor once the document editor is ready. `reload`
+ * reloads the window first, so init scripts and stored settings apply.
+ */
+export async function waitForFormattedEditor(
+  application,
+  page,
+  { reload = false } = {},
+) {
+  await waitForDocumentEditor(application, page, { timeout: 30000 })
+  // A note can open in a table cell, whose cell editor has its own .cm-content.
+  const editor = page.locator(
+    '.rich-pane .hibi-formatted .cm-content:not(.hibi-lp-cell-editor *)',
+  )
+  if (reload) {
+    await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+    await page.reload({ waitUntil: 'commit' })
+    await page.waitForLoadState('load')
+    await waitForDocumentEditor(application, page, { timeout: 30000 })
+  }
+  await editor.waitFor({ timeout: 30000 })
+  assert.equal(await editor.getAttribute('aria-label'), 'Document editor')
+  return editor
+}
+
 export const APP_STATE_TIMEOUT = 7000
 // This Playwright build treats Promise-valued waitForFunction predicates as
 // truthy before they resolve. Evaluate and await async checks in the host.
@@ -1094,7 +1120,7 @@ export async function waitForAsync(
                   label: focus.getAttribute('aria-label'),
                   editable: focus.isContentEditable,
                 },
-                editors: [...document.querySelectorAll('.cm-content, .tiptap')]
+                editors: [...document.querySelectorAll('.cm-content')]
                   .slice(0, 4)
                   .map((editor) => ({
                     label: editor.getAttribute('aria-label'),

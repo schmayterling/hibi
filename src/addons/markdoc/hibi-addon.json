@@ -2,7 +2,7 @@
   "id": "markdoc",
   "name": "Markdoc",
   "description": "Edit, preview, and export Markdoc documents.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.1",
   "authors": [

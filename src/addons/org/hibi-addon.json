@@ -2,7 +2,7 @@
   "id": "org",
   "name": "Org mode",
   "description": "Edit, preview, and export Org mode documents.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.2",
   "authors": [

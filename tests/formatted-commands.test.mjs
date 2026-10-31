@@ -5,8 +5,10 @@ import { EditorSelection, EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
 import { NodeType, Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
-import { MarkdownManager } from '@tiptap/markdown'
-import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
+import {
+  ChunkedMarkdownParser,
+  uncovered,
+} from '../src/renderer/src/chunked-markdown.ts'
 import {
   blockAtom,
   blockBreak,
@@ -19,13 +21,10 @@ import {
   indent,
   lineBreak,
   lineInput,
+  tabSyntax,
 } from '../src/renderer/src/formatted-commands.ts'
-import {
-  codeIndentLines,
-  detectIndentUnit,
-  tabIndent,
-} from '../src/renderer/src/indentation.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
+import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
+import { codeIndentLines } from '../src/renderer/src/indentation.ts'
 import { sourceEditorTextCooperatively } from '../src/renderer/src/source-session.ts'
 import { Footnotes } from '../src/shared/markdown-extra-syntax.ts'
 import { HTMLImage } from '../src/shared/markdown-html-syntax.ts'
@@ -294,21 +293,6 @@ test('code indentation strips quote and indented-code prefixes', () => {
 
 test('code indentation strips container prefixes as the rich editor reads them', () => {
   const footnotes = parser.configure([GFM, Footnotes])
-  const { parser: marked, options, core, addons } = markdownConfiguration([])
-  const manager = new MarkdownManager({
-    extensions: [...core, ...addons],
-    marked,
-    markedOptions: options,
-  })
-  /** The rich editor's Tab unit in the first code block of `doc`. */
-  const rich = (doc) => {
-    const code = (node) =>
-      node.type === 'codeBlock'
-        ? (node.content ?? []).map(({ text }) => text).join('')
-        : node.content?.map(code).find((text) => text !== undefined)
-    const text = code(manager.parse(doc.replace('|', '')))
-    return detectIndentUnit(text, codeIndentLines) ?? tabIndent.snapshot().unit
-  }
   const tab = (doc, codeTabs) => {
     const head = doc.indexOf('|')
     const text = doc.replace('|', '')
@@ -340,10 +324,8 @@ test('code indentation strips container prefixes as the rich editor reads them',
     ['10. item\n\n    ```\n    foo|\n    \tbar\n    ```', '\t'],
     ['[^1]: note\n\n    ```js\n    foo|\n    \tbar\n    ```', '\t'],
     ['    foo|\n      bar', '  '],
-  ]) {
-    assert.equal(rich(doc), unit, `rich editor: ${doc}`)
+  ])
     assert.equal(tab(doc), doc.replace('|', `${unit}|`), doc)
-  }
   // The rich editor reads an ordered item's code one column early, with a
   // leading space and three-space unit here; the code's own unit is two.
   assert.equal(
@@ -1213,12 +1195,6 @@ test('multi-line input in a 50 MiB block reads and rewrites only around the care
 })
 
 test('select-all code input keeps matching fences as literal code', () => {
-  const { parser: marked, options, core, addons } = markdownConfiguration([])
-  const manager = new MarkdownManager({
-    extensions: [...core, ...addons],
-    marked,
-    markedOptions: options,
-  })
   for (const [opening, input, closing] of [
     ['```', '```\nX', '````'],
     ['```js', '  `````\nX', '``````'],
@@ -1233,14 +1209,6 @@ test('select-all code input keeps matching fences as literal code', () => {
       next,
       `${closing}${opening.replace(/`+|~+/, '')}\n${normalized}|\n${closing}`,
     )
-    const doc = manager.parse(next.replace('|', ''))
-    assert.equal(doc.content.length, 1)
-    assert.equal(doc.content[0].type, 'codeBlock')
-    assert.equal(
-      doc.content[0].attrs.language,
-      opening.replace(/`+|~+/, '') || null,
-    )
-    assert.equal(doc.content[0].content[0].text, normalized)
   }
 })
 
@@ -1469,4 +1437,84 @@ test('multiline input keeps selections through partial inline markers valid', ()
             }, `${source}: ${from}..${to}, ${backward}, ${text}`)
           }
   }
+})
+
+test('Tab reads the blocks of a selection or caret past the parsed text with the block grammar', () => {
+  // One millisecond of parsing per transaction leaves most of a large note unparsed.
+  const partly = (doc, anchor, head = anchor, slice = 1) => {
+    const syntax = formattedSyntax({ slice })
+    const state = EditorState.create({
+      doc,
+      selection: { anchor, head },
+      extensions: syntax.extension,
+    })
+    return { state, tree: syntax.tree(state) }
+  }
+  const tab = (doc, anchor, head) => {
+    const { state, tree } = partly(doc, anchor, head)
+    const blocks = tabSyntax(state, tree)
+    assert.notEqual(blocks, tree, 'the parse had not reached the selection')
+    return state.update(indent(state, blocks, false, Decoration.none)).state
+  }
+  const code = Array.from({ length: 16384 }, (_, line) =>
+    `${line}`.padEnd(63, 'x'),
+  ).join('\n')
+  const fence = `\`\`\`\n${code}\n\`\`\``
+  // Every selected code line, and a caret at the start of the last one.
+  assert.equal(
+    tab(fence, 4, code.length + 4).doc.toString(),
+    `\`\`\`\n${code.replaceAll(/^/gm, '\t')}\n\`\`\``,
+  )
+  const last = fence.lastIndexOf('\n', fence.length - 5) + 1
+  assert.equal(
+    tab(fence, last).doc.toString(),
+    `${fence.slice(0, last)}\t${fence.slice(last)}`,
+  )
+  // A caret in the last item of a long list nests it, with its own child,
+  // under the item before.
+  const items = Array.from(
+    { length: 16384 },
+    (_, item) => `- item ${item} ${'y'.repeat(48)}`,
+  ).join('\n')
+  assert.equal(
+    tab(`${items}\n- last\n  - child`, items.length + 4).doc.toString(),
+    `${items}\n  - last\n    - child`,
+  )
+  // Only blocks: the inline syntax of the text is not read.
+  const prose = 'para **bold** text\n\n'.repeat(65536)
+  const { state, tree } = partly(prose, 0, prose.length)
+  const names = new Set()
+  tabSyntax(state, tree).iterate({ enter: (node) => void names.add(node.name) })
+  assert.ok(names.has('Paragraph'))
+  assert.equal(names.has('StrongEmphasis'), false)
+  // A parsed selection keeps the view's own tree.
+  const small = partly('```\nx\n```', 4, 4, Number.POSITIVE_INFINITY)
+  assert.equal(tabSyntax(small.state, small.tree), small.tree)
+  // A caret at the start of the first chunk not parsed yet: the view's first
+  // parse of a long nested list ends at the start of a child item's line.
+  const nested = Array.from(
+    { length: 40000 },
+    (_, item) => `- item ${item} ${'y'.repeat(48)}\n  - child`,
+  ).join('\n')
+  const first = partly(nested, 0, 0, Number.POSITIVE_INFINITY)
+  let edge = 0
+  for (let high = nested.length; edge < high; ) {
+    const mid = (edge + high) >> 1
+    if (uncovered(first.tree, 0, mid + 1)) high = mid
+    else edge = mid + 1
+  }
+  const line = first.state.doc.lineAt(edge)
+  assert.deepEqual([line.from, line.text], [edge, '  - child'])
+  const atEdge = partly(nested, edge, edge, Number.POSITIVE_INFINITY)
+  const read = tabSyntax(atEdge.state, atEdge.tree)
+  assert.notEqual(read, atEdge.tree, 'the caret starts an unparsed chunk')
+  const nestedTab = atEdge.state.update(
+    indent(atEdge.state, read, false, Decoration.none),
+  ).state.doc
+  // The item nests under the one before, with its child.
+  const parent = first.state.doc.line(line.number - 1).text
+  assert.deepEqual(
+    [nestedTab.line(line.number - 1).text, nestedTab.line(line.number).text],
+    [`  ${parent}`, '    - child'],
+  )
 })

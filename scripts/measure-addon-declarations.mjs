@@ -88,7 +88,6 @@ try {
       },
       files: [
         join(root, 'src/addons/api.ts'),
-        join(root, 'src/addons/sdk.ts'),
         join(root, 'src/addons/sdk-loader.ts'),
       ],
       include: [],
@@ -98,7 +97,7 @@ try {
   check('declarations incremental', sourceConfig)
 
   const total = await declarationSize(declarations)
-  const entries = ['api', 'sdk', 'sdk-loader']
+  const entries = ['api', 'sdk-loader']
   let publicBytes = 0
   for (const entry of entries)
     publicBytes += (

@@ -5,7 +5,6 @@ import type { countText } from './count'
 import type { CounterReply, FormattedCountRequest } from './counter.worker'
 import type { observeFormattedCounts } from './formatted'
 import manifest from './manifest'
-import { observeRichCounts } from './rich'
 import { scheduleCounts } from './schedule'
 
 let stop: (() => void) | undefined
@@ -20,7 +19,6 @@ export default defineAddon({
     worker.addEventListener('error', failed)
     worker.addEventListener('messageerror', failed)
     const status = context.statusBar.register({ id: 'total', label: '' })
-    let richCounts: ReturnType<typeof observeRichCounts> | null = null
     let countsRichText = false
     let formattedCounts: ReturnType<typeof observeFormattedCounts> | undefined
     let formattedLoad: Promise<typeof import('./formatted')> | undefined
@@ -36,9 +34,8 @@ export default defineAddon({
           return formatted
         }
         if (markdown && formattedLoad && !formattedCounts) return null
-        const rich = markdown ? richCounts : null
-        countsRichText = Boolean(rich)
-        return rich ? rich.read(document) : document.markdown
+        countsRichText = false
+        return document.markdown
       },
       (text) => worker.postMessage(text),
       ({ words, characters }) => {
@@ -64,26 +61,6 @@ export default defineAddon({
         if (!active) return []
         formattedCounts ??= observeFormattedCounts(context, worker, refresh)
         return formattedCounts.extension
-      },
-    })
-    context.editor.registerRich({
-      id: 'text',
-      preview: 'deferred',
-      attach(instance) {
-        const reader = observeRichCounts(
-          instance,
-          context.editor.getDocument,
-          refresh,
-        )
-        richCounts = reader
-        refresh()
-        return () => {
-          reader.stop()
-          if (richCounts === reader) {
-            richCounts = null
-            refresh()
-          }
-        }
       },
     })
     context.editor.onDocumentChange(refresh)

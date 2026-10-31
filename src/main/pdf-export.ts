@@ -12,7 +12,13 @@ import {
 } from './document'
 import { runFileDialog } from './file-operation-dialog'
 import { writeText } from './files'
-import { documentMediaPath, imageSources, readDocumentImage } from './images'
+import {
+  documentMediaPath,
+  imageSources,
+  readDocumentImage,
+  remoteImageRequestHeaders,
+  withoutSetCookie,
+} from './images'
 import { workspaceRoot } from './workspace'
 
 const MAX_PRINT_HTML = 64 * 1024 * 1024
@@ -61,6 +67,18 @@ async function renderPdf(html: string, owner: BrowserWindow) {
             details.resourceType === 'image' && /^https:\/\//i.test(details.url)
           ),
       }),
+    )
+    // Image hosts get no cookies or cache validators and keep no cookies
+    // between exports, as in the app's own session.
+    partition.webRequest.onBeforeSendHeaders(
+      { urls: ['https://*/*'] },
+      ({ requestHeaders }, callback) =>
+        callback({ requestHeaders: remoteImageRequestHeaders(requestHeaders) }),
+    )
+    partition.webRequest.onHeadersReceived(
+      { urls: ['https://*/*'] },
+      ({ responseHeaders = {} }, callback) =>
+        callback({ responseHeaders: withoutSetCookie(responseHeaders) }),
     )
     partition.on('will-download', denyDownload)
     partition.protocol.handle(
@@ -135,6 +153,8 @@ async function renderPdf(html: string, owner: BrowserWindow) {
     if (window && !window.isDestroyed()) window.destroy()
     partition.protocol.unhandle('hibi-print')
     partition.webRequest.onBeforeRequest(null)
+    partition.webRequest.onBeforeSendHeaders(null)
+    partition.webRequest.onHeadersReceived(null)
     partition.setPermissionCheckHandler(null)
     partition.setPermissionRequestHandler(null)
     partition.removeListener('will-download', denyDownload)

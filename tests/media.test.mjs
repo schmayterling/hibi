@@ -10,11 +10,8 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import {
   pressShortcut,
   replaceRichText,
@@ -56,7 +53,7 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
   page.setDefaultTimeout(6000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await app.evaluate(
     ({ dialog }, { gif, workspace }) => {
       dialog.showOpenDialog = async () => ({

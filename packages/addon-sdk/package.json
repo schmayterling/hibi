@@ -1,6 +1,6 @@
 {
   "name": "@hibi/addon-sdk",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Type declarations for Hibi addon packages",
@@ -13,9 +13,6 @@
     },
     "./api": {
       "types": "./types/api.d.ts"
-    },
-    "./sdk": {
-      "types": "./types/sdk.d.ts"
     },
     "./sdk-loader": {
       "types": "./types/sdk-loader.d.ts"
@@ -39,7 +36,6 @@
     "@lezer/highlight": "^1.2.3",
     "@lezer/common": "^1.5.2",
     "@lezer/markdown": "^1.8.1",
-    "@tiptap/core": "^3.31.3",
     "@types/react": "^19.3.0",
     "marked": "^18.0.13",
     "react": "^19.3.0"

@@ -62,7 +62,7 @@ try {
           )
           const selector =
             mode === 'rich'
-              ? '.tiptap[contenteditable="true"]'
+              ? '.rich-pane .cm-content[contenteditable="true"]'
               : '.source-pane .cm-content[contenteditable="true"]'
           await page.locator(selector).waitFor()
           await page.evaluate((selector) => {

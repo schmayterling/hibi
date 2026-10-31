@@ -6,7 +6,7 @@ import test from 'node:test'
 import { build } from 'vite'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 
-test('codemirror: formulas rendering on or above the reading line keep it in place, and later scrolling stands', {
+test('formulas rendering on or above the reading line keep it in place, and later scrolling stands', {
   timeout: 120000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formula-reading-'))

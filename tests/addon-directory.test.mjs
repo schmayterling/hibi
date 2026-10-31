@@ -30,7 +30,7 @@ const metadata = {
   name: 'Example',
   description: 'Directory fixture',
   version: '1.0.0',
-  apiVersion: 2,
+  apiVersion: 3,
   kind: 'extension',
   authors: [{ displayName: 'Author' }],
   license: 'MIT',
@@ -38,13 +38,13 @@ const metadata = {
 const commit = 'a'.repeat(40)
 const entry = { ...metadata, path: 'addons/example' }
 
-test('directory accepts mixed supported api versions and rejects malformed versions', () => {
+test('directory hides entries for older apis and rejects malformed versions', () => {
   const entries = [1, 2, 3].map((apiVersion) => ({
     ...entry,
     id: `example-v${apiVersion}`,
     apiVersion,
   }))
-  assert.deepEqual(parseAddonDirectory(entries), entries)
+  assert.deepEqual(parseAddonDirectory(entries), [entries[2]])
   for (const apiVersion of [0, -1, 3.1, '3', null, undefined])
     assert.throws(
       () => parseAddonDirectory([{ ...entry, apiVersion }]),

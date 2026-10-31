@@ -12,9 +12,19 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  defaultPane,
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// What the formatted view drew while it matched the removed rich view, and the
+// rich view's own results, recorded before its removal.
+const check = frozenSnapshot('formatted-text-extras')
+const recorded = frozenOracle('formatted-text-extras-rich')
 const parityNote = `# Small parity
 
 Water is H~2~O and CO~2~ here, with ~a long subscript~ too.
@@ -52,6 +62,13 @@ const applyPalette = (scheme) =>
     style.textContent = css
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, palette(scheme))
 
 /** Open a note with the File menu's shortcut. */
@@ -74,16 +91,11 @@ async function open(name) {
   await waitForDocumentEditor(app, page)
 }
 
-/** Reload the window with the formatted engine switch and marker setting. */
-async function engine(codemirror, markers = true) {
+/** Reload the window with the marker setting. */
+async function markers(shown) {
   await page.evaluate(
-    ({ codemirror, markers }) => {
-      if (codemirror)
-        localStorage.setItem('hibi:formatted-engine', 'codemirror')
-      else localStorage.setItem('hibi:formatted-engine', 'tiptap')
-      localStorage.setItem('markdown-markers', String(markers))
-    },
-    { codemirror, markers },
+    (shown) => localStorage.setItem('markdown-markers', String(shown)),
+    shown,
   )
   await page.reload()
   await waitForDocumentEditor(app, page)
@@ -112,7 +124,11 @@ before(
     }
     await writeFile(join(folder, 'notes', 'many.md'), many)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     // Closing with edited notes answers the unsaved-changes prompt.
     await app.evaluate(({ dialog }) => {
@@ -134,12 +150,13 @@ after(
 )
 
 /**
- * The distinct computed styles of subscripts and small text, their counts,
- * and a screenshot of the pane. The formatted view's text around a reference
- * is split around its characters, so it has more elements.
+ * The distinct computed styles of subscripts and small text, and what the pane
+ * draws in place of its pixels: each line's and inline element's tag, classes
+ * and computed paint, and its box in the pane. The formatted view's text around
+ * a reference is split around its characters, so it has more elements.
  */
-async function capture(name, selectors) {
-  const { styles, count } = await page.evaluate((selectors) => {
+const capture = (selectors) =>
+  page.evaluate((selectors) => {
     const distinct = (selector, keys) => [
       ...new Set(
         [...document.querySelectorAll(selector)].map((element) => {
@@ -147,6 +164,22 @@ async function capture(name, selectors) {
           return JSON.stringify(keys.map((key) => style[key]))
         }),
       ),
+    ]
+    const pane = document.querySelector('.rich-pane')
+    const origin = pane.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
+    const keys = [
+      'color',
+      'backgroundColor',
+      'fontSize',
+      'fontWeight',
+      'fontStyle',
+      'verticalAlign',
+      'textDecorationLine',
+      'opacity',
+    ]
+    const drawn = [
+      ...pane.querySelectorAll('.cm-content > *, .cm-content > * *'),
     ]
     return {
       styles: {
@@ -161,79 +194,71 @@ async function capture(name, selectors) {
           'lineHeight',
         ]),
       },
-      count: [selectors.subscript, selectors.subtext].map(
-        (selector) => document.querySelectorAll(selector).length,
-      ),
+      drawn: drawn.map((element) => {
+        const style = getComputedStyle(element)
+        return {
+          element: [
+            element.tagName.toLowerCase(),
+            ...[...element.classList]
+              .filter((name) => !/^cm-(active|focused)/.test(name))
+              .sort(),
+          ].join('.'),
+          ...Object.fromEntries(keys.map((key) => [key, style[key]])),
+        }
+      }),
+      boxes: drawn.map((element) => {
+        const box = element.getBoundingClientRect()
+        return {
+          left: round(box.left - origin.left),
+          top: round(box.top - origin.top),
+          width: round(box.width),
+          height: round(box.height),
+        }
+      }),
     }
   }, selectors)
-  const image = await page
-    .locator('.rich-pane')
-    .screenshot({ path: `test-results/formatted-text-extras-${name}.png` })
-  return { styles, count, image }
-}
 
-test('subscripts and small text render in the formatted view as in the rich view, in light and dark', {
+test('subscripts and small text keep the rich view’s recorded styles and drawing, in light and dark', {
   timeout: 120000,
-}, async () => {
-  await engine(false)
-  await open('parity.md')
-  await page.locator('.tiptap h1', { hasText: 'Small parity' }).waitFor()
-  const rich = {}
-  for (const scheme of ['hibi-light', 'hibi-dark']) {
-    await applyPalette(scheme)
-    rich[scheme] = await capture(`rich-${scheme}`, {
-      subscript: '.rich-pane sub',
-      subtext: '.rich-pane p.markdown-subtext',
-    })
-  }
-  await engine(true)
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Small parity' })
     .waitFor()
   await page.locator('.rich-pane .hibi-lp-subscript').first().waitFor()
-  const report = []
+  // The harness suites draw in the default window's pane, so on a screen
+  // that fits the default window the app's pane is that size too.
+  const screen = await app.evaluate(
+    ({ screen }) => screen.getPrimaryDisplay().workAreaSize,
+  )
+  if (screen.height >= 720)
+    assert.deepEqual(
+      await page
+        .locator('.rich-pane', {
+          has: page.locator('.hibi-lp-h1', { hasText: 'Small parity' }),
+        })
+        .evaluate((pane) => {
+          const box = pane.getBoundingClientRect()
+          return { width: box.width, height: box.height }
+        }),
+      defaultPane,
+    )
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
     await settle()
-    const formatted = await capture(`formatted-${scheme}`, {
+    const formatted = await capture({
       subscript: '.rich-pane .hibi-lp-subscript',
       // Lines, or the text beside a list bullet.
       subtext: '.rich-pane .markdown-subtext',
     })
-    assert.deepEqual(formatted.styles, rich[scheme].styles, scheme)
-    const difference = await app.evaluate(
-      ({ nativeImage }, images) => {
-        const [a, b] = images.map((image) =>
-          nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-        )
-        const size = a.getSize(),
-          other = b.getSize()
-        if (size.width !== other.width || size.height !== other.height) return 1
-        const left = a.toBitmap(),
-          right = b.toBitmap()
-        let changed = 0
-        for (let i = 0; i < left.length; i += 4)
-          if (
-            Math.abs(left[i] - right[i]) > 8 ||
-            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-            Math.abs(left[i + 2] - right[i + 2]) > 8
-          )
-            changed++
-        return changed / (left.length / 4)
-      },
-      [rich[scheme].image, formatted.image].map((image) =>
-        image.toString('base64'),
-      ),
-    )
-    report.push({ scheme, difference })
+    check(`parity ${scheme} styles`, formatted.styles)
+    check(`parity ${scheme} drawn`, formatted.drawn)
+    check(`parity ${scheme} boxes`, formatted.boxes, {
+      tolerance: 1,
+    })
   }
-  console.log(JSON.stringify(report))
-  for (const { scheme, difference } of report)
-    assert.ok(difference < 0.002, `${scheme}: ${difference}`)
-  // Seven subscripts and four small-text paragraphs in the rich view; the
-  // formatted view shows each reference's characters, as the rich view does.
-  assert.deepEqual(rich['hibi-light'].count, [7, 4])
+  // The formatted view shows each reference's characters, as the rich view does.
   assert.deepEqual(
     await page.evaluate(() =>
       [...document.querySelectorAll('.rich-pane .hibi-lp-entity')].map(
@@ -278,14 +303,14 @@ test('the caret reveals subscript tildes and the small-text marker', {
     ['&'],
   )
   // With markers hidden, the caret does not reveal them.
-  await engine(true, false)
+  await markers(false)
   await open('parity.md')
   await page
     .locator('.rich-pane .cm-line', { hasText: 'a line of small text' })
     .click()
   await settle()
   assert.equal(await marker('-#').count(), 0)
-  await engine(true, true)
+  await markers(true)
 })
 
 test('decoded entity glyphs retain nested link, strong and emphasis styles', {
@@ -319,39 +344,26 @@ test('decoded entity glyphs retain nested link, strong and emphasis styles', {
         }),
       selector,
     )
-  await engine(false, false)
+  await markers(false)
   await open('attributes.md')
-  await page
-    .locator('.rich-pane .tiptap h1', { hasText: 'Attributes' })
-    .waitFor()
-  const rich = new Map()
-  for (const scheme of ['hibi-light', 'hibi-dark']) {
-    await applyPalette(scheme)
-    rich.set(
-      scheme,
-      await styles(
-        '.rich-pane sub, .rich-pane .markdown-subtext strong, .rich-pane .markdown-subtext em, .rich-pane .markdown-subtext a',
-      ),
-    )
-  }
-  await engine(true, false)
   await waitForAsync(
     page,
     () => document.querySelectorAll('.rich-pane .hibi-lp-entity').length >= 8,
   )
+  // The rich view's subscripts, links, strong and emphasis styles, recorded
+  // while the views matched.
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
-    assert.deepEqual(
+    check(
+      `attributes ${scheme} entity styles`,
       await styles('.rich-pane .hibi-lp-entity'),
-      rich.get(scheme),
-      scheme,
     )
   }
   assert.equal(
     await page.evaluate(async () => (await window.hibi.getDocument()).markdown),
     source,
   )
-  await engine(true, true)
+  await markers(true)
 })
 
 test('enter inside a subscript splits it into two subscripts, and undo joins them', {
@@ -399,7 +411,7 @@ test('enter inside a subscript splits it into two subscripts, and undo joins the
   )
 })
 
-test('backspace at the start of small text keeps the rich view block behavior', {
+test('backspace at the start of small text keeps the recorded rich view block behavior', {
   timeout: 90000,
 }, async () => {
   const sources = [
@@ -409,74 +421,58 @@ test('backspace at the start of small text keeps the rich view block behavior', 
     '> -# abcd',
     '- -# abcd',
   ]
-  const results = []
+  const output = []
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  for (const codemirror of [false, true]) {
-    await engine(codemirror, false)
-    const output = []
-    for (const [index, source] of sources.entries()) {
-      const name = `backspace-${codemirror}-${index}.md`
-      await writeFile(join(folder, 'notes', name), source)
-      await open(name)
-      await page
-        .locator(codemirror ? '.rich-pane .cm-content' : '.rich-pane .tiptap')
-        .waitFor()
+  await markers(false)
+  for (const [index, source] of sources.entries()) {
+    const name = `backspace-${index}.md`
+    await writeFile(join(folder, 'notes', name), source)
+    await open(name)
+    await page.locator('.rich-pane .cm-content').waitFor()
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+    await page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.focus()
+      view.dispatch({
+        selection: { anchor: view.state.doc.toString().indexOf('abcd') },
+      })
+    })
+    await page.keyboard.press('Backspace')
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    const markdown = (await page.evaluate(() => window.hibi.getDocument()))
+      .markdown
+    output.push(markdown.trimEnd())
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const content = document.querySelector('.rich-pane .cm-content')
+        return [
+          document.activeElement === content,
+          content.cmTile.root.view.state.selection.main.head,
+        ]
+      }),
+      [true, markdown.indexOf('abcd')],
+    )
+    if (markdown !== source) {
+      await pressShortcut(app, `${mod}+z`)
       await waitForAsync(
         page,
-        async (name) => (await window.hibi.getDocument()).name === name,
-        name,
+        async (source) => (await window.hibi.getDocument()).markdown === source,
+        source,
       )
-      await page.evaluate((codemirror) => {
-        if (codemirror) {
-          const view = document.querySelector('.rich-pane .cm-content').cmTile
-            .root.view
-          view.focus()
-          view.dispatch({
-            selection: { anchor: view.state.doc.toString().indexOf('abcd') },
-          })
-        } else {
-          const editor = document.querySelector('.rich-pane .tiptap').editor
-          let at = 0
-          editor.state.doc.descendants((node, pos) => {
-            if (node.isText && node.text === 'abcd') at = pos
-          })
-          editor.commands.focus()
-          editor.commands.setTextSelection(at)
-        }
-      }, codemirror)
-      await page.keyboard.press('Backspace')
-      await page.evaluate(() => new Promise(requestAnimationFrame))
-      const markdown = (await page.evaluate(() => window.hibi.getDocument()))
-        .markdown
-      output.push(markdown.trimEnd())
-      if (codemirror) {
-        assert.deepEqual(
-          await page.evaluate(() => {
-            const content = document.querySelector('.rich-pane .cm-content')
-            return [
-              document.activeElement === content,
-              content.cmTile.root.view.state.selection.main.head,
-            ]
-          }),
-          [true, markdown.indexOf('abcd')],
-        )
-        if (markdown !== source) {
-          await pressShortcut(app, `${mod}+z`)
-          await waitForAsync(
-            page,
-            async (source) =>
-              (await window.hibi.getDocument()).markdown === source,
-            source,
-          )
-        }
-      }
     }
-    results.push(output)
   }
-  console.log(JSON.stringify({ smallTextBackspace: results }))
-  assert.deepEqual(results[1], results[0])
-  await engine(true, true)
+  console.log(JSON.stringify({ smallTextBackspace: output }))
+  assert.deepEqual(
+    output,
+    sources.map((source) => recorded({ kind: 'backspace', source })),
+  )
+  await markers(true)
 })
 
 test('with their syntax settings or the flavor off, subscripts and small text stay as written', {

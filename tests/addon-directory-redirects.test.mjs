@@ -14,7 +14,7 @@ test('the addon directory follows a redirect on its own host without cookies', {
     name: 'Example',
     description: 'Directory fixture',
     version: '1.0.0',
-    apiVersion: 2,
+    apiVersion: 3,
     kind: 'extension',
     authors: [{ displayName: 'Author' }],
     license: 'MIT',

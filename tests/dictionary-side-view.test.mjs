@@ -2,35 +2,30 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { gzipSync } from 'node:zlib'
 import { packs } from '../src/addons/dictionary/packs.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
 async function placeCaret(editor, offset = 'end') {
   await editor.evaluate((element, offset) => {
-    if (element.editor)
-      element.editor.commands.focus(offset === 'end' ? offset : offset + 1)
-    else {
-      const view = element.cmTile.root.view
-      view.dispatch({
-        selection: {
-          anchor: offset === 'end' ? view.state.doc.length : offset,
-        },
-      })
-      view.focus()
-    }
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: {
+        anchor: offset === 'end' ? view.state.doc.length : offset,
+      },
+    })
+    view.focus()
   }, offset)
 }
 async function undoRich(editor) {
-  if (await editor.evaluate((element) => !!element.editor))
-    await editor.evaluate((element) => element.editor.commands.undo())
-  else await editor.press('ControlOrMeta+z')
+  await editor.press('ControlOrMeta+z')
 }
 
 test('side view follows the caret offline, replaces in one undo step, and pack suggestions accept with Tab', {
@@ -87,7 +82,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     { downloads, path: file },
   )
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(APP_STATE_TIMEOUT)
@@ -262,10 +257,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
   }
   await toggle('autocomplete-suggest')
   await toggle('autocomplete-suggest')
-  const richText = () =>
-    t.formattedEngine === 'tiptap'
-      ? rich.evaluate((element) => element.editor.state.doc.textContent)
-      : markdown()
+  const richText = () => markdown()
   const menu = page.getByRole('listbox', { name: 'Completions' })
   await placeCaret(rich)
   await page.keyboard.type(' hap')
@@ -316,23 +308,15 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     await rich.locator('table').waitFor()
     assert.doesNotMatch(await markdown(), /\/table/)
   })
-  if (t.formattedEngine === 'tiptap')
-    await waitForAsync(page, async () => {
-      const { markdown } = await window.hibi.getDocument()
-      if (markdown.endsWith(' zq happy')) return true
-      document.querySelector('.tiptap').editor.commands.undo()
-      return false
-    })
-  else
-    while (!(await markdown()).endsWith(' zq happy')) {
-      const before = await markdown()
-      await undoRich(rich)
-      await waitForAsync(
-        page,
-        async (before) => (await window.hibi.getDocument()).markdown !== before,
-        before,
-      )
-    }
+  while (!(await markdown()).endsWith(' zq happy')) {
+    const before = await markdown()
+    await undoRich(rich)
+    await waitForAsync(
+      page,
+      async (before) => (await window.hibi.getDocument()).markdown !== before,
+      before,
+    )
+  }
 
   // Code-mixed writing: German joins English, tagged by language, in one
   // native request per keystroke.
@@ -406,13 +390,12 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
       () => typeof window.suggestionLatency === 'number',
     )
     latencies.push(await page.evaluate(() => window.suggestionLatency))
-    if (t.formattedEngine === 'codemirror')
-      assert.ok(
-        (await app.evaluate(() => globalThis.completionPackQueries)) -
-          queriesBefore <=
-          4,
-        'four input keys issue at most four batched pack queries across both languages',
-      )
+    assert.ok(
+      (await app.evaluate(() => globalThis.completionPackQueries)) -
+        queriesBefore <=
+        4,
+      'four input keys issue at most four batched pack queries across both languages',
+    )
     await menu
       .getByRole('option', { name: /^happy/ })
       .filter({ hasText: 'English' })

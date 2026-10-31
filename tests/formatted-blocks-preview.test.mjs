@@ -6,8 +6,13 @@ import test from 'node:test'
 import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
-import { after, before, electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  defaultPane,
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const image =
@@ -40,6 +45,10 @@ Closing paragraph.
 `
 
 let app, folder, page, harness
+// What the formatted view drew while it matched the removed rich view, and
+// the rich view's own styles for the compared text.
+const check = frozenSnapshot('formatted-blocks-preview')
+const richStyle = frozenOracle('formatted-blocks-preview-rich')
 
 const palette = (id) => {
   const scheme = bundledColorschemes.find((entry) => entry.id === id)
@@ -60,6 +69,13 @@ const applyPalette = (target, scheme) =>
     style.textContent = css
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, scheme)
 
 before(
@@ -92,11 +108,15 @@ before(
     await mkdir(join(folder, 'notes'))
     await writeFile(file, note)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await selectFormattedEngine(app, page, 'tiptap')
+    await waitForDocumentEditor(app, page)
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -107,8 +127,9 @@ before(
       app,
       process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
     )
-    await page.locator('.tiptap h1', { hasText: 'Blocks parity' }).waitFor()
-    await page.locator('.tiptap .github-alert-title').waitFor()
+    await page
+      .locator('.rich-pane .hibi-lp-h1', { hasText: 'Blocks parity' })
+      .waitFor()
     const size = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getContentSize(),
     )
@@ -148,20 +169,19 @@ after(
   { timeout: 30000 },
 )
 
-/** Computed styles and the box of `text` for matching elements in one editor. */
+/** Computed styles and the box of `text` for matching elements. */
 const sample = (target, selectors) =>
   target.evaluate((selectors) => {
     const root = [...document.querySelectorAll('.rich-pane')].find((pane) =>
-      pane
-        .querySelector(':is(h1, .hibi-lp-h1)')
-        ?.textContent.includes('Blocks parity'),
+      pane.querySelector('.hibi-lp-h1')?.textContent.includes('Blocks parity'),
     )
     const pane = root.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
     const relative = (box) => ({
-      left: box.left - pane.left,
-      top: box.top - pane.top,
-      width: box.width,
-      height: box.height,
+      left: round(box.left - pane.left),
+      top: round(box.top - pane.top),
+      width: round(box.width),
+      height: round(box.height),
     })
     const textBox = (element, text) => {
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
@@ -200,20 +220,97 @@ const sample = (target, selectors) =>
     )
   }, selectors)
 
-const rich = {
-  title: { selector: '.tiptap h1', text: 'Blocks parity' },
-  task: { selector: '.tiptap ul[data-type="taskList"] li p', text: 'buy milk' },
-  done: { selector: '.tiptap ul[data-type="taskList"] li p', text: 'write' },
-  box: { selector: '.tiptap input[type="checkbox"]' },
-  entities: { selector: '.tiptap p', text: 'Fish' },
-  afterEntity: { selector: '.tiptap p', text: 'chips' },
-  lastEntity: { selector: '.tiptap p', text: 'AT&T' },
-  alertTitle: { selector: '.tiptap .github-alert-title', text: 'Remember' },
-  alertBody: { selector: '.tiptap .github-alert-body p', text: 'Alerts' },
-  html: { selector: '.tiptap pre.hibi-literal-block code', text: '<div>' },
-  image: { selector: '.tiptap .document-media img' },
-  closing: { selector: '.tiptap p', text: 'Closing paragraph' },
-}
+/**
+ * What a pane draws in place of its pixels: each line's and inline
+ * element's tag, classes and paint, and its box in the pane. Colors are per
+ * color scheme; the rest is the same in both.
+ */
+const drawing = (target) =>
+  target.evaluate(() => {
+    const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+      root.querySelector('.hibi-lp-h1')?.textContent.includes('Blocks parity'),
+    )
+    const origin = pane.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
+    const sides = ['Top', 'Right', 'Bottom', 'Left']
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft']
+    const result = { drawn: [], paint: [], boxes: [] }
+    for (const element of pane.querySelectorAll(
+      '.cm-content > *, .cm-content > * *',
+    )) {
+      const style = getComputedStyle(element)
+      const before = getComputedStyle(element, '::before')
+      const edges = sides.filter(
+        (side) => style[`border${side}Style`] !== 'none',
+      )
+      const radius = corners.map((corner) => style[`border${corner}Radius`])
+      const listed = style.display === 'list-item'
+      const painted = !['none', 'normal'].includes(before.content)
+      result.drawn.push({
+        element: [
+          element.tagName.toLowerCase(),
+          ...[...element.classList]
+            .filter((name) => !/^cm-(active|focused)/.test(name))
+            .sort(),
+        ].join('.'),
+        display: style.display,
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        verticalAlign: style.verticalAlign,
+        textDecorationLine: style.textDecorationLine,
+        opacity: style.opacity,
+        ...(listed && { listStyleType: style.listStyleType }),
+        ...(edges.length && {
+          borders: edges.map(
+            (side) =>
+              `${side} ${style[`border${side}Width`]} ${style[`border${side}Style`]}`,
+          ),
+        }),
+        ...(radius.some((value) => value !== '0px') && {
+          radius: radius.join(' '),
+        }),
+        ...(painted && {
+          before: [
+            before.content,
+            before.top,
+            before.right,
+            before.bottom,
+            before.left,
+          ].join(' '),
+        }),
+      })
+      result.paint.push({
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        ...(style.backgroundImage !== 'none' && {
+          backgroundImage: style.backgroundImage,
+        }),
+        ...(edges.length && {
+          borders: edges.map((side) => style[`border${side}Color`]),
+        }),
+        ...(style.textDecorationLine !== 'none' && {
+          decoration: style.textDecorationColor,
+        }),
+        ...(listed && {
+          marker: getComputedStyle(element, '::marker').color,
+        }),
+        ...(painted && {
+          before: `${before.backgroundColor} ${before.backgroundImage}`,
+        }),
+      })
+      const box = element.getBoundingClientRect()
+      result.boxes.push([
+        round(box.left - origin.left),
+        round(box.top - origin.top),
+        round(box.width),
+        round(box.height),
+      ])
+    }
+    return result
+  })
+
 const formatted = {
   title: { selector: '.hibi-lp-h1', text: 'Blocks parity' },
   task: { selector: '.cm-line', text: 'buy milk' },
@@ -229,34 +326,27 @@ const formatted = {
   closing: { selector: '.cm-line', text: 'Closing paragraph' },
 }
 
-test('tasks, entities, alerts, html blocks and images match the rich view in light and dark', {
+test('tasks, entities, alerts, html blocks and images keep the rich view’s styles and their recorded drawing in light and dark', {
   timeout: 90000,
-}, async () => {
-  const richPane = page.locator('.rich-pane', {
-    has: page.locator('.tiptap h1', { hasText: 'Blocks parity' }),
-  })
-  const pane = await richPane.evaluate((element) => {
-    const box = element.getBoundingClientRect()
-    return { width: box.width, height: box.height }
-  })
+}, async (t) => {
+  await overlayScrollbars(t, harness)
   await harness.evaluate(
     ({ doc, pane }) => window.livePreview.mount(doc, pane),
-    { doc: note, pane },
+    { doc: note, pane: defaultPane },
   )
   await harness.locator('.document-media img[src]').waitFor()
-  const report = []
   for (const id of ['hibi-light', 'hibi-dark']) {
     const scheme = palette(id)
     await applyPalette(page, scheme)
     await applyPalette(harness, scheme)
     await harness.evaluate(() => window.livePreview.settle())
-    const before = await sample(page, rich)
     const after = await sample(harness, formatted)
-    for (const key of Object.keys(rich)) {
-      const a = before[key],
-        b = after[key]
-      assert.ok(a?.box && b?.box, `${key}: ${JSON.stringify({ a, b })}`)
-      if (!['box', 'image', 'lastEntity'].includes(key))
+    const starts = {}
+    for (const key of Object.keys(formatted)) {
+      const b = after[key]
+      assert.ok(b?.box, `${key}: ${JSON.stringify(b)}`)
+      if (!['box', 'image', 'lastEntity'].includes(key)) {
+        const rich = richStyle({ scheme: id, key })
         for (const property of [
           'fontFamily',
           'fontSize',
@@ -265,54 +355,17 @@ test('tasks, entities, alerts, html blocks and images match the rich view in lig
           'color',
           'letterSpacing',
         ])
-          assert.equal(b[property], a[property], `${id} ${key} ${property}`)
-      report.push({
-        id,
-        key,
-        dx: Math.round((b.box.left - a.box.left) * 10) / 10,
-        dy: Math.round((b.box.top - a.box.top) * 10) / 10,
-      })
+          assert.equal(b[property], rich[property], `${id} ${key} ${property}`)
+      }
+      starts[key] = { left: b.box.left, top: b.box.top }
     }
-    const images = [
-      await richPane.screenshot({
-        path: `test-results/formatted-blocks-rich-${id}.png`,
-      }),
-      await harness.locator('.rich-pane').screenshot({
-        path: `test-results/formatted-blocks-formatted-${id}.png`,
-      }),
-    ].map((image) => image.toString('base64'))
-    const difference = await app.evaluate(({ nativeImage }, images) => {
-      const [a, b] = images.map((image) =>
-        nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-      )
-      const size = a.getSize()
-      const other = b.getSize()
-      if (size.width !== other.width || size.height !== other.height) return 1
-      const left = a.toBitmap(),
-        right = b.toBitmap()
-      let changed = 0
-      for (let i = 0; i < left.length; i += 4)
-        if (
-          Math.abs(left[i] - right[i]) > 8 ||
-          Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-          Math.abs(left[i + 2] - right[i + 2]) > 8
-        )
-          changed++
-      return changed / (left.length / 4)
-    }, images)
-    report.push({ id, key: 'pixels', difference })
-    assert.ok(
-      difference < 0.002,
-      `${id}: ${difference} ${JSON.stringify(report)}`,
-    )
+    // Where each block's text starts, within a pixel of where it was recorded.
+    check('starts', starts, { tolerance: 1 })
+    const drawn = await drawing(harness)
+    check('drawn', drawn.drawn)
+    check(`${id} paint`, drawn.paint)
+    check('boxes', drawn.boxes, { tolerance: 1 })
   }
-  const offsets = report.filter(
-    (entry) =>
-      entry.key !== 'pixels' &&
-      (Math.abs(entry.dx) > 1 || Math.abs(entry.dy) > 1),
-  )
-  console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
-  assert.deepEqual(offsets, [], JSON.stringify(report))
 })
 
 test('20,000 images resolve only the media in view', {

@@ -1,0 +1,12 @@
+{
+  "{\"scheme\":\"hibi-dark\",\"block\":\"code\"}": {"color":"rgb(150, 161, 161)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(228, 233, 233)","rgb(34, 34, 34)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-dark\",\"block\":\"heading\"}": {"color":"rgb(150, 161, 161)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(228, 233, 233)","rgb(34, 34, 34)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-dark\",\"block\":\"item\"}": {"color":"rgb(150, 161, 161)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(228, 233, 233)","rgb(34, 34, 34)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-dark\",\"block\":\"nested\"}": {"color":"rgb(150, 161, 161)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(228, 233, 233)","rgb(34, 34, 34)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-dark\",\"block\":\"paragraph\"}": {"color":"rgb(150, 161, 161)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(228, 233, 233)","rgb(34, 34, 34)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-light\",\"block\":\"code\"}": {"color":"rgb(89, 99, 99)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(27, 32, 33)","rgb(245, 245, 245)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-light\",\"block\":\"heading\"}": {"color":"rgb(89, 99, 99)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(27, 32, 33)","rgb(245, 245, 245)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-light\",\"block\":\"item\"}": {"color":"rgb(89, 99, 99)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(27, 32, 33)","rgb(245, 245, 245)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-light\",\"block\":\"nested\"}": {"color":"rgb(89, 99, 99)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(27, 32, 33)","rgb(245, 245, 245)"],"transition":"0.12s, 0.12s"},
+  "{\"scheme\":\"hibi-light\",\"block\":\"paragraph\"}": {"color":"rgb(89, 99, 99)","background":"rgba(0, 0, 0, 0)","hovered":["rgb(27, 32, 33)","rgb(245, 245, 245)"],"transition":"0.12s, 0.12s"}
+}

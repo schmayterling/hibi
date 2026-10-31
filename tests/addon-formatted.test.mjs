@@ -9,19 +9,15 @@ import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-const notice =
-  'Legacy proof has features made for the previous formatted editor. Those features are off until it is updated; source view is unaffected.'
-
-test('installed api 3 formatted contributions coexist with legacy api 1 and 2 packages', {
+test('installed api 3 formatted contributions run, and addons for earlier apis ask for an update', {
   timeout: 90000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-addon-formatted-'))
   const profile = join(folder, 'profile')
   const file = join(folder, 'note.md')
-  const source = '# Title\n\n==formatted proof== and **legacy proof**\n'
+  const source = '# Title\n\n==formatted proof== and **bold proof**\n'
   await writeFile(file, source)
   // Install the existing source slash implementation through the public formatted hook.
-  // The bundled addon will register that hook in its own migration.
   const slash = await build({
     entryPoints: ['src/addons/slash-commands/source.ts'],
     bundle: true,
@@ -70,25 +66,18 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       "; return { start(context) { context.editor.registerFormatted({ id: 'slash', create() { return slashFixture.sourceSlashCommands(context) } }) }, stop() { window.formattedStops = (window.formattedStops || 0) + 1 } } }",
     'formatted',
   )
-  await install(
-    profile,
-    'v1-proof',
-    1,
-    [],
-    'export default () => ({ start() { window.apiOneStarted = true } })',
-  )
-  await install(
-    profile,
-    'legacy-proof',
-    2,
-    [],
-    [
-      'export default () => ({ start(context) {',
-      "context.editor.registerSyntax({ id: 'legacy', label: 'Legacy syntax', group: 'Proof', level: 'inline', nodes: ['StrongEmphasis'], matches: token => token.type === 'strong' })",
-      "context.editor.registerRich({ id: 'legacy', attach(editor) { window.legacyRichAttached = editor.isEditable; return () => {} } })",
-      '} })',
-    ].join('\n'),
-  )
+  for (const [id, apiVersion, capabilities] of [
+    ['v1-proof', 1, []],
+    ['v2-proof', 2, []],
+    ['rich-sdk-proof', 3, ['rich']],
+  ])
+    await install(
+      profile,
+      id,
+      apiVersion,
+      capabilities,
+      `export default () => ({ start() { window.earlierApiStarted = '${id}' } })`,
+    )
   await install(
     profile,
     'formatted-proof',
@@ -99,9 +88,8 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       'const { EditorView } = sdk.codeMirror.view',
       'window.formattedMarkdownAvailable = !!sdk.codeMirror.markdown.parser',
       "const prop = new sdk.codeMirror.common.NodeProp(); const parser = sdk.codeMirror.markdown.parser.configure({ props: [prop.add({ Paragraph: 'shared' })] }); window.formattedCommonShared = parser.parse('text').topNode.firstChild.type.prop(prop) === 'shared'",
-
       "const proofDelimiter = { resolve: 'ProofHighlight', mark: 'ProofMark' }",
-      "context.editor.registerSyntax({ id: 'highlight', label: 'Proof highlight', group: 'Proof', level: 'inline', nodes: ['ProofHighlight'], matches: () => false, slash: { markdown: '==slash proof==', cursor: 2, rich() { window.legacySlashCalled = true; throw Error('legacy slash must not run') } } })",
+      "context.editor.registerSyntax({ id: 'highlight', label: 'Proof highlight', group: 'Proof', level: 'inline', nodes: ['ProofHighlight'], matches: () => false, slash: { markdown: '==slash proof==', cursor: 2 } })",
       "context.editor.registerFlavor({ id: 'highlight', name: 'Proof highlight', kind: 'syntax', description: 'Proof', detect: () => true,",
       "syntax: { defineNodes: ['ProofHighlight', 'ProofMark'], parseInline: [{ name: 'ProofHighlight', before: 'Escape', parse(cx, next, pos) {",
       'if (next !== 61 || cx.char(pos + 1) !== 61) return -1',
@@ -113,50 +101,18 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       '} }] })',
       "context.editor.registerFormatted({ id: 'view', async create(ctx) { window.formattedViewId = ctx.viewId; return EditorView.editorAttributes.of({ 'data-formatted-proof': ctx.viewId }) } })",
       "context.editor.registerSource({ id: 'view', create() { return EditorView.editorAttributes.of({ 'data-source-proof': 'yes' }) } })",
-      "context.editor.registerRich({ id: 'view', attach() { window.dualEngineAttached = true; return () => {} } })",
       '} })',
     ].join('\n'),
-  )
-  await install(
-    profile,
-    'legacy-flavor-proof',
-    2,
-    undefined,
-    "export default sdk => ({ start(context) { context.editor.registerSource({ id: 'failed', create: () => sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-failed-sdk': 'yes' }) }); const extension = sdk.tiptap.Extension.create({ name: 'legacyProof' }); window.legacyFullSdkAvailable = extension.name; context.editor.registerFlavor({ id: 'legacy', name: 'Legacy flavor', kind: 'syntax', description: 'Legacy', detect: () => false, richExtensions: [extension] }) }, stop() { window.legacySdkStops = (window.legacySdkStops || 0) + 1 } })",
-  )
-  await install(
-    profile,
-    'rich-sdk-proof',
-    2,
-    ['rich'],
-    'export default sdk => ({ start() { window.richSdkAvailable = !!sdk.tiptap.Extension } })',
-  )
-  await install(
-    profile,
-    'legacy-source-proof',
-    2,
-    undefined,
-    `export default sdk => ({
-      Settings: () => sdk.React.createElement(sdk.ui.Button, { onClick() { window.legacyUiClicks = (window.legacyUiClicks || 0) + 1 }, children: 'Legacy SDK button' }),
-      start(context) {
-        window.legacySourceStarts = (window.legacySourceStarts || 0) + 1
-        window.legacyMarkdown = new sdk.markdown.Marked().parse('**source**')
-        context.editor.registerSource({ id: 'source', create: () => sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-legacy-source': 'yes' }) })
-      },
-      stop() { window.legacySourceStops = (window.legacySourceStops || 0) + 1 }
-    })`,
   )
   await writeFile(
     join(profile, 'addons.json'),
     JSON.stringify({
       'slash-commands': false,
       'v1-proof': true,
-      'legacy-proof': true,
-      'formatted-proof': true,
+      'v2-proof': true,
       'rich-sdk-proof': true,
+      'formatted-proof': true,
       'formatted-slash-proof': true,
-      'legacy-flavor-proof': true,
-      'legacy-source-proof': true,
     }),
   )
   const app = await electron.launch({
@@ -170,64 +126,29 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
-  await page.waitForFunction(
-    () => window.legacyFullSdkAvailable === 'legacyProof',
-  )
   await waitForDocumentEditor(app, page)
-  await page.waitForFunction(
-    () =>
-      window.apiOneStarted &&
-      window.legacyRichAttached &&
-      window.richSdkAvailable &&
-      window.formattedMarkdownAvailable,
-  )
-  assert.equal(
-    await page.evaluate(() => window.formattedActivations),
-    undefined,
-  )
+  // Earlier APIs and the rich SDK are refused before their code runs; one
+  // notice asks for their updates.
+  await page
+    .locator('.toast')
+    .filter({ hasText: '3 addons need an update for addon API 3.' })
+    .waitFor()
+  await page.waitForFunction(() => window.formattedMarkdownAvailable)
+  assert.equal(await page.evaluate(() => window.earlierApiStarted), undefined)
   assert.equal(await page.evaluate(() => window.formattedCommonShared), true)
-  assert.equal(await page.getByText(notice, { exact: true }).count(), 0)
-  assert.equal(await page.locator('[data-formatted-proof]').count(), 0)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await pressShortcut(app, mod + '+o')
-  await page.locator('.tiptap strong', { hasText: 'legacy proof' }).waitFor()
-
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await page
-    .getByRole('textbox', { name: 'Markdown editor', exact: true })
-    .waitFor()
-  await page
-    .getByText(
-      'This addon uses the previous formatted editor SDK. Update its formatted-view features for the current editor before using them here.',
-      { exact: true },
-    )
-    .first()
-    .waitFor()
-  await page.waitForFunction(() => window.legacySdkStops === 1)
-  await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  await page.locator('#addon-rich-sdk-proof').click()
-  await page.locator('#addon-legacy-flavor-proof').click()
-  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   await page
     .locator('.rich-pane .fixture-formatted', { hasText: 'formatted proof' })
     .waitFor()
   await page.locator('.rich-pane [data-formatted-proof]').waitFor()
   await page.waitForFunction(() => window.formattedActivations === 1)
   assert.equal(await page.locator('.rich-pane [data-source-proof]').count(), 0)
-  assert.equal(await page.evaluate(() => window.legacyRichAttached), undefined)
-  assert.equal(await page.evaluate(() => window.richSdkAvailable), undefined)
-  await page.getByText(notice, { exact: true }).waitFor()
-  assert.equal(await page.locator('.rich-pane .hibi-lp-strong').count(), 0)
-  assert.match(
-    await page.locator('.rich-pane .cm-content').innerText(),
-    /\*\*legacy proof\*\*/,
-  )
+  await page
+    .locator('.rich-pane .hibi-lp-strong', { hasText: 'bold proof' })
+    .waitFor()
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     source,
@@ -254,7 +175,6 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('==slash proof=='),
   )
-  assert.equal(await page.evaluate(() => window.legacySlashCalled), undefined)
   assert.equal(
     await page.evaluate(
       () =>
@@ -272,12 +192,6 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   }, source.length)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.locator('.source-pane [data-source-proof]').waitFor()
-  await page.locator('.source-pane [data-legacy-source="yes"]').waitFor()
-  assert.equal(await page.locator('[data-failed-sdk]').count(), 0)
-  assert.match(
-    await page.evaluate(() => window.legacyMarkdown),
-    /<strong>source<\/strong>/,
-  )
   await page.locator('.source-pane .cm-content').type('x')
   await waitForAsync(
     page,
@@ -298,59 +212,6 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   )
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  await page.locator('[data-formatted-compatibility="legacy-proof"]').waitFor()
-  // failed sdk activation publishes no flavor or source registrations.
-  assert.equal(
-    await page
-      .locator('[data-formatted-compatibility="legacy-flavor-proof"]')
-      .count(),
-    0,
-  )
-  await page.locator('#addon-legacy-flavor-proof').click()
-  await page.waitForFunction(() => window.legacySdkStops === 2)
-  assert.equal(await page.locator('[data-failed-sdk]').count(), 0)
-  await page.locator('#addon-legacy-flavor-proof').click()
-  await page
-    .getByRole('tab', { name: 'legacy-source-proof', exact: true })
-    .click()
-  await page
-    .getByRole('button', { name: 'Legacy SDK button', exact: true })
-    .click()
-  assert.equal(await page.evaluate(() => window.legacyUiClicks), 1)
-  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  await page.locator('#addon-legacy-source-proof').click()
-  await page.waitForFunction(() => window.legacySourceStops === 1)
-  await waitForAsync(
-    page,
-    () => !document.querySelector('[data-legacy-source]'),
-  )
-  await page.locator('#addon-legacy-source-proof').click()
-  await page.waitForFunction(() => window.legacySourceStarts === 2)
-  await page.locator('.source-pane [data-legacy-source="yes"]').waitFor()
-  assert.equal(
-    await page
-      .locator('[data-formatted-compatibility="formatted-proof"]')
-      .count(),
-    0,
-  )
-  assert.equal(
-    await page.locator('[data-formatted-compatibility="math"]').count(),
-    0,
-  )
-  await page.locator('#addon-legacy-proof').click()
-  await waitForAsync(
-    page,
-    () =>
-      !document.querySelector('[data-formatted-compatibility="legacy-proof"]'),
-  )
-  await waitForAsync(
-    page,
-    (message) =>
-      ![...document.querySelectorAll('.toast:not([data-closing="true"])')].some(
-        (node) => node.textContent.includes(message),
-      ),
-    notice,
-  )
   await page.locator('#addon-formatted-proof').click()
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   assert.equal(
@@ -423,9 +284,6 @@ for (const hook of ['decorate', 'layout', 'container']) {
     await waitForAsync(
       page,
       async () => (await window.hibi.getDocument()).name === 'note.md',
-    )
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
     )
     await page.reload()
     await waitForDocumentEditor(app, page)
@@ -524,9 +382,6 @@ test('installed flavor state stays current in static and editable table cells', 
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -600,7 +455,7 @@ async function install(
     join(folder, 'hibi-addon.json'),
     JSON.stringify({
       id,
-      name: id === 'legacy-proof' ? 'Legacy proof' : id,
+      name: id,
       description: 'Formatted fixture',
       apiVersion,
       capabilities,

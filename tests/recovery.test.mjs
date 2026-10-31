@@ -2,12 +2,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { build } from 'vite'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 test('recovery preview preserves the live draft; real render failures offer recovery actions', {
@@ -26,7 +23,7 @@ test('recovery preview preserves the live draft; real render failures offer reco
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: /document editor/i }),

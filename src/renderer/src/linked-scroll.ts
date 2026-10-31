@@ -1,3 +1,4 @@
+import { focusedEditor, mappedPositionAt } from './native-dom-selection'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
 /** Markdown follows text positions; other preview formats keep proportional scrolling. */
@@ -19,13 +20,30 @@ export function linkScroll(
     if (!from || !to) return null
     const bounds = leader.getBoundingClientRect()
     let position = from.state.selection.main.head
-    let point = from.hasFocus ? from.coordsAtPos(position) : null
+    // A table cell's editor, inside the view, has the formatted view's caret.
+    let point = focusedEditor(from) ? from.coordsAtPos(position) : null
     if (!point || point.top < bounds.top || point.bottom > bounds.bottom) {
+      const content = from.contentDOM.getBoundingClientRect()
+      const y = bounds.top + bounds.height / 2
+      // posAtCoords gives a table's edges for a point in its cells, and the
+      // content's left edge can be in the table's margin, so the table is
+      // asked at the middle of its cells. Sized columns can leave them
+      // narrower than the content.
+      let x = content.left + content.width / 2
+      const cells = document
+        .elementFromPoint(x, y)
+        ?.closest('.hibi-lp-table')
+        ?.querySelector(':scope > table')
+        ?.getBoundingClientRect()
+      if (cells)
+        x =
+          (Math.max(cells.left, content.left) +
+            Math.min(cells.right, content.right)) /
+          2
       position =
-        from.posAtCoords({
-          x: from.contentDOM.getBoundingClientRect().left + 8,
-          y: bounds.top + bounds.height / 2,
-        }) ?? position
+        mappedPositionAt(from, x, y) ??
+        from.posAtCoords({ x: content.left + 8, y }) ??
+        position
       point = from.coordsAtPos(position)
     }
     const at = editorPosition(to, sourcePosition(from, position))

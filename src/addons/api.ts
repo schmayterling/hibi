@@ -246,7 +246,11 @@ export type FormattedLayout = {
 
 export type FormattedRenderContext = {
   state: EditorState
-  /** `decorate`: the visible range being rendered, to bound per-line work in long nodes; null in `layout`. */
+  /**
+   * `decorate`: the range being drawn, to bound per-line work in long nodes:
+   * a visible range, or the line the view keeps drawn off screen for the
+   * selection; null in `layout`.
+   */
   visible: { from: number; to: number } | null
   /**
    * The selection touches the node while Markdown markers are shown: show

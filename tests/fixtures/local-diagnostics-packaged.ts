@@ -1,12 +1,11 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, type BrowserWindow, dialog, Menu } from 'electron'
+import './local-diagnostics-packaged-dialogs'
 import '../../src/main/index'
 
 // This entrypoint is never referenced by the production build. It runs in a
 // separately signed test package with the production fuses left unchanged.
-dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
-dialog.showErrorBox = () => {}
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 async function run(window: BrowserWindow) {
   const root = app.getPath('userData')
@@ -15,10 +14,11 @@ async function run(window: BrowserWindow) {
       await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
       const deadline = Date.now() + 10000;
       const ready = async () => {
-        const element = document.querySelector('.tiptap[contenteditable="true"]');
-        if (!element?.editor || !window.hibiDiagnostics) { if(Date.now() > deadline) reject(new Error('test readiness')); else setTimeout(ready, 20); return; }
+        const element = document.querySelector('.rich-pane .hibi-formatted .cm-content[contenteditable="true"]');
+        const view = element?.cmTile?.root.view;
+        if (!view || !window.hibiDiagnostics) { if(Date.now() > deadline) reject(new Error('test readiness')); else setTimeout(ready, 20); return; }
         const config = JSON.parse(await window.hibiDiagnostics.configuration());
-        element.editor.commands.insertContent('PRIVATE PACKAGED DOCUMENT 雪');
+        view.dispatch(view.state.replaceSelection('PRIVATE PACKAGED DOCUMENT 雪'));
         await window.hibi.flushDocumentChanges();
         const doc = await window.hibi.getDocument();
         window.hibiDiagnostics.record(JSON.stringify({code:'RENDERER_ERROR',stackStatus:'captured',frames:[[config.artifacts[0][1],1,2]]}));

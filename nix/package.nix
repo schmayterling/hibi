@@ -15,7 +15,7 @@ let
     owner = "hibigarden";
     repo = "docs";
     rev = lib.fileContents ../docs-revision;
-    hash = "sha256-SANJIcborSQmUkzxO8v4G8j2fU+Hm7/WncmVWUQbDgU=";
+    hash = "sha256-5NGN9hXrvQKyUL/AVAinsnQrC/L79HS7S3c0Axi8Wxs=";
   };
 
   mimeTypes = [

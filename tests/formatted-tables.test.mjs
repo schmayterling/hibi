@@ -3142,6 +3142,31 @@ test('the toolbar inserts a header and two rows, with the caret in the first hea
   assert.equal(await rows.first().locator('th, td').count(), 3)
 })
 
+// The first input into a cell its row lacks adds the cell. Undo comes back
+// to that row and redo to the typed text, not to where the caret was before
+// the cell was clicked.
+test('undo and redo of typing into a cell its row lacks come back to that cell', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| - | - |\n| x | y |\n| short |\n| u | v |\n\nafter'
+  await mount(doc)
+  // The caret starts in another row.
+  await harness.locator('.hibi-lp-table td', { hasText: /^v$/ }).click()
+  await harness.locator('.hibi-lp-table tr[data-line="3"] td').nth(1).click()
+  await harness.keyboard.type('q')
+  const typed = await state()
+  assert.match(typed.line, /^\| short \|\s*q\s*\|$/)
+  assert.equal(typed.cell, '3:1')
+  await harness.keyboard.press(undoKey)
+  const undone = await state()
+  assert.equal(undone.doc, doc)
+  assert.equal(undone.line, '| short |')
+  await harness.keyboard.press(redoKey)
+  const redone = await state()
+  assert.equal(redone.doc, typed.doc)
+  assert.deepEqual([redone.cell, redone.head], [typed.cell, typed.head])
+})
+
 test('tab extends a table of only a header, and leaving a table at the end adds a paragraph', {
   timeout: 30000,
 }, async () => {

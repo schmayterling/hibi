@@ -514,7 +514,7 @@ export type CellHost = {
   /** The cell's text between its delimiters in the formatted view's document now; null while its row ends before it. */
   span(): { from: number; to: number; closed: boolean } | null
   /** The change that ends the cell's row with this cell, holding `text`. */
-  fill(text: string): ChangeSpec
+  fill(text: string): { from: number; insert: string }
   /** Move to another cell or out of the table; false when there is nowhere to go. */
   move(move: CellMove): boolean
   /** Leave the table, after it or before it, back to the formatted view. */
@@ -939,10 +939,18 @@ export class CellEditor {
     for (const transaction of transactions) {
       if (!view.dom.isConnected || !this.host.current()) return
       const span = this.host.span()
+      // Where the cell's text starts in the formatted view after the change.
+      let start = span ? span.from : null
       const changes: ChangeSpec[] = []
       if (transaction.docChanged) {
-        if (!span) changes.push(this.host.fill(transaction.newDoc.toString()))
-        else
+        if (!span) {
+          // The first input adds the cell its row lacks: its text ends the
+          // inserted cells, before their closing pipe.
+          const text = transaction.newDoc.toString()
+          const fill = this.host.fill(text)
+          changes.push(fill)
+          start = fill.from + fill.insert.length - text.length - 1
+        } else
           transaction.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
             const insert = text.toString()
             // Choosing a composition's candidates rewrites its text unchanged.
@@ -964,21 +972,19 @@ export class CellEditor {
       const own = transaction.annotation(Transaction.userEvent)
       const userEvent = own === 'select.pointer' ? 'select' : own
       const isolate = transaction.annotation(isolateHistory)
+      const from = start
       this.host.main.dispatch({
         changes,
-        ...(span
-          ? {
+        ...(from === null
+          ? {}
+          : {
               selection: EditorSelection.create(
                 selection.ranges.map((range) =>
-                  EditorSelection.range(
-                    span.from + range.anchor,
-                    span.from + range.head,
-                  ),
+                  EditorSelection.range(from + range.anchor, from + range.head),
                 ),
                 selection.mainIndex,
               ),
-            }
-          : {}),
+            }),
         ...(userEvent ? { userEvent } : {}),
         annotations: [
           cellInput.of(true),

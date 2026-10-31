@@ -96,13 +96,16 @@ async function open(t, { source, presentation, engine, code }) {
   const page = await app.firstWindow()
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  if (engine === 'tiptap') {
-    await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-    )
-    await page.reload()
-  }
+  // Failure notices stay until the test reads them: a failing feature reports
+  // while the startup note opens, before `reported` looks. The addons run
+  // again after the reload.
+  await waitForDocumentEditor(app, page, { timeout: 20000 })
+  await page.evaluate((engine) => {
+    localStorage.setItem('toast-preferences', JSON.stringify({ duration: 0 }))
+    if (engine === 'tiptap')
+      localStorage.setItem('hibi:formatted-engine', 'tiptap')
+  }, engine)
+  await page.reload()
   // The failing feature leaves the startup note editable.
   await waitForDocumentEditor(app, page, { timeout: 20000 })
   await app.evaluate(({ dialog }, path) => {

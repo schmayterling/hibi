@@ -1,7 +1,8 @@
-import { EditorView } from '@codemirror/view'
+import type { EditorView } from '@codemirror/view'
 import { type RefObject, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { tableShows } from './formatted/tables'
+import { focusedEditor } from './native-dom-selection'
 import {
   editorPosition,
   sourceView as findSourceView,
@@ -39,16 +40,8 @@ export function MirrorCursor({
       )
       const richView = richElement && findSourceView(richElement)
       // The formatted view has the focus in its own content or in a table
-      // cell's editor, whose caret it follows. findFromDOM looks inside the
-      // element first, where the formatted view's content holds the cells'.
-      let editor = focused === richElement ? (richView ?? null) : null
-      if (
-        !editor &&
-        focused instanceof HTMLElement &&
-        focused.classList.contains('cm-content') &&
-        richElement?.contains(focused)
-      )
-        editor = EditorView.findFromDOM(focused)
+      // cell's editor, whose caret it follows.
+      const editor = richView ? focusedEditor(richView) : null
       const richFocus = !!editor
       const sourceFocus = focused === sourceElement
       if (

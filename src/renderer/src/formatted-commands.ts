@@ -1,4 +1,3 @@
-import { DocInput } from '@codemirror/language'
 import {
   countColumn,
   EditorSelection,
@@ -18,10 +17,7 @@ import {
   markdownLiteral as literal,
 } from '../../shared/markdown-literal.ts'
 import { uncovered } from './chunked-markdown.ts'
-import {
-  formattedBlockParser,
-  formattedFormatting,
-} from './formatted-contributions.ts'
+import { formattedFormatting } from './formatted-contributions.ts'
 import { codeIndentLines, detectIndentUnit, tabIndent } from './indentation.ts'
 import { sourceWhitespace } from './source-whitespace.ts'
 
@@ -1811,20 +1807,6 @@ export function deleteForward(
     selection: EditorSelection.cursor(pos),
     userEvent: 'delete.forward',
   }
-}
-
-/**
- * The syntax Tab reads at the selection. A selection or caret in text the
- * view has not parsed yet, as in a large note just opened, reads the note's
- * blocks with the block grammar alone, so a list item keeps the children
- * below it.
- */
-export function tabSyntax(state: EditorState, tree: Tree) {
-  const { from, to } = state.selection.main
-  const { length } = state.doc
-  if (!uncovered(tree, Math.max(0, from - 1), Math.min(length, to + 1)))
-    return tree
-  return state.facet(formattedBlockParser)(state).parse(new DocInput(state.doc))
 }
 
 /**

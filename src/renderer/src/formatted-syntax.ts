@@ -12,13 +12,14 @@ import {
   type Input,
   IterMode,
   NodeProp,
-  type Tree,
+  NodeType,
+  Tree,
   TreeFragment,
 } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
-  type MarkdownParser,
+  MarkdownParser,
   parseCode,
 } from '@lezer/markdown'
 import type { BoundaryReceive } from '../../shared/document-worker-protocol.ts'
@@ -865,6 +866,13 @@ export type FormattedSyntax = {
   tree: (state: EditorState) => Tree
   /** The same configured grammar for a bounded source-block proof. */
   parser: (state: EditorState) => MarkdownParser
+  /**
+   * The syntax edit keys read at the selection: the view's tree, or for a
+   * selection or caret in text not parsed yet, as in a large note just
+   * opened, the note's blocks, with inline syntax only in the leaf blocks at
+   * the selection's ends. A list item keeps the children below it.
+   */
+  editTree: (state: EditorState) => Tree
   /** Complete only missing syntax for the selected range. */
   selectionTree: (
     state: EditorState,
@@ -900,6 +908,32 @@ export function formattedSyntax(
     ],
     tree: (state) => state.field(field).tree,
     parser: (state) => syntax.chunkedFor(state).full,
+    editTree: (state) => {
+      const { tree, prefix } = state.field(field)
+      const { from, to } = state.selection.main
+      const { doc } = state
+      if (!uncovered(tree, Math.max(0, from - 1), Math.min(doc.length, to + 1)))
+        return tree
+      const parseInline = MarkdownParser.prototype.parseInline
+      const parser = Object.assign(syntax.textFor(state).full.configure({}), {
+        // Inline syntax only in the leaf blocks at the selection's ends.
+        parseInline(this: MarkdownParser, text: string, offset: number) {
+          const end = offset + text.length
+          return (offset <= from && from <= end) || (offset <= to && to <= end)
+            ? parseInline.call(this, text, offset)
+            : []
+        },
+      })
+      const { type, children, positions, length } = parser.parse(
+        new DocInput(doc),
+        [],
+        [{ from: prefix, to: doc.length }],
+      )
+      // The parse after a prefix, such as frontmatter, counts from the
+      // prefix's end; an anonymous node places it there.
+      const text = new Tree(NodeType.none, children, positions, length)
+      return new Tree(type, [text], [prefix], doc.length)
+    },
     selectionTree: (state, from, to, budget) => {
       const value = state.field(field)
       if (from === to || !uncovered(value.tree, from, to)) return value.tree

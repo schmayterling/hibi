@@ -2517,7 +2517,7 @@ export function livePreview(
           run: run((view) =>
             deleteBackward(
               view.state,
-              syntax.editTree(view.state),
+              () => syntax.editTree(view.state),
               hidden(view),
             ),
           ),
@@ -2527,7 +2527,7 @@ export function livePreview(
           run: run((view) =>
             deleteForward(
               view.state,
-              syntax.editTree(view.state),
+              () => syntax.editTree(view.state),
               hidden(view),
             ),
           ),

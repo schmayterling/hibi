@@ -8,7 +8,7 @@ import {
   StateField,
   Text,
 } from '@codemirror/state'
-import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
+import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import {
   type ChangedRange,
   type Input,
@@ -926,7 +926,11 @@ function edited(a: Text, b: Text, from: number, to: number) {
         toB: pos,
       })
   }
-  return ranges.sort((x, y) => x.fromB - y.fromB)
+  // An end at the start of the changed text comes before it, or the text
+  // after the change would map back without its offset.
+  return ranges.sort(
+    (x, y) => x.fromB - y.fromB || x.toB - y.toB || x.toA - y.toA,
+  )
 }
 
 /** Chunked Markdown syntax for one formatted editor configuration. */
@@ -955,6 +959,20 @@ export function formattedSyntax(
       ),
       driver(syntax, options),
       keepRead,
+      // The kept read holds the whole note's blocks; it goes once the view's
+      // tree covers the selection.
+      EditorView.updateListener.of(({ state }) => {
+        const { from, to } = state.selection.main
+        if (
+          read &&
+          !uncovered(
+            state.field(field).tree,
+            Math.max(0, from - 1),
+            Math.min(state.doc.length, to + 1),
+          )
+        )
+          read = null
+      }),
     ],
     tree: (state) => state.field(field).tree,
     parser: (state) => syntax.chunkedFor(state).full,

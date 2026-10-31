@@ -1623,4 +1623,49 @@ test('edit reads keep the last read where the note did not change', () => {
   }).state
   state = state.update(blockBreak(state, read(state))).state
   assert.equal(state.sliceDoc(state.doc.length - 19), '```\n- one\n- two\n- \n')
+  // Delete pressed twice at the start of a line, where the default command
+  // deletes: the caret is where the changed text starts, and the blocks
+  // after it move back.
+  const tail = 'abc def\n\n- one\n- two\n\n```\ncode\n```\n\n> quote\n'
+  const at = state.doc.toString().indexOf('some **bo')
+  state = state.update({
+    changes: { from: at, to: state.doc.length, insert: tail },
+    selection: { anchor: at },
+  }).state
+  for (let n = 0; n < 2; n++) {
+    assert.equal(deleteForward(state, read(state), Decoration.none), null)
+    state = state.update({ changes: { from: at, to: at + 1 } }).state
+  }
+  read(state)
+})
+
+test('Backspace and Delete read the syntax only where they use it', () => {
+  const state = (doc, anchor, head = anchor) =>
+    EditorState.create({ doc, selection: { anchor, head } })
+  let reads = 0
+  const read = () => {
+    reads++
+    return parser.parse('')
+  }
+  const doc = 'one two\n\nthree'
+  // A caret inside a line, and a selection, which the default command deletes.
+  for (const [anchor, head] of [
+    [4, 4],
+    [2, 12],
+  ]) {
+    assert.equal(
+      deleteBackward(state(doc, anchor, head), read, Decoration.none),
+      null,
+    )
+    assert.equal(
+      deleteForward(state(doc, anchor, head), read, Decoration.none),
+      null,
+    )
+  }
+  assert.equal(reads, 0)
+  // At the start of a line and the end of one, the blocks decide.
+  deleteBackward(state(doc, 9), read, Decoration.none)
+  assert.equal(reads, 1)
+  deleteForward(state(doc, 7), read, Decoration.none)
+  assert.ok(reads > 1)
 })

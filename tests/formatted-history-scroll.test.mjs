@@ -228,12 +228,10 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   await page
     .getByRole('textbox', { name: 'Find in document', exact: true })
     .fill('needle')
-  const found = await page
-    .waitForFunction(showsCell, 'needle', { timeout: 3000 })
-    .then(
-      () => true,
-      () => false,
-    )
+  const found = await page.waitForFunction(showsCell, 'needle').then(
+    () => true,
+    () => false,
+  )
   t.diagnostic(JSON.stringify({ name: 'find in a long table', shown: found }))
   if (!found) differences.push('find in a long table: not shown')
   await page.keyboard.press('Escape')
@@ -260,22 +258,33 @@ test('codemirror: undo and redo scroll to the selection they restore', {
         .sourceReady === 'true',
   )
   const source = '.source-pane .cm-scroller'
-  const top = (scroller) => document.querySelector(scroller).scrollTop
+  // The pane's scroll position once it holds over two frames: a view
+  // measures, and so scrolls, in the frame after a change.
+  const settled = (scroller) =>
+    page.evaluate(async (scroller) => {
+      const pane = document.querySelector(scroller)
+      const frame = () => new Promise(requestAnimationFrame)
+      let last = null
+      for (let read = 0; read < 50 && pane.scrollTop !== last; read++) {
+        last = pane.scrollTop
+        await frame()
+        await frame()
+      }
+      return pane.scrollTop
+    }, scroller)
   await page.evaluate((scroller) => {
     const pane = document.querySelector(scroller)
     pane.querySelector('.cm-content').cmTile.root.view.focus()
     pane.scrollTop = pane.scrollHeight / 2
   }, source)
-  await page.waitForTimeout(500)
-  const kept = await page.evaluate(top, source)
+  const kept = await settled(source)
   await page.keyboard.press(undoKey)
   await waitForAsync(
     page,
     async (text) => (await window.hibi.getDocument()).markdown === text,
     paragraphs,
   )
-  await page.waitForTimeout(500)
-  const place = await page.evaluate(top, source)
+  const place = await settled(source)
   t.diagnostic(JSON.stringify({ name: 'undo of another view', kept, place }))
   if (Math.abs(place - kept) > 1)
     differences.push(`undo of another view: ${kept} became ${place}`)

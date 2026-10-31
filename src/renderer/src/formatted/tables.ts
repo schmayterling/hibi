@@ -994,6 +994,13 @@ class TableView {
     // Markdown; CodeMirror's focus update, which draws it, waits for a timer.
     editor.refresh()
     editor.mirror()
+    // A cell its row lacks has no text to mirror yet: the caret waits at the
+    // row's end, where the first input adds the cell, so undo comes back here.
+    if (!span)
+      this.view.dispatch({
+        selection: { anchor: this.editing.to },
+        annotations: cellInput.of(true),
+      })
     // A note opening in its last cell still opens at its top.
     if (!this.view.state.facet(placedSelection))
       element.scrollIntoView({ block: 'nearest', inline: 'nearest' })

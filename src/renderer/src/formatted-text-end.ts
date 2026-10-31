@@ -80,7 +80,8 @@ function atomRange(
   return atoms.has(node.name) ||
     (node.name === 'FencedCode' && replaced(node)) ||
     (node.name === 'Paragraph' &&
-      image?.name === 'Image' &&
+      (image?.name === 'Image' ||
+        (image?.name === 'HTMLImage' && replaced(image))) &&
       image.from === node.from &&
       image.to === to)
     ? { from: node.from, to }
@@ -94,9 +95,9 @@ function atomRange(
  * editor takes; in code, the code's end before its closing fence. Blank
  * lines after the last block that show an empty paragraph hold it instead.
  * A last block the rich editor draws as one node, such as a divider, a
- * block image or a fence `replaced` says a renderer draws in place of its
- * text, is selected whole, so typing replaces it. Null while the syntax tree
- * does not reach the note's end.
+ * block image, or a fence or lone `<img>` tag that `replaced` says a
+ * renderer draws in place of its text, is selected whole, so typing
+ * replaces it. Null while the syntax tree does not reach the note's end.
  */
 export function formattedOpenSelection(
   doc: Text,

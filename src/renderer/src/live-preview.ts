@@ -111,6 +111,43 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 })
 
 type Revealed = { from: number; to: number }
+/** A drawn range; `lite` when only its block styles are drawn. */
+type Drawn = Revealed & { lite?: true }
+
+/**
+ * The longest line the editor draws whole once any of it shows: a longer one
+ * gets line gaps (CodeMirror's margin for wrapped lines, on each side).
+ */
+const wholeLine = 20000
+
+/**
+ * The visible ranges, and the lines the editor keeps drawn outside its
+ * viewport for the main selection's ends. Drawn without the formatted
+ * view's styles, such a line, as a heading the caret is in, measures at
+ * another height once the pane scrolls away from it and moves the text below.
+ */
+function drawnRanges(view: EditorView): readonly Drawn[] {
+  const { viewport } = view
+  const { anchor, head } = view.state.selection.main
+  const extra: Drawn[] = []
+  for (const pos of [anchor, head])
+    if (
+      (pos < viewport.from || pos > viewport.to) &&
+      !extra.some((block) => pos >= block.from && pos <= block.to)
+    ) {
+      const { from, to } = view.lineBlockAt(pos)
+      // ponytail: the editor draws such a block whole, and every viewport
+      // change styles it again, so one longer than a line it draws whole on
+      // screen keeps only the block styles that set its lines' heights, and
+      // its inline formatting can still move the text below it. Keeping its
+      // decorations through updates that only move the viewport would lift this.
+      extra.push(
+        to - from <= wholeLine ? { from, to } : { from, to, lite: true },
+      )
+    }
+  if (!extra.length) return view.visibleRanges
+  return [...view.visibleRanges, ...extra].sort((a, b) => a.from - b.from)
+}
 
 /** Where the widget under the first press of a click sequence starts. */
 const pressedWidget = new WeakMap<EditorView, number | null>()
@@ -828,12 +865,14 @@ function inline(
     },
   })
 
-  for (const range of view.visibleRanges) {
+  for (const range of drawnRanges(view)) {
     tree.iterate({
       from: range.from,
       to: range.to,
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
+        if (range.lite)
+          return ref.type.is('Block') && builtIn(ref, range) !== false
         const name = ref.name
         let skip = literalText(ref.node, literal)
         if (!skip) {
@@ -1115,6 +1154,9 @@ function inline(
       )
   }
   for (const { from, to, level } of headings.values()) {
+    // The entries around the editor name headings outside the viewport, as
+    // one drawn for the selection.
+    if (to < view.viewport.from || from > view.viewport.to) continue
     wrappers.push(
       BlockWrapper.create({
         tagName: 'div',
@@ -1422,7 +1464,7 @@ function spacing(
       previous = node
     }
   }
-  for (const range of view.visibleRanges) visit(tree.topNode, range)
+  for (const range of drawnRanges(view)) visit(tree.topNode, range)
   return ending(view, tree, line)
 }
 
@@ -1987,6 +2029,7 @@ export function livePreview(
       /** Space below the last line, in px. */
       end: number
       reveal: readonly Revealed[]
+      drawn: readonly Revealed[]
       /** Decorated columns of long code lines by line start; null where a line wraps. */
       columns = new Map<number, Revealed | null>()
       long: readonly LongLine[] = []
@@ -2061,6 +2104,7 @@ export function livePreview(
       }
       constructor(readonly view: EditorView) {
         this.reveal = revealed(view, syntax.tree(view.state))
+        this.drawn = drawnRanges(view)
         ;({
           decorations: this.decorations,
           groupMarks: this.groupMarks,
@@ -2140,6 +2184,9 @@ export function livePreview(
               range.to !== this.reveal[index]?.to,
           )
         this.reveal = reveal
+        const drawn = drawnRanges(update.view)
+        const changedDrawn = !sameRanges(drawn, this.drawn)
+        this.drawn = drawn
         if (update.docChanged && this.scrolls.size) {
           const scrolls = [...this.scrolls]
           this.scrolls.clear()
@@ -2173,6 +2220,7 @@ export function livePreview(
           update.state.facet(formattedBlockEdges) !==
             update.startState.facet(formattedBlockEdges) ||
           changedReveal ||
+          changedDrawn ||
           tree !== syntax.tree(update.startState) ||
           update.state.field(layout) !== update.startState.field(layout) ||
           update.state.facet(formattedViews) !==

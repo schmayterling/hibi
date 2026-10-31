@@ -996,6 +996,235 @@ test('a viewport starting just below a code box keeps its scrollbar in the heigh
   assert.equal(result.after, result.before, report)
 })
 
+test('a heading the caret is in keeps its height when a scroll leaves it far above', {
+  timeout: 120000,
+}, async () => {
+  const paragraphs = Array.from(
+    { length: 400 },
+    (_, i) => `Paragraph ${i} of the note.`,
+  )
+  const doc = `# A heading\n\nA paragraph before the rest.\n\n${paragraphs.join('\n\n')}\n`
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 900, height: 600 }, { editable: true })
+    // Parsed whole, so no parsing slice keeps the reading position later.
+    for (let i = 0; i < 500 && !preview.covered(0, doc.length); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const view = preview.view()
+    const heading = view.lineBlockAt(0).height
+    // A line the editor has drawn, so it scrolls there at once; the
+    // heading then leaves what it draws.
+    const at = view.lineBlockAt(view.viewport.to).from
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'start' }),
+    })
+    await preview.settle()
+    await preview.settle()
+    // The caret's line stays drawn out of view, as the editor keeps it.
+    const line = view.contentDOM.querySelector('.cm-line')
+    return {
+      covered: preview.covered(0, doc.length),
+      left: view.viewport.from > 0,
+      caret: view.state.selection.main.head,
+      heading,
+      kept: view.lineBlockAt(0).height,
+      drawn: line.classList.contains('hibi-lp-h1'),
+      top: view.coordsAtPos(at, 1).top - pane.getBoundingClientRect().top,
+    }
+  }, doc)
+  const report = JSON.stringify(result)
+  assert.equal(result.covered, true, report)
+  assert.equal(result.caret, 0, report)
+  assert.equal(result.left, true, report)
+  assert.equal(result.drawn, true, report)
+  assert.equal(result.kept, result.heading, report)
+  // The editor scrolls the line a few pixels below the pane's top, and the
+  // text above it keeps its height, so the line stays there.
+  assert.ok(result.top >= 0 && result.top < 20, report)
+
+  // A caret paragraph longer than the viewport's text is not styled again on
+  // every scroll: the editor draws it whole.
+  const long = `${'**bold** words '.repeat(4000)}\n\n${paragraphs.join('\n\n')}\n`
+  const styled = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 900, height: 600 }, { editable: true })
+    await preview.settle()
+    const view = preview.view()
+    pane.scrollTop = pane.scrollHeight
+    await preview.settle()
+    await preview.settle()
+    const line = view.contentDOM.querySelector('.cm-line')
+    return {
+      left: view.viewport.from > 0,
+      plain: line.textContent.startsWith('**bold**'),
+    }
+  }, long)
+  assert.deepEqual(styled, { left: true, plain: true })
+})
+
+test('a long caret paragraph left far above stays plain while a longer line is on screen', {
+  timeout: 120000,
+}, async () => {
+  const paragraphs = Array.from(
+    { length: 60 },
+    (_, i) => `Paragraph ${i} of the note.`,
+  )
+  // A caret paragraph of 60,000 characters, then one twice as long that line
+  // gaps draw only near the screen, though the viewport spans all its text:
+  // the caret paragraph is not styled again on every scroll.
+  const doc = `${'**bold** words '.repeat(4000)}\n\n${paragraphs.join('\n\n')}\n\n${'plain words '.repeat(10000)}\n\n${paragraphs.join('\n\n')}\n`
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 900, height: 600 }, { editable: true })
+    // The caret paragraph parses whole; the longer one is read in windows.
+    for (let i = 0; i < 500 && !preview.covered(0, 60000); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const view = preview.view()
+    const at = doc.indexOf('plain words')
+    // The view measures the text above as it leaves: aim again at the
+    // longer paragraph's middle once heights settle.
+    for (let i = 0; i < 3; i++) {
+      const target = view.lineBlockAt(at)
+      pane.scrollTop +=
+        target.top +
+        target.height / 2 -
+        (pane.getBoundingClientRect().top - view.documentTop)
+      await preview.settle()
+      await preview.settle()
+    }
+    const block = view.lineBlockAt(at)
+    let shown = 0
+    for (const range of view.visibleRanges) shown += range.to - range.from
+    return {
+      parsed: preview.covered(0, 60000),
+      spans: view.viewport.from <= at && view.viewport.to >= block.to,
+      gapped: shown < block.to - block.from,
+      plain: view.contentDOM
+        .querySelector('.cm-line')
+        .textContent.startsWith('**bold**'),
+    }
+  }, doc)
+  assert.deepEqual(result, {
+    parsed: true,
+    spans: true,
+    gapped: true,
+    plain: true,
+  })
+})
+
+test('a caret paragraph left above keeps its height as the text on screen thins out', {
+  timeout: 120000,
+}, async () => {
+  const link = (i) => `[word ${i}](https://example.com/a/long/path/to/${i})`
+  const caret = Array.from(
+    { length: 40 },
+    (_, i) => `some words and ${link(i)} more text`,
+  ).join(' ')
+  const dense = Array.from(
+    { length: 12 },
+    (_, i) => `D${i} ${'words in a long paragraph. '.repeat(36)}`,
+  ).join('\n\n')
+  const sparse = Array.from({ length: 150 }, () => 'a').join('\n\n')
+  const doc = `${caret}\n\n${dense}\n\n${sparse}\n`
+  const result = await harness.evaluate(
+    async ({ doc, end }) => {
+      const preview = window.livePreview
+      const pane = document.querySelector('.rich-pane')
+      pane.scrollTop = 0
+      await preview.mount(doc, { width: 900, height: 600 }, { editable: true })
+      for (let i = 0; i < 500 && !preview.covered(0, doc.length); i++)
+        await new Promise((done) => setTimeout(done, 20))
+      await preview.settle()
+      const view = preview.view()
+      const top = async (pos) => {
+        pane.scrollTop +=
+          view.lineBlockAt(pos).top -
+          (pane.getBoundingClientRect().top - view.documentTop)
+        await preview.settle()
+        await preview.settle()
+        return {
+          left: view.viewport.from > end,
+          styled: !view.contentDOM
+            .querySelector('.cm-line')
+            .textContent.includes('https://'),
+          height: view.lineBlockAt(0).height,
+        }
+      }
+      // Dense text on screen, then lines of one character each.
+      return [
+        await top(doc.indexOf('D6 ')),
+        await top(doc.indexOf('\na\n', doc.indexOf('D11 ')) + 225),
+      ]
+    },
+    { doc, end: caret.length },
+  )
+  const report = JSON.stringify(result)
+  assert.deepEqual(
+    result.map(({ left, styled }) => ({ left, styled })),
+    [
+      { left: true, styled: true },
+      { left: true, styled: true },
+    ],
+    report,
+  )
+  assert.equal(result[1].height, result[0].height, report)
+})
+
+test('a long caret code line left far above keeps its one row', {
+  timeout: 120000,
+}, async () => {
+  // Longer than a line the view styles whole off screen: drawn plain, the
+  // code line would wrap into thousands of pixels.
+  const code = `const value = ${'"x" + '.repeat(4300)}"end";`
+  const paragraphs = Array.from(
+    { length: 400 },
+    (_, i) => `Paragraph ${i} of the note.`,
+  )
+  const doc = `\`\`\`js\n${code}\n\`\`\`\n\n${paragraphs.join('\n\n')}\n`
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 900, height: 600 }, { editable: true })
+    for (let i = 0; i < 500 && !preview.covered(0, doc.length); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    const view = preview.view()
+    const line = view.state.doc.line(2)
+    view.dispatch({ selection: { anchor: line.from + 10 } })
+    await preview.settle()
+    const before = view.lineBlockAt(line.from).height
+    const at = view.lineBlockAt(view.viewport.to).from
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'start' }),
+    })
+    await preview.settle()
+    await preview.settle()
+    // Pushed far down, the line is not drawn and has no coordinates.
+    const box = view.coordsAtPos(at, 1)
+    return {
+      length: line.length,
+      left: view.viewport.from > line.to,
+      before,
+      after: view.lineBlockAt(line.from).height,
+      top: box && box.top - pane.getBoundingClientRect().top,
+    }
+  }, doc)
+  const report = JSON.stringify(result)
+  assert.ok(result.length > 20000, report)
+  assert.equal(result.left, true, report)
+  assert.ok(result.before < 100, report)
+  assert.equal(result.after, result.before, report)
+  assert.ok(result.top >= 0 && result.top < 20, report)
+})
+
 test('stepping up after a jump to the end, known code blocks never draw as plain text', {
   timeout: 120000,
 }, async () => {

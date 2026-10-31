@@ -43,6 +43,17 @@ export function readDOMPosition(view: EditorView, node: Node, offset: number) {
   }
 }
 
+/**
+ * The position at a point inside a widget that maps its DOM positions, as
+ * a table cell's text does, where `posAtCoords` gives the widget's edges.
+ */
+export function mappedPositionAt(view: EditorView, x: number, y: number) {
+  const range = view.contentDOM.ownerDocument.caretRangeFromPoint(x, y)
+  const read =
+    range && readDOMPosition(view, range.startContainer, range.startOffset)
+  return read?.mapped ? read.at : null
+}
+
 type Points = Pick<
   Selection,
   'anchorNode' | 'anchorOffset' | 'focusNode' | 'focusOffset'
@@ -236,3 +247,21 @@ export const shiftDoubleClick = EditorView.mouseSelectionStyle.of(
     }
   },
 )
+
+/**
+ * The editor that has the focus in `view`: the view itself, or the editor
+ * of one of its table cells, whose caret the view follows.
+ */
+export function focusedEditor(view: EditorView) {
+  if (view.hasFocus) return view
+  const active = view.contentDOM.ownerDocument.activeElement
+  // findFromDOM looks inside an element first, so only a cell's own
+  // content is asked, never the view's, which holds the cells'.
+  return active instanceof HTMLElement &&
+    active.classList.contains('cm-content') &&
+    active.closest('.hibi-lp-table') &&
+    view.contentDOM.contains(active) &&
+    active.ownerDocument.hasFocus()
+    ? EditorView.findFromDOM(active)
+    : null
+}

@@ -214,12 +214,32 @@ test('Tab preserves paragraph, code, list, table, focus and source behavior', {
         `${line}`.padEnd(63, 'x'),
       ).join('\n')
       const text = `\`\`\`\n${big}\n\`\`\``
-      await set(text, 4, big.length + 4)
-      const selected = await state()
-      assert.equal(selected.anchor, 4)
-      assert.equal(selected.head, big.length + 4)
-      assert.equal(selected.focused, true)
-      await page.keyboard.press('Tab')
+      // A slow machine is still parsing the megabyte when Tab arrives: hold
+      // the view's idle parse steps and slow the ones edits run.
+      await page.evaluate(() => {
+        const held = []
+        const request = window.requestIdleCallback
+        window.requestIdleCallback = (callback) => {
+          held.push(callback)
+          return 0
+        }
+        window.releaseIdle = () => {
+          window.requestIdleCallback = request
+          for (const callback of held) request(callback)
+        }
+      })
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: 20 })
+      try {
+        await set(text, 4, big.length + 4)
+        const selected = await state()
+        assert.equal(selected.anchor, 4)
+        assert.equal(selected.head, big.length + 4)
+        assert.equal(selected.focused, true)
+        await page.keyboard.press('Tab')
+      } finally {
+        await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+        await page.evaluate(() => window.releaseIdle())
+      }
       const result = await rich.evaluate((element) => {
         const view = element.cmTile.root.view
         const text = view.state.sliceDoc(4, view.state.doc.length - 4)

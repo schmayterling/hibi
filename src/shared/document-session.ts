@@ -400,51 +400,52 @@ export class DocumentSession {
     maximumGroups = this.#options.historyGroups ?? 128,
   ) {
     let { bytes, groups } = this.historySize()
-    // Branches go first, oldest first: undo and redo never reach them.
-    while (
+    // Branches go first, oldest first: undo and redo never reach them. Each
+    // goes with the branches that leave from its steps.
+    if (
       this.#branches.size &&
       (bytes > maximumBytes || groups > maximumGroups)
     ) {
-      let oldest: readonly [object, HistoryGroup[]] | undefined
-      for (const [from, chains] of this.#branches)
-        for (const chain of chains)
-          if (!oldest || chain.at(-1)!.order < oldest[1].at(-1)!.order)
-            oldest = [from, chain]
-      const dropped = this.#dropBranch(...oldest!)
-      bytes -= dropped.bytes
-      groups -= dropped.groups
-    }
-    while (
-      this.#undo.length &&
-      (bytes > maximumBytes ||
-        this.#undo.length + this.#redo.length > maximumGroups)
-    ) {
-      const dropped = this.#undo.shift()!
-      bytes -= dropped.bytes
-      this.#root = dropped.step
-    }
-    while (
-      this.#redo.length &&
-      (bytes > maximumBytes || this.#redo.length > maximumGroups)
-    )
-      bytes -= this.#redo.shift()!.bytes
-  }
-  #dropBranch(from: object, chain: readonly HistoryGroup[]) {
-    const chains = this.#branches.get(from)!.filter((kept) => kept !== chain)
-    if (chains.length) this.#branches.set(from, chains)
-    else this.#branches.delete(from)
-    let bytes = 0,
-      groups = 0
-    for (const group of chain) {
-      bytes += group.bytes
-      groups++
-      for (const nested of this.#branches.get(group.step) ?? []) {
-        const dropped = this.#dropBranch(group.step, nested)
-        bytes += dropped.bytes
-        groups += dropped.groups
+      const dropped = new Set<readonly HistoryGroup[]>()
+      for (const chain of [...this.#branches.values()]
+        .flat()
+        .sort((a, b) => a.at(-1)!.order - b.at(-1)!.order)) {
+        if (bytes <= maximumBytes && groups <= maximumGroups) break
+        for (const going = [chain]; going.length; ) {
+          const next = going.pop()!
+          if (dropped.has(next)) continue
+          dropped.add(next)
+          for (const group of next) {
+            bytes -= group.bytes
+            groups--
+            for (const nested of this.#branches.get(group.step) ?? [])
+              going.push(nested)
+          }
+        }
+      }
+      for (const [from, chains] of this.#branches) {
+        const kept = chains.filter((chain) => !dropped.has(chain))
+        if (kept.length) this.#branches.set(from, kept)
+        else this.#branches.delete(from)
       }
     }
-    return { bytes, groups }
+    // The oldest undo steps go next, then the farthest redo steps, each in one
+    // splice.
+    let undone = 0
+    while (
+      undone < this.#undo.length &&
+      (bytes > maximumBytes ||
+        this.#undo.length - undone + this.#redo.length > maximumGroups)
+    )
+      bytes -= this.#undo[undone++]!.bytes
+    if (undone) this.#root = this.#undo.splice(0, undone).at(-1)!.step
+    let redone = 0
+    while (
+      redone < this.#redo.length &&
+      (bytes > maximumBytes || this.#redo.length - redone > maximumGroups)
+    )
+      bytes -= this.#redo[redone++]!.bytes
+    this.#redo.splice(0, redone)
   }
   #record(
     prepared: PreparedSourceOperation,
@@ -464,8 +465,9 @@ export class DocumentSession {
       previous.operations < 256 &&
       previous.bytes + editBytes(forward) + editBytes(inverse) < 128 * 1024 &&
       // A merge changes the state its step leads to: never one a save took
-      // or other steps leave from.
-      previous.step !== this.#sealed &&
+      // or other steps leave from. A composition stays one step, as undo
+      // takes it back, so a save during it keeps no history until the next.
+      (previous.step !== this.#sealed || operation.origin === 'composition') &&
       !this.#redo.length &&
       !this.#branches.has(previous.step)
     if (merge) {
@@ -783,8 +785,11 @@ export class DocumentSession {
     if (!editing) this.#redo = [...restored.redo]
     else if (restored.redo.length)
       branches.push([this.#opening, [...restored.redo]])
-    for (const [from, chain] of branches)
-      this.#branches.set(from, [...(this.#branches.get(from) ?? []), chain])
+    for (const [from, chain] of branches) {
+      const chains = this.#branches.get(from)
+      if (chains) chains.push(chain)
+      else this.#branches.set(from, [chain])
+    }
     this.#undo = [...restored.undo, ...this.#undo]
     this.#root = restored.root
     this.#trim()

@@ -364,3 +364,67 @@ test('stored history is checked before it is used', () => {
     assert.throws(() => parseUndoHistory(value), /invalid/)
   assert.deepEqual(parseUndoHistory(history), history)
 })
+
+test('a save during a composition keeps the composition one step, and keeps no history until the next save', () => {
+  const note = open('base ')
+  const compose = (at, insert) =>
+    note.session.edit([{ from: at, to: at, insert }], 'composition', 'ime')
+  compose(5, 'に')
+  note.save()
+  compose(6, 'ほ')
+  compose(7, 'ん')
+  assert.equal(note.text(), 'base にほん')
+  assert.deepEqual(note.session.historyDepth(), { undo: 1, redo: 0 })
+  // The saved text is inside the composition now, so nothing is kept.
+  assert.equal(keptHistory(note.session), null)
+  note.save()
+  assert.deepEqual(texts(keptHistory(note.session), 'base にほん'), [
+    'base にほん',
+  ])
+  note.session.undo()
+  assert.equal(note.text(), 'base ')
+})
+
+test('restoring a large stored history takes time in proportion to its steps, whatever its shape', () => {
+  const step = (parent, at) => ({
+    parent,
+    origin: 'source',
+    forward: [{ from: at, to: at, insert: 'x' }],
+    inverse: [{ from: at, to: at + 1, insert: '' }],
+    beforeLength: at,
+    before: null,
+    after: null,
+    operations: 1,
+    started: 0,
+    time: 0,
+  })
+  const count = 64000
+  const shapes = {
+    // One long line of steps.
+    line: Array.from({ length: count }, (_, at) => step(at - 1, at)),
+    // Every step leaves the oldest state.
+    fan: Array.from({ length: count }, () => step(-1, 0)),
+    // A branch off every step of a line.
+    comb: Array.from({ length: count }, (_, at) =>
+      at % 2
+        ? step(at - 1, (at + 1) / 2)
+        : step(at === 0 ? -1 : at - 2, at / 2),
+    ),
+  }
+  for (const [shape, steps] of Object.entries(shapes)) {
+    const saved = shape === 'fan' ? 0 : shape === 'line' ? count - 1 : count - 2
+    const units = steps[saved].beforeLength + 1
+    const history = parseUndoHistory({ saved, units, version: 0, steps })
+    // Copying the same history through JSON is the yardstick: a restore that
+    // went over its steps once per step took hundreds of copies' time.
+    let started = performance.now()
+    JSON.parse(JSON.stringify(history))
+    const copy = performance.now() - started
+    const reopened = open('x'.repeat(units))
+    started = performance.now()
+    assert.equal(restore(reopened, history), true)
+    const took = performance.now() - started
+    assert.ok(took < 50 * copy + 50, `${shape}: ${took} ms, copy ${copy} ms`)
+    assert.equal(reopened.session.historySize().groups, 128)
+  }
+})

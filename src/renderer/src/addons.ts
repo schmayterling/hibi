@@ -564,6 +564,7 @@ export function useAddons(
         addonId: string
         presentation: 'source' | 'formatted'
         views: Map<string, number>
+        background?: boolean
         fail?: (error: unknown) => void
         drop?: () => void
       }
@@ -1233,6 +1234,10 @@ export function useAddons(
           addonId: id,
           presentation,
           views,
+          // Editing is ready before it starts; input does not wait for it.
+          ...(addon.manifest.startup === 'background'
+            ? { background: true }
+            : {}),
           async create(...args: Parameters<SourceExtension['create']>) {
             if (disposed) return []
             try {

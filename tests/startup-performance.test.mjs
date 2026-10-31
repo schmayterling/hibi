@@ -110,11 +110,12 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // scrolling undo and redo to the selection they restore adds 65 (#737),
   // keeping an addon's failure notice when a note opens adds 27 (#750),
   // running an addon's undo and redo in the view the user works in adds 491 (#745),
+  // keeping a pane's undo steps, caret and kept place when a split opens or closes adds 539 (#759),
   // and sharing the menu store with the remote image menu, which moves it into
   // a chunk of its own, adds 36 (#735).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 491 + 36,
+    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

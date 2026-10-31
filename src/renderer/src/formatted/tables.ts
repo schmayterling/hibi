@@ -1029,14 +1029,41 @@ class TableView {
     if (!element) return false
     const editor =
       this.editing?.element === element ? this.editing.editor.view : null
-    const { top, bottom } = visibleBand(element)
-    // Of a cell taller than the view, its editor shows the caret.
-    if (editor && element.getBoundingClientRect().height > bottom - top)
+    const band = visibleBand(element)
+    // Of a cell taller than the view, its editor shows the caret, and its
+    // text the position.
+    const tall = element.getBoundingClientRect().height > band.bottom - band.top
+    if (tall && editor)
       editor.dispatch({
         effects: EditorView.scrollIntoView(editor.state.selection.main.head),
       })
-    else element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    else {
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      if (tall) this.scrollText(pos, band)
+    }
     return true
+  }
+
+  /** Scroll the text at a position of a rendered cell into the visible band. */
+  private scrollText(pos: number, band: { top: number; bottom: number }) {
+    const point = this.point(pos)
+    if (point?.node.nodeType !== Node.TEXT_NODE) return
+    const range = this.dom.ownerDocument.createRange()
+    range.setStart(point.node, point.offset)
+    const rect = range.getClientRects()[0]
+    if (!rect) return
+    for (let node = this.dom.parentElement; node; node = node.parentElement) {
+      if (
+        !/auto|scroll/.test(getComputedStyle(node).overflowY) ||
+        node.scrollHeight <= node.clientHeight
+      )
+        continue
+      // A few pixels clear of the edge, as CodeMirror scrolls to a caret.
+      if (rect.top < band.top) node.scrollTop -= band.top - rect.top + 5
+      else if (rect.bottom > band.bottom)
+        node.scrollTop += rect.bottom - band.bottom + 5
+      return
+    }
   }
 
   /** Edit one cell's inline source without normalizing its table's padding. */

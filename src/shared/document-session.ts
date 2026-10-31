@@ -82,6 +82,8 @@ export class DocumentSession {
   #settled: Promise<void> = Promise.resolve()
   #selection: SourceSelection | null = null
   readonly #viewSelections = new Map<string, SourceSelection | null>()
+  /** How far above a source pane's kept top line its scroll position was, by view id. */
+  readonly keptMargins = new Map<string, number>()
 
   constructor(
     source: string | SourceStore,
@@ -176,6 +178,35 @@ export class DocumentSession {
       : (this.#viewSelections.get(viewId) ?? null)
   releaseView(viewId: string) {
     if (viewId !== 'default') this.#viewSelections.delete(viewId)
+  }
+  /**
+   * A view's selections and history steps follow it to a new id, as a pane's
+   * do when a split opens or closes, so its steps stay its own. The ids of
+   * the views it hosts, `${id}:…`, follow with it, with the places they keep.
+   * Not for 'default': its selection is the session's own.
+   */
+  renameView(from: string, to: string) {
+    const renamed = (id: string) =>
+      id === from || id.startsWith(`${from}:`) ? to + id.slice(from.length) : id
+    const follow = (groups: HistoryGroup[]) =>
+      groups.map((group) => {
+        const viewId = renamed(group.viewId)
+        return viewId === group.viewId
+          ? group
+          : Object.freeze({ ...group, viewId })
+      })
+    this.#undo = follow(this.#undo)
+    this.#redo = follow(this.#redo)
+    const kept: Map<string, unknown>[] = [
+      this.#viewSelections,
+      this.keptMargins,
+    ]
+    for (const values of kept)
+      for (const [id, value] of [...values])
+        if (renamed(id) !== id) {
+          values.delete(id)
+          values.set(renamed(id), value)
+        }
   }
   subscribeSelection = (listener: () => void) => {
     this.#selectionListeners.add(listener)

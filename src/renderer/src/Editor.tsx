@@ -95,6 +95,7 @@ import {
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
+import { useFilePosition } from './file-position'
 import { flavors as flavorRegistry } from './flavors'
 import { LargeMarkdownPreview } from './LargeMarkdownPreview'
 import { LoadingScreen } from './LoadingScreen'
@@ -702,6 +703,18 @@ export function MarkdownEditor({
     },
     [markdownExtensions, flavors, schemaVersion],
   )
+  const filePosition = useFilePosition({
+    document: documentState,
+    content,
+    mode: paneMode,
+    ready:
+      !disabled &&
+      paneMode === mode &&
+      (paneMode === 'markdown' || !!editor) &&
+      (paneMode === 'normal' || sourceReady),
+    focused,
+    outlineTarget,
+  })
   useEffect(() => {
     if (!editor) return
     return editorViewRegistry.register(
@@ -736,10 +749,13 @@ export function MarkdownEditor({
             return false
           }
         },
-        reveal: (position) => revealRichRange(editor, position),
+        reveal: (position) => {
+          filePosition.cancelRestore('rich')
+          return revealRichRange(editor, position)
+        },
       },
     )
-  }, [editor, documentState.tabId, viewId])
+  }, [editor, documentState.tabId, viewId, filePosition.cancelRestore])
   const updateRichEditable = useCallback(() => {
     if (!editor || editor.isDestroyed) return
     editor.setEditable(
@@ -2773,12 +2789,21 @@ export function MarkdownEditor({
         )
       )
         return
+      const pane = content.current?.querySelector<HTMLElement>('.rich-pane')
+      const top = pane?.scrollTop ?? 0
+      const left = pane?.scrollLeft ?? 0
       editor.view.dispatch(
         editor.state.tr
           .setSelection(TextSelection.atEnd(editor.state.doc))
           .setMeta('addToHistory', false),
       )
-      editor.view.focus()
+      if (filePosition.remembered) {
+        editor.view.dom.focus({ preventScroll: true })
+        if (pane) {
+          pane.scrollTop = top
+          pane.scrollLeft = left
+        }
+      } else editor.view.focus()
     }
     editor.on('mount', focus)
     focus()
@@ -3082,14 +3107,25 @@ export function MarkdownEditor({
     sourceOutline,
   ])
   useEffect(() => {
-    if (paneMode !== 'side-by-side' || !sourceReady || !editor) return
+    if (
+      paneMode !== 'side-by-side' ||
+      !sourceReady ||
+      !editor ||
+      filePosition.restoring
+    )
+      return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
-    const source = content.current?.querySelector<HTMLElement>('.cm-scroller')
+    const source = content.current?.querySelector<HTMLElement>(
+      '.source-pane .cm-scroller',
+    )
     if (!rich || !source) return
+    const leader =
+      filePosition.leader ??
+      (source.contains(window.document.activeElement) ? 'source' : 'rich')
     return linkScroll(
       rich,
       source,
-      source.contains(window.document.activeElement) ? source : rich,
+      leader === 'source' ? source : rich,
       markdownDocument && !footnoteDocument
         ? { editor, content: geometryContent, positions }
         : undefined,
@@ -3103,6 +3139,8 @@ export function MarkdownEditor({
     footnoteDocument,
     positions,
     geometryContent,
+    filePosition.restoring,
+    filePosition.leader,
   ])
   const { attachSource: attachSourceFormatting, attachFiles } =
     useFormattingToolbar(
@@ -3295,11 +3333,47 @@ export function MarkdownEditor({
         }
         onClose={() => {
           onCloseFind()
-          if (findTarget === 'rich') editor?.commands.focus()
-          else
+          if (findTarget === 'rich') {
+            const pane =
+              content.current?.querySelector<HTMLElement>('.rich-pane')
+            const top = pane?.scrollTop ?? 0
+            const left = pane?.scrollLeft ?? 0
+            // Find closes by focusing the editor. Keep the restored viewport
+            // and move an off-screen end-of-document caret into it first.
+            if (editor && pane) {
+              const box = pane.getBoundingClientRect()
+              const caret = editor.view.coordsAtPos(editor.state.selection.from)
+              if (caret.bottom < box.top || caret.top > box.bottom) {
+                const at = [16, 48, 96]
+                  .map((offset) =>
+                    editor.view.posAtCoords({
+                      left: box.left + 16,
+                      top: box.top + offset,
+                    }),
+                  )
+                  .find((position) => position)
+                if (at)
+                  editor.view.dispatch(
+                    editor.state.tr
+                      .setSelection(
+                        TextSelection.create(editor.state.doc, at.pos),
+                      )
+                      .setMeta('addToHistory', false),
+                  )
+              }
+            }
+            const settle = () => {
+              if (!pane) return
+              pane.scrollTop = top
+              pane.scrollLeft = left
+            }
+            editor?.view.dom.focus({ preventScroll: true })
+            settle()
+            requestAnimationFrame(settle)
+          } else
             content.current
               ?.querySelector<HTMLElement>('.source-pane .cm-content')
-              ?.focus()
+              ?.focus({ preventScroll: true })
         }}
       />
       <main

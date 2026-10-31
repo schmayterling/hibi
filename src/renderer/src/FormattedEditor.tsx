@@ -24,6 +24,7 @@ import { emitEditorKeyEvent } from './editor-events'
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
+import { useFilePosition } from './file-position'
 import type { FormattedHeadingList } from './formatted-headings'
 import { formattedProjectionSource } from './formatted-projection'
 import { openAtEnd } from './formatted-text-end'
@@ -134,24 +135,6 @@ export function MarkdownEditor({
       },
     ]
   }, [markdownExtensions, documentState.tabId])
-  const editorExtensions = useMemo(
-    () => [
-      ...(showProperties
-        ? largeProperties
-          ? reportedProperties
-          : propertiesExtensions
-        : []),
-      ...projectionExtensions,
-      ...formattedExtensions,
-    ],
-    [
-      showProperties,
-      largeProperties,
-      reportedProperties,
-      projectionExtensions,
-      formattedExtensions,
-    ],
-  )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
     markdownSyntax.version,
@@ -216,6 +199,36 @@ export function MarkdownEditor({
     setSourceSettled,
     focusOwnedByEditor,
   } = useEditorPanes(mode, markdownDocument, false, releaseSource)
+  const filePosition = useFilePosition({
+    document: documentState,
+    content,
+    mode: paneMode,
+    ready:
+      !disabled &&
+      paneMode === mode &&
+      (paneMode === 'markdown' || formattedReady) &&
+      (paneMode === 'normal' || sourceReady),
+    focused,
+    outlineTarget,
+  })
+  const editorExtensions = useMemo(
+    () => [
+      ...(showProperties
+        ? largeProperties
+          ? reportedProperties
+          : propertiesExtensions
+        : []),
+      ...projectionExtensions,
+      ...formattedExtensions,
+    ],
+    [
+      showProperties,
+      largeProperties,
+      reportedProperties,
+      projectionExtensions,
+      formattedExtensions,
+    ],
+  )
   // The source bookmark stays independent of the hosting view identity.
   const sourceViewId = `${viewId}:source` as ViewId
   const documentTarget = documentRuntime.captureDocument(documentState.tabId)
@@ -485,23 +498,48 @@ export function MarkdownEditor({
       return
     // As its Selection.atEnd: the end of the last text, or the last block
     // selected whole. A table there edits its last cell once the view has focus.
+    const pane = content.current?.querySelector<HTMLElement>('.rich-pane')
+    const top = pane?.scrollTop ?? 0
+    const left = pane?.scrollLeft ?? 0
     openAtEnd(view)
-    view.focus()
-  }, [autoFocus, formattedReady, paneMode, content])
+    if (filePosition.remembered) {
+      view.contentDOM.focus({ preventScroll: true })
+      if (pane) {
+        pane.scrollTop = top
+        pane.scrollLeft = left
+      }
+    } else view.focus()
+  }, [autoFocus, formattedReady, paneMode, content, filePosition.remembered])
   useEffect(() => {
-    if (paneMode !== 'side-by-side' || !sourceReady || !formattedReady) return
+    if (
+      paneMode !== 'side-by-side' ||
+      !sourceReady ||
+      !formattedReady ||
+      filePosition.restoring
+    )
+      return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
     const source = content.current?.querySelector<HTMLElement>(
       '.source-pane .cm-scroller',
     )
     if (!rich || !source) return
+    const leader =
+      filePosition.leader ??
+      (source.contains(window.document.activeElement) ? 'source' : 'rich')
     return linkScroll(
       rich,
       source,
-      source.contains(window.document.activeElement) ? source : rich,
+      leader === 'source' ? source : rich,
       'source',
     )
-  }, [content, paneMode, sourceReady, formattedReady])
+  }, [
+    content,
+    paneMode,
+    sourceReady,
+    formattedReady,
+    filePosition.restoring,
+    filePosition.leader,
+  ])
   /**
    * Properties editors above the text return the whole source, as in the
    * rich editor; their change goes to the formatted view as one minimal edit
@@ -590,7 +628,7 @@ export function MarkdownEditor({
                 ? '.rich-pane .cm-content'
                 : '.source-pane .cm-content',
             )
-            ?.focus()
+            ?.focus({ preventScroll: true })
         }}
       />
       <main

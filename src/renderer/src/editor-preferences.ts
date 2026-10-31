@@ -22,6 +22,11 @@ export const editorPreferences = {
     () => localStorage.getItem('markdown-markers') !== 'false',
     String,
   ),
+  rememberScrollPosition: stored(
+    'remember-scroll-position',
+    () => localStorage.getItem('remember-scroll-position') !== 'false',
+    String,
+  ),
 }
 
 export function useEditorPreference<T>(

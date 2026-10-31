@@ -1032,8 +1032,7 @@ test('a heading the caret is in keeps its height when a scroll leaves it far abo
       heading,
       kept: view.lineBlockAt(0).height,
       drawn: line.classList.contains('hibi-lp-h1'),
-      top:
-        view.coordsAtPos(at, 1).top - pane.getBoundingClientRect().top,
+      top: view.coordsAtPos(at, 1).top - pane.getBoundingClientRect().top,
     }
   }, doc)
   const report = JSON.stringify(result)

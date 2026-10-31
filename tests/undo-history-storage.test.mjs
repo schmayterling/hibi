@@ -218,3 +218,30 @@ test('keeping turned off removes kept histories and keeps no new ones', async (t
   await later.clearUndoHistory()
   assert.equal(await exists(folder(root)), false)
 })
+
+test('a temporary copy a crash left behind is removed by the next store', async (t) => {
+  const root = await profile(t)
+  await fs.mkdir(folder(root), { recursive: true })
+  const left = join(folder(root), `.${'a'.repeat(64)}.json.left.tmp`)
+  await fs.writeFile(left, 'deleted text from a cut-short write')
+  const api = await main(root)
+  const note = saved()
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  assert.equal(await exists(left), false)
+  assert.equal(await exists(kept(root, '/notes/a.md')), true)
+})
+
+test('an unreadable undo history setting keeps nothing until it is set again', async (t) => {
+  const root = await profile(t)
+  const note = saved()
+  for (const text of ['null', '{"keep":', 'not json']) {
+    await fs.writeFile(join(root, 'undo-history-settings.json'), text)
+    const api = await main(root)
+    assert.equal(await api.keepsUndoHistory(), false)
+    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  }
+  const api = await main(root)
+  await api.setKeepUndoHistory(true)
+  assert.equal(await (await main(root)).keepsUndoHistory(), true)
+})

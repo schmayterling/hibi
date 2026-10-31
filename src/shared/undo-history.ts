@@ -106,6 +106,8 @@ export function parseUndoHistory(value: unknown): UndoHistory {
   if (
     !history ||
     !Array.isArray(history.steps) ||
+    // A session keeps at most 128 steps; more is not a history Hibi wrote.
+    history.steps.length > 1024 ||
     !safePosition(history.units) ||
     !safePosition(history.version) ||
     !Number.isSafeInteger(history.saved) ||

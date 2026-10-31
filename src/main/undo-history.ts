@@ -26,7 +26,14 @@ let keeping: Promise<boolean> | undefined
 /** Whether notes keep their undo history after closing; on unless turned off. */
 export const keepsUndoHistory = () =>
   (keeping ??= readFile(settingsPath(), 'utf8').then(
-    (text) => (JSON.parse(text) as { keep?: unknown }).keep !== false,
+    (text) => {
+      try {
+        return (JSON.parse(text) as { keep?: unknown }).keep !== false
+      } catch {
+        // An unreadable setting keeps nothing until it is set again.
+        return false
+      }
+    },
     () => true,
   ))
 
@@ -45,6 +52,12 @@ async function measure() {
   if (sizes) return sizes
   const measured = new Map<string, { bytes: number; time: number }>()
   for (const name of await readdir(folder()).catch(() => [])) {
+    // A write a crash cut short leaves its temporary copy, with deleted text.
+    // Nothing is writing while this runs in the queue.
+    if (name.endsWith('.tmp')) {
+      await unlink(join(folder(), name)).catch(() => {})
+      continue
+    }
     if (!/^[0-9a-f]{64}\.json$/.test(name)) continue
     const info = await stat(join(folder(), name)).catch(() => null)
     if (info?.isFile())

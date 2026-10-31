@@ -360,29 +360,38 @@ test('stored history is checked before it is used', () => {
         mainIndex: 0,
       }
     }),
+    // No session keeps so many steps; restoring them costs time on every open.
+    broken((copy) => {
+      copy.steps = Array.from({ length: 1025 }, () => copy.steps[0])
+    }),
   ])
     assert.throws(() => parseUndoHistory(value), /invalid/)
   assert.deepEqual(parseUndoHistory(history), history)
+  const most = broken((copy) => {
+    copy.steps = Array.from({ length: 1024 }, () => copy.steps[0])
+  })
+  assert.equal(parseUndoHistory(most).steps.length, 1024)
 })
 
-test('a save during a composition keeps the composition one step, and keeps no history until the next save', () => {
-  const note = open('base ')
-  const compose = (at, insert) =>
-    note.session.edit([{ from: at, to: at, insert }], 'composition', 'ime')
-  compose(5, 'に')
+test('a save during a composition keeps the composition one step, and nothing until the next save', () => {
+  const note = open('x')
+  const compose = (from, to, insert) =>
+    note.session.edit([{ from, to, insert }], 'composition', 'compose')
+  compose(1, 1, 'ni')
+  // An autosave lands while the candidate window is open.
   note.save()
-  compose(6, 'ほ')
-  compose(7, 'ん')
-  assert.equal(note.text(), 'base にほん')
-  assert.deepEqual(note.session.historyDepth(), { undo: 1, redo: 0 })
-  // The saved text is inside the composition now, so nothing is kept.
+  compose(1, 3, 'nihon SECRET')
+  compose(1, 13, '日本')
+  // The text saved mid-composition is no state undo stops at.
   assert.equal(keptHistory(note.session), null)
-  note.save()
-  assert.deepEqual(texts(keptHistory(note.session), 'base にほん'), [
-    'base にほん',
-  ])
+  assert.deepEqual(note.session.historyDepth(), { undo: 1, redo: 0 })
   note.session.undo()
-  assert.equal(note.text(), 'base ')
+  assert.equal(note.text(), 'x')
+  note.session.redo()
+  note.save()
+  const history = keptHistory(note.session)
+  assert.doesNotMatch(JSON.stringify(history), /SECRET/)
+  assert.deepEqual(texts(history, 'x日本'), ['x日本'])
 })
 
 test('restoring a large stored history takes time in proportion to its steps, whatever its shape', () => {
@@ -414,7 +423,8 @@ test('restoring a large stored history takes time in proportion to its steps, wh
   for (const [shape, steps] of Object.entries(shapes)) {
     const saved = shape === 'fan' ? 0 : shape === 'line' ? count - 1 : count - 2
     const units = steps[saved].beforeLength + 1
-    const history = parseUndoHistory({ saved, units, version: 0, steps })
+    // Far past what a stored history may hold, so built directly.
+    const history = { saved, units, version: 0, steps }
     // Copying the same history through JSON is the yardstick: a restore that
     // went over its steps once per step took hundreds of copies' time.
     let started = performance.now()

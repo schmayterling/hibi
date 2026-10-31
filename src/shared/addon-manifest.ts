@@ -4,7 +4,7 @@ import {
   compatibleAddonManifest,
 } from '../addons/api'
 import { parseAddonRequirements } from './addon-dependencies'
-import { validCommandMenu } from './addon-hotkeys'
+import { validCommandMenu, validCommandShortcut } from './addon-hotkeys'
 import {
   MAX_ADDON_MANIFEST_BYTES,
   validAddonPath as validPath,
@@ -174,6 +174,17 @@ export function parseAddonManifest(
       ))
   )
     throw new Error('The addon command descriptors are invalid.')
+  const unbound = Array.isArray(data.commands)
+    ? data.commands.find(
+        (command) =>
+          command.defaultShortcut !== undefined &&
+          !validCommandShortcut(command.defaultShortcut),
+      )
+    : undefined
+  if (unbound)
+    throw new Error(
+      `The default shortcut for the ${unbound.id} command is not available on every platform. Choose a supported key combination that Hibi does not reserve.`,
+    )
   if (
     data.activation === 'command' &&
     (!Array.isArray(data.commands) || !data.commands.length)
@@ -361,6 +372,20 @@ export function admitInstalledAddon(
       importer: undefined,
       windows: undefined,
       ...(data.kind === 'extension' ? { themes: undefined } : {}),
+      // Packages installed before shortcuts were checked keep their commands without them.
+      ...(Array.isArray(data.commands)
+        ? {
+            commands: data.commands.map((command) => {
+              if (
+                command?.defaultShortcut === undefined ||
+                validCommandShortcut(command.defaultShortcut)
+              )
+                return command
+              const { defaultShortcut: _defaultShortcut, ...rest } = command
+              return rest
+            }),
+          }
+        : {}),
     }
   }
   const parsed = parseAddonManifest(value, { themeFiles })

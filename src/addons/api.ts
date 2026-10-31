@@ -121,7 +121,7 @@ export type AddonCommandDescriptor = {
   id: string
   label: string
   keywords?: string
-  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. A package is refused unless it is a supported, unreserved combination on every platform. */
   defaultShortcut?: string
   /** Show this command in a built-in menu. */
   menu?: CommandMenuContribution

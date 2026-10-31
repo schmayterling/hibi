@@ -157,6 +157,50 @@ test('installed admission rejects compiled ids and privileged declarations regar
   }
 })
 
+test('command shortcuts must bind on every platform, and loading drops ones installed before that check', () => {
+  const commands = (defaultShortcut) => [
+    { id: 'run', label: 'Run', defaultShortcut },
+    { id: 'other', label: 'Other' },
+  ]
+  for (const shortcut of ['shift+f7', 'f2', 'mod+alt+shift+g', 'ctrl+alt+k'])
+    assert.deepEqual(
+      admitInstalledAddon({ ...base, commands: commands(shortcut) }, [])
+        .manifest.commands,
+      commands(shortcut),
+    )
+  for (const shortcut of [
+    '',
+    'k',
+    'shift+a',
+    'Mod+K',
+    'alt+ctrl+k',
+    'hyper+k',
+    'mod+c',
+    'mod+w',
+    'meta+c',
+    'ctrl+v',
+    'alt+f4',
+    `ctrl+${'f'.repeat(60)}`,
+    7,
+    null,
+  ]) {
+    const input = { ...base, commands: commands(shortcut) }
+    for (const parse of [
+      () => parseAddonManifest(input, { trust: 'compiled' }),
+      () => admitInstalledAddon(input, []),
+    ])
+      assert.throws(
+        parse,
+        /default shortcut for the run command is not available on every platform/,
+        String(shortcut),
+      )
+    assert.deepEqual(admitInstalledAddon(input, [], 'load').manifest.commands, [
+      { id: 'run', label: 'Run' },
+      { id: 'other', label: 'Other' },
+    ])
+  }
+})
+
 test('loading existing packages ignores old unknown declarations without admitting malformed installs', () => {
   for (const key of ['styles', 'themes', 'native', 'importer', 'windows']) {
     for (const value of [

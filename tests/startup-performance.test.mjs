@@ -113,9 +113,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // keeping a pane's undo steps, caret and kept place when a split opens or closes adds 539 (#759),
   // and sharing the menu store with the remote image menu, which moves it into
   // a chunk of its own, adds 36 (#735).
+  // The dictionary's declared commands, which work before it starts, and
+  // commands that wait for their addon's editor features add 1,504 (#746).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36,
+    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

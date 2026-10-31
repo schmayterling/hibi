@@ -51,7 +51,7 @@ async function open(t, addons) {
   }, file)
   page.setDefaultTimeout(8000)
   const editor = await waitForFormattedEditor(app, page)
-  // The dictionary starts in the background; its menu items come with it.
+  // Its manifest binds the shortcut and lists its menu items before it starts.
   if (addons?.dictionary)
     await waitForAddonShortcut(page, 'dictionary.synonyms')
   await clickMenu(app, 'Open…')

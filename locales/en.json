@@ -1857,6 +1857,7 @@
   "8a4ff1954358": "The cached addon revocation list is too large.",
   "2ea18168d79b": "The command target is no longer available.",
   "32c1f3399caa": "The content is encrypted. Protected sites use hash-based links.",
+  "d2cb42ff7704": "The default shortcut for the {value1} command is not available on every platform. Choose a supported key combination that Hibi does not reserve.",
   "35aa67de3cc1": "The destination already exists.",
   "de77fbc70fe9": "The destination folder changed. Review it before copying.",
   "3beb69ab6d1d": "The destination folder changed. Review it before moving.",

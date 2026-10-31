@@ -147,6 +147,21 @@ function sameHotkey(left: HotkeyDescriptor, right: HotkeyDescriptor): boolean {
     left.menu?.order === right.menu?.order
   )
 }
+
+/** Counts an editor of the view as showing a feature until the returned call, and tells `waiting`. */
+function showFeature(
+  views: Map<string, number>,
+  viewId: string,
+  waiting: ReadonlySet<() => void>,
+) {
+  views.set(viewId, (views.get(viewId) ?? 0) + 1)
+  for (const check of [...waiting]) check()
+  return () => {
+    const count = (views.get(viewId) ?? 1) - 1
+    if (count) views.set(viewId, count)
+    else views.delete(viewId)
+  }
+}
 type Environment = Omit<
   AddonContext,
   | 'commands'
@@ -594,6 +609,24 @@ export function useAddons(
   )
   const exchange = useRef(createAddonExchange()).current
   const started = useRef(new Set<string>()).current
+  /** Ends a background start's wait for an idle moment. */
+  const idleStarts = useRef(new Map<string, () => void>()).current
+  /** Editor features with the views whose editors show them, counted per editor. */
+  const sources = useRef(
+    new Map<
+      string,
+      SourceExtension & {
+        addonId: string
+        presentation: 'source' | 'formatted'
+        views: Map<string, number>
+        background?: boolean
+        fail?: (error: unknown) => void
+        drop?: () => void
+      }
+    >(),
+  ).current
+  /** Checks waiting for editor features to reach a view. */
+  const featureWaits = useRef(new Set<() => void>()).current
   const activation = useRef(
     new Map<
       string,
@@ -679,10 +712,49 @@ export function useAddons(
             ? current
             : new Set([...current, ...requested]),
         )
+        for (const id of requested) idleStarts.get(id)?.()
         await whenStarted(owner)
       }
     },
-    [started, whenStarted],
+    [started, whenStarted, idleStarts],
+  )
+  /**
+   * Resolves once the view's editor shows the owner's editor features, which
+   * follow its start, or once those features leave or the view closes.
+   */
+  const featuresShown = useCallback(
+    (owner: string, view: CommandExecutionContext['view']) => {
+      const selection = view && editorViewRegistry.getSelection(view)
+      if (!view || !selection?.ok) return
+      // The formatted view is the rich editor.
+      const presentation =
+        selection.value.editor === 'source' ? 'source' : 'formatted'
+      const missing = () =>
+        documentRuntime.isLiveView(view) &&
+        [...sources.values()].some(
+          (feature) =>
+            feature.addonId === owner &&
+            feature.presentation === presentation &&
+            !feature.views.has(view.viewId),
+        )
+      if (!missing()) return
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer)
+          featureWaits.delete(check)
+          stopViews()
+          resolve()
+        }
+        const check = () => {
+          if (!missing()) done()
+        }
+        // ponytail: an editor that never shows a feature delays the command 5 s; editors could report the features they skip.
+        const timer = setTimeout(done, 5000)
+        const stopViews = documentRuntime.subscribeViews(check)
+        featureWaits.add(check)
+      })
+    },
+    [featureWaits, sources],
   )
   const executeCommand = useCallback(
     async (
@@ -691,6 +763,7 @@ export function useAddons(
       context: CommandExecutionContext = captureCommandContext('api'),
     ) => {
       await activateAddon(owner)
+      await featuresShown(owner, context.view)
       const command = registered.get(`${owner}.${commandId}`)
       if (!command || !currentActivation.current.available.has(owner))
         throw new Error('This command is no longer available.')
@@ -701,7 +774,7 @@ export function useAddons(
         throw new Error('The command target is no longer available.')
       await command.run(context)
     },
-    [activateAddon, captureCommandContext, registered],
+    [activateAddon, featuresShown, captureCommandContext, registered],
   )
   useEffect(
     () =>
@@ -723,17 +796,6 @@ export function useAddons(
   const [markdownExtensions, setMarkdownExtensions] = useState<
     MarkdownExtension[]
   >([])
-  const sources = useRef(
-    new Map<
-      string,
-      SourceExtension & {
-        addonId: string
-        presentation: 'source' | 'formatted'
-        fail?: (error: unknown) => void
-        drop?: () => void
-      }
-    >(),
-  ).current
   /** Editor features that failed in any window, with their addons and activations, until those stop. */
   const failedFeatures = useRef(
     new Map<string, { addonId: string; activation: number }>(),
@@ -804,7 +866,9 @@ export function useAddons(
         ? current
         : next
     })
-  }, [sources])
+    // A command stops waiting for features that left, as when their addon stops.
+    for (const check of [...featureWaits]) check()
+  }, [sources, featureWaits])
   const publishExtensions = useCallback(() => {
     setMarkdownExtensions((current) => {
       const next = [...extensions.values()].sort(
@@ -1184,10 +1248,16 @@ export function useAddons(
             `This addon supplied a duplicate or invalid ${presentation}-editor feature: ${key}.`,
           )
         let remove = () => {}
+        const views = new Map<string, number>()
         const entry = {
           id: key,
           addonId: id,
           presentation,
+          views,
+          // Editing is ready before it starts; input does not wait for it.
+          ...(addon.manifest.startup === 'background'
+            ? { background: true }
+            : {}),
           async create(...args: Parameters<SourceExtension['create']>) {
             if (disposed) return []
             try {
@@ -1196,7 +1266,19 @@ export function useAddons(
                 `${presentation} attachment:${extension.id}`,
                 () => (extension.create as SourceExtension['create'])(...args),
               )
-              return disposed ? [] : result
+              const viewId = args[0]?.viewId
+              if (disposed) return []
+              if (!viewId) return result
+              // Commands wait until the editor of their view shows this.
+              const { ViewPlugin } = await import('@codemirror/view')
+              return disposed
+                ? []
+                : [
+                    result,
+                    ViewPlugin.define(() => ({
+                      destroy: showFeature(views, viewId, featureWaits),
+                    })),
+                  ]
             } catch (error) {
               throw new Error(
                 `${addon.manifest.name} could not start its ${presentation} editor feature.`,
@@ -2299,9 +2381,11 @@ export function useAddons(
         const starting =
           required.has(id) || requested.has(id)
             ? measuredStart()
-            : new Promise<void>((resolve) =>
-                requestIdleCallback(() => resolve(), { timeout: 1000 }),
-              ).then(() => {
+            : new Promise<void>((resolve) => {
+                // A request for this addon ends the wait.
+                idleStarts.set(id, resolve)
+                requestIdleCallback(() => resolve(), { timeout: 1000 })
+              }).then(() => {
                 if (!disposed) return measuredStart()
               })
         void starting
@@ -2332,6 +2416,8 @@ export function useAddons(
     requested,
     activation,
     started,
+    idleStarts,
+    featureWaits,
     executeCommand,
     activateAddon,
     exchange,
@@ -2695,8 +2781,13 @@ export function useAddons(
             context ?? captureCommandContext('api'),
           ),
       })),
+      // Declared commands of addons that cannot start in this window stay out of it.
       ...catalog
-        .filter((addon) => available.has(addon.manifest.id))
+        .filter(
+          (addon) =>
+            available.has(addon.manifest.id) &&
+            !windowBlocked(addon.manifest.id),
+        )
         .flatMap((addon) =>
           (addon.manifest.commands ?? [])
             .filter(
@@ -2721,6 +2812,7 @@ export function useAddons(
     commands,
     catalog,
     available,
+    windowBlocked,
     registered,
     executeCommand,
     captureCommandContext,

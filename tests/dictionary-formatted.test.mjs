@@ -15,8 +15,11 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
 
-/** Launch with the dictionary and autocomplete, and answer lookups from fixtures. */
-async function launch(t, files) {
+/**
+ * Launch with the dictionary and autocomplete, and answer lookups from fixtures.
+ * `held` keeps background addons from starting by themselves, so only a command can start them.
+ */
+async function launch(t, files, { held = false } = {}) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-formatted-'))
   for (const [name, text] of Object.entries(files))
     await writeFile(join(profile, name), text)
@@ -37,7 +40,28 @@ async function launch(t, files) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   await waitForDocumentEditor(app, page)
-  // The dictionary starts in the background; a lookup before it does is lost.
+  // Background addons start from an idle callback with a 1 s timeout; held,
+  // they wait for `heldStarts`. The script reaches the window from its next load.
+  if (held) {
+    await app.context().addInitScript(() => {
+      const idle = window.requestIdleCallback.bind(window)
+      const starts = []
+      window.heldStarts = starts
+      window.requestIdleCallback = (callback, options) => {
+        if (options?.timeout !== 1000) return idle(callback, options)
+        starts.push(() => idle(callback, options))
+        return 0
+      }
+      // A command's wait for its addon's editor features gives up after 5 s;
+      // held, that never happens, so only the features can end the wait.
+      const timeout = window.setTimeout.bind(window)
+      window.setTimeout = (callback, delay, ...rest) =>
+        delay === 5000 ? 0 : timeout(callback, delay, ...rest)
+    })
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+  }
+  // Its manifest binds the shortcut, even before it starts in the background.
   await waitForAddonShortcut(page, 'dictionary.synonyms')
   const responses = {
     'https://en.wiktionary.org/api/rest_v1/page/definition/happy':
@@ -506,4 +530,110 @@ test('in the formatted view a press in a selection keeps it for the dictionary',
     await page.keyboard.press('Escape')
     await define.waitFor({ state: 'hidden' })
   }
+})
+
+// Shift+F7 and the editor's menu reach the dictionary before it starts in the
+// background, start it, and look up the word once it tracks the view.
+test("in the formatted view, Shift+F7 before the dictionary starts finds the caret word's synonyms", {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today'
+  const { app, page, open } = await launch(
+    t,
+    { 'note.md': note },
+    { held: true },
+  )
+  await open('note.md')
+  await caret(page, 'I am Ha'.length)
+  assert.ok(await page.evaluate(() => window.heldStarts.length))
+  await chooseSynonym(app, page, 'Happy', 'glad')
+  await saved(page, 'I am Glad today')
+})
+
+// The command waits for the source editor's feature, not the hidden formatted one's.
+test("in the source view, Shift+F7 before the dictionary starts finds the caret word's synonyms", {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today'
+  const { app, page, open } = await launch(
+    t,
+    { 'note.md': note },
+    { held: true },
+  )
+  await open('note.md')
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await caret(page, 'I am Ha'.length, '.source-pane')
+  assert.ok(await page.evaluate(() => window.heldStarts.length))
+  await chooseSynonym(app, page, 'Happy', 'glad')
+  await saved(page, 'I am Glad today')
+})
+
+test('in the formatted view, a right-click before the dictionary starts offers it for the pressed word', {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today\n\nThe zorp is here'
+  const { page, open } = await launch(t, { 'note.md': note }, { held: true })
+  await open('note.md')
+  const formatted = page.locator('.rich-pane .formatted-editor .cm-content')
+  await page
+    .locator('.rich-pane .cm-line', { hasText: 'I am Happy today' })
+    .waitFor()
+  await caret(page, note.length)
+  assert.ok(await page.evaluate(() => window.heldStarts.length))
+  const word = await formatted.evaluate(
+    (element, at) => element.cmTile.root.view.coordsAtPos(at),
+    note.indexOf('Happy') + 2,
+  )
+  await page.mouse.click(word.left, (word.top + word.bottom) / 2, {
+    button: 'right',
+  })
+  const menu = page.getByRole('menu', { name: 'Editor actions' })
+  for (const name of ['Define word', 'Find synonyms', 'Add word to dictionary'])
+    await menu.getByRole('menuitem', { name: new RegExp(`^${name}`) }).waitFor()
+  await menu.getByRole('menuitem', { name: /^Define word/ }).click()
+  await page
+    .getByRole('dialog', { name: 'Define “Happy”' })
+    .getByText('Music makes me feel happy.')
+    .waitFor()
+})
+
+test('in the formatted view, a dictionary that starts while a note is open leaves the view editable and focused', {
+  timeout: 60000,
+}, async (t) => {
+  const note = 'I am Happy today'
+  const { app, page, open } = await launch(
+    t,
+    { 'note.md': note },
+    { held: true },
+  )
+  await open('note.md')
+  await caret(page, 'I am Ha'.length)
+  await formattedFocused(page)
+  // Record each moment the view stops taking input, or loses focus to
+  // nothing, from the start on.
+  await page.evaluate(() => {
+    const content = document.querySelector(
+      '.rich-pane .formatted-editor .cm-content',
+    )
+    const lost = []
+    window.inputLost = lost
+    new MutationObserver(() => {
+      if (content.contentEditable !== 'true') lost.push('read-only')
+    }).observe(content, {
+      attributes: true,
+      attributeFilter: ['contenteditable'],
+    })
+    content.addEventListener('blur', ({ relatedTarget }) => {
+      if (!relatedTarget) lost.push('blur')
+    })
+    for (const start of window.heldStarts.splice(0)) start()
+  })
+  await page
+    .locator('style[data-addon-style="dictionary.dictionary"]')
+    .waitFor({ state: 'attached' })
+  // The lookup runs once the view has the dictionary.
+  await chooseSynonym(app, page, 'Happy', 'glad')
+  await saved(page, 'I am Glad today')
+  assert.deepEqual(await page.evaluate(() => window.inputLost), [])
 })

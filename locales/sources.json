@@ -185,6 +185,7 @@
     "src/addons/dictionary/index.tsx"
   ],
   "9c830cc7200a": [
+    "src/addons/dictionary/hibi-addon.json",
     "src/addons/dictionary/index.tsx"
   ],
   "022c1a6073fb": [
@@ -1637,6 +1638,7 @@
     "src/addons/graph/Settings.tsx"
   ],
   "934e73cfc236": [
+    "src/addons/dictionary/hibi-addon.json",
     "src/addons/dictionary/index.tsx"
   ],
   "0daae4bccd6c": [
@@ -2512,6 +2514,7 @@
     "src/shared/source-search-index.ts"
   ],
   "4b41e058b4ff": [
+    "src/addons/dictionary/hibi-addon.json",
     "src/addons/dictionary/index.tsx"
   ],
   "2cee7495c451": [
@@ -5838,6 +5841,9 @@
   ],
   "32c1f3399caa": [
     "src/addons/documentation/ExportDialog.tsx"
+  ],
+  "d2cb42ff7704": [
+    "src/shared/addon-manifest.ts"
   ],
   "35aa67de3cc1": [
     "src/main/workspace-entry-transfer.ts"

@@ -426,22 +426,29 @@ const sameReferenceSyntax = (
   !!a.math === !!b.math &&
   a.frontmatter === b.frontmatter
 
-/** An editor feature. `fail` reports its failure and removes it from every editor; input waits for one without it. */
+/**
+ * An editor feature. `fail` reports its failure and removes it from every editor; input waits for one without it.
+ * `background` features come from addons that start after editing is ready, which are not input addons.
+ */
 type EditorFeature = (SourceExtension | FormattedExtension) & {
   fail?: (error: unknown) => void
+  background?: boolean
 }
 type InstalledFeature = { feature: EditorFeature; extension: Extension }
 
-/** Input does not wait for features this editor removed after they failed to leave. */
+/** Input does not wait for background features to arrive or leave, or for features this editor removed after they failed to leave. */
 const installedFor = (
   installed: readonly EditorFeature[],
   wanted: readonly EditorFeature[],
   failed: WeakSet<EditorFeature>,
 ) =>
   installed === wanted ||
-  (wanted.every((feature) => installed.includes(feature)) &&
+  (wanted.every(
+    (feature) => feature.background || installed.includes(feature),
+  ) &&
     installed.every(
-      (feature) => wanted.includes(feature) || failed.has(feature),
+      (feature) =>
+        feature.background || wanted.includes(feature) || failed.has(feature),
     ))
 
 const featureExtensions = (

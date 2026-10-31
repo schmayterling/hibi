@@ -165,7 +165,7 @@ test('remote https images neither send nor store cookies', {
   assert.deepEqual(await stored(app, origin), ['existing'])
 })
 
-test('remote https images skip the cache, so hosts get no validators to recognize a reader by', {
+test('remote https images loaded straight from their host skip the cache, so hosts get no validators to recognize a reader by', {
   timeout: 90000,
 }, async (t) => {
   const host = await imageHost(t)
@@ -330,7 +330,7 @@ test('held remote images keep no editor view alive, and a closed tab holds none'
   assert.equal(
     await live(
       'HTMLImageElement.prototype',
-      `function () { return this.filter((image) => image.src.startsWith(${JSON.stringify(origin)})).length }`,
+      "function () { return this.filter((image) => image.src.startsWith('app://remote-image/?')).length }",
       (count) => count === 0,
     ),
     0,
@@ -343,7 +343,7 @@ test('held remote images keep no editor view alive, and a closed tab holds none'
   )
 })
 
-test('PDF exports send image hosts no cookies or validators and keep no cookies between exports', {
+test('PDF exports draw remote images from the image cache, which sends image hosts no cookies and keeps none', {
   timeout: 60000,
 }, async (t) => {
   const { app, page, origin, cookies, validators, folder } = await imageHost(t)
@@ -362,7 +362,8 @@ test('PDF exports send image hosts no cookies or validators and keep no cookies 
     page,
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
-  await trust(app, origin, 'hibi-print')
+  // The cache downloads in the app's own session.
+  await trust(app, origin)
   for (const name of ['first', 'second']) {
     const target = join(folder, `${name}.pdf`)
     await app.evaluate(({ dialog }, target) => {
@@ -380,7 +381,8 @@ test('PDF exports send image hosts no cookies or validators and keep no cookies 
       target,
     )
   }
-  assert.deepEqual(cookies, [null, null])
-  assert.deepEqual(validators, [null, null])
-  assert.deepEqual(await stored(app, origin, 'hibi-print'), ['existing'])
+  // The second export draws the copy the first one kept.
+  assert.deepEqual(cookies, [null])
+  assert.deepEqual(validators, [null])
+  assert.deepEqual(await stored(app, origin), ['existing'])
 })

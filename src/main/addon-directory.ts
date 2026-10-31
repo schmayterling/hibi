@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
-import { app, net } from 'electron'
+import { app } from 'electron'
 import {
   ADDON_DIRECTORY_URL,
   type AddonDirectory,
@@ -13,6 +12,7 @@ import { validId } from '../shared/addon-manifest'
 import { MAX_ADDON_FILE_BYTES } from '../shared/addon-package'
 import { download } from './download'
 import { writeText } from './files'
+import { manualFetch } from './manual-fetch'
 
 const HOUR = 60 * 60 * 1000
 let cached: AddonDirectory | undefined
@@ -64,48 +64,6 @@ async function loadDirectory(refresh: boolean): Promise<AddonDirectory> {
   lastAttempt = Date.now()
   return refreshDirectory()
 }
-
-/**
- * `net.fetch` cancels every redirect under `redirect: 'manual'`, so this
- * answers a redirect with a response of its own, without a body, for
- * `download` to check before it requests the next address.
- */
-const manualFetch: typeof fetch = (input, init = {}) =>
-  new Promise((resolve, reject) => {
-    const request = net.request({
-      url: input instanceof Request ? input.url : String(input),
-      redirect: 'manual',
-      credentials: 'omit',
-    })
-    for (const [name, value] of new Headers(init.headers))
-      request.setHeader(name, value)
-    init.signal?.addEventListener(
-      'abort',
-      () => {
-        reject(init.signal?.reason)
-        request.abort()
-      },
-      { once: true },
-    )
-    request.on('redirect', (status, _method, location) => {
-      resolve(new Response(null, { status, headers: { location } }))
-      request.abort()
-    })
-    request.on('response', (message) => {
-      const headers = new Headers()
-      for (const [name, value] of Object.entries(message.headers))
-        for (const item of [value].flat()) headers.append(name, item)
-      // As in net.fetch, statuses that never have a body get none.
-      const body = [204, 205, 304].includes(message.statusCode)
-        ? null
-        : (Readable.toWeb(
-            message as unknown as Readable,
-          ) as ReadableStream<Uint8Array>)
-      resolve(new Response(body, { status: message.statusCode, headers }))
-    })
-    request.on('error', reject)
-    request.end()
-  })
 
 /**
  * Directory files come without credentials from the catalog's origin, which

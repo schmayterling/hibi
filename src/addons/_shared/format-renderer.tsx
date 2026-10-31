@@ -1,6 +1,10 @@
 import DOMPurify from 'dompurify'
 import { FileDown, Play } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import {
+  openRemoteImageMenu,
+  withCachedImages,
+} from '../../renderer/src/document-media'
 import { errorMessage } from '../../shared/errors'
 import { Button, SettingRow } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -71,13 +75,15 @@ async function htmlResult(
   return { html: parsed.body.innerHTML, css }
 }
 
-function HtmlPreview({ html }: { html: string }) {
+function HtmlPreview({ html, tab }: { html: string; tab: string }) {
   const host = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!host.current) return
     // Rendered content is sanitized before crossing this one HTML insertion boundary.
-    host.current.innerHTML = html
-  }, [html])
+    host.current.replaceChildren(withCachedImages(html, tab))
+    host.current.oncontextmenu = openRemoteImageMenu
+    host.current.onkeydown = openRemoteImageMenu
+  }, [html, tab])
   return <div ref={host} className="format-content" />
 }
 
@@ -306,7 +312,7 @@ export function startFormat(context: AddonContext, spec: FormatSpec) {
             <FormatPdf data={result.pdf} />
           </Suspense>
         ) : enabled && html ? (
-          <HtmlPreview html={html} />
+          <HtmlPreview html={html} tab={document.tabId} />
         ) : null}
       </div>
     )

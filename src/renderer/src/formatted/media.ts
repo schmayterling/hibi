@@ -8,11 +8,19 @@ import {
 import type { SyntaxNodeRef } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import type { DocumentMedia } from '../../../shared/media.ts'
-import { observeDocumentMedia } from '../document-media.ts'
+import {
+  isMenuKey,
+  menuImage,
+  observeDocumentMedia,
+  remoteImageMenu,
+  remoteImageSource,
+} from '../document-media.ts'
 import { documentRuntime } from '../document-runtime.ts'
+import type { EditorActionsRequest } from '../editor-interactions'
 import {
   type FormattedContribution,
   formattedDocument,
+  formattedSyntaxTree,
 } from '../formatted-contributions.ts'
 import './media.css'
 
@@ -47,10 +55,11 @@ export function imageOf(state: EditorState, node: SyntaxNodeRef) {
 }
 
 /**
- * Loaded remote images each open tab has drawn, most recent last. Remote
- * image requests skip the HTTP cache, so holding an image keeps it in the
- * page's memory: drawn again after scrolling back or switching tabs, it shows
- * without another download. A tab lets go of its images when it closes.
+ * Loaded remote images each open tab has drawn, most recent last. The image
+ * cache answers with `no-store`, so a widget drawn again after scrolling back
+ * or switching tabs would wait for its image to load again; while the page
+ * holds the loaded one, it is drawn at once, in shape. A tab lets go of its
+ * images when it closes.
  */
 const held = new Map<string, Map<string, HTMLImageElement>>()
 /** At most this many per tab, so a note full of remote images stays bounded. */
@@ -68,15 +77,20 @@ function hold(view: EditorView, media: Element) {
     // A lazy image kept waiting off screen is not complete, but it is sized
     // once a copy loaded for an earlier widget arrives.
     !media.naturalWidth ||
-    !/^https:/i.test(media.src)
+    !remoteImageSource(media)
   )
     return false
   if (!watching) {
     watching = true
     // The runtime drops a closed tab's session, and its images go with it.
     documentRuntime.subscribeCatalog(() => {
-      for (const id of held.keys())
-        if (!documentRuntime.session(id)) held.delete(id)
+      for (const [id, images] of held)
+        if (!documentRuntime.session(id)) {
+          // One still loading would stay alive, and keep loading, until its
+          // load ends.
+          for (const image of images.values()) if (!image.complete) clear(image)
+          held.delete(id)
+        }
     })
   }
   let images = held.get(tabId)
@@ -86,10 +100,16 @@ function hold(view: EditorView, media: Element) {
   }
   // Out of its widget, the image keeps no destroyed view's DOM alive.
   media.remove()
+  const previous = images.get(media.src)
+  if (previous && previous !== media && !previous.complete) clear(previous)
   images.delete(media.src)
   images.set(media.src, media)
   const [oldest = ''] = images.keys()
-  if (images.size > HELD_PER_TAB) images.delete(oldest)
+  if (images.size > HELD_PER_TAB) {
+    const evicted = images.get(oldest)
+    images.delete(oldest)
+    if (evicted && !evicted.complete) clear(evicted)
+  }
   return true
 }
 
@@ -189,7 +209,12 @@ export class MediaWidget extends WidgetType {
       bind: (revision) => {
         // The new resolution starts before the old one is let go.
         const previous = release
-        release = observeDocumentMedia(this.source, revision, render)
+        release = observeDocumentMedia(
+          this.source,
+          revision,
+          render,
+          view.state.facet(formattedDocument).tabId,
+        )
         previous?.()
       },
       release: () => {
@@ -268,14 +293,91 @@ function clear(media: Element) {
   }
 }
 
-/** Drawn media follow a new document revision without being drawn again. */
+/** Drawn media follow a new document revision or tab without being drawn again. */
 const revisions = ViewPlugin.fromClass(
   class {
     update(update: ViewUpdate) {
-      const { revision } = update.state.facet(formattedDocument)
-      if (revision === update.startState.facet(formattedDocument).revision)
-        return
+      const { revision, tabId } = update.state.facet(formattedDocument)
+      const previous = update.startState.facet(formattedDocument)
+      if (revision === previous.revision && tabId === previous.tabId) return
       for (const binding of drawn.get(update.view) ?? []) binding.bind(revision)
+    }
+  },
+)
+
+/** The drawn remote image of the image whose source holds the selection, or null. */
+function selectedRemoteImage(view: EditorView) {
+  const tree = formattedSyntaxTree(view.state)
+  const { head } = view.state.selection.main
+  for (const side of [-1, 1] as const)
+    for (
+      let node = tree?.resolveInner(head, side) ?? null;
+      node;
+      node = node.parent
+    ) {
+      if (node.name !== 'Image' && node.name !== 'HTMLImage') continue
+      for (const image of view.contentDOM.querySelectorAll('img')) {
+        const at = view.posAtDOM(image)
+        if (at >= node.from && at <= node.to && remoteImageSource(image))
+          return image
+      }
+      break
+    }
+  return null
+}
+
+/**
+ * Right-clicking a remote image, or Shift+F10 or the menu key with the
+ * selection in one, offers to fetch it again, first among the editor's actions.
+ */
+const refreshMenu = ViewPlugin.fromClass(
+  class {
+    view: EditorView
+    constructor(view: EditorView) {
+      this.view = view
+      view.dom.addEventListener('contextmenu', this.context, true)
+      view.dom.addEventListener('keydown', this.key, true)
+    }
+    context = (event: MouseEvent) => {
+      // The menu key's event comes from no button; its menu opens at the selection.
+      if (event.button < 0) this.atSelection(event)
+      else {
+        const image = menuImage(event)
+        if (image) this.open(event, image, event.clientX, event.clientY)
+      }
+    }
+    key = (event: KeyboardEvent) => {
+      if (isMenuKey(event)) this.atSelection(event)
+    }
+    /** Opens the actions of the remote image holding the selection, below it. */
+    atSelection(event: Event) {
+      const image = selectedRemoteImage(this.view)
+      const caret =
+        image && this.view.coordsAtPos(this.view.state.selection.main.head)
+      if (image && caret) this.open(event, image, caret.left, caret.bottom + 6)
+    }
+    open(event: Event, image: HTMLImageElement, x: number, y: number) {
+      const menu = remoteImageMenu(image, { x, y })
+      if (!menu) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      const request = new CustomEvent<EditorActionsRequest>(
+        'hibi:editor-actions-request',
+        {
+          cancelable: true,
+          detail: {
+            position: this.view.posAtDOM(image),
+            x,
+            y,
+            items: menu.items,
+          },
+        },
+      )
+      if (this.view.contentDOM.dispatchEvent(request)) menu.open()
+    }
+    destroy() {
+      this.view.dom.removeEventListener('contextmenu', this.context, true)
+      this.view.dom.removeEventListener('keydown', this.key, true)
     }
   },
 )
@@ -289,7 +391,7 @@ const marker = { class: 'hibi-lp-marker' }
 export const contribution: FormattedContribution = {
   id: 'core.images',
   feature: 'core.images',
-  extension: revisions,
+  extension: [revisions, refreshMenu],
   views: [
     {
       nodes: ['Image'],

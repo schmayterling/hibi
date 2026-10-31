@@ -41,6 +41,7 @@ export const MEDIA_CHANNELS = {
   read: 'media:read',
   resolve: 'media:resolve',
   cancel: 'media:cancel',
+  refreshRemote: 'media:refresh-remote',
   scopeChanged: 'media:scope-changed',
   open: 'media:open-dropped',
 } as const

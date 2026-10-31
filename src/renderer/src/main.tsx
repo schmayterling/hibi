@@ -231,12 +231,16 @@ function App() {
   }, [settingTarget, settingsCategory])
   const dialogs = useDialogs()
   const toasts = useToasts()
-  const errorNotice = useRef<ToastHandle | null>(null)
+  // An addon's failure is not the open document's, so each has its own
+  // notice: the next document operation clears a document error only.
+  const errorNotices = useRef<
+    Partial<Record<'document' | 'addon', ToastHandle | null>>
+  >({})
   const setError = useCallback(
-    (message: string) => {
-      errorNotice.current?.dismiss()
+    (message: string, owner: 'document' | 'addon' = 'document') => {
+      errorNotices.current[owner]?.dismiss()
       // Main-process failures arrive wrapped in Electron's IPC error text.
-      errorNotice.current = message
+      errorNotices.current[owner] = message
         ? toasts.show({ message: errorMessage(message), variant: 'error' })
         : null
     },
@@ -947,6 +951,7 @@ function App() {
           error instanceof Error
             ? error.message
             : 'The addon could not complete this action.',
+          'addon',
         ),
     },
     document?.name,

@@ -2520,6 +2520,10 @@ function tableAt(view: EditorView, pos: number, strict = false) {
   return null
 }
 
+/** Whether a position of the formatted view is inside a table, whose cells show their text where a collapsed range shows none. */
+export const tableShows = (view: EditorView, pos: number) =>
+  tableAt(view, pos, true) !== null
+
 /** Views that dropped a focused cell editor while taking no input, to take focus back once they do. */
 const regaining = new WeakSet<EditorView>()
 

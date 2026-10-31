@@ -12,9 +12,18 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// What the formatted view's handle drew while it matched the removed rich
+// view's, and the rich view's own handle colors.
+const check = frozenSnapshot('formatted-block-drag')
+const richHandle = frozenOracle('formatted-block-drag-rich')
 
 const note = `# hello **world**
 
@@ -157,7 +166,11 @@ before(
       ).join('\n\n'),
     )
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     // Quitting with edited notes answers the unsaved-changes prompt.
     await app.evaluate(({ dialog }) => {
@@ -179,39 +192,14 @@ after(
 )
 
 /**
- * The window's pixels in `rect`, as drawn. Not page.screenshot: on Windows and
- * Linux its clip resizes the page while capturing, and a shown window then
- * gets a mouse move from wherever the desktop's pointer rests.
- */
-async function capture(rect) {
-  // A frame drawn after the last change.
-  await page.evaluate(
-    () =>
-      new Promise((done) =>
-        requestAnimationFrame(() => requestAnimationFrame(done)),
-      ),
-  )
-  const png = await app.evaluate(async ({ BrowserWindow }, rect) => {
-    const window = BrowserWindow.getAllWindows().find(
-      (window) => window.webContents.getURL() === 'app://hibi/',
-    )
-    const image = await window.webContents.capturePage(rect, {
-      stayHidden: true,
-    })
-    return image.toPNG().toString('base64')
-  }, rect)
-  return Buffer.from(png, 'base64')
-}
-
-/**
  * Hover each block's first line of text and report where the handle goes,
- * relative to the pane, with its look at rest and under the pointer.
+ * relative to the pane, with its look at rest and under the pointer, and what
+ * it draws at rest: each of its elements' tag, classes, paint and box.
  */
 async function handles(targets) {
   const out = []
   for (const target of targets) {
-    const box = await hover(target)
-    const { top } = box
+    await hover(target)
     const measured = await grip().evaluate((handle) => {
       const pane = handle.closest('.rich-pane').getBoundingClientRect()
       const rect = handle.getBoundingClientRect()
@@ -228,11 +216,40 @@ async function handles(targets) {
         transition: style.transitionDuration,
       }
     })
-    const image = await capture({
-      x: Math.round(box.x - 40),
-      y: Math.round(box.y + top - 4),
-      width: 40,
-      height: 34,
+    const drawn = await grip().evaluate((handle) => {
+      const pane = handle.closest('.rich-pane').getBoundingClientRect()
+      const round = (value) => Math.round(value * 10) / 10
+      const result = { shape: [], paint: [], boxes: [] }
+      for (const element of [handle, ...handle.querySelectorAll('*')]) {
+        const style = getComputedStyle(element)
+        const drawing = element instanceof SVGElement
+        result.shape.push({
+          element: [
+            element.tagName.toLowerCase(),
+            ...[...element.classList].sort(),
+          ].join('.'),
+          display: style.display,
+          visibility: style.visibility,
+          opacity: style.opacity,
+          border: `${style.borderTopWidth} ${style.borderTopStyle}`,
+          radius: style.borderTopLeftRadius,
+          ...(drawing && { strokeWidth: style.strokeWidth }),
+        })
+        result.paint.push({
+          color: style.color,
+          backgroundColor: style.backgroundColor,
+          borderColor: style.borderTopColor,
+          ...(drawing && { fill: style.fill, stroke: style.stroke }),
+        })
+        const box = element.getBoundingClientRect()
+        result.boxes.push([
+          round(box.left - pane.left),
+          round(box.top - pane.top),
+          round(box.width),
+          round(box.height),
+        ])
+      }
+      return result
     })
     // Under the pointer, the handle takes the hover colors.
     const handle = await grip().boundingBox()
@@ -245,94 +262,44 @@ async function handles(targets) {
       const style = getComputedStyle(handle)
       return [style.color, style.backgroundColor]
     })
-    out.push({ target, ...measured, hovered, image })
+    out.push({ target, ...measured, hovered, drawn })
   }
   return out
 }
 
-const difference = (a, b) =>
-  app.evaluate(
-    ({ nativeImage }, images) => {
-      const [left, right] = images.map((image) =>
-        nativeImage.createFromBuffer(Buffer.from(image, 'base64')).toBitmap(),
-      )
-      if (left.length !== right.length) return 1
-      let changed = 0
-      for (let i = 0; i < left.length; i += 4)
-        if (
-          Math.abs(left[i] - right[i]) > 8 ||
-          Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-          Math.abs(left[i + 2] - right[i + 2]) > 8
-        )
-          changed++
-      return changed / (left.length / 4)
-    },
-    [a, b].map((image) => image.toString('base64')),
-  )
-
-test('the formatted view’s handle sits and looks like the rich view’s, in light and dark', {
+test('the formatted view’s handle keeps the rich view’s colors and its recorded place and drawing, in light and dark', {
   timeout: 120000,
-}, async () => {
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
-  await open('note.md')
-  await page.locator('.tiptap h1').waitFor()
-  const rich = {}
-  for (const scheme of ['hibi-light', 'hibi-dark']) {
-    await applyPalette(scheme)
-    rich[scheme] = await handles([
-      '.tiptap h1',
-      '.tiptap > p >> nth=0',
-      '.tiptap li >> nth=0',
-      '.tiptap li li',
-      '.tiptap pre',
-    ])
-  }
-  await page.mouse.move(0, 0)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('note.md')
   await page.locator('.rich-pane .hibi-lp-h1').waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
-  const report = []
+  const blocks = {
+    heading: '.rich-pane .hibi-lp-h1',
+    paragraph: '.rich-pane .cm-line:has-text("second paragraph")',
+    item: '.rich-pane .hibi-lp-list-item:has-text("first item")',
+    nested: '.rich-pane .hibi-lp-list-item:has-text("nested item")',
+    code: '.rich-pane .hibi-lp-codeblock-first',
+  }
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
-    const formatted = await handles([
-      '.rich-pane .hibi-lp-h1',
-      '.rich-pane .cm-line:has-text("second paragraph")',
-      '.rich-pane .hibi-lp-list-item:has-text("first item")',
-      '.rich-pane .hibi-lp-list-item:has-text("nested item")',
-      '.rich-pane .hibi-lp-codeblock-first',
-    ])
-    formatted.forEach((handle, index) => {
-      const expected = rich[scheme][index]
-      for (const [i, value] of handle.box.entries())
-        assert.ok(
-          Math.abs(value - expected.box[i]) <= 1,
-          `${scheme} ${handle.target}: ${handle.box} vs ${expected.box}`,
-        )
-      assert.equal(handle.color, expected.color, handle.target)
-      assert.equal(handle.background, expected.background, handle.target)
-      assert.deepEqual(handle.hovered, expected.hovered, handle.target)
+    const formatted = await handles(Object.values(blocks))
+    for (const [index, block] of Object.keys(blocks).entries()) {
+      const handle = formatted[index]
+      const rich = richHandle({ scheme, block })
+      // Beside the block's first line, within a pixel of where it was recorded.
+      check(`${block} place`, handle.box, { tolerance: 1 })
+      assert.equal(handle.color, rich.color, block)
+      assert.equal(handle.background, rich.background, block)
+      assert.deepEqual(handle.hovered, rich.hovered, block)
       assert.notDeepEqual(handle.hovered, [handle.color, handle.background])
-      assert.equal(handle.transition, expected.transition)
-    })
-    for (const [index, handle] of formatted.entries())
-      report.push({
-        scheme,
-        target: handle.target,
-        difference: await difference(handle.image, rich[scheme][index].image),
+      assert.equal(handle.transition, rich.transition)
+      check(`${block} drawn`, handle.drawn.shape)
+      check(`${block} ${scheme} paint`, handle.drawn.paint)
+      check(`${block} parts`, handle.drawn.boxes, {
+        tolerance: 1,
       })
+    }
   }
-  console.log(JSON.stringify(report))
-  for (const { scheme, target, difference } of report)
-    assert.ok(difference < 0.02, `${scheme} ${target}: ${difference}`)
   await applyPalette('hibi-light')
 })
 
@@ -570,9 +537,6 @@ test('in a long note the handle follows the block under the pointer and moves it
 test('native tab activates the caret block without hover and tall blocks keep their handle', {
   timeout: 120000,
 }, async () => {
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   const session = await page.context().newCDPSession(page)

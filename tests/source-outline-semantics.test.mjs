@@ -1,114 +1,33 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getSchema } from '@tiptap/core'
-import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
-import { Strike } from '@tiptap/extension-strike'
-import { MarkdownManager } from '@tiptap/markdown'
 import { Marked } from 'marked'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
-import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
-import {
-  blockMath,
-  blockMathStart,
-  inlineMath,
-  mathTokens,
-} from '../src/addons/math/syntax.ts'
-import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
-import { documentImage } from '../src/renderer/src/DocumentImage.ts'
-import { editorExtensions } from '../src/renderer/src/markdown.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
 import { createOutlineLabelRenderer } from '../src/renderer/src/source-outline-label.ts'
 import { createOutlineLabelReader } from '../src/renderer/src/source-outline-label.worker.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { frozenOracle } from './frozen-oracle.mjs'
 
-const flavors = [
-  {
-    id: 'markdown.github',
-    markedOptions: { gfm: true },
-    richExtensions: [GithubAlert, Strike],
-    export: { extensions: [alertMarkdown] },
-  },
-  {
-    id: 'text-extras.text-extras',
-    richExtensions: [Subscript, Subtext],
-    export: { extensions: [textExtrasMarkdown] },
-  },
-]
-const mathFlavor = {
-  id: 'math.latex',
-  richExtensions: [
-    InlineMath.extend({
-      markdownTokenizer: {
-        name: 'inlineMath',
-        level: 'inline',
-        start: (source) => source.indexOf('$'),
-        tokenize: inlineMath,
-      },
-    }),
-    BlockMath.extend({
-      markdownTokenizer: {
-        name: 'blockMath',
-        level: 'block',
-        start: blockMathStart,
-        tokenize: blockMath,
-      },
-    }),
-  ],
-  export: { extensions: [mathTokens] },
-}
+const native = frozenOracle('source-outline-semantics')
+const flavors = ['markdown.github', 'text-extras.text-extras']
+const mathFlavor = 'math.latex'
 const body = (source) => readFrontmatter(source)?.content ?? source
 
-function nativeHeadings(source, activeFlavors = flavors) {
-  const extensions = [
-    ...editorExtensions(activeFlavors),
-    ...(markdownSyntax.enabled('core.images') ? [documentImage(0)] : []),
-  ]
-  const markdown = extensions.find((extension) => extension.name === 'markdown')
-  const manager = new MarkdownManager({
-    extensions,
-    marked: markdown.options.marked,
-    markedOptions: markdown.options.markedOptions,
-  })
-  const document = getSchema(extensions).nodeFromJSON(
-    manager.parse(body(source)),
-  )
-  const headings = []
-  document.descendants((node) => {
-    if (node.type.name !== 'heading') return
-    // Inline formulas read as their LaTeX, and stay apart in the label parts.
-    const parts = []
-    node.forEach((child) => {
-      if (child.type.name === 'inlineMath')
-        parts.push({ latex: child.attrs.latex })
-      else if (typeof parts.at(-1) === 'string')
-        parts[parts.length - 1] += child.textContent
-      else parts.push(child.textContent)
-    })
-    const label = parts
-      .map((part) => (typeof part === 'string' ? part : part.latex))
-      .join('')
-    const math = parts.some((part) => typeof part !== 'string')
-    headings.push({
-      label: label.replace(/\s+/g, ' ').trim() || 'Untitled heading',
-      level: Number(node.attrs.level),
-      ...(math && {
-        parts: parts
-          .map((part, index) =>
-            typeof part !== 'string'
-              ? part
-              : part
-                  .replace(/\s+/g, ' ')
-                  .replace(index === 0 ? /^ / : /(?!)/, '')
-                  .replace(index === parts.length - 1 ? / $/ : /(?!)/, ''),
-          )
-          .filter((part) => part !== ''),
-      }),
-    })
-  })
-  return headings
+/**
+ * The removed rich editor's headings in `source`, with the GitHub and text
+ * extras flavors, math with `math`, and the syntax features turned off now:
+ * each heading's text content as its label, with inline formulas as their
+ * LaTeX and, when it has any, as parts.
+ */
+function nativeHeadings(source, math = false) {
+  const off = markdownSyntax
+    .snapshot()
+    .filter((feature) => !feature.enabled)
+    .map((feature) => feature.id)
+  return native({ kind: 'headings', source, math, off })
 }
 
 function referenceOracle(source) {
@@ -134,9 +53,8 @@ function finish(work, resolve, readLabel) {
 }
 
 function setup(source, { math = false, deferLabels = false } = {}) {
-  const activeFlavors = math ? [...flavors, mathFlavor] : flavors
   const consumer = createOutlineLabelRenderer(
-    activeFlavors.map((flavor) => flavor.id),
+    math ? [...flavors, mathFlavor] : flavors,
   )
   assert.ok(consumer)
   const store = new SourceStore(source, {
@@ -152,7 +70,7 @@ function setup(source, { math = false, deferLabels = false } = {}) {
     deferLabels,
     renderLabel: consumer,
   })
-  return { store, model, activeFlavors }
+  return { store, model }
 }
 
 function edit(store, model, changes) {
@@ -171,7 +89,7 @@ function edit(store, model, changes) {
 }
 
 function check(source, options) {
-  const { model, activeFlavors } = setup(source, options)
+  const { model } = setup(source, options)
   try {
     const actual = finish(model.read(), referenceOracle(source))
     assert.deepEqual(
@@ -180,7 +98,7 @@ function check(source, options) {
         level,
         ...(parts && { parts }),
       })),
-      nativeHeadings(source, activeFlavors),
+      nativeHeadings(source, options?.math),
       source,
     )
     return actual
@@ -268,17 +186,15 @@ for (const [disabled, text, label] of [
   ['math.inline', 'H~$x$~O', 'HO'],
 ])
   test(`source outline subscript matches frozen native labels with ${disabled} disabled: ${text}`, () => {
-    const activeFlavors = [...flavors, mathFlavor]
     const reader = createOutlineLabelReader({
       syntax: { gfm: true, alerts: true, textExtras: true, math: true },
-      flavors: activeFlavors.map((flavor) => flavor.id),
+      flavors: [...flavors, mathFlavor],
       disabled: [disabled],
     })
     try {
       for (const padding of ['', 'heading '.repeat(90)]) {
         const source = `# ${padding}${text}`
         const expected = [{ label: padding + label, level: 1 }]
-        assert.deepEqual(nativeHeadings(source, activeFlavors), expected)
         for (const deferLabels of [false, true]) {
           const { model } = setup(source, { math: true, deferLabels })
           try {
@@ -517,7 +433,7 @@ test('deferred labels preserve complete native formatting, references, math and 
   for (const off of [false, true]) {
     const reader = createOutlineLabelReader({
       syntax: { gfm: true, alerts: true, textExtras: true, math: true },
-      flavors: [...flavors, mathFlavor].map((flavor) => flavor.id),
+      flavors: [...flavors, mathFlavor],
       disabled: off ? disabled : [],
     })
     const nested = `${'*a '.repeat(1000)}b${' a*'.repeat(1000)}`
@@ -529,7 +445,7 @@ test('deferred labels preserve complete native formatting, references, math and 
       )
     }
     for (const source of fixtures) {
-      const { model, activeFlavors } = setup(source, {
+      const { model } = setup(source, {
         math: true,
         deferLabels: true,
       })
@@ -551,7 +467,7 @@ test('deferred labels preserve complete native formatting, references, math and 
             level,
             ...(parts && { parts }),
           })),
-          nativeHeadings(source, activeFlavors),
+          nativeHeadings(source, true),
         )
       } finally {
         model.dispose()

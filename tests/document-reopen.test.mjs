@@ -9,22 +9,15 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import nodeTest from 'node:test'
+import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
-
-// Newer cases run in the CodeMirror formatted view only; Tiptap is being removed.
-function codemirrorTest(name, options, run) {
-  nodeTest(`codemirror: ${name}`, options, (t) => {
-    t.formattedEngine = 'codemirror'
-    return run(t)
-  })
-}
 
 // Resolves once main has finished the next request on this channel.
 async function replied(app, channel) {
@@ -69,7 +62,7 @@ async function setup(t) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(15000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog, BrowserWindow }, file) => {
     for (const window of BrowserWindow.getAllWindows())
@@ -252,7 +245,7 @@ for (const slowChunk of [false, true])
       const chunks = JSON.parse(
         await readFile('out/renderer/startup-bundle.json', 'utf8'),
       )
-      const module = `src/renderer/src/${t.formattedEngine === 'tiptap' ? 'Editor' : 'FormattedEditor'}.tsx`
+      const module = `src/renderer/src/FormattedEditor.tsx`
       const asset = chunks.find((chunk) => chunk.modules.includes(module)).file
       await app.evaluate(({ app, protocol, net }, asset) => {
         const { join } = process.getBuiltinModule('node:path')
@@ -978,411 +971,378 @@ test('a link to the note itself, its explorer row and dropping it check for outs
   })
 })
 
-codemirrorTest(
-  'closing a tab checks the tab shown next for outside changes',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const setupState = await setup(t)
-    const { app, page, notes, file, read, idle, open, content } = setupState
-    const { answer, prompts, state, type } = setupState
-    const note = (await read()).tabId
-    const close = async () => {
-      const done = await replied(app, 'document:close-tab')
-      await page.getByRole('button', { name: /^close other\.md$/i }).click()
-      await done()
-      await idle()
-      return prompts()
-    }
-    await writeFile(join(notes, 'other.md'), 'other note\n')
-    await answer(2, join(notes, 'other.md'))
-    await open()
-    await content('other note\n')
-    // A clean tab shows its file's latest text, as a tab switch does.
-    await writeFile(file, 'outside text\n')
-    assert.deepEqual(await close(), [])
-    assert.deepEqual(await state(), {
-      tabId: note,
-      markdown: 'outside text\n',
-      dirty: false,
-      ephemeral: false,
-    })
-    await content('outside text\n')
-    // Edits whose file changed ask once; Cancel keeps the edits and the file.
-    const draft = await type('local draft')
-    await open()
-    await content('other note\n')
-    await writeFile(file, 'another outside text\n')
-    await answer(1)
-    assert.deepEqual(await close(), ['note.md changed outside Hibi.'])
-    assert.deepEqual(await state(), {
-      tabId: note,
-      markdown: draft,
-      dirty: true,
-      ephemeral: false,
-    })
-    await content(draft)
-    assert.equal(await readFile(file, 'utf8'), 'another outside text\n')
-  },
-)
-
-codemirrorTest(
-  'closing a tab still shows the next tab when its file cannot be read',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const setupState = await setup(t)
-    const { app, page, notes, file, read, idle, open, content } = setupState
-    const { answer, prompts, state, notice } = setupState
-    const note = (await read()).tabId
-    await writeFile(join(notes, 'other.md'), 'other note\n')
-    await answer(2, join(notes, 'other.md'))
-    await open()
-    await content('other note\n')
-    // Another app puts a folder where the next tab's file was.
-    await rm(file)
-    await mkdir(file)
+test('closing a tab checks the tab shown next for outside changes', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, content } = setupState
+  const { answer, prompts, state, type } = setupState
+  const note = (await read()).tabId
+  const close = async () => {
     const done = await replied(app, 'document:close-tab')
     await page.getByRole('button', { name: /^close other\.md$/i }).click()
     await done()
     await idle()
-    await notice('Choose a text file, not a folder or device.')
-    assert.deepEqual(await prompts(), [])
-    assert.deepEqual(await state(), {
-      tabId: note,
-      markdown: 'original text\n',
-      dirty: false,
-      ephemeral: false,
-    })
-    await content('original text\n')
-  },
-)
+    return prompts()
+  }
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  // A clean tab shows its file's latest text, as a tab switch does.
+  await writeFile(file, 'outside text\n')
+  assert.deepEqual(await close(), [])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: 'outside text\n',
+    dirty: false,
+    ephemeral: false,
+  })
+  await content('outside text\n')
+  // Edits whose file changed ask once; Cancel keeps the edits and the file.
+  const draft = await type('local draft')
+  await open()
+  await content('other note\n')
+  await writeFile(file, 'another outside text\n')
+  await answer(1)
+  assert.deepEqual(await close(), ['note.md changed outside Hibi.'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  await content(draft)
+  assert.equal(await readFile(file, 'utf8'), 'another outside text\n')
+})
 
-codemirrorTest(
-  'a tab that changes while Hibi asks about the next tab stays open and says why',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const setupState = await setup(t)
-    const { app, page, notes, file, read, idle, open, content } = setupState
-    const { select, answer, prompts, state, type, notice } = setupState
-    const note = (await read()).tabId
-    await writeFile(join(notes, 'other.md'), 'other note\n')
-    await answer(2, join(notes, 'other.md'))
-    await open()
-    await content('other note\n')
-    const other = (await read()).tabId
-    await select(note)
-    await type('local draft')
-    await select(other)
-    await writeFile(file, 'outside text\n')
-    // The next tab's prompt waits for an answer, then Cancel keeps both texts.
-    await app.evaluate(({ dialog }) => {
-      const asked = Promise.withResolvers()
-      const answered = Promise.withResolvers()
-      dialog.showMessageBox = async (_window, options) => {
-        globalThis.reopenPrompts.push(options)
-        asked.resolve()
-        await answered.promise
-        return { response: 1 }
-      }
-      globalThis.closePrompt = {
-        asked: asked.promise,
-        cancel: answered.resolve,
-      }
-    })
-    const done = await replied(app, 'document:close-tab')
-    await page.getByRole('button', { name: /^close other\.md$/i }).click()
-    await app.evaluate(() => globalThis.closePrompt.asked)
-    // The closing tab changes meanwhile, as a late keystroke or an addon can.
-    await page.evaluate(() => {
-      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
-        .view
-      view.dispatch({
-        changes: {
-          from: view.state.doc.length,
-          insert: ' typed while closing',
-        },
-      })
-    })
-    // Requests send pending edits first, so main has the change after this.
-    await page.evaluate(() => window.hibi.getDocument())
-    await app.evaluate(() => globalThis.closePrompt.cancel())
-    await done()
-    await idle()
-    await notice(
-      'The tab for other.md stayed open because it changed while Hibi was closing it.',
-    )
-    assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
-    const after = await state()
-    assert.equal(after.tabId, other)
-    assert.match(after.markdown, /typed while closing/)
-    assert.equal(after.dirty, true)
-    assert.equal(await readFile(file, 'utf8'), 'outside text\n')
-  },
-)
+test('closing a tab still shows the next tab when its file cannot be read', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, content } = setupState
+  const { answer, prompts, state, notice } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  // Another app puts a folder where the next tab's file was.
+  await rm(file)
+  await mkdir(file)
+  const done = await replied(app, 'document:close-tab')
+  await page.getByRole('button', { name: /^close other\.md$/i }).click()
+  await done()
+  await idle()
+  await notice('Choose a text file, not a folder or device.')
+  assert.deepEqual(await prompts(), [])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: 'original text\n',
+    dirty: false,
+    ephemeral: false,
+  })
+  await content('original text\n')
+})
 
-codemirrorTest(
-  'a link to a heading of another note or the note itself moves to the heading',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const setupState = await setup(t)
-    const { app, page, notes, file, read, idle, open, select } = setupState
-    const { prompts } = setupState
-    const note = (await read()).tabId
-    // Both headings sit far below the links, out of view.
-    const filler = Array.from(
-      { length: 120 },
-      (_, index) => `filler paragraph ${index}\n\n`,
-    ).join('')
-    const self = `original text\n\nsee [down](note.md#far-away) and [there](other.md#far-away)\n\n${filler}## Far away\n\nend\n`
-    const other = `other note\n\n${filler}## Far away\n\nother end\n`
-    await writeFile(file, self)
-    await writeFile(join(notes, 'other.md'), other)
-    await open()
-    const editor = page.locator('.rich-pane [aria-label="Document editor"]')
-    const follow = async (name) => {
-      const done = await replied(app, 'document:link')
-      await editor
-        .getByRole('link', { name, exact: true })
-        .click({ modifiers: ['Shift'] })
-      await done()
-      await idle()
-      assert.deepEqual(await prompts(), [])
+test('a tab that changes while Hibi asks about the next tab stays open and says why', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, content } = setupState
+  const { select, answer, prompts, state, type, notice } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  const other = (await read()).tabId
+  await select(note)
+  await type('local draft')
+  await select(other)
+  await writeFile(file, 'outside text\n')
+  // The next tab's prompt waits for an answer, then Cancel keeps both texts.
+  await app.evaluate(({ dialog }) => {
+    const asked = Promise.withResolvers()
+    const answered = Promise.withResolvers()
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.reopenPrompts.push(options)
+      asked.resolve()
+      await answered.promise
+      return { response: 1 }
     }
-    // The caret moves to the heading's text, and the heading is in view.
-    const atHeading = async (markdown) => {
-      const from = markdown.indexOf('## Far away') + 3
-      await waitForAsync(
-        page,
-        (from) =>
-          document.querySelector('.rich-pane .cm-content').cmTile.root.view
-            .state.selection.main.head === from,
-        from,
-      )
-      assert.equal(
-        await editor.evaluate((element, from) => {
-          const caret = element.cmTile.root.view.coordsAtPos(from)
-          const pane = element.closest('.rich-pane').getBoundingClientRect()
-          return (
-            !!caret &&
-            caret.top >= pane.top - 1 &&
-            caret.bottom <= pane.bottom + 1
-          )
-        }, from),
-        true,
-      )
-      assert.equal((await read()).markdown, markdown)
+    globalThis.closePrompt = {
+      asked: asked.promise,
+      cancel: answered.resolve,
     }
-    await follow('there')
-    await atHeading(other)
-    await select(note)
-    await follow('down')
-    assert.equal((await read()).tabId, note)
-    await atHeading(self)
-  },
-)
-
-codemirrorTest(
-  'a missing Finder file and a moved note folder get plain messages',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const setupState = await setup(t)
-    const { app, page, notes, read, idle } = setupState
-    const { prompts, state, type, notice } = setupState
-    const note = (await read()).tabId
-    // A missing file from Finder is named once.
-    let done = await replied(app, 'document:external')
-    await app.evaluate(
-      ({ app }, path) =>
-        app.emit(
-          'second-instance',
-          {},
-          ['electron', 'app', path],
-          process.cwd(),
-        ),
-      join(notes, 'gone.md'),
-    )
-    await done()
-    await idle()
-    await notice('Could not find gone.md.')
-    assert.deepEqual(
-      (await page.locator('.toast').allTextContents()).filter((toast) =>
-        toast.includes('gone.md:'),
-      ),
-      [],
-    )
-    // Saving after another app moves the note's folder keeps the edits and says why.
-    const draft = await type('local draft')
-    await rename(notes, join(dirname(notes), 'moved'))
-    done = await replied(app, 'document:save')
-    await clickMenu(app, 'Save')
-    await done()
-    await idle()
-    await notice(
-      'The folder for note.md was moved or deleted outside Hibi. Use Save as to keep this text.',
-    )
-    assert.deepEqual(await prompts(), [])
-    assert.deepEqual(await state(), {
-      tabId: note,
-      markdown: draft,
-      dirty: true,
-      ephemeral: false,
+  })
+  const done = await replied(app, 'document:close-tab')
+  await page.getByRole('button', { name: /^close other\.md$/i }).click()
+  await app.evaluate(() => globalThis.closePrompt.asked)
+  // The closing tab changes meanwhile, as a late keystroke or an addon can.
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      changes: {
+        from: view.state.doc.length,
+        insert: ' typed while closing',
+      },
     })
-  },
-)
+  })
+  // Requests send pending edits first, so main has the change after this.
+  await page.evaluate(() => window.hibi.getDocument())
+  await app.evaluate(() => globalThis.closePrompt.cancel())
+  await done()
+  await idle()
+  await notice(
+    'The tab for other.md stayed open because it changed while Hibi was closing it.',
+  )
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  const after = await state()
+  assert.equal(after.tabId, other)
+  assert.match(after.markdown, /typed while closing/)
+  assert.equal(after.dirty, true)
+  assert.equal(await readFile(file, 'utf8'), 'outside text\n')
+})
 
-codemirrorTest(
-  'a pane checks its file under the file-operation lock, so an autosave meanwhile is skipped',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const setupState = await setup(t)
-    const { app, page, notes, file, read, idle, open, content } = setupState
-    const { select, answer, prompts, state, type } = setupState
-    const note = (await read()).tabId
-    await writeFile(join(notes, 'other.md'), 'other note\n')
-    await answer(2, join(notes, 'other.md'))
-    await open()
-    await content('other note\n')
-    const other = (await read()).tabId
-    await select(note)
-    const draft = await type('local draft')
-    const { revision } = await read()
-    await splitTab(app, page, other)
+test('a link to a heading of another note or the note itself moves to the heading', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, select } = setupState
+  const { prompts } = setupState
+  const note = (await read()).tabId
+  // Both headings sit far below the links, out of view.
+  const filler = Array.from(
+    { length: 120 },
+    (_, index) => `filler paragraph ${index}\n\n`,
+  ).join('')
+  const self = `original text\n\nsee [down](note.md#far-away) and [there](other.md#far-away)\n\n${filler}## Far away\n\nend\n`
+  const other = `other note\n\n${filler}## Far away\n\nother end\n`
+  await writeFile(file, self)
+  await writeFile(join(notes, 'other.md'), other)
+  await open()
+  const editor = page.locator('.rich-pane [aria-label="Document editor"]')
+  const follow = async (name) => {
+    const done = await replied(app, 'document:link')
+    await editor
+      .getByRole('link', { name, exact: true })
+      .click({ modifiers: ['Shift'] })
+    await done()
+    await idle()
+    assert.deepEqual(await prompts(), [])
+  }
+  // The caret moves to the heading's text, and the heading is in view.
+  const atHeading = async (markdown) => {
+    const from = markdown.indexOf('## Far away') + 3
     await waitForAsync(
       page,
-      async (id) => (await window.hibi.getDocument()).tabId === id,
-      other,
+      (from) =>
+        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+          .selection.main.head === from,
+      from,
     )
-    await idle()
-    assert.deepEqual(await prompts(), [])
-    // Focusing the note's pane reads its changed file; hold that read.
-    await writeFile(file, 'outside text\n')
-    await gateReadAndReply(app, file)
-    await answer(1)
-    const focused = await replied(app, 'document:focus-tab')
-    await page
-      .locator(
-        '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
-      )
-      .click()
-    await app.evaluate(() => globalThis.reopenGate.reading)
-    // An autosave meanwhile is skipped, as it is during other file operations.
-    const autosave = page.evaluate(
-      ([id, revision]) => window.hibi.autosaveDocument(id, revision),
-      [note, revision],
+    assert.equal(
+      await editor.evaluate((element, from) => {
+        const caret = element.cmTile.root.view.coordsAtPos(from)
+        const pane = element.closest('.rich-pane').getBoundingClientRect()
+        return (
+          !!caret &&
+          caret.top >= pane.top - 1 &&
+          caret.bottom <= pane.bottom + 1
+        )
+      }, from),
+      true,
     )
-    const early = await Promise.race([autosave, delay(10000, 'still waiting')])
-    await app.evaluate(() => globalThis.reopenGate.releaseRead())
-    await focused()
-    await idle()
-    assert.deepEqual(early, { status: 'skipped', document: null })
-    assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
-    assert.deepEqual(await state(), {
-      tabId: note,
-      markdown: draft,
-      dirty: true,
-      ephemeral: false,
-    })
-    assert.equal(await readFile(file, 'utf8'), 'outside text\n')
-  },
-)
+    assert.equal((await read()).markdown, markdown)
+  }
+  await follow('there')
+  await atHeading(other)
+  await select(note)
+  await follow('down')
+  assert.equal((await read()).tabId, note)
+  await atHeading(self)
+})
 
-codemirrorTest(
-  'clicking a split pane while the window waits to close does not change which note Save writes',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const setupState = await setup(t)
-    const { app, page, notes, file, read, idle, open, content } = setupState
-    const { select, answer, prompts, type } = setupState
-    const note = (await read()).tabId
-    await writeFile(join(notes, 'other.md'), 'other note\n')
-    await answer(2, join(notes, 'other.md'))
-    await open()
-    await content('other note\n')
-    const other = (await read()).tabId
-    const otherDraft = await type('other draft')
-    await select(note)
-    await type('local draft')
-    const { revision } = await read()
-    await splitTab(app, page, other)
-    await waitForAsync(
-      page,
-      async (id) => (await window.hibi.getDocument()).tabId === id,
-      other,
+test('a missing Finder file and a moved note folder get plain messages', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, read, idle } = setupState
+  const { prompts, state, type, notice } = setupState
+  const note = (await read()).tabId
+  // A missing file from Finder is named once.
+  let done = await replied(app, 'document:external')
+  await app.evaluate(
+    ({ app }, path) =>
+      app.emit('second-instance', {}, ['electron', 'app', path], process.cwd()),
+    join(notes, 'gone.md'),
+  )
+  await done()
+  await idle()
+  await notice('Could not find gone.md.')
+  assert.deepEqual(
+    (await page.locator('.toast').allTextContents()).filter((toast) =>
+      toast.includes('gone.md:'),
+    ),
+    [],
+  )
+  // Saving after another app moves the note's folder keeps the edits and says why.
+  const draft = await type('local draft')
+  await rename(notes, join(dirname(notes), 'moved'))
+  done = await replied(app, 'document:save')
+  await clickMenu(app, 'Save')
+  await done()
+  await idle()
+  await notice(
+    'The folder for note.md was moved or deleted outside Hibi. Use Save as to keep this text.',
+  )
+  assert.deepEqual(await prompts(), [])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+})
+
+test('a pane checks its file under the file-operation lock, so an autosave meanwhile is skipped', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, content } = setupState
+  const { select, answer, prompts, state, type } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  const other = (await read()).tabId
+  await select(note)
+  const draft = await type('local draft')
+  const { revision } = await read()
+  await splitTab(app, page, other)
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    other,
+  )
+  await idle()
+  assert.deepEqual(await prompts(), [])
+  // Focusing the note's pane reads its changed file; hold that read.
+  await writeFile(file, 'outside text\n')
+  await gateReadAndReply(app, file)
+  await answer(1)
+  const focused = await replied(app, 'document:focus-tab')
+  await page
+    .locator(
+      '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
     )
-    await idle()
-    await prompts()
-    // An autosave of note.md holds the file-operation lock while its read waits.
-    await gateReadAndReply(app, file)
-    const autosave = page.evaluate(
-      ([id, revision]) => window.hibi.autosaveDocument(id, revision),
-      [note, revision],
-    )
-    await app.evaluate(() => globalThis.reopenGate.reading)
-    // The close asks about other.md and waits for Save. A pane click that
-    // reaches main while the close waits runs once that prompt is open.
-    await app.evaluate(({ dialog, ipcMain }) => {
-      const asked = Promise.withResolvers()
-      const answered = Promise.withResolvers()
-      const focusing = Promise.withResolvers()
-      const focused = Promise.withResolvers()
-      dialog.showMessageBox = async (_window, options) => {
-        globalThis.reopenPrompts.push(options)
-        asked.resolve()
-        await answered.promise
-        return { response: 0 }
-      }
-      const channel = 'document:focus-tab'
-      const original = ipcMain._invokeHandlers.get(channel)
-      ipcMain._invokeHandlers.set(channel, async (...args) => {
-        ipcMain._invokeHandlers.set(channel, original)
-        focusing.resolve()
-        await asked.promise
-        try {
-          return await original(...args)
-        } finally {
-          focused.resolve()
-        }
-      })
-      globalThis.closeRace = {
-        focusing: focusing.promise,
-        focused: focused.promise,
-        save: answered.resolve,
+    .click()
+  await app.evaluate(() => globalThis.reopenGate.reading)
+  // An autosave meanwhile is skipped, as it is during other file operations.
+  const autosave = page.evaluate(
+    ([id, revision]) => window.hibi.autosaveDocument(id, revision),
+    [note, revision],
+  )
+  const early = await Promise.race([autosave, delay(10000, 'still waiting')])
+  await app.evaluate(() => globalThis.reopenGate.releaseRead())
+  await focused()
+  await idle()
+  assert.deepEqual(early, { status: 'skipped', document: null })
+  assert.deepEqual(await prompts(), ['note.md changed outside Hibi.'])
+  assert.deepEqual(await state(), {
+    tabId: note,
+    markdown: draft,
+    dirty: true,
+    ephemeral: false,
+  })
+  assert.equal(await readFile(file, 'utf8'), 'outside text\n')
+})
+
+test('clicking a split pane while the window waits to close does not change which note Save writes', {
+  timeout: 150000,
+}, async (t) => {
+  const setupState = await setup(t)
+  const { app, page, notes, file, read, idle, open, content } = setupState
+  const { select, answer, prompts, type } = setupState
+  const note = (await read()).tabId
+  await writeFile(join(notes, 'other.md'), 'other note\n')
+  await answer(2, join(notes, 'other.md'))
+  await open()
+  await content('other note\n')
+  const other = (await read()).tabId
+  const otherDraft = await type('other draft')
+  await select(note)
+  await type('local draft')
+  const { revision } = await read()
+  await splitTab(app, page, other)
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    other,
+  )
+  await idle()
+  await prompts()
+  // An autosave of note.md holds the file-operation lock while its read waits.
+  await gateReadAndReply(app, file)
+  const autosave = page.evaluate(
+    ([id, revision]) => window.hibi.autosaveDocument(id, revision),
+    [note, revision],
+  )
+  await app.evaluate(() => globalThis.reopenGate.reading)
+  // The close asks about other.md and waits for Save. A pane click that
+  // reaches main while the close waits runs once that prompt is open.
+  await app.evaluate(({ dialog, ipcMain }) => {
+    const asked = Promise.withResolvers()
+    const answered = Promise.withResolvers()
+    const focusing = Promise.withResolvers()
+    const focused = Promise.withResolvers()
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.reopenPrompts.push(options)
+      asked.resolve()
+      await answered.promise
+      return { response: 0 }
+    }
+    const channel = 'document:focus-tab'
+    const original = ipcMain._invokeHandlers.get(channel)
+    ipcMain._invokeHandlers.set(channel, async (...args) => {
+      ipcMain._invokeHandlers.set(channel, original)
+      focusing.resolve()
+      await asked.promise
+      try {
+        return await original(...args)
+      } finally {
+        focused.resolve()
       }
     })
-    await app.evaluate(
-      ({ BrowserWindow }) =>
-        new Promise((resolve) => {
-          const window = BrowserWindow.getAllWindows()[0]
-          window.once('close', () => resolve())
-          window.close()
-        }),
+    globalThis.closeRace = {
+      focusing: focusing.promise,
+      focused: focused.promise,
+      save: answered.resolve,
+    }
+  })
+  await app.evaluate(
+    ({ BrowserWindow }) =>
+      new Promise((resolve) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        window.once('close', () => resolve())
+        window.close()
+      }),
+  )
+  await page
+    .locator(
+      '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
     )
-    await page
-      .locator(
-        '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
-      )
-      .click()
-    await app.evaluate(() => globalThis.closeRace.focusing)
-    await app.evaluate(() => globalThis.reopenGate.releaseRead())
-    assert.equal((await autosave).status, 'saved')
-    await app.evaluate(() => globalThis.closeRace.focused)
-    assert.deepEqual(await prompts(), ['Save changes to other.md?'])
-    const closed = new Promise((resolve) => page.once('close', resolve))
-    await app.evaluate(() => globalThis.closeRace.save())
-    await closed
-    assert.equal(await readFile(join(notes, 'other.md'), 'utf8'), otherDraft)
-  },
-)
+    .click()
+  await app.evaluate(() => globalThis.closeRace.focusing)
+  await app.evaluate(() => globalThis.reopenGate.releaseRead())
+  assert.equal((await autosave).status, 'saved')
+  await app.evaluate(() => globalThis.closeRace.focused)
+  assert.deepEqual(await prompts(), ['Save changes to other.md?'])
+  const closed = new Promise((resolve) => page.once('close', resolve))
+  await app.evaluate(() => globalThis.closeRace.save())
+  await closed
+  assert.equal(await readFile(join(notes, 'other.md'), 'utf8'), otherDraft)
+})

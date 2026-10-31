@@ -36,7 +36,7 @@ const metadata = (id, fields = {}) => ({
   id,
   name: id,
   description: 'Installation fixture',
-  apiVersion: 1,
+  apiVersion: 3,
   version: '1.0.0',
   kind: 'extension',
   authors: [{ displayName: 'Test' }],
@@ -884,12 +884,12 @@ test('replacements keep their enabled setting only while their access is unchang
       network: { origins: origins.slice(0, 1) },
       capabilities: [],
     },
-    { version: '6.0.0', network: { origins }, capabilities: ['ui', 'rich'] },
+    { version: '6.0.0', network: { origins }, capabilities: ['ui', 'source'] },
     // Reordered set-valued fields grant nothing new.
     {
       version: '7.0.0',
       network: { origins: origins.toReversed() },
-      capabilities: ['rich', 'ui'],
+      capabilities: ['source', 'ui'],
     },
   ]) {
     await f.write(packageFiles('one', 'one', fields))

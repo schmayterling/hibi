@@ -3,11 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines,
-} from './formatted-engine.mjs'
+import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 // Preserve casing, spacing, CRLF, and trailing whitespace across view-only folds.
@@ -42,157 +38,147 @@ const note = [
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-testFormattedEngines(
-  'callouts fold with pointer and keyboard without changing markdown',
-  {
-    timeout: 150000,
-  },
-  async (t) => {
-    const engine = t.formattedEngine
-    const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-fold-'))
-    await mkdir(join(folder, 'notes'))
-    const file = join(folder, 'notes', 'folds.md')
-    await writeFile(file, note)
-    const app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+test('callouts fold with pointer and keyboard without changing markdown', {
+  timeout: 150000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-fold-'))
+  await mkdir(join(folder, 'notes'))
+  const file = join(folder, 'notes', 'folds.md')
+  await writeFile(file, note)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(20000)
+  await waitForFormattedEditor(app, page)
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
     })
-    t.after(async () => {
-      await app.close()
-      await rm(folder, { recursive: true, force: true })
-    })
-    const page = await app.firstWindow()
-    page.setDefaultTimeout(20000)
-    await selectFormattedEngine(app, page, engine)
-    const session = await page.context().newCDPSession(page)
-    await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-    await app.evaluate(({ dialog }, path) => {
-      dialog.showOpenDialog = async () => ({
-        canceled: false,
-        filePaths: [path],
-      })
-      dialog.showMessageBox = async () => ({ response: 1 })
-    }, file)
-    await pressShortcut(app, `${mod}+o`)
-    const pane = page.locator('.rich-pane')
-    await pane.getByText('After callouts.', { exact: true }).waitFor()
-    const control = (title) =>
-      pane.getByRole('button', { name: new RegExp(`callout: ${title}$`) })
-    const closed = control('Closed title')
-    const open = control('Open title')
-    const nested = control('Nested title')
-    const read = () =>
-      page.evaluate(async () => (await window.hibi.getDocument()).markdown)
-    const unchanged = async () => {
-      assert.equal(await read(), note)
-      assert.equal(
-        await page.evaluate(
-          async () => (await window.hibi.getDocument()).dirty,
+    dialog.showMessageBox = async () => ({ response: 1 })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  const pane = page.locator('.rich-pane')
+  await pane.getByText('After callouts.', { exact: true }).waitFor()
+  const control = (title) =>
+    pane.getByRole('button', { name: new RegExp(`callout: ${title}$`) })
+  const closed = control('Closed title')
+  const open = control('Open title')
+  const nested = control('Nested title')
+  const read = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+  const unchanged = async () => {
+    assert.equal(await read(), note)
+    assert.equal(
+      await page.evaluate(async () => (await window.hibi.getDocument()).dirty),
+      false,
+    )
+  }
+
+  await closed.waitFor()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  assert.equal(await open.getAttribute('aria-expanded'), 'true')
+  assert.equal(await nested.getAttribute('aria-expanded'), 'false')
+  assert.equal(await pane.getByRole('button', { name: /callout:/ }).count(), 3)
+  assert.equal(
+    await pane.getByText('Hidden paragraph.', { exact: true }).isVisible(),
+    false,
+  )
+  assert.equal(
+    await pane.getByText('Visible paragraph.', { exact: true }).isVisible(),
+    true,
+  )
+  assert.equal(
+    await pane.getByText('Nested paragraph.', { exact: true }).isVisible(),
+    false,
+  )
+  assert.equal(
+    await pane.getByText('Always visible.', { exact: true }).isVisible(),
+    true,
+  )
+  await unchanged()
+
+  await closed.focus()
+  await page.keyboard.press('Tab')
+  assert.equal(
+    await open.evaluate((element) => element === document.activeElement),
+    true,
+  )
+  await page.keyboard.press('Shift+Tab')
+  assert.equal(
+    await closed.evaluate((element) => element === document.activeElement),
+    true,
+  )
+  await page.keyboard.press('Enter')
+  await pane.getByText('Hidden paragraph.', { exact: true }).waitFor()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  assert.equal(
+    await pane.getByText('Hidden list item', { exact: true }).isVisible(),
+    true,
+  )
+  assert.equal(await pane.locator('table').count(), 1)
+  await unchanged()
+  await closed.focus()
+  await page.keyboard.press('Space')
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  assert.equal(
+    await pane.getByText('Hidden paragraph.', { exact: true }).isVisible(),
+    false,
+  )
+  await unchanged()
+
+  await nested.scrollIntoViewIfNeeded()
+  assert.equal(
+    await nested.evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      return element.contains(
+        document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
         ),
-        false,
       )
-    }
+    }),
+    true,
+  )
+  await nested.click()
+  await pane.getByText('Nested paragraph.', { exact: true }).waitFor()
+  assert.equal(await nested.getAttribute('aria-expanded'), 'true')
+  await open.focus()
+  await page.keyboard.press('Enter')
+  assert.equal(await open.getAttribute('aria-expanded'), 'false')
+  assert.equal(
+    await pane.getByText('Visible paragraph.', { exact: true }).isVisible(),
+    false,
+  )
+  assert.equal(
+    await pane.getByText('Nested paragraph.', { exact: true }).isVisible(),
+    false,
+  )
+  await open.focus()
+  await page.keyboard.press('Space')
+  await pane.getByText('Nested paragraph.', { exact: true }).waitFor()
+  assert.equal(await nested.getAttribute('aria-expanded'), 'true')
+  await unchanged()
 
-    await closed.waitFor()
-    assert.equal(await closed.getAttribute('aria-expanded'), 'false')
-    assert.equal(await open.getAttribute('aria-expanded'), 'true')
-    assert.equal(await nested.getAttribute('aria-expanded'), 'false')
-    assert.equal(
-      await pane.getByRole('button', { name: /callout:/ }).count(),
-      3,
-    )
-    assert.equal(
-      await pane.getByText('Hidden paragraph.', { exact: true }).isVisible(),
-      false,
-    )
-    assert.equal(
-      await pane.getByText('Visible paragraph.', { exact: true }).isVisible(),
-      true,
-    )
-    assert.equal(
-      await pane.getByText('Nested paragraph.', { exact: true }).isVisible(),
-      false,
-    )
-    assert.equal(
-      await pane.getByText('Always visible.', { exact: true }).isVisible(),
-      true,
-    )
-    await unchanged()
+  await pressShortcut(app, `${mod}+Shift+]`)
+  await page.locator('.source-pane .cm-content').waitFor()
+  await unchanged()
+  await pressShortcut(app, `${mod}+Shift+[`)
+  await pane.getByText('After callouts.', { exact: true }).waitFor()
+  await unchanged()
+  await pressShortcut(app, `${mod}+s`)
+  assert.equal(await readFile(file, 'utf8'), note)
+})
 
-    await closed.focus()
-    await page.keyboard.press('Tab')
-    assert.equal(
-      await open.evaluate((element) => element === document.activeElement),
-      true,
-    )
-    await page.keyboard.press('Shift+Tab')
-    assert.equal(
-      await closed.evaluate((element) => element === document.activeElement),
-      true,
-    )
-    await page.keyboard.press('Enter')
-    await pane.getByText('Hidden paragraph.', { exact: true }).waitFor()
-    assert.equal(await closed.getAttribute('aria-expanded'), 'true')
-    assert.equal(
-      await pane.getByText('Hidden list item', { exact: true }).isVisible(),
-      true,
-    )
-    assert.equal(await pane.locator('table').count(), 1)
-    await unchanged()
-    await closed.focus()
-    await page.keyboard.press('Space')
-    assert.equal(await closed.getAttribute('aria-expanded'), 'false')
-    assert.equal(
-      await pane.getByText('Hidden paragraph.', { exact: true }).isVisible(),
-      false,
-    )
-    await unchanged()
-
-    await nested.scrollIntoViewIfNeeded()
-    assert.equal(
-      await nested.evaluate((element) => {
-        const box = element.getBoundingClientRect()
-        return element.contains(
-          document.elementFromPoint(
-            box.x + box.width / 2,
-            box.y + box.height / 2,
-          ),
-        )
-      }),
-      true,
-    )
-    await nested.click()
-    await pane.getByText('Nested paragraph.', { exact: true }).waitFor()
-    assert.equal(await nested.getAttribute('aria-expanded'), 'true')
-    await open.focus()
-    await page.keyboard.press('Enter')
-    assert.equal(await open.getAttribute('aria-expanded'), 'false')
-    assert.equal(
-      await pane.getByText('Visible paragraph.', { exact: true }).isVisible(),
-      false,
-    )
-    assert.equal(
-      await pane.getByText('Nested paragraph.', { exact: true }).isVisible(),
-      false,
-    )
-    await open.focus()
-    await page.keyboard.press('Space')
-    await pane.getByText('Nested paragraph.', { exact: true }).waitFor()
-    assert.equal(await nested.getAttribute('aria-expanded'), 'true')
-    await unchanged()
-
-    await pressShortcut(app, `${mod}+Shift+]`)
-    await page.locator('.source-pane .cm-content').waitFor()
-    await unchanged()
-    await pressShortcut(app, `${mod}+Shift+[`)
-    await pane.getByText('After callouts.', { exact: true }).waitFor()
-    await unchanged()
-    await pressShortcut(app, `${mod}+s`)
-    assert.equal(await readFile(file, 'utf8'), note)
-  },
-)
-
-/** Launch with `markdown` open in the formatted view of `engine`. */
-async function openNote(t, engine, markdown) {
+/** Launch with `markdown` open in the formatted view. */
+async function openNote(t, markdown) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-fold-'))
   await mkdir(join(folder, 'notes'))
   const file = join(folder, 'notes', 'folds.md')
@@ -209,7 +195,7 @@ async function openNote(t, engine, markdown) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(20000)
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await app.evaluate(({ dialog }, path) => {
@@ -242,143 +228,121 @@ const hiding = [
   '',
 ].join('\n')
 
-testFormattedEngines(
-  'find, the outline and undo unfold a callout, and folding keeps typing in view',
-  { timeout: 150000 },
-  async (t) => {
-    const engine = t.formattedEngine
-    const { app, page, pane } = await openNote(t, engine, hiding)
-    const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
-    const shown = (text) =>
-      pane.getByText(text, { exact: true }).first().isVisible()
-    const editorFocused = () =>
-      page.evaluate(() =>
-        document.activeElement?.matches('.rich-pane .cm-content, .tiptap'),
-      )
-    // The caret where the text is: in codemirror the Markdown source.
-    const place = (text, offset) =>
-      page.evaluate(
-        ({ text, offset }) => {
-          const content = document.querySelector('.rich-pane .cm-content')
-          if (content) {
-            const { view } = content.cmTile.root
-            view.focus()
-            view.dispatch({
-              selection: {
-                anchor: view.state.doc.toString().indexOf(text) + offset,
-              },
-            })
-            return
-          }
-          const { editor } = document.querySelector('.tiptap')
-          let at = -1
-          editor.state.doc.descendants((node, pos) => {
-            if (at < 0 && node.isText && node.text.includes(text))
-              at = pos + node.text.indexOf(text) + offset
-          })
-          editor.view.focus()
-          editor.commands.setTextSelection(at)
-        },
-        { text, offset },
-      )
-    const markdown = () =>
-      page.evaluate(async () => (await window.hibi.getDocument()).markdown)
-
-    await closed.waitFor()
-    assert.equal(await closed.getAttribute('aria-expanded'), 'false')
-    const name = await closed.getAttribute('aria-label')
-    // A folded box is as tall below its title as above it.
-    const gaps = await closed.evaluate((button) => {
-      const box = (
-        button.closest('blockquote') ?? button.closest('.cm-line')
-      ).getBoundingClientRect()
-      const text = (
-        button.closest('blockquote')
-          ? button.nextElementSibling
-          : button
-              .closest('.cm-line')
-              .querySelector('.hibi-lp-alert-title-text')
-      ).getBoundingClientRect()
-      return Math.round(text.top - box.top - (box.bottom - text.bottom))
-    })
-    assert.ok(Math.abs(gaps) <= 1, `title gaps differ by ${gaps}px`)
-
-    // Find selects a match in the folded body and shows it.
-    await place('Before paragraph.', 0)
-    await pressShortcut(app, `${mod}+f`)
-    const input = page.getByRole('textbox', {
-      name: 'Find in document',
-      exact: true,
-    })
-    await input.fill('omega')
-    await page.locator('.find-bar output', { hasText: /\/1$/ }).waitFor()
-    await input.press('Enter')
-    await pane.getByText('hidden omega end', { exact: true }).waitFor()
-    assert.equal(await closed.getAttribute('aria-expanded'), 'true')
-    // Its name stays put while aria-expanded tells the state.
-    assert.equal(await closed.getAttribute('aria-label'), name)
-    await input.press('Escape')
-
-    // A pointer fold keeps the caret and focus in the text.
-    await place('After paragraph.', 0)
-    await closed.click()
-    assert.equal(await closed.getAttribute('aria-expanded'), 'false')
-    assert.equal(await editorFocused(), true)
-
-    // The outline jumps to a heading in the folded body and shows it.
-    await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
-    await page.getByRole('button', { name: /^right sidebar views$/i }).click()
-    await page
-      .getByRole('menuitem', { name: 'On this page', exact: true })
-      .click()
-    await page
-      .locator('.outline-sidebar[data-side="right"][data-open="true"]')
-      .getByRole('treeitem', { name: 'Hidden heading', exact: true })
-      .click()
-    // The focused heading line shows its markers in codemirror.
-    await pane.getByText('Hidden heading').first().waitFor()
-    assert.equal(await closed.getAttribute('aria-expanded'), 'true')
-
-    // Undo of typing in a body folded since shows it again. In codemirror
-    // the caret's line shows its quote marker.
-    const caretLine = (text) => (engine === 'codemirror' ? `> ${text}` : text)
-    await place('hidden alpha body.', 'hidden'.length)
-    await page.keyboard.type('Z')
-    await pane
-      .getByText(caretLine('hiddenZ alpha body.'), { exact: true })
-      .waitFor()
-    await waitForAsync(
-      page,
-      async (typed) => (await window.hibi.getDocument()).markdown === typed,
-      hiding.replace('> hidden alpha', '> hiddenZ alpha'),
+test('find, the outline and undo unfold a callout, and folding keeps typing in view', {
+  timeout: 150000,
+}, async (t) => {
+  const { app, page, pane } = await openNote(t, hiding)
+  const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
+  const shown = (text) =>
+    pane.getByText(text, { exact: true }).first().isVisible()
+  const editorFocused = () =>
+    page.evaluate(() =>
+      document.activeElement?.matches('.rich-pane .cm-content'),
     )
-    await closed.click()
-    assert.equal(await shown('hiddenZ alpha body.'), false)
-    await pressShortcut(app, `${mod}+z`)
-    await pane
-      .getByText(caretLine('hidden alpha body.'), { exact: true })
-      .waitFor()
-    assert.equal(await closed.getAttribute('aria-expanded'), 'true')
-    assert.equal(await markdown(), hiding)
-
-    // Typing after folding around the caret stays in view.
-    await place('hidden alpha body.', 'hidden'.length)
-    await closed.click()
-    assert.equal(await editorFocused(), true)
-    await page.keyboard.type('KK')
-    await waitForAsync(page, async () =>
-      (await window.hibi.getDocument()).markdown.includes('KK'),
+  // The caret where the text is: in codemirror the Markdown source.
+  const place = (text, offset) =>
+    page.evaluate(
+      ({ text, offset }) => {
+        const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+          .root
+        view.focus()
+        view.dispatch({
+          selection: {
+            anchor: view.state.doc.toString().indexOf(text) + offset,
+          },
+        })
+      },
+      { text, offset },
     )
-    assert.equal(await pane.getByText(/KK/).first().isVisible(), true)
-  },
-)
+  const markdown = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
 
-test('codemirror: a callout keeps its own fold state as text around it changes', {
+  await closed.waitFor()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  const name = await closed.getAttribute('aria-label')
+  // A folded box is as tall below its title as above it.
+  const gaps = await closed.evaluate((button) => {
+    const box = (
+      button.closest('blockquote') ?? button.closest('.cm-line')
+    ).getBoundingClientRect()
+    const text = (
+      button.closest('blockquote')
+        ? button.nextElementSibling
+        : button.closest('.cm-line').querySelector('.hibi-lp-alert-title-text')
+    ).getBoundingClientRect()
+    return Math.round(text.top - box.top - (box.bottom - text.bottom))
+  })
+  assert.ok(Math.abs(gaps) <= 1, `title gaps differ by ${gaps}px`)
+
+  // Find selects a match in the folded body and shows it.
+  await place('Before paragraph.', 0)
+  await pressShortcut(app, `${mod}+f`)
+  const input = page.getByRole('textbox', {
+    name: 'Find in document',
+    exact: true,
+  })
+  await input.fill('omega')
+  await page.locator('.find-bar output', { hasText: /\/1$/ }).waitFor()
+  await input.press('Enter')
+  await pane.getByText('hidden omega end', { exact: true }).waitFor()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  // Its name stays put while aria-expanded tells the state.
+  assert.equal(await closed.getAttribute('aria-label'), name)
+  await input.press('Escape')
+
+  // A pointer fold keeps the caret and focus in the text.
+  await place('After paragraph.', 0)
+  await closed.click()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'false')
+  assert.equal(await editorFocused(), true)
+
+  // The outline jumps to a heading in the folded body and shows it.
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  await page
+    .locator('.outline-sidebar[data-side="right"][data-open="true"]')
+    .getByRole('treeitem', { name: 'Hidden heading', exact: true })
+    .click()
+  // The focused heading line shows its markers in codemirror.
+  await pane.getByText('Hidden heading').first().waitFor()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+
+  // Undo of typing in a body folded since shows it again. The caret's line
+  // shows its quote marker.
+  await place('hidden alpha body.', 'hidden'.length)
+  await page.keyboard.type('Z')
+  await pane.getByText('> hiddenZ alpha body.', { exact: true }).waitFor()
+  await waitForAsync(
+    page,
+    async (typed) => (await window.hibi.getDocument()).markdown === typed,
+    hiding.replace('> hidden alpha', '> hiddenZ alpha'),
+  )
+  await closed.click()
+  assert.equal(await shown('hiddenZ alpha body.'), false)
+  await pressShortcut(app, `${mod}+z`)
+  await pane.getByText('> hidden alpha body.', { exact: true }).waitFor()
+  assert.equal(await closed.getAttribute('aria-expanded'), 'true')
+  assert.equal(await markdown(), hiding)
+
+  // Typing after folding around the caret stays in view.
+  await place('hidden alpha body.', 'hidden'.length)
+  await closed.click()
+  assert.equal(await editorFocused(), true)
+  await page.keyboard.type('KK')
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.includes('KK'),
+  )
+  assert.equal(await pane.getByText(/KK/).first().isVisible(), true)
+})
+
+test('a callout keeps its own fold state as text around it changes', {
   timeout: 120000,
 }, async (t) => {
   const { page, pane } = await openNote(
     t,
-    'codemirror',
     [
       'Before paragraph.',
       '',
@@ -429,7 +393,7 @@ test('codemirror: a callout keeps its own fold state as text around it changes',
   )
 })
 
-test('codemirror: a tab keeps its callout folds across tab switches and a reload from disk', {
+test('a tab keeps its callout folds across tab switches and a reload from disk', {
   timeout: 150000,
 }, async (t) => {
   const markdown = [
@@ -445,7 +409,7 @@ test('codemirror: a tab keeps its callout folds across tab switches and a reload
     'After paragraph.',
     '',
   ].join('\n')
-  const { app, page, pane, file } = await openNote(t, 'codemirror', markdown)
+  const { app, page, pane, file } = await openNote(t, markdown)
   const other = join(file, '..', 'other.md')
   await writeFile(other, '# Other\n\nOther note.\n')
   const control = (title) =>
@@ -502,7 +466,7 @@ test('codemirror: a tab keeps its callout folds across tab switches and a reload
   assert.equal(current.dirty, false)
 })
 
-test('codemirror: arrows step over a folded body, and Backspace or Delete beside it unfold it first', {
+test('arrows step over a folded body, and Backspace or Delete beside it unfold it first', {
   timeout: 120000,
 }, async (t) => {
   const markdown = [
@@ -514,7 +478,7 @@ test('codemirror: arrows step over a folded body, and Backspace or Delete beside
     'After paragraph.',
     '',
   ].join('\n')
-  const { page, pane } = await openNote(t, 'codemirror', markdown)
+  const { page, pane } = await openNote(t, markdown)
   const closed = pane.getByRole('button', { name: /callout: Closed title$/ })
   const titleEnd = markdown.indexOf('Closed title') + 'Closed title'.length
   const after = markdown.indexOf('After paragraph.')
@@ -579,7 +543,7 @@ test('codemirror: arrows step over a folded body, and Backspace or Delete beside
   )
 })
 
-test('codemirror: a disk edit that drops the open callout leaves the next one folded', {
+test('a disk edit that drops the open callout leaves the next one folded', {
   timeout: 120000,
 }, async (t) => {
   const markdown = [
@@ -592,7 +556,7 @@ test('codemirror: a disk edit that drops the open callout leaves the next one fo
     'After paragraph.',
     '',
   ].join('\n')
-  const { app, page, pane, file } = await openNote(t, 'codemirror', markdown)
+  const { app, page, pane, file } = await openNote(t, markdown)
   const first = pane.getByRole('button', { name: /callout: First$/ })
   const second = pane.getByRole('button', { name: /callout: Second$/ })
   await first.click()
@@ -633,7 +597,7 @@ async function opensFolded(t, markdown) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(20000)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
@@ -663,7 +627,7 @@ async function opensFolded(t, markdown) {
 }
 
 test(
-  'codemirror: a note that ends in a folded callout opens with it folded',
+  'a note that ends in a folded callout opens with it folded',
   {
     timeout: 120000,
   },
@@ -681,7 +645,7 @@ test(
 )
 
 test(
-  'codemirror: a note that ends in nested folded callouts opens with them folded',
+  'a note that ends in nested folded callouts opens with them folded',
   {
     timeout: 120000,
   },
@@ -701,14 +665,13 @@ test(
     ),
 )
 
-test('codemirror: a closed tab releases its remembered folds and text', {
+test('a closed tab releases its remembered folds and text', {
   timeout: 240000,
 }, async (t) => {
   const size = 8 * 1024 * 1024
   const line = 'a line of a large note with folds, closed again 0123456789\n\n'
   const { app, page, pane, file } = await openNote(
     t,
-    'codemirror',
     'Small note.\n\nAfter paragraph.\n',
   )
   const large = join(file, '..', 'large.md')

@@ -28,4 +28,4 @@ Automatic flavor detection ignores dollar signs inside code and escaped dollar s
 
 ## Credits
 
-This addon uses MIT-licensed [Tiptap Mathematics](https://tiptap.dev/docs/editor/extensions/nodes/mathematics) and [KaTeX](https://katex.org/docs/security), listed in Hibi's **Open source licenses**.
+This addon uses MIT-licensed [KaTeX](https://katex.org/docs/security), listed in Hibi's **Open source licenses**.

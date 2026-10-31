@@ -180,7 +180,11 @@ import { HostCredentials } from './host-credentials'
 import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
-import { readDocumentImage } from './images'
+import {
+  readDocumentImage,
+  remoteImageRequestHeaders,
+  withoutSetCookie,
+} from './images'
 import { cancelImport, runCancellableImport } from './import-cancellation'
 import { listLicenses, readLicense } from './licenses'
 import {
@@ -189,6 +193,7 @@ import {
   openRemoteDocument,
 } from './links'
 import { LocalDiagnostics } from './local-diagnostics/runtime'
+import { manualFetch } from './manual-fetch'
 import {
   attachMedia,
   documentMedia,
@@ -203,6 +208,7 @@ import {
   observeKnownWorkspaces,
   setKnownWorkspace,
 } from './recent-workspaces'
+import { refreshRemoteImage, remoteImageResponse } from './remote-images'
 import {
   CONTENT_SECURITY_POLICY,
   isTrustedRendererUrl,
@@ -214,6 +220,7 @@ import {
   installedAddons,
   installedAsset,
   openAddonsFolder,
+  outdatedAddons,
 } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
 import {
@@ -865,6 +872,13 @@ async function readAfterFileOperation<T>(
   return read(window)
 }
 
+/** Remote images of the note in `tab` are kept with its workspace, or else with the app. */
+const remoteImagePlace = (tab: unknown) => ({
+  note: typeof tab === 'string' ? getDocumentPathForTab(tab) : null,
+  workspace: workspaceRoot(),
+  data: app.getPath('userData'),
+})
+
 function serveAsset(request: Request): Promise<Response> {
   return localDiagnostics.observeAsset(request.url, () =>
     serveAssetResponse(request),
@@ -880,6 +894,17 @@ async function serveAssetResponse(request: Request): Promise<Response> {
       parsed.pathname.startsWith('/document-media/')
     )
       return await serveDocumentMedia(request)
+    if (parsed.hostname === 'remote-image')
+      // Only plain <img> loads: the app scheme doesn't check CORS, so a
+      // request that sends an Origin (crossorigin, fetch) would let page
+      // scripts read the image.
+      return request.headers.has('origin')
+        ? new Response(null, { status: 403 })
+        : await remoteImageResponse(
+            parsed.searchParams.get('src'),
+            remoteImagePlace(parsed.searchParams.get('tab')),
+            manualFetch,
+          )
     const isAddon = parsed.pathname.startsWith('/installed-addons/')
     const path = isAddon
       ? await installedAsset(request.url)
@@ -1571,14 +1596,19 @@ if (!app.requestSingleInstanceLock()) {
         event.preventDefault(),
       )
 
-      // App pages are app://hibi, so every https image is cross-site. Without
-      // cookies, image hosts can't follow a reader from note to note.
+      // App pages are app://hibi, so every https image is cross-site. Notes'
+      // remote images come from Hibi's image cache; images loaded straight
+      // from a host give it no cookies or cache validators to follow a reader
+      // with.
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: ['https://*/*'] },
-        ({ resourceType, requestHeaders }, callback) => {
-          if (resourceType === 'image') delete requestHeaders.Cookie
-          callback({ requestHeaders })
-        },
+        ({ resourceType, requestHeaders }, callback) =>
+          callback({
+            requestHeaders:
+              resourceType === 'image'
+                ? remoteImageRequestHeaders(requestHeaders)
+                : requestHeaders,
+          }),
       )
       const devOrigin = devUrl ? new URL(devUrl).origin : null
       const devPolicy =
@@ -1594,10 +1624,10 @@ if (!app.requestSingleInstanceLock()) {
       session.defaultSession.webRequest.onHeadersReceived(
         { urls: ['https://*/*', ...(devOrigin ? [`${devOrigin}/*`] : [])] },
         ({ resourceType, url, responseHeaders = {} }, callback) => {
-          const headers = { ...responseHeaders }
-          if (resourceType === 'image' && url.startsWith('https:'))
-            for (const name of Object.keys(headers))
-              if (name.toLowerCase() === 'set-cookie') delete headers[name]
+          const headers =
+            resourceType === 'image' && url.startsWith('https:')
+              ? withoutSetCookie(responseHeaders)
+              : { ...responseHeaders }
           if (devPolicy && url.startsWith(`${devOrigin}/`))
             headers['Content-Security-Policy'] = [devPolicy]
           callback({ responseHeaders: headers })
@@ -1631,6 +1661,7 @@ if (!app.requestSingleInstanceLock()) {
         () => ({
           states: getAddonStates(),
           packages: installedAddons(),
+          outdated: outdatedAddons(),
           notices: getAddonStartupNotices(),
         }),
         addonsReady,
@@ -1917,6 +1948,10 @@ if (!app.requestSingleInstanceLock()) {
       handle(SIDELOAD_CHANNELS.list, (event) => {
         trustedWindow(event)
         return installedAddons()
+      })
+      handle(SIDELOAD_CHANNELS.outdated, (event) => {
+        trustedWindow(event)
+        return outdatedAddons()
       })
       handle(SIDELOAD_CHANNELS.resources, (_event, id: unknown) =>
         installedAddonResources(id),
@@ -2336,6 +2371,13 @@ if (!app.requestSingleInstanceLock()) {
         if (typeof request === 'string' && request.length <= 128)
           documentMedia.cancel(request)
       })
+      handle(
+        MEDIA_CHANNELS.refreshRemote,
+        (event, source: unknown, tab: unknown) => {
+          trustedWindow(event)
+          return refreshRemoteImage(source, remoteImagePlace(tab), manualFetch)
+        },
+      )
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )

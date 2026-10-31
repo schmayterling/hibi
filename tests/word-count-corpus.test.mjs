@@ -5,47 +5,20 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { getSchema, getText, getTextSerializersFromSchema } from '@tiptap/core'
-import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
-import { Strike } from '@tiptap/extension-strike'
-import { TaskItem } from '@tiptap/extension-task-item'
-import { TaskList } from '@tiptap/extension-task-list'
-import { MarkdownManager } from '@tiptap/markdown'
-import { markedGithubFootnote } from 'marked-github-footnote'
-import { alertMarkdown, alertMarker } from '../src/addons/markdown/alerts.ts'
-import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
-import {
-  ObsidianHighlight,
-  obsidianMarkdown,
-  WikiEmbed,
-  WikiLink,
-} from '../src/addons/markdown/obsidian.ts'
-import { NativeTableKit } from '../src/addons/markdown/table-tokenizer.ts'
-import {
-  blockMath,
-  blockMathStart,
-  inlineMath,
-  mathFlavor,
-  mathTokens,
-} from '../src/addons/math/syntax.ts'
-import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
-import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { countText } from '../src/addons/word-count/count.ts'
 import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
-import { documentImage } from '../src/renderer/src/DocumentImage.ts'
-import { editorExtensions } from '../src/renderer/src/markdown.ts'
-import { configureMarkdownEntities } from '../src/renderer/src/markdown-entities.ts'
-import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 /*
  * The original 1221-state word count fuzz corpus: 60 notes in five syntax
  * settings, each edited up to 25 times, with the same cancelled reads.
- * Counts must match the rich editor's own Markdown parser and schema.
+ * Counts must match the rich editor's own Markdown parser and schema, as
+ * recorded before its removal.
  */
 const corpus = JSON.parse(
   readFileSync(new URL('./fixtures/word-count-corpus.json', import.meta.url)),
@@ -74,159 +47,18 @@ function* states(doc) {
   }
 }
 
-// Syntax features the markdown, math and text extras addons register.
-for (const [owner, id, level, extensions, matches] of [
-  [
-    'markdown',
-    'tables',
-    'block',
-    ['tableKit'],
-    (token) => token.type === 'table',
-  ],
-  [
-    'markdown',
-    'tasks',
-    'block',
-    ['taskList', 'taskItem'],
-    (token) =>
-      token.type === 'list' && !!token.items?.some((item) => item.task),
-  ],
-  ['markdown', 'strike', 'inline', ['strike'], (token) => token.type === 'del'],
-  [
-    'markdown',
-    'alerts',
-    'block',
-    ['githubAlert'],
-    (token) =>
-      token.type === 'githubAlert' ||
-      (token.type === 'blockquote' && !!alertMarker(token.text ?? '')),
-  ],
-  [
-    'math',
-    'inline',
-    'inline',
-    ['inlineMath'],
-    (token) => token.type === 'inlineMath',
-  ],
-  [
-    'math',
-    'block',
-    'block',
-    ['blockMath'],
-    (token) => token.type === 'blockMath',
-  ],
-  [
-    'text-extras',
-    'subscript',
-    'inline',
-    ['subscript'],
-    (token) => token.type === 'subscript',
-  ],
-  [
-    'text-extras',
-    'subtext',
-    'block',
-    ['subtext'],
-    (token) => token.type === 'subtext',
-  ],
-])
-  markdownSyntax.register(owner, {
-    id,
-    label: id,
-    group: owner,
-    level,
-    extensions,
-    matches,
-  })
-
 /**
- * The rich editor's conversion for one syntax setting: the flavors the
- * addons register, sorted by id as the app selects them, and the user's
- * disabled syntax. Footnote state is per parse, as for a newly opened note.
+ * The rich editor's text for a source in one corpus syntax setting, as its
+ * own Markdown parser and schema made it before its removal: the flavors the
+ * addons register, the user's disabled syntax, and footnote state per parse,
+ * as for a newly opened note. Corpus states are keyed by a digest of the body.
  */
-function richOracle(syntax) {
-  markdownSyntax.reset()
-  for (const id of syntax.disabledFeatures) {
-    markdownSyntax.setEnabled(id, false)
-    assert.equal(markdownSyntax.enabled(id), false, id)
-  }
-  const footnotes = markedGithubFootnote()
-  const flavors = [
-    syntax.gfm && {
-      id: 'markdown.github',
-      kind: 'dialect',
-      markedOptions: { gfm: true },
-      richExtensions: [
-        GithubAlert,
-        Strike,
-        NativeTableKit.configure({ table: { resizable: false } }),
-        TaskList,
-        TaskItem.configure({ nested: true }),
-      ],
-      export: { extensions: [alertMarkdown, footnotes] },
-    },
-    syntax.wikilinks && {
-      id: 'markdown.obsidian',
-      richExtensions: [WikiEmbed, WikiLink, ObsidianHighlight],
-      export: { extensions: [obsidianMarkdown] },
-    },
-    syntax.math && {
-      ...mathFlavor,
-      id: 'math.latex',
-      richExtensions: [
-        InlineMath.extend({
-          markdownTokenizer: {
-            name: 'inlineMath',
-            level: 'inline',
-            start: (source) => source.indexOf('$'),
-            tokenize: inlineMath,
-          },
-        }),
-        BlockMath.extend({
-          markdownTokenizer: {
-            name: 'blockMath',
-            level: 'block',
-            start: blockMathStart,
-            tokenize: blockMath,
-          },
-        }),
-      ],
-      export: { extensions: [mathTokens] },
-    },
-    syntax.textExtras && {
-      id: 'text-extras.text-extras',
-      richExtensions: [Subscript, Subtext],
-      export: { extensions: [textExtrasMarkdown] },
-    },
-  ].filter(Boolean)
-  const extensions = [
-    ...editorExtensions(flavors),
-    ...(markdownSyntax.enabled('core.images') ? [documentImage(0)] : []),
-  ]
-  const markdown = extensions.find((extension) => extension.name === 'markdown')
-  const manager = new MarkdownManager({
-    extensions,
-    marked: markdown.options.marked,
-    markedOptions: markdown.options.markedOptions,
-  })
-  configureMarkdownEntities(manager)
-  const schema = getSchema(extensions)
-  const textSerializers = getTextSerializersFromSchema(schema)
-  return Object.assign(
-    (body) => {
-      footnotes.hooks.preprocess(body)
-      const json = manager.parse(body)
-      return {
-        json,
-        text: getText(schema.nodeFromJSON(json), {
-          blockSeparator: '\n',
-          textSerializers,
-        }),
-      }
-    },
-    { schema },
-  )
-}
+const frozen = frozenOracle('word-count-corpus')
+const digest = (text) =>
+  createHash('sha256').update(text).digest('hex').slice(0, 12)
+const richText = (config, source) => frozen({ kind: 'text', config, source })
+const stateText = (config, body) =>
+  frozen({ kind: 'state', config, digest: digest(body) })
 
 const read = (counter) => {
   const work = counter.read()
@@ -243,7 +75,6 @@ function corpusResults() {
   const results = []
   corpus.configs.forEach((config, index) => {
     const syntax = countSyntax(config)
-    const rich = richOracle(syntax)
     for (const doc of corpus.docs.filter((entry) => entry.config === index)) {
       const counter = new FormattedCounter(
         new SourceStore(doc.source, {
@@ -277,7 +108,7 @@ function corpusResults() {
           syntax,
         )
         const body = bodyOf(state.source, syntax)
-        const { text, json } = rich(body)
+        const text = stateText(index, body)
         results.push({
           doc: doc.doc,
           step: state.step,
@@ -290,14 +121,12 @@ function corpusResults() {
           fresh: read(fresh),
           rich: countText(text),
           text,
-          json,
         })
         fresh.dispose()
       }
       counter.dispose()
     }
   })
-  markdownSyntax.reset()
   return results
 }
 
@@ -359,7 +188,6 @@ const richQuirks = [
 test('schema corpus: paragraph boundary edits retain markdown ownership', () => {
   const midDuplicate = 'a\n\n[x]: /y\n\n[x]: /z\n\nb'
   const syntax = countSyntax(corpus.configs[0])
-  const rich = richOracle(syntax)
   const cases = [
     [
       'foo',
@@ -393,7 +221,7 @@ test('schema corpus: paragraph boundary edits retain markdown ownership', () => 
       syntax,
     )
     try {
-      const initialRich = countText(rich(source).text)
+      const initialRich = countText(richText(0, source))
       const quirk = richQuirks.find((quirk) => quirk.source === source)
       assert.deepEqual(
         read(counter),
@@ -416,18 +244,16 @@ test('schema corpus: paragraph boundary edits retain markdown ownership', () => 
           changes: [{ from, to, insert }],
         })
         source = `${source.slice(0, from)}${insert}${source.slice(to)}`
-        assert.deepEqual(read(counter), countText(rich(source).text), source)
+        assert.deepEqual(read(counter), countText(richText(0, source)), source)
       }
     } finally {
       counter.dispose()
     }
   }
-  markdownSyntax.reset()
 })
 
 test('schema corpus: escaped blank-line titles stay visible as CommonMark text', () => {
   const syntax = countSyntax(corpus.configs[0])
-  const rich = richOracle(syntax)
   for (const [source, visible] of [
     [
       '[a]: /url "one\n\ntwo\\\\" three\n\nfour"\n\nafter',
@@ -442,7 +268,6 @@ test('schema corpus: escaped blank-line titles stay visible as CommonMark text',
   ])
     for (const eol of ['\n', '\r\n']) {
       const text = source.replaceAll('\n', eol)
-      assert.equal(rich(text).text, visible, JSON.stringify(text))
       const want = countText(visible)
       const counter = new FormattedCounter(
         new SourceStore(text, { tabId: 'escaped-titles', revision: 0 }),
@@ -464,19 +289,17 @@ test('schema corpus: escaped blank-line titles stay visible as CommonMark text',
         const changed = text.slice(0, from) + 'x' + text.slice(from)
         assert.deepEqual(
           read(counter),
-          countText(rich(changed).text),
+          countText(richText(0, changed)),
           JSON.stringify(changed),
         )
       } finally {
         counter.dispose()
       }
     }
-  markdownSyntax.reset()
 })
 
 test('schema corpus: styled unicode edits keep the rich text boundary context', () => {
   const syntax = countSyntax(corpus.configs[0])
-  const rich = richOracle(syntax)
   for (const [source, marker, offset] of [
     ['**word**\u0301x', '\u0301', 1],
     ['x\u0301**word**', '\u0301', 0],
@@ -491,7 +314,7 @@ test('schema corpus: styled unicode edits keep the rich text boundary context', 
       syntax,
     )
     try {
-      assert.deepEqual(read(counter), countText(rich(source).text))
+      assert.deepEqual(read(counter), countText(richText(0, source)))
       const from = source.indexOf(marker) + offset
       const snapshot = counter.store.snapshot()
       counter.apply({
@@ -504,19 +327,17 @@ test('schema corpus: styled unicode edits keep the rich text boundary context', 
         changes: [{ from, to: from, insert: ' ' }],
       })
       const changed = `${source.slice(0, from)} ${source.slice(from)}`
-      assert.deepEqual(read(counter), countText(rich(changed).text), changed)
+      assert.deepEqual(read(counter), countText(richText(0, changed)), changed)
     } finally {
       counter.dispose()
     }
   }
-  markdownSyntax.reset()
 })
 
-test('schema corpus: rich parser quirks keep their minimal reproductions', () => {
+test('schema corpus: formatted counts keep each recorded rich parser quirk difference', () => {
   for (const quirk of richQuirks) {
     const syntax = countSyntax({ ...corpus.configs[0], ...quirk.syntax })
-    const { text } = richOracle(syntax)(quirk.source)
-    assert.equal(text, quirk.text)
+    const { text } = quirk
     const counter = new FormattedCounter(
       new SourceStore(quirk.source, { tabId: 'quirk', revision: 0 }),
       syntax,
@@ -531,7 +352,6 @@ test('schema corpus: rich parser quirks keep their minimal reproductions', () =>
       quirk.difference,
     )
   }
-  markdownSyntax.reset()
 })
 
 test('schema corpus: formatted counts match the rich parser and schema in every state', () => {
@@ -579,52 +399,7 @@ test('schema corpus: formatted counts match the rich parser and schema in every 
   )
 })
 
-/*
- * The same states in freshly loaded notes, with the same addons, flavors
- * and disabled syntax. Text is read only from an active, editable rich view
- * outside source panes whose document is what its own parser makes of the
- * canonical source at one unchanged version.
- */
-const probe = async ({ source, body, footnotes }) => {
-  const shell = await window.hibi.getDocument()
-  if (shell?.markdown !== source) return null
-  const view = document.querySelector('#document-editor-panel .tiptap')
-  const editor = view?.editor
-  if (!editor || editor.isDestroyed) return null
-  const sourceMode = !!document.querySelector(
-    '.editor-panes.mode-markdown, .editor-panes.mode-side-by-side',
-  )
-  // A note that defines footnotes keeps source editing and no editable rich view.
-  if (footnotes)
-    return !editor.isEditable && sourceMode ? { fallback: true } : null
-  if (
-    !editor.isEditable ||
-    sourceMode ||
-    view.getAttribute('aria-readonly') !== 'false' ||
-    view.getAttribute('contenteditable') !== 'true'
-  )
-    return null
-  const json = editor.getJSON()
-  const parsed = editor.schema.nodeFromJSON(editor.markdown.parse(body))
-  if (!editor.state.doc.eq(parsed)) return null
-  const text = editor.getText({ blockSeparator: '\n' })
-  const after = await window.hibi.getDocument()
-  if (
-    after.markdown !== source ||
-    after.tabId !== shell.tabId ||
-    after.revision !== shell.revision ||
-    after.contentVersion !== shell.contentVersion
-  )
-    return null
-  return {
-    text,
-    json,
-    nodes: Object.keys(editor.schema.nodes),
-    marks: Object.keys(editor.schema.marks),
-  }
-}
-
-async function openCorpus(config, formatted = false) {
+async function openCorpus(config) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-word-count-corpus-'))
   await writeFile(
     join(folder, 'addons.json'),
@@ -654,18 +429,12 @@ async function openCorpus(config, formatted = false) {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await waitForDocumentEditor(app, page)
-    await page.evaluate(
-      ({ disabled, formatted }) => {
-        localStorage.setItem(
-          'hibi:markdown-syntax-disabled',
-          JSON.stringify(disabled),
-        )
-        if (formatted)
-          localStorage.setItem('hibi:formatted-engine', 'codemirror')
-        else localStorage.setItem('hibi:formatted-engine', 'tiptap')
-      },
-      { disabled: config.disabledFeatures, formatted },
-    )
+    await page.evaluate((disabled) => {
+      localStorage.setItem(
+        'hibi:markdown-syntax-disabled',
+        JSON.stringify(disabled),
+      )
+    }, config.disabledFeatures)
     // A worker answers count requests in order, each once: a result, or null
     // when a newer request cancels it. Pair them per worker, without payloads.
     await page.addInitScript(() => {
@@ -773,110 +542,6 @@ async function openCorpus(config, formatted = false) {
   }
 }
 
-test('native corpus: a freshly loaded active rich editor holds the schema text of every supported state', {
-  timeout: 3600000,
-}, async (t) => {
-  const expected = new Map(
-    corpusResults().map((result) => [`${result.doc}:${result.step}`, result]),
-  )
-  const mismatches = []
-  let fallbacks = 0
-  for (const [index, config] of corpus.configs.entries()) {
-    const docs = corpus.docs.filter((doc) => doc.config === index)
-    const { schema } = richOracle(countSyntax(config))
-    const { page, errors, open, close } = await openCorpus(config)
-    try {
-      let schemaChecked = false
-      for (const doc of docs)
-        for (const state of states(doc)) {
-          const result = expected.get(`${doc.doc}:${state.step}`)
-          await open(`${doc.doc}-${state.step}.md`, state.source)
-          // the native footnote tokenizer retains definitions between parses.
-          // reload gives each note the same isolated state as the schema oracle.
-          await page.reload()
-          const arg = {
-            source: state.source,
-            body: result.body,
-            footnotes: result.oracle === 'schema',
-          }
-          await waitForAsync(page, probe, arg, { timeout: 15000 }).catch(
-            async (error) => {
-              const seen = await page.evaluate(async ({ source, body }) => {
-                const shell = await window.hibi.getDocument()
-                const view = document.querySelector(
-                  '#document-editor-panel .tiptap',
-                )
-                const editor = view?.editor
-                const live = JSON.stringify(editor?.getJSON()) ?? ''
-                const parsed =
-                  JSON.stringify(
-                    editor?.schema.nodeFromJSON(editor.markdown.parse(body)),
-                  ) ?? ''
-                let at = 0
-                while (at < live.length && live[at] === parsed[at]) at++
-                return {
-                  source: shell?.markdown === source,
-                  editable: editor?.isEditable,
-                  readOnly: view?.getAttribute('aria-readonly'),
-                  panes: document.querySelector('.editor-panes')?.className,
-                  live: live.slice(Math.max(0, at - 60), at + 140),
-                  parsed: parsed.slice(Math.max(0, at - 60), at + 140),
-                }
-              }, arg)
-              throw new Error(
-                `${doc.doc}:${state.step} not ready: ${JSON.stringify(seen)}`,
-                { cause: error },
-              )
-            },
-          )
-          const native = await page.evaluate(probe, arg)
-          assert.ok(
-            native,
-            `${doc.doc}:${state.step} changed while it was read`,
-          )
-          if (native.fallback) {
-            fallbacks++
-            continue
-          }
-          if (!schemaChecked) {
-            // The rich schema of this syntax setting is the oracle's.
-            assert.deepEqual(
-              {
-                nodes: native.nodes.toSorted(),
-                marks: native.marks.toSorted(),
-              },
-              {
-                nodes: Object.keys(schema.nodes).toSorted(),
-                marks: Object.keys(schema.marks).toSorted(),
-              },
-            )
-            schemaChecked = true
-          }
-          if (native.text !== result.text)
-            mismatches.push({
-              doc: doc.doc,
-              step: state.step,
-              source: state.source,
-              native: native.text,
-              schema: result.text,
-              json: JSON.stringify(native.json),
-            })
-        }
-      assert.deepEqual(errors, [])
-    } finally {
-      await close()
-    }
-  }
-  t.diagnostic(
-    JSON.stringify({
-      states: expected.size,
-      fallbacks,
-      mismatches: mismatches.length,
-    }),
-  )
-  assert.deepEqual(mismatches, [])
-})
-
 /**
  * The formatted view's count of this note at its unchanged version: the
  * result its worker returned for the latest request on the note's stream,
@@ -927,7 +592,7 @@ test('canonical path keeps native word-count syntax choices', {
 }, async (t) => {
   for (const [index, config] of corpus.configs.entries())
     await t.test(`syntax ${index}`, async (t) => {
-      const { page, open, close } = await openCorpus(config, true)
+      const { page, open, close } = await openCorpus(config)
       t.after(close)
       const source = 'plain words'
       await open('syntax.md', source)
@@ -967,7 +632,7 @@ test('native corpus: formatted counts equal the rich text counts in the app', {
       mermaid: false,
       typst: false,
     }
-    const { page, errors, open, close } = await openCorpus(config, true)
+    const { page, errors, open, close } = await openCorpus(config)
     try {
       for (const result of results.filter((entry) => entry.config === index)) {
         // Each opened note gets its own tab and count stream.

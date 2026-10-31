@@ -33,8 +33,21 @@ export type InstallCandidate = {
   data?: ReturnType<typeof admitInstalledAddon>
 }
 
+/** The manifest fields a user's enabled setting consents to. */
+export type AddonAccess = Pick<
+  AddonManifest,
+  'kind' | 'capabilities' | 'network' | 'dependencies'
+>
+/** An install made for addon API 1 or 2, which a replacement may keep the setting of. */
+export type OutdatedInstall = {
+  id: string
+  version: string
+  source: 'local' | 'third-party'
+  access: AddonAccess
+}
+
 // Set-valued fields compare without order; omitted capabilities (the full legacy SDK) differ from `[]`.
-const access = (manifest: AddonManifest) =>
+const access = (manifest: AddonAccess) =>
   JSON.stringify([
     manifest.kind ?? 'extension',
     manifest.capabilities ? [...manifest.capabilities].sort() : null,
@@ -44,7 +57,7 @@ const access = (manifest: AddonManifest) =>
       .sort(),
   ])
 /** A replacement that asks for the same access keeps the user's enabled setting. */
-export const sameAddonAccess = (previous: AddonManifest, next: AddonManifest) =>
+export const sameAddonAccess = (previous: AddonAccess, next: AddonAccess) =>
   access(previous) === access(next)
 
 export function installationGraph(
@@ -93,6 +106,7 @@ export async function inspectAddonCandidates(
   inventory: AddonInventory,
   builtins: readonly AddonManifest[],
   installed: readonly InstalledAddon[],
+  outdated: readonly OutdatedInstall[] = [],
 ): Promise<InstallCandidate[]> {
   const candidates: InstallCandidate[] = []
   const prepared: InstallCandidate[] = []
@@ -228,12 +242,22 @@ export async function inspectAddonCandidates(
     const previous = installed.find(
       (addon) => addon.manifest.id === candidate.review.manifest!.id,
     )
-    if (previous)
+    const old = outdated.find(
+      (addon) => addon.id === candidate.review.manifest!.id,
+    )
+    const replaced = previous
+      ? {
+          version: previous.manifest.version,
+          source: previous.source ?? 'local',
+          access: previous.manifest,
+        }
+      : old
+    if (replaced)
       candidate.review.replaces = {
-        version: previous.manifest.version,
-        source: previous.source ?? 'local',
+        version: replaced.version,
+        source: replaced.source,
         ...(candidate.data &&
-        sameAddonAccess(previous.manifest, candidate.data.manifest)
+        sameAddonAccess(replaced.access, candidate.data.manifest)
           ? { keepsSetting: true as const }
           : {}),
       }

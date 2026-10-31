@@ -397,6 +397,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(MEDIA_CHANNELS.resolve, source, revision, request),
     cancelDocumentMedia: (request) =>
       ipcRenderer.invoke(MEDIA_CHANNELS.cancel, request),
+    refreshRemoteImage: (source, tab) =>
+      ipcRenderer.invoke(MEDIA_CHANNELS.refreshRemote, source, tab),
     onDocumentMediaScopeChanged: (callback) =>
       subscribe(MEDIA_CHANNELS.scopeChanged, callback),
     openDroppedFile: (file, includeEntries = true) =>
@@ -406,6 +408,7 @@ if (process.isMainFrame) {
         includeEntries,
       ),
     getInstalledAddons: () => ipcRenderer.invoke(SIDELOAD_CHANNELS.list),
+    getOutdatedAddons: () => ipcRenderer.invoke(SIDELOAD_CHANNELS.outdated),
     getAddonTrustSettings: () => ipcRenderer.invoke(ADDON_TRUST_CHANNELS.get),
     setAddonTrustSettings: (changes) =>
       ipcRenderer.invoke(ADDON_TRUST_CHANNELS.set, changes),

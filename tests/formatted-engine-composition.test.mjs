@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -15,7 +12,6 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 test('native composition replaces selected text in one undo step and cancels at the caret', {
   timeout: 45000,
 }, async (t) => {
-  const engine = t.formattedEngine
   const profile = await mkdtemp(join(tmpdir(), 'hibi-engine-composition-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -28,7 +24,7 @@ test('native composition replaces selected text in one undo step and cancels at 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  const rich = await selectFormattedEngine(app, page, engine)
+  const rich = await waitForFormattedEditor(app, page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const saved = (text) =>

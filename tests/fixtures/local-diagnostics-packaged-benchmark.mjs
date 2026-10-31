@@ -22,13 +22,13 @@ app.once('browser-window-created', (_event, window) => {
         const ready =
           await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
           const end = Date.now() + 10000;
-          const poll = () => { const el = document.querySelector('[role="textbox"][aria-label="Document editor"]'); if(el?.isContentEditable && !el.closest('[inert]') && el.getBoundingClientRect().width > 0 && el.editor) resolve(performance.timeOrigin + performance.now()); else if(Date.now()>end) reject(new Error('readiness')); else requestAnimationFrame(poll); }; poll();
+          const poll = () => { const el = document.querySelector('[role="textbox"][aria-label="Document editor"]'); if(el?.isContentEditable && !el.closest('[inert]') && el.getBoundingClientRect().width > 0 && el.cmTile) resolve(performance.timeOrigin + performance.now()); else if(Date.now()>end) reject(new Error('readiness')); else requestAnimationFrame(poll); }; poll();
         })`)
         await window.webContents.executeJavaScript(`(() => {
-          const el=document.querySelector('.tiptap'), editor=el.editor, dispatch=editor.view.props.dispatchTransaction;
+          const el=document.querySelector('.rich-pane .cm-content'), view=el.cmTile.root.view, dispatch=view.dispatch;
           window.localBenchmark={cpu:[], proxy:[]};
-          editor.commands.focus('end');
-          editor.view.setProps({dispatchTransaction(tr){const start=performance.now();try{dispatch.call(this,tr)}finally{if(tr.docChanged)window.localBenchmark.cpu.push(performance.now()-start)}}});
+          view.dispatch({selection:{anchor:view.state.doc.length}}); view.focus();
+          view.dispatch=(...specs)=>{const start=performance.now(), before=view.state.doc;try{dispatch.apply(view,specs)}finally{if(view.state.doc!==before)window.localBenchmark.cpu.push(performance.now()-start)}};
           el.addEventListener('beforeinput',()=>{const start=performance.now();requestAnimationFrame(()=>requestAnimationFrame(()=>window.localBenchmark.proxy.push(performance.now()-start)))});
         })()`)
         for (let n = 0; n < 120; n++) await window.webContents.insertText('a')

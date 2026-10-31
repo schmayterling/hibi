@@ -31,8 +31,6 @@ Task source keeps its operable checkbox. Plain fences use the same source-reveal
 
 The engine test helper selects only the main document editor, excluding nested table-cell editors. Startup uses a separate 30-second readiness budget; interaction checks keep their existing deadlines. Marker fixtures use the existing raw-source helper instead of typing Markdown through a formatted selection, which can inherit pending formatting and escape the new fixture. The original caret geometry limits and frame checks remain intact. The code-fence expectation now checks the two revealed source markers; the separate hidden-fence case retains its original navigation assertions.
 
-The legacy Tiptap editor still draws noneditable generated hints. This accepted CodeMirror-only capability is recorded in `tests/formatted-engine-gaps.md`, and the new tests assert both engine roots.
-
 Final local validation at `dbee828ff4df2ddc4835384893c4921a139a6039`, after merging main's `2a0be662` (the Electron teardown and filtered-setup fix):
 
 - Before probe: 18 records, 1/1 probe test passed.

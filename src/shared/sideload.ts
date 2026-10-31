@@ -16,6 +16,13 @@ export type InstalledAddon = {
   /** Set while the addon is on the signed revocation list; it stays disabled. */
   revoked?: AddonRevocation
 }
+/** An installed package made for addon API 1 or 2. Hibi does not run it, but lists it so it can be updated or uninstalled. */
+export type OutdatedAddon = {
+  id: string
+  name: string
+  version: string
+  kind: 'theme' | 'extension'
+}
 export type AddonDocument = {
   path: string
   kind: 'markdown' | 'image'
@@ -52,6 +59,7 @@ export type AddonInstallResult = {
 }
 export const SIDELOAD_CHANNELS = {
   list: 'addons:installed',
+  outdated: 'addons:outdated',
   install: 'addons:install',
   selection: 'addons:install-selection',
   cancel: 'addons:install-cancel',

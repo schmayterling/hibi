@@ -7,6 +7,7 @@ import { countText } from '../src/addons/word-count/count.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const syntax = {
@@ -15,9 +16,11 @@ const syntax = {
   textExtras: true,
   alerts: true,
 }
+// The count the removed rich view showed for each note, recorded before its removal.
+const rich = frozenOracle('formatted-word-count-regions')
 const label = ({ words, characters }) =>
   `${words} ${words === 1 ? 'word' : 'words'} · ${characters} ${characters === 1 ? 'character' : 'characters'}`
-test('math regions and leading empty paragraphs match native rich counts after edits and undo', {
+test('math regions and leading empty paragraphs match the recorded rich counts after edits and undo', {
   timeout: 180000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-count-regions-'))
@@ -53,11 +56,6 @@ test('math regions and leading empty paragraphs match native rich counts after e
       text,
     )
   for (const [index, source] of fixtures.entries()) {
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-    )
-    await page.reload()
-    await waitForDocumentEditor(app, page)
     await app.evaluate(
       ({ dialog }, path) => {
         dialog.showOpenDialog = async () => ({
@@ -74,10 +72,8 @@ test('math regions and leading empty paragraphs match native rich counts after e
       `${index}.md`,
     )
     const want = label(countText(richText(source, syntax).slice(1)))
+    assert.equal(want, rich(source))
     await counts(want)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     await counts(want)

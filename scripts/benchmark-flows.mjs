@@ -25,7 +25,7 @@ export async function writeInputProfile(profile, enabledAddons, analysisLoad) {
         name: 'Analysis benchmark',
         description: 'Benchmark-only analysis load',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         authors: [{ displayName: 'Hibi benchmark' }],
         capabilities: [],
@@ -95,17 +95,8 @@ export async function launchBenchmarkApp(profile, entry = resolve('.')) {
   }
 }
 
-export function benchmarkEngine(engine) {
-  assert.ok(
-    ['tiptap', 'codemirror'].includes(engine),
-    'unknown benchmark engine',
-  )
-  return engine
-}
-
 // seed chromium storage identically for every condition, without app modules.
-export async function seedBenchmarkProfile(profile, engine) {
-  benchmarkEngine(engine)
+export async function seedBenchmarkProfile(profile) {
   const entry = join(profile, 'benchmark-profile.cjs')
   await writeFile(
     entry,
@@ -125,10 +116,9 @@ app.on('window-all-closed', () => app.quit());`,
   try {
     const page = await app.firstWindow()
     await page.waitForURL('app://hibi/', { waitUntil: 'load' })
-    await page.evaluate((engine) => {
-      localStorage.setItem('hibi:formatted-engine', engine)
+    await page.evaluate(() => {
       localStorage.setItem('default-view', 'normal')
-    }, engine)
+    })
     await app.evaluate(({ session }) =>
       session.defaultSession.flushStorageData(),
     )
@@ -279,26 +269,21 @@ export async function verifyBenchmarkProvenance(before, sampler, root = '.') {
 }
 
 // Frame polling avoids locator retry backoff being counted as startup latency.
-export async function waitForEditor(page, engine) {
-  const ready = (engine) => {
+// `settled` also waits for the app and its document panel to finish loading.
+export async function waitForEditor(page, settled = false) {
+  const ready = (settled) => {
     const editor = document.querySelector(
       '[role="textbox"][aria-label="Document editor"]',
     )
-    const observed = editor?.classList.contains('tiptap')
-      ? 'tiptap'
-      : editor?.closest('.hibi-formatted')
-        ? 'codemirror'
-        : null
     return (
       !!editor?.isContentEditable &&
       editor.getAttribute('aria-readonly') !== 'true' &&
       !editor.closest('[inert]') &&
       editor.getBoundingClientRect().width > 0 &&
       document.fonts.status === 'loaded' &&
-      (!engine ||
-        (observed === engine &&
-          document.querySelector('.app')?.getAttribute('aria-busy') ===
-            'false' &&
+      (!settled ||
+        (document.querySelector('.app')?.getAttribute('aria-busy') ===
+          'false' &&
           document
             .querySelector('#document-editor-panel')
             ?.getAttribute('aria-busy') === 'false'))
@@ -306,11 +291,11 @@ export async function waitForEditor(page, engine) {
   }
   // this playwright build does not await promises in waitForFunction.
   for (;;) {
-    await page.waitForFunction(ready, engine)
+    await page.waitForFunction(ready, settled)
     await page.evaluate(
       () => new Promise((done) => requestAnimationFrame(done)),
     )
-    if (await page.evaluate(ready, engine)) return true
+    if (await page.evaluate(ready, settled)) return true
   }
 }
 

@@ -8,9 +8,15 @@ import { parseRow } from '../src/renderer/src/formatted/table-source.ts'
 import { tableKey } from '../src/renderer/src/table-layout-store.ts'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
-import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  after,
+  before,
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { defaultPane, frozenSnapshot } from './frozen-oracle.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -52,6 +58,8 @@ Closing paragraph.
 `
 
 let app, folder, page, harness
+// What the formatted view drew while it matched the removed rich view.
+const check = frozenSnapshot('formatted-tables')
 const tablesView = 'window.tables.view()'
 const documentView = `document.querySelector('.rich-pane [aria-label="Document editor"]')?.cmTile?.root.view`
 
@@ -75,6 +83,13 @@ const applyPalette = (target, scheme) =>
     style.textContent = `${css} .rich-pane { scrollbar-width: none !important; }`
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, scheme)
 
 before(
@@ -106,11 +121,15 @@ before(
     const file = join(folder, 'notes', 'tables.md')
     await writeFile(file, note)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await selectFormattedEngine(app, page, 'tiptap')
+    await waitForFormattedEditor(app, page)
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -121,7 +140,9 @@ before(
       app,
       process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
     )
-    await page.locator('.tiptap h1', { hasText: 'Formatted tables' }).waitFor()
+    await page
+      .locator('.rich-pane .hibi-lp-h1', { hasText: 'Formatted tables' })
+      .waitFor()
     const size = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getContentSize(),
     )
@@ -169,10 +190,12 @@ after(
 )
 
 /**
- * Every rendered table in a pane, by its header text: its cells' boxes, text
+ * Every table in view in a pane, by its header text: its cells' boxes, text
  * and styles, and where it is from the document's top, or above the closing
  * paragraph when the pane is scrolled down (the formatted view estimates the
- * height of text it has not rendered).
+ * height of text it has not rendered). Tables out of view are left out: how
+ * far past the view the formatted view renders depends on when it last
+ * measured.
  */
 const tables = (target, fromEnd) =>
   target.evaluate((fromEnd) => {
@@ -181,8 +204,9 @@ const tables = (target, fromEnd) =>
     const closing = [...pane.querySelectorAll('p, .cm-line')]
       .find((element) => element.textContent.startsWith('Closing paragraph'))
       ?.getBoundingClientRect().top
-    return [...pane.querySelectorAll('table')].map((table) => {
+    return [...pane.querySelectorAll('table')].flatMap((table) => {
       const frame = table.getBoundingClientRect()
+      if (frame.bottom <= origin.top || frame.top >= origin.bottom) return []
       return {
         header: table.rows[0].innerText,
         at: [
@@ -246,68 +270,92 @@ const scroll = (target, fraction) =>
       await new Promise(requestAnimationFrame)
   }, fraction)
 
-test('tables in the formatted view match the rich view in light and dark', {
+/** Each top-level block the pane draws in view: its tag, classes and computed paint, and its box. */
+const drawn = (target) =>
+  target.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    const origin = pane.getBoundingClientRect()
+    const keys = [
+      'color',
+      'backgroundColor',
+      'fontSize',
+      'fontWeight',
+      'fontStyle',
+      'textDecorationLine',
+      'opacity',
+    ]
+    // As with tables, how far past the view blocks render depends on when
+    // the formatted view last measured.
+    const blocks = [...pane.querySelectorAll('.cm-content > *')].filter(
+      (element) => {
+        const box = element.getBoundingClientRect()
+        return box.bottom > origin.top && box.top < origin.bottom
+      },
+    )
+    return {
+      blocks: blocks.map((element) => {
+        const style = getComputedStyle(element)
+        return {
+          element: [
+            element.tagName.toLowerCase(),
+            ...[...element.classList]
+              .filter((name) => !/^cm-(active|focused)/.test(name))
+              .sort(),
+          ].join('.'),
+          ...Object.fromEntries(keys.map((key) => [key, style[key]])),
+        }
+      }),
+      boxes: blocks.map((element) => {
+        const box = element.getBoundingClientRect()
+        return [
+          box.left - origin.left,
+          box.top - origin.top,
+          box.width,
+          box.height,
+        ].map((value) => Math.round(value))
+      }),
+    }
+  })
+
+test('tables in the formatted view keep the rich view’s recorded cells, text and styles in light and dark', {
   timeout: 60000,
 }, async () => {
-  const richPane = page.locator('.rich-pane')
-  const pane = await richPane.evaluate((element) => {
-    const box = element.getBoundingClientRect()
-    return { width: box.width, height: box.height }
-  })
   await harness.evaluate(({ doc, pane }) => window.tables.mount(doc, pane), {
     doc: note,
-    pane,
+    pane: defaultPane,
   })
   for (const id of ['hibi-light', 'hibi-dark']) {
-    const scheme = palette(id)
-    await applyPalette(page, scheme)
-    await applyPalette(harness, scheme)
-    // The formatted view renders the tables near the visible part: compare
+    await applyPalette(harness, palette(id))
+    // The formatted view renders the tables near the visible part: check
     // them at the top and the bottom of the note.
     const compared = new Set()
     for (const fraction of [0, 1]) {
-      await scroll(page, fraction)
       await scroll(harness, fraction)
-      const rich = await tables(page, fraction === 1)
-      for (const table of await tables(harness, fraction === 1)) {
-        const expected = rich.find((other) => other.header === table.header)
-        // Same cells, at the same places, with the same text and styles.
-        assert.deepEqual(table, expected, `${id} ${table.header}`)
+      for (const { at, rows, ...table } of await tables(
+        harness,
+        fraction === 1,
+      )) {
+        // The same cells, at the same places, with the same text and styles
+        // as the rich view drew them.
+        check(`${id} ${fraction} ${table.header} cells`, {
+          ...table,
+          rows: rows.map((row) => row.map(({ box, ...cell }) => cell)),
+        })
+        check(
+          `${id} ${fraction} ${table.header} boxes`,
+          { at, cells: rows.map((row) => row.map(({ box }) => box)) },
+          { tolerance: 1 },
+        )
         compared.add(table.header)
       }
     }
     assert.equal(compared.size, 4, [...compared].join(' / '))
-    await scroll(page, 0)
+    // In place of the pane's pixels, compared with the rich view's while it
+    // existed: what the pane draws around the tables.
     await scroll(harness, 0)
-    const images = [
-      await richPane.screenshot({
-        path: `test-results/formatted-tables-rich-${id}.png`,
-      }),
-      await harness.locator('.rich-pane').screenshot({
-        path: `test-results/formatted-tables-formatted-${id}.png`,
-      }),
-    ].map((image) => image.toString('base64'))
-    const difference = await app.evaluate(({ nativeImage }, images) => {
-      const [a, b] = images.map((image) =>
-        nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-      )
-      const size = a.getSize(),
-        other = b.getSize()
-      if (size.width !== other.width || size.height !== other.height) return 1
-      const left = a.toBitmap(),
-        right = b.toBitmap()
-      let changed = 0
-      for (let i = 0; i < left.length; i += 4)
-        if (
-          Math.abs(left[i] - right[i]) > 8 ||
-          Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-          Math.abs(left[i + 2] - right[i + 2]) > 8
-        )
-          changed++
-      return changed / (left.length / 4)
-    }, images)
-    console.log(JSON.stringify({ id, difference }))
-    assert.ok(difference < 0.002, `${id}: ${difference}`)
+    const { blocks, boxes } = await drawn(harness)
+    check(`${id} blocks`, blocks)
+    check(`${id} block boxes`, boxes, { tolerance: 1 })
   }
 })
 
@@ -559,7 +607,7 @@ test('arrow keys enter the nearest cells of an adjacent table and shift-click ex
   assert.equal(extended.editor, null)
 })
 
-test('shift-drag and shift-double-click from an edited cell keep the anchor in the cell, as in the rich editor', {
+test('shift-drag and shift-double-click from an edited cell keep the anchor in the cell, as the rich editor did', {
   timeout: 30000,
 }, async () => {
   const doc =
@@ -608,7 +656,7 @@ test('shift-drag and shift-double-click from an edited cell keep the anchor in t
   assert.deepEqual([plain.anchor, plain.head], [1, doc.indexOf('five') + 1])
 })
 
-test('a shift-drag from an edited cell back over the table picks across cells, as in the rich editor', {
+test('a shift-drag from an edited cell back over the table picks across cells, as the rich editor did', {
   timeout: 30000,
 }, async () => {
   const doc =
@@ -653,7 +701,7 @@ test('a shift-drag from an edited cell back over the table picks across cells, a
   assert.equal(await harness.evaluate(() => getSelection().toString()), 'l')
 })
 
-test('shift-triple-click from an edited cell selects the clicked paragraph, as in the rich editor', {
+test('shift-triple-click from an edited cell selects the clicked paragraph, as the rich editor did', {
   timeout: 30000,
 }, async () => {
   const doc =
@@ -683,7 +731,7 @@ test('shift-triple-click from an edited cell selects the clicked paragraph, as i
   }
 })
 
-test("triple-click selects the clicked block's text, with or without Shift, as in the rich editor", {
+test("triple-click selects the clicked block's text, with or without Shift, as the rich editor did", {
   timeout: 30000,
 }, async () => {
   const doc =
@@ -761,7 +809,7 @@ test("triple-click selects the clicked block's text, with or without Shift, as i
   }
 })
 
-test("a shift-drag from a cell into another table's cells keeps the anchor, as in the rich editor", {
+test("a shift-drag from a cell into another table's cells keeps the anchor, as the rich editor did", {
   timeout: 30000,
 }, async () => {
   const doc =
@@ -800,66 +848,9 @@ test("a shift-drag from a cell into another table's cells keeps the anchor, as i
   )
 })
 
-test("a shift-press in another table's cell extends the selection there; the rich editor selects the anchor's cell", {
+test("a shift-press in another table's cell extends the selection there", {
   timeout: 30000,
 }, async () => {
-  // The rich editor's cell selection cannot span two tables: a shift-press on
-  // another table's text puts a cell selection on the anchor's cell, and a
-  // drag from it changes nothing.
-  const session = await page.context().newCDPSession(page)
-  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  const richSelection = () => {
-    const selection = document.querySelector('.tiptap').editor.state.selection
-    const cell = ($pos) => {
-      for (let depth = $pos.depth; depth > 0; depth--)
-        if (/cell|header/i.test($pos.node(depth).type.name))
-          return $pos.node(depth).textContent
-      return null
-    }
-    return [
-      cell(selection.$from),
-      cell(selection.$to),
-      '$anchorCell' in selection,
-    ]
-  }
-  await page.locator('.tiptap td').filter({ hasText: /^one$/ }).click()
-  // The editor reads the click's caret from a later selectionchange.
-  await page.waitForFunction(
-    () =>
-      document.querySelector('.tiptap').editor.state.selection.$anchor.parent
-        .textContent === 'one',
-  )
-  // The wide table sits below the window: a press there would land on the
-  // page root, which extends a native selection by timing.
-  const [target, further] = await page.evaluate(() => {
-    const cells = [...document.querySelectorAll('.tiptap td p')]
-    const text = (cell) => cells.find((p) => p.textContent === cell)
-    text('value 1').scrollIntoView({ block: 'center' })
-    return ['value 1', 'value 3'].map((cell) => {
-      const range = document.createRange()
-      range.setStart(text(cell).firstChild, 2)
-      range.setEnd(text(cell).firstChild, 3)
-      const { left, top, height } = range.getBoundingClientRect()
-      const point = { x: left + 1, y: top + height / 2 }
-      return {
-        ...point,
-        hit: document.elementFromPoint(point.x, point.y) === text(cell),
-      }
-    })
-  })
-  assert.deepEqual([target.hit, further.hit], [true, true])
-  await page.keyboard.down('Shift')
-  try {
-    await page.mouse.move(target.x, target.y)
-    await page.mouse.down()
-    await page.mouse.move(further.x, further.y, { steps: 4 })
-    await page.mouse.up()
-  } finally {
-    await page.keyboard.up('Shift')
-  }
-  const rich = await page.evaluate(richSelection)
-  await page.locator('.tiptap p', { hasText: 'A paragraph before' }).click()
-  assert.deepEqual(rich, ['one', 'one', true])
   // The formatted view keeps the anchor in its cell, and the head follows
   // the pointer through the other table's cells, as from outside the tables.
   const doc =
@@ -883,91 +874,6 @@ test("a shift-press in another table's cell extends the selection there; the ric
   assert.deepEqual(await pick(), ['first cell', 'second tail'])
 })
 
-/** The rich editor's selection: its kind, the cells it selects, its head's cell and its head's text block up to the head. */
-const richSelection = () =>
-  page.evaluate(() => {
-    const { selection } = document.querySelector('.tiptap').editor.state
-    const cell = ($pos) => {
-      for (let depth = $pos.depth; depth > 0; depth--)
-        if (/cell|header/i.test($pos.node(depth).type.name))
-          return $pos.node(depth).textContent
-      return null
-    }
-    const cells = []
-    if ('forEachCell' in selection)
-      selection.forEachCell((node) => cells.push(node.textContent))
-    const { $anchor, $head } = selection
-    return {
-      cells: 'forEachCell' in selection ? cells : null,
-      anchor: [
-        cell($anchor),
-        $anchor.parent.textContent.slice(0, $anchor.parentOffset),
-      ],
-      head: [
-        cell($head),
-        $head.parent.textContent.slice(0, $head.parentOffset),
-      ],
-    }
-  })
-
-/** A visible page point inside the character after the `offset`th of the rich text block that reads `text`. */
-const richAt = async (text, offset) => {
-  const point = await page.evaluate(
-    ({ text, offset }) => {
-      const block = [...document.querySelectorAll('.tiptap p')].find(
-        (p) => p.textContent === text,
-      )
-      block.scrollIntoView({ block: 'center' })
-      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT)
-      let at = offset
-      while (walker.nextNode() && at >= walker.currentNode.length)
-        at -= walker.currentNode.length
-      const range = document.createRange()
-      range.setStart(walker.currentNode, at)
-      range.setEnd(walker.currentNode, at + 1)
-      const { left, top, height } = range.getBoundingClientRect()
-      const x = left + 1,
-        y = top + height / 2
-      return { x, y, hit: block.contains(document.elementFromPoint(x, y)) }
-    },
-    { text, offset },
-  )
-  // A press off the text would test the browser's fallback instead.
-  assert.ok(point.hit, text)
-  return point
-}
-
-/** Puts the rich editor's caret in the text block that reads `text`, by a click. */
-const richCaret = async (text, offset) => {
-  const { x, y } = await richAt(text, offset)
-  await page.mouse.click(x, y)
-  // The editor reads the click's caret from a later selectionchange.
-  await page.waitForFunction(
-    ({ text, offset }) => {
-      const { $head, empty } =
-        document.querySelector('.tiptap').editor.state.selection
-      return (
-        empty &&
-        $head.parent.textContent === text &&
-        $head.parentOffset === offset
-      )
-    },
-    { text, offset },
-  )
-}
-
-/** Runs rich pointer actions with Shift held, then reads the rich selection once it settles. */
-const richShifted = async (run) => {
-  await page.keyboard.down('Shift')
-  try {
-    await run()
-  } finally {
-    await page.keyboard.up('Shift')
-  }
-  await page.waitForTimeout(300)
-  return richSelection()
-}
-
 /** `at`, asserting that the point hits the text there. */
 const hitAt = async (word, offset) => {
   const point = await at(word, offset)
@@ -982,44 +888,9 @@ const hitAt = async (word, offset) => {
   return point
 }
 
-test('shift-double-click extends the selection to the click, and a drag from it follows the pointer, as in the rich editor', {
+test('shift-double-click extends the selection to the click, and a drag from it follows the pointer, as the rich editor did', {
   timeout: 60000,
 }, async () => {
-  const session = await page.context().newCDPSession(page)
-  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  const paragraph = 'A paragraph before the table.',
-    closing = 'Closing paragraph.'
-  const double = (point) => () =>
-    page.mouse.click(point.x, point.y, { clickCount: 2 })
-  const rich = {}
-  await richCaret(paragraph, 2)
-  rich.text = await richShifted(double(await richAt(closing, 3)))
-  await richCaret('one', 1)
-  rich.cell = await richShifted(double(await richAt(closing, 3)))
-  await richCaret('two | pipe', 1)
-  rich.inCell = await richShifted(double(await richAt('two | pipe', 8)))
-  await richCaret(paragraph, 2)
-  const from = await richAt(closing, 3)
-  const to = await richAt(closing, 11)
-  rich.drag = await richShifted(async () => {
-    await page.mouse.move(from.x, from.y)
-    await page.mouse.down({ clickCount: 1 })
-    await page.mouse.up({ clickCount: 1 })
-    await page.mouse.down({ clickCount: 2 })
-    await page.mouse.move(to.x, to.y, { steps: 6 })
-    await page.mouse.up({ clickCount: 2 })
-  })
-  await page.locator('.tiptap p', { hasText: 'A paragraph before' }).click()
-  assert.deepEqual(rich, {
-    text: { cells: null, anchor: [null, 'A '], head: [null, 'Clo'] },
-    cell: { cells: null, anchor: ['one', 'o'], head: [null, 'Clo'] },
-    inCell: {
-      cells: null,
-      anchor: ['two | pipe', 't'],
-      head: ['two | pipe', 'two | pi'],
-    },
-    drag: { cells: null, anchor: [null, 'A '], head: [null, 'Closing par'] },
-  })
   const doc =
     'one two three\n\n| a | b |\n| --- | --- |\n| x | yy pipe tail |\n\nfour five six'
   const cell = doc.indexOf('x |') + 1
@@ -1070,28 +941,9 @@ test('shift-double-click extends the selection to the click, and a drag from it 
   )
 })
 
-test('shift-triple-click on a cell selects its text from outside the cells and extends from a cell, as in the rich editor', {
+test('shift-triple-click on a cell selects its text from outside the cells and extends from a cell, as the rich editor did', {
   timeout: 60000,
 }, async () => {
-  const session = await page.context().newCDPSession(page)
-  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  const press = (count) => async () => {
-    const { x, y } = await richAt('1', 0)
-    await page.mouse.click(x, y, { clickCount: count })
-  }
-  const rich = {}
-  await richCaret('A paragraph before the table.', 2)
-  rich.outside = await richShifted(press(3))
-  await richCaret('one', 1)
-  rich.click = await richShifted(press(1))
-  await richCaret('one', 1)
-  rich.triple = await richShifted(press(3))
-  await page.locator('.tiptap p', { hasText: 'A paragraph before' }).click()
-  // From outside the cells the rich editor selects the clicked cell, as a
-  // triple-click does; from a cell, the cells a shift-click selects.
-  assert.deepEqual(rich.outside.cells, ['1'])
-  assert.deepEqual(rich.click.cells, ['one', 'em and code', '1'])
-  assert.deepEqual(rich.triple, rich.click)
   // The formatted view's cell editor selects the clicked cell's text, as on
   // a triple-click; from a cell, the selection extends as on a shift-click.
   const doc =
@@ -1124,7 +976,7 @@ test('shift-triple-click on a cell selects its text from outside the cells and e
   assert.deepEqual(await fromCell(triple), clicked)
 })
 
-test('a drag from a cell selects its text and picks across cells, as in the rich editor', {
+test('a drag from a cell selects its text and picks across cells, as the rich editor did', {
   timeout: 30000,
 }, async () => {
   const doc =
@@ -1173,7 +1025,7 @@ test('a drag from a cell selects its text and picks across cells, as in the rich
   }
 })
 
-test('a drag from a cell scrolls a wide table sideways at the pane edges, as in the rich editor; a shift-drag does not', {
+test('a drag from a cell scrolls a wide table sideways at the pane edges, as the rich editor did; a shift-drag does not', {
   timeout: 30000,
 }, async () => {
   const columns = Array.from({ length: 30 }, (_, i) => i)
@@ -1828,7 +1680,7 @@ test('typing replaces a selection from inside a table to past it, and keys still
   }
 })
 
-test('mod-enter in a table that ends the note leaves it for a paragraph below, as in the rich editor', {
+test('mod-enter in a table that ends the note leaves it for a paragraph below, as the rich editor did', {
   timeout: 30000,
 }, async () => {
   const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |'
@@ -1995,7 +1847,7 @@ const tabbed = (target) =>
     ]
   })
 
-test('tab and shift-tab select the text of the cell they move to, as in the rich editor', {
+test('tab and shift-tab select the text of the cell they move to, as the rich editor did', {
   timeout: 30000,
 }, async () => {
   const keys = [
@@ -2029,23 +1881,10 @@ test('tab and shift-tab select the text of the cell they move to, as in the rich
     ['a', 'a'],
     ['b', 'b'],
   ]
-  // table-tab-001: down from a selection, the rich editor takes the
+  // table-tab-001: down from a selection, the rich editor took the
   // browser's line move through the cells in document order; the formatted
   // view moves to the cell below, as from a caret.
-  const down = { rich: ['c', ''], formatted: ['d', ''] }
-  // The rich editor's copy of the note has this table in its list item.
-  const richDoc = () =>
-    page.evaluate(() => document.querySelector('.tiptap').editor.getJSON())
-  const before = await richDoc()
-  await richCaret('a', 0)
-  const rich = []
-  for (const key of keys) {
-    await page.keyboard.press(key)
-    rich.push(await tabbed(page))
-  }
-  assert.deepEqual(rich, [...expected, down.rich])
-  // Shift+Tab in the first cell does not outdent the list item either.
-  assert.deepEqual(await richDoc(), before)
+  const down = ['d', '']
   const doc = '- item\n\n  | a | b |\n  | - | - |\n  | c | d |\n\nafter'
   await mount(doc)
   await harness.locator('.hibi-lp-table th', { hasText: 'a' }).click()
@@ -2054,7 +1893,7 @@ test('tab and shift-tab select the text of the cell they move to, as in the rich
     await harness.keyboard.press(key)
     formatted.push(await tabbed(harness))
   }
-  assert.deepEqual(formatted, [...expected, down.formatted])
+  assert.deepEqual(formatted, [...expected, down])
   // Typing replaces the selected text, which is the cell's source.
   await mount(doc)
   await harness.locator('.hibi-lp-table th', { hasText: 'a' }).click()
@@ -2075,7 +1914,7 @@ test('tab and shift-tab select the text of the cell they move to, as in the rich
 
 const undoKey = process.platform === 'darwin' ? 'Meta+z' : 'Control+z'
 
-test('enter, shift-enter and mod-enter break the line in a cell, as in the rich editor', {
+test('enter, shift-enter and mod-enter break the line in a cell, as the rich editor did', {
   timeout: 30000,
 }, async () => {
   const doc = '| a | b |\n| --- | --- |\n|  | x |\n\nafter'
@@ -2461,6 +2300,121 @@ test('unfinished syntax never resolves or writes cells with old spans', {
   await harness.evaluate(() => window.tables.settle())
   const now = await state()
   assert.deepEqual([now.cell, now.editor], ['20000:1', 'right19998'])
+})
+
+// Linked scrolling and the reading place line positions up with what
+// coordsAtPos gives; until a changed table's layout comes, the table's edges
+// would move the pane by up to half the table at each edit.
+test('positions in a changed table measure at its rows until its layout comes', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 30 }, (_, i) => `| r${i} | v${i} |`)
+  const doc = `intro\n\n| a | b |\n| - | - |\n${rows.join('\n')}\n\n${'more text\n\n'.repeat(20000)}after`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    doc,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: /^v5$/ }).click()
+  await harness.keyboard.press('End')
+  const result = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const editor = document.querySelector('.hibi-lp-cell-editor .cm-content')
+      .cmTile.root.view
+    // Typing in the cell, then an edit above the table, as from the other pane.
+    editor.dispatch(editor.state.replaceSelection('Z'), {
+      userEvent: 'input.type',
+    })
+    view.dispatch({ changes: { from: 0, insert: '~~~\n' } })
+    const text = view.state.doc.toString()
+    const caret = view.coordsAtPos(view.state.selection.main.head)
+    const own = editor.coordsAtPos(editor.state.selection.main.head)
+    const other = view.coordsAtPos(text.indexOf('r20 |') + 1)
+    const row = document
+      .querySelector('.hibi-lp-table tr[data-line="22"]')
+      .getBoundingClientRect()
+    return {
+      settling: window.tables.settling(),
+      caret: caret && [caret.left, caret.top, caret.bottom],
+      own: [own.left, own.top, own.bottom],
+      other: other && [other.top, other.bottom],
+      row: [row.top, row.bottom],
+    }
+  })
+  assert.equal(result.settling, true)
+  // The edited cell's caret is its editor's.
+  assert.deepEqual(result.caret, result.own)
+  // Another row's position is in that row, not at the table's edges.
+  assert.ok(
+    result.other &&
+      result.other[0] >= result.row[0] - 1 &&
+      result.other[1] <= result.row[1] + 1,
+    JSON.stringify(result),
+  )
+})
+
+// Each text node of a cell maps its offsets through the cell's row: parsing
+// the row for each of them made a position in a long cell cost the row's
+// length for every text node before it (176 ms for 1,000 bold runs).
+test('a position in a long cell reads its row once', {
+  timeout: 30000,
+}, async () => {
+  const runs = Array.from({ length: 300 }, (_, i) => `x **b${i}** y`)
+  await mount(`| long |\n| --- |\n| ${runs.join(' ')} |\n`)
+  const slices = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const at = view.state.doc.toString().indexOf('b299**') + 1
+    view.coordsAtPos(at)
+    const slice = String.prototype.slice
+    let count = 0
+    String.prototype.slice = function (...args) {
+      count++
+      return slice.apply(this, args)
+    }
+    try {
+      view.coordsAtPos(at)
+    } finally {
+      String.prototype.slice = slice
+    }
+    return count
+  })
+  assert.ok(slices < 20, `${slices} string slices`)
+})
+
+// The edited cell's editor has the cell's text now and lays it out itself, so
+// a position in that cell measures through the editor.
+test('a position in the edited cell measures through its editor', {
+  timeout: 30000,
+}, async () => {
+  await mount('| a | b |\n| - | - |\n| one | two |\n')
+  await harness.locator('.hibi-lp-table td', { hasText: /^two$/ }).click()
+  await harness.locator('.hibi-lp-cell-editor .cm-content').waitFor()
+  const result = await harness.evaluate(() => {
+    const view = window.tables.view()
+    const editor = document.querySelector('.hibi-lp-cell-editor .cm-content')
+      .cmTile.root.view
+    const own = editor.coordsAtPos.bind(editor)
+    let calls = 0
+    editor.coordsAtPos = (...args) => {
+      calls++
+      return own(...args)
+    }
+    const box = view.coordsAtPos(view.state.doc.toString().indexOf('two') + 1)
+    delete editor.coordsAtPos
+    const caret = own(editor.state.doc.toString().indexOf('two') + 1)
+    return {
+      calls,
+      box: box && [box.left, box.top, box.bottom],
+      caret: caret && [caret.left, caret.top, caret.bottom],
+    }
+  })
+  assert.equal(result.calls, 1, JSON.stringify(result))
+  assert.deepEqual(result.box, result.caret)
 })
 
 test('a cell editor whose table a redraw removes gives focus back to the formatted view', {
@@ -3303,6 +3257,31 @@ test('the toolbar inserts a header and two rows, with the caret in the first hea
   assert.equal(await rows.first().locator('th, td').count(), 3)
 })
 
+// The first input into a cell its row lacks adds the cell. Undo comes back
+// to that row and redo to the typed text, not to where the caret was before
+// the cell was clicked.
+test('undo and redo of typing into a cell its row lacks come back to that cell', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| - | - |\n| x | y |\n| short |\n| u | v |\n\nafter'
+  await mount(doc)
+  // The caret starts in another row.
+  await harness.locator('.hibi-lp-table td', { hasText: /^v$/ }).click()
+  await harness.locator('.hibi-lp-table tr[data-line="3"] td').nth(1).click()
+  await harness.keyboard.type('q')
+  const typed = await state()
+  assert.match(typed.line, /^\| short \|\s*q\s*\|$/)
+  assert.equal(typed.cell, '3:1')
+  await harness.keyboard.press(undoKey)
+  const undone = await state()
+  assert.equal(undone.doc, doc)
+  assert.equal(undone.line, '| short |')
+  await harness.keyboard.press(redoKey)
+  const redone = await state()
+  assert.equal(redone.doc, typed.doc)
+  assert.deepEqual([redone.cell, redone.head], [typed.cell, typed.head])
+})
+
 test('tab extends a table of only a header, and leaving a table at the end adds a paragraph', {
   timeout: 30000,
 }, async () => {
@@ -4063,7 +4042,6 @@ const openFormatted = async () => {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('hibi:toolbar', JSON.stringify({ autoHide: false }))
   })
   await page.reload()

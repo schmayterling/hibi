@@ -1,40 +1,44 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const filler = (name) =>
   Array.from({ length: 30 }, (_, i) => `${name} paragraph ${i}.`).join('\n\n')
+// The rich view's outline of a note, by the note's digest, recorded before its removal.
+const recorded = frozenOracle('formatted-outline')
+const digest = (text) =>
+  createHash('sha256').update(text).digest('hex').slice(0, 12)
 
-test('behind the switch, the formatted view reports, follows and navigates the rich outline', {
+test('the formatted view reports, follows and navigates the recorded rich outline', {
   timeout: 90000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-outline-'))
   const file = join(folder, 'outline.md')
-  await writeFile(
-    file,
-    [
-      '# Title',
-      'Intro.',
-      '## Section *one* with [a link](https://example.com)',
-      filler('first'),
-      'Setext two\n----------',
-      filler('second'),
-      '### Deep `code` &amp; heading',
-      filler('deep'),
-      'Setext top\n==========',
-      '## Reference [label][ref]',
-      '[ref]: /target',
-      filler('reference'),
-      '1. #### Ordered heading',
-      '#### Last **bold**',
-      'End.\n',
-    ].join('\n\n'),
-  )
+  const note = [
+    '# Title',
+    'Intro.',
+    '## Section *one* with [a link](https://example.com)',
+    filler('first'),
+    'Setext two\n----------',
+    filler('second'),
+    '### Deep `code` &amp; heading',
+    filler('deep'),
+    'Setext top\n==========',
+    '## Reference [label][ref]',
+    '[ref]: /target',
+    filler('reference'),
+    '1. #### Ordered heading',
+    '#### Last **bold**',
+    'End.\n',
+  ].join('\n\n')
+  await writeFile(file, note)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })
@@ -78,21 +82,7 @@ test('behind the switch, the formatted view reports, follows and navigates the r
     )
 
   // The rich view's outline is the reference for the same note.
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
-  await clickMenu(app, 'Open…')
-  await page.locator('.tiptap h4', { hasText: 'Last' }).waitFor()
-  await openOutline()
-  await page.waitForFunction(
-    () =>
-      document.querySelectorAll(
-        '.outline-sidebar[data-side="right"] [role="treeitem"]',
-      ).length === 8,
-  )
-  const rich = (await entries()).map(({ label, depth }) => ({ label, depth }))
+  const rich = recorded(digest(note))
   assert.deepEqual(
     rich.map(({ label }) => label),
     [
@@ -107,14 +97,8 @@ test('behind the switch, the formatted view reports, follows and navigates the r
     ],
   )
 
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
   await clickMenu(app, 'Open…')
   await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
   // Hidden windows have no focus; the outline focuses the view it moves.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -317,9 +301,6 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   const chunks = JSON.parse(
@@ -464,13 +445,10 @@ test('outline rows name long headings in full and shorten them only on screen', 
     }
   }
 
-  // The rich view's outline names the heading by its whole text.
+  // The outline names the heading by its whole text, also after a reload.
   const rich = await rows()
   assert.equal(rich.label.length, label.length)
   assert.equal(rich.label, label)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await page.locator('.rich-pane .hibi-lp-h1').waitFor()
   const formatted = await rows()
@@ -499,9 +477,6 @@ test('long outline labels run in a worker and cancel when edited, closed, or the
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   page.on('console', (message) => {
     if (
       message.type() === 'error' &&

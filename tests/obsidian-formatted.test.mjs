@@ -9,7 +9,7 @@ import {
   obsidianWork,
   wikiText,
 } from '../src/addons/markdown/formatted-syntax.ts'
-import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
+import { obsidianMarkdown } from '../src/addons/markdown/obsidian-markdown.ts'
 import { formattedTree } from '../src/renderer/src/formatted-contributions.ts'
 
 const lezer = parser.configure([GFM, obsidianSyntax])

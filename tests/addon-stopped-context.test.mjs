@@ -17,7 +17,7 @@ test('a stopped addon context rejects host calls and releases its registrations'
       name: 'stopped-probe',
       description: 'Stopped context fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',

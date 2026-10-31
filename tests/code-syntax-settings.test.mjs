@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 async function loadMarkdown(app, page, markdown) {
@@ -43,7 +44,7 @@ test('code highlighting controls update both panes, persist, and discover addon 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
@@ -152,8 +153,8 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  const cm = t.formattedEngine === 'codemirror'
+  await waitForFormattedEditor(app, page)
+
   page.setDefaultTimeout(10000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await app.evaluate(({ dialog }, file) => {
@@ -161,7 +162,7 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   }, file)
   await clickMenu(app, 'Open…')
   await page
-    .locator(cm ? '.rich-pane .hibi-lp-h1' : '.tiptap h1', {
+    .locator('.rich-pane .hibi-lp-h1', {
       hasText: 'Long code',
     })
     .waitFor()
@@ -171,24 +172,19 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   await tokens.first().waitFor({ state: 'attached' })
   // The block has about 40,000 tokens; only text near the viewport is decorated.
   assert.ok((await tokens.count()) < 4000)
-  if (cm) {
-    await page.locator('.rich-pane .cm-content').evaluate((element) => {
-      const view = element.cmTile.root.view
-      view.dispatch({
-        selection: {
-          anchor: view.state.doc.line(view.state.doc.lines - 2).from,
-        },
-        scrollIntoView: true,
-      })
+
+  await page.locator('.rich-pane .cm-content').evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      selection: {
+        anchor: view.state.doc.line(view.state.doc.lines - 2).from,
+      },
+      scrollIntoView: true,
     })
-  } else
-    await page
-      .locator('.tiptap pre')
-      .evaluate((pre) => pre.scrollIntoView({ block: 'end' }))
-  await page.waitForFunction((cm) => {
-    const pre = document.querySelector(
-      cm ? '.rich-pane .hibi-lp-codeblock-last' : '.tiptap pre',
-    )
+  })
+
+  await page.waitForFunction(() => {
+    const pre = document.querySelector('.rich-pane .hibi-lp-codeblock-last')
     if (!pre) return false
     const last = [...pre.querySelectorAll('[class*="hibi-token-"]')].at(-1)
     return (
@@ -196,28 +192,22 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
       pre.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom <
         100
     )
-  }, cm)
+  })
   assert.ok((await tokens.count()) < 4000)
   await tokens.last().click()
   await page.keyboard.press('End')
   await page.keyboard.press('Enter')
   await page.keyboard.insertText('const typed = 1')
-  await page.waitForFunction(
-    (cm) =>
-      [
-        ...document.querySelectorAll(
-          '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
-        ),
-      ].some(
-        (token) =>
-          token.textContent === 'const' &&
-          (cm
-            ? token.closest('.cm-line')?.textContent.trim() ===
-              'const typed = 1'
-            : token.nextSibling?.textContent === ' ' &&
-              token.nextSibling.nextSibling?.textContent === 'typed'),
+  await page.waitForFunction(() =>
+    [
+      ...document.querySelectorAll(
+        '.rich-pane :is(pre, .hibi-lp-codeblock) .hibi-token-keyword',
       ),
-    cm,
+    ].some(
+      (token) =>
+        token.textContent === 'const' &&
+        token.closest('.cm-line')?.textContent.trim() === 'const typed = 1',
+    ),
   )
   // Long lines scroll inside the block; highlighting follows both axes.
   const wide = join(profile, 'wide-code.md')
@@ -228,16 +218,14 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   }, wide)
   await clickMenu(app, 'Open…')
   await page
-    .locator(cm ? '.rich-pane .hibi-lp-h1' : '.tiptap h1', {
+    .locator('.rich-pane .hibi-lp-h1', {
       hasText: 'Wide code',
     })
     .waitFor()
   // CodeMirror draws a block's scroll box again when lines draw above it,
-  // so its checks find the box anew; the rich editor keeps its pre.
-  const box = cm ? '.rich-pane .hibi-lp-codescroll' : null
-  const block = page
-    .locator(box ?? '.tiptap:has(h1:text-is("Wide code")) pre')
-    .first()
+  // so its checks find the box anew.
+  const box = '.rich-pane .hibi-lp-codescroll'
+  const block = page.locator(box).first()
   await block.waitFor()
   await block.evaluate(async (pre, box) => {
     // A redraw may replace the box; wait for the new one.
@@ -249,20 +237,24 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
     if (pre.matches('.rich-pane')) pre.scrollTop = pre.scrollHeight
     else pre.scrollIntoView({ block: 'end' })
   }, box)
-  if (cm)
-    await t.test('wide code can scroll horizontally', async () => {
-      assert.ok(
-        await block.evaluate(async (pre, box) => {
-          // A redraw may replace the box; wait for the new one.
-          while (box && !pre.isConnected) {
-            pre = document.querySelector(box) ?? pre
-            if (!pre.isConnected) await new Promise(requestAnimationFrame)
-          }
-          return pre.scrollLeft > 0
-        }, box),
-        'wide code retains horizontal scrolling',
-      )
-    })
+  await t.test('wide code can scroll horizontally', async () => {
+    assert.ok(
+      await block.evaluate(async (pre, box) => {
+        // A redraw may replace the box, and a new box is only as wide as
+        // the view until its long lines are drawn; wait for one that is.
+        const started = performance.now()
+        for (;;) {
+          if (!pre.isConnected) pre = document.querySelector(box) ?? pre
+          if (pre.isConnected && pre.scrollWidth > pre.clientWidth) break
+          if (performance.now() - started > 8000)
+            throw new Error('no wide code box is drawn')
+          await new Promise(requestAnimationFrame)
+        }
+        return pre.scrollLeft > 0
+      }, box),
+      'wide code retains horizontal scrolling',
+    )
+  })
   await block.evaluate(
     (pre, selector) =>
       new Promise((resolve, reject) => {
@@ -301,293 +293,259 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   )
 })
 
-test(
-  'rich highlighting waits while source mode hides it, and long lines stay windowed',
-  () => ({ timeout: 45000 }),
-  async (t) => {
-    const profile = await mkdtemp(join(tmpdir(), 'hibi-code-hidden-'))
-    const app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${profile}`],
+test('rich highlighting waits while source mode hides it, and long lines stay windowed', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-code-hidden-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
     })
-    t.after(async () => {
-      await app.evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
-      })
-      await app.close()
-      await rm(profile, { recursive: true, force: true })
-    })
-    const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
-    const cm = t.formattedEngine === 'codemirror'
-    page.setDefaultTimeout(10000)
-    const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-    await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-    const rich = page.locator(cm ? '.rich-pane .cm-content' : '.tiptap')
-    if (cm) await loadMarkdown(app, page, '```js\nconst hidden = 42;\n```')
-    else
-      await rich.evaluate((element) =>
-        element.editor.commands.setContent('```js\nconst hidden = 42;\n```', {
-          contentType: 'markdown',
-        }),
-      )
-    await page.locator('.rich-pane .hibi-token-keyword').waitFor()
-    // Source mode hides the rich pane with its style; it keeps its size.
-    await pressShortcut(app, `${mod}+Shift+]`)
-    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-    await page.waitForFunction(
-      () =>
-        getComputedStyle(document.querySelector('.rich-pane')).visibility ===
-        'hidden',
-    )
-    if (cm)
-      await rich.evaluate((element) => {
-        // PM plugin metadata has no CM equivalent; observe hidden highlighting work and visible refresh.
-        window.richRefreshes = 0
-        window.richHighlightObserver = new MutationObserver((records) => {
-          window.richRefreshes += records.length
-        })
-        window.richHighlightObserver.observe(element, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-        })
-      })
-    else
-      await rich.evaluate((element) => {
-        const { editor } = element
-        const plugin = editor.state.plugins.find((plugin) =>
-          plugin.key.startsWith('codeHighlight'),
-        )
-        window.richRefreshes = 0
-        editor.on('transaction', ({ transaction }) => {
-          if (transaction.getMeta(plugin)) window.richRefreshes++
-        })
-      })
-    await clickMenu(app, 'Settings')
-    await page
-      .getByRole('tab', { name: /^code highlight$/i, exact: true })
-      .click()
-    const javascript = page.getByRole('checkbox', {
-      name: /^javascript$/i,
-      exact: true,
-    })
-    const sourceKeyword = (shown) =>
-      page.waitForFunction(
-        (shown) =>
-          [
-            ...document.querySelectorAll('.source-pane .hibi-token-keyword'),
-          ].some((token) => token.textContent === 'const') === shown,
-        shown,
-      )
-    await javascript.click()
-    await sourceKeyword(false)
-    await javascript.click()
-    await sourceKeyword(true)
-    await page.getByRole('button', { name: /back to app/i }).click()
-    await page.locator('.settings-screen').waitFor({ state: 'hidden' })
-    await page.evaluate(
-      () =>
-        new Promise((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve)),
-        ),
-    )
-    assert.equal(await page.evaluate(() => window.richRefreshes), 0)
-    await pressShortcut(app, `${mod}+Shift+[`)
-    // Accepted difference: the rich editor refreshes its highlighting once when
-    // shown; the language ended as it was, so CodeMirror has nothing to redraw.
-    await page.waitForFunction(
-      (cm) =>
-        (cm || window.richRefreshes === 1) &&
-        !!document.querySelector('.rich-pane .hibi-token-keyword'),
-      cm,
-    )
-    if (cm) {
-      await page.evaluate(() => window.richHighlightObserver.disconnect())
-      // The shown view follows the language: no colors while it is off.
-      const toggle = async () => {
-        await clickMenu(app, 'Settings')
-        await page
-          .getByRole('tab', { name: /^code highlight$/i, exact: true })
-          .click()
-        await javascript.click()
-        await page.getByRole('button', { name: /back to app/i }).click()
-        await page.locator('.settings-screen').waitFor({ state: 'hidden' })
-      }
-      await toggle()
-      await page.waitForFunction(
-        () => !document.querySelector('.rich-pane .hibi-token-keyword'),
-      )
-      await toggle()
-      await page.locator('.rich-pane .hibi-token-keyword').waitFor()
-    }
-    // One long line decorates the columns near the visible ones, also after typing.
-    const longLine = `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``
-    if (cm) await loadMarkdown(app, page, longLine)
-    else
-      await rich.evaluate((element) =>
-        element.editor.commands.setContent(
-          `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``,
-          { contentType: 'markdown' },
-        ),
-      )
-    const tokens = page.locator(
-      '.rich-pane :is(pre, .hibi-lp-codeblock) [class*="hibi-token-"]',
-    )
-    await tokens.first().waitFor({ state: 'attached' })
-    assert.ok((await tokens.count()) < 1000, 'the line is windowed')
-    if (cm) {
-      await rich.focus()
-      await rich.evaluate((element) =>
-        element.cmTile.root.view.dispatch({
-          selection: { anchor: 15 },
-          scrollIntoView: true,
-        }),
-      )
-      await page.keyboard.insertText(' ')
-      await page.evaluate(() => window.hibi.flushDocumentChanges())
-      assert.equal(
-        (await page.evaluate(() => window.hibi.getDocument())).markdown,
-        `${longLine.slice(0, 15)} ${longLine.slice(15)}`,
-      )
-    } else
-      await rich.evaluate((element) => {
-        element.editor.commands.setTextSelection(10)
-        element.editor.commands.insertContent(' ')
-      })
-    await page.evaluate(
-      () =>
-        new Promise((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve)),
-        ),
-    )
-    assert.ok((await tokens.count()) < 1000, 'typing keeps the line windowed')
-  },
-)
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForFormattedEditor(app, page)
 
-test(
-  'scrolled tab-indented, wide-character, and wrapped long lines keep visible highlighting',
-  () => ({ timeout: 45000 }),
-  async (t) => {
-    const profile = await mkdtemp(join(tmpdir(), 'hibi-code-columns-'))
-    const app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${profile}`],
+  page.setDefaultTimeout(10000)
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  const rich = page.locator('.rich-pane .cm-content')
+  await loadMarkdown(app, page, '```js\nconst hidden = 42;\n```')
+  await page.locator('.rich-pane .hibi-token-keyword').waitFor()
+  // Source mode hides the rich pane with its style; it keeps its size.
+  await pressShortcut(app, `${mod}+Shift+]`)
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await page.waitForFunction(
+    () =>
+      getComputedStyle(document.querySelector('.rich-pane')).visibility ===
+      'hidden',
+  )
+  await rich.evaluate((element) => {
+    // PM plugin metadata has no CM equivalent; observe hidden highlighting work and visible refresh.
+    window.richRefreshes = 0
+    window.richHighlightObserver = new MutationObserver((records) => {
+      window.richRefreshes += records.length
     })
-    t.after(async () => {
-      await app.evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
-      })
-      await app.close()
-      await rm(profile, { recursive: true, force: true })
+    window.richHighlightObserver.observe(element, {
+      childList: true,
+      subtree: true,
+      attributes: true,
     })
-    const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
-    const cm = t.formattedEngine === 'codemirror'
-    page.setDefaultTimeout(10000)
-    await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-    const rich = page.locator(cm ? '.rich-pane .cm-content' : '.tiptap')
-    const show = async (markdown, place) => {
-      if (cm) await loadMarkdown(app, page, markdown)
-      else
-        await rich.evaluate(
-          (element, markdown) =>
-            element.editor.commands.setContent(markdown, {
-              contentType: 'markdown',
-            }),
-          markdown,
-        )
+  })
+  await clickMenu(app, 'Settings')
+  await page
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
+    .click()
+  const javascript = page.getByRole('checkbox', {
+    name: /^javascript$/i,
+    exact: true,
+  })
+  const sourceKeyword = (shown) =>
+    page.waitForFunction(
+      (shown) =>
+        [...document.querySelectorAll('.source-pane .hibi-token-keyword')].some(
+          (token) => token.textContent === 'const',
+        ) === shown,
+      shown,
+    )
+  await javascript.click()
+  await sourceKeyword(false)
+  await javascript.click()
+  await sourceKeyword(true)
+  await page.getByRole('button', { name: /back to app/i }).click()
+  await page.locator('.settings-screen').waitFor({ state: 'hidden' })
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  assert.equal(await page.evaluate(() => window.richRefreshes), 0)
+  await pressShortcut(app, `${mod}+Shift+[`)
+  // Accepted difference: the rich editor refreshes its highlighting once when
+  // shown; the language ended as it was, so CodeMirror has nothing to redraw.
+  await page.waitForFunction(
+    () => !!document.querySelector('.rich-pane .hibi-token-keyword'),
+  )
+  {
+    await page.evaluate(() => window.richHighlightObserver.disconnect())
+    // The shown view follows the language: no colors while it is off.
+    const toggle = async () => {
+      await clickMenu(app, 'Settings')
       await page
-        .locator(
-          '.rich-pane :is(pre, .hibi-lp-codeblock) [class*="hibi-token-"]',
-        )
-        .first()
-        .waitFor({ state: 'attached' })
-      const box = cm ? '.rich-pane .hibi-lp-codescroll' : null
-      const block = page.locator(box ?? '.tiptap pre').first()
-      await block.evaluate(place, box)
-      if (cm)
-        assert.equal(
-          (await page.evaluate(() => window.hibi.getDocument())).markdown,
-          markdown,
-        )
-      // Highlighted text must appear where the block is scrolled to.
-      await block.evaluate(
-        (pre, selector) =>
-          new Promise((resolve, reject) => {
-            const started = performance.now()
-            const check = () => {
-              if (selector && !pre.isConnected)
-                pre = document.querySelector(selector) ?? pre
-              // A redraw replaces the box; wait a frame for the new one.
-              if (!pre.isConnected) {
-                if (performance.now() - started > 8000)
-                  reject(new Error('no code box is drawn'))
-                else requestAnimationFrame(check)
-                return
-              }
-              const box = pre.getBoundingClientRect()
-              const pane = pre.closest('.rich-pane').getBoundingClientRect()
-              const shown = [
-                ...pre.querySelectorAll('[class*="hibi-token-"]'),
-              ].some((token) => {
-                const rect = token.getBoundingClientRect()
-                return (
-                  rect.right > box.left &&
-                  rect.left < box.right &&
-                  rect.bottom > Math.max(box.top, pane.top) &&
-                  rect.top < Math.min(box.bottom, pane.bottom)
-                )
-              })
-              if (shown) resolve()
-              else if (performance.now() - started > 8000)
-                reject(new Error('no highlighted code is visible'))
-              else requestAnimationFrame(check)
-            }
-            check()
-          }),
-        box,
-      )
+        .getByRole('tab', { name: /^code highlight$/i, exact: true })
+        .click()
+      await javascript.click()
+      await page.getByRole('button', { name: /back to app/i }).click()
+      await page.locator('.settings-screen').waitFor({ state: 'hidden' })
     }
-    const right = async (pre, box) => {
+    await toggle()
+    await page.waitForFunction(
+      () => !document.querySelector('.rich-pane .hibi-token-keyword'),
+    )
+    await toggle()
+    await page.locator('.rich-pane .hibi-token-keyword').waitFor()
+  }
+  // One long line decorates the columns near the visible ones, also after typing.
+  const longLine = `\`\`\`js\n${'const horizontal = 42; '.repeat(5000)}\n\`\`\``
+  await loadMarkdown(app, page, longLine)
+  const tokens = page.locator(
+    '.rich-pane :is(pre, .hibi-lp-codeblock) [class*="hibi-token-"]',
+  )
+  await tokens.first().waitFor({ state: 'attached' })
+  assert.ok((await tokens.count()) < 1000, 'the line is windowed')
+
+  await rich.focus()
+  await rich.evaluate((element) =>
+    element.cmTile.root.view.dispatch({
+      selection: { anchor: 15 },
+      scrollIntoView: true,
+    }),
+  )
+  await page.keyboard.insertText(' ')
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    `${longLine.slice(0, 15)} ${longLine.slice(15)}`,
+  )
+
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  assert.ok((await tokens.count()) < 1000, 'typing keeps the line windowed')
+})
+
+test('scrolled tab-indented, wide-character, and wrapped long lines keep visible highlighting', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-code-columns-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForFormattedEditor(app, page)
+
+  page.setDefaultTimeout(10000)
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  const show = async (markdown, place) => {
+    await loadMarkdown(app, page, markdown)
+    await page
+      .locator('.rich-pane :is(pre, .hibi-lp-codeblock) [class*="hibi-token-"]')
+      .first()
+      .waitFor({ state: 'attached' })
+    const box = '.rich-pane .hibi-lp-codescroll'
+    const block = page.locator(box).first()
+    await block.evaluate(place, box)
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      markdown,
+    )
+    // Highlighted text must appear where the block is scrolled to.
+    await block.evaluate(
+      (pre, selector) =>
+        new Promise((resolve, reject) => {
+          const started = performance.now()
+          const check = () => {
+            if (selector && !pre.isConnected)
+              pre = document.querySelector(selector) ?? pre
+            // A redraw replaces the box; wait a frame for the new one.
+            if (!pre.isConnected) {
+              if (performance.now() - started > 8000)
+                reject(new Error('no code box is drawn'))
+              else requestAnimationFrame(check)
+              return
+            }
+            const box = pre.getBoundingClientRect()
+            const pane = pre.closest('.rich-pane').getBoundingClientRect()
+            const shown = [
+              ...pre.querySelectorAll('[class*="hibi-token-"]'),
+            ].some((token) => {
+              const rect = token.getBoundingClientRect()
+              return (
+                rect.right > box.left &&
+                rect.left < box.right &&
+                rect.bottom > Math.max(box.top, pane.top) &&
+                rect.top < Math.min(box.bottom, pane.bottom)
+              )
+            })
+            if (shown) resolve()
+            else if (performance.now() - started > 8000)
+              reject(new Error('no highlighted code is visible'))
+            else requestAnimationFrame(check)
+          }
+          check()
+        }),
+      box,
+    )
+  }
+  const right = async (pre, box) => {
+    // A redraw may replace the box; wait for the new one.
+    while (box && !pre.isConnected) {
+      pre = document.querySelector(box) ?? pre
+      if (!pre.isConnected) await new Promise(requestAnimationFrame)
+    }
+    pre.scrollIntoView({ block: 'start' })
+    pre.scrollLeft = pre.scrollWidth
+  }
+  // An ASCII header, then lines indented by tabs far to the right.
+  await show(
+    `\`\`\`js\nconst header = 42;\n${`${'\t'.repeat(300)}const tabbed = 42;\n`.repeat(40)}\`\`\``,
+    right,
+  )
+  // One line of 20,000 wide characters.
+  const wide = `\`\`\`js\nconst text = "${'漢'.repeat(20_000)}";\n\`\`\``
+  await show(wide, right)
+  // CodeMirror once kept a line gap it drew for that line while it took
+  // it for wrapped text, so only its start was drawn, and a tall line
+  // kept one. A line that does not wrap gets no gap.
+  const tall = await page.addStyleTag({
+    content:
+      '.rich-pane .hibi-lp-codescroll > .cm-line { padding-bottom: 9000px; }',
+  })
+  await show(wide, right)
+  assert.ok(
+    await page
+      .locator('.rich-pane .hibi-lp-codescroll')
+      .first()
+      .evaluate((box) => box.textContent.length > 20_000),
+    'the whole line is drawn',
+  )
+  await tall.evaluate((style) => style.remove())
+  // A short first line, then one long line that wraps.
+  await page.addStyleTag({
+    content:
+      '.rich-pane :is(pre, .hibi-lp-codeblock) { white-space: pre-wrap; overflow-wrap: anywhere; }',
+  })
+  await show(
+    `\`\`\`js\nconst header = 42;\n${'const wrapped = 42; '.repeat(5000)}\n\`\`\``,
+    async (pre, box) => {
       // A redraw may replace the box; wait for the new one.
       while (box && !pre.isConnected) {
         pre = document.querySelector(box) ?? pre
         if (!pre.isConnected) await new Promise(requestAnimationFrame)
       }
-      pre.scrollIntoView({ block: 'start' })
-      pre.scrollLeft = pre.scrollWidth
-    }
-    // An ASCII header, then lines indented by tabs far to the right.
-    await show(
-      `\`\`\`js\nconst header = 42;\n${`${'\t'.repeat(300)}const tabbed = 42;\n`.repeat(40)}\`\`\``,
-      right,
-    )
-    // One line of 20,000 wide characters.
-    await show(
-      `\`\`\`js\nconst text = "${'漢'.repeat(20_000)}";\n\`\`\``,
-      right,
-    )
-    // A short first line, then one long line that wraps.
-    await page.addStyleTag({
-      content:
-        '.rich-pane :is(pre, .hibi-lp-codeblock) { white-space: pre-wrap; overflow-wrap: anywhere; }',
-    })
-    await show(
-      `\`\`\`js\nconst header = 42;\n${'const wrapped = 42; '.repeat(5000)}\n\`\`\``,
-      async (pre, box) => {
-        // A redraw may replace the box; wait for the new one.
-        while (box && !pre.isConnected) {
-          pre = document.querySelector(box) ?? pre
-          if (!pre.isConnected) await new Promise(requestAnimationFrame)
-        }
-        const pane = pre.closest('.rich-pane')
-        const content = pre.matches('.rich-pane')
-          ? pre.querySelector('.cm-content')
-          : pre
-        pane.scrollTop +=
-          content.getBoundingClientRect().top -
-          pane.getBoundingClientRect().top +
-          content.offsetHeight / 2
-      },
-    )
-  },
-)
+      const pane = pre.closest('.rich-pane')
+      const content = pre.matches('.rich-pane')
+        ? pre.querySelector('.cm-content')
+        : pre
+      pane.scrollTop +=
+        content.getBoundingClientRect().top -
+        pane.getBoundingClientRect().top +
+        content.offsetHeight / 2
+    },
+  )
+})

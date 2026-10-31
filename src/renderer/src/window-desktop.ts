@@ -15,6 +15,7 @@ export function windowDesktop(bridge: AddonWindowBridge): DesktopApi {
       addons: async () => ({
         states: await bridge.states(),
         packages: [],
+        outdated: [],
         notices: [],
       }),
       recentWorkspaces: async () => [],

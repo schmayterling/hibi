@@ -1,5 +1,4 @@
 import { lazy } from 'react'
-import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { formatToolbar } from '../_shared/format-toolbar'
@@ -12,9 +11,6 @@ import { systemCompilerEnabled } from './preferences'
 import css from './style.css?inline'
 import { svgSource, typstFlavor, typstTokens } from './syntax'
 import type { TypstResult } from './types'
-
-// The Tiptap editor loads only when it is the selected engine.
-const rich = codemirrorFormattedView ? undefined : await import('./Block')
 
 let stopFormatted: (() => void) | undefined
 export default defineAddon({
@@ -30,14 +26,11 @@ export default defineAddon({
       group: 'Typst',
       description: 'Preview Typst code blocks in Markdown.',
       level: 'block',
-      extensions: ['typstBlock'],
       matches: (token) =>
         token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? ''),
       slash: {
         markdown: '```typst\n\n```',
         cursor: 9,
-        rich: (chain) =>
-          chain.insertContent({ type: 'typstBlock', attrs: { source: '' } }),
       },
     })
     context.styles.register('preview', css)
@@ -111,7 +104,6 @@ export default defineAddon({
     context.editor.registerDocumentFormat(format)
     context.editor.registerFlavor({
       ...typstFlavor,
-      richExtensions: rich ? [rich.typstNode(context)] : [],
       export: {
         extensions: [typstTokens],
         css,

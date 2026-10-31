@@ -14,7 +14,6 @@ const core: MarkdownSyntaxFeature[] = [
       group: 'headings',
       description: `${'#'.repeat(index + 1)} heading`,
       level: 'block',
-      extensions: ['heading'],
       nodes: [`ATXHeading${index + 1}`, `SetextHeading${index + 1}`],
       matches: (token) => token.type === 'heading' && token.depth === index + 1,
       slash: {
@@ -23,8 +22,6 @@ const core: MarkdownSyntaxFeature[] = [
           ['Large heading', 'Medium heading', 'Small heading'][index] ??
           `${'#'.repeat(index + 1)} heading`,
         keywords: `h${index + 1} title`,
-        rich: (chain) =>
-          chain.setHeading({ level: (index + 1) as 1 | 2 | 3 | 4 | 5 | 6 }),
       },
     }),
   ),
@@ -35,9 +32,8 @@ const core: MarkdownSyntaxFeature[] = [
     description: '**bold**',
     level: 'inline',
     nodes: ['StrongEmphasis'],
-    extensions: ['bold'],
     matches: (token) => token.type === 'strong',
-    slash: { markdown: '****', cursor: 2, rich: (chain) => chain.toggleBold() },
+    slash: { markdown: '****', cursor: 2 },
   },
   {
     id: 'italic',
@@ -46,9 +42,8 @@ const core: MarkdownSyntaxFeature[] = [
     description: '*italic*',
     level: 'inline',
     nodes: ['Emphasis'],
-    extensions: ['italic'],
     matches: (token) => token.type === 'em',
-    slash: { markdown: '**', cursor: 1, rich: (chain) => chain.toggleItalic() },
+    slash: { markdown: '**', cursor: 1 },
   },
   {
     id: 'inline-code',
@@ -57,9 +52,8 @@ const core: MarkdownSyntaxFeature[] = [
     description: '`code`',
     level: 'inline',
     nodes: ['InlineCode'],
-    extensions: ['code'],
     matches: (token) => token.type === 'codespan',
-    slash: { markdown: '``', cursor: 1, rich: (chain) => chain.toggleCode() },
+    slash: { markdown: '``', cursor: 1 },
   },
   {
     id: 'escapes',
@@ -80,14 +74,12 @@ const core: MarkdownSyntaxFeature[] = [
       'Wrap code in three backticks or tildes, or indent it with four spaces.',
     level: 'block',
     nodes: ['FencedCode', 'CodeBlock'],
-    extensions: ['codeBlock'],
     matches: (token) => token.type === 'code',
     slash: {
       markdown: '```\n\n```',
       cursor: 4,
       description: 'Code with syntax highlighting',
       keywords: 'code codeblock pre',
-      rich: (chain) => chain.setCodeBlock(),
     },
   },
   {
@@ -97,13 +89,11 @@ const core: MarkdownSyntaxFeature[] = [
     description: '> quote',
     level: 'block',
     nodes: ['Blockquote'],
-    extensions: ['blockquote'],
     matches: (token) => token.type === 'blockquote',
     slash: {
       markdown: '> ',
       description: 'Indented quotation',
       keywords: 'quotation',
-      rich: (chain) => chain.toggleBlockquote(),
     },
   },
   {
@@ -113,7 +103,6 @@ const core: MarkdownSyntaxFeature[] = [
     description: '- item',
     level: 'block',
     nodes: ['BulletList'],
-    extensions: ['bulletList'],
     matches: (token) =>
       token.type === 'list' &&
       !token.ordered &&
@@ -122,7 +111,6 @@ const core: MarkdownSyntaxFeature[] = [
       markdown: '- ',
       description: 'List with bullet points',
       keywords: 'ul bullets',
-      rich: (chain) => chain.toggleBulletList(),
     },
   },
   {
@@ -132,7 +120,6 @@ const core: MarkdownSyntaxFeature[] = [
     description: '1. item',
     level: 'block',
     nodes: ['OrderedList'],
-    extensions: ['orderedList'],
     matches: (token) =>
       token.type === 'list' &&
       token.ordered &&
@@ -141,7 +128,6 @@ const core: MarkdownSyntaxFeature[] = [
       markdown: '1. ',
       description: 'List with numbered steps',
       keywords: 'ol numbers',
-      rich: (chain) => chain.toggleOrderedList(),
     },
   },
   {
@@ -151,13 +137,11 @@ const core: MarkdownSyntaxFeature[] = [
     description: '---, ***, or ___.',
     level: 'block',
     nodes: ['HorizontalRule'],
-    extensions: ['horizontalRule'],
     matches: (token) => token.type === 'hr',
     slash: {
       markdown: '---\n\n',
       description: 'Horizontal dividing line',
       keywords: 'hr separator line',
-      rich: (chain) => chain.setHorizontalRule(),
     },
   },
   {
@@ -168,9 +152,8 @@ const core: MarkdownSyntaxFeature[] = [
       'End a line with two spaces or a backslash to keep the line break.',
     level: 'inline',
     nodes: ['HardBreak'],
-    extensions: ['hardBreak'],
     matches: (token) => token.type === 'br',
-    slash: { markdown: '  \n', rich: (chain) => chain.setHardBreak() },
+    slash: { markdown: '  \n' },
   },
   {
     id: 'links',
@@ -179,7 +162,6 @@ const core: MarkdownSyntaxFeature[] = [
     description: 'Markdown links and automatic links.',
     level: 'inline',
     nodes: ['Link', 'Autolink', 'URL'],
-    extensions: ['link'],
     matches: (token) => token.type === 'link',
     slash: { markdown: '[text](url)', cursor: 1 },
   },
@@ -189,7 +171,6 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'links and media',
     description: '![description](path)',
     level: 'inline',
-    extensions: ['image'],
     matches: (token) => token.type === 'image',
     slash: { markdown: '![description](path)', cursor: 2 },
   },
@@ -221,7 +202,6 @@ const registry = new Map<string, Feature & { owner: string }>(
     { ...feature, id: `core.${feature.id}`, owner: 'core' },
   ]),
 )
-const coreIds = new Set(registry.keys())
 const disabled = new Set<string>()
 try {
   const stored: unknown = JSON.parse(
@@ -241,9 +221,7 @@ try {
 const listeners = new Set<() => void>()
 let snapshot: readonly Entry[] = [],
   disabledFeatures: readonly Entry[] = [],
-  version = 0,
-  schema: readonly unknown[] = [],
-  schemaVersion = 0
+  version = 0
 function publish() {
   snapshot = [...registry.values()].map((feature) => ({
     ...feature,
@@ -251,19 +229,6 @@ function publish() {
   }))
   disabledFeatures = snapshot.filter((feature) => !feature.enabled)
   version++
-  // Preview-only document syntax cannot change what Markdown editors parse.
-  const next = [...registry.values()].flatMap((feature) =>
-    feature.scope === 'document' && !feature.extensions?.length
-      ? []
-      : [feature, disabled.has(feature.id)],
-  )
-  if (
-    next.length !== schema.length ||
-    next.some((value, index) => value !== schema[index])
-  ) {
-    schema = next
-    schemaVersion++
-  }
   for (const listener of listeners) listener()
   workspaceSyntaxEvents.publish()
 }
@@ -281,16 +246,8 @@ function savePreferences() {
 }
 export const markdownSyntax = {
   snapshot: () => snapshot,
-  isCore: (id: string) => coreIds.has(id),
   version: () => version,
-  schemaVersion: () => schemaVersion,
   enabled: (id: string) => !disabled.has(id),
-  extensionEnabled(name: string) {
-    const owners = snapshot.filter((feature) =>
-      feature.extensions?.includes(name),
-    )
-    return !owners.length || owners.some((feature) => feature.enabled)
-  },
   disabledFeature(token: Token) {
     return disabledFeatures.find((feature) => {
       try {
@@ -328,9 +285,6 @@ export const markdownSyntax = {
       !feature.group ||
       !['block', 'inline'].includes(feature.level) ||
       (feature.scope !== 'document' && typeof feature.matches !== 'function') ||
-      (feature.extensions !== undefined &&
-        (!Array.isArray(feature.extensions) ||
-          feature.extensions.some((name) => typeof name !== 'string'))) ||
       (feature.nodes !== undefined &&
         (!Array.isArray(feature.nodes) ||
           feature.nodes.some((name) => typeof name !== 'string'))) ||
@@ -344,16 +298,13 @@ export const markdownSyntax = {
           (feature.slash.cursor !== undefined &&
             (!Number.isInteger(feature.slash.cursor) ||
               feature.slash.cursor < 0 ||
-              feature.slash.cursor > feature.slash.markdown.length)) ||
-          (feature.slash.rich !== undefined &&
-            typeof feature.slash.rich !== 'function')))
+              feature.slash.cursor > feature.slash.markdown.length))))
     )
       throw new Error('invalid or duplicate markdown syntax feature.')
     const entry = {
       ...feature,
       id,
       owner,
-      extensions: [...(feature.extensions ?? [])],
       ...(feature.nodes ? { nodes: [...feature.nodes] } : {}),
     }
     registry.set(id, entry)

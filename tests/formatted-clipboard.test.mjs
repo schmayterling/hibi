@@ -6,10 +6,13 @@ import test from 'node:test'
 import { parser as markdownParser } from '@lezer/markdown'
 import { marked } from 'marked'
 import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// What the removed rich view's copy of the note rendered.
+const richCopy = frozenOracle('formatted-clipboard-rich')
 const note = `# Clipboard
 
 A [link](https://example.com/) and ![image](img.png) in **bold** and \`code\`.
@@ -34,22 +37,15 @@ const x = 1
 
 let app, page, folder, file
 
-/** Open the note in the app, in the codemirror formatted view or the rich view. */
-async function open(formatted) {
-  await page.evaluate((formatted) => {
-    if (formatted) localStorage.setItem('hibi:formatted-engine', 'codemirror')
-    else localStorage.setItem('hibi:formatted-engine', 'tiptap')
-  }, formatted)
+/** Open the note in the app's formatted view. */
+async function open() {
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await pressShortcut(app, `${mod}+o`)
-  await page
-    .locator(formatted ? '.rich-pane .cm-content' : '.rich-pane .tiptap')
-    .getByText('quoted')
-    .waitFor()
+  await page.locator('.rich-pane .cm-content').getByText('quoted').waitFor()
   // Hidden windows have no focus; editors need a focused page.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -71,7 +67,7 @@ before(
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
     await waitForDocumentEditor(app, page)
-    await open(true)
+    await open()
   },
   { timeout: 90000 },
 )
@@ -1034,7 +1030,7 @@ test('queued html pastes preserve event order with selection and intervening typ
   }
 })
 
-test('the rich view copies the same rendered content for the same note', {
+test('a copy renders the content the rich view copied for the same note', {
   timeout: 60000,
 }, async () => {
   /** The text and html of a copy, and what the html renders. */
@@ -1061,22 +1057,7 @@ test('the rich view copies the same rendered content for the same note', {
   assert.equal(await markdown(), note)
   const all = await clipboardEvent('copy', 0, null)
   const formatted = await read(all.text, all.html)
-  await open(false)
-  await page.locator('.rich-pane .tiptap').click()
-  await page.keyboard.press(`${mod}+a`)
-  const copied = await page.evaluate(() => {
-    const element = document.querySelector('.rich-pane .tiptap')
-    const data = new DataTransfer()
-    element.dispatchEvent(
-      new ClipboardEvent('copy', {
-        clipboardData: data,
-        bubbles: true,
-        cancelable: true,
-      }),
-    )
-    return { text: data.getData('text/plain'), html: data.getData('text/html') }
-  })
-  const rich = await read(copied.text, copied.html)
+  const rich = richCopy({ note: 'note.md' })
   console.log(JSON.stringify({ formatted, rich }, null, 1))
   // The text is the note's markdown, where the rich view gave its rendered text.
   assert.equal(formatted.text, note)

@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -60,7 +57,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
       description: 'Document navigation fixture',
       kind: 'extension',
       authors: [{ displayName: 'Test' }],
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       capabilities: ['ui'],
       entry: 'index.js',
@@ -102,7 +99,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.waitForFunction(() => window.navigationView)
   await page.evaluate(() => {
     window.navigationView.open({ id: 'session' })
@@ -130,10 +127,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
     await editor.waitFor()
     await idle()
     // Compare the visible document and exact source.
-    if (
-      t.formattedEngine === 'codemirror' &&
-      editorName === 'Document editor'
-    ) {
+    if (editorName === 'Document editor') {
       assert.equal(
         await editor.evaluate((element) => {
           const text = element.cloneNode(true)
@@ -154,7 +148,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
     assert.equal(await addonPanel.isVisible(), false)
     if (capture)
       await page.screenshot({
-        path: `test-results/addon-navigation-${t.formattedEngine}-${capture}.png`,
+        path: `test-results/addon-navigation-codemirror-${capture}.png`,
       })
     await addonTab.click()
     await retained()
@@ -416,7 +410,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
       description: 'Scoped view fixture',
       kind: 'extension',
       authors: [{ displayName: 'Test' }],
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       capabilities: ['ui'],
       entry: 'index.js',
@@ -474,7 +468,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const editor = page
     .locator('#document-editor-panel')
     .getByRole('textbox', { name: 'Document editor', exact: true })
@@ -608,7 +602,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     .revision
   await splitTab(app, page, second)
   const leftEditor = page.locator(
-    '.editor-page[data-side="left"] .rich-pane :is(.tiptap, .cm-content)',
+    '.editor-page[data-side="left"] .rich-pane .cm-content',
   )
   const leftNode = await leftEditor.elementHandle()
   await waitForAsync(
@@ -643,7 +637,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
       (node) =>
         node ===
         document.querySelector(
-          '.editor-page[data-side="left"] .rich-pane :is(.tiptap, .cm-content)',
+          '.editor-page[data-side="left"] .rich-pane .cm-content',
         ),
       leftNode,
     ),
@@ -743,7 +737,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     lastDocument,
   )
   await page.waitForFunction(() =>
-    document.activeElement?.matches('.tiptap, .cm-content'),
+    document.activeElement?.matches('.cm-content'),
   )
   await pressShortcut(app, `${modifier}+Alt+Right`)
   await page.getByRole('tab', { name: 'Fixture tab', selected: true }).waitFor()
@@ -776,7 +770,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   assert.equal(await editor.isVisible(), true)
   await page.evaluate(() => window.releaseFrames())
   await page.waitForFunction(() =>
-    document.activeElement?.matches('.tiptap, .cm-content'),
+    document.activeElement?.matches('.cm-content'),
   )
   await page.evaluate(() => {
     const f = window.viewsFixture
@@ -796,7 +790,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await addonTab.waitFor({ state: 'detached' })
   await page.evaluate(() => window.releaseFrames())
   await page.waitForFunction(() =>
-    document.activeElement?.matches('.tiptap, .cm-content'),
+    document.activeElement?.matches('.cm-content'),
   )
   await page.evaluate(() => {
     const f = window.viewsFixture

@@ -23,7 +23,7 @@ async function open(t) {
       name: 'Pane probe',
       description: 'Pane identity regression fixture.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       capabilities: ['source'],
       authors: [{ displayName: 'Test' }],
@@ -64,9 +64,6 @@ async function open(t) {
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => !!window.paneProbe)

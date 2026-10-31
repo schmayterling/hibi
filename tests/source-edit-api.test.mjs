@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -23,7 +24,8 @@ test('a review addon applies source edits atomically, preserves undo, and reject
       name: 'Local review',
       description: 'Edit API fixture',
       kind: 'extension',
-      apiVersion: 1,
+      apiVersion: 3,
+      capabilities: ['source'],
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',
@@ -73,7 +75,7 @@ test('a review addon applies source edits atomically, preserves undo, and reject
   page.setDefaultTimeout(6000)
   const original = 'very very good and teh note'
   const corrected = 'very good and the note'
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: 'Document editor', exact: true }),

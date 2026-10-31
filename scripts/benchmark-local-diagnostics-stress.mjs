@@ -73,25 +73,24 @@ try {
           globalThis.diagnosticStressPhase = stress
         }, phase)
         await page.evaluate((check) => {
-          const element = document.querySelector('.tiptap'),
-            editor = element.editor,
-            dispatch = editor.view.props.dispatchTransaction
+          const view = document.querySelector('.rich-pane .cm-content').cmTile
+              .root.view,
+            dispatch = view.dispatch
           const measure = { cpu: [], frames: [], previous: 0, stopped: false }
           window.diagnosticStressInput = measure
-          editor.view.setProps({
-            dispatchTransaction(tr) {
-              const start = check ? 0 : performance.now()
-              try {
-                dispatch.call(this, tr)
-              } finally {
-                if (tr.docChanged)
-                  measure.cpu.push(check ? 0 : performance.now() - start)
-              }
-            },
-          })
+          view.dispatch = (...specs) => {
+            const start = check ? 0 : performance.now()
+            const before = view.state.doc
+            try {
+              dispatch.apply(view, specs)
+            } finally {
+              if (view.state.doc !== before)
+                measure.cpu.push(check ? 0 : performance.now() - start)
+            }
+          }
           window.stopDiagnosticStressInput = () => {
             measure.stopped = true
-            editor.view.setProps({ dispatchTransaction: dispatch })
+            view.dispatch = dispatch
           }
           const frame = (time) => {
             if (measure.stopped) return

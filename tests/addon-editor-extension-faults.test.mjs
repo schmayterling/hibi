@@ -64,7 +64,7 @@ const failingCreate = (
  * Opens `source` with a failing addon feature and a healthy addon's
  * feature in the given pane.
  */
-async function open(t, { source, presentation, engine, code }) {
+async function open(t, { source, presentation, code }) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-extension-faults-'))
   const profile = join(folder, 'profile')
   const file = join(folder, 'note.md')
@@ -96,13 +96,25 @@ async function open(t, { source, presentation, engine, code }) {
   const page = await app.firstWindow()
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  if (engine === 'tiptap') {
-    await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
-    )
-    await page.reload()
-  }
+  // A feature can fail on the startup note, and opening the next note
+  // clears that error, so every shown toast is recorded.
+  await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+  await page.evaluate(() => {
+    const shown = new Set()
+    window.shownToasts = shown
+    // A toast can already be up, or closing, by the time this runs.
+    const record = () => {
+      for (const toast of document.querySelectorAll('.toast'))
+        shown.add(toast.textContent)
+    }
+    record()
+    new MutationObserver(record).observe(document, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
+  })
   // The failing feature leaves the startup note editable.
   await waitForDocumentEditor(app, page, { timeout: 20000 })
   await app.evaluate(({ dialog }, path) => {
@@ -179,23 +191,35 @@ const reported = (page, text) =>
     .first()
     .waitFor({ timeout: 10000 })
 
+/**
+ * Waits for a toast that `open` saw, even one a later open cleared, matching
+ * case-insensitively like `hasText`.
+ */
+const shown = (page, text) =>
+  page.waitForFunction(
+    (text) =>
+      [...window.shownToasts].some((shown) =>
+        shown.toLowerCase().includes(text.toLowerCase()),
+      ),
+    text,
+    { timeout: 10000 },
+  )
+
 const plain = '# Title\n\n**strong** text\n\nend\n'
 const withFrontmatter = `---\ntitle: Probe\n---\n${plain}`
 
 const fieldCases = [
-  { presentation: 'formatted', engine: 'codemirror', source: plain },
-  { presentation: 'formatted', engine: 'codemirror', source: withFrontmatter },
-  { presentation: 'source', engine: 'codemirror', source: plain },
-  { presentation: 'source', engine: 'tiptap', source: plain },
+  { presentation: 'formatted', source: plain },
+  { presentation: 'formatted', source: withFrontmatter },
+  { presentation: 'source', source: plain },
 ]
-for (const { presentation, engine, source } of fieldCases)
-  test(`an addon ${presentation} state field that fails on input is removed and typing stays on screen and in the note (${engine}${source === plain ? '' : ', frontmatter'})`, {
+for (const { presentation, source } of fieldCases)
+  test(`an addon ${presentation} state field that fails on input is removed and typing stays on screen and in the note${source === plain ? '' : ' (frontmatter)'}`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source,
       presentation,
-      engine,
       code: failingField,
     })
     await type(page, pane, ['a', 'Q'])
@@ -222,7 +246,6 @@ const composeOverFailure = (presentation, code) => async (t) => {
   const { page, pane, errors, cdp } = await open(t, {
     source: withFrontmatter,
     presentation,
-    engine: 'codemirror',
     code,
   })
   await caret(page, pane)
@@ -261,7 +284,7 @@ const composeOverFailure = (presentation, code) => async (t) => {
 
 for (const presentation of ['formatted', 'source'])
   test(
-    `an addon ${presentation} state field that fails during composition is removed and the composed text lands once (codemirror)`,
+    `an addon ${presentation} state field that fails during composition is removed and the composed text lands once`,
     {
       timeout: 120000,
     },
@@ -291,13 +314,12 @@ const failingCommand = (
   ] })
 } })`
 
-test('an addon feature that fails on its own annotated edit is named and removed (codemirror)', {
+test('an addon feature that fails on its own annotated edit is named and removed', {
   timeout: 120000,
 }, async (t) => {
   const { page, pane, errors } = await open(t, {
     source: plain,
     presentation: 'source',
-    engine: 'codemirror',
     code: failingCommand,
   })
   await caret(page, pane)
@@ -340,13 +362,12 @@ const failingOnce = (
   ] })
 } })`
 
-test('an edit that fails without naming a feature is rejected on screen and reported, and input continues (codemirror)', {
+test('an edit that fails without naming a feature is rejected on screen and reported, and input continues', {
   timeout: 120000,
 }, async (t) => {
   const { page, pane, errors } = await open(t, {
     source: plain,
     presentation: 'source',
-    engine: 'codemirror',
     code: failingOnce,
   })
   await type(page, pane, ['a', 'Q'])
@@ -398,13 +419,12 @@ const readFailingField = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} extender that reads its failing field cannot leave rejected input on screen, and the feature is named and removed (codemirror)`, {
+  test(`an addon ${presentation} extender that reads its failing field cannot leave rejected input on screen, and the feature is named and removed`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: readFailingField,
     })
     await type(page, pane, ['a', 'Q'])
@@ -428,7 +448,7 @@ for (const presentation of ['formatted', 'source'])
 
 for (const presentation of ['formatted', 'source'])
   test(
-    `an addon ${presentation} state field read by its own extender that fails during composition is removed and the composed text lands once (codemirror)`,
+    `an addon ${presentation} state field read by its own extender that fails during composition is removed and the composed text lands once`,
     {
       timeout: 120000,
     },
@@ -465,13 +485,12 @@ const failingWhileMade = (hook) => (presentation) =>
 
 for (const presentation of ['formatted', 'source'])
   for (const hook of ['extender', 'changeFilter'])
-    test(`an addon ${presentation} ${hook} that fails while a composition is made into an edit is removed, and the screen follows the note through the rest of the composition (codemirror)`, {
+    test(`an addon ${presentation} ${hook} that fails while a composition is made into an edit is removed, and the screen follows the note through the rest of the composition`, {
       timeout: 120000,
     }, async (t) => {
       const { page, pane, errors, cdp } = await open(t, {
         source: plain,
         presentation,
-        engine: 'codemirror',
         code: failingWhileMade(hook),
       })
       await caret(page, pane)
@@ -545,13 +564,12 @@ const failingWithCursors = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} extender that fails while a composition at two cursors is made into an edit is removed, and the composition lands at both (codemirror)`, {
+  test(`an addon ${presentation} extender that fails while a composition at two cursors is made into an edit is removed, and the composition lands at both`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors, cdp } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: failingWithCursors,
     })
     await ready(page, pane)
@@ -620,13 +638,12 @@ const throwingOnce = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`a composed edit that fails without naming an addon ${presentation} feature ends the composition, and the screen follows the note (codemirror)`, {
+  test(`a composed edit that fails without naming an addon ${presentation} feature ends the composition, and the screen follows the note`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors, cdp } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: throwingOnce,
     })
     await caret(page, pane)
@@ -685,13 +702,12 @@ for (const presentation of ['formatted', 'source'])
     assert.deepEqual(errors, [])
   })
 
-test('an addon source state field that fails on a pasted edit is removed and the paste is rejected on screen and in the note (codemirror)', {
+test('an addon source state field that fails on a pasted edit is removed and the paste is rejected on screen and in the note', {
   timeout: 120000,
 }, async (t) => {
   const { app, page, pane, errors } = await open(t, {
     source: plain,
     presentation: 'source',
-    engine: 'codemirror',
     code: failingField,
   })
   await caret(page, pane)
@@ -740,13 +756,12 @@ const failingBatch = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} field that fails on the second transaction of a dispatch is named and removed, and the dispatch is rejected (codemirror)`, {
+  test(`an addon ${presentation} field that fails on the second transaction of a dispatch is named and removed, and the dispatch is rejected`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: failingBatch,
     })
     await caret(page, pane)
@@ -799,13 +814,12 @@ for (const presentation of ['formatted', 'source'])
     ['Q', 'a', 'b'],
     ['a', 'Q', 'b'],
   ])
-    test(`an addon ${presentation} field that fails on edit ${inserts.indexOf('Q') + 1} of a dispatch whose next edit was made from it is named and removed (codemirror)`, {
+    test(`an addon ${presentation} field that fails on edit ${inserts.indexOf('Q') + 1} of a dispatch whose next edit was made from it is named and removed`, {
       timeout: 120000,
     }, async (t) => {
       const { page, pane, errors } = await open(t, {
         source: plain,
         presentation,
-        engine: 'codemirror',
         code: failingChain(inserts),
       })
       await caret(page, pane)
@@ -848,13 +862,12 @@ const failingAlternatives = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`of two failing edits an addon ${presentation} command makes from one state, the one it dispatches names its feature (codemirror)`, {
+  test(`of two failing edits an addon ${presentation} command makes from one state, the one it dispatches names its feature`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: failingAlternatives,
     })
     await caret(page, pane)
@@ -899,13 +912,12 @@ const swallowingFilter = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} field failure that the addon's own change filter catches is still rejected, named and removed (codemirror)`, {
+  test(`an addon ${presentation} field failure that the addon's own change filter catches is still rejected, named and removed`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: swallowingFilter,
     })
     await type(page, pane, ['a', 'Q'])
@@ -964,13 +976,12 @@ const swallowedNested = (mode) => (presentation) =>
 
 for (const presentation of ['formatted', 'source'])
   for (const mode of ['provide', 'enable', 'compute', 'wrap'])
-    test(`an addon ${presentation} failure from a ${mode === 'provide' ? 'provided field' : mode === 'enable' ? 'facet-enabled field' : mode === 'compute' ? 'facet value' : 'wrapped field'} that its change filter catches is rejected, named and removed (codemirror)`, {
+    test(`an addon ${presentation} failure from a ${mode === 'provide' ? 'provided field' : mode === 'enable' ? 'facet-enabled field' : mode === 'compute' ? 'facet value' : 'wrapped field'} that its change filter catches is rejected, named and removed`, {
       timeout: 120000,
     }, async (t) => {
       const { page, pane, errors } = await open(t, {
         source: plain,
         presentation,
-        engine: 'codemirror',
         code: swallowedNested(mode),
       })
       await type(page, pane, ['Q'])
@@ -1015,13 +1026,12 @@ const compartmentAdded = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} field added later through the addon's compartment, whose failure its change filter catches, is rejected, named and removed (codemirror)`, {
+  test(`an addon ${presentation} field added later through the addon's compartment, whose failure its change filter catches, is rejected, named and removed`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: compartmentAdded,
     })
     await caret(page, pane)
@@ -1061,13 +1071,12 @@ const frozenField = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} feature with a frozen state field installs and typing works next to a failing one (codemirror)`, {
+  test(`an addon ${presentation} feature with a frozen state field installs and typing works next to a failing one`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: frozenField,
     })
     await type(page, pane, ['a', 'Q'])
@@ -1106,13 +1115,12 @@ const rebuildingFilter = (
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} filter that rebuilds the rejected edit cannot hide its failing field (codemirror)`, {
+  test(`an addon ${presentation} filter that rebuilds the rejected edit cannot hide its failing field`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine: 'codemirror',
       code: rebuildingFilter,
     })
     await type(page, pane, ['a', 'Q'])
@@ -1152,13 +1160,12 @@ const failingExtender = (
 } })`
 
 for (const made of ['typing', 'a command'])
-  test(`an addon extender that fails while ${made} is made into an edit is named and removed, and the edit is rejected (codemirror)`, {
+  test(`an addon extender that fails while ${made} is made into an edit is named and removed, and the edit is rejected`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation: 'source',
-      engine: 'codemirror',
       code: failingExtender,
     })
     if (made === 'typing') await type(page, pane, ['Z'])
@@ -1193,9 +1200,12 @@ async function addWindowFeature(page) {
       const addons = Object.values(await import(`app://hibi/${registry}`)).find(
         (value) => value?.isInstalled && value?.snapshot,
       )
-      const { state, view } = Object.values(
-        await import(`app://hibi/${sdk}`),
-      ).find((value) => value?.view?.EditorView)
+      const source = await import(`app://hibi/${sdk}`)
+      // The chunk exports the SDK source by name, or as one value when the
+      // bundle shares the module with other chunks.
+      const { state, view } = source.view
+        ? source
+        : Object.values(source).find((value) => value?.view?.EditorView)
       const addon = addons
         .snapshot()
         .find((entry) => entry.manifest.id === 'text-extras')
@@ -1252,7 +1262,6 @@ async function openWindows(t, beforeWindow = async () => {}) {
   const { app, page, pane, errors } = await open(t, {
     source: plain,
     presentation: 'formatted',
-    engine: 'codemirror',
     code: () => 'export default () => ({ start() {} })',
   })
   await addWindowFeature(page)
@@ -1286,7 +1295,7 @@ async function openWindows(t, beforeWindow = async () => {}) {
   return { app, page, pane, errors, preview, previewErrors, feature }
 }
 
-test('a failing formatted feature leaves the editors of every window, and turning its addon off and on restores it (codemirror)', {
+test('a failing formatted feature leaves the editors of every window, and turning its addon off and on restores it', {
   timeout: 180000,
 }, async (t) => {
   const { app, page, pane, errors, preview, previewErrors, feature } =
@@ -1346,7 +1355,7 @@ const holdFailures = (page) =>
   })
 
 for (const late of ['while it is off', 'after it is on again'])
-  test(`a failure from another window that arrives ${late} does not remove the feature from the addon's next run (codemirror)`, {
+  test(`a failure from another window that arrives ${late} does not remove the feature from the addon's next run`, {
     timeout: 180000,
   }, async (t) => {
     const { app, page, pane, errors, preview, previewErrors, feature } =
@@ -1395,7 +1404,7 @@ for (const late of ['while it is off', 'after it is on again'])
     assert.deepEqual(previewErrors, [])
   })
 
-test("a failure from the addon's next run still removes the feature from a window that learns of that run later (codemirror)", {
+test("a failure from the addon's next run still removes the feature from a window that learns of that run later", {
   timeout: 180000,
 }, async (t) => {
   const { app, page, pane, errors, preview, previewErrors, feature } =
@@ -1444,7 +1453,7 @@ test("a failure from the addon's next run still removes the feature from a windo
   assert.deepEqual(previewErrors, [])
 })
 
-test('a failure keeps the activation of the run it happened in, even when main answers the window later (codemirror)', {
+test('a failure keeps the activation of the run it happened in, even when main answers the window later', {
   timeout: 180000,
 }, async (t) => {
   const { app, page, pane, errors, preview, previewErrors, feature } =
@@ -1498,23 +1507,21 @@ const invalidExtension = (
 } })`
 
 const createCases = [
-  { presentation: 'formatted', engine: 'codemirror', code: failingCreate },
-  { presentation: 'source', engine: 'codemirror', code: failingCreate },
-  { presentation: 'source', engine: 'tiptap', code: failingCreate },
-  { presentation: 'formatted', engine: 'codemirror', code: invalidExtension },
-  { presentation: 'source', engine: 'tiptap', code: invalidExtension },
+  { presentation: 'formatted', code: failingCreate },
+  { presentation: 'source', code: failingCreate },
+  { presentation: 'formatted', code: invalidExtension },
+  { presentation: 'source', code: invalidExtension },
 ]
-for (const { presentation, engine, code } of createCases)
-  test(`an addon ${presentation} feature that ${code === failingCreate ? 'fails to start' : 'cannot be installed'} is reported and the others install with input (${engine})`, {
+for (const { presentation, code } of createCases)
+  test(`an addon ${presentation} feature that ${code === failingCreate ? 'fails to start' : 'cannot be installed'} is reported and the others install with input`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
-      engine,
       code,
     })
-    await reported(
+    await shown(
       page,
       code === failingCreate
         ? `Bad ext could not start its ${presentation} editor feature.`
@@ -1536,3 +1543,29 @@ for (const { presentation, engine, code } of createCases)
     )
     assert.deepEqual(errors, [])
   })
+
+test('a startup failure of an addon formatted feature stays reported when another note opens', {
+  timeout: 120000,
+}, async (t) => {
+  const { app, page } = await open(t, {
+    source: plain,
+    presentation: 'formatted',
+    code: failingCreate,
+  })
+  // The notice stays until dismissed, so a slow runner still sees it when the
+  // note opens. The addons start again after the reload and report again.
+  await page.evaluate(() =>
+    localStorage.setItem('toast-preferences', JSON.stringify({ duration: 0 })),
+  )
+  await page.reload()
+  const message = 'Bad ext could not start its formatted editor feature.'
+  await reported(page, message)
+  // Opening a note clears the last document error, not an addon's failure.
+  await pressShortcut(app, `${mod}+o`)
+  await page.locator('.app[aria-busy="false"]').waitFor()
+  await frame(page)
+  assert.equal(
+    await page.locator('.toast').filter({ hasText: message }).count(),
+    1,
+  )
+})

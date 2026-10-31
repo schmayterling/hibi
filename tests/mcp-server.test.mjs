@@ -4,15 +4,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -90,7 +88,7 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
   }, workspace)
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  const rich = await waitForFormattedEditor(app, page)
   await page.evaluate(
     (preferences) => {
       localStorage.setItem(
@@ -609,12 +607,7 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
         textOf(await tool('read_document', { path: 'active.md' })),
         'Unsaved MCP draft.',
       )
-      if (t.formattedEngine === 'tiptap')
-        assert.equal(
-          await rich.evaluate((element) => element.editor.commands.undo()),
-          true,
-        )
-      else await rich.press('ControlOrMeta+z')
+      await rich.press('ControlOrMeta+z')
       await waitForAppState(
         page,
         async () =>

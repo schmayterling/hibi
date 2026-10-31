@@ -34,7 +34,7 @@ for (const [label, tail, before] of [
         name: 'Completion probe',
         description: 'Records completion requests',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         startup: 'background',
         capabilities: ['source'],
@@ -67,9 +67,6 @@ for (const [label, tail, before] of [
     })
     const page = await app.firstWindow()
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     const session = await page.context().newCDPSession(page)

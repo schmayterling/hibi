@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { formulaCache, formulaScheduler } from '../src/addons/math/rendering.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -233,148 +236,7 @@ test('a formula KaTeX cannot render shows its source', (t) => {
   assert.throws(() => scheduler.render('broken', false), /KaTeX failed/)
 })
 
-test('tiptap: opening 2,000 formulas accepts input before rendering them all', {
-  timeout: 90000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-math-rendering-'))
-  const file = join(profile, 'formulas.md')
-  let body = '# Formulas\n\n'
-  for (let index = 0; index < 400; index++) {
-    for (let line = 0; line < 4; line++)
-      body += `Line ${index}.${line} has $\\frac{a+${index}}{c+d}+\\sqrt{x^2+y^2}$ inline.\n\n`
-    body += `$$\n\\sum_{i=1}^{${index}} \\frac{i^2}{\\sqrt{i+1}}\n$$\n\n`
-  }
-  await writeFile(join(profile, 'addons.json'), JSON.stringify({ math: true }))
-  await writeFile(file, body)
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
-    })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  page.setDefaultTimeout(60000)
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await app.evaluate(({ dialog }, file) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
-  }, file)
-  await page.evaluate(() => {
-    window.mathOpen = {}
-    const count = () => document.querySelectorAll('.tiptap .katex').length
-    new MutationObserver((_, observer) => {
-      if (document.querySelector('.tiptap h1')?.textContent !== 'Formulas')
-        return
-      observer.disconnect()
-      // Counted in the same task that inserted the document, then after its first frame.
-      window.mathOpen.synchronous = count()
-      requestAnimationFrame(() => {
-        window.mathOpen.frame = count()
-      })
-    }).observe(document.body, { childList: true, subtree: true })
-  })
-  await clickMenu(app, 'Open…')
-  await page.waitForFunction(() => window.mathOpen.frame !== undefined)
-  const opened = await page.evaluate(() => window.mathOpen)
-  assert.equal(opened.synchronous, 0)
-  assert.ok(opened.frame < 200, `${opened.frame} formulas rendered first`)
-  await page.locator('.tiptap h1').click()
-  await page.keyboard.insertText('Z')
-  await page.waitForFunction(() =>
-    document.querySelector('.tiptap h1')?.textContent.includes('Z'),
-  )
-  await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex').length === 2000,
-  )
-  // Rendered formulas keep the package views' markup.
-  assert.deepEqual(
-    await page.evaluate(() => ({
-      inline: document.querySelectorAll(
-        '.tiptap span.tiptap-mathematics-render[data-type="inline-math"][data-latex] > .katex',
-      ).length,
-      block: document.querySelectorAll(
-        '.tiptap div.tiptap-mathematics-render[data-type="block-math"][data-latex] > .block-math-inner > .katex-display > .katex',
-      ).length,
-    })),
-    { inline: 1600, block: 400 },
-  )
-  // Tall formulas rendering around the reading position do not move it.
-  const opening = await page.evaluate(() => {
-    const editor = document.querySelector('.tiptap').editor
-    let source = ''
-    for (let index = 0; index < 80; index++)
-      source += `anchor ${index}\n\n$$\n\\begin{pmatrix} ${index}\\\\b\\\\c\\\\d\\\\e\\\\f\\\\g\\\\h \\end{pmatrix}\n$$\n\n`
-    window.tallSource = source
-    editor.commands.setContent(source, { contentType: 'markdown' })
-    let scroller = document.querySelector('.tiptap').parentElement
-    while (!/auto|scroll/.test(getComputedStyle(scroller).overflowY))
-      scroller = scroller.parentElement
-    const block = document.querySelectorAll(
-      '.tiptap [data-type="block-math"]',
-    )[50]
-    scroller.scrollTop +=
-      block.getBoundingClientRect().top -
-      scroller.getBoundingClientRect().top -
-      120
-    window.tallBlock = block
-    return {
-      rendered: document.querySelectorAll('.tiptap .katex').length,
-      top: block.getBoundingClientRect().top,
-      height: block.getBoundingClientRect().height,
-    }
-  })
-  assert.equal(opening.rendered, 0)
-  await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex').length === 80,
-  )
-  const settled = await page.evaluate(() => ({
-    top: window.tallBlock.getBoundingClientRect().top,
-    height: window.tallBlock.getBoundingClientRect().height,
-  }))
-  assert.ok(
-    settled.height > opening.height + 100,
-    'the matrix grew when rendered',
-  )
-  assert.ok(
-    Math.abs(settled.top - opening.top) < 1,
-    `the block moved from ${opening.top} to ${settled.top}`,
-  )
-  // Remounted formulas reserve the height they rendered at.
-  const remounted = await page.evaluate(() => {
-    const editor = document.querySelector('.tiptap').editor
-    editor.commands.setContent('replaced', { contentType: 'markdown' })
-    editor.commands.setContent(window.tallSource, { contentType: 'markdown' })
-    const block = document.querySelectorAll(
-      '.tiptap [data-type="block-math"]',
-    )[50]
-    return {
-      rendered: document.querySelectorAll('.tiptap .katex').length,
-      height: block.getBoundingClientRect().height,
-    }
-  })
-  assert.equal(remounted.rendered, 0)
-  assert.ok(
-    Math.abs(remounted.height - settled.height) < 1,
-    `pending height ${remounted.height}, rendered ${settled.height}`,
-  )
-  await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex').length === 80,
-  )
-  assert.equal(
-    await page.evaluate(
-      () =>
-        document.querySelectorAll('.tiptap [data-type="block-math"][style]')
-          .length,
-    ),
-    0,
-  )
-})
-
-test('codemirror: formulas accept input before completion, keep the reading position and reserve cached heights', {
+test('formulas accept input before completion, keep the reading position and reserve cached heights', {
   timeout: 90000,
 }, async function formattedFormulas(t) {
   const profile = await mkdtemp(
@@ -401,7 +263,7 @@ test('codemirror: formulas accept input before completion, keep the reading posi
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)

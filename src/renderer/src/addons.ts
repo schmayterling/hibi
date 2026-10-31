@@ -18,9 +18,9 @@ import {
   compatibleAddonManifest,
   type FormattedExtension,
   type MarkdownExtension,
-  type RichExtension,
   type SourceExtension,
   type StatusItem,
+  type ToastApi,
   type ViewApi,
   type ViewInstance,
   type ViewRegistration,
@@ -46,6 +46,7 @@ import {
   parseSyntaxDescriptors,
   validatePreservation,
 } from '../../shared/preservation'
+import type { OutdatedAddon } from '../../shared/sideload'
 import { startupSpan } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { useDialogService } from '../../ui/DialogProvider'
@@ -75,7 +76,6 @@ import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, type RegisteredFlavor, renderMarkdownAsync } from './flavors'
-import { codemirrorFormattedView } from './formatted-engine'
 import { reportRendererFailure } from './local-diagnostics'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
@@ -146,6 +146,21 @@ function sameHotkey(left: HotkeyDescriptor, right: HotkeyDescriptor): boolean {
     left.menu?.group === right.menu?.group &&
     left.menu?.order === right.menu?.order
   )
+}
+
+/** Counts an editor of the view as showing a feature until the returned call, and tells `waiting`. */
+function showFeature(
+  views: Map<string, number>,
+  viewId: string,
+  waiting: ReadonlySet<() => void>,
+) {
+  views.set(viewId, (views.get(viewId) ?? 0) + 1)
+  for (const check of [...waiting]) check()
+  return () => {
+    const count = (views.get(viewId) ?? 1) - 1
+    if (count) views.set(viewId, count)
+    else views.delete(viewId)
+  }
 }
 type Environment = Omit<
   AddonContext,
@@ -293,6 +308,54 @@ export async function renderExportDocument(
   )
 }
 
+/**
+ * Hibi no longer runs addons made for API 1 or 2. One notice per new set of
+ * them leads to the addon manager, which keeps listing them.
+ */
+function outdatedNotice(
+  outdated: readonly OutdatedAddon[],
+  open: (id: string) => void,
+) {
+  const first = outdated[0]
+  return {
+    message:
+      outdated.length === 1
+        ? `${first?.name} needs an update for addon API 3.`
+        : `${outdated.length} addons need an update for addon API 3.`,
+    action: {
+      label: 'Open addon manager',
+      run: () => first && open(first.id),
+    },
+  }
+}
+
+function announceOutdated(
+  outdated: readonly OutdatedAddon[],
+  show: ToastApi['show'],
+  open: (id: string) => void,
+) {
+  const key = 'hibi:outdated-addons-announced'
+  const current = outdated.map((addon) => `${addon.id}@${addon.version}`)
+  let announced: unknown = []
+  try {
+    announced = JSON.parse(localStorage.getItem(key) ?? '[]')
+  } catch {
+    // A malformed record announces again.
+  }
+  localStorage.setItem(key, JSON.stringify(current))
+  if (
+    !outdated.length ||
+    (Array.isArray(announced) &&
+      current.every((item) => announced.includes(item)))
+  )
+    return null
+  return show({
+    ...outdatedNotice(outdated, open),
+    variant: 'error',
+    duration: 0,
+  })
+}
+
 export function useAddons(
   environment: Environment,
   documentName?: string,
@@ -318,6 +381,21 @@ export function useAddons(
     runAction: (command) => latest.current.runAction(command),
   }).current
   const [states, setStates] = useState<AddonState[]>([])
+  const [outdated, setOutdated] = useState<readonly OutdatedAddon[]>([])
+  const outdatedToast = useRef<ReturnType<ToastApi['show']> | null>(null)
+  // An update or uninstall settles what the notice named.
+  useEffect(() => {
+    const notice = outdatedToast.current
+    if (!notice) return
+    if (outdated.length)
+      notice.update(
+        outdatedNotice(outdated, (id) => latest.current.openAddonSettings(id)),
+      )
+    else {
+      notice.dismiss()
+      outdatedToast.current = null
+    }
+  }, [outdated])
   const [loaded, setLoaded] = useState(false)
   const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(
     new Map(),
@@ -374,10 +452,8 @@ export function useAddons(
           : activation === 'source'
             ? activeView !== 'normal'
             : activation === 'formatted'
-              ? codemirrorFormattedView && activeView !== 'markdown'
-              : activation === 'rich'
-                ? activeView !== 'markdown'
-                : true)
+              ? activeView !== 'markdown'
+              : true)
       )
     },
     [activeView, requested],
@@ -533,6 +609,24 @@ export function useAddons(
   )
   const exchange = useRef(createAddonExchange()).current
   const started = useRef(new Set<string>()).current
+  /** Ends a background start's wait for an idle moment. */
+  const idleStarts = useRef(new Map<string, () => void>()).current
+  /** Editor features with the views whose editors show them, counted per editor. */
+  const sources = useRef(
+    new Map<
+      string,
+      SourceExtension & {
+        addonId: string
+        presentation: 'source' | 'formatted'
+        views: Map<string, number>
+        background?: boolean
+        fail?: (error: unknown) => void
+        drop?: () => void
+      }
+    >(),
+  ).current
+  /** Checks waiting for editor features to reach a view. */
+  const featureWaits = useRef(new Set<() => void>()).current
   const activation = useRef(
     new Map<
       string,
@@ -618,10 +712,56 @@ export function useAddons(
             ? current
             : new Set([...current, ...requested]),
         )
+        for (const id of requested) idleStarts.get(id)?.()
         await whenStarted(owner)
       }
     },
-    [started, whenStarted],
+    [started, whenStarted, idleStarts],
+  )
+  /**
+   * Resolves once the view's current editor shows the owner's editor features,
+   * which follow its start, or once those features leave or the view closes.
+   */
+  const featuresShown = useCallback(
+    (owner: string, view: CommandExecutionContext['view']) => {
+      const selection = view && editorViewRegistry.getSelection(view)
+      if (!view || !selection?.ok) return
+      const missing = () => {
+        if (!documentRuntime.isLiveView(view)) return false
+        // The view can switch between its source and formatted editors, and
+        // waits while the one it switched to mounts.
+        const current = editorViewRegistry.getSelection(view)
+        if (!current.ok) return true
+        // The formatted view is the rich editor.
+        const presentation =
+          current.value.editor === 'source' ? 'source' : 'formatted'
+        return [...sources.values()].some(
+          (feature) =>
+            feature.addonId === owner &&
+            feature.presentation === presentation &&
+            !feature.views.has(view.viewId),
+        )
+      }
+      if (!missing()) return
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer)
+          featureWaits.delete(check)
+          stopViews()
+          stopEditors()
+          resolve()
+        }
+        const check = () => {
+          if (!missing()) done()
+        }
+        // ponytail: an editor that never shows a feature delays the command 5 s; editors could report the features they skip.
+        const timer = setTimeout(done, 5000)
+        const stopViews = documentRuntime.subscribeViews(check)
+        const stopEditors = editorViewRegistry.subscribe(check)
+        featureWaits.add(check)
+      })
+    },
+    [featureWaits, sources],
   )
   const executeCommand = useCallback(
     async (
@@ -630,6 +770,7 @@ export function useAddons(
       context: CommandExecutionContext = captureCommandContext('api'),
     ) => {
       await activateAddon(owner)
+      await featuresShown(owner, context.view)
       const command = registered.get(`${owner}.${commandId}`)
       if (!command || !currentActivation.current.available.has(owner))
         throw new Error('This command is no longer available.')
@@ -640,7 +781,7 @@ export function useAddons(
         throw new Error('The command target is no longer available.')
       await command.run(context)
     },
-    [activateAddon, captureCommandContext, registered],
+    [activateAddon, featuresShown, captureCommandContext, registered],
   )
   useEffect(
     () =>
@@ -662,30 +803,6 @@ export function useAddons(
   const [markdownExtensions, setMarkdownExtensions] = useState<
     MarkdownExtension[]
   >([])
-  const rich = useRef(
-    new Map<string, RichExtension & { addonId: string }>(),
-  ).current
-  const [richExtensions, setRichExtensions] = useState<RichExtension[]>([])
-  const publishRich = useCallback(() => {
-    setRichExtensions((current) => {
-      const next = [...rich.values()].sort((a, b) => a.id.localeCompare(b.id))
-      return current.length === next.length &&
-        current.every((entry, index) => entry === next[index])
-        ? current
-        : next
-    })
-  }, [rich])
-  const sources = useRef(
-    new Map<
-      string,
-      SourceExtension & {
-        addonId: string
-        presentation: 'source' | 'formatted'
-        fail?: (error: unknown) => void
-        drop?: () => void
-      }
-    >(),
-  ).current
   /** Editor features that failed in any window, with their addons and activations, until those stop. */
   const failedFeatures = useRef(
     new Map<string, { addonId: string; activation: number }>(),
@@ -756,7 +873,9 @@ export function useAddons(
         ? current
         : next
     })
-  }, [sources])
+    // A command stops waiting for features that left, as when their addon stops.
+    for (const check of [...featureWaits]) check()
+  }, [sources, featureWaits])
   const publishExtensions = useCallback(() => {
     setMarkdownExtensions((current) => {
       const next = [...extensions.values()].sort(
@@ -857,7 +976,7 @@ export function useAddons(
   useEffect(() => {
     void window.hibi.bootstrap
       .addons()
-      .then(async ({ states, packages: installed, notices }) => {
+      .then(async ({ states, packages: installed, outdated, notices }) => {
         try {
           if (localStorage.getItem('hibi:dictionary:typing')) {
             const { migrateDictionaryTyping } = await import(
@@ -880,6 +999,12 @@ export function useAddons(
         }
         setStates(states)
         addonRegistry.hydrate(installed)
+        setOutdated(outdated)
+        outdatedToast.current = announceOutdated(
+          outdated,
+          toastService.api.show,
+          (id) => latest.current.openAddonSettings(id),
+        )
         for (const message of notices)
           toastService.api.show({
             message,
@@ -1020,39 +1145,6 @@ export function useAddons(
       const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
-      const compatibility =
-        codemirrorFormattedView && addonRegistry.origin(id) !== 'built-in'
-          ? import('./formatted-addon-compatibility').then(
-              ({ createFormattedCompatibility }) =>
-                disposed
-                  ? null
-                  : createFormattedCompatibility(
-                      id,
-                      addon.manifest.name,
-                      toastScope.api,
-                      () => latest.current.openAddonSettings(id),
-                    ),
-            )
-          : null
-      if (compatibility)
-        cleanups.add(() => {
-          void compatibility.then((scope) => scope?.dispose())
-        })
-      const registerCompatibility = (
-        register: (
-          scope: NonNullable<Awaited<typeof compatibility>>,
-        ) => () => void,
-      ) => {
-        let removed = false
-        let remove: (() => void) | undefined
-        void compatibility?.then((scope) => {
-          if (!removed && scope) remove = register(scope)
-        })
-        return () => {
-          removed = true
-          remove?.()
-        }
-      }
       const registerView: ViewApi['register'] = (view) => {
         let registered: ViewRegistration | undefined
         let removed = false
@@ -1163,10 +1255,16 @@ export function useAddons(
             `This addon supplied a duplicate or invalid ${presentation}-editor feature: ${key}.`,
           )
         let remove = () => {}
+        const views = new Map<string, number>()
         const entry = {
           id: key,
           addonId: id,
           presentation,
+          views,
+          // Editing is ready before it starts; input does not wait for it.
+          ...(addon.manifest.startup === 'background'
+            ? { background: true }
+            : {}),
           async create(...args: Parameters<SourceExtension['create']>) {
             if (disposed) return []
             try {
@@ -1175,7 +1273,19 @@ export function useAddons(
                 `${presentation} attachment:${extension.id}`,
                 () => (extension.create as SourceExtension['create'])(...args),
               )
-              return disposed ? [] : result
+              const viewId = args[0]?.viewId
+              if (disposed) return []
+              if (!viewId) return result
+              // Commands wait until the editor of their view shows this.
+              const { ViewPlugin } = await import('@codemirror/view')
+              return disposed
+                ? []
+                : [
+                    result,
+                    ViewPlugin.define(() => ({
+                      destroy: showFeature(views, viewId, featureWaits),
+                    })),
+                  ]
             } catch (error) {
               throw new Error(
                 `${addon.manifest.name} could not start its ${presentation} editor feature.`,
@@ -1211,15 +1321,8 @@ export function useAddons(
           if (entry.fail && failedFeatures.has(`${presentation}:${key}`))
             return () => {}
           sources.set(`${presentation}:${key}`, entry)
-          const removeCompatibility =
-            presentation === 'formatted'
-              ? registerCompatibility((scope) =>
-                  scope.register('formatted', extension.id),
-                )
-              : () => {}
           if (mounted.current) publishSources()
           return () => {
-            removeCompatibility()
             sources.delete(`${presentation}:${key}`)
             if (!disposed && mounted.current) publishSources()
           }
@@ -1350,9 +1453,6 @@ export function useAddons(
           if (extension.addonId === id) extensions.delete(key)
         for (const [key, extension] of sources)
           if (extension.addonId === id) sources.delete(key)
-        for (const [key, extension] of rich)
-          if (extension.addonId === id) rich.delete(key)
-        if (mounted.current) publishRich()
         for (const [key, item] of status)
           if (item.addonId === id) status.delete(key)
         if (mounted.current) setStatusItems([...status.values()])
@@ -1848,21 +1948,14 @@ export function useAddons(
               registerFlavor(flavor) {
                 if (disposed) return () => {}
                 assertSchemaActivation()
-                const remove = batch.register(`flavor:${flavor.id}`, () => {
-                  const removeFlavor = flavors.register(
+                const remove = batch.register(`flavor:${flavor.id}`, () =>
+                  flavors.register(
                     id,
                     flavor,
                     (error) => latest.current.error(error),
                     addonRegistry.origin(id) !== 'built-in',
-                  )
-                  const removeCompatibility = registerCompatibility((scope) =>
-                    scope.registerFlavor(flavor),
-                  )
-                  return () => {
-                    removeFlavor()
-                    removeCompatibility()
-                  }
-                })
+                  ),
+                )
                 return track(remove)
               },
               renderMarkdown(source, documentId) {
@@ -1965,60 +2058,6 @@ export function useAddons(
                   }
                 })
                 return track(remove)
-              },
-              registerRich(extension) {
-                if (disposed) return () => {}
-                assertInputActivation()
-                const key = `${id}.${extension.id}`
-                if (!/^[a-z][a-z0-9-]*$/.test(extension.id) || rich.has(key))
-                  throw new Error(
-                    `This addon supplied a duplicate or invalid editor feature: ${key}.`,
-                  )
-                const entry = {
-                  id: key,
-                  addonId: id,
-                  ...(extension.preview === 'deferred'
-                    ? { preview: extension.preview }
-                    : {}),
-                  attach(...args: Parameters<RichExtension['attach']>) {
-                    if (disposed) return () => {}
-                    try {
-                      const detach = performanceDiagnostics.measure(
-                        id,
-                        `rich attachment:${extension.id}`,
-                        () => extension.attach(...args),
-                      )
-                      return () => {
-                        try {
-                          performanceDiagnostics.measure(
-                            id,
-                            `rich cleanup:${extension.id}`,
-                            detach,
-                          )
-                        } catch (error) {
-                          latest.current.error(error)
-                        }
-                      }
-                    } catch (error) {
-                      throw new Error(
-                        `${addon.manifest.name} could not start its rich editor feature.`,
-                        { cause: error },
-                      )
-                    }
-                  },
-                }
-                return batch.register(`rich:${extension.id}`, () => {
-                  rich.set(key, entry)
-                  const removeCompatibility = registerCompatibility((scope) =>
-                    scope.register('rich', extension.id),
-                  )
-                  if (mounted.current) publishRich()
-                  return () => {
-                    removeCompatibility()
-                    if (rich.delete(key) && !disposed && mounted.current)
-                      publishRich()
-                  }
-                })
               },
               runCommand: (command) =>
                 disposed ? Promise.resolve(false) : app.runCommand(command),
@@ -2349,9 +2388,11 @@ export function useAddons(
         const starting =
           required.has(id) || requested.has(id)
             ? measuredStart()
-            : new Promise<void>((resolve) =>
-                requestIdleCallback(() => resolve(), { timeout: 1000 }),
-              ).then(() => {
+            : new Promise<void>((resolve) => {
+                // A request for this addon ends the wait.
+                idleStarts.set(id, resolve)
+                requestIdleCallback(() => resolve(), { timeout: 1000 })
+              }).then(() => {
                 if (!disposed) return measuredStart()
               })
         void starting
@@ -2382,6 +2423,8 @@ export function useAddons(
     requested,
     activation,
     started,
+    idleStarts,
+    featureWaits,
     executeCommand,
     activateAddon,
     exchange,
@@ -2397,8 +2440,6 @@ export function useAddons(
     publishSources,
     status,
     app,
-    rich,
-    publishRich,
     dialogService,
     toastService,
     ready,
@@ -2591,12 +2632,14 @@ export function useAddons(
           await reviewAddonInstall(dialogService.api, session, openSettings)
         }
       } finally {
-        const [states, packages, { reloadAddons }] = await Promise.all([
+        const [states, packages, old, { reloadAddons }] = await Promise.all([
           window.hibi.getAddonStates(),
           window.hibi.getInstalledAddons(),
+          window.hibi.getOutdatedAddons(),
           import('./addon-reload'),
         ])
         setStates(states)
+        setOutdated(old)
         // A replacement that kept its enabled setting restarts with its new files before the start effect sees them.
         const replaced = addonRegistry
           .hydrate(packages)
@@ -2714,11 +2757,13 @@ export function useAddons(
         next.delete(id)
         return next
       })
-      const [states, packages] = await Promise.all([
+      const [states, packages, old] = await Promise.all([
         window.hibi.getAddonStates(),
         window.hibi.getInstalledAddons(),
+        window.hibi.getOutdatedAddons(),
       ])
       setStates(states)
+      setOutdated(old)
       addonRegistry.hydrate(packages)
     } catch (error) {
       latest.current.error(error)
@@ -2743,8 +2788,13 @@ export function useAddons(
             context ?? captureCommandContext('api'),
           ),
       })),
+      // Declared commands of addons that cannot start in this window stay out of it.
       ...catalog
-        .filter((addon) => available.has(addon.manifest.id))
+        .filter(
+          (addon) =>
+            available.has(addon.manifest.id) &&
+            !windowBlocked(addon.manifest.id),
+        )
         .flatMap((addon) =>
           (addon.manifest.commands ?? [])
             .filter(
@@ -2769,6 +2819,7 @@ export function useAddons(
     commands,
     catalog,
     available,
+    windowBlocked,
     registered,
     executeCommand,
     captureCommandContext,
@@ -2834,11 +2885,12 @@ export function useAddons(
     commands: visibleCommands,
     captureCommandContext,
     markdownExtensions,
-    richExtensions,
     sourceExtensions,
     formattedExtensions,
     statusItems,
     sidebarViews,
+    /** Installs made for addon API 1 or 2, which only an update or uninstall resolves. */
+    outdated,
     setEnabled,
     install,
     remove,

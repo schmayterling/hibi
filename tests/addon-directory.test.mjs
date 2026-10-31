@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import test from 'node:test'
 import { build } from 'esbuild'
 
@@ -28,7 +30,7 @@ const metadata = {
   name: 'Example',
   description: 'Directory fixture',
   version: '1.0.0',
-  apiVersion: 2,
+  apiVersion: 3,
   kind: 'extension',
   authors: [{ displayName: 'Author' }],
   license: 'MIT',
@@ -36,13 +38,13 @@ const metadata = {
 const commit = 'a'.repeat(40)
 const entry = { ...metadata, path: 'addons/example' }
 
-test('directory accepts mixed supported api versions and rejects malformed versions', () => {
+test('directory hides entries for older apis and rejects malformed versions', () => {
   const entries = [1, 2, 3].map((apiVersion) => ({
     ...entry,
     id: `example-v${apiVersion}`,
     apiVersion,
   }))
-  assert.deepEqual(parseAddonDirectory(entries), entries)
+  assert.deepEqual(parseAddonDirectory(entries), [entries[2]])
   for (const apiVersion of [0, -1, 3.1, '3', null, undefined])
     assert.throws(
       () => parseAddonDirectory([{ ...entry, apiVersion }]),
@@ -138,9 +140,46 @@ test('directory package identity must match every listed manifest field', () => 
   )
 })
 
-test('directory fetch is lazy, coalesced, cached offline and preserves good data on failure', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-directory-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
+/**
+ * Electron's `net.request`, as the directory uses it: `answer(url)` gives
+ * each request a status and body, or the location it redirects to.
+ */
+function netRequest(answer, requests = []) {
+  return (options) => {
+    const request = Object.assign(new EventEmitter(), {
+      options,
+      setHeader() {},
+      abort() {
+        request.aborted = true
+      },
+      end: () =>
+        queueMicrotask(() => {
+          const { status = 200, body = '', location } = answer(options.url)
+          if (location)
+            request.emit(
+              'redirect',
+              status,
+              'GET',
+              new URL(location, options.url).href,
+              {},
+            )
+          else
+            request.emit(
+              'response',
+              Object.assign(Readable.from([Buffer.from(body)]), {
+                statusCode: status,
+                headers: {},
+              }),
+            )
+        }),
+    })
+    requests.push(request)
+    return request
+  }
+}
+
+/** A fresh main-process directory module over `net`, keeping its cache in `root`. */
+async function directoryModule(root, net) {
   const { outputFiles } = await build({
     entryPoints: ['src/main/addon-directory.ts'],
     bundle: true,
@@ -149,21 +188,9 @@ test('directory fetch is lazy, coalesced, cached offline and preserves good data
     format: 'cjs',
     packages: 'external',
   })
-  let calls = 0,
-    status = 200,
-    body = JSON.stringify([entry])
-  const desktop = {
-    app: { isPackaged: true, getPath: () => root },
-    net: {
-      fetch: async (_url, options) => {
-        calls++
-        assert.equal(options.credentials, 'omit')
-        return new Response(body, { status })
-      },
-    },
-  }
+  const desktop = { app: { isPackaged: true, getPath: () => root }, net }
   const require = createRequire(import.meta.url)
-  const load = () => {
+  return () => {
     const module = { exports: {} }
     new Function('require', 'module', 'exports', outputFiles[0].text)(
       (id) => (id === 'electron' ? desktop : require(id)),
@@ -172,26 +199,42 @@ test('directory fetch is lazy, coalesced, cached offline and preserves good data
     )
     return module.exports
   }
+}
+
+test('directory fetch is lazy, coalesced, cached offline and preserves good data on failure', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-directory-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  let status = 200,
+    body = JSON.stringify([entry])
+  const requests = []
+  const load = await directoryModule(root, {
+    request: netRequest(() => ({ status, body }), requests),
+  })
+  const calls = () => requests.length
   const api = load()
-  assert.equal(calls, 0)
+  assert.equal(calls(), 0)
   const [one, two] = await Promise.all([
     api.getAddonDirectory(),
     api.getAddonDirectory(),
   ])
   assert.deepEqual(one, two)
-  assert.equal(calls, 1)
+  assert.equal(calls(), 1)
+  assert.deepEqual(
+    [requests[0].options.credentials, requests[0].options.redirect],
+    ['omit', 'manual'],
+  )
   assert.deepEqual(one.entries, [entry])
   assert.equal((await api.directoryAddon('example')).id, 'example')
-  assert.equal(calls, 1)
+  assert.equal(calls(), 1)
   status = 503
   const failed = await api.getAddonDirectory(true)
   assert.match(failed.error, /503/)
   assert.deepEqual(failed.entries, [entry])
   assert.deepEqual(await api.getAddonDirectory(), failed)
-  assert.equal(calls, 2)
+  assert.equal(calls(), 2)
   const offline = load()
   assert.deepEqual((await offline.getAddonDirectory()).entries, [entry])
-  assert.equal(calls, 2)
+  assert.equal(calls(), 2)
   status = 200
   body = JSON.stringify([{ ...entry, signed: true }])
   assert.match((await api.getAddonDirectory(true)).error, /invalid entry/)
@@ -207,35 +250,17 @@ test('directory fetch is lazy, coalesced, cached offline and preserves good data
 test('detached signatures come from the catalog location without credentials and stay bounded', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-directory-signature-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  const { outputFiles } = await build({
-    entryPoints: ['src/main/addon-directory.ts'],
-    bundle: true,
-    write: false,
-    platform: 'node',
-    format: 'cjs',
-    packages: 'external',
-  })
   const urls = []
   let body = '{"keyId":"k"}',
     status = 200
-  const desktop = {
-    app: { isPackaged: true, getPath: () => root },
-    net: {
-      fetch: async (url, options) => {
+  const api = (
+    await directoryModule(root, {
+      request: netRequest((url) => {
         urls.push(url)
-        assert.equal(options.credentials, 'omit')
-        return new Response(body, { status })
-      },
-    },
-  }
-  const require = createRequire(import.meta.url)
-  const module = { exports: {} }
-  new Function('require', 'module', 'exports', outputFiles[0].text)(
-    (id) => (id === 'electron' ? desktop : require(id)),
-    module,
-    module.exports,
-  )
-  const api = module.exports
+        return { status, body }
+      }),
+    })
+  )()
   assert.deepEqual(await api.directorySignature('example'), Buffer.from(body))
   const requested = new URL(urls[0])
   assert.equal(
@@ -264,6 +289,51 @@ test('detached signatures come from the catalog location without credentials and
       api.directorySignature('example'),
       /Could not download the Hibi signature/,
     )
+  }
+})
+
+test('directory files follow redirects only on the catalog origin, each checked before it is requested', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-directory-redirects-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const folder = '/hibigarden/addons-repository/main'
+  let hops = {}
+  const requests = []
+  const api = (
+    await directoryModule(root, {
+      request: netRequest(
+        (url) => hops[new URL(url).pathname] ?? { status: 404 },
+        requests,
+      ),
+    })
+  )()
+  const requested = () =>
+    requests.map(({ options, aborted = false }) => [
+      new URL(options.url).pathname,
+      aborted,
+    ])
+  // A move within the catalog's origin is followed with a new request.
+  hops = {
+    [`${folder}/catalog.json`]: {
+      status: 301,
+      location: `${folder}/moved.json`,
+    },
+    [`${folder}/moved.json`]: { body: JSON.stringify([entry]) },
+  }
+  assert.deepEqual((await api.getAddonDirectory(true)).entries, [entry])
+  assert.deepEqual(requested(), [
+    [`${folder}/catalog.json`, true],
+    [`${folder}/moved.json`, false],
+  ])
+  // Other hosts, plain http and a sixth redirect are refused unrequested.
+  for (const [location, error, count] of [
+    ['https://example.com/catalog.json', /unapproved host/, 1],
+    [`http://raw.githubusercontent.com${folder}/moved.json`, /HTTPS/, 1],
+    [`${folder}/catalog.json`, /too many times/, 6],
+  ]) {
+    requests.length = 0
+    hops = { [`${folder}/catalog.json`]: { status: 302, location } }
+    assert.match((await api.getAddonDirectory(true)).error, error)
+    assert.equal(requests.length, count, location)
   }
 })
 

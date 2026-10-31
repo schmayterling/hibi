@@ -10,15 +10,13 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 test('managed workspaces stay opt-in, preserve files, import safely, and reopen at startup', {
@@ -57,7 +55,7 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
     return page
   }
   let page = await launch()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   assert.equal(
     (await page.evaluate(() => window.hibi.getWorkspaceSettings())).enabled,
     false,
@@ -268,13 +266,7 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
   await app.close()
   app = null
   page = await launch()
-  await page
-    .locator(
-      t.formattedEngine === 'tiptap'
-        ? '.rich-pane .tiptap'
-        : '.rich-pane .hibi-formatted .cm-content',
-    )
-    .waitFor()
+  await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
   await waitForAppState(page, async () => !!(await window.hibi.getWorkspace()))
   await page.waitForFunction(
     () =>

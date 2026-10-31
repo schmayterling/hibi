@@ -10,9 +10,9 @@
 - `src/site`: the read-only documentation viewer, which runs without the Electron bridge.
 - `scripts`: build, export, and documentation tools.
 
-## Formatted view migration
+## Formatted view
 
-Markdown notes open in the ProseMirror formatted view by default. The CodeMirror formatted view (`FormattedEditor.tsx`, `live-preview.ts`, `chunked-markdown.ts`) renders Markdown in place over the same source session as the source view. Tests and development profiles select it with a temporary switch: set `hibi:formatted-engine` to `codemirror` in the renderer's local storage and reload. It has no setting or saved preference and is removed when the CodeMirror view becomes the default.
+Markdown notes open in the CodeMirror formatted view (`FormattedEditor.tsx`, `live-preview.ts`, `chunked-markdown.ts`), which renders Markdown in place over the same source session as the source view. It is the only Normal-view editor; the Tiptap/ProseMirror editor and its `hibi:formatted-engine` setting were removed.
 
 ### Formatted view contributions
 
@@ -40,11 +40,7 @@ Core widgets that render selectable source text register current DOM positions t
 
 API 3 flavors publish Lezer `syntax` and `render` hooks through this same lazy registry, scoped to the selected flavor. A renderer's optional `feature` is a local `registerSyntax` id; `MarkdownSyntaxFeature.nodes` names nodes that remain literal while its setting is off. Source highlighting uses the same flavor syntax. `context.editor.registerFormatted({ id, create })` uses the source editor host's per-view extension installation and readiness gate, with `EditorExtensionContext.viewId`; it never installs in the source pane. Installed packages request the `formatted` capability for the shared CodeMirror SDK and `sdk.codeMirror.markdown` (`@lezer/markdown`). These editor modules remain demand-loaded.
 
-Manifests 1, 2 and 3 load. Tiptap `registerRich` and flavor `richExtensions` keep working in the previous editor. With the CodeMirror switch active, installed addons that only supply legacy rich features receive a persistent notice and an addon settings badge; their declared syntax nodes stay literal.
-
-Migration is paired per feature, not per addon: `registerRich` and `registerFormatted` use the same addon-local id. For rich flavor extensions, `registerSyntax.extensions` lists the rich extension names and `nodes` names the syntax they own. A flavor's renderer covers a feature by naming its local id in `render.feature`, or by matching every declared node through a node name or Lezer group (`NodeType.is`). Child-only renderers need `feature` to identify full coverage; until then the notice remains, builtin rendering stays literal, and the same owner's child views can still render. Explicitly disabling a syntax setting suppresses all its renderers and descendants. Declared syntax/render coverage applies while a flavor's lazy contribution starts, so fully migrated flavors do not flash a notice. Removing or failing a previously registered counterpart restores the notice and literal fallback for that feature. Other migrated features keep working; stopping the owner's registrations removes its notice and badge.
-
-Bundled addons are exempt because users cannot update them separately; a test maintains their remaining migration allowlist, which must be empty before the default flips. Installed packages requesting `rich` cannot use `sdk.tiptap` with the CodeMirror engine and receive an explicit activation error. The published SDK retains Tiptap types until its deletion. The CodeMirror slash menu uses `markdown` and `cursor` source edits and ignores `slash.rich`.
+Only API 3 manifests load, and nothing in the API names the removed Tiptap editor. A flavor's renderer names its local syntax id in `render.feature`; explicitly disabling a syntax setting suppresses all its renderers and descendants. The slash menu inserts `markdown` at `cursor` in both views.
 
 Core features live in `src/renderer/src/formatted/<feature>.ts` and export `contribution` or `contributions`; they are found automatically. Bundled addons register a lazy entry with `formattedRegistry.register({ id, load })` from `formatted-registry.ts` in `start` and remove it in `stop`, so no editor code loads at startup.
 

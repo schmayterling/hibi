@@ -3,15 +3,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { build } from 'esbuild'
 import { formattedMarkdownParser } from '../src/shared/formatted-markdown.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 import {
   electron,
-  stopElectronTree,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -66,22 +64,18 @@ const cases = [
   {
     name: 'html',
     source: '<div>\n[ref]: /hidden\n</div>\n\n[ref]',
-    unavailable: true,
   },
   {
     name: 'inline html',
     source: 'words <em>native</em>\n\n# after',
-    unavailable: true,
   },
   {
     name: 'multiline title',
     source: '[ref]: /target "first\n\n# title\nlast"\n\n[ref]',
-    unavailable: true,
   },
   {
     name: 'quoted title',
     source: '[ref]: /target "title"\n\n[ref]',
-    unavailable: true,
   },
   {
     name: 'long physical heading',
@@ -90,7 +84,6 @@ const cases = [
   {
     name: 'task list',
     source: '- [ ] todo\n- [x] done\n\n# after',
-    compatibility: true,
   },
   { name: 'intraword non-bmp symbol', source: 'ab**😀cd**ef' },
   { name: 'intraword non-bmp punctuation', source: 'ab**𐩐cd**ef' },
@@ -123,7 +116,7 @@ const formattedDifferences = {
   '1/forward references/0': { text: 'ref # [ref]' },
 }
 
-// Frozen outcomes are shared by both engines and checked by the native control.
+// Frozen outcomes, checked by the native control before its removal.
 const formattedOutcomes = {
   '0/intraword non-bmp symbol/0': {
     text: 'ab**😀cd**ef',
@@ -389,358 +382,9 @@ const formattedOutcomes = {
   },
 }
 
-const harness = `
-import { getText, getTextSerializersFromSchema } from '@tiptap/core'
-import { Strike } from '@tiptap/extension-strike'
-import { TableKit } from '@tiptap/extension-table'
-import { TaskItem } from '@tiptap/extension-task-item'
-import { TaskList } from '@tiptap/extension-task-list'
-import { GithubAlert } from './src/addons/markdown/GithubAlert.ts'
-import { alertMarkdown } from './src/addons/markdown/alerts.ts'
-import { Subscript, Subtext } from './src/addons/text-extras/nodes.ts'
-import { textExtrasMarkdown } from './src/addons/text-extras/syntax.ts'
-import { countText } from './src/addons/word-count/count.ts'
-import { createMarkdownSemantics } from './src/renderer/src/markdown-semantics.ts'
-import { DocumentWorkerService } from './src/shared/document-worker-service.ts'
-import { SourceTransferSender } from './src/shared/source-transfer.ts'
-
-const syntax = {gfm:true,alerts:true,textExtras:true}
-const flavors = [
-  {id:'markdown.github',markedOptions:{gfm:true},
-   richExtensions:[GithubAlert,Strike,TableKit.configure({table:{resizable:false}}),TaskList,TaskItem.configure({nested:true})],
-   export:{extensions:[alertMarkdown]}},
-  {id:'text-extras.text-extras',richExtensions:[Subscript,Subtext],export:{extensions:[textExtrasMarkdown]}},
-]
-const same = (a,b) => JSON.stringify(a) === JSON.stringify(b)
-
-export async function run(cases) {
-  const editor = document.querySelector('.tiptap').editor
-  const original = await window.hibi.getDocument()
-  const originalJSON = editor.getJSON()
-  const reader = createMarkdownSemantics(flavors, 0)
-  const results = [], controls = []
-  for (const fixture of cases) {
-    let source = fixture.source, id = 0, version = 0
-    const pending = new Map()
-    let lastReply
-    const worker = new DocumentWorkerService(reply => {
-      lastReply = reply
-      if (reply.type !== 'metadata' && reply.type !== 'error') return
-      const request = pending.get(reply.id)
-      if (!request) return
-      pending.delete(reply.id)
-      clearTimeout(request.timer)
-      request.resolve(structuredClone(reply))
-    })
-    const request = from => new Promise((resolve,reject) => {
-      const requestId = ++id
-      const timer = setTimeout(() => {
-        pending.delete(requestId)
-        reject(Error('Semantic metadata did not settle: '+fixture.name))
-      },6000)
-      pending.set(requestId,{resolve,reject,timer})
-      worker.receive({type:'metadata',epoch:'native-semantic',id:requestId,version,
-        dialect:'gfm',semantic:syntax,from,to:source.length,limit:1})
-    })
-    const sender = new SourceTransferSender({tabId:'fixture',revision:0,contentVersion:version,
-      streamId:crypto.randomUUID(),length:source.length},[source])
-    worker.receive({type:'load-start',epoch:'native-semantic',head:sender.head})
-    for (;;) {
-      if (lastReply?.type !== 'load-ack') throw Error('Missing source stream acknowledgement')
-      const chunk = sender.read(lastReply.request)
-      worker.receive({type:'load-chunk',epoch:'native-semantic',chunk})
-      if (chunk.done) break
-    }
-    const finish = lastReply.request
-    sender.finish(finish)
-    worker.receive({type:'load-finish',epoch:'native-semantic',request:finish})
-    if (lastReply?.type !== 'ack') throw Error('Source stream did not publish')
-    try {
-      for (let pass=0;pass<(fixture.edit?2:1);pass++) {
-        if (pass) {
-          worker.receive({type:'edit',epoch:'native-semantic',operation:{
-            document:{tabId:'fixture',revision:0},operationId:'edit-reference',baseVersion:version,
-            contentVersion:++version,origin:'source',historyGroup:'typing',changes:[fixture.edit],
-          }})
-          source = source.slice(0,fixture.edit.from)+fixture.edit.insert+source.slice(fixture.edit.to)
-        }
-        const expected = editor.markdown.parse(source)
-        const expectedNode = editor.schema.nodeFromJSON(expected)
-        const expectedText = getText(expectedNode,{blockSeparator:'\\n',textSerializers:getTextSerializersFromSchema(editor.schema)})
-        const expectedHeadings = []
-        expectedNode.descendants(node=>{
-          if (node.type.name==='heading') expectedHeadings.push({label:node.textContent || 'Untitled heading',level:Number(node.attrs.level)})
-        })
-        controls.push({name:fixture.name,pass,text:expectedText,
-          headings:expectedHeadings.map(({label})=>label),counts:countText(expectedText)})
-        const rows = [], pages = []
-        let from = 0, unavailable
-        for (;;) {
-          const reply = await request(from)
-          if (reply.type !== 'metadata') throw Error(reply.message || 'Unexpected metadata reply')
-          const semantic = reply.semantic
-          if (semantic.status !== 'available') { unavailable=semantic; break }
-          if (semantic.bytes > 512*1024) throw Error('Semantic page exceeded byte limit')
-          rows.push(...semantic.rows)
-          pages.push(semantic)
-          if (semantic.next === null) break
-          if (semantic.next <= from) throw Error('Semantic page cursor did not advance')
-          from = semantic.next
-        }
-        if (unavailable) {
-          results.push({name:fixture.name,pass,unavailable})
-          continue
-        }
-        if (new Set(rows.map(row=>row.slot)).size !== rows.length)
-          throw Error('Semantic pages repeated a region')
-        const first = rows.findIndex(row=>row.nonSpace), last = rows.findLastIndex(row=>row.nonSpace)
-        const parts = rows.map((row,index)=>reader.read(row.tokens,{
-          before:first>=0 && index>first,after:last>=0 && index<last,
-        }))
-        if (parts.some(part=>part===null)) {
-          results.push({name:fixture.name,pass,compatibility:true})
-          continue
-        }
-        const actual = {type:'doc',content:parts.flatMap(part=>part.json.content ?? [])}
-        const actualParts = parts.filter(part=>part.blockCount)
-        const actualText = actualParts.map(part=>part.text).join('\\n')
-        const headings = parts.flatMap(part=>part.headings.map(({label,level})=>({label,level})))
-        const totals = actualParts.reduce((result,part,index)=>{
-          const counted = countText(part.text)
-          result.words += counted.words
-          result.characters += counted.characters+(index?1:0)
-          if (index && actualParts[index-1].text.endsWith('\\r')) result.characters--
-          return result
-        },{words:0,characters:0})
-        results.push({name:fixture.name,pass,pages:pages.length,rows:rows.length,
-          json:same(actual,expected),text:actualText===expectedText,
-          headings:same(headings,expectedHeadings),stats:same(totals,countText(expectedText)),
-          crSeam:actualParts.slice(0,-1).some(part=>part.text.endsWith('\\r')),
-          ...(fixture.name==='long physical heading'?{regions:rows}:{}),
-          ...(same(actual,expected)?{}:{actual,expected}),
-        })
-      }
-    } finally {
-      worker.dispose()
-      for (const waiter of pending.values()) clearTimeout(waiter.timer)
-      pending.clear()
-    }
-  }
-  return {results,controls,preserved:same(original,await window.hibi.getDocument()) && same(originalJSON,editor.getJSON())}
-}
-`
-
-test('tiptap: paginated worker semantics match native schema text, headings and counts', {
-  timeout: 60000,
-}, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-semantic-native-'))
-  const bundle = await build({
-    stdin: { contents: harness, resolveDir: resolve('.') },
-    bundle: true,
-    format: 'iife',
-    globalName: 'SemanticNativeFixture',
-    platform: 'browser',
-    write: false,
-  })
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
-  })
-  const watchdog = setTimeout(() => stopElectronTree(app.process()), 50000)
-  t.after(async () => {
-    await app
-      .evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
-      })
-      .catch(() => {})
-    await app.close().catch(() => {})
-    clearTimeout(watchdog)
-    await rm(root, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, 'tiptap')
-  for (const disabled of [[], ['core.heading-1', 'core.bold', 'core.images']]) {
-    await waitForDocumentEditor(app, page)
-    if (disabled.length) {
-      await page.evaluate(
-        (disabled) =>
-          localStorage.setItem(
-            'hibi:markdown-syntax-disabled',
-            JSON.stringify(disabled),
-          ),
-        disabled,
-      )
-      await page.reload()
-      await waitForDocumentEditor(app, page)
-    }
-    await page.waitForFunction(
-      () =>
-        document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-          'true' &&
-        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
-    )
-    await page.evaluate(bundle.outputFiles[0].text)
-    const report = await page.evaluate(
-      (cases) => window.SemanticNativeFixture.run(cases),
-      cases,
-    )
-    await t.test(disabled.length ? 'disabled syntax' : 'default syntax', () => {
-      const differences = report.controls.flatMap(
-        ({ name, pass, text, headings, counts }) => {
-          const key = `${disabled.length ? 1 : 0}/${name}/${pass}`
-          const actual = { text, headings, counts }
-          const expected = formattedOutcomes[key]
-          return JSON.stringify(actual) === JSON.stringify(expected)
-            ? []
-            : [{ key, actual, expected }]
-        },
-      )
-      if (differences.length)
-        t.diagnostic(JSON.stringify({ nativeOracleDifferences: differences }))
-      assert.equal(
-        differences.length,
-        0,
-        'frozen outcomes must match the current native control',
-      )
-      assert.equal(
-        report.preserved,
-        true,
-        'Native parsing must preserve the open document',
-      )
-      assert.ok(
-        report.results.some((row) => row.pages > 2),
-        'Fixture must exercise pagination',
-      )
-      t.diagnostic(
-        `${disabled.length ? 'disabled' : 'default'} syntax: ${report.results.filter((row) => row.json).length} matching native conversions, ${report.results.filter((row) => row.unavailable).length} explicit syntax fallbacks, ${report.results.filter((row) => row.compatibility).length} consumer fallbacks`,
-      )
-      for (const result of report.results) {
-        const fixture = cases.find((item) => item.name === result.name)
-        const name = `${result.name}, pass ${result.pass}, disabled ${disabled.join(',')}`
-        if (fixture.unavailable) {
-          assert.deepEqual(
-            result.unavailable,
-            { status: 'unavailable', reason: 'syntax-context' },
-            name,
-          )
-        } else if (fixture.compatibility) {
-          assert.equal(result.compatibility, true, name)
-        } else {
-          assert.equal(result.unavailable, undefined, name)
-          assert.equal(result.compatibility, undefined, name)
-          assert.equal(
-            result.json,
-            true,
-            `${name}: ${JSON.stringify({ actual: result.actual, expected: result.expected })}`,
-          )
-          assert.equal(result.text, true, name)
-          assert.equal(result.headings, true, name)
-          assert.equal(result.stats, true, name)
-          if (fixture.name === 'long physical heading') {
-            const source = fixture.source,
-              paragraphFrom = source.lastIndexOf('[other]')
-            assert.equal(result.pages, 2, name)
-            assert.deepEqual(
-              result.regions.map(({ from, contentFrom, to, nonSpace }) => [
-                from,
-                contentFrom,
-                to,
-                nonSpace,
-              ]),
-              [
-                [0, 0, paragraphFrom, true],
-                [paragraphFrom, paragraphFrom, source.length, true],
-              ],
-              name,
-            )
-            assert.deepEqual(
-              result.regions.flatMap((row) => row.tokens),
-              [
-                ...markdownSourceParser({
-                  gfm: true,
-                  alerts: true,
-                  textExtras: true,
-                }).lexer(source),
-              ],
-              name,
-            )
-            assert.equal(
-              result.regions[0].tokens[0].text,
-              source.slice(2, source.indexOf('\n')),
-              name,
-            )
-            assert.equal(
-              result.regions[1].tokens[0].tokens[0].type,
-              'text',
-              name,
-            )
-          }
-        }
-      }
-    })
-    for (const fixture of cases.filter((item) =>
-      item.name.includes('non-bmp'),
-    )) {
-      const file = join(root, `${disabled.length}-${fixture.name}.md`)
-      await writeFile(file, fixture.source)
-      await app.evaluate(({ dialog }, file) => {
-        dialog.showOpenDialog = async () => ({
-          canceled: false,
-          filePaths: [file],
-        })
-      }, file)
-      await clickMenu(app, 'Open…')
-      await waitForAsync(
-        page,
-        async (source) => (await window.hibi.getDocument()).markdown === source,
-        fixture.source,
-      )
-      await page.waitForFunction(
-        (expected) =>
-          document.querySelector('.tiptap')?.editor.state.doc.textContent ===
-          expected,
-        formattedOutcomes[`${disabled.length ? 1 : 0}/${fixture.name}/0`].text,
-      )
-      const actual = await page.locator('.tiptap').evaluate((element) => {
-        const bold = []
-        element.editor.state.doc.descendants((node) => {
-          if (
-            node.isText &&
-            node.marks.some((mark) => mark.type.name === 'bold')
-          )
-            bold.push(node.text)
-        })
-        return {
-          text: element.editor.state.doc.textContent,
-          bold,
-          domBold: [...element.querySelectorAll('strong')].map(
-            (node) => node.textContent,
-          ),
-        }
-      })
-      const bold =
-        !disabled.length && fixture.name === 'non-bmp emphasis controls'
-          ? ['cd', '😀cd']
-          : []
-      assert.deepEqual(
-        actual,
-        {
-          text: formattedOutcomes[
-            `${disabled.length ? 1 : 0}/${fixture.name}/0`
-          ].text,
-          bold,
-          domBold: bold,
-        },
-        `Live native model and DOM: ${fixture.name}`,
-      )
-    }
-  }
-})
-
-// Schema JSON, PM positions and compatibility-reader fallbacks above are
-// implementation-exclusive Tiptap proofs. This CM counterpart checks the same
-// notes through canonical source, visible outline and rendered-text counts.
-test('codemirror: semantic fixtures preserve source, headings and formatted counts', {
+// The notes keep their canonical source, visible outline and rendered-text
+// counts, the outcomes the removed native editor's control matched.
+test('semantic fixtures preserve source, headings and formatted counts', {
   timeout: 240000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-semantic-formatted-'))
@@ -809,7 +453,7 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
       },
     })
   })
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   const statusLabel = ({ words, characters }) =>
     `${words.toLocaleString()} ${words === 1 ? 'word' : 'words'} · ${characters.toLocaleString()} ${characters === 1 ? 'character' : 'characters'}`
   for (const [configuration, disabled] of configurations.entries()) {
@@ -1001,7 +645,7 @@ test('codemirror: semantic fixtures preserve source, headings and formatted coun
             assert.equal(
               actual.counts,
               formattedCount,
-              'formatted counts exclude Markdown syntax, as in the native Tiptap oracle',
+              'formatted counts exclude Markdown syntax, as the frozen native outcome does',
             )
             await rich.evaluate((element) => element.blur())
             /** The view's visible text, or whether it is `expected`. */

@@ -26,7 +26,7 @@ test('combined history pressure preserves inactive drafts and active source undo
       name: 'History fixture',
       description: 'History retention fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       capabilities: ['source'],

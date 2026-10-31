@@ -40,7 +40,6 @@ test('footnote references are links that move to their definitions', {
   page.setDefaultTimeout(30000)
   await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('markdown-markers', 'false')
   })
   await page.reload()

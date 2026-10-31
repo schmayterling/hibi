@@ -24,7 +24,8 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
           name: 'url fixture',
           description: 'downloaded package fixture',
           kind: 'extension',
-          apiVersion: 1,
+          apiVersion: 3,
+          capabilities: [],
           version: '1.0.0',
           authors: [{ displayName: 'test author' }],
           network: {

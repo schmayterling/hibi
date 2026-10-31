@@ -630,7 +630,7 @@ test('background addon failure is recorded without addon identity or error conte
       name: 'PRIVATE_ADDON',
       description: 'Fixture.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',

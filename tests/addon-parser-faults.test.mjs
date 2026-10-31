@@ -102,9 +102,6 @@ for (const [mode, cascade] of [
       const errors = []
       page.on('pageerror', (error) => errors.push(error.message))
       await waitForDocumentEditor(app, page)
-      await page.evaluate(() =>
-        localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-      )
       await page.reload()
       await waitForDocumentEditor(app, page)
       await app.evaluate(({ dialog }, path) => {

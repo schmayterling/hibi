@@ -3,11 +3,11 @@ import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
-import type { MarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
+import type { MarkdownEditor } from './FormattedEditor'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
@@ -66,7 +66,6 @@ export function FormatEditor({
     return () => editorViewRegistry.clearActive(viewId as ViewId)
   }, [paneMode, viewId])
   const { attachSource, attachFiles } = useFormattingToolbar(
-    null,
     paneMode,
     focusedPane,
     disabled || mode !== paneMode,

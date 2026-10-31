@@ -3,41 +3,17 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-test('tiptap: the legacy formatted-engine switch replaces the editor root', {
-  timeout: 90000,
-}, async (t) => {
-  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-switch-'))
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
-  })
-  t.after(async () => {
-    await app.close()
-    await rm(folder, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  // The switch is a local-storage flag for tests and development profiles.
-  assert.equal(await page.locator('.rich-pane .hibi-formatted').count(), 0)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
-  await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
-})
-
-test('codemirror: notes open in the formatted view and edit their markdown', {
+test('notes open in the formatted view and edit their markdown', {
   timeout: 90000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-view-'))
@@ -56,13 +32,12 @@ test('codemirror: notes open in the formatted view and edit their markdown', {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await pressShortcut(app, `${mod}+o`)
   await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
-  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
   // Hidden windows have no focus; markers under the caret need a focused editor.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -142,7 +117,6 @@ test('behind the switch, hidden fence lines and multi-line link destinations sta
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     // This case exercises the navigation contract while syntax is hidden.
     localStorage.setItem('markdown-markers', 'false')
   })
@@ -224,7 +198,7 @@ test('behind the switch, completions get prose context past the first 16 KiB', {
       name: 'Completion probe',
       description: 'Records completion requests',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       startup: 'background',
       capabilities: ['source'],
@@ -257,9 +231,6 @@ test('behind the switch, completions get prose context past the first 16 KiB', {
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   const session = await page.context().newCDPSession(page)
@@ -302,9 +273,6 @@ test('behind the switch, frontmatter properties above the formatted view edit th
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -359,9 +327,6 @@ test('behind the switch, properties edit notes with crlf line breaks and a byte 
     })
     const page = await app.firstWindow()
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     await app.evaluate(({ dialog }, path) => {
@@ -418,9 +383,6 @@ test('behind the switch, frontmatter after a byte order mark shows once', {
     })
     const page = await app.firstWindow()
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     await app.evaluate(({ dialog }, path) => {
@@ -472,9 +434,6 @@ test('behind the switch, a leading block that is not a metadata mapping stays in
     })
     const page = await app.firstWindow()
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     await app.evaluate(({ dialog }, path) => {
@@ -516,9 +475,6 @@ test('behind the switch, a composition over a selected table undoes in one step 
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -593,9 +549,6 @@ test('behind the switch, a note that is only a table takes text and compositions
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -656,9 +609,6 @@ test('behind the switch, undoing a composition from inside a table to past it sh
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -729,9 +679,6 @@ test('behind the switch, an edit from the source pane while composing in a table
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -806,9 +753,6 @@ test('behind the switch, an echo before the first composition candidate keeps th
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -902,7 +846,7 @@ test('behind the switch, edits from elsewhere that change the columns of a table
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
@@ -1004,7 +948,7 @@ test('behind the switch, a composition in a table cell goes on through edits fro
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
@@ -1101,196 +1045,172 @@ test('behind the switch, a composition in a table cell goes on through edits fro
 // triple-001 in formatted-engine-gaps.md: the rich editor node-selects a
 // block it draws as one node, and the formatted view selects its source.
 const atoms = {
-  html: ['<div>\nhtmlword here\n</div>', 'rawHtmlBlock', 'htmlword'],
-  comment: ['<!-- commentword -->', 'rawHtmlBlock', 'commentword'],
-  rule: ['***', 'horizontalRule', 'hr, .hibi-lp-rule'],
-  image: ['![alt](pic.png)', 'image', 'img[alt="alt"]'],
-  math: ['$$\nx^2\n$$', 'blockMath', '[data-type="block-math"]'],
-  mermaid: [
-    '```mermaid\ngraph TD\n  A --> B\n```',
-    'mermaidBlock',
-    '.mermaid-block',
-  ],
-  typst: ['```typst\n= typsthead\n```', 'typstBlock', '.typst-block'],
+  html: ['<div>\nhtmlword here\n</div>', 'htmlword'],
+  comment: ['<!-- commentword -->', 'commentword'],
+  rule: ['***', 'hr, .hibi-lp-rule'],
+  image: ['![alt](pic.png)', 'img[alt="alt"]'],
+  math: ['$$\nx^2\n$$', '[data-type="block-math"]'],
+  mermaid: ['```mermaid\ngraph TD\n  A --> B\n```', '.mermaid-block'],
+  typst: ['```typst\n= typsthead\n```', '.typst-block'],
 }
 const atomNote = `first words\n\n${Object.values(atoms)
   .map(([source]) => source)
   .join('\n\n')}\n\nlast words\n`
 
-testFormattedEngines(
-  'a triple-click on a block drawn as one node selects it, and typed text replaces it',
-  {
-    timeout: 120000,
-  },
-  async (t) => {
-    const engine = t.formattedEngine
-    const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-atoms-'))
-    const file = join(folder, 'notes', 'note.md')
-    await mkdir(join(folder, 'notes'))
-    await mkdir(join(folder, 'profile'))
-    await writeFile(file, atomNote)
-    // A 40×30 PNG.
-    await writeFile(
-      join(folder, 'notes', 'pic.png'),
-      Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAIAAADVQXn+AAAAJklEQVR42u3NMQEAAAgDoK1/aE3hJxQgu1ryAKFQKBQKhUKhUCj8Bg/OH9qw+A0vAAAAAElFTkSuQmCC',
-        'base64',
+test('a triple-click on a block drawn as one node selects it, and typed text replaces it', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-atoms-'))
+  const file = join(folder, 'notes', 'note.md')
+  await mkdir(join(folder, 'notes'))
+  await mkdir(join(folder, 'profile'))
+  await writeFile(file, atomNote)
+  // A 40×30 PNG.
+  await writeFile(
+    join(folder, 'notes', 'pic.png'),
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAACgAAAAeCAIAAADVQXn+AAAAJklEQVR42u3NMQEAAAgDoK1/aE3hJxQgu1ryAKFQKBQKhUKhUCj8Bg/OH9qw+A0vAAAAAElFTkSuQmCC',
+      'base64',
+    ),
+  )
+  await writeFile(
+    join(folder, 'profile', 'addons.json'),
+    JSON.stringify({ math: true, typst: true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await waitForFormattedEditor(app, page)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  // The addons' blocks draw once they load.
+  for (const drawn of [
+    '[data-type="block-math"]',
+    '.mermaid-block',
+    '.typst-block',
+  ])
+    await page.locator(`.rich-pane ${drawn}`).waitFor()
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const markdown = async () =>
+    (await page.evaluate(() => window.hibi.getDocument())).markdown
+  const settled = (expected) =>
+    waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      expected,
+      { timeout: 3000 },
+    ).catch(() => {})
+  /** A point in the block: on its text for HTML, else on its drawing. */
+  /** A point in the block, once scrolled to it: on its text for HTML, else on its drawing. */
+  const point = (at) =>
+    page.evaluate(async (at) => {
+      const frames = async () => {
+        for (let frame = 0; frame < 3; frame++)
+          await new Promise(requestAnimationFrame)
+      }
+      await frames()
+      const root = document.querySelector(
+        '.rich-pane [aria-label="Document editor"]',
+      )
+      const box = (element) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode()) {
+          const index = walker.currentNode.data.indexOf(at)
+          if (index < 0) continue
+          const range = document.createRange()
+          range.setStart(walker.currentNode, index + 2)
+          range.setEnd(walker.currentNode, index + 3)
+          const { left, top, height } = range.getBoundingClientRect()
+          return { x: left + 1, y: top + height / 2 }
+        }
+        return null
+      }
+      if (/^[a-z]+word$/.test(at)) {
+        ;[...root.querySelectorAll('*')]
+          .findLast((element) => element.textContent.includes(at))
+          .scrollIntoView({ block: 'center' })
+        await frames()
+        return box(root)
+      }
+      root.querySelector(at).scrollIntoView({ block: 'center' })
+      await frames()
+      const { left, top, width, height } = root
+        .querySelector(at)
+        .getBoundingClientRect()
+      return { x: left + Math.min(20, width / 2), y: top + height / 2 }
+    }, at)
+  const selected = () =>
+    page.evaluate(async () => {
+      for (let frame = 0; frame < 2; frame++)
+        await new Promise(requestAnimationFrame)
+      const root = document.querySelector(
+        '.rich-pane [aria-label="Document editor"]',
+      )
+      const view = root.cmTile.root.view
+      const { from, to } = view.state.selection.main
+      return view.state.sliceDoc(from, to)
+    })
+  for (const [kind, [source, at]] of Object.entries(atoms)) {
+    await page
+      .locator('.rich-pane p, .rich-pane .cm-line', { hasText: 'last words' })
+      .last()
+      .click()
+    const { x, y } = await point(at)
+    await page.mouse.click(x, y, { clickCount: 3 })
+    assert.equal(await selected(), source, kind)
+    // Focus leaves the rich editor for a moment after presses on a formula.
+    await page.waitForFunction(() =>
+      document.activeElement?.matches(
+        '.rich-pane [aria-label="Document editor"]',
       ),
     )
-    await writeFile(
-      join(folder, 'profile', 'addons.json'),
-      JSON.stringify({ math: true, typst: true }),
+    await page.keyboard.type('Z')
+    // The rich editor takes no text over a selected rule.
+    const replaced = atomNote.replace(source, 'Z')
+    await settled(replaced)
+    assert.equal(await markdown(), replaced, kind)
+    await pressShortcut(app, `${mod}+z`)
+    await settled(atomNote)
+    assert.equal(await markdown(), atomNote, `${kind} undone`)
+    // One press on a drawing selects the block as well, and Backspace
+    // removes it with the blank line after it. The formatted view shows
+    // HTML as editable source, where a press places the caret; the rich
+    // editor's press on a formula opens its formula dialog.
+    if (['html', 'comment'].includes(kind)) continue
+    await page
+      .locator('.rich-pane p, .rich-pane .cm-line', { hasText: 'last words' })
+      .last()
+      .click()
+    const press = await point(at)
+    await page.mouse.click(press.x, press.y)
+    assert.equal(await selected(), source, `${kind} pressed`)
+    await page.waitForFunction(() =>
+      document.activeElement?.matches(
+        '.rich-pane [aria-label="Document editor"]',
+      ),
     )
-    const app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
-    })
-    t.after(async () => {
-      await app.close()
-      await rm(folder, { recursive: true, force: true })
-    })
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
-    })
-    const page = await app.firstWindow()
-    page.setDefaultTimeout(10000)
-    await selectFormattedEngine(app, page, engine)
-    await app.evaluate(({ dialog }, path) => {
-      dialog.showOpenDialog = async () => ({
-        canceled: false,
-        filePaths: [path],
-      })
-    }, file)
-    await pressShortcut(app, `${mod}+o`)
-    // The addons' blocks draw once they load.
-    for (const drawn of [
-      '[data-type="block-math"]',
-      '.mermaid-block',
-      '.typst-block',
-    ])
-      await page.locator(`.rich-pane ${drawn}`).waitFor()
-    const cdp = await page.context().newCDPSession(page)
-    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-    const markdown = async () =>
-      (await page.evaluate(() => window.hibi.getDocument())).markdown
-    const settled = (expected) =>
-      waitForAsync(
-        page,
-        async (expected) =>
-          (await window.hibi.getDocument()).markdown === expected,
-        expected,
-        { timeout: 3000 },
-      ).catch(() => {})
-    /** A point in the block: on its text for HTML, else on its drawing. */
-    /** A point in the block, once scrolled to it: on its text for HTML, else on its drawing. */
-    const point = (at) =>
-      page.evaluate(async (at) => {
-        const frames = async () => {
-          for (let frame = 0; frame < 3; frame++)
-            await new Promise(requestAnimationFrame)
-        }
-        await frames()
-        const root = document.querySelector(
-          '.rich-pane [aria-label="Document editor"]',
-        )
-        const box = (element) => {
-          const walker = document.createTreeWalker(
-            element,
-            NodeFilter.SHOW_TEXT,
-          )
-          while (walker.nextNode()) {
-            const index = walker.currentNode.data.indexOf(at)
-            if (index < 0) continue
-            const range = document.createRange()
-            range.setStart(walker.currentNode, index + 2)
-            range.setEnd(walker.currentNode, index + 3)
-            const { left, top, height } = range.getBoundingClientRect()
-            return { x: left + 1, y: top + height / 2 }
-          }
-          return null
-        }
-        if (/^[a-z]+word$/.test(at)) {
-          ;[...root.querySelectorAll('*')]
-            .findLast((element) => element.textContent.includes(at))
-            .scrollIntoView({ block: 'center' })
-          await frames()
-          return box(root)
-        }
-        root.querySelector(at).scrollIntoView({ block: 'center' })
-        await frames()
-        const { left, top, width, height } = root
-          .querySelector(at)
-          .getBoundingClientRect()
-        return { x: left + Math.min(20, width / 2), y: top + height / 2 }
-      }, at)
-    const selected = () =>
-      page.evaluate(async () => {
-        for (let frame = 0; frame < 2; frame++)
-          await new Promise(requestAnimationFrame)
-        const root = document.querySelector(
-          '.rich-pane [aria-label="Document editor"]',
-        )
-        if (root.editor) return root.editor.state.selection.node?.type.name
-        const view = root.cmTile.root.view
-        const { from, to } = view.state.selection.main
-        return view.state.sliceDoc(from, to)
-      })
-    for (const [kind, [source, node, at]] of Object.entries(atoms)) {
-      await page
-        .locator('.rich-pane p, .rich-pane .cm-line', { hasText: 'last words' })
-        .last()
-        .click()
-      const { x, y } = await point(at)
-      await page.mouse.click(x, y, { clickCount: 3 })
-      assert.equal(await selected(), engine === 'tiptap' ? node : source, kind)
-      // Focus leaves the rich editor for a moment after presses on a formula.
-      await page.waitForFunction(() =>
-        document.activeElement?.matches(
-          '.rich-pane [aria-label="Document editor"]',
-        ),
-      )
-      await page.keyboard.type('Z')
-      // The rich editor takes no text over a selected rule.
-      const replaced =
-        engine === 'tiptap' && kind === 'rule'
-          ? atomNote
-          : atomNote.replace(source, 'Z')
-      await settled(replaced)
-      assert.equal(await markdown(), replaced, kind)
-      await pressShortcut(app, `${mod}+z`)
-      await settled(atomNote)
-      assert.equal(await markdown(), atomNote, `${kind} undone`)
-      // One press on a drawing selects the block as well, and Backspace
-      // removes it with the blank line after it. The formatted view shows
-      // HTML as editable source, where a press places the caret; the rich
-      // editor's press on a formula opens its formula dialog.
-      if ((engine === 'tiptap' ? ['math'] : ['html', 'comment']).includes(kind))
-        continue
-      await page
-        .locator('.rich-pane p, .rich-pane .cm-line', { hasText: 'last words' })
-        .last()
-        .click()
-      const press = await point(at)
-      await page.mouse.click(press.x, press.y)
-      assert.equal(
-        await selected(),
-        engine === 'tiptap' ? node : source,
-        `${kind} pressed`,
-      )
-      await page.waitForFunction(() =>
-        document.activeElement?.matches(
-          '.rich-pane [aria-label="Document editor"]',
-        ),
-      )
-      await page.keyboard.press('Backspace')
-      const removed =
-        engine === 'tiptap' && kind === 'rule'
-          ? atomNote
-          : atomNote.replace(`${source}\n\n`, '')
-      await settled(removed)
-      assert.equal(await markdown(), removed, `${kind} removed`)
-      await pressShortcut(app, `${mod}+z`)
-      await settled(atomNote)
-      assert.equal(await markdown(), atomNote, `${kind} restored`)
-    }
-  },
-)
+    await page.keyboard.press('Backspace')
+    const removed = atomNote.replace(`${source}\n\n`, '')
+    await settled(removed)
+    assert.equal(await markdown(), removed, `${kind} removed`)
+    await pressShortcut(app, `${mod}+z`)
+    await settled(atomNote)
+    assert.equal(await markdown(), atomNote, `${kind} restored`)
+  }
+})

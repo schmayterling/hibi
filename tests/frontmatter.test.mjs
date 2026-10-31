@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import unit from 'node:test'
 import { parseDocument } from 'yaml'
 import {
@@ -10,11 +11,11 @@ import {
   replaceFrontmatter,
   splitFrontmatter,
 } from '../src/addons/frontmatter/markdown.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -85,7 +86,7 @@ test('frontmatter contributes slash actions in rich and source panes only while 
     await rm(folder, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(5000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -215,7 +216,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     dialog.showMessageBox = async () => ({ response: 1 })
   }, fixture)
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   assert.equal(
     await page.getByRole('region', { name: /frontmatter properties/i }).count(),
@@ -312,7 +313,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
   assert.equal(values.alias, 'light')
   assert.equal(values.draft, true)
   assert.equal(values.order, undefined)
-  if (t.formattedEngine === 'codemirror') {
+  {
     const rich = page.getByRole('textbox', {
       name: 'Document editor',
       exact: true,
@@ -327,12 +328,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
       view.focus()
     })
     await page.keyboard.insertText('updated body')
-  } else
-    await replaceRichText(
-      page,
-      page.getByRole('textbox', { name: /document editor/i }),
-      'updated body',
-    )
+  }
   assert.equal(splitFrontmatter(await read()).content, 'updated body\r\n')
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
@@ -389,19 +385,13 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     .waitFor({ state: 'hidden' })
   assert.equal(await readFile(fixture, 'utf8'), await read())
   await clickMenu(app, 'New')
-  if (t.formattedEngine === 'tiptap')
-    await page.waitForFunction(
-      () =>
-        document.querySelector('.rich-pane [role="textbox"]')?.textContent ===
-        '',
-    )
-  else {
-    await waitForDocumentEditor(app, page)
-    await waitForAsync(
-      page,
-      async () => (await window.hibi.getDocument()).markdown === '',
-    )
-  }
+
+  await waitForDocumentEditor(app, page)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === '',
+  )
+
   await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /search commands/i })
@@ -442,7 +432,7 @@ unit(
       })
     }, fixture)
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, 'codemirror')
+    await waitForFormattedEditor(app, page)
     await clickMenu(app, 'Open…')
     await waitForDocumentEditor(app, page)
     const properties = page.getByRole('region', {
@@ -526,7 +516,7 @@ unit(
         description: 'Projection fixture',
         kind: 'extension',
         version: '1.0.0',
-        apiVersion: 2,
+        apiVersion: 3,
         capabilities: [],
         authors: [{ displayName: 'Test' }],
         entry: 'index.js',
@@ -586,7 +576,7 @@ unit(
       await rm(folder, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, 'codemirror')
+    await waitForFormattedEditor(app, page)
     await page.waitForFunction(() => window.sourcesLoaded === true)
     const properties = page.getByRole('region', {
       name: /frontmatter properties/i,
@@ -677,7 +667,7 @@ test('typing a leading divider never activates frontmatter or disables editing',
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await rich.pressSequentially('---')
@@ -753,7 +743,7 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
     { fixture, folder },
   )
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   const center = await page.locator('.open-workspace').evaluate((button) => {

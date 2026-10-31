@@ -2,7 +2,6 @@ import type { EditorState, Extension } from '@codemirror/state'
 import type { WidgetType } from '@codemirror/view'
 import type { SyntaxNodeRef } from '@lezer/common'
 import type { MarkdownConfig } from '@lezer/markdown'
-import type { AnyExtension, Editor } from '@tiptap/core'
 import type { MarkedExtension } from 'marked'
 import type { ComponentType, CSSProperties } from 'react'
 import type { AddonWindowOptions } from '../shared/addon-windows'
@@ -96,15 +95,13 @@ export type { TooltipApi, TooltipOptions } from '../ui/tooltips'
 /** Increment when a public contract changes incompatibly. */
 export const ADDON_API_VERSION = 3
 
-/** Versioned API v1 and v2 packages remain loadable. */
+/** Only API 3 packages load. */
 export function compatibleAddonManifest(manifest: {
   apiVersion?: unknown
   version?: unknown
 }): boolean {
   return (
-    (manifest.apiVersion === 1 ||
-      manifest.apiVersion === 2 ||
-      manifest.apiVersion === ADDON_API_VERSION) &&
+    manifest.apiVersion === ADDON_API_VERSION &&
     typeof manifest.version === 'string' &&
     !!manifest.version.trim() &&
     manifest.version.length <= 40
@@ -114,9 +111,7 @@ export function compatibleAddonManifest(manifest: {
 /** Metadata used to list an addon before its code loads. */
 export type AddonCapability =
   | 'ui'
-  /** @deprecated Tiptap SDK for the previous editor. Use formatted for the CodeMirror formatted view. */
-  | 'rich'
-  /** CodeMirror formatted editor and Lezer Markdown SDK (API 3). */
+  /** CodeMirror formatted editor and Lezer Markdown SDK. */
   | 'formatted'
   | 'source'
   | 'markdown'
@@ -126,7 +121,7 @@ export type AddonCommandDescriptor = {
   id: string
   label: string
   keywords?: string
-  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. A package is refused unless it is a supported, unreserved combination on every platform. */
   defaultShortcut?: string
   /** Show this command in a built-in menu. */
   menu?: CommandMenuContribution
@@ -151,18 +146,17 @@ export type AddonManifest = {
   id: string
   name: string
   description: string
-  apiVersion: 1 | 2 | typeof ADDON_API_VERSION
-  /** Existing API v1 addons default to extension. */
-  kind?: 'theme' | 'extension'
+  apiVersion: typeof ADDON_API_VERSION
+  kind: 'theme' | 'extension'
   defaultEnabled?: boolean
   /** Background-only UI/services can activate after editing is ready. Omit for schema/input addons. */
   startup?: 'background'
-  /** Omit for the legacy all-engines SDK. An empty array loads no UI or editor SDK.
+  /** Required for an extension whose entry exports a factory; an empty array loads no UI or editor SDK.
    * Declaring capabilities also stages editor registrations until start() succeeds.
    */
   capabilities?: readonly AddonCapability[]
   /** Command activation needs inert command descriptors. View activation is for editor behavior, not schemas. */
-  activation?: 'command' | 'source' | 'rich' | 'formatted'
+  activation?: 'command' | 'source' | 'formatted'
   commands?: readonly AddonCommandDescriptor[]
   /** Inert ownership metadata protects source even when an installed addon has never been loaded. */
   syntax?: readonly AddonSyntaxDescriptor[]
@@ -291,12 +285,7 @@ export type FormattedContainer = {
 export type FormattedNodeView = {
   /** Names of the nodes it renders, or of their Lezer groups, such as `LeafBlock`. */
   nodes: readonly string[]
-  /**
-   * Local registerSyntax id controlling this renderer. It also pairs a legacy
-   * flavor's rich extension with this formatted renderer, including child-only
-   * views. Without it, coverage requires every feature node to match a view
-   * name or Lezer group. Disabled syntax suppresses this view and its children.
-   */
+  /** Local registerSyntax id controlling this renderer. Disabled syntax suppresses this view and its children. */
   feature?: string
   /** Inline decorations. Return false to skip the node's children. */
   decorate?(
@@ -333,15 +322,6 @@ export type SourceExtension = {
   id: string
   /** Created per source editor; may lazy-load an editor integration. */
   create: (context?: EditorExtensionContext) => Extension | Promise<Extension>
-}
-
-/** @deprecated Tiptap-only attachment. Use FormattedExtension for the CodeMirror formatted view. */
-export type RichExtension = {
-  id: string
-  /** Attach editor behavior without rebuilding its schema or undo history. */
-  attach: (editor: Editor, context?: EditorExtensionContext) => () => void
-  /** Lets a read-only split preview catch up after source typing pauses. Omit to update it after every source edit. */
-  preview?: 'deferred'
 }
 
 export type StatusItem = {
@@ -509,23 +489,6 @@ export type MarkdownProjection = {
   serialize: (content: string) => string
   readOnly?: boolean
 }
-/** Host context for a paragraph escaping rule, independent of the editor library. */
-export type MarkdownParagraphRuleContext = {
-  /** Parent node type; table paragraphs receive 'table'. */
-  parentType?: string | null
-  /** Protected literal text, keyed by opaque sentinels. */
-  literals: ReadonlyMap<string, string>
-}
-/** Escape paragraph Markdown in flavor and rule order, before core block-prefix escaping. */
-export type MarkdownParagraphRule = {
-  /** Replace these literal text characters with sentinels during inline rendering. */
-  characters?: string
-  /** Replace only whole sentinels that need escaping; the host restores the rest afterward.
-   * Preserve declared characters, using backslash escapes or HTML entities when needed.
-   * Errors, damaged sentinels, or dropped declared characters abort serialization and saving with the flavor id.
-   */
-  escape: (source: string, ctx: MarkdownParagraphRuleContext) => string
-}
 /** Composable parser contributions. Declare descriptors on Addon.flavors for discovery. */
 export type MarkdownFlavor = {
   id: string
@@ -537,12 +500,6 @@ export type MarkdownFlavor = {
   /** False when disabled syntax has a lossless built-in fallback, such as a code fence. */
   readOnlyWhenDisabled?: boolean
   markedOptions?: { gfm?: boolean; breaks?: boolean }
-  /**
-   * @deprecated Legacy Tiptap schema extensions. Use syntax and render for the CodeMirror formatted editor.
-   * registerSyntax.extensions must include each rich extension's name to
-   * identify its feature; unmapped extensions use the flavor as one feature.
-   */
-  richExtensions?: readonly AnyExtension[]
   /**
    * Lezer Markdown extensions for the formatted view and source highlighting (API 3).
    * New node names must be unique across the configured grammar. Use your addon id
@@ -560,15 +517,8 @@ export type MarkdownFlavor = {
    * formatted contribution. Other flavors and source editing keep working.
    */
   render?: readonly FormattedNodeView[]
-  /** Rules receive rendered Markdown with declared text characters protected by ctx.literals (sentinel to character), including in tables; preserve node markup. */
-  paragraphRules?: readonly MarkdownParagraphRule[]
   /** Verbatim flavors require source editing. Literal fallback is for semantic syntax only. */
   preservation?: SourcePreservation & { fallback: 'source' | 'literal' }
-  /** Opt in only when top-level blocks serialize independently with standard blank-line joining.
-   * Cache context includes index, the previous block, and document attributes.
-   * Omission preserves full-document serialization for existing addons.
-   */
-  serialization?: 'block-local'
   /** Static exports run the same syntax parsers; their HTML is sanitized by the site. */
   export?: {
     extensions?: readonly MarkedExtension[]
@@ -650,7 +600,7 @@ export type DocumentsApi = {
     target: import('../shared/foundation-contracts').VersionedDocumentTarget,
   ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
 }
-/** Positions are opaque and editor-local. `editor: 'rich'` names either implementation, without an engine discriminator. Derive ranges from selection, before/after, and documentLength, never Markdown text or constants. CodeMirror uses normalized-source UTF-16 offsets; legacy rich uses ProseMirror positions, including node boundaries. */
+/** Positions are opaque UTF-16 offsets local to the named editor: `editor: 'rich'` is the formatted Normal view and `'source'` the source view, both counted in the note's normalized Markdown source. Derive ranges from selection, before/after, and documentLength, never Markdown text or constants. */
 export type EditorViewSelection = {
   view: import('../shared/foundation-contracts').ViewTarget
   editor: 'source' | 'rich'
@@ -972,9 +922,7 @@ export type AddonContext = {
     onCodeHighlightingChange: (listener: () => void) => () => void
     /**
      * Contribute a renderer toggle; disabled tokens remain literal, editable Markdown.
-     * For dual-engine flavors, list legacy extension names in extensions and the
-     * feature's syntax node names in nodes. Pair render.feature with this local id,
-     * or provide views matching every node by name or Lezer group.
+     * List the feature's syntax node names in nodes and pair render.feature with this local id.
      */
     registerSyntax: (feature: MarkdownSyntaxFeature) => () => void
     /** Format-specific rendering control, without a Markdown token matcher. */
@@ -1018,20 +966,9 @@ export type AddonContext = {
     registerContextActionProvider: (
       provider: import('../shared/editor-interactions').EditorContextActionProvider,
     ) => Promise<() => void>
-    /**
-     * @deprecated Tiptap-only. Use registerFormatted for the CodeMirror formatted editor.
-     * A formatted registration with the same local id marks this feature migrated.
-     * Other ids do not cover it; remaining legacy features keep their update notice.
-     */
-    registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void
     registerSource: (extension: SourceExtension) => () => void
-    /**
-     * Create an extension for each CodeMirror formatted editor (API 3).
-     * Use the same local id as registerRich to pair the feature. If that id also
-     * names a syntax feature, the formatted registration covers its literal fallback.
-     * Removing the registration restores the notice for its remaining rich feature.
-     */
+    /** Create an extension for each CodeMirror formatted editor. */
     registerFormatted: (extension: FormattedExtension) => () => void
     registerFlavor: (flavor: MarkdownFlavor) => () => void
     /** Render with the file's flavor choice and active projections for static export. */

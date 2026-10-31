@@ -2,7 +2,7 @@
   "id": "quarto",
   "name": "Quarto Markdown",
   "description": "Edit and preview Quarto; run embedded code when you choose.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.3",
   "authors": [

@@ -7,9 +7,7 @@ function editableTarget(target: EventTarget | null) {
     document.querySelector('dialog[open]')
   )
     return null
-  return target.closest<HTMLElement>(
-    '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
-  )
+  return target.closest<HTMLElement>('.cm-content[contenteditable="true"]')
 }
 
 /** CodeMirror's formatted presentation is the normal view. */

@@ -1,5 +1,4 @@
 import type { Addon, AddonManifest } from '../../addons/api'
-import { codemirrorFormattedView } from './formatted-engine'
 
 export type Definition = Omit<Addon, 'manifest'> & { manifest?: AddonManifest }
 // Elements also carry `$$typeof`, so only React's component wrappers qualify.
@@ -26,12 +25,15 @@ export async function normalizeDefinition(
     throw new Error(
       'This addon has no valid startup function. Contact its author.',
     )
-  // Capabilities select the optional SDK; omitting them keeps the legacy factory contract.
+  // Capabilities select the SDK parts a factory receives.
+  if (typeof exported === 'function' && !manifest.capabilities)
+    throw new Error(
+      'This addon was made for an earlier version of Hibi. Ask its author for an update to addon API 3.',
+    )
   const sdk =
-    typeof exported === 'function'
+    typeof exported === 'function' && manifest.capabilities
       ? await (await import('../../addons/sdk-loader')).loadAddonSdk(
           manifest.capabilities,
-          codemirrorFormattedView,
         )
       : undefined
   // A stop during loading must not run factory code that would own resources.

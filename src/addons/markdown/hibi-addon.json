@@ -2,7 +2,7 @@
   "id": "markdown",
   "name": "Markdown",
   "description": "Write Markdown with formatted editing, source view, and HTML export.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.1",
   "authors": [

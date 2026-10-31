@@ -2,21 +2,17 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
-import { getSchema, Node } from '@tiptap/core'
-import { MarkdownManager } from '@tiptap/markdown'
 import { Marked } from 'marked'
 import { micromark } from 'micromark'
 import {
   markedFenceText,
   readFence,
 } from '../src/addons/_shared/formatted-fence.ts'
-import { typstMarkdown } from '../src/addons/typst/markdown.ts'
 import {
   typstBlock,
   typstFlavor,
   typstTokens,
 } from '../src/addons/typst/syntax.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 
 const markdown = parser.configure(GFM)
@@ -133,42 +129,6 @@ test('typst fences close and dedent per CommonMark in every view', () => {
       },
       JSON.stringify(source),
     )
-  }
-})
-
-test('rich documents preserve the same typst bodies', () => {
-  const diagram = Node.create({
-    name: 'typstBlock',
-    group: 'block',
-    atom: true,
-    addAttributes: () => ({ source: { default: '' }, raw: { default: '' } }),
-    ...typstMarkdown,
-  })
-  const configuration = markdownConfiguration([
-    {
-      ...typstFlavor,
-      id: 'typst.blocks',
-      richExtensions: [diagram],
-      export: { extensions: [typstTokens] },
-    },
-  ])
-  const extensions = [...configuration.core, ...configuration.addons]
-  const manager = new MarkdownManager({
-    marked: configuration.parser,
-    extensions,
-  })
-  const schema = getSchema(extensions)
-  const bodies = (json) => {
-    const found = []
-    schema.nodeFromJSON(json).descendants((node) => {
-      if (node.type.name === 'typstBlock') found.push(node.attrs.source)
-    })
-    return found
-  }
-  for (const [source, body] of cases) {
-    const json = manager.parse(source)
-    assert.deepEqual(bodies(json), [body], source)
-    assert.match(schema.nodeFromJSON(json).textContent, /after/, source)
   }
 })
 

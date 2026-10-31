@@ -5,8 +5,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -61,7 +64,7 @@ test('rendered worker projection agrees with actual unrevealed formatted DOM', {
       return post.call(this, message, ...rest)
     }
   })
-  const rich = await selectFormattedEngine(app, page, 'codemirror', {
+  const rich = await waitForFormattedEditor(app, page, {
     reload: true,
   })
   await page.getByRole('button', { name: 'Source view', exact: true }).click()

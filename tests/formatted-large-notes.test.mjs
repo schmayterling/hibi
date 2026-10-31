@@ -20,8 +20,8 @@ const makeSource = (size) => {
   )
 }
 
-/** Open `file` in a fresh app, with the CodeMirror formatted view switch on or off. */
-async function launch(t, file, codemirror, boundaryLength) {
+/** Open `file` in a fresh app. */
+async function launch(t, file, boundaryLength) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-large-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -37,71 +37,66 @@ async function launch(t, file, codemirror, boundaryLength) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
-  if (codemirror) {
-    await page.addInitScript((length) => {
-      const counters = {
-        requests: 0,
-        streams: [],
-        length: 0,
-        pages: 0,
-        records: 0,
-        maxRecords: 0,
-        done: false,
-        syntax: [],
-      }
-      window.defaultBoundaryWork = counters
-      const NativeWorker = window.Worker
-      window.Worker = class extends NativeWorker {
-        constructor(...args) {
-          super(...args)
-          this.noteEpoch = null
-          this.addEventListener('message', ({ data }) => {
-            const stream = `${data.epoch}:${data.id}:${data.version}`
-            if (
-              data.type !== 'boundaries' ||
-              data.epoch !== this.noteEpoch ||
-              !counters.streams.includes(stream)
-            )
-              return
-            const syntax = JSON.parse(data.key).syntax
-            if (!syntax.includes('subtext@1')) return
-            counters.syntax = syntax
-            counters.length = data.length
-            counters.pages++
-            counters.records += data.records.length
-            counters.maxRecords = Math.max(
-              counters.maxRecords,
-              data.records.length,
-            )
-            counters.done = data.done
-          })
-        }
-        postMessage(message, ...args) {
-          if (message.type === 'load-start')
-            this.noteEpoch =
-              message.head.length === length ? message.epoch : null
-          // Code extent requests (#590) carry no boundary records.
+
+  await page.addInitScript((length) => {
+    const counters = {
+      requests: 0,
+      streams: [],
+      length: 0,
+      pages: 0,
+      records: 0,
+      maxRecords: 0,
+      done: false,
+      syntax: [],
+    }
+    window.defaultBoundaryWork = counters
+    const NativeWorker = window.Worker
+    window.Worker = class extends NativeWorker {
+      constructor(...args) {
+        super(...args)
+        this.noteEpoch = null
+        this.addEventListener('message', ({ data }) => {
+          const stream = `${data.epoch}:${data.id}:${data.version}`
           if (
-            message.type === 'boundaries' &&
-            !message.codeOnly &&
-            message.epoch === this.noteEpoch &&
-            message.config.syntax.includes('subtext@1')
-          ) {
-            counters.requests++
-            counters.streams.push(
-              `${message.epoch}:${message.id}:${message.version}`,
-            )
-          }
-          super.postMessage(message, ...args)
-        }
+            data.type !== 'boundaries' ||
+            data.epoch !== this.noteEpoch ||
+            !counters.streams.includes(stream)
+          )
+            return
+          const syntax = JSON.parse(data.key).syntax
+          if (!syntax.includes('subtext@1')) return
+          counters.syntax = syntax
+          counters.length = data.length
+          counters.pages++
+          counters.records += data.records.length
+          counters.maxRecords = Math.max(
+            counters.maxRecords,
+            data.records.length,
+          )
+          counters.done = data.done
+        })
       }
-    }, boundaryLength)
-  }
-  // The init script applies on reload; the Tiptap engine needs its choice stored.
-  await page.evaluate(
-    (engine) => localStorage.setItem('hibi:formatted-engine', engine),
-    codemirror ? 'codemirror' : 'tiptap',
-  )
+      postMessage(message, ...args) {
+        if (message.type === 'load-start')
+          this.noteEpoch = message.head.length === length ? message.epoch : null
+        // Code extent requests (#590) carry no boundary records.
+        if (
+          message.type === 'boundaries' &&
+          !message.codeOnly &&
+          message.epoch === this.noteEpoch &&
+          message.config.syntax.includes('subtext@1')
+        ) {
+          counters.requests++
+          counters.streams.push(
+            `${message.epoch}:${message.id}:${message.version}`,
+          )
+        }
+        super.postMessage(message, ...args)
+      }
+    }
+  }, boundaryLength)
+
+  // The init script applies on reload.
   await page.reload()
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
@@ -113,7 +108,7 @@ async function launch(t, file, codemirror, boundaryLength) {
 }
 
 for (const size of [2, 50])
-  test(`behind the switch, a ${size} MiB note opens in the formatted view and takes typing`, {
+  test(`a ${size} MiB note opens in the formatted view and takes typing`, {
     timeout: 240000,
   }, async (t) => {
     const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-large-note-'))
@@ -121,7 +116,7 @@ for (const size of [2, 50])
     const file = join(folder, `${size}.md`)
     await mkdir(folder, { recursive: true })
     await writeFile(file, makeSource(size))
-    const { page, started } = await launch(t, file, true, size * 1024 * 1024)
+    const { page, started } = await launch(t, file, size * 1024 * 1024)
     // Before, notes over 256 KiB opened in source view.
     await page
       .locator('.rich-pane .hibi-formatted .hibi-lp-h1', {
@@ -201,15 +196,3 @@ for (const size of [2, 50])
       }),
     )
   })
-
-test('without the switch, a large note still opens in source view', {
-  timeout: 120000,
-}, async (t) => {
-  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-large-note-'))
-  t.after(() => rm(folder, { recursive: true, force: true }))
-  const file = join(folder, '2.md')
-  await writeFile(file, makeSource(2))
-  const { page } = await launch(t, file, false)
-  await page.getByText('Opened in source view').waitFor()
-  assert.equal(await page.locator('.rich-pane .hibi-formatted').count(), 0)
-})

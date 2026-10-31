@@ -8,7 +8,7 @@ import type {
 
 type BlockToken = { type: string; raw: string }
 
-// Symbol keys survive tokenizer wrappers that copy results, as Tiptap does.
+// Symbol keys survive tokenizer wrappers that copy results.
 const leaf = Symbol('leaf block')
 const quote = Symbol('quote text')
 type Custom = Tokens.Generic & { [leaf]?: true; [quote]?: string }

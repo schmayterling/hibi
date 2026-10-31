@@ -2,7 +2,7 @@
   "id": "dictionary",
   "name": "Dictionary and thesaurus",
   "description": "Look up definitions and synonyms in English, Chinese, Cantonese, Japanese, Filipino, French, and German. Words you look up are sent to Wiktionary and Datamuse.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.0",
   "authors": [
@@ -20,6 +20,27 @@
     "icon": "book-open"
   },
   "startup": "background",
+  "commands": [
+    {
+      "id": "define",
+      "label": "Define word",
+      "keywords": "dictionary definition meaning look up",
+      "menu": { "location": "editor", "group": "dictionary", "order": 1 }
+    },
+    {
+      "id": "synonyms",
+      "label": "Find synonyms",
+      "keywords": "thesaurus synonym antonym replace word",
+      "defaultShortcut": "shift+f7",
+      "menu": { "location": "editor", "group": "dictionary", "order": 2 }
+    },
+    {
+      "id": "add-word",
+      "label": "Add word to dictionary",
+      "keywords": "dictionary custom word add own spelling",
+      "menu": { "location": "editor", "group": "dictionary", "order": 3 }
+    }
+  ],
   "licenses": [
     {
       "id": "dictionary-german-wiktionary",

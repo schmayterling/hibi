@@ -29,7 +29,7 @@ test('installed addon imports and exports only selected files', {
       name: 'Selected IO probe',
       description: 'Selected file bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',

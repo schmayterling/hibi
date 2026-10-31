@@ -27,7 +27,6 @@ async function launch(t, prefix, assistive = true) {
   if (assistive)
     await app.evaluate(({ app }) => app.setAccessibilitySupportEnabled(true))
   await page.evaluate(() => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('markdown-markers', 'false')
   })
   await page.reload()

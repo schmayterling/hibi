@@ -4,33 +4,12 @@ import { history, isolateHistory, redo, undo } from '@codemirror/commands'
 import { EditorState } from '@codemirror/state'
 import { Decoration } from '@codemirror/view'
 import { parser } from '@lezer/markdown'
-import { Strike } from '@tiptap/extension-strike'
-import { TaskItem } from '@tiptap/extension-task-item'
-import { TaskList } from '@tiptap/extension-task-list'
-import { MarkdownManager } from '@tiptap/markdown'
 import { Lexer, Marked, Tokenizer } from 'marked'
-import { markedGithubFootnote } from 'marked-github-footnote'
 import { micromark } from 'micromark'
 import { gfmHtml, gfm as gfmSyntax } from 'micromark-extension-gfm'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
-import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
-import { NativeTableKit } from '../src/addons/markdown/table-tokenizer.ts'
 import { codeIndent, indent } from '../src/renderer/src/formatted-commands.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { BlockTokenizer, blockMarkdown } from '../src/shared/marked-blocks.ts'
-
-const github = {
-  id: 'markdown.github',
-  markedOptions: { gfm: true },
-  richExtensions: [
-    GithubAlert,
-    Strike,
-    NativeTableKit.configure({ table: { resizable: false } }),
-    TaskList,
-    TaskItem.configure({ nested: true }),
-  ],
-  export: { extensions: [alertMarkdown, markedGithubFootnote()] },
-}
 
 const code = (html) =>
   html.match(/<pre><code[^>]*>[\s\S]*?<\/code><\/pre>/g) ?? []
@@ -552,21 +531,6 @@ test('recursive extension bodies retain quote frames, literal tabs and native ef
       Lexer.prototype.blockTokens = read
     }
   }
-  const {
-    parser: marked,
-    options,
-    core,
-    addons,
-  } = markdownConfiguration([github])
-  const manager = new MarkdownManager({
-    extensions: [...core, ...addons],
-    marked,
-    markedOptions: options,
-  })
-  const codeText = (node) =>
-    node.type === 'codeBlock'
-      ? [(node.content ?? []).map(({ text }) => text ?? '').join('')]
-      : (node.content ?? []).flatMap(codeText)
   for (const template of samples)
     for (const fence of ['```', '~~~'])
       for (const eol of ['\n', '\r\n']) {
@@ -577,13 +541,6 @@ test('recursive extension bodies retain quote frames, literal tabs and native ef
         assert.equal(
           fixed.tokens.map(({ raw }) => raw).join(''),
           source.replaceAll('\r\n', '\n'),
-        )
-        assert.deepEqual(
-          codeText(manager.parse(source)),
-          codeText(manager.parse(source.replaceAll('\tcode', 'TABcode'))).map(
-            (text) => text.replaceAll('TABcode', '\tcode'),
-          ),
-          source,
         )
       }
 })
@@ -623,69 +580,6 @@ test('recursive extension failure restores options and allows the same parser to
   const native = new Marked({ gfm: true }, alertMarkdown)
   assert.equal(markdown.parse(source), native.parse(source))
   assert.deepEqual(lexer.lex(source), native.lexer(source))
-})
-
-test('default native list compositions keep preexisting models and code bytes', async (t) => {
-  const cfg = markdownConfiguration([github])
-  const extensions = [...cfg.core, ...cfg.addons]
-  const nativeCfg = markdownConfiguration([github])
-  nativeCfg.parser.defaults.tokenizer = new Tokenizer()
-  const nativeMarked = nativeCfg.parser
-  const fixed = new MarkdownManager({
-    extensions,
-    marked: cfg.parser,
-    markedOptions: cfg.options,
-  })
-  const native = new MarkdownManager({
-    extensions,
-    marked: nativeMarked,
-    markedOptions: cfg.options,
-  })
-  const codeText = (node) =>
-    node.type === 'codeBlock'
-      ? [(node.content ?? []).map(({ text }) => text ?? '').join('')]
-      : (node.content ?? []).flatMap(codeText)
-  const cases = [
-    ['ordered fence', '> 1. BT\n>    \tcode\n>    BT', [' \tcode', '']],
-    [
-      'ordered quote',
-      '> 1. > BT\n>    > \tcode\n>    > BT',
-      ['', 'code\n', ''],
-    ],
-    [
-      'ordered alert',
-      '> 1. > [!NOTE]\n>    > BT\n>    > \tcode\n>    > BT',
-      ['\tcode'],
-    ],
-    ['task quote', '> - [ ] > BT\n>   > \tcode\n>   > BT', ['code\n', '']],
-    [
-      'alert ordered',
-      '> > [!NOTE]\n> > 1. BT\n> >    \tcode\n> >    BT',
-      [' \tcode', ''],
-    ],
-  ]
-  for (const [name, template, expected] of cases)
-    for (const eol of ['\n', '\r\n'])
-      await t.test(name + JSON.stringify(eol), () => {
-        const source = template
-          .replaceAll('BT', String.fromCharCode(96).repeat(3))
-          .replaceAll('\n', eol)
-        const actual = fixed.parse(source),
-          baseline = native.parse(source)
-        assert.deepEqual(
-          codeText(baseline),
-          expected,
-          'preexisting native composition remains explicit',
-        )
-        assert.deepEqual(codeText(actual), expected, source)
-        assert.deepEqual(actual, baseline, source)
-        const tokens = cfg.parser.lexer(source)
-        assert.deepEqual(tokens, nativeMarked.lexer(source), source)
-        assert.equal(
-          tokens.map(({ raw }) => raw).join(''),
-          source.replaceAll('\r\n', '\n'),
-        )
-      })
 })
 
 test('lazy containers retain physical reference-title columns', () => {

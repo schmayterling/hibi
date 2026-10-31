@@ -34,7 +34,7 @@ test('create-hibi-addon writes a runnable api 2 starter for released clients wit
     name: 'Note tools',
     description: 'A starter Hibi addon.',
     version: '1.0.0',
-    apiVersion: 2,
+    apiVersion: 3,
     kind: 'extension',
     capabilities: [],
     activation: 'command',

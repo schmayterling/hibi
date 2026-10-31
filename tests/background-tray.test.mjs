@@ -4,17 +4,15 @@ import { once } from 'node:events'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   crashAndReload,
   electron,
   stopElectronTree,
   waitForDocumentEditor,
   waitForElectronShutdown,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -66,7 +64,7 @@ async function launch(t) {
     }
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   const id = await app.evaluate(
     ({ BrowserWindow }) =>
@@ -616,14 +614,10 @@ test('hidden renderer crash shows recovery and clean tray quit stays hidden', {
   )
   assert.equal(recovered.markdown, 'recover hidden draft')
   assert.equal(recovered.dirty, true)
-  await app.evaluate(
-    (_, engine) =>
-      globalThis.backgroundTestContents.executeJavaScript(
-        engine === 'tiptap'
-          ? `document.querySelector('.tiptap').editor.commands.setContent('<p></p>')`
-          : `window.hibi.updateDocument('')`,
-      ),
-    t.formattedEngine,
+  await app.evaluate(() =>
+    globalThis.backgroundTestContents.executeJavaScript(
+      `window.hibi.updateDocument('')`,
+    ),
   )
   await waitForAsync(
     app,

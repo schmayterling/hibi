@@ -30,7 +30,6 @@ try {
       },
       files: [
         join(root, 'src/addons/api.ts'),
-        join(root, 'src/addons/sdk.ts'),
         join(root, 'src/addons/sdk-loader.ts'),
       ],
       include: [],

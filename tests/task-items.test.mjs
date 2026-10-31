@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -28,7 +25,7 @@ test('typing a task marker creates a checkbox and saves unescaped Markdown', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -37,18 +34,16 @@ test('typing a task marker creates a checkbox and saves unescaped Markdown', {
   await page.keyboard.type('- [ ] task')
   await rich.getByRole('checkbox').waitFor()
   assert.equal(await rich.getByRole('checkbox').isChecked(), false)
-  if (t.formattedEngine === 'tiptap')
-    assert.equal(await rich.locator('li p').textContent(), 'task')
-  else {
-    assert.equal(
-      await rich.getByRole('checkbox').getAttribute('aria-label'),
-      'Task item checkbox for task',
-    )
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      '- [ ] task',
-    )
-  }
+
+  assert.equal(
+    await rich.getByRole('checkbox').getAttribute('aria-label'),
+    'Task item checkbox for task',
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '- [ ] task',
+  )
+
   await clickMenu(app, 'Save')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal((await readFile(file, 'utf8')).trim(), '- [ ] task')
@@ -73,7 +68,7 @@ test('populated and empty task markers render as checkboxes and preserve CRLF so
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -85,25 +80,7 @@ test('populated and empty task markers render as checkboxes and preserve CRLF so
   assert.equal(await checkboxes.nth(1).isChecked(), false)
   assert.equal(await checkboxes.nth(2).isChecked(), false)
   assert.equal(await checkboxes.nth(3).isChecked(), true)
-  if (t.formattedEngine === 'tiptap') {
-    assert.equal(
-      await rich.locator(':scope > ul[data-type="taskList"]').count(),
-      1,
-    )
-    assert.equal(
-      await rich.locator(':scope > ul[data-type="taskList"] > li').count(),
-      3,
-    )
-    assert.deepEqual(
-      await checkboxes.evaluateAll((inputs) =>
-        inputs.map(
-          (input) => input.closest('li').querySelector('p').textContent,
-        ),
-      ),
-      ['a', '', '', ''],
-    )
-    assert.equal(await rich.locator('li li').getByRole('checkbox').count(), 1)
-  } else {
+  {
     assert.deepEqual(
       await checkboxes.evaluateAll((inputs) =>
         inputs.map((input) => input.getAttribute('aria-label')),
@@ -144,11 +121,7 @@ test('populated and empty task markers render as checkboxes and preserve CRLF so
 
   await waitForAsync(
     page,
-    (engine) =>
-      engine === 'tiptap'
-        ? document.querySelector('.tiptap')?.editor.isEditable
-        : document.querySelector('.rich-pane .cm-content')?.isContentEditable,
-    t.formattedEngine,
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
   )
   await checkboxes.nth(1).check()
   const edited = markdown.replace('- [ ]\r\n', '- [x]\r\n')
@@ -163,46 +136,17 @@ test('populated and empty task markers render as checkboxes and preserve CRLF so
 
   await waitForAsync(
     page,
-    (engine) =>
-      engine === 'tiptap'
-        ? document.querySelector('.tiptap')?.editor.isEditable
-        : document.querySelector('.rich-pane .cm-content')?.isContentEditable,
-    t.formattedEngine,
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
   )
-  if (t.formattedEngine === 'tiptap') {
-    await rich.evaluate((element) => {
-      const editor = element.editor
-      const paragraph = element.querySelectorAll(
-        ':scope > ul[data-type="taskList"] > li > div > p',
-      )[2]
-      editor.commands.setTextSelection(editor.view.posAtDOM(paragraph, 0))
-      editor.view.focus()
-    })
-    await waitForAsync(page, () => {
-      const element = document.querySelector('.tiptap')
-      const editor = element.editor
-      const paragraph = element.querySelectorAll(
-        ':scope > ul[data-type="taskList"] > li > div > p',
-      )[2]
-      return editor.state.selection.from === editor.view.posAtDOM(paragraph, 0)
-    })
-    await page.keyboard.press('Tab')
-    await rich
-      .locator('ul[data-type="taskList"] ul[data-type="taskList"]')
-      .waitFor()
-    assert.equal(
-      await rich.locator(':scope > ul[data-type="taskList"] > li').count(),
-      2,
-    )
-  } else {
-    await rich.evaluate((element) => {
-      const view = element.cmTile.root.view
-      view.dispatch({ selection: { anchor: view.state.doc.line(3).to } })
-      view.focus()
-    })
-    await page.keyboard.press('Tab')
-    assert.equal(await rich.getByRole('checkbox').count(), 4)
-  }
+
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({ selection: { anchor: view.state.doc.line(3).to } })
+    view.focus()
+  })
+  await page.keyboard.press('Tab')
+  assert.equal(await rich.getByRole('checkbox').count(), 4)
+
   const indented = edited.replace('- [ ]\r\n- bullet', '  - [ ]\r\n- bullet')
   await waitForAsync(
     page,

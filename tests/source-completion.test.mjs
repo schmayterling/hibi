@@ -23,7 +23,7 @@ test('source completions stream, accept in one undo step, and retract on provide
       description: 'Source completion fixture',
       kind: 'extension',
       authors: [{ displayName: 'Test' }],
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       startup: 'background',
       capabilities: ['source'],

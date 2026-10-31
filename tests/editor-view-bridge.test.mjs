@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('installed addon addresses source and rich selections by live view', {
@@ -28,7 +25,7 @@ test('installed addon addresses source and rich selections by live view', {
       name: 'View probe',
       description: 'Editor view bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',
@@ -79,7 +76,7 @@ test('installed addon addresses source and rich selections by live view', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const scroller = page.locator('.rich-pane')
   await page.waitForFunction(() => !!window.viewProbe)
   async function open(file) {
@@ -147,10 +144,9 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
-  if (t.formattedEngine === 'codemirror')
-    await page.waitForFunction(
-      () => document.querySelector('.rich-pane').scrollTop > 100,
-    )
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane').scrollTop > 100,
+  )
   assert.ok((await scroller.evaluate((pane) => pane.scrollTop)) > 100)
   // Block boundaries measure as zero-height rects but are still visible.
   await scroller.evaluate((pane) => {
@@ -165,10 +161,9 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
-  if (t.formattedEngine === 'codemirror')
-    await page.waitForFunction(
-      () => document.querySelector('.rich-pane').scrollTop > 100,
-    )
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane').scrollTop > 100,
+  )
   assert.ok((await scroller.evaluate((pane) => pane.scrollTop)) > 100)
 
   await page.getByRole('button', { name: 'Source view', exact: true }).click()

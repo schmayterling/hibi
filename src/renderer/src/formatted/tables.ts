@@ -47,6 +47,7 @@ import {
   recordPageSelection,
   registerDOMPositions,
 } from '../native-dom-selection.ts'
+import { placedSelection } from '../reading-position.ts'
 import { type InsertValues, tableActions } from '../source-formatting.ts'
 import {
   formattedInputError,
@@ -186,14 +187,25 @@ class TableWidget extends WidgetType {
   rowStart(index: number, text: string) {
     return index ? rowStart(text, this.quotes) : this.start
   }
+  /** The row parsed last: mapping a cell's text to positions reads one row many times. */
+  private parsed: { index: number; row: ReturnType<typeof parseRow> } | null =
+    null
   /** Cells and pipes of table line `index`, relative to its start. */
   row(index: number) {
+    if (this.parsed?.index === index) return this.parsed.row
     const { text } = this.line(index)
     const start = this.rowStart(index, text)
-    return parseRow(text.slice(start), start)
+    const row = parseRow(text.slice(start), start)
+    this.parsed = { index, row }
+    return row
   }
   toDOM(view: EditorView) {
     return new TableView(view, this).dom
+  }
+  // A position in the table is where its cell shows it, not the table's edge.
+  override coordsAt(dom: HTMLElement, pos: number) {
+    const table = tableViews.get(dom)
+    return table?.coordsAt(table.range().from + pos) ?? null
   }
   override updateDOM(dom: HTMLElement, view: EditorView) {
     const table = tableViews.get(dom)
@@ -993,7 +1005,16 @@ class TableView {
     // Markdown; CodeMirror's focus update, which draws it, waits for a timer.
     editor.refresh()
     editor.mirror()
-    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    // A cell its row lacks has no text to mirror yet: the caret waits at the
+    // row's end, where the first input adds the cell, so undo comes back here.
+    if (!span)
+      this.view.dispatch({
+        selection: { anchor: this.editing.to },
+        annotations: cellInput.of(true),
+      })
+    // A note opening in its last cell still opens at its top.
+    if (!this.view.state.facet(placedSelection))
+      element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     return true
   }
 
@@ -1013,6 +1034,91 @@ class TableView {
       from?.offset ?? offset,
       offset === 'end' ? undefined : offset,
     )
+  }
+
+  /** Scroll the cell at a position of the formatted view's document into view. */
+  scrollTo(pos: number) {
+    const cell = this.locate(pos)
+    if (!cell) return false
+    const { line, column } = cell
+    if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
+    const row = line ? this.rendered.get(line - 2)?.element : this.head
+    const element = row?.cells[column]
+    if (!element) return false
+    const editor =
+      this.editing?.element === element ? this.editing.editor.view : null
+    const { top, bottom } = visibleBand(element)
+    // Of a cell taller than the view, its editor shows the caret, and
+    // CodeMirror its text at the position, once the cell is in view.
+    const tall = element.getBoundingClientRect().height > bottom - top
+    if (tall && editor) {
+      editor.dispatch({
+        effects: EditorView.scrollIntoView(editor.state.selection.main.head),
+      })
+      return true
+    }
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    return !tall
+  }
+
+  /** Where a position inside the table shows: in its cell's editor, or in its drawn row's text. */
+  coordsAt(pos: number) {
+    if (!this.current) return this.near(pos)
+    if (pos <= this.widget.from || pos >= this.widget.to) return null
+    const editing = this.editing
+    const span = editing && this.span(editing)
+    if (editing && span && pos >= span.from && pos <= span.to)
+      return editing.editor.view.coordsAtPos(pos - span.from)
+    const point = this.point(pos)
+    if (!point) return null
+    const range = this.dom.ownerDocument.createRange()
+    range.setStart(point.node, point.offset)
+    // An empty cell's paragraph has no text to measure.
+    const box =
+      range.getClientRects()[0] ??
+      (point.node instanceof Element
+        ? point.node.getBoundingClientRect()
+        : null)
+    return box?.height
+      ? { left: box.left, right: box.left, top: box.top, bottom: box.bottom }
+      : null
+  }
+
+  /**
+   * A changed table shows its old text until its layout comes. A position
+   * is then in the edited cell's editor, which has the text now, or near
+   * enough in the row drawn for its line: the table's edges would move a
+   * pane that lines the position up, as linked scrolling and the reading
+   * place do while text is typed.
+   */
+  private near(pos: number) {
+    const { doc } = this.view.state
+    const { from } = this.range()
+    const index = doc.lineAt(pos).number - doc.lineAt(from).number
+    if (pos <= from || index >= this.lines) return null
+    const editing = this.editing
+    if (editing && pos >= editing.from && pos <= editing.to) {
+      const text = doc.sliceString(editing.from, editing.to)
+      const start = this.widget.rowStart(editing.line, text)
+      const span = cellSpan(
+        parseRow(text.slice(start), start),
+        editing.column,
+        text.length,
+      )
+      const editor = editing.editor.view
+      if (
+        span &&
+        pos >= editing.from + span.from &&
+        pos <= editing.from + span.to &&
+        editor.state.sliceDoc() === text.slice(span.from, span.to)
+      )
+        return editor.coordsAtPos(pos - editing.from - span.from)
+    }
+    const row = index > 1 ? this.rendered.get(index - 2)?.element : this.head
+    const box = row?.getBoundingClientRect()
+    return box?.height
+      ? { left: box.left, right: box.left, top: box.top, bottom: box.bottom }
+      : null
   }
 
   /** Edit one cell's inline source without normalizing its table's padding. */
@@ -1367,6 +1473,17 @@ class TableView {
     const editing = this.editing
     if (!editing) return
     this.editing = null
+    // The page selection of an editor that lost focus would fall back to
+    // before the table, which the formatted view reads as its caret while it
+    // takes no input, as a tab switch makes it: the caret left its cell.
+    const page = editing.element.ownerDocument.getSelection()
+    if (
+      page?.anchorNode &&
+      !editing.editor.view.hasFocus &&
+      editing.element.contains(page.anchorNode) &&
+      editing.element.contains(page.focusNode)
+    )
+      page.removeAllRanges()
     editing.editor.destroy()
     // The cell renders statically again unless its table is being removed.
     if (redraw && editing.line < this.lines && editing.element.isConnected)
@@ -1752,24 +1869,47 @@ class TableView {
       default:
         return false
     }
-    const { line } = cell
+    const next = result.cell && {
+      line: result.cell.line < 0 ? cell.line : result.cell.line,
+      column: result.cell.column,
+    }
     this.stopEditing()
+    const changes = this.view.state.changes(result.changes)
+    // The caret moves to that cell with the change, so that redo brings it
+    // back there, as the rich editor's history does.
+    const anchor =
+      next && this.cellStart(changes.apply(this.view.state.doc), next)
     this.view.dispatch({
-      changes: result.changes,
+      changes,
+      ...(anchor === null || anchor === undefined
+        ? {}
+        : { selection: { anchor } }),
       annotations: [
         Transaction.userEvent.of('input.format'),
         isolateHistory.of('full'),
       ],
     })
     // Editing goes on in the cell the action leaves the caret in.
-    if (result.cell && this.dom.isConnected)
-      this.edit(
-        result.cell.line < 0 ? line : result.cell.line,
-        result.cell.column,
-        'start',
-      )
+    if (next && this.dom.isConnected) this.edit(next.line, next.column, 'start')
     else this.view.focus()
     return true
+  }
+
+  /** Where `edit` puts a caret at a cell's start in `doc`, the document with this table changed. */
+  private cellStart(doc: Text, { line, column }: Cell) {
+    const index = line === 1 ? 0 : line
+    const number = this.view.state.doc.lineAt(this.range().from).number + index
+    if (number > doc.lines) return null
+    const { from, text } = doc.line(number)
+    const start = this.widget.rowStart(index, text)
+    const span = cellSpan(
+      parseRow(text.slice(start), start),
+      column,
+      text.length,
+    )
+    return span
+      ? from + span.from + padding(text.slice(span.from, span.to)).start
+      : null
   }
 
   /** The source edit that deletes the table, with the blank line after it. */
@@ -3170,6 +3310,16 @@ export const contribution: FormattedContribution = {
       },
     }),
     tableEditing,
+    // CodeMirror scrolls to a block widget's bounds, which for a table is all
+    // of it: scrolling to a caret in a table, as after undo, shows its cell.
+    // Other handlers, as reading-position's, see the scroll first.
+    Prec.lowest(
+      EditorView.scrollHandler.of(
+        (view, range, { y }) =>
+          y === 'nearest' &&
+          (tableAt(view, range.head, true)?.scrollTo(range.head) ?? false),
+      ),
+    ),
     // Chromium drops typing and compositions over a selection that covers a
     // table widget or starts or ends inside one.
     composeCleared,

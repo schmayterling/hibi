@@ -3,8 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -14,7 +17,7 @@ import {
 } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-async function launchTargetProbe(t, engine) {
+async function launchTargetProbe(t) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-target-bridge-'))
   const folder = join(profile, 'installed-addons', 'target-probe')
   await mkdir(folder, { recursive: true })
@@ -29,7 +32,7 @@ async function launchTargetProbe(t, engine) {
       name: 'Target probe',
       description: 'Document target bridge test addon.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       defaultEnabled: true,
       startup: 'background',
@@ -108,8 +111,8 @@ async function launchTargetProbe(t, engine) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  if (engine === 'codemirror') page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, engine)
+  page.setDefaultTimeout(7000)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.waitForFunction(() => !!window.targetProbe)
   async function open(file) {
@@ -140,277 +143,8 @@ async function launchTargetProbe(t, engine) {
   return { app, page, first, second, open, openTarget }
 }
 
-test('installed addon edits inactive documents and guards deferred legacy commands', {
-  timeout: 60000,
-}, async (t) => {
-  const { app, page, first, second, open } = await launchTargetProbe(
-    t,
-    'tiptap',
-  )
-  await open(first)
-  await page.waitForFunction(() =>
-    window.targetProbe.list().some(({ name }) => name === 'first.md'),
-  )
-  const firstTarget = await page.evaluate(
-    () =>
-      window.targetProbe.list().find(({ name }) => name === 'first.md').target,
-  )
-  await open(second)
-  await page.waitForFunction(() =>
-    window.targetProbe.list().some(({ name }) => name === 'second.md'),
-  )
-  const source = await page.evaluate(
-    (target) => window.targetProbe.read(target),
-    firstTarget,
-  )
-  assert.equal(source.status, 'read')
-  assert.equal(source.source, '# one')
-  const result = await page.evaluate(
-    (target) =>
-      window.targetProbe.edit({
-        requestId: 'inactive-first',
-        target,
-        changes: [{ from: 2, to: 5, expectedText: 'one', insert: 'ONE' }],
-      }),
-    source.target,
-  )
-  assert.equal(result.status, 'applied')
-  const saved = await page.evaluate(
-    (target) => window.targetProbe.save(target),
-    { ...source.target, contentVersion: result.contentVersion },
-  )
-  assert.ok(['saved', 'clean'].includes(saved.status))
-  assert.equal(await readFile(first, 'utf8'), '# ONE')
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).name,
-    'second.md',
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '# two',
-  )
-  await page.getByRole('tab', { name: 'first.md' }).click()
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).markdown === '# ONE',
-    undefined,
-    { timeout: 30000 },
-  )
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
-  const richEdit = await page.evaluate((target) => {
-    const read = window.targetProbe.read(target)
-    return window.targetProbe.edit({
-      requestId: 'active-rich',
-      target: read.target,
-      changes: [{ from: 2, to: 5, expectedText: 'ONE', insert: 'One' }],
-    })
-  }, firstTarget)
-  assert.equal(richEdit.status, 'applied')
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '# One',
-  )
-  await page.getByRole('button', { name: 'Source view', exact: true }).click()
-  await page.waitForFunction(
-    () =>
-      document.querySelector(
-        '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content',
-      )?.isContentEditable,
-  )
-  const sourceEdit = await page.evaluate((target) => {
-    const read = window.targetProbe.read(target)
-    return window.targetProbe.edit({
-      requestId: 'active-source',
-      target: read.target,
-      changes: [{ from: 2, to: 5, expectedText: 'One', insert: 'ONE' }],
-    })
-  }, firstTarget)
-  assert.equal(sourceEdit.status, 'applied')
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '# ONE',
-  )
-
-  await app.evaluate(({ ipcMain }) => {
-    const channel = 'document:select-tab'
-    const select = ipcMain._invokeHandlers.get(channel)
-    ipcMain._invokeHandlers.set(channel, async (...args) => {
-      ipcMain._invokeHandlers.set(channel, select)
-      await new Promise((resolve) => {
-        globalThis.releaseTargetSelection = resolve
-      })
-      return select(...args)
-    })
-  })
-  await page.evaluate(() => window.targetProbe.begin())
-  await page.waitForFunction(() => window.targetProbe.started)
-  await page.getByRole('tab', { name: 'second.md' }).click()
-  await waitForAsync(app, () => !!globalThis.releaseTargetSelection)
-  const resumed = (async () => {
-    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-    await page.evaluate(() => window.targetProbe.release())
-  })()
-  try {
-    // The old source editor stays visible while the target tab is pending.
-    await page
-      .getByRole('textbox', { name: 'Markdown editor', exact: true })
-      .waitFor()
-    assert.equal(await page.locator('.app').getAttribute('aria-busy'), 'true')
-    const pending = await page.evaluate(async () => ({
-      document: await window.hibi.getDocument(),
-      result: window.targetProbe.result,
-    }))
-    assert.equal(pending.document.name, 'first.md')
-    assert.equal(pending.document.markdown, '# ONE')
-    assert.equal(pending.result, null)
-  } finally {
-    await app.evaluate(() => globalThis.releaseTargetSelection())
-    await resumed
-  }
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).name,
-    'second.md',
-  )
-  await page.waitForFunction(() => window.targetProbe.result !== null)
-  assert.match(
-    await page.evaluate(() => window.targetProbe.result),
-    /command target is no longer available/i,
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '# two',
-  )
-
-  await page.evaluate(() => window.targetProbe.begin())
-  await page.waitForFunction(() => window.targetProbe.started)
-  await page.evaluate(() => window.targetProbe.release())
-  await page.waitForFunction(() => window.targetProbe.result !== null)
-  assert.equal(await page.evaluate(() => window.targetProbe.result), 'applied')
-  await waitForAsync(
-    page,
-    async () =>
-      (await window.hibi.getDocument()).markdown === '# two\nfrom command',
-    undefined,
-    { timeout: 30000 },
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '# two\nfrom command',
-  )
-
-  await page.evaluate(() => window.targetProbe.sync())
-  await waitForAsync(
-    page,
-    async () =>
-      (await window.hibi.getDocument()).markdown ===
-      '# two\nfrom command\nfrom sync command',
-    undefined,
-    { timeout: 30000 },
-  )
-  await page.evaluate(() => window.targetProbe.background())
-  await waitForAsync(
-    page,
-    async () =>
-      (await window.hibi.getDocument()).markdown ===
-      '# two\nfrom command\nfrom sync command\nfrom background',
-    undefined,
-    { timeout: 30000 },
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '# two\nfrom command\nfrom sync command\nfrom background',
-  )
-
-  await page.getByRole('tab', { name: 'first.md' }).click()
-  await page.getByRole('button', { name: 'normal', exact: true }).click()
-  await page.waitForFunction(
-    () =>
-      document.querySelector('.editor-panes.mode-normal .tiptap')
-        ?.isContentEditable,
-  )
-  const secondId = await page
-    .getByRole('tab', { name: 'second.md' })
-    .evaluate((tab) => tab.closest('[data-tab-key]').dataset.tabKey)
-  await splitTab(app, page, secondId)
-  const left = page.locator('.editor-page[data-side="left"]')
-  const right = page.locator('.editor-page[data-side="right"]')
-  const leftRich = left.locator('.rich-pane .tiptap')
-  await leftRich.waitFor()
-  await right.locator('.rich-pane .tiptap').waitFor()
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector('.editor-page[data-side="right"]')
-        ?.getAttribute('data-active') === 'true',
-  )
-  assert.equal(await left.locator('.source-pane[inert] .cm-content').count(), 1)
-  assert.equal(await leftRich.getAttribute('contenteditable'), 'true')
-  const inactiveRichEdit = await page.evaluate((target) => {
-    const read = window.targetProbe.read(target)
-    return window.targetProbe.edit({
-      requestId: 'inactive-mounted-rich',
-      target: read.target,
-      changes: [{ from: 2, to: 5, expectedText: 'ONE', insert: 'Uno' }],
-    })
-  }, firstTarget)
-  assert.equal(inactiveRichEdit.status, 'applied')
-  assert.match(await leftRich.innerText(), /Uno/)
-  assert.equal(await right.getAttribute('data-active'), 'true')
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).name,
-    'second.md',
-  )
-
-  await leftRich.click()
-  await waitForAsync(
-    page,
-    async () =>
-      document
-        .querySelector('.editor-page[data-side="left"]')
-        ?.getAttribute('data-active') === 'true' &&
-      (await window.hibi.getDocument()).name === 'first.md',
-    undefined,
-    { timeout: 30000 },
-  )
-  await page.getByRole('button', { name: 'side-by-side', exact: true }).click()
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector(
-          '.editor-page[data-side="left"] .editor-panes.mode-side-by-side',
-        )
-        ?.getAttribute('data-source-ready') === 'true',
-  )
-  assert.equal(await left.locator('.source-pane[inert]').count(), 0)
-  assert.equal(await leftRich.getAttribute('contenteditable'), 'false')
-  await leftRich.focus()
-  assert.equal(
-    await leftRich.evaluate((element) => element === document.activeElement),
-    true,
-  )
-  const previewFocusedSourceEdit = await page.evaluate((target) => {
-    const read = window.targetProbe.read(target)
-    return window.targetProbe.edit({
-      requestId: 'preview-focused-mounted-source',
-      target: read.target,
-      changes: [{ from: 2, to: 5, expectedText: 'Uno', insert: 'ONE' }],
-    })
-  }, firstTarget)
-  assert.equal(previewFocusedSourceEdit.status, 'applied')
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '# ONE',
-  )
-  assert.equal(
-    await leftRich.evaluate((element) => element === document.activeElement),
-    true,
-  )
-})
-
-// The installed API 2 bridge is shared by engines; keep its native CM contracts
-// independent so a formatted adapter failure cannot hide source or command guards.
+// Each target contract is its own test, so a formatted adapter failure cannot
+// hide source or command guards.
 const targetWord = (page, target, requestId, expectedText, insert) =>
   page.evaluate(
     ({ target, requestId, expectedText, insert }) => {
@@ -430,13 +164,10 @@ const acceptedMarkdown = (page) =>
     return (await window.hibi.getDocument()).markdown
   })
 
-test('codemirror: inactive addon target edits save exact source without changing active input or focus', {
+test('inactive addon target edits save exact source without changing active input or focus', {
   timeout: 60000,
 }, async (t) => {
-  const { app, page, first, second, openTarget } = await launchTargetProbe(
-    t,
-    'codemirror',
-  )
+  const { app, page, first, second, openTarget } = await launchTargetProbe(t)
   const target = await openTarget(first)
   await openTarget(second)
   const rich = page.getByRole('textbox', {
@@ -493,13 +224,10 @@ test('codemirror: inactive addon target edits save exact source without changing
   )
 })
 
-test('codemirror: active formatted addon target edits keep canonical source and native history', {
+test('active formatted addon target edits keep canonical source and native history', {
   timeout: 60000,
 }, async (t) => {
-  const { app, page, first, openTarget } = await launchTargetProbe(
-    t,
-    'codemirror',
-  )
+  const { app, page, first, openTarget } = await launchTargetProbe(t)
   const target = await openTarget(first)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
@@ -528,13 +256,10 @@ test('codemirror: active formatted addon target edits keep canonical source and 
   assert.equal(await acceptedMarkdown(page), '# One')
 })
 
-test('codemirror: active source addon target edits keep the native source and its history', {
+test('active source addon target edits keep the native source and its history', {
   timeout: 60000,
 }, async (t) => {
-  const { app, page, first, openTarget } = await launchTargetProbe(
-    t,
-    'codemirror',
-  )
+  const { app, page, first, openTarget } = await launchTargetProbe(t)
   const target = await openTarget(first)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -565,13 +290,10 @@ test('codemirror: active source addon target edits keep the native source and it
   assert.equal(await acceptedMarkdown(page), '# ONE')
 })
 
-test('codemirror: a deferred legacy command rejects a target switched while tab selection is pending', {
+test('a deferred legacy command rejects a target switched while tab selection is pending', {
   timeout: 60000,
 }, async (t) => {
-  const { app, page, first, second, openTarget } = await launchTargetProbe(
-    t,
-    'codemirror',
-  )
+  const { app, page, first, second, openTarget } = await launchTargetProbe(t)
   await openTarget(first)
   await openTarget(second)
   await page.getByRole('tab', { name: 'first.md', exact: true }).click()
@@ -625,13 +347,10 @@ test('codemirror: a deferred legacy command rejects a target switched while tab 
   assert.equal(await acceptedMarkdown(page), '# two')
 })
 
-test('codemirror: same-target deferred, synchronous and background legacy commands apply exact source', {
+test('same-target deferred, synchronous and background legacy commands apply exact source', {
   timeout: 60000,
 }, async (t) => {
-  const { app, page, second, openTarget } = await launchTargetProbe(
-    t,
-    'codemirror',
-  )
+  const { app, page, second, openTarget } = await launchTargetProbe(t)
   await openTarget(second)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -673,19 +392,18 @@ test('codemirror: same-target deferred, synchronous and background legacy comman
     await acceptedMarkdown(page),
     '# two\nfrom command\nfrom sync command\nfrom background',
   )
-  assert.equal(
-    await source.evaluate((element) => element === document.activeElement),
-    true,
+  // Each update remounts the editor; the new source view takes focus back.
+  await page.waitForFunction(() =>
+    document.activeElement?.matches(
+      '.source-pane .cm-content[aria-label="Markdown editor"]',
+    ),
   )
 })
 
-test('codemirror: mounted inactive target edits keep the other document and its native focus', {
+test('mounted inactive target edits keep the other document and its native focus', {
   timeout: 60000,
 }, async (t) => {
-  const { app, page, first, second, openTarget } = await launchTargetProbe(
-    t,
-    'codemirror',
-  )
+  const { app, page, first, second, openTarget } = await launchTargetProbe(t)
   const target = await openTarget(first)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
@@ -742,13 +460,10 @@ test('codemirror: mounted inactive target edits keep the other document and its 
   )
 })
 
-test('codemirror: split-focused target edits retain native focus in the editable formatted pane', {
+test('split-focused target edits retain native focus in the editable formatted pane', {
   timeout: 60000,
 }, async (t) => {
-  const { app, page, first, second, openTarget } = await launchTargetProbe(
-    t,
-    'codemirror',
-  )
+  const { app, page, first, second, openTarget } = await launchTargetProbe(t)
   const target = await openTarget(first)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })

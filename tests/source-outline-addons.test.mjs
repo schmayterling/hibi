@@ -163,14 +163,13 @@ test('outline grammar follows addon syntax and refuses only block syntax it cann
     detect: () => false,
     ...extra,
   })
-  const grammar = (flavors, projections = [], legacy = true) =>
-    sourceOutlineGrammar(flavors, projections, { origin, legacy })
+  const grammar = (flavors, projections = []) =>
+    sourceOutlineGrammar(flavors, projections, { origin })
   const github = flavor('markdown', 'github', { markedOptions: { gfm: true } })
   const typst = {
     ...typstFlavor,
     id: 'typst.blocks',
     addonId: 'typst',
-    richExtensions: [{ name: 'typstBlock', config: {} }],
     export: { extensions: [typstTokens] },
   }
   const frontmatter = { id: 'frontmatter.metadata', addonId: 'frontmatter' }
@@ -199,58 +198,28 @@ test('outline grammar follows addon syntax and refuses only block syntax it cann
     export: {
       extensions: [{ extensions: [{ name: 'mark', level: 'inline' }] }],
     },
-    richExtensions: [
-      {
-        config: {},
-        parent: { config: { markdownTokenizer: { level: 'inline' } } },
-      },
-    ],
   })
   const extended = grammar([github, notes, inline])
   assert.deepEqual(extended.blocked, [])
   assert.deepEqual(extended.syntax, [notes])
   assert.deepEqual(extended.labels, ['markdown.github'])
 
-  // Block syntax only the visual editor reads is refused, by owner.
+  // The formatted view reads only Lezer syntax, like the outline, so export-only block syntax leaves it.
   const marked = flavor('fixture-marked', 'blocks', {
     export: { extensions: [{ extensions: [{ name: 'box', level: 'block' }] }] },
-  })
-  const tiptap = flavor('fixture-tiptap', 'blocks', {
-    richExtensions: [
-      {
-        config: {},
-        parent: { config: { markdownTokenizer: { level: 'block' } } },
-      },
-    ],
   })
   const override = flavor('fixture-override', 'headings', {
     export: { extensions: [{ tokenizer: { heading: () => undefined } }] },
   })
-  assert.deepEqual(grammar([github, marked, tiptap, override]).blocked, [
-    'fixture-marked',
-    'fixture-tiptap',
-    'fixture-override',
-  ])
-  // The formatted view reads only Lezer syntax, like the outline.
-  assert.deepEqual(grammar([marked, tiptap], [], false).blocked, [])
-  // A local copy cannot authorize Typst's shared fence tokenizer override.
+  assert.deepEqual(grammar([github, marked, override]).blocked, [])
+  // So a local Typst copy's fence tokenizer override leaves it unchanged too.
   origins.typst = 'local'
-  assert.deepEqual(grammar([typst]).blocked, ['typst'])
-  // A matching id cannot authorize an actual block grammar override.
-  assert.deepEqual(
-    grammar([
-      {
-        ...typst,
-        export: { extensions: [{ tokenizer: { fences: () => undefined } }] },
-      },
-    ]).blocked,
-    ['typst'],
-  )
+  assert.deepEqual(grammar([typst]).blocked, [])
   origins.typst = 'built-in'
 
   // Projections other than built-in frontmatter hide part of the source.
   const projection = { id: 'fixture-toml.metadata', addonId: 'fixture-toml' }
-  assert.deepEqual(grammar([], [frontmatter, projection], false).blocked, [
+  assert.deepEqual(grammar([], [frontmatter, projection]).blocked, [
     'fixture-toml',
   ])
 })

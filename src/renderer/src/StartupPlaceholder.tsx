@@ -1,6 +1,6 @@
 import type { RecentWorkspace } from '../../shared/workspace'
 import { Button } from '../../ui/Controls'
-import type { ViewMode } from './Editor'
+import type { ViewMode } from './FormattedEditor'
 import './startup-placeholder.css'
 
 export function StartupPlaceholder({

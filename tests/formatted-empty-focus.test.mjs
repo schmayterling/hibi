@@ -30,9 +30,6 @@ for (const action of ['backspace', 'cut', 'cut shortcut', 'type in empty']) {
     })
     const page = await app.firstWindow()
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     const cdp = await page.context().newCDPSession(page)

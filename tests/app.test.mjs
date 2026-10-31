@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { crashAndReload, electron, showTestWindows } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  crashAndReload,
+  electron,
+  showTestWindows,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const { version: appVersion } = JSON.parse(
@@ -29,7 +31,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
   const page = await app.firstWindow()
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   t.diagnostic(
     `launch to ready content: ${Math.round(performance.now() - started)} ms`,
@@ -115,9 +117,11 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'readDocumentMedia',
         'resolveDocumentMedia',
         'cancelDocumentMedia',
+        'refreshRemoteImage',
         'onDocumentMediaScopeChanged',
         'openDroppedFile',
         'getInstalledAddons',
+        'getOutdatedAddons',
         'getAddonDirectory',
         'installDirectoryAddon',
         'onAddonGardenRequest',
@@ -374,13 +378,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
       await app.context().setOffline(true)
       await page.reload()
       await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-      await page
-        .locator(
-          t.formattedEngine === 'tiptap'
-            ? '.rich-pane .tiptap'
-            : '.rich-pane .hibi-formatted .cm-content',
-        )
-        .waitFor()
+      await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
       await app.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0]
         window.unmaximize()

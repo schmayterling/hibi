@@ -4,15 +4,19 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { tableKey } from '../src/renderer/src/table-layout-store.ts'
-import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { waitForAsync } from './poll.mjs'
+
+// The layout entry the removed rich editor stored after the drags, recorded
+// (on macOS) before its removal.
+const recorded = frozenOracle('formatted-table-sizes')
 
 const markdown =
   '# Sizes\n\n| Name | Notes |\n| --- | --- |\n| one | first row |\n| two | second row |\n'
 
 /** Open the workspace's note in a fresh app on `profile`. */
-async function openNote(root, profile, apps, engine) {
+async function openNote(root, profile, apps) {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -24,7 +28,7 @@ async function openNote(root, profile, apps, engine) {
   }, root)
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() => window.hibi.openWorkspace())
   await page.getByRole('button', { name: 'Toggle workspace sidebar' }).click()
   await page.getByRole('treeitem', { name: 'note.md' }).click()
@@ -50,7 +54,7 @@ async function drag(page, cell, axis, distance, handle) {
 const stored = async (layout) =>
   JSON.parse(await readFile(layout, 'utf8')).documents['note.md']?.tables ?? []
 
-test('formatted tables show and resize the column and row sizes the rich editor stores', {
+test('formatted tables show and resize the column and row sizes the rich editor stored', {
   timeout: 120000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-table-sizes-'))
@@ -66,43 +70,20 @@ test('formatted tables show and resize the column and row sizes the rich editor 
   })
   const profile = join(folder, 'profile')
 
-  // Sizes set in the rich editor.
-  let page = await openNote(root, profile, apps, 'tiptap')
-  const rich = page.locator('.tiptap table')
-  await rich.getByText('first row').waitFor()
-  await drag(
-    page,
-    rich.locator('th').first(),
-    'column',
-    80,
-    (axis) => `.tiptap[data-table-resize="${axis}"]`,
+  // Sizes set in the rich editor: the first column dragged 80px wider and
+  // the first body row 40px taller.
+  const richEntry = recorded({ markdown, drags: { column: 80, row: 40 } })
+  await mkdir(join(root, '.hibi'))
+  await writeFile(
+    layout,
+    JSON.stringify({
+      version: 1,
+      documents: { 'note.md': { tables: [richEntry] } },
+    }),
   )
-  await drag(
-    page,
-    rich.locator('tr').nth(1).locator('td').first(),
-    'row',
-    40,
-    (axis) => `.tiptap[data-table-resize="${axis}"]`,
-  )
-  await waitForAsync(
-    page,
-    async () =>
-      (
-        await window.hibi.readTableLayout(
-          (
-            await window.hibi.getDocument()
-          ).tabId,
-        )
-      )?.length === 1,
-  )
-  const [richEntry] = await stored(layout)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await apps.pop().close()
 
   // The formatted view finds them by the table's key.
-  page = await openNote(root, profile, apps, 'codemirror')
+  const page = await openNote(root, profile, apps)
   const table = page.locator('.rich-pane .hibi-lp-table')
   await table.getByText('first row').waitFor()
   const measure = () =>
@@ -193,7 +174,7 @@ test('formatted tables show and resize the column and row sizes the rich editor 
   )
 })
 
-test('the rich editor stores only the tables it changes', {
+test('the formatted view stores only the tables it changes', {
   timeout: 120000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-rich-table-updates-'))
@@ -219,9 +200,9 @@ test('the rich editor stores only the tables it changes', {
     for (const app of apps) await app.close()
     await rm(folder, { recursive: true, force: true })
   })
-  const page = await openNote(root, join(folder, 'profile'), apps, 'tiptap')
-  const rich = page.locator('.tiptap table')
-  await rich.nth(1).getByText('3').waitFor()
+  const page = await openNote(root, join(folder, 'profile'), apps)
+  const views = page.locator('.rich-pane .hibi-lp-table')
+  await views.nth(1).getByText('3').waitFor()
   // Another view or window stores a new width for the first table.
   await page.evaluate(async (key) => {
     const { tabId } = await window.hibi.getDocument()
@@ -240,14 +221,14 @@ test('the rich editor stores only the tables it changes', {
       set: [{ key, axis: 'row', index: 1, size: 90 }],
     })
   }, second)
-  // The rich editor resizes the second table: its save keeps the first's
+  // The formatted view resizes the second table: its save keeps the first's
   // width and the second's row height.
   await drag(
     page,
-    rich.nth(1).locator('th').first(),
+    views.nth(1).locator('th').first(),
     'column',
     40,
-    (axis) => `.tiptap[data-table-resize="${axis}"]`,
+    (axis) => `.hibi-lp-table[data-table-resize="${axis}"]`,
   )
   await waitForAsync(
     page,

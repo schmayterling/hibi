@@ -1,20 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getSchema } from '@tiptap/core'
-import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
-import { TableKit } from '@tiptap/extension-table'
-import { MarkdownManager } from '@tiptap/markdown'
 import { Marked } from 'marked'
 import {
   blockMath,
   inlineMath,
   mathFlavor,
   mathTokens,
-  richInlineMath,
 } from '../src/addons/math/syntax.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
-import { markdownSerializer } from '../src/renderer/src/markdown-serialization.ts'
-import { preserveRichSource } from '../src/renderer/src/rich-source-preservation.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 
 const fixtures = [
@@ -62,50 +54,6 @@ const fixtures = [
   ['`$$x$$`', 0],
   ['```tex\n$$x$$\n```', 0],
 ]
-
-function mathParser(gfm = false) {
-  const extensions = [InlineMath, BlockMath].map((extension) => {
-    const syntax = mathTokens.extensions.find(
-      ({ name }) => name === extension.name,
-    )
-    // As in the app, the rich editor keeps its own inline math rule.
-    const tokenize =
-      extension === InlineMath ? richInlineMath : syntax.tokenizer
-    return extension.extend({
-      parseMarkdown(token, helpers) {
-        return token.display
-          ? helpers.createTextNode(
-              (token.raw ?? '').replace(/[ \t]*\n[ \t]*/g, ' '),
-            )
-          : this.parent?.(token, helpers)
-      },
-      markdownTokenizer: {
-        name: syntax.name,
-        level: syntax.level,
-        start: syntax.start,
-        tokenize,
-      },
-    })
-  })
-  const { parser, options, core, addons } = markdownConfiguration([
-    {
-      ...mathFlavor,
-      id: 'math.latex',
-      markedOptions: { gfm },
-      richExtensions: [...extensions, ...(gfm ? [TableKit] : [])],
-      export: { extensions: [mathTokens] },
-    },
-  ])
-  const all = [...core, ...addons]
-  return {
-    schema: getSchema(all),
-    manager: new MarkdownManager({
-      extensions: all,
-      marked: parser,
-      markedOptions: options,
-    }),
-  }
-}
 
 test('display math blocks start only at line boundaries in visual and source tokenizers', () => {
   const visual = new Marked(mathTokens)
@@ -164,169 +112,42 @@ test('display math start hints and tokenizer agree on indentation and real newli
   assert.equal(inlineMath('$x$')?.latex, 'x')
 })
 
-test('math paragraphs retain literal text without inserted line breaks', () => {
-  const { manager, schema } = mathParser()
-  for (const source of [
-    'text $$x$$',
-    'text $$x$$ more',
-    'x$$x$$',
-    '$5 and $$10',
-    '\\$\\$x\\$\\$',
-    'text $$x$y$$ more',
-    'text $$ $$ more',
-    // Line breaks read as spaces, as in the text around them.
-    'text $$x\n  +y$$ more',
-  ]) {
-    const doc = schema.nodeFromJSON(manager.parse(source))
-    assert.equal(doc.childCount, 1, source)
-    assert.equal(doc.firstChild.type.name, 'paragraph', source)
-    assert.equal(
-      doc.textContent,
-      source.replaceAll('\\$', '$').replace(/[ \t]*\n[ \t]*/g, ' '),
-      source,
-    )
-  }
-})
-
-test('full and cached math serialization preserve literal dollars and equations', async (t) => {
-  const parsers = [mathParser(), mathParser(true)]
-  for (const source of [
-    '\\$$x$$',
-    '\\$x$',
-    '$5 and $10',
-    'a \\$ b',
-    'text $$x$$',
-    'text $$x$$ more',
-    '$$x$$ more',
-    'text  \n\\$$x$$',
-    '> \\$$x$$',
-    '- \\$$x$$',
-    '\\# \\$x$',
-    '**\\$x$**',
-    '\\$**x**$',
-    '[\\$x$](https://example.com/$y$)',
-    '`$x$`',
-    '`$x$` and \\$x$',
-    '| \\$x$ | `$y$` |\n| --- | --- |\n| $z$ | $5 and $10 |',
-    '```tex\n$x$\n```',
-    '$x$ and \\$x$',
-    '\\$x$ and $x$',
-    '$x$\\$',
-    '\\$$x$',
-    '\\$5 or \\$y$ total',
-    '\\$$$x$',
-    'a \\$5 then \\$x$ more',
-    '$x$ and $5 and $10',
-    '$x+y$ and $$z$$',
-    '$$x$$',
-    '$$\nx+y\n$$',
-    '\uE0000\uE001 \\$x$ \uE000\uE0000\uE001',
-    'a $$x\n+y$$ b',
-    'a $$ $$ b',
-    'a $$x$y$$ b',
-    'a $$$$ b',
-    'a $$x\\\n+y$$ b',
-    '> a $$x\n> +y$$ b',
-    '\\$$x\n+y$$',
-  ]) {
-    await t.test(JSON.stringify(source), () => {
-      for (const { manager, schema } of parsers) {
-        const doc = schema.nodeFromJSON(manager.parse(source))
-        doc.check()
-        for (const blockLocal of [false, true]) {
-          const saved = markdownSerializer(manager, blockLocal)(doc).source
-          const reparsed = schema.nodeFromJSON(manager.parse(saved))
-          assert.equal(reparsed.textContent, doc.textContent, saved)
-          assert.ok(reparsed.eq(doc), saved)
-          assert.ok(!saved.includes('&NewLine;'), saved)
-          if (source.includes('$5 and $10'))
-            assert.ok(saved.includes('$5 and $10'), saved)
-          if (source.includes('`$x$`'))
-            assert.ok(saved.includes('`$x$`'), saved)
-        }
-      }
-    })
-  }
-})
-
-test('table cells escape literal double dollars for display-aware exports', () => {
-  const { manager, schema } = mathParser(true)
-  const doc = schema.nodeFromJSON(
-    manager.parse('| \\$\\$x\\$\\$ |\n| --- |\n| $x$ |'),
-  )
-  for (const blockLocal of [false, true]) {
-    const saved = markdownSerializer(manager, blockLocal)(doc).source
-    assert.ok(saved.includes('| \\$\\$x\\$\\$ |'), saved)
-    assert.ok(schema.nodeFromJSON(manager.parse(saved)).eq(doc), saved)
-  }
-})
-
 test('literal double dollars stay literal after rich serialization and export', () => {
-  const { manager, schema } = mathParser(true)
   const parser = markdownSourceParser({ gfm: true, math: true })
-  for (const source of [
-    String.raw`before \$\$x\$\$ after`,
-    '| \\$\\$x\\$\\$ |\n| --- |',
-    'before \\$\\$x\n+y\\$\\$ after',
-    String.raw`before \$$ $$ after`,
-    String.raw`before \$$$$ after`,
-    String.raw`before \$\$ x $y\$\$ after`,
-  ]) {
-    const doc = schema.nodeFromJSON(manager.parse(source))
-    for (const blockLocal of [false, true]) {
-      const saved = markdownSerializer(manager, blockLocal)(doc).source
+  // The source the rich editor saved for each note with the GitHub and math
+  // flavors, in full and block-local serialization.
+  for (const [source, saved] of Object.entries({
+    'before \\$\\$x\\$\\$ after': [
+      'before \\$\\$x\\$\\$ after',
+      'before \\$\\$x\\$\\$ after',
+    ],
+    '| \\$\\$x\\$\\$ |\n| --- |': [
+      '\n| \\$\\$x\\$\\$ |\n| --------- |\n',
+      '\n| \\$\\$x\\$\\$ |\n| --------- |\n',
+    ],
+    'before \\$\\$x\n+y\\$\\$ after': [
+      'before \\$\\$x +y\\$\\$ after',
+      'before \\$\\$x +y\\$\\$ after',
+    ],
+    'before \\$$ $$ after': [
+      'before \\$\\$ \\$\\$ after',
+      'before \\$\\$ \\$\\$ after',
+    ],
+    'before \\$$$$ after': [
+      'before \\$\\$\\$\\$ after',
+      'before \\$\\$\\$\\$ after',
+    ],
+    'before \\$\\$ x $y\\$\\$ after': [
+      'before $$ x $y\\$\\$ after',
+      'before $$ x $y\\$\\$ after',
+    ],
+  }))
+    for (const text of saved) {
       let formulas = 0
-      parser.walkTokens(parser.lexer(saved), (token) => {
+      parser.walkTokens(parser.lexer(text), (token) => {
         if (token.type === 'inlineMath' || token.type === 'blockMath')
           formulas++
       })
-      assert.equal(formulas, 0, saved)
+      assert.equal(formulas, 0, JSON.stringify({ source, text }))
     }
-  }
-})
-
-test('math-disabled serialization leaves dollar signs unchanged', () => {
-  const { core, parser, options } = markdownConfiguration([])
-  const manager = new MarkdownManager({
-    extensions: core,
-    marked: parser,
-    markedOptions: options,
-  })
-  for (const source of ['$x$', '$$x$$', '$5 and $10'])
-    assert.equal(manager.serialize(manager.parse(source)), source)
-})
-
-test('math round-trips preserve bytes through unrelated rich edits', () => {
-  const { manager, schema } = mathParser()
-  for (const [fixture, expected] of fixtures) {
-    for (const eol of ['\n', '\r\n']) {
-      for (const ending of ['', eol]) {
-        const source = `${fixture}\n\nanchor`.replaceAll('\n', eol) + ending
-        const doc = schema.nodeFromJSON(manager.parse(source))
-        doc.check()
-        let blocks = 0
-        doc.descendants((node) => {
-          if (node.type.name === 'blockMath') blocks++
-        })
-        assert.equal(blocks, expected, source)
-        const before = manager.serialize(doc.toJSON())
-        assert.equal(
-          preserveRichSource(source, before, before, (candidate) =>
-            schema.nodeFromJSON(manager.parse(candidate)).eq(doc),
-          ),
-          source,
-        )
-        const changed = structuredClone(doc.toJSON())
-        changed.content.at(-1).content[0].text = 'changed'
-        const next = schema.nodeFromJSON(changed)
-        const after = manager.serialize(changed)
-        assert.equal(
-          preserveRichSource(source, before, after, (candidate) =>
-            schema.nodeFromJSON(manager.parse(candidate)).eq(next),
-          ),
-          source.replace('anchor', 'changed'),
-        )
-      }
-    }
-  }
 })

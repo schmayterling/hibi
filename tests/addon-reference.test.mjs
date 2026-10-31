@@ -131,7 +131,7 @@ test('development guide examples parse and the sample theme validates', async ()
       if (token.lang === 'json') {
         const manifest = JSON.parse(token.text)
         if ('id' in manifest && manifest.type !== 'hibi-addon-signature') {
-          assert.equal(manifest.apiVersion, 2)
+          assert.equal(manifest.apiVersion, 3)
           assert.ok(manifest.version)
         }
         if (manifest.themes) manifest.themes.forEach(defineColorscheme)

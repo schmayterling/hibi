@@ -7,8 +7,13 @@ import test from 'node:test'
 import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
-import { after, before, electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { after, before, electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  defaultPane,
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const note = `# Formatted view parity
@@ -106,6 +111,10 @@ closing paragraph.
 `
 
 let app, folder, page, harness, server
+// What the formatted view drew while it matched the removed rich view, and
+// the rich view's own styles for the compared text.
+const check = frozenSnapshot('live-preview')
+const richStyle = frozenOracle('live-preview-rich')
 
 const palette = (id) => {
   const scheme = bundledColorschemes.find((entry) => entry.id === id)
@@ -126,6 +135,13 @@ const applyPalette = (target, scheme) =>
     style.textContent = css
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, scheme)
 
 before(
@@ -187,12 +203,13 @@ before(
       args: [
         resolve('.'),
         '--disable-lcd-text',
+        '--force-device-scale-factor=1',
         `--user-data-dir=${join(folder, 'profile')}`,
       ],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await selectFormattedEngine(app, page, 'tiptap')
+    await waitForDocumentEditor(app, page)
     await open(file, 'Formatted view parity')
     const size = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getContentSize(),
@@ -225,7 +242,7 @@ before(
   },
   { timeout: 90000 },
 )
-/** Open a note in the app's rich view. */
+/** Open a note in the app's formatted view. */
 async function open(file, title) {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({
@@ -251,7 +268,7 @@ async function open(file, title) {
       },
       [process.platform === 'darwin' ? 'meta' : 'control'],
     )
-  await page.locator('.tiptap h1', { hasText: title }).waitFor()
+  await page.locator('.rich-pane .hibi-lp-h1', { hasText: title }).waitFor()
 }
 
 after(
@@ -266,12 +283,12 @@ after(
   { timeout: 30000 },
 )
 
-/** Computed styles and text geometry for matching elements in both editors. */
+/** Computed styles and text geometry for matching elements. */
 const sample = (target, selectors, title) =>
   target.evaluate(
     ({ selectors, title }) => {
       const root = [...document.querySelectorAll('.rich-pane')].find((pane) =>
-        pane.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+        pane.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
       const pane = root.getBoundingClientRect()
       const textBox = (element, text) => {
@@ -294,11 +311,12 @@ const sample = (target, selectors, title) =>
         range.setStart(...point(index))
         range.setEnd(...point(index + text.length))
         const box = range.getBoundingClientRect()
+        const round = (value) => Math.round(value * 10) / 10
         return {
-          width: box.width,
-          left: box.left - pane.left,
-          top: box.top - pane.top,
-          height: box.height,
+          width: round(box.width),
+          left: round(box.left - pane.left),
+          top: round(box.top - pane.top),
+          height: round(box.height),
         }
       }
       return Object.fromEntries(
@@ -328,25 +346,6 @@ const sample = (target, selectors, title) =>
     { selectors, title },
   )
 
-const rich = {
-  title: { selector: '.tiptap h1', text: 'Formatted view parity' },
-  paragraph: { selector: '.tiptap p', text: 'A paragraph with' },
-  second: { selector: '.tiptap p', text: 'It continues' },
-  bold: { selector: '.tiptap strong', text: 'bold' },
-  italic: { selector: '.tiptap em', text: 'italic' },
-  struck: { selector: '.tiptap s', text: 'struck' },
-  code: { selector: '.tiptap p code', text: 'inline code' },
-  link: { selector: '.tiptap a', text: 'link' },
-  lists: { selector: '.tiptap h2', text: 'Lists' },
-  item: { selector: '.tiptap li', text: 'first item' },
-  nested: { selector: '.tiptap li li', text: 'nested item' },
-  ordered: { selector: '.tiptap ol li', text: 'two' },
-  quote: { selector: '.tiptap blockquote p', text: 'A quote' },
-  block: { selector: '.tiptap pre code', text: 'const answer' },
-  third: { selector: '.tiptap h3', text: 'Third level' },
-  closing: { selector: '.tiptap p', text: 'Closing paragraph' },
-  after: { selector: '.tiptap p', text: 'After the rule' },
-}
 const formatted = {
   title: { selector: '.hibi-lp-h1', text: 'Formatted view parity' },
   paragraph: { selector: '.cm-line', text: 'A paragraph with' },
@@ -367,69 +366,145 @@ const formatted = {
   after: { selector: '.cm-line', text: 'After the rule' },
 }
 
-/** Compare a note in the rich view and the formatted view: styles, text positions and pixels. */
-async function parity(title, doc, rich, formatted, name) {
-  const richPane = page.locator('.rich-pane', {
-    has: page.locator('.tiptap h1', { hasText: title }),
-  })
-  const pane = await richPane.evaluate((element) => {
-    const box = element.getBoundingClientRect()
-    return { width: box.width, height: box.height }
-  })
+/**
+ * What a pane draws in place of its pixels: each line's and inline
+ * element's tag, classes and paint, and its box in the pane. Colors are per
+ * color scheme; the rest is the same in both.
+ */
+const drawing = (target, title) =>
+  target.evaluate((title) => {
+    const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+      root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
+    )
+    const origin = pane.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
+    const sides = ['Top', 'Right', 'Bottom', 'Left']
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft']
+    const result = { drawn: [], paint: [], boxes: [] }
+    for (const element of pane.querySelectorAll(
+      '.cm-content > *, .cm-content > * *',
+    )) {
+      const style = getComputedStyle(element)
+      const before = getComputedStyle(element, '::before')
+      const edges = sides.filter(
+        (side) => style[`border${side}Style`] !== 'none',
+      )
+      const radius = corners.map((corner) => style[`border${corner}Radius`])
+      const listed = style.display === 'list-item'
+      const painted = !['none', 'normal'].includes(before.content)
+      result.drawn.push({
+        element: [
+          element.tagName.toLowerCase(),
+          ...[...element.classList]
+            .filter((name) => !/^cm-(active|focused)/.test(name))
+            .sort(),
+        ].join('.'),
+        display: style.display,
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        verticalAlign: style.verticalAlign,
+        textDecorationLine: style.textDecorationLine,
+        opacity: style.opacity,
+        ...(listed && { listStyleType: style.listStyleType }),
+        ...(edges.length && {
+          borders: edges.map(
+            (side) =>
+              `${side} ${style[`border${side}Width`]} ${style[`border${side}Style`]}`,
+          ),
+        }),
+        ...(radius.some((value) => value !== '0px') && {
+          radius: radius.join(' '),
+        }),
+        ...(painted && {
+          before: [
+            before.content,
+            before.top,
+            before.right,
+            before.bottom,
+            before.left,
+          ].join(' '),
+        }),
+      })
+      result.paint.push({
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        ...(style.backgroundImage !== 'none' && {
+          backgroundImage: style.backgroundImage,
+        }),
+        ...(edges.length && {
+          borders: edges.map((side) => style[`border${side}Color`]),
+        }),
+        ...(style.textDecorationLine !== 'none' && {
+          decoration: style.textDecorationColor,
+        }),
+        ...(listed && {
+          marker: getComputedStyle(element, '::marker').color,
+        }),
+        ...(painted && {
+          before: `${before.backgroundColor} ${before.backgroundImage}`,
+        }),
+      })
+      const box = element.getBoundingClientRect()
+      result.boxes.push([
+        round(box.left - origin.left),
+        round(box.top - origin.top),
+        round(box.width),
+        round(box.height),
+      ])
+    }
+    return result
+  }, title)
+
+/**
+ * Check a note in the formatted view against the rich view's recorded styles
+ * for the compared text, and against the text positions and drawing the
+ * formatted view recorded while it matched the rich view within a pixel.
+ */
+async function parity(title, doc, formatted, name) {
   await harness.evaluate(
     ({ doc, pane }) => window.livePreview.mount(doc, pane),
-    { doc, pane },
+    { doc, pane: defaultPane },
   )
-  // The panes scroll alike: where scrollbars take space, as on Linux and
-  // Windows, the app's thin scrollbar is in both screenshots.
+  // The panes scroll alike, in the app's scrollbar colors. Both hide their
+  // scrollbars while geometry is read (overlayScrollbars).
   const scrolling = (target) =>
     target.evaluate((title) => {
       const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
-        root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+        root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
       const style = getComputedStyle(pane)
       return {
         overflowY: style.overflowY,
-        scrollbarWidth: style.scrollbarWidth,
         scrollbarColor: style.scrollbarColor,
       }
     }, title)
-  const report = []
   for (const id of ['hibi-light', 'hibi-dark']) {
     const scheme = palette(id)
     await applyPalette(page, scheme)
     await applyPalette(harness, scheme)
     await harness.evaluate(() => window.livePreview.settle())
     assert.deepEqual(await scrolling(harness), await scrolling(page), id)
-    // A note that fits the pane is as tall in both views, so a scrollbar
-    // shows in both screenshots or in neither. (The formatted view lays out
-    // the lines it shows, so a longer note's height is not compared.)
-    const height = (target) =>
-      target.evaluate((title) => {
-        const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
-          root
-            .querySelector(':is(h1, .hibi-lp-h1)')
-            ?.textContent.includes(title),
-        )
-        return {
-          pane: pane.clientHeight,
-          note: pane
-            .querySelector('.tiptap, .cm-content')
-            .getBoundingClientRect().height,
-        }
-      }, title)
-    const tall = { rich: await height(page), formatted: await height(harness) }
-    if (tall.rich.note <= tall.rich.pane)
-      assert.ok(
-        Math.abs(tall.rich.note - tall.formatted.note) <= 1,
-        `${id}: ${JSON.stringify(tall)}`,
+    // A note that fits the pane is as tall as the rich view's was. (The
+    // formatted view lays out the lines it shows, so a longer note's height
+    // is not compared.)
+    const tall = await harness.evaluate((title) => {
+      const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+        root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
-    const before = await sample(page, rich, title)
+      const note = pane.querySelector('.cm-content').getBoundingClientRect()
+      return { pane: pane.clientHeight, note: note.height }
+    }, title)
+    check(`${name} note`, tall.note <= tall.pane ? tall.note : 'scrolls', {
+      tolerance: 1,
+    })
     const after = await sample(harness, formatted, title)
-    for (const key of Object.keys(rich)) {
-      const a = before[key],
-        b = after[key]
-      assert.ok(a?.box && b?.box, `${key}: ${JSON.stringify({ a, b })}`)
+    const text = {}
+    for (const key of Object.keys(formatted)) {
+      const b = after[key]
+      assert.ok(b?.box, `${key}: ${JSON.stringify(b)}`)
+      const rich = richStyle({ note: name, scheme: id, key })
       for (const property of [
         'fontFamily',
         'fontSize',
@@ -438,116 +513,33 @@ async function parity(title, doc, rich, formatted, name) {
         'color',
         'letterSpacing',
       ])
-        assert.equal(b[property], a[property], `${id} ${key} ${property}`)
-      report.push({
-        id,
-        key,
-        dx: Math.round((b.box.left - a.box.left) * 10) / 10,
-        dy: Math.round((b.box.top - a.box.top) * 10) / 10,
-        dw: Math.round((b.box.width - a.box.width) * 10) / 10,
-        dh: Math.round((b.box.height - a.box.height) * 10) / 10,
-      })
+        assert.equal(b[property], rich[property], `${id} ${key} ${property}`)
+      text[key] = b.box
     }
-    const images = [
-      await richPane.screenshot({
-        path: `test-results/live-preview-${name}-rich-${id}.png`,
-      }),
-      await harness.locator('.rich-pane').screenshot({
-        path: `test-results/live-preview-${name}-formatted-${id}.png`,
-      }),
-    ].map((image) => image.toString('base64'))
-    const { difference, box } = await app.evaluate(
-      ({ nativeImage }, images) => {
-        const [a, b] = images.map((image) =>
-          nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-        )
-        const size = a.getSize()
-        const other = b.getSize()
-        if (size.width !== other.width || size.height !== other.height)
-          return { difference: 1, box: [size, other] }
-        const left = a.toBitmap(),
-          right = b.toBitmap()
-        let changed = 0,
-          box = null
-        for (let i = 0; i < left.length; i += 4)
-          if (
-            Math.abs(left[i] - right[i]) > 8 ||
-            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-            Math.abs(left[i + 2] - right[i + 2]) > 8
-          ) {
-            changed++
-            const x = (i / 4) % size.width,
-              y = Math.floor(i / 4 / size.width)
-            box = box
-              ? [
-                  Math.min(box[0], x),
-                  Math.min(box[1], y),
-                  Math.max(box[2], x),
-                  Math.max(box[3], y),
-                ]
-              : [x, y, x, y]
-          }
-        return { difference: changed / (left.length / 4), box }
-      },
-      images,
-    )
-    // Where the screenshots differ, in their pixels: left, top, right, bottom.
-    report.push({ id, key: 'pixels', difference, box })
+    // Full phrase bounds, within a pixel of where they were recorded.
+    check(`${name} text`, text, { tolerance: 1 })
+    const drawn = await drawing(harness, title)
+    check(`${name} drawn`, drawn.drawn)
+    check(`${name} ${id} paint`, drawn.paint)
+    check(`${name} boxes`, drawn.boxes, { tolerance: 1 })
   }
-  console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
-  // keep the pixel gate strict; failures also report full phrase bounds.
-  for (const { id, key, difference } of report)
-    if (key === 'pixels')
-      assert.ok(
-        difference < 0.002,
-        `${id}: ${difference} ${JSON.stringify(report)}`,
-      )
-  // full phrase bounds match the rich view within a pixel.
-  const offsets = report.filter(
-    (entry) =>
-      entry.key !== 'pixels' &&
-      [entry.dx, entry.dy, entry.dw, entry.dh].some(
-        (value) => Math.abs(value) > 1,
-      ),
-  )
-  assert.deepEqual(offsets, [], JSON.stringify(report))
 }
 
-test('the codemirror formatted view matches the rich view in light and dark', {
+test('the formatted view keeps the rich view’s styles and its recorded drawing in light and dark', {
   timeout: 60000,
-}, async () => {
-  await parity('Formatted view parity', note, rich, formatted, 'parity')
+}, async (t) => {
+  await overlayScrollbars(t, page, harness)
+  await parity('Formatted view parity', note, formatted, 'parity')
 })
 
-test('blocks inside quotes and lists match the rich view in light and dark', {
+test('blocks inside quotes and lists keep the rich view’s styles and their recorded drawing in light and dark', {
   timeout: 60000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page, harness)
   await open(join(folder, 'notes', 'nested.md'), 'Nested blocks')
   await parity(
     'Nested blocks',
     nested,
-    {
-      title: { selector: '.tiptap h1', text: 'Nested blocks' },
-      quotedCode: {
-        selector: '.tiptap blockquote pre code',
-        text: 'const nested',
-      },
-      parent: { selector: '.tiptap li p', text: 'parent' },
-      childCode: { selector: '.tiptap li pre code', text: 'const child' },
-      quotedItem: { selector: '.tiptap blockquote li', text: 'quoted item' },
-      anotherItem: { selector: '.tiptap blockquote li', text: 'another item' },
-      quoteItem: { selector: '.tiptap li p', text: 'item with a quote' },
-      deepCode: {
-        selector: '.tiptap li blockquote pre code',
-        text: 'const deep',
-      },
-      quotedRule: {
-        selector: '.tiptap blockquote p',
-        text: 'after the quoted rule',
-      },
-      rule: { selector: '.tiptap p', text: 'words after a rule' },
-      closing: { selector: '.tiptap p', text: 'closing paragraph' },
-    },
     {
       title: { selector: '.hibi-lp-h1', text: 'Nested blocks' },
       quotedCode: { selector: '.hibi-lp-codetext', text: 'const nested' },
@@ -576,42 +568,14 @@ test('blocks inside quotes and lists match the rich view in light and dark', {
   ])
 })
 
-test('list markers alone on their lines sit beside the item text as in the rich view', {
+test('list markers alone on their lines keep the item text beside them, in their recorded drawing', {
   timeout: 60000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, page, harness)
   await open(join(folder, 'notes', 'markers.md'), 'Marker lines')
   await parity(
     'Marker lines',
     markers,
-    {
-      title: { selector: '.tiptap h1', text: 'Marker lines' },
-      first: { selector: '.tiptap li', text: 'first under its marker' },
-      second: { selector: '.tiptap li', text: 'second item' },
-      one: { selector: '.tiptap ol li', text: 'one under its marker' },
-      two: { selector: '.tiptap ol li', text: 'two' },
-      quoted: {
-        selector: '.tiptap blockquote li',
-        text: 'quoted under its marker',
-      },
-      quotedSecond: {
-        selector: '.tiptap blockquote li',
-        text: 'quoted second',
-      },
-      quotedOne: {
-        selector: '.tiptap blockquote ol li',
-        text: 'quoted one under its marker',
-      },
-      quotedTwo: { selector: '.tiptap blockquote ol li', text: 'quoted two' },
-      deep: {
-        selector: '.tiptap blockquote blockquote li',
-        text: 'deep under its marker',
-      },
-      deepSecond: {
-        selector: '.tiptap blockquote blockquote li',
-        text: 'deep second',
-      },
-      closing: { selector: '.tiptap p', text: 'closing paragraph' },
-    },
     {
       title: { selector: '.hibi-lp-h1', text: 'Marker lines' },
       first: { selector: '.hibi-lp-list-item', text: 'first under its marker' },
@@ -636,9 +600,10 @@ test('list markers alone on their lines sit beside the item text as in the rich 
   )
 })
 
-test('notes end as in the rich view, so both views scroll alike', {
+test('notes end at their recorded heights, so a pane scrolls only for a taller note', {
   timeout: 120000,
-}, async () => {
+}, async (t) => {
+  await overlayScrollbars(t, harness)
   // Zero, one and several final line breaks, and last blocks that paint or are replaced.
   const endings = {
     paragraph: 'tail',
@@ -659,16 +624,17 @@ test('notes end as in the rich view, so both views scroll alike', {
   const measure = (target, title) =>
     target.evaluate((title) => {
       const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
-        root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+        root.querySelector('.hibi-lp-h1')?.textContent.includes(title),
       )
-      const note = pane.querySelector('.tiptap, .cm-content')
+      const note = pane.querySelector('.cm-content')
       const top = note.getBoundingClientRect().top
       const block = [...note.children].find((child) =>
         child.textContent.includes('tail'),
       )
+      const round = (value) => Math.round(value * 10) / 10
       return {
-        note: note.getBoundingClientRect().height,
-        block: block.getBoundingClientRect().bottom - top,
+        note: round(note.getBoundingClientRect().height),
+        block: round(block.getBoundingClientRect().bottom - top),
         scrolls: pane.scrollHeight > pane.clientHeight,
       }
     }, title)
@@ -679,7 +645,7 @@ test('notes end as in the rich view, so both views scroll alike', {
     await writeFile(file, doc)
     await open(file, title)
     const richPane = page.locator('.rich-pane', {
-      has: page.locator('.tiptap h1', { hasText: title }),
+      has: page.locator('.hibi-lp-h1', { hasText: title }),
     })
     const size = await richPane.evaluate((element) => {
       const box = element.getBoundingClientRect()
@@ -691,36 +657,17 @@ test('notes end as in the rich view, so both views scroll alike', {
         size: { ...size, height },
       })
     await mount(size.height)
-    const rich = await measure(page, title)
-    const formatted = await measure(harness, title)
-    const report = `${name}: ${JSON.stringify({ rich, formatted })}`
-    assert.ok(Math.abs(rich.note - formatted.note) <= 1, report)
-    // Space after the last block lies outside it, as a quote's bar shows.
-    assert.ok(Math.abs(rich.block - formatted.block) <= 1, report)
+    const { note, block } = await measure(harness, title)
+    // As tall as the rich view's note, within a pixel when recorded; space
+    // after the last block lies outside it, as a quote's bar shows.
+    check(`ending ${name}`, { note, block }, { tolerance: 1 })
     // Panes a little shorter than the note scroll; a little taller do not.
-    const style = await richPane.getAttribute('style')
-    const scrolling = { rich: [], formatted: [] }
-    for (const height of [
-      Math.floor(rich.note) - 2,
-      Math.ceil(rich.note) + 2,
-    ]) {
-      await richPane.evaluate((element, height) => {
-        Object.assign(element.style, {
-          flex: 'none',
-          height: `${height}px`,
-          minHeight: '0',
-        })
-      }, height)
+    const scrolling = []
+    for (const height of [Math.floor(note) - 2, Math.ceil(note) + 2]) {
       await mount(height)
-      scrolling.rich.push((await measure(page, title)).scrolls)
-      scrolling.formatted.push((await measure(harness, title)).scrolls)
+      scrolling.push((await measure(harness, title)).scrolls)
     }
-    await richPane.evaluate((element, style) => {
-      if (style === null) element.removeAttribute('style')
-      else element.setAttribute('style', style)
-    }, style)
-    assert.deepEqual(scrolling.rich, [true, false], name)
-    assert.deepEqual(scrolling.formatted, scrolling.rich, name)
+    assert.deepEqual(scrolling, [true, false], name)
   }
 })
 
@@ -1098,6 +1045,249 @@ test('stepping up after a jump to the end, known code blocks never draw as plain
   // Before, a block the parser started over on showed its long lines as
   // wrapped text, thousands of pixels tall, and the view jumped away.
   assert.equal(plain, 0)
+})
+
+test('a long code line pasted into a note draws whole, with its end in reach and no blank space below it', {
+  timeout: 60000,
+}, async (t) => {
+  const doc =
+    '# Pasted code\n\nWords before the code.\n\n```js\nconst short = 1\n```\n\nWords after the code.\n'
+  const pasted = `const long = "${'abcdefghij'.repeat(20_000)}";`
+  for (const caret of [false, true])
+    await t.test(
+      caret ? 'with the caret at its end' : 'elsewhere',
+      async () => {
+        const result = await harness.evaluate(
+          async ({ doc, pasted, caret }) => {
+            await window.livePreview.mount(
+              doc,
+              { width: 900, height: 600 },
+              { editable: true },
+            )
+            const view = window.livePreview.view()
+            const frames = async (count) => {
+              for (let i = 0; i < count; i++)
+                await new Promise(requestAnimationFrame)
+            }
+            // The note is drawn and measured, so the editor takes the new line
+            // for wrapped text until it draws it.
+            const at = doc.indexOf('const short = 1') + 'const short = 1'.length
+            view.dispatch({
+              changes: { from: at, insert: `\n${pasted}` },
+              ...(caret
+                ? {
+                    selection: { anchor: at + 1 + pasted.length },
+                    scrollIntoView: true,
+                    userEvent: 'input.paste',
+                  }
+                : {}),
+            })
+            await frames(6)
+            const box = view.contentDOM.querySelector('.hibi-lp-codescroll')
+            const lines = [...box.querySelectorAll('.cm-line')]
+            const short = lines.find(
+              (line) => line.textContent === 'const short = 1',
+            )
+            const long = lines.find((line) => line !== short)
+            box.scrollLeft = box.scrollWidth
+            await frames(3)
+            const walker = document.createTreeWalker(long, NodeFilter.SHOW_TEXT)
+            let last = null
+            for (let node = walker.nextNode(); node; node = walker.nextNode())
+              last = node
+            const range = document.createRange()
+            range.setStart(last, last.length - 1)
+            range.setEnd(last, last.length)
+            const end = range.getBoundingClientRect()
+            const shown = box.getBoundingClientRect()
+            return {
+              drawn: long.textContent.length,
+              // The short line is not drawn when the long one is too tall.
+              rows: [
+                short?.getBoundingClientRect().height ?? 0,
+                long.getBoundingClientRect().height,
+              ],
+              end: [end.left, end.right],
+              box: [shown.left, shown.right],
+            }
+          },
+          { doc, pasted, caret },
+        )
+        const report = JSON.stringify(result)
+        // Before, a line gap sized as the line's wrapped rows hid all but a
+        // screen's width of it and kept itself: the box grew tens of thousands
+        // of pixels of blank space, and its end could not be scrolled to.
+        assert.equal(result.drawn, pasted.length, report)
+        assert.ok(Math.abs(result.rows[1] - result.rows[0]) <= 1, report)
+        assert.ok(
+          result.end[0] >= result.box[0] && result.end[1] <= result.box[1] + 1,
+          report,
+        )
+      },
+    )
+})
+
+test('long lines that wrap stay behind line gaps: a huge paragraph or wrapping code draws only near the screen', {
+  timeout: 60000,
+}, async () => {
+  const words = 'word '.repeat(40_000)
+  const code = 'const wrapped = 42; '.repeat(10_000)
+  const drawn = await harness.evaluate(
+    async ({ words, code }) => {
+      const show = async (doc, start) => {
+        await window.livePreview.mount(doc, { width: 900, height: 600 })
+        for (let i = 0; i < 4; i++) await new Promise(requestAnimationFrame)
+        const view = window.livePreview.view()
+        return [...view.contentDOM.querySelectorAll('.cm-line')].find((line) =>
+          line.textContent.startsWith(start),
+        )?.textContent.length
+      }
+      const paragraph = await show(`# Wrapping\n\n${words}\n\nAfter.\n`, 'word')
+      const style = document.createElement('style')
+      style.textContent =
+        '.rich-pane :is(pre, .hibi-lp-codeblock) { white-space: pre-wrap; overflow-wrap: anywhere; }'
+      document.head.append(style)
+      try {
+        return {
+          paragraph,
+          code: await show(`\`\`\`js\n${code}\n\`\`\`\n`, 'const wrapped'),
+        }
+      } finally {
+        style.remove()
+      }
+    },
+    { words, code },
+  )
+  const report = JSON.stringify(drawn)
+  // Lines that wrap draw a margin around the screen, not the whole line.
+  assert.ok(drawn.paragraph > 0 && drawn.paragraph < words.length / 4, report)
+  assert.ok(drawn.code > 0 && drawn.code < code.length / 4, report)
+})
+
+test('deleting a code block keeps the long paragraph after it behind line gaps', {
+  timeout: 60000,
+}, async () => {
+  const prose = 'word '.repeat(60_000).trim()
+  const doc = `\`\`\`js\nconst long = "${'abcdefghij'.repeat(20_000)}";\n\`\`\`\n${prose}\n\nEnd.\n`
+  const result = await harness.evaluate(async (doc) => {
+    await window.livePreview.mount(
+      doc,
+      { width: 900, height: 600 },
+      { editable: true },
+    )
+    const view = window.livePreview.view()
+    const whole = () =>
+      [
+        ...view.contentDOM.querySelectorAll('.hibi-lp-codescroll > .cm-line'),
+      ].some((line) => line.textContent.length > 200_000)
+    for (let i = 0; i < 300 && !whole(); i++)
+      await new Promise(requestAnimationFrame)
+    const ready = whole()
+    // The paragraph now starts where the long code line did.
+    view.dispatch({ changes: { from: 0, to: doc.indexOf('word') } })
+    const drawn = Math.max(
+      ...[...view.contentDOM.querySelectorAll('.cm-line')].map(
+        (line) => line.textContent.length,
+      ),
+    )
+    return { ready, drawn }
+  }, doc)
+  assert.ok(result.ready, JSON.stringify(result))
+  // The update alone must not draw a wrapping paragraph whole.
+  assert.ok(result.drawn < prose.length / 4, JSON.stringify(result))
+})
+
+test('typing above a long code line that edits pushed far below the screen leaves it drawn', {
+  timeout: 60000,
+}, async () => {
+  let doc = '# Far code\n\n'
+  for (let i = 0; i < 60; i++) doc += `Line ${i} of filler.\n\n`
+  const fence = doc.length
+  doc += `\`\`\`js\nconst long = "${'abcdefghij'.repeat(20_000)}";\n\`\`\`\n\n`
+  for (let i = 0; i < 40; i++) doc += `After ${i}.\n\n`
+  const result = await harness.evaluate(
+    async ({ doc, fence }) => {
+      // A wide pane: CodeMirror hides text more than 10,000 characters' worth of
+      // wrapped rows from the screen, about 900 px here.
+      await window.livePreview.mount(
+        doc,
+        { width: 2560, height: 600 },
+        { editable: true },
+      )
+      const frames = async (count) => {
+        for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+      }
+      await frames(6)
+      const view = window.livePreview.view()
+      let pane = view.contentDOM.parentElement
+      while (
+        pane &&
+        !(
+          pane.scrollHeight > pane.clientHeight &&
+          /auto|scroll/.test(getComputedStyle(pane).overflowY)
+        )
+      )
+        pane = pane.parentElement
+      const bottom = () =>
+        pane.getBoundingClientRect().bottom - view.documentTop
+      let at = fence + 6
+      const long = () => view.lineBlockAt(at)
+      const length = view.state.doc.lineAt(at).length
+      const drawn = () =>
+        Math.max(
+          0,
+          ...[
+            ...view.contentDOM.querySelectorAll(
+              '.hibi-lp-codescroll > .cm-line',
+            ),
+          ].map((line) => line.textContent.length),
+        )
+      // Settle the long line just below the screen, drawn whole.
+      for (let i = 0; i < 3; i++) {
+        pane.scrollTop += long().top - 450 - bottom()
+        await frames(4)
+      }
+      // Text added between the screen and the line, as an edit or a loading
+      // image would, moves it down while the editor keeps drawing it.
+      let below = long().top - bottom()
+      for (let i = 0; i < 60 && below < 1300; i++) {
+        view.dispatch({ changes: { from: fence, insert: 'Grown line.\n\n' } })
+        fence += 13
+        at += 13
+        await frames(3)
+        below = long().top - bottom()
+      }
+      const inView = view.viewport.from <= at && view.viewport.to > at
+      const before = drawn()
+      // Typing on the screen updates the view.
+      const top = pane.getBoundingClientRect().top - view.documentTop
+      const typeAt = view.lineBlockAtHeight(top + 60).to
+      view.dispatch({
+        changes: { from: typeAt, insert: 'x' },
+        selection: { anchor: typeAt + 1 },
+        scrollIntoView: true,
+        userEvent: 'input.type',
+      })
+      const sync = drawn()
+      await frames(2)
+      return {
+        below: Math.round(below),
+        inView,
+        length,
+        before,
+        sync,
+        after: drawn(),
+      }
+    },
+    { doc, fence },
+  )
+  const report = JSON.stringify(result)
+  assert.ok(result.below >= 1300 && result.inView, report)
+  assert.equal(result.before, result.length, report)
+  // The update keeps the line drawn; a gap here is dropped again by the next
+  // measure, which draws the whole line once more on every key.
+  assert.equal(result.sync, result.length, report)
+  assert.equal(result.after, result.length, report)
 })
 
 test('typing beside a multi-line link destination edits the text', {

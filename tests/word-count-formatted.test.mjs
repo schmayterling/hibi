@@ -1,201 +1,47 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { GFM, parser } from '@lezer/markdown'
-import {
-  getSchema,
-  getText,
-  getTextSerializersFromSchema,
-  Node,
-} from '@tiptap/core'
-import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
-import { Strike } from '@tiptap/extension-strike'
-import { TableKit } from '@tiptap/extension-table'
-import { TaskItem } from '@tiptap/extension-task-item'
-import { TaskList } from '@tiptap/extension-task-list'
-import { MarkdownManager } from '@tiptap/markdown'
-import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
-import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
-import {
-  ObsidianHighlight,
-  obsidianMarkdown,
-  WikiEmbed,
-  WikiLink,
-} from '../src/addons/markdown/obsidian.ts'
-import {
-  blockMath,
-  blockMathStart,
-  inlineMath,
-  mathTokens,
-} from '../src/addons/math/syntax.ts'
-import { mermaidMarkdown } from '../src/addons/mermaid/markdown.ts'
-import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
-import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
-import { typstMarkdown } from '../src/addons/typst/markdown.ts'
-import { typstTokens } from '../src/addons/typst/syntax.ts'
 import { countText } from '../src/addons/word-count/count.ts'
 import { FormattedCounter } from '../src/addons/word-count/formatted-counter.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
-import { documentImage } from '../src/renderer/src/DocumentImage.ts'
-import { editorExtensions } from '../src/renderer/src/markdown.ts'
-import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
-import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import {
   customBodyBoldCases,
   customBodyCases,
 } from './fixtures/custom-body.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 
-const flavors = [
-  {
-    id: 'markdown.github',
-    markedOptions: { gfm: true },
-    richExtensions: [
-      GithubAlert,
-      Strike,
-      TableKit.configure({ table: { resizable: false } }),
-      TaskList,
-      TaskItem.configure({ nested: true }),
-    ],
-    export: { extensions: [alertMarkdown, markedGithubFootnote()] },
-  },
-  {
-    id: 'markdown.obsidian',
-    richExtensions: [ObsidianHighlight, WikiLink, WikiEmbed],
-    export: { extensions: [obsidianMarkdown] },
-  },
-  {
-    id: 'text-extras.text-extras',
-    richExtensions: [Subscript, Subtext],
-    export: { extensions: [textExtrasMarkdown] },
-  },
-]
-flavors.push({
-  id: 'math.latex',
-  richExtensions: [
-    BlockMath.extend({
-      markdownTokenizer: {
-        name: 'blockMath',
-        level: 'block',
-        start: blockMathStart,
-        tokenize: blockMath,
-      },
-    }),
-    InlineMath.extend({
-      markdownTokenizer: {
-        name: 'inlineMath',
-        level: 'inline',
-        start: (source) => source.indexOf('$'),
-        tokenize: inlineMath,
-      },
-    }),
-  ],
-  export: { extensions: [mathTokens] },
-})
-markdownSyntax.register('markdown', {
-  id: 'strike',
-  label: 'Strikethrough',
-  group: 'Markdown',
-  level: 'inline',
-  extensions: ['strike'],
-  nodes: ['Strikethrough'],
-  matches: (token) => token.type === 'del',
-})
+const rich = frozenOracle('word-count-formatted')
 
-function nativeDocument(source, selected = flavors) {
-  const freshFlavors = selected.map((flavor) =>
-    flavor.id === 'markdown.github'
-      ? {
-          ...flavor,
-          export: { extensions: [alertMarkdown, markedGithubFootnote()] },
-        }
-      : flavor,
-  )
-  const extensions = [...editorExtensions(freshFlavors), documentImage(0)]
-  const markdown = extensions.find((extension) => extension.name === 'markdown')
-  const manager = new MarkdownManager({
-    extensions,
-    marked: markdown.options.marked,
-    markedOptions: markdown.options.markedOptions,
-  })
-  const schema = getSchema(extensions)
-  return schema.nodeFromJSON(manager.parse(source))
-}
-
-function native(source, selected = flavors) {
-  const document = nativeDocument(source, selected)
-  return getText(document, {
-    blockSeparator: '\n',
-    textSerializers: getTextSerializersFromSchema(document.type.schema),
-  })
-}
+/**
+ * The text the removed rich view read from `source`, as its word count
+ * counted it, with the GitHub, Obsidian, text extras and math flavors and the
+ * syntax features `off` turned off.
+ */
+const native = (source, off = []) => rich({ kind: 'text', source, off })
 
 for (const fixture of customBodyCases)
-  test(`custom body native model: ${fixture.name}`, () => {
-    markdownSyntax.reset()
-    if (fixture.feature) markdownSyntax.setEnabled(fixture.feature, false)
+  test(`custom body text and counts: ${fixture.name}`, () => {
+    const syntax = {
+      ...defaultNoteSyntax,
+      alerts: true,
+      textExtras: true,
+      disabledFeatures: fixture.feature ? [fixture.feature] : [],
+    }
+    assert.equal(richText(fixture.source, syntax).slice(1), fixture.text)
+    const counter = new FormattedCounter(
+      new SourceStore(fixture.source, { tabId: 'custom-body', revision: 0 }),
+      syntax,
+    )
     try {
-      const document = nativeDocument(fixture.source)
-      assert.equal(native(fixture.source), fixture.text)
-      const nodes = [],
-        marks = []
-      document.descendants((node) => {
-        nodes.push(node.type.name)
-        marks.push(...node.marks.map((mark) => mark.type.name))
-      })
-      if (fixture.feature === 'markdown.strike')
-        assert.ok(!marks.includes('strike'))
-      if (fixture.feature === 'core.italic')
-        assert.ok(!marks.includes('italic'))
-      if (fixture.feature === 'core.links') assert.ok(!marks.includes('link'))
-      if (fixture.feature === 'core.bold') assert.ok(!marks.includes('bold'))
-      if (fixture.feature === 'core.heading-1')
-        assert.ok(nodes.includes('heading'))
-      if (fixture.name === 'subscript bold')
-        assert.ok(marks.includes('subscript'))
-      if (fixture.name === 'alert task') assert.ok(nodes.includes('taskItem'))
-      if (fixture.name === 'bullet alert')
-        assert.equal(
-          document.firstChild.firstChild.firstChild.firstChild.text,
-          '**x** y',
-        )
-      if (fixture.name === 'ordered alert') {
-        assert.deepEqual(
-          nodes.filter((name) => name !== 'text'),
-          [
-            'orderedList',
-            'listItem',
-            'paragraph',
-            'githubAlert',
-            'paragraph',
-            'blockquote',
-            'paragraph',
-          ],
-        )
-        assert.ok(marks.includes('bold'))
-      }
-      const syntax = {
-        ...defaultNoteSyntax,
-        alerts: true,
-        textExtras: true,
-        disabledFeatures: fixture.feature ? [fixture.feature] : [],
-      }
-      assert.equal(richText(fixture.source, syntax).slice(1), fixture.text)
-      const counter = new FormattedCounter(
-        new SourceStore(fixture.source, { tabId: 'custom-body', revision: 0 }),
-        syntax,
-      )
-      try {
-        let step
-        const work = counter.read()
-        do step = work.next()
-        while (!step.done)
-        assert.deepEqual(step.value, countText(fixture.text))
-      } finally {
-        counter.dispose()
-      }
+      let step
+      const work = counter.read()
+      do step = work.next()
+      while (!step.done)
+      assert.deepEqual(step.value, countText(fixture.text))
     } finally {
-      markdownSyntax.reset()
+      counter.dispose()
     }
   })
 
@@ -298,21 +144,13 @@ test('mid-line display math is excluded from counts while literal dollars stay',
     )
 })
 
-for (const [source, formatted, rich] of [
-  ['- [ ] text[^a]\n\n[^a]: note', '\n\ntext\nnote', '\n\ntext[^a]\nnote'],
-  [
-    '- [ ] [some words][ref]\n\n[ref]: /target',
-    '\n\nsome words',
-    '\n\n[some words][ref]',
-  ],
-  [
-    '- [ ] [label][ref]\n\n[ref]: https://example.test',
-    '\n\nlabel',
-    '\n\n[label][ref]',
-  ],
+for (const [source, formatted] of [
+  ['- [ ] text[^a]\n\n[^a]: note', '\n\ntext\nnote'],
+  ['- [ ] [some words][ref]\n\n[ref]: /target', '\n\nsome words'],
+  ['- [ ] [label][ref]\n\n[ref]: https://example.test', '\n\nlabel'],
 ])
   test(`task forward references retain Markdown semantics: ${JSON.stringify(source)}`, () => {
-    // tiptap tokenizes task text before later definitions; valid forward links still resolve.
+    // The rich view tokenized task text before later definitions; valid forward links still resolve.
     assert.equal(
       richText(source, {
         ...defaultNoteSyntax,
@@ -322,21 +160,18 @@ for (const [source, formatted, rich] of [
       }).slice(1),
       formatted,
     )
-    assert.equal(native(source), rich)
   })
 
 test('disabled bullets stay literal beside active task lists', () => {
   const source = '- [ ] task\n\n- a\n  - nested'
-  markdownSyntax.setEnabled('core.bullet-lists', false)
-  try {
-    const syntax = {
-      ...defaultNoteSyntax,
-      disabledFeatures: ['core.bullet-lists'],
-    }
-    assert.equal(richText(source, syntax).slice(1), native(source))
-  } finally {
-    markdownSyntax.reset()
+  const syntax = {
+    ...defaultNoteSyntax,
+    disabledFeatures: ['core.bullet-lists'],
   }
+  assert.equal(
+    richText(source, syntax).slice(1),
+    native(source, ['core.bullet-lists']),
+  )
 })
 
 test('tab-separated task markers match the rendered task text and counts', () => {
@@ -396,21 +231,20 @@ test('indented code in list items stays literal instead of becoming a task', () 
       do step = work.next()
       while (!step.done)
       assert.deepEqual(step.value, { words: 1, characters }, source)
-      assert.deepEqual(countText(native(source)), { words: 1, characters: 3 })
     } finally {
       counter.dispose()
     }
   }
 })
 
-test('list and definition projection differences stay explicit', () => {
-  for (const [source, formatted, rich] of [
-    ['1. e\n=', [1, 3], [1, 4]],
-    ['1. 2.', [0, 3], [0, 4]],
-    ['2.\n    e', [1, 3], [1, 4]],
-    ['- [ ]\n ', [0, 2], [0, 3]],
-    ['1. one\n2.\n two', [2, 11], [3, 12]],
-    ['1. one\n[^a]:', [1, 5], [2, 11]],
+test('list and definition projection counts stay explicit', () => {
+  for (const [source, formatted] of [
+    ['1. e\n=', [1, 3]],
+    ['1. 2.', [0, 3]],
+    ['2.\n    e', [1, 3]],
+    ['- [ ]\n ', [0, 2]],
+    ['1. one\n2.\n two', [2, 11]],
+    ['1. one\n[^a]:', [1, 5]],
   ])
     for (const gfm of source === '1. one\n2.\n two' ? [false, true] : [true]) {
       const counter = new FormattedCounter(
@@ -427,15 +261,6 @@ test('list and definition projection differences stay explicit', () => {
           formatted,
           source,
         )
-        const expected = countText(
-          native(
-            source,
-            gfm
-              ? flavors
-              : flavors.filter((flavor) => flavor.id !== 'markdown.github'),
-          ),
-        )
-        assert.deepEqual([expected.words, expected.characters], rich, source)
       } finally {
         counter.dispose()
       }
@@ -444,35 +269,29 @@ test('list and definition projection differences stay explicit', () => {
 
 test('custom alert and subtext bodies retain native text with disabled bold', () => {
   const disabledFeatures = ['core.heading-1', 'core.bold', 'core.images']
-  for (const feature of disabledFeatures)
-    markdownSyntax.setEnabled(feature, false)
-  try {
-    for (const body of ['> [!TIP]\n> **careful**', '-# small **words**']) {
-      const source = `**outside**\n\n${body}\n\n# after`
-      const syntax = {
-        ...defaultNoteSyntax,
-        alerts: true,
-        textExtras: true,
-        disabledFeatures,
-      }
-      const expected = native(source)
-      assert.equal(richText(source, syntax).slice(1), expected)
-      const counter = new FormattedCounter(
-        new SourceStore(source, { tabId: 'flavor', revision: 0 }),
-        syntax,
-      )
-      try {
-        const work = counter.read()
-        let step
-        do step = work.next()
-        while (!step.done)
-        assert.deepEqual(step.value, countText(expected))
-      } finally {
-        counter.dispose()
-      }
+  for (const body of ['> [!TIP]\n> **careful**', '-# small **words**']) {
+    const source = `**outside**\n\n${body}\n\n# after`
+    const syntax = {
+      ...defaultNoteSyntax,
+      alerts: true,
+      textExtras: true,
+      disabledFeatures,
     }
-  } finally {
-    markdownSyntax.reset()
+    const expected = native(source, disabledFeatures)
+    assert.equal(richText(source, syntax).slice(1), expected)
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'flavor', revision: 0 }),
+      syntax,
+    )
+    try {
+      const work = counter.read()
+      let step
+      do step = work.next()
+      while (!step.done)
+      assert.deepEqual(step.value, countText(expected))
+    } finally {
+      counter.dispose()
+    }
   }
 })
 
@@ -527,53 +346,38 @@ for (const [feature, bodies] of [
   })
 
 test('list-nested alerts keep disabled bold literal while subtext owns its body', () => {
-  markdownSyntax.setEnabled('core.bold', false)
-  try {
-    for (const source of [
-      '- > [!TIP]\n  > **x**',
-      '1. > [!TIP]\n   > **x**',
-      '- -# small **words**',
-    ]) {
-      const expected = native(source)
-      assert.equal(
-        richText(source, {
-          ...defaultNoteSyntax,
-          alerts: true,
-          textExtras: true,
-          disabledFeatures: ['core.bold'],
-        })
-          .slice(1)
-          .trim(),
-        expected.trim(),
-        source,
-      )
-      assert.equal(
-        expected.includes('**'),
-        !source.includes('-# small'),
-        source,
-      )
-    }
-  } finally {
-    markdownSyntax.reset()
+  for (const source of [
+    '- > [!TIP]\n  > **x**',
+    '1. > [!TIP]\n   > **x**',
+    '- -# small **words**',
+  ]) {
+    const expected = native(source, ['core.bold'])
+    assert.equal(
+      richText(source, {
+        ...defaultNoteSyntax,
+        alerts: true,
+        textExtras: true,
+        disabledFeatures: ['core.bold'],
+      })
+        .slice(1)
+        .trim(),
+      expected.trim(),
+      source,
+    )
+    assert.equal(expected.includes('**'), !source.includes('-# small'), source)
   }
 })
 
 test('custom subscript bodies preserve native inline mark parsing', () => {
-  markdownSyntax.setEnabled('core.bold', false)
-  try {
-    const source = 'H~**2**~O'
-    assert.equal(native(source), 'H2O')
-    assert.equal(
-      richText(source, {
-        ...defaultNoteSyntax,
-        textExtras: true,
-        disabledFeatures: ['core.bold'],
-      }).slice(1),
-      'H2O',
-    )
-  } finally {
-    markdownSyntax.reset()
-  }
+  const source = 'H~**2**~O'
+  assert.equal(
+    richText(source, {
+      ...defaultNoteSyntax,
+      textExtras: true,
+      disabledFeatures: ['core.bold'],
+    }).slice(1),
+    'H2O',
+  )
 })
 
 test('disabled syntax remains literal in document totals', () => {
@@ -596,90 +400,56 @@ test('disabled syntax remains literal in document totals', () => {
 
 for (const language of ['mermaid', 'typst'])
   test(`${language} fences retain native opaque, disabled and ordinary-code counts`, () => {
-    const name = `${language}Block`
-    const node = Node.create({
-      name,
-      group: 'block',
-      atom: true,
-      addAttributes: () => ({ source: { default: '' }, raw: { default: '' } }),
-      ...(language === 'mermaid' ? mermaidMarkdown : typstMarkdown),
-    })
-    const flavor = {
-      id: `${language}.blocks`,
-      richExtensions: [node],
-      ...(language === 'typst'
-        ? { export: { extensions: [typstTokens] } }
-        : {}),
-    }
-    const remove = markdownSyntax.register(language, {
-      id: 'blocks',
-      label: language,
-      group: language,
-      level: 'block',
-      extensions: [name],
-      matches: (token) =>
-        language === 'mermaid'
-          ? token.type === 'code' && token.lang === 'mermaid'
-          : token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? ''),
-    })
-    try {
-      for (const disabled of [
-        [],
-        [`${language}.blocks`],
-        ['core.code-blocks'],
-      ]) {
-        markdownSyntax.reset()
-        for (const feature of disabled)
-          markdownSyntax.setEnabled(feature, false)
-        for (const active of [true, false]) {
-          const config = {
-            ...defaultNoteSyntax,
-            [language]: active,
-            disabledFeatures: disabled,
-          }
-          for (const source of [
-            `\`\`\`${language}\nx\n\`\`\``,
-            `before\n\n\`\`\`${language}\nx\n\`\`\`\n\nafter`,
-            `before\r\n\r\n~~~${language.toUpperCase()}\r\nx\r\n~~~\r\n\r\nafter`,
-            `~~~${language[0].toUpperCase()}${language.slice(1)}\nx\n~~~`,
-            `before\n\n\`\`\`${language}\nx\n\nafter`,
-            `\`\`\`${language} extra\nx\n\`\`\``,
-            `> \`\`\`${language}\n> x\n> \`\`\`\n\nafter`,
-            `> \`\`\`${language}\n> x\n> \`\`\`\noutside\n===\n\n# real`,
-            `> \`\`\`${language}\r\n> x\r\n> \`\`\`\r\noutside\r\n===\r\n\r\n# real`,
-            `- before\n\n  \`\`\`${language}\n  x\n  \`\`\`\n\nafter`,
-            `before\n\n~~~${language}\nx\n~~~\t\n\nafter`,
-            `> ~~~${language}\n> x\n> ~~~\t\n> tail\n\nafter`,
-            `- before\n\n  ~~~${language}\n  x\n  ~~~\t\n  tail\n\nafter`,
-            '```js\nordinary code\n```',
-          ]) {
-            const expected = native(
-              source,
-              active ? [...flavors, flavor] : flavors,
-            )
-            const label = JSON.stringify({ language, active, disabled, source })
-            assert.equal(richText(source, config).slice(1), expected, label)
-            const counter = new FormattedCounter(
-              new SourceStore(source, { tabId: 'fences', revision: 0 }),
-              config,
-            )
-            try {
-              const work = counter.read()
-              let step
-              do {
-                step = work.next()
-              } while (!step.done)
-              assert.deepEqual(step.value, countText(expected), label)
-            } finally {
-              counter.dispose()
-            }
+    for (const disabled of [[], [`${language}.blocks`], ['core.code-blocks']])
+      for (const active of [true, false]) {
+        const config = {
+          ...defaultNoteSyntax,
+          [language]: active,
+          disabledFeatures: disabled,
+        }
+        for (const source of [
+          `\`\`\`${language}\nx\n\`\`\``,
+          `before\n\n\`\`\`${language}\nx\n\`\`\`\n\nafter`,
+          `before\r\n\r\n~~~${language.toUpperCase()}\r\nx\r\n~~~\r\n\r\nafter`,
+          `~~~${language[0].toUpperCase()}${language.slice(1)}\nx\n~~~`,
+          `before\n\n\`\`\`${language}\nx\n\nafter`,
+          `\`\`\`${language} extra\nx\n\`\`\``,
+          `> \`\`\`${language}\n> x\n> \`\`\`\n\nafter`,
+          `> \`\`\`${language}\n> x\n> \`\`\`\noutside\n===\n\n# real`,
+          `> \`\`\`${language}\r\n> x\r\n> \`\`\`\r\noutside\r\n===\r\n\r\n# real`,
+          `- before\n\n  \`\`\`${language}\n  x\n  \`\`\`\n\nafter`,
+          `before\n\n~~~${language}\nx\n~~~\t\n\nafter`,
+          `> ~~~${language}\n> x\n> ~~~\t\n> tail\n\nafter`,
+          `- before\n\n  ~~~${language}\n  x\n  ~~~\t\n  tail\n\nafter`,
+          '```js\nordinary code\n```',
+        ]) {
+          // With the language's block feature registered, and its block
+          // flavor too when active.
+          const expected = rich({
+            kind: 'text',
+            source,
+            off: disabled,
+            blocks: language,
+            active,
+          })
+          const label = JSON.stringify({ language, active, disabled, source })
+          assert.equal(richText(source, config).slice(1), expected, label)
+          const counter = new FormattedCounter(
+            new SourceStore(source, { tabId: 'fences', revision: 0 }),
+            config,
+          )
+          try {
+            const work = counter.read()
+            let step
+            do {
+              step = work.next()
+            } while (!step.done)
+            assert.deepEqual(step.value, countText(expected), label)
+          } finally {
+            counter.dispose()
           }
         }
       }
-    } finally {
-      remove()
-      markdownSyntax.reset()
-    }
   })
 
 test('tab closers keep following text outside indented fences', () => {
@@ -689,7 +459,6 @@ test('tab closers keep following text outside indented fences', () => {
       ['   ', ' \t '],
     ]) {
       const source = `before\n\n${indent}~~~${language}\nx\n${indent}~~~${suffix}\n\nafter`
-      assert.equal(native(source), 'before\nafter')
       assert.equal(
         richText(source, { ...defaultNoteSyntax, typst: true }).slice(1),
         language === 'typst' ? 'before\n\nafter' : 'before\nx\nafter',
@@ -745,8 +514,7 @@ test('formatted text and counts match the rich view', () => {
   }
 })
 
-test('rich view keeps headings after custom leaves outside containers', () => {
-  // Tiptap copies tokenizer results; leaf identity must survive the copy.
+test('formatted text matches the rich view after custom leaves outside containers', () => {
   for (const source of [
     '> $$\n> x\n> $$\noutside\n===\n',
     '> -# small\noutside\n===\n',
@@ -754,12 +522,6 @@ test('rich view keeps headings after custom leaves outside containers', () => {
     '- -# small\noutside\n===\n',
     '> > [!NOTE]\n> > ```\n> > x\n> > ```\noutside\n===\n',
   ]) {
-    const document = nativeDocument(source)
-    const headings = []
-    document.forEach((node) => {
-      if (node.type.name === 'heading') headings.push(node.textContent)
-    })
-    assert.deepEqual(headings, ['outside'], source)
     assert.equal(
       richText(source, {
         ...defaultNoteSyntax,
@@ -775,34 +537,28 @@ test('rich view keeps headings after custom leaves outside containers', () => {
 
 for (const fixture of customBodyBoldCases)
   test(`custom body bold counts: ${fixture.name}`, () => {
-    markdownSyntax.setEnabled('core.bold', false)
-    try {
-      for (const suffix of ['', '\n\ntail']) {
-        const source = fixture.source + suffix
-        const expected = fixture.text + (suffix ? '\ntail' : '')
-        assert.equal(native(source), expected, source)
-        const syntax = {
-          ...defaultNoteSyntax,
-          alerts: true,
-          textExtras: true,
-          disabledFeatures: ['core.bold'],
-        }
-        assert.equal(richText(source, syntax).slice(1), expected, source)
-        const counter = new FormattedCounter(
-          new SourceStore(source, { tabId: 'custom-count', revision: 0 }),
-          syntax,
-        )
-        try {
-          const work = counter.read()
-          let step
-          do step = work.next()
-          while (!step.done)
-          assert.deepEqual(step.value, countText(expected), source)
-        } finally {
-          counter.dispose()
-        }
+    for (const suffix of ['', '\n\ntail']) {
+      const source = fixture.source + suffix
+      const expected = fixture.text + (suffix ? '\ntail' : '')
+      const syntax = {
+        ...defaultNoteSyntax,
+        alerts: true,
+        textExtras: true,
+        disabledFeatures: ['core.bold'],
       }
-    } finally {
-      markdownSyntax.setEnabled('core.bold', true)
+      assert.equal(richText(source, syntax).slice(1), expected, source)
+      const counter = new FormattedCounter(
+        new SourceStore(source, { tabId: 'custom-count', revision: 0 }),
+        syntax,
+      )
+      try {
+        const work = counter.read()
+        let step
+        do step = work.next()
+        while (!step.done)
+        assert.deepEqual(step.value, countText(expected), source)
+      } finally {
+        counter.dispose()
+      }
     }
   })

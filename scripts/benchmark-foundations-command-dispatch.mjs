@@ -52,7 +52,7 @@ try {
       name: 'Foundations command benchmark',
       description: 'Command dispatch benchmark fixture.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Benchmark' }],
       entry: 'index.js',

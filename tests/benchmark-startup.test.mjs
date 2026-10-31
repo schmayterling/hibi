@@ -18,7 +18,7 @@ async function scratch(t) {
   return root
 }
 
-test('profile seed selects explicit engine without importing editor code', async (t) => {
+test('profile seed stores the default view without importing editor code', async (t) => {
   const profile = await scratch(t)
   const events = []
   const values = new Map()
@@ -78,8 +78,8 @@ test('profile seed selects explicit engine without importing editor code', async
       async waitForURL(url) {
         assert.equal(url, 'app://hibi/')
       },
-      async evaluate(run, engine) {
-        vm.runInNewContext(`(${run})(${JSON.stringify(engine)})`, {
+      async evaluate(run) {
+        vm.runInNewContext(`(${run})()`, {
           localStorage: { setItem: (key, value) => values.set(key, value) },
         })
         events.push('seed')
@@ -100,33 +100,16 @@ test('profile seed selects explicit engine without importing editor code', async
       },
     }
   })
-  for (const engine of ['tiptap', 'codemirror']) {
-    const seed = await flows.seedBenchmarkProfile(profile, engine)
-    assert.equal(seed.method, 'chromium-storage-only')
-    assert.equal(seed.hardwareAcceleration, false)
-    assert.ok(seed.files['benchmark-profile.cjs'].bytes > 0)
-    assert.match(seed.files['benchmark-profile.cjs'].sha256, /^[a-f0-9]{64}$/)
-    assert.equal(values.get('hibi:formatted-engine'), engine)
-    assert.equal(values.get('default-view'), 'normal')
-  }
-  assert.deepEqual(events, [
-    'software-seed',
-    'seed',
-    'flush',
-    'closed',
-    'software-seed',
-    'seed',
-    'flush',
-    'closed',
-  ])
-  await assert.rejects(
-    () => flows.seedBenchmarkProfile(profile, 'other'),
-    /engine/,
-  )
+  const seed = await flows.seedBenchmarkProfile(profile)
+  assert.equal(seed.method, 'chromium-storage-only')
+  assert.equal(seed.hardwareAcceleration, false)
+  assert.ok(seed.files['benchmark-profile.cjs'].bytes > 0)
+  assert.match(seed.files['benchmark-profile.cjs'].sha256, /^[a-f0-9]{64}$/)
+  assert.deepEqual([...values], [['default-view', 'normal']])
+  assert.deepEqual(events, ['software-seed', 'seed', 'flush', 'closed'])
 })
 
-test('both engines wait for editable, idle, loaded fonts and the next frame', async () => {
-  let observed = 'codemirror'
+test('the editor waits for editable, idle, loaded fonts and the next frame', async () => {
   let readonly = false
   let inert = false
   let busy = false
@@ -137,17 +120,12 @@ test('both engines wait for editable, idle, loaded fonts and the next frame', as
     getAttribute: () => (readonly ? 'true' : null),
     closest(selector) {
       if (selector === '[inert]') return inert ? {} : null
-      if (selector === '.hibi-formatted')
-        return observed === 'codemirror' ? {} : null
       return null
-    },
-    classList: {
-      contains: (name) => observed === 'tiptap' && name === 'tiptap',
     },
     getBoundingClientRect: () => ({ width: 100 }),
   }
-  const runInPage = (run, engine) =>
-    vm.runInNewContext(`(${run})(${JSON.stringify(engine)})`, {
+  const runInPage = (run, settled) =>
+    vm.runInNewContext(`(${run})(${JSON.stringify(settled)})`, {
       requestAnimationFrame: (run) => frames.push(run),
       document: {
         fonts: {
@@ -165,8 +143,8 @@ test('both engines wait for editable, idle, loaded fonts and the next frame', as
       },
     })
   const page = {
-    waitForFunction(run, engine) {
-      const result = runInPage(run, engine)
+    waitForFunction(run, settled) {
+      const result = runInPage(run, settled)
       assert.equal(
         typeof result,
         'boolean',
@@ -177,64 +155,46 @@ test('both engines wait for editable, idle, loaded fonts and the next frame', as
     },
     evaluate: runInPage,
   }
-  for (observed of ['codemirror', 'tiptap']) {
-    for (const condition of [
-      'fonts',
-      'busy',
-      'readonly',
-      'inert',
-      'editable',
-    ]) {
-      fontStatus = condition === 'fonts' ? 'loading' : 'loaded'
-      busy = condition === 'busy'
-      readonly = condition === 'readonly'
-      inert = condition === 'inert'
-      editor.isContentEditable = condition !== 'editable'
-      await assert.rejects(
-        () => flows.waitForEditor(page, observed),
-        /not ready/,
-        condition,
-      )
-      assert.equal(frames.length, 0, 'no frame until common conditions hold')
-    }
-    fontStatus = 'loaded'
-    busy = readonly = inert = false
-    editor.isContentEditable = true
+  for (const condition of ['fonts', 'busy', 'readonly', 'inert', 'editable']) {
+    fontStatus = condition === 'fonts' ? 'loading' : 'loaded'
+    busy = condition === 'busy'
+    readonly = condition === 'readonly'
+    inert = condition === 'inert'
+    editor.isContentEditable = condition !== 'editable'
     await assert.rejects(
-      () =>
-        flows.waitForEditor(
-          page,
-          observed === 'tiptap' ? 'codemirror' : 'tiptap',
-        ),
+      () => flows.waitForEditor(page, true),
       /not ready/,
+      condition,
     )
-    const pending = flows.waitForEditor(page, observed)
-    await Promise.resolve()
-    assert.equal(frames.length, 1, 'readiness must await first frame')
-    frames.shift()()
-    assert.equal(await pending, true, observed)
-    const invalidated = flows.waitForEditor(page, observed)
-    await Promise.resolve()
-    busy = true
-    frames.shift()()
-    await assert.rejects(
-      invalidated,
-      /not ready/,
-      'conditions rechecked after frame',
-    )
-    busy = false
+    assert.equal(frames.length, 0, 'no frame until common conditions hold')
   }
+  fontStatus = 'loaded'
+  busy = readonly = inert = false
+  editor.isContentEditable = true
+  const pending = flows.waitForEditor(page, true)
+  await Promise.resolve()
+  assert.equal(frames.length, 1, 'readiness must await first frame')
+  frames.shift()()
+  assert.equal(await pending, true)
+  const invalidated = flows.waitForEditor(page, true)
+  await Promise.resolve()
+  busy = true
+  frames.shift()()
+  await assert.rejects(
+    invalidated,
+    /not ready/,
+    'conditions rechecked after frame',
+  )
 })
 
-test('document opening recognizes formatted headings in either engine', async () => {
-  let observed = 'codemirror'
+test('document opening recognizes formatted headings', async () => {
   const page = {
     locator: () => ({ waitFor: async () => {} }),
     waitForFunction: (run, title) => {
       const ready = vm.runInNewContext(`(${run})(${JSON.stringify(title)})`, {
         document,
       })
-      assert.equal(ready, true, `${observed} heading must become ready`)
+      assert.equal(ready, true, 'heading must become ready')
       return ready
     },
   }
@@ -254,13 +214,12 @@ test('document opening recognizes formatted headings in either engine', async ()
   }
   const document = {
     querySelectorAll(selector) {
-      return selector.includes('[role="heading"]') || observed === 'tiptap'
+      return selector.includes('[role="heading"]')
         ? [{ textContent: 'Note', getAttribute: () => null }]
         : []
     },
   }
-  for (observed of ['tiptap', 'codemirror'])
-    await flows.openBenchmarkDocument(app, page, 'Note')
+  await flows.openBenchmarkDocument(app, page, 'Note')
 })
 
 test('timed startup and later document samples never enable the debugger', async () => {
@@ -315,7 +274,6 @@ test('timed startup and later document samples never enable the debugger', async
         samples,
         assert,
         values: { 'script-census': census },
-        engine: 'codemirror',
         recentPaths: [],
         performance: { now: () => 0, timeOrigin: 0 },
         process: { env: {} },
@@ -336,7 +294,6 @@ test('timed startup and later document samples never enable the debugger', async
       },
     )
     assert.equal(samples.length, 2)
-    assert.equal(samples[0].engine, 'codemirror')
     assert.equal(
       samples[0].visibility.visible,
       true,
@@ -438,7 +395,6 @@ test('all startup conditions seed identically before launch including minimal co
     recentPaths: [],
     enabledAddons: [],
     minimal: 'minimal.cjs',
-    engine: 'tiptap',
     profileSeeds: new Map(),
     // The loop runs as on linux, whose paths use forward slashes.
     join: posix.join,
@@ -446,8 +402,8 @@ test('all startup conditions seed identically before launch including minimal co
     mkdir: async () => {},
     writeFile: async () => {},
     performance: { now: () => ++now },
-    seedBenchmarkProfile: async (profile, engine) => {
-      seeds.push({ profile, engine, now })
+    seedBenchmarkProfile: async (profile) => {
+      seeds.push({ profile, now })
       return { method: 'seeded' }
     },
     launchBenchmarkApp: async (profile) => {
@@ -467,7 +423,6 @@ test('all startup conditions seed identically before launch including minimal co
       '/profiles/warm',
     ],
   )
-  assert.ok(seeds.every((seed) => seed.engine === 'tiptap'))
   assert.equal(launches.length, 6)
 })
 
@@ -544,7 +499,6 @@ test('release packaging excludes the benchmark build receipt', async () => {
 
 for (const [file, start, end] of [
   ['benchmark-startup.mjs', 'const { values }', 'const temp ='],
-  ['benchmark-editors.mjs', '  const { values }', '  const selected ='],
 ]) {
   test(`${file} accepts hosted windows by default and requires hidden windows for verified runs`, async () => {
     const source = await readFile(
@@ -561,7 +515,6 @@ for (const [file, start, end] of [
           assert,
           parseArgs: (options) => parseArgs({ ...options, args }),
           showTestWindows: shown,
-          benchmarkEngine: flows.benchmarkEngine,
           benchmarkProvenance: async (_sampler, _root, required) => {
             assert.equal(required, args.includes('--require-build-manifest'))
             return {}
@@ -715,7 +668,7 @@ test('end verification rejects changed source, output, helpers or a replacement 
 })
 
 test('samplers verify provenance after sampling and cold startup never times a reload', async () => {
-  for (const file of ['benchmark-startup.mjs', 'benchmark-editors.mjs']) {
+  for (const file of ['benchmark-startup.mjs']) {
     const source = await readFile(
       new URL(`../scripts/${file}`, import.meta.url),
       'utf8',

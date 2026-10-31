@@ -12,19 +12,16 @@ import {
 } from '../scripts/benchmark-flows.mjs'
 import {
   electron,
-  showTestWindows,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
-import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
-import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
+import { waitForAsync } from './poll.mjs'
 
-const inputFixtureCapture = process.env.HIBI_CAPTURE_TIPTAP_INPUT === '1'
-
+// What the removed native editor did with table picks, recorded before its removal.
+const recorded = frozenOracle('editor-input')
 // Frozen user outcomes: CM never launches the old engine to derive an expectation.
 // Reviewed 51/51 records: .engine-focus-scale-port-input-fixtures-capture-r2.log.
 const frozenToolbarSource =
@@ -697,587 +694,126 @@ function inputFixture(kind, name) {
   return fixture
 }
 
-function emitInputFixture(t, kind, name, value) {
-  if (inputFixtureCapture)
-    t.diagnostic(
-      'tiptap-input-freeze ' +
-        JSON.stringify({ schema: 1, kind, name, ...value }),
-    )
-}
-
-const table =
-  '<table><tbody><tr><td><p>a|</p></td><td><p>b</p></td></tr><tr><td><p>c</p></td><td><p>d</p></td></tr></tbody></table>'
-// [case, document, input, selection], then whether the editor handles it.
+// [case, input, selection]; each case's document is in its frozen fixture.
 const multilineInputCases = [
   [
     'markdown',
-    '<p>|</p>',
     'words **bold** _em_ `code` [l](https://e.test) <b>h</b>\n# no\n- item\n> quote\n1. one\n\nend',
   ],
-  ['paragraph', '<p>start|END</p>', 'a\r\n\nb\rc'],
-  ['heading middle', '<h2>st|art</h2>', '1\n\n2'],
-  ['heading end', '<h2>start|</h2><p>z</p>', 'a\nb\n'],
-  ['list', '<ul><li><p>start|END</p></li></ul>', 'a\n\nb'],
-  [
-    'list end',
-    '<ol><li><p>one|</p></li><li><p>two</p></li></ol>',
-    'a\n\nb\n\nc',
-  ],
-  ['item paragraphs', '<ul><li><p>fi|rst</p><p>second</p></li></ul>', 'a\nb'],
-  [
-    'ordered end',
-    '<ol start="7"><li><p>ab|</p></li><li><p>tail</p></li></ol>',
-    'a\n\nb',
-  ],
-  [
-    'nested list',
-    '<ul><li><p>x</p><ul><li><p>y|</p></li></ul></li></ul>',
-    'a\nb',
-  ],
-  ['quote', '<blockquote><p>start|</p></blockquote>', 'a\n\nb'],
-  ['code', '<pre><code>s|e</code></pre>', '**l**\r\n\t b\rc\n'],
-  ['cell', table, 'one\n\ntwo'],
-  ['selection', '<p>before [MIDDLE] after</p>', 'one\ntwo'],
-  ['bold', '<p><strong>a|b</strong></p>', 'X\nY'],
-  ['link end', '<p>x<a href="https://e.test">ab|</a>z</p>', 'X\nY'],
-  ['code end', '<p>x<code>ab|</code></p>', 'X\nY'],
-  ['stored mark', '<p>|</p>', 'alpha\nbeta', 'bold'],
-  ['cells', table, 'one\ntwo', 'cells', false],
-  ['blocks', '<p>ab[c</p><p>d]ef</p>', 'X\nY'],
-  [
-    'blocks into a list',
-    '<p>a[b</p><ul><li><p>c]d</p><p>more</p></li><li><p>x</p></li></ul>',
-    'X\n\nY\n',
-  ],
-  [
-    'items',
-    '<ul><li><p>a[b</p></li><li><p>c]d</p></li><li><p>x</p></li></ul>',
-    'X\n\nY\n',
-  ],
-  ['all', '<h1>Title</h1><p>replace me</p>', 'X\n\nY\n', 'all'],
-  [
-    'all from a list',
-    '<ol start="7"><li><p>a</p></li></ol><p>b</p>',
-    'X\n\nY\n',
-    'all',
-  ],
-  [
-    'line breaks only',
-    '<ol start="7"><li><p>ab|</p></li><li><p>tail</p></li></ol>',
-    '\n\n',
-    undefined,
-    false,
-  ],
-  ['block kinds', '<p>a[b</p><h2>c]d</h2>', 'X\nY', undefined, false],
-  [
-    'into a table',
-    '<p>a[b</p><table><tbody><tr><td><p>c]d</p></td></tr></tbody></table>',
-    'X\nY',
-    undefined,
-    false,
-  ],
-  [
-    'task',
-    '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>|</p></li></ul>',
-    '\nb',
-    undefined,
-    false,
-  ],
-  [
-    'nested list end',
-    '<ul><li><p>x</p><ul><li><p>y|</p></li></ul></li></ul>',
-    'a\n\nb',
-    undefined,
-    false,
-  ],
-  [
-    'item start',
-    '<ul><li><p>|x</p><ul><li><p>y</p></li></ul></li></ul>',
-    '\nb',
-    undefined,
-    false,
-  ],
-  ['single line', '<p>a|</p>', 'one line', undefined, false],
+  ['paragraph', 'a\r\n\nb\rc'],
+  ['heading middle', '1\n\n2'],
+  ['heading end', 'a\nb\n'],
+  ['list', 'a\n\nb'],
+  ['list end', 'a\n\nb\n\nc'],
+  ['item paragraphs', 'a\nb'],
+  ['ordered end', 'a\n\nb'],
+  ['nested list', 'a\nb'],
+  ['quote', 'a\n\nb'],
+  ['code', '**l**\r\n\t b\rc\n'],
+  ['cell', 'one\n\ntwo'],
+  ['selection', 'one\ntwo'],
+  ['bold', 'X\nY'],
+  ['link end', 'X\nY'],
+  ['code end', 'X\nY'],
+  ['stored mark', 'alpha\nbeta', 'bold'],
+  ['cells', 'one\ntwo', 'cells'],
+  ['blocks', 'X\nY'],
+  ['blocks into a list', 'X\n\nY\n'],
+  ['items', 'X\n\nY\n'],
+  ['all', 'X\n\nY\n', 'all'],
+  ['all from a list', 'X\n\nY\n', 'all'],
+  ['line breaks only', '\n\n'],
+  ['block kinds', 'X\nY'],
+  ['into a table', 'X\nY'],
+  ['task', '\nb'],
+  ['nested list end', 'a\n\nb'],
+  ['item start', '\nb'],
+  ['single line', 'one line'],
 ]
 
-async function installTiptapMultilineProbe(page) {
-  await page.evaluate(() => {
-    const editor = document.querySelector('.tiptap').editor
-    const handlers = editor.options.editorProps.handleDOMEvents
-    const probe = { prevented: [], inputs: [], steps: [] }
-    window.addEventListener('beforeinput', (event) =>
-      probe.prevented.push(event.defaultPrevented),
-    )
-    window.addEventListener('input', (event) => probe.inputs.push(event.data))
-    editor.on('transaction', ({ transaction }) => {
-      if (transaction.docChanged) probe.steps.push(transaction.steps.length)
-    })
-    // `|` marks the caret and `[` `]` a selection. `browser` leaves every
-    // input to the browser, as the editor did before.
-    window.richLines = (html, select, browser) => {
-      editor.setOptions({
-        editorProps: {
-          ...editor.options.editorProps,
-          handleDOMEvents: {
-            ...handlers,
-            beforeinput: browser ? () => false : handlers.beforeinput,
-          },
-        },
-      })
-      editor.commands.setContent(html, { contentType: 'html' })
-      // Tables load through the source parser too: their serialized empty
-      // header must already exist in the model that native history restores.
-      if (html.includes('<table>'))
-        editor.commands.setContent(editor.getMarkdown(), {
-          contentType: 'markdown',
-        })
-      const marks = []
-      editor.state.doc.descendants((node, pos) => {
-        for (const match of node.text?.matchAll(/[|[\]]/g) ?? [])
-          marks.push(pos + match.index)
-      })
-      const tr = editor.state.tr
-      for (const pos of [...marks].reverse()) tr.delete(pos, pos + 1)
-      editor.view.dispatch(tr)
-      const [from, to = from] = marks.map((pos, index) => pos - index)
-      if (select === 'cells') {
-        const cells = []
-        editor.state.doc.descendants((node, pos) => {
-          if (node.type.name === 'tableCell') cells.push(pos)
-        })
-        editor.commands.setCellSelection({
-          anchorCell: cells[0],
-          headCell: cells.at(-1),
-        })
-      } else if (select === 'all') editor.commands.selectAll()
-      else editor.commands.setTextSelection({ from, to })
-      if (select === 'bold') editor.commands.setMark('bold')
-      Object.assign(probe, { prevented: [], inputs: [], steps: [] })
-      const { $to } = editor.state.selection
-      return $to.parent.textBetween($to.parentOffset, $to.parent.content.size)
-    }
-    window.richLinesResult = () => {
-      const { $head } = editor.state.selection
-      return {
-        ...probe,
-        doc: editor.getJSON(),
-        markdown: editor.getMarkdown(),
-        caret: [
-          $head.parent.textBetween(0, $head.parentOffset),
-          $head.parent.textBetween(
-            $head.parentOffset,
-            $head.parent.content.size,
-          ),
-        ],
-      }
-    }
-  })
-}
-
-test('typing coalesces formatting checks without delaying document changes or undo', {
-  timeout: 30000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-input-'))
-  const app = await launchBenchmarkApp(profile)
-  t.after(async () => {
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  await waitForEditor(page)
-  const result = await page.evaluate(async () => {
-    const editor = document.querySelector('.tiptap').editor
-    await new Promise(requestAnimationFrame)
-    const visibleActions = document.querySelectorAll(
-      '.editor-toolbar [data-toolbar-id^="format."]',
-    ).length
-    let checks = 0
-    const can = editor.can.bind(editor)
-    editor.can = (...args) => {
-      checks++
-      return can(...args)
-    }
-    for (const letter of 'hello') editor.commands.insertContent(letter)
-    const immediate = { checks, text: editor.getText() }
-    await new Promise(requestAnimationFrame)
-    const inFrame = checks
-    while (!checks) await new Promise(requestAnimationFrame)
-    await new Promise(requestAnimationFrame)
-    const afterFrame = checks
-    const persisted = (await window.hibi.getDocument()).markdown
-    editor.commands.undo()
-    const undone = editor.getText()
-    editor.commands.redo()
-    return {
-      immediate,
-      inFrame,
-      afterFrame,
-      visibleActions,
-      persisted,
-      undone,
-      redone: editor.getText(),
-    }
-  })
-  assert.deepEqual(result.immediate, { checks: 0, text: 'hello' })
-  assert.ok(result.visibleActions > 0)
-  // One refresh for all five transactions, after the frame that showed them.
-  assert.equal(result.inFrame, 0)
-  assert.equal(result.afterFrame, result.visibleActions)
-  assert.equal(result.persisted, 'hello')
-  assert.equal(result.undone, '')
-  assert.equal(result.redone, 'hello')
-})
-
-test('multi-line text input in the visual editor makes the browser edit in one step', {
-  timeout: 120000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-lines-'))
-  const app = await launchBenchmarkApp(profile)
-  t.after(async () => {
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  await waitForEditor(page)
-  const rich = page.getByRole('textbox', {
-    name: 'Document editor',
-    exact: true,
-  })
-  await installTiptapMultilineProbe(page)
-  const cases = multilineInputCases
-  for (const [what, html, text, select, handled = true] of cases) {
-    const capture = inputFixtureCapture
-      ? await captureTiptapInputRange(page, html, select)
-      : null
-    const results = []
-    for (const browser of [true, false]) {
-      await rich.focus()
-      const rest = await page.evaluate(
-        (args) => window.richLines(...args),
-        [html, select, browser],
-      )
-      const before = ['cell', 'cells', 'into a table'].includes(what)
-        ? await rich.evaluate((element) => ({
-            doc: element.editor.getJSON(),
-            markdown: element.editor.getMarkdown(),
-          }))
-        : null
-      if (before)
-        assert.equal(
-          (await acceptedInput(page)).markdown,
-          before.markdown,
-          what + ' canonical before source',
-        )
-      await page.keyboard.insertText(text)
-      results.push({
-        rest,
-        before,
-        ...(await page.evaluate(() => window.richLinesResult())),
-      })
-    }
-    const [browser, typed] = results
-    if (['cell', 'cells', 'into a table'].includes(what)) {
-      assert.notDeepEqual(
-        typed.doc,
-        typed.before.doc,
-        what + ' edits the native model',
-      )
-      const modelCells = (doc) => {
-        const cells = []
-        const read = (node) =>
-          node.type === 'hardBreak'
-            ? '\n'
-            : (node.text ??
-              (node.content ?? [])
-                .map(read)
-                .join(
-                  node.type === 'tableCell' || node.type === 'tableHeader'
-                    ? '\n'
-                    : '',
-                ))
-        const walk = (node) => {
-          if (node.type === 'tableRow') cells.push(node.content.map(read))
-          else for (const child of node.content ?? []) walk(child)
-        }
-        walk(doc)
-        return cells
-      }
-      const expected = {
-        cell: [
-          ['', ''],
-          ['aone\n\ntwo', 'b'],
-          ['c', 'd'],
-        ],
-        cells: [
-          ['', ''],
-          ['a', 'b'],
-          ['c', 'one\ntwo'],
-        ],
-        // The range removes the header row; the table keeps the empty one its source has.
-        'into a table': [[''], ['d']],
-      }[what]
-      assert.deepEqual(
-        modelCells(browser.doc),
-        expected,
-        what + ' browser model',
-      )
-      assert.deepEqual(modelCells(typed.doc), expected, what + ' native model')
-      const history = await rich.evaluate((element) => {
-        const editor = element.editor
-        editor.commands.undo()
-        const undo = { doc: editor.getJSON(), markdown: editor.getMarkdown() }
-        editor.commands.redo()
-        return {
-          undo,
-          redo: { doc: editor.getJSON(), markdown: editor.getMarkdown() },
-        }
-      })
-      assert.deepEqual(history.undo, typed.before, what + ' native undo')
-      assert.equal(
-        history.redo.markdown,
-        typed.markdown,
-        what + ' exact native redo source',
-      )
-      const fresh = await launchInputFixture(t, typed.markdown, 'tiptap')
-      const reloaded = await fresh.rich.evaluate((element) =>
-        element.editor.getJSON(),
-      )
-      assert.equal((await acceptedInput(fresh.page)).markdown, typed.markdown)
-      assert.deepEqual(
-        history.redo.doc,
-        reloaded,
-        what + ' native redo model equals a fresh source load',
-      )
-      assert.deepEqual(
-        modelCells(reloaded),
-        expected,
-        what + ' native reload cell text and counts',
-      )
-      const styles = (node) => {
-        if (node.type === 'text')
-          return [...node.text].map((text) => ({
-            text,
-            marks: node.marks ?? [],
-          }))
-        if (node.type === 'hardBreak')
-          return [{ text: '\n', marks: node.marks ?? [] }]
-        return (node.content ?? []).flatMap((child, index) => [
-          ...(index && ['tableCell', 'tableHeader'].includes(node.type)
-            ? [{ text: '\n', marks: [] }]
-            : []),
-          ...styles(child),
-        ])
-      }
-      assert.deepEqual(
-        styles(reloaded),
-        styles(typed.doc),
-        what + ' native reload text and styles',
-      )
-      await fresh.close()
-    }
-    assert.deepEqual(
-      [typed.doc, typed.markdown],
-      [browser.doc, browser.markdown],
-      what,
-    )
-    assert.deepEqual(typed.prevented, [handled], what)
-    if (inputFixtureCapture)
-      emitInputFixture(t, 'multiline', what, {
-        ...capture,
-        input: text,
-        select: select ?? null,
-        handled,
-        result: { markdown: typed.markdown, caret: typed.caret },
-      })
-    if (!handled) continue
-    // One step and the input signal, with the caret after the input (the
-    // browser's own edit can leave it a line early).
-    assert.deepEqual([typed.steps, typed.inputs], [[1], [text]], what)
-    const line = text.split(/\r\n?|\n/).at(-1)
-    assert.equal(typed.caret[1], typed.rest, what)
-    assert.ok(
-      what === 'code' ? typed.caret[0].endsWith(line) : typed.caret[0] === line,
-      `${what}: ${typed.caret}`,
-    )
-  }
-  const undone = []
-  for (const browser of [true, false]) {
-    await rich.focus()
-    await page.evaluate(
-      (browser) => window.richLines('<p>|</p>', undefined, browser),
-      browser,
-    )
-    await page.keyboard.insertText('hello')
-    await page.keyboard.insertText('one\ntwo')
-    undone.push(
-      await page.evaluate(() => {
-        const editor = document.querySelector('.tiptap').editor
-        editor.commands.undo()
-        return editor.getJSON()
-      }),
-    )
-  }
-  assert.deepEqual(undone[1], undone[0])
-  // Ending a list at its only item keeps the text, which the browser's own
-  // edit drops.
-  const captureEnd = inputFixtureCapture
-    ? await captureTiptapInputRange(page, '<ul><li><p>|</p></li></ul><p>z</p>')
-    : null
-  await rich.focus()
-  await page.evaluate(() =>
-    window.richLines('<ul><li><p>|</p></li></ul><p>z</p>', undefined, false),
-  )
-  await page.keyboard.insertText('\nb')
-  const ended = await page.evaluate(() => window.richLinesResult())
-  assert.deepEqual(
-    [ended.prevented, ended.markdown, ended.caret],
-    [[true], 'b\n\nz', ['b', '']],
-  )
-  if (inputFixtureCapture)
-    emitInputFixture(t, 'special', 'empty-list-exit', {
-      ...captureEnd,
-      input: '\nb',
-      select: null,
-      result: { markdown: ended.markdown, caret: ended.caret },
-    })
-})
-
-// Each pick launches its own app, so each has its own budget rather than
-// sharing one that a loaded machine runs out of partway.
 test('native table picks retain multiline caret positions, scalar boundaries and literal text', async (t) => {
-  const outcomes = []
-  await t.test('tiptap outcomes', { timeout: 60000 }, async (t) => {
-    const native = await launchInputFixture(t, '', 'tiptap')
-    await installTiptapMultilineProbe(native.page)
-    for (const [what, html, , select] of multilineInputCases.filter(([name]) =>
-      ['cells', 'into a table'].includes(name),
-    )) {
-      for (const [text, caret] of [
-        ['Z', null],
-        ['a\nb', ['', 'b']],
-        ['a\nbcdef', ['bcde', 'f']],
-        ['a\nb\nc', ['b', '']],
-        ['a\n😀', ['😀', '']],
-        ['**a**\n| &amp;', null],
-      ]) {
-        await native.rich.focus()
-        await native.page.evaluate(
-          (args) => window.richLines(...args),
-          [html, select, false],
-        )
-        await native.rich.evaluate((element) => element.editor.view.focus())
-        await native.page.waitForFunction(() => {
-          const editor = document.querySelector('.tiptap').editor
-          const selection = getSelection()
-          return (
-            selection?.focusNode &&
-            editor.view.posAtDOM(selection.focusNode, selection.focusOffset) ===
-              editor.state.selection.head
+  for (const [what] of multilineInputCases.filter(([name]) =>
+    ['cells', 'into a table'].includes(name),
+  ))
+    for (const text of [
+      'Z',
+      'a\nb',
+      'a\nbcdef',
+      'a\nb\nc',
+      'a\n😀',
+      '**a**\n| &amp;',
+    ]) {
+      // What the native editor did with the same pick and input, recorded
+      // before its removal.
+      const { result, following } = recorded({ kind: 'table pick', what, text })
+      await t.test(
+        what + ': ' + JSON.stringify(text),
+        { timeout: 30000 },
+        async (t) => {
+          const oracle = inputFixture('multiline', what)
+          const { app, page, rich } = await launchInputFixture(t, oracle.source)
+          await rich.focus()
+          await selectNativeInputTable(t, page, rich, what, oracle)
+          // The owner can focus again before the browser's selection echo arrives.
+          await rich.evaluate((element) => element.cmTile.root.view.focus())
+          await page.waitForFunction(
+            ({ from, to, text }) => {
+              const element = document.querySelector(
+                '.rich-pane [aria-label="Document editor"]',
+              )
+              const range = element.cmTile.root.view.state.selection.main
+              return (
+                range.from === from &&
+                range.to === to &&
+                getSelection()?.toString().replace(/\s/g, '') === text
+              )
+            },
+            {
+              from: oracle.from,
+              to: oracle.to,
+              text: what === 'cells' ? 'abcd' : 'bc',
+            },
           )
-        })
-        const before = await native.rich.evaluate((element) =>
-          element.editor.getJSON(),
-        )
-        assert.equal(
-          (await acceptedInput(native.page)).markdown,
-          await native.rich.evaluate((element) => element.editor.getMarkdown()),
-        )
-        await native.page.keyboard.insertText(text)
-        const result = await native.page.evaluate(() =>
-          window.richLinesResult(),
-        )
-        assert.notDeepEqual(
-          result.doc,
-          before,
-          what + ' edits the native model',
-        )
-        assert.deepEqual(result.steps, [1])
-        if (caret) assert.deepEqual(result.caret, caret, what + ': ' + text)
-        await native.page.keyboard.insertText('Q')
-        const following = await native.page.evaluate(() =>
-          window.richLinesResult(),
-        )
-        assert.notDeepEqual(
-          following.doc,
-          result.doc,
-          what + ' native following character edits the model',
-        )
-        outcomes.push({ what, text, result, following })
-      }
+          const before = await acceptedInput(page)
+          await inputWorkProbe(rich)
+          await page.keyboard.insertText(text)
+          const actual = await acceptedInput(page)
+          assert.deepEqual(
+            inputOutcome(actual.markdown),
+            inputOutcome(result.markdown),
+          )
+          assert.deepEqual(await cmCaretText(rich), result.caret)
+          const work = await page.evaluate(() => window.cmInputWork)
+          assert.equal(work.beforeinput.length, 1)
+          assert.deepEqual(work.inputs, [{ type: 'insertText', data: text }])
+          assert.equal(work.changes, 1)
+          assert.equal(actual.contentVersion, before.contentVersion + 1)
+          await pressShortcut(
+            app,
+            process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+          )
+          assert.equal((await acceptedInput(page)).markdown, before.markdown)
+          await pressShortcut(
+            app,
+            process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+          )
+          const redone = await acceptedInput(page)
+          assert.equal(redone.markdown, actual.markdown)
+          assert.deepEqual(await cmCaretText(rich), result.caret)
+          await page.keyboard.insertText('Q')
+          const continued = await acceptedInput(page)
+          assert.deepEqual(
+            inputOutcome(continued.markdown),
+            inputOutcome(following.markdown),
+          )
+          assert.deepEqual(await cmCaretText(rich), following.caret)
+          assert.equal(continued.contentVersion, redone.contentVersion + 1)
+        },
+      )
     }
-    await native.close()
-  })
-  for (const { what, text, result, following } of outcomes) {
-    await t.test(
-      what + ': ' + JSON.stringify(text),
-      { timeout: 30000 },
-      async (t) => {
-        const oracle = inputFixture('multiline', what)
-        const { app, page, rich } = await launchInputFixture(t, oracle.source)
-        await rich.focus()
-        await selectNativeInputTable(t, page, rich, what, oracle)
-        // The owner can focus again before the browser's selection echo arrives.
-        await rich.evaluate((element) => element.cmTile.root.view.focus())
-        await page.waitForFunction(
-          ({ from, to, text }) => {
-            const element = document.querySelector(
-              '.rich-pane [aria-label="Document editor"]',
-            )
-            const range = element.cmTile.root.view.state.selection.main
-            return (
-              range.from === from &&
-              range.to === to &&
-              getSelection()?.toString().replace(/\s/g, '') === text
-            )
-          },
-          {
-            from: oracle.from,
-            to: oracle.to,
-            text: what === 'cells' ? 'abcd' : 'bc',
-          },
-        )
-        const before = await acceptedInput(page)
-        await inputWorkProbe(rich)
-        await page.keyboard.insertText(text)
-        const actual = await acceptedInput(page)
-        assert.deepEqual(
-          inputOutcome(actual.markdown),
-          inputOutcome(result.markdown),
-        )
-        assert.deepEqual(await cmCaretText(rich), result.caret)
-        const work = await page.evaluate(() => window.cmInputWork)
-        assert.equal(work.beforeinput.length, 1)
-        assert.deepEqual(work.inputs, [{ type: 'insertText', data: text }])
-        assert.equal(work.changes, 1)
-        assert.equal(actual.contentVersion, before.contentVersion + 1)
-        await pressShortcut(
-          app,
-          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
-        )
-        assert.equal((await acceptedInput(page)).markdown, before.markdown)
-        await pressShortcut(
-          app,
-          process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
-        )
-        const redone = await acceptedInput(page)
-        assert.equal(redone.markdown, actual.markdown)
-        assert.deepEqual(await cmCaretText(rich), result.caret)
-        await page.keyboard.insertText('Q')
-        const continued = await acceptedInput(page)
-        assert.deepEqual(
-          inputOutcome(continued.markdown),
-          inputOutcome(following.markdown),
-        )
-        assert.deepEqual(await cmCaretText(rich), following.caret)
-        assert.equal(continued.contentVersion, redone.contentVersion + 1)
-      },
-    )
-  }
 })
 
-test('codemirror: a native table pick keeps the shared input guards', {
+test('a native table pick keeps the shared input guards', {
   timeout: 60000,
 }, async (t) => {
   const documentView = `document.querySelector('.rich-pane [aria-label="Document editor"]').cmTile.root.view`
@@ -1431,180 +967,7 @@ test('codemirror: a native table pick keeps the shared input guards', {
   }
 })
 
-test('multi-line text input work in the visual editor stays linear in the lines', {
-  timeout: 60000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-lines-work-'))
-  const app = await launchBenchmarkApp(profile)
-  t.after(async () => {
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  await waitForEditor(page)
-  const rich = page.getByRole('textbox', {
-    name: 'Document editor',
-    exact: true,
-  })
-  await page.evaluate(() => {
-    const editor = document.querySelector('.tiptap').editor
-    const mapping = Object.getPrototypeOf(editor.state.tr.mapping),
-      map = mapping.map
-    const work = { prevented: [] }
-    window.richLinesWork = work
-    window.addEventListener('beforeinput', (event) =>
-      work.prevented.push(event.defaultPrevented),
-    )
-    editor.on('transaction', ({ transaction }) => {
-      if (!transaction.docChanged) return
-      work.transactions++
-      work.steps += transaction.steps.length
-    })
-    mapping.map = function (...args) {
-      work.maps++
-      work.mapped += this.to - this.from
-      return map.apply(this, args)
-    }
-  })
-  const counts = []
-  // Into an empty paragraph, and over everything after select all.
-  for (const all of [false, true])
-    for (const lines of [500, 1000]) {
-      await rich.focus()
-      await page.evaluate((all) => {
-        const editor = document.querySelector('.tiptap').editor
-        editor.commands.setContent(
-          all ? '<h1>Title</h1><p>replace me</p>' : '<p></p>',
-          { contentType: 'html' },
-        )
-        editor.commands.setTextSelection(1)
-      }, all)
-      if (all) await rich.press('ControlOrMeta+a')
-      const captureWork = inputFixtureCapture
-        ? await rich.evaluate((element, all) => {
-            const source = element.editor.getMarkdown()
-            return { source, from: 0, to: all ? source.length : 0 }
-          }, all)
-        : null
-      await page.evaluate(() =>
-        Object.assign(window.richLinesWork, {
-          prevented: [],
-          transactions: 0,
-          steps: 0,
-          maps: 0,
-          mapped: 0,
-        }),
-      )
-      // Lines with markdown syntax, which paste rules would format.
-      await page.keyboard.insertText(
-        Array.from(
-          { length: lines },
-          (_, index) => `line **${index}** _${index}_ \`${index}\``,
-        ).join('\n'),
-      )
-      counts.push({
-        all,
-        lines,
-        ...(await page.evaluate(() => ({
-          ...window.richLinesWork,
-          blocks: document.querySelector('.tiptap').editor.state.doc.childCount,
-        }))),
-      })
-      if (inputFixtureCapture)
-        emitInputFixture(t, 'linear', (all ? 'all' : 'empty') + ':' + lines, {
-          ...captureWork,
-          all,
-          lines,
-          result: {
-            markdown: await rich.evaluate((element) =>
-              element.editor.getMarkdown(),
-            ),
-          },
-        })
-    }
-  for (const result of counts)
-    assert.deepEqual(
-      [result.prevented, result.transactions, result.steps, result.blocks],
-      [[true], 1, 1, result.lines],
-      JSON.stringify(result),
-    )
-  // Twice the lines, at most twice the position mapping work.
-  for (const [small, large] of [counts.slice(0, 2), counts.slice(2)])
-    assert.ok(
-      large.maps <= 2 * small.maps + 8 && large.mapped <= 2 * small.mapped + 8,
-      JSON.stringify(counts),
-    )
-})
-
-test('visual typing after a source visit defers the hidden source and toolbar checks', {
-  timeout: 30000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-hidden-source-'))
-  const app = await launchBenchmarkApp(profile)
-  t.after(async () => {
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  await waitForEditor(page)
-  await switchToSource(app, page)
-  await pressShortcut(
-    app,
-    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+[`,
-  )
-  await page.waitForFunction(
-    () =>
-      document.querySelector('.editor-panes.mode-normal') &&
-      document.querySelector('.source-pane .cm-content')?.closest('[inert]'),
-  )
-  await waitForEditor(page)
-  const result = await page.evaluate(async () => {
-    const editor = document.querySelector('.tiptap').editor
-    const source = document.querySelector('.cm-content').cmTile.root.view
-    editor.commands.focus('end')
-    await new Promise(requestAnimationFrame)
-    const visibleActions = document.querySelectorAll(
-      '.editor-toolbar [data-toolbar-id^="format."]',
-    ).length
-    let updates = 0,
-      checks = 0
-    const update = source.update.bind(source)
-    // Echoes change the document; focus and parser updates of the hidden view do not.
-    source.update = (transactions) => {
-      if (transactions.some((transaction) => transaction.docChanged)) updates++
-      return update(transactions)
-    }
-    const can = editor.can.bind(editor)
-    editor.can = (...args) => {
-      checks++
-      return can(...args)
-    }
-    for (const letter of 'hello') editor.commands.insertContent(letter)
-    const immediate = { updates, checks, text: editor.getText() }
-    while (!checks) await new Promise(requestAnimationFrame)
-    await new Promise(requestAnimationFrame)
-    return { immediate, afterFrame: { updates, checks }, visibleActions }
-  })
-  // One toolbar refresh after paint; the hidden source waits until shown.
-  assert.deepEqual(result.immediate, { updates: 0, checks: 0, text: 'hello' })
-  assert.deepEqual(result.afterFrame, {
-    updates: 0,
-    checks: result.visibleActions,
-  })
-  await switchToSource(app, page)
-  const shown = await page.evaluate(async () => {
-    const source = document.querySelector('.cm-content').cmTile.root.view
-    return {
-      text: source.state.doc.toString(),
-      persisted: (await window.hibi.getDocument()).markdown,
-    }
-  })
-  assert.deepEqual(shown, { text: 'hello', persisted: 'hello' })
-})
-
-it('multi-line text input reaches source view in one edit, without native paragraph steps', {
+test('multi-line text input reaches source view in one edit, without native paragraph steps', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-source-lines-'))
@@ -1614,7 +977,7 @@ it('multi-line text input reaches source view in one edit, without native paragr
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForEditor(page)
   await switchToSource(app, page)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -1680,7 +1043,7 @@ it('multi-line text input reaches source view in one edit, without native paragr
   assert.deepEqual([plain.prevented, plain.text], [[false], 'one line'])
 })
 
-it('source input handlers see multi-line text input with normalized line breaks', {
+test('source input handlers see multi-line text input with normalized line breaks', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-source-line-handler-'))
@@ -1693,7 +1056,7 @@ it('source input handlers see multi-line text input with normalized line breaks'
       name: 'Upper input',
       description: 'Consuming source input handler fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       capabilities: ['source'],
@@ -1733,7 +1096,7 @@ it('source input handlers see multi-line text input with normalized line breaks'
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForEditor(page)
   await switchToSource(app, page)
   await page.waitForFunction(() => {
@@ -1776,394 +1139,6 @@ it('source input handlers see multi-line text input with normalized line breaks'
   }
 })
 
-test('formatting toolbar states match each action check across selections, typing and history', {
-  timeout: 60000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-toolbar-states-'))
-  const file = join(profile, 'states.md')
-  await writeFile(
-    file,
-    [
-      '# Title',
-      'plain **bold** *italic* ~~strike~~ `code` [link](https://example.com) end',
-      '- one\n- two\n  - nested',
-      '1. first\n2. second',
-      '- [ ] task\n- [x] done',
-      '> quote',
-      '```js\nconst x = 1\n```',
-      '| a | b |\n| - | - |\n| cell | 2 |',
-      '',
-    ].join('\n\n'),
-  )
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`, file],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
-    })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  await waitForDocumentEditor(app, page)
-  await installTiptapToolbarProbe(page)
-  const states = () => page.evaluate(() => window.__toolbarStates())
-  const settled = async (label) => {
-    try {
-      await page.waitForFunction(
-        () => {
-          const { expected, actual } = window.__toolbarStates()
-          return (
-            Object.keys(actual).length === Object.keys(expected).length &&
-            Object.entries(expected).every(
-              ([id, state]) =>
-                actual[id]?.pressed === state.pressed &&
-                actual[id]?.disabled === state.disabled,
-            )
-          )
-        },
-        undefined,
-        { timeout: APP_STATE_TIMEOUT },
-      )
-    } catch {
-      const { expected, actual } = await states()
-      assert.deepEqual(actual, expected, label)
-    }
-    return (await states()).actual
-  }
-  const select = (text, offset = 1, length = 0) =>
-    page.evaluate(
-      ({ text, offset, length }) => {
-        const editor = document.querySelector('.tiptap').editor
-        let from = null
-        editor.state.doc.descendants((node, position) => {
-          if (from === null && node.isText && node.text.includes(text))
-            from = position + node.text.indexOf(text) + offset
-          return from === null
-        })
-        editor.commands.setTextSelection({ from, to: from + length })
-      },
-      { text, offset, length },
-    )
-  const cases = {}
-  for (const [label, text, offset, length] of toolbarSelectionCases) {
-    await select(text, offset, length)
-    cases[label] = await settled(label)
-    if (inputFixtureCapture)
-      emitInputFixture(
-        t,
-        'toolbar',
-        label,
-        await captureTiptapToolbarRange(page, text, offset, length),
-      )
-  }
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.selectAll(),
-  )
-  cases['whole document'] = await settled('whole document')
-  if (inputFixtureCapture)
-    emitInputFixture(
-      t,
-      'toolbar',
-      'whole document',
-      await captureTiptapToolbarRange(page, null),
-    )
-  assert.equal(cases.heading['heading-1'].pressed, 'true')
-  assert.equal(cases['bold text'].bold.pressed, 'true')
-  assert.equal(cases['plain text'].bold.pressed, 'false')
-  assert.equal(cases['code block']['code-block'].pressed, 'true')
-  assert.equal(cases['code block'].bold.disabled, true)
-  assert.equal(cases['first list item'].indent.disabled, true)
-  assert.equal(cases['second list item'].indent.disabled, false)
-  assert.equal(cases['nested list item'].outdent.disabled, false)
-  assert.equal(cases['table cell']['row-after'].disabled, false)
-  assert.equal(cases['plain text']['row-after'], undefined)
-
-  await select('end', 3)
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.toggleBold(),
-  )
-  assert.equal((await settled('stored bold mark')).bold.pressed, 'true')
-  await page.evaluate(() => document.querySelector('.tiptap').focus())
-  await page.keyboard.type(' typed')
-  const typed = await settled('after typing')
-  assert.equal(typed.undo.disabled, false)
-  assert.equal(typed.bold.pressed, 'true')
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.undo(),
-  )
-  assert.equal((await settled('after undo')).redo.disabled, false)
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.redo(),
-  )
-  assert.equal((await settled('after redo')).redo.disabled, true)
-
-  await select('plain')
-  assert.equal((await settled('before toolbar click')).bold.pressed, 'false')
-  // A click before the toolbar refreshes still formats the live selection.
-  const shown = await page.evaluate(() => {
-    const editor = document.querySelector('.tiptap').editor
-    let from = null
-    editor.state.doc.descendants((node, position) => {
-      if (from === null && node.isText && node.text === 'bold') from = position
-      return from === null
-    })
-    editor.commands.setTextSelection({ from, to: from + 4 })
-    const button = document.querySelector(
-      '.editor-toolbar [data-toolbar-id="format.bold"]',
-    )
-    const pressed = button.getAttribute('aria-pressed')
-    button.click()
-    return pressed
-  })
-  assert.equal(shown, 'false')
-  await waitForAsync(page, async () =>
-    (await window.hibi.getDocument()).markdown.includes('plain bold *italic*'),
-  )
-  assert.equal((await settled('after toolbar click')).bold.pressed, 'false')
-})
-
-test('blank paragraphs and typed spaces survive tab switches without nonbreaking spaces', {
-  timeout: 30000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-space-input-'))
-  const file = join(profile, 'spaces.md')
-  await writeFile(file, '')
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`, file],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
-    })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  await waitForDocumentEditor(app, page)
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
-  const rich = page.getByRole('textbox', { name: 'Document editor' })
-  await rich.click()
-  await page.keyboard.type('first')
-  await page.keyboard.press('Enter')
-  await page.keyboard.press('Enter')
-  await page.keyboard.type('second')
-  await page.keyboard.press('Space')
-  await waitForAsync(page, async () =>
-    (await window.hibi.getDocument()).markdown.endsWith('second '),
-  )
-  const typed = await page.evaluate(() => window.hibi.getDocument())
-  assert.equal(typed.markdown, 'first\n\n\n\nsecond ')
-  assert.doesNotMatch(typed.markdown, /&nbsp;|\u00a0/)
-  await clickMenu(app, 'New')
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.textContent === '',
-  )
-  await page.getByRole('tab', { name: 'spaces.md', exact: true }).click()
-  await waitForAsync(
-    page,
-    async (id) => (await window.hibi.getDocument()).tabId === id,
-    typed.tabId,
-  )
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.textContent === 'firstsecond ',
-  )
-  const restored = await page.evaluate(() => window.hibi.getDocument())
-  assert.equal(restored.tabId, typed.tabId)
-  assert.equal(restored.markdown, typed.markdown)
-  assert.doesNotMatch(restored.markdown, /&nbsp;|\u00a0/)
-  await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(await readFile(file, 'utf8'), typed.markdown)
-})
-
-for (const spaces of [1, 2]) {
-  test(`typing a letter after ${spaces} trailing spaces keeps regular spaces`, {
-    timeout: 30000,
-  }, async (t) => {
-    const profile = await mkdtemp(join(tmpdir(), 'hibi-trailing-space-'))
-    const app = await launchBenchmarkApp(profile)
-    t.after(async () => {
-      await app.close()
-      await rm(profile, { recursive: true, force: true })
-    })
-    const page = await app.firstWindow()
-    const whitespaceWarnings = []
-    page.on('console', (message) => {
-      if (/white-space/.test(message.text()))
-        whitespaceWarnings.push(message.text())
-    })
-    await selectFormattedEngine(app, page, 'tiptap')
-    await waitForEditor(page)
-    const rich = page.getByRole('textbox', { name: 'Document editor' })
-    assert.equal(
-      await rich.evaluate((element) => getComputedStyle(element).whiteSpace),
-      'pre-wrap',
-    )
-    await rich.click()
-    // One undo step, however slow the machine.
-    await withHeldClock(page, async () => {
-      await page.keyboard.type('hi')
-      for (let index = 0; index < spaces; index++)
-        await page.keyboard.press('Space')
-      await page.keyboard.type('x')
-    })
-    const expected = `hi${' '.repeat(spaces)}x`
-    await waitForAsync(
-      page,
-      async (text) => (await window.hibi.getDocument()).markdown === text,
-      expected,
-    )
-    const { markdown } = await page.evaluate(() => window.hibi.getDocument())
-    assert.equal(markdown, expected)
-    assert.doesNotMatch(markdown, /&nbsp;|\u00a0/)
-    assert.equal(await rich.textContent(), expected)
-    assert.deepEqual(whitespaceWarnings, [])
-    await rich.evaluate((element) => element.editor.commands.undo())
-    await waitForAsync(
-      page,
-      async () => (await window.hibi.getDocument()).markdown === '',
-    )
-  })
-}
-
-test('long documents with HTML and reference syntax stay visually editable through save and undo', {
-  timeout: 60000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-unrestricted-rich-'))
-  const file = join(profile, 'long.md')
-  const original = [
-    '# Editable document',
-    '<div>HTML content</div>',
-    '[reference][target]\n\n[target]: https://example.com',
-    ...Array(40).fill('alpha beta '.repeat(500)),
-  ].join('\n\n')
-  // Keep visual coverage below the current source-first opening threshold.
-  assert.ok(original.length > 200000)
-  assert.ok(original.length <= 256 * 1024)
-  await writeFile(file, original)
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`, file],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
-    })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  page.setDefaultTimeout(15000)
-  const editable = () =>
-    page.waitForFunction(
-      () => document.querySelector('.tiptap')?.isContentEditable,
-    )
-  await editable()
-  const opened = (await page.evaluate(() => window.hibi.getDocument())).markdown
-  assert.match(opened, /^# Editable document/)
-  assert.match(opened, /HTML content/)
-  assert.match(opened, /reference/)
-  assert.ok(opened.length > 200000)
-  await page
-    .waitForFunction(() => {
-      const editor = document.querySelector('.tiptap')
-      const panel = editor?.closest('.editor-page')
-      return (
-        editor?.isContentEditable &&
-        editor.textContent?.startsWith('Editable document') &&
-        panel?.getAttribute('aria-busy') === 'false' &&
-        !panel.hasAttribute('inert')
-      )
-    })
-    .catch(async (error) => {
-      const state = await page.evaluate(() => {
-        const editor = document.querySelector('.tiptap')
-        const panel = editor?.closest('.editor-page')
-        return {
-          text: editor?.textContent?.slice(0, 80),
-          editable: editor?.isContentEditable,
-          busy: panel?.getAttribute('aria-busy'),
-          inert: panel?.hasAttribute('inert'),
-        }
-      })
-      assert.fail(
-        `long document never became editable: ${error.message}\n${JSON.stringify(state)}`,
-      )
-    })
-  if (showTestWindows)
-    await app.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0]
-      window.setFocusable(true)
-      window.show()
-      window.focus()
-    })
-  await page.locator('.tiptap').evaluate((element) => {
-    element.editor.commands.setTextSelection(1)
-    element.editor.view.focus()
-  })
-  await page
-    .waitForFunction(
-      (needsWindowFocus) =>
-        (!needsWindowFocus || document.hasFocus()) &&
-        document.activeElement?.classList.contains('tiptap'),
-      showTestWindows,
-      { timeout: 5000 },
-    )
-    .catch(async (error) => {
-      const state = await page.evaluate(() => ({
-        focused: document.hasFocus(),
-        active: document.activeElement?.outerHTML.slice(0, 160),
-      }))
-      assert.fail(
-        `long document editor never received focus: ${error.message}\n${JSON.stringify(state)}`,
-      )
-    })
-  await page.keyboard.insertText('edited ')
-  await waitForAsync(page, async () =>
-    (await window.hibi.getDocument()).markdown.startsWith(
-      '# edited Editable document',
-    ),
-  )
-  const edited = (await page.evaluate(() => window.hibi.getDocument())).markdown
-  assert.ok(edited.includes('alpha beta'))
-  await page.locator('.tiptap').evaluate((element) => {
-    element.editor.commands.undo()
-  })
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    opened,
-  )
-  await editable()
-  await page.locator('.tiptap').evaluate((element) => {
-    element.editor.commands.redo()
-  })
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    edited,
-  )
-  await page.getByRole('button', { name: 'Source view', exact: true }).click()
-  await page
-    .getByRole('textbox', { name: 'Markdown editor', exact: true })
-    .waitFor()
-  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  await editable()
-  await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(await readFile(file, 'utf8'), edited)
-  await page.reload()
-  await editable()
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    edited,
-  )
-})
-
 const toolbarSelectionCases = [
   ['heading', 'Title'],
   ['plain text', 'plain'],
@@ -2182,91 +1157,7 @@ const toolbarSelectionCases = [
   ['table cell', 'cell'],
 ]
 
-async function installTiptapToolbarProbe(page) {
-  await page.evaluate(() => {
-    // The same capability and active checks FormattingToolbar runs for each rich action.
-    const list = (editor) =>
-      editor.isActive('taskList') ? 'taskItem' : 'listItem'
-    const actions = [
-      ['undo', (c) => c.undo()],
-      ['redo', (c) => c.redo()],
-      ['bold', (c) => c.toggleBold(), 'bold'],
-      ['italic', (c) => c.toggleItalic(), 'italic'],
-      ['strike', (c) => c.toggleStrike(), 'strike'],
-      ['inline-code', (c) => c.toggleCode(), 'code'],
-      ['subscript', (c) => c.toggleMark('subscript'), 'subscript'],
-      ['subtext', (c) => c.setNode('subtext'), 'subtext'],
-      ['paragraph', (c) => c.setParagraph(), 'paragraph'],
-      ...[1, 2, 3, 4, 5, 6].map((level) => [
-        `heading-${level}`,
-        (c) => c.toggleHeading({ level }),
-        'heading',
-        { level },
-      ]),
-      ['bullet-list', (c) => c.toggleBulletList(), 'bulletList'],
-      ['numbered-list', (c) => c.toggleOrderedList(), 'orderedList'],
-      ['checklist', (c) => c.toggleTaskList(), 'taskList'],
-      ['indent', (c, editor) => c.sinkListItem(list(editor))],
-      ['outdent', (c, editor) => c.liftListItem(list(editor))],
-      ['quote', (c) => c.toggleBlockquote(), 'blockquote'],
-      ['code-block', (c) => c.toggleCodeBlock(), 'codeBlock'],
-      ['divider', (c) => c.setHorizontalRule()],
-      ['hard-break', (c) => c.setHardBreak()],
-      ['link', (c) => c.setLink({ href: 'https://example.com' }), 'link'],
-      ['unlink', (c) => c.unsetLink()],
-      ['image', (c) => c.setImage({ src: 'image.png' })],
-      [
-        'table',
-        (c) => c.insertTable({ rows: 3, cols: 2, withHeaderRow: true }),
-      ],
-      ...[
-        ['row-before', (c) => c.addRowBefore()],
-        ['row-after', (c) => c.addRowAfter()],
-        ['row-delete', (c) => c.deleteRow()],
-        ['column-before', (c) => c.addColumnBefore()],
-        ['column-after', (c) => c.addColumnAfter()],
-        ['column-delete', (c) => c.deleteColumn()],
-        ['table-delete', (c) => c.deleteTable()],
-      ].map(([id, rich]) => [id, rich, undefined, undefined, true]),
-    ]
-    window.__toolbarStates = () => {
-      const editor = document.querySelector('.tiptap').editor
-      const inTable = editor.isActive('table')
-      const expected = {}
-      for (const [id, rich, active, attrs, table] of actions) {
-        if (table && !inTable) continue
-        let allowed
-        try {
-          allowed = rich(editor.can().chain(), editor).run()
-        } catch {
-          allowed = false
-        }
-        expected[id] = {
-          pressed: active ? String(editor.isActive(active, attrs)) : null,
-          disabled: !editor.isEditable || !allowed,
-        }
-      }
-      const actual = {}
-      for (const button of document.querySelectorAll(
-        '.editor-toolbar [data-toolbar-id^="format."]',
-      ))
-        actual[button.dataset.toolbarId.slice('format.'.length)] = {
-          pressed:
-            button.getAttribute('aria-pressed') ??
-            button.getAttribute('aria-checked'),
-          disabled: button.disabled,
-        }
-      return { expected, actual }
-    }
-  })
-}
-
-async function launchInputFixture(
-  t,
-  source,
-  engine = 'codemirror',
-  counted = false,
-) {
+async function launchInputFixture(t, source, counted = false) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-input-parity-'))
   const file = join(profile, counted ? 'input.countmd' : 'input.md')
   await writeFile(file, source)
@@ -2280,7 +1171,7 @@ async function launchInputFixture(
         name: 'Counted format',
         description: 'Count toolbar inspections',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         capabilities: ['source'],
         authors: [{ displayName: 'Test' }],
@@ -2336,11 +1227,9 @@ async function launchInputFixture(
   }, file)
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, engine)
-  if (engine === 'codemirror') {
-    cdp = await page.context().newCDPSession(page)
-    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  }
+  await waitForFormattedEditor(app, page)
+  cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await clickMenu(app, 'Open…')
   await waitForAsync(
     page,
@@ -2353,100 +1242,6 @@ async function launchInputFixture(
     exact: true,
   })
   return { app, page, rich, file, close }
-}
-
-async function captureTiptapInputRange(page, html, select) {
-  const rich = page.getByRole('textbox', {
-    name: 'Document editor',
-    exact: true,
-  })
-  const marked = await rich.evaluate((element, html) => {
-    const marked = html
-      .replaceAll('|', 'HIBIPORTCARET871')
-      .replaceAll('[', 'HIBIPORTSTART871')
-      .replaceAll(']', 'HIBIPORTEND871')
-    element.editor.commands.setContent(marked, { contentType: 'html' })
-    return element.editor.getMarkdown()
-  }, html)
-  let source = marked
-    .replace('HIBIPORTCARET871', '')
-    .replace('HIBIPORTSTART871', '')
-    .replace('HIBIPORTEND871', '')
-  let from = marked.includes('HIBIPORTCARET871')
-    ? marked.indexOf('HIBIPORTCARET871')
-    : marked.indexOf('HIBIPORTSTART871')
-  let to = marked.includes('HIBIPORTEND871')
-    ? marked.indexOf('HIBIPORTEND871') - 'HIBIPORTSTART871'.length
-    : from
-  if (select === 'all') {
-    from = 0
-    to = source.length
-  }
-  if (select === 'cells') {
-    from = source.indexOf('a')
-    to = source.lastIndexOf('d') + 1
-  }
-  await rich.focus()
-  await page.evaluate(
-    ({ html, select }) => window.richLines(html, select, false),
-    { html, select },
-  )
-  const canonical = await rich.evaluate((element) =>
-    element.editor.getMarkdown(),
-  )
-  if (html.includes('<table>')) {
-    // A sentinel changes table column widths. Locate the original cell text instead.
-    source = canonical
-    if (select === 'cells') {
-      from = source.indexOf('a')
-      to = source.lastIndexOf('d') + 1
-    } else if (html.startsWith('<p>a[b')) {
-      from = source.indexOf('ab') + 1
-      to = source.indexOf('cd') + 1
-    } else {
-      from = to = source.indexOf('a') + 1
-    }
-    assert.ok(from >= 0 && to >= from && to <= source.length)
-  } else if (canonical !== source) {
-    // Empty list/task markers can lose separator whitespace when the sentinel is removed.
-    let prefix = 0,
-      suffix = 0
-    while (
-      prefix < source.length &&
-      prefix < canonical.length &&
-      source[prefix] === canonical[prefix]
-    )
-      prefix++
-    while (
-      suffix < source.length - prefix &&
-      suffix < canonical.length - prefix &&
-      source.at(-1 - suffix) === canonical.at(-1 - suffix)
-    )
-      suffix++
-    assert.match(
-      source.slice(prefix, source.length - suffix) +
-        canonical.slice(prefix, canonical.length - suffix),
-      /^\s*$/,
-    )
-    const position = (value) =>
-      value <= prefix
-        ? value
-        : value >= source.length - suffix
-          ? canonical.length - (source.length - value)
-          : prefix
-    from = position(from)
-    to = position(to)
-    source = canonical
-    if (select === 'all') {
-      from = 0
-      to = source.length
-    }
-    if (select === 'cells') {
-      from = source.indexOf('a')
-      to = source.lastIndexOf('d') + 1
-    }
-  }
-  return { source, from, to }
 }
 
 // Compare rendered Markdown meaning, not table padding or escape/entity spelling.
@@ -2810,13 +1605,13 @@ test('the CM multiline corpus retains all thirty historical fixture names', () =
   assert.equal(new Set(multilineInputCases.map(([name]) => name)).size, 30)
 })
 
-for (const [what, , text, select] of multilineInputCases) {
-  test('codemirror: native multiline ' +
+for (const [what, text, select] of multilineInputCases) {
+  test('native multiline ' +
     what +
     ' retains the historical user outcome and one-edit history', {
     timeout: 60000,
   }, async (t) => {
-    // PM schema/step equality stays in the original test; this frozen record contains only its user outcome.
+    // The frozen record holds the removed native editor's user outcome.
     const oracle = inputFixture('multiline', what)
     const tableInput = ['cell', 'cells', 'into a table'].includes(what)
     const { app, page, rich } = await launchInputFixture(t, oracle.source)
@@ -2967,7 +1762,7 @@ for (const [what, , text, select] of multilineInputCases) {
   })
 }
 
-test('codemirror: native multiline input at the only empty list item retains the following paragraph', {
+test('native multiline input at the only empty list item retains the following paragraph', {
   timeout: 60000,
 }, async (t) => {
   const oracle = inputFixture('special', 'empty-list-exit')
@@ -2996,16 +1791,11 @@ test('codemirror: native multiline input at the only empty list item retains the
 })
 
 for (const hiddenSource of [false, true]) {
-  test('codemirror: native typing defers and coalesces toolbar inspections' +
+  test('native typing defers and coalesces toolbar inspections' +
     (hiddenSource ? ' after a source visit' : ''), {
     timeout: 60000,
   }, async (t) => {
-    const { app, page, rich } = await launchInputFixture(
-      t,
-      '',
-      'codemirror',
-      true,
-    )
+    const { app, page, rich } = await launchInputFixture(t, '', true)
     await page.waitForFunction(() => Array.isArray(window.countedFormatChecks))
     if (hiddenSource) {
       await page
@@ -3176,7 +1966,7 @@ for (const hiddenSource of [false, true]) {
 }
 
 for (const all of [false, true]) {
-  test('codemirror: multiline native work stays linear into ' +
+  test('multiline native work stays linear into ' +
     (all ? 'select-all' : 'an empty paragraph'), {
     timeout: 60000,
   }, async (t) => {
@@ -3320,7 +2110,7 @@ for (const all of [false, true]) {
   })
 }
 
-test('codemirror: multi-line input over select-all replaces all of a large note', {
+test('multi-line input over select-all replaces all of a large note', {
   timeout: 60000,
 }, async (t) => {
   // The formatted view parses a large note in steps; input before the parser
@@ -3335,7 +2125,7 @@ test('codemirror: multi-line input over select-all replaces all of a large note'
   assert.ok(markdown === 'x\n\ny', JSON.stringify(markdown.slice(0, 80)))
 })
 
-test('codemirror: blank paragraphs and a typed trailing space survive tab switches and exact disk save', {
+test('blank paragraphs and a typed trailing space survive tab switches and exact disk save', {
   timeout: 30000,
 }, async (t) => {
   const { app, page, rich, file } = await launchInputFixture(t, '')
@@ -3374,7 +2164,7 @@ test('codemirror: blank paragraphs and a typed trailing space survive tab switch
 })
 
 for (const spaces of [1, 2]) {
-  test('codemirror: typing a letter after ' +
+  test('typing a letter after ' +
     spaces +
     ' trailing spaces keeps regular spaces and native undo', {
     timeout: 30000,
@@ -3418,7 +2208,7 @@ for (const spaces of [1, 2]) {
   })
 }
 
-test('codemirror: the original 200–256 KiB HTML/reference note stays natively editable through history, source, save and reload', {
+test('the original 200–256 KiB HTML/reference note stays natively editable through history, source, save and reload', {
   timeout: 60000,
 }, async (t) => {
   const original = [
@@ -3517,105 +2307,6 @@ async function settledInputToolbar(page, id, expected) {
   }
 }
 
-async function captureTiptapToolbarRange(page, text, offset = 1, length = 0) {
-  return page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .evaluate(
-      (element, { text, offset, length }) => {
-        const editor = element.editor
-        if (text === null) editor.commands.selectAll()
-        else {
-          let from = null
-          editor.state.doc.descendants((node, position) => {
-            if (from === null && node.isText && node.text.includes(text))
-              from = position + node.text.indexOf(text) + offset
-            return from === null
-          })
-          editor.commands.setTextSelection({ from, to: from + length })
-        }
-        const expected = window.__toolbarStates().expected
-        const source = editor.getMarkdown()
-        if (text === null)
-          return { source, from: 0, to: source.length, expected }
-        if (text === 'cell') {
-          // Preserve the table's original padding; sentinel serialization widens its header.
-          const from = source.indexOf(text) + offset
-          return {
-            source,
-            from,
-            to: from + length,
-            expected,
-            selectionText: '',
-          }
-        }
-        const { from, to } = editor.state.selection
-        const startMarks =
-          editor.state.doc.resolve(from).nodeAfter?.marks ??
-          editor.state.doc.resolve(from).marks()
-        const endMarks =
-          editor.state.doc.resolve(to).nodeBefore?.marks ??
-          editor.state.doc.resolve(to).marks()
-        const transaction = editor.state.tr
-        if (from === to)
-          transaction.insert(
-            from,
-            editor.schema.text('HIBISTATECARET871', startMarks),
-          )
-        else {
-          transaction.insert(
-            to,
-            editor.schema.text('HIBISTATEEND871', endMarks),
-          )
-          transaction.insert(
-            from,
-            editor.schema.text('HIBISTATESTART871', startMarks),
-          )
-        }
-        const marked = editor.markdown.serialize(transaction.doc.toJSON())
-        const first = from === to ? 'HIBISTATECARET871' : 'HIBISTATESTART871'
-        const plain = marked.replace(first, '').replace('HIBISTATEEND871', '')
-        let rawFrom = marked.indexOf(first)
-        let rawTo =
-          from === to
-            ? rawFrom
-            : marked.indexOf('HIBISTATEEND871') - first.length
-        if (plain !== source) {
-          let prefix = 0,
-            suffix = 0
-          while (
-            prefix < plain.length &&
-            prefix < source.length &&
-            plain[prefix] === source[prefix]
-          )
-            prefix++
-          while (
-            suffix < plain.length - prefix &&
-            suffix < source.length - prefix &&
-            plain.at(-1 - suffix) === source.at(-1 - suffix)
-          )
-            suffix++
-          const map = (value) =>
-            value <= prefix
-              ? value
-              : value >= plain.length - suffix
-                ? source.length - (plain.length - value)
-                : prefix
-          rawFrom = map(rawFrom)
-          rawTo = map(rawTo)
-        }
-        return {
-          source,
-          from: rawFrom,
-          to: rawTo,
-          expected,
-          markerlessSource: plain,
-          selectionText: editor.state.doc.textBetween(from, to, '\n'),
-        }
-      },
-      { text, offset, length },
-    )
-}
-
 test('the toolbar corpus retains all fifteen historical selections plus select-all', () => {
   assert.equal(toolbarSelectionCases.length, 15)
   assert.equal(new Set(toolbarSelectionCases.map(([name]) => name)).size, 15)
@@ -3649,7 +2340,7 @@ const formattedToolbarState = (label, expected) =>
     : expected
 
 for (const [label] of [...toolbarSelectionCases, ['whole document', null]]) {
-  test('codemirror: all historical toolbar action states at ' +
+  test('all historical toolbar action states at ' +
     label +
     ' match frozen user-outcome fixtures', {
     timeout: 60000,
@@ -3749,7 +2440,7 @@ for (const [label] of [...toolbarSelectionCases, ['whole document', null]]) {
   })
 }
 
-test('codemirror: stored bold state follows native typing, undo and redo', {
+test('stored bold state follows native typing, undo and redo', {
   timeout: 45000,
 }, async (t) => {
   const { app, page, rich } = await launchInputFixture(t, 'plain end')
@@ -3807,7 +2498,7 @@ test('codemirror: stored bold state follows native typing, undo and redo', {
   )
 })
 
-test('codemirror: a toolbar click before refresh formats the newly selected live source range', {
+test('a toolbar click before refresh formats the newly selected live source range', {
   timeout: 45000,
 }, async (t) => {
   const source = 'plain **bold** *italic* end'

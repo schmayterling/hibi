@@ -67,7 +67,6 @@ import {
   formattedBlockEdges,
   formattedContributions,
   formattedDocument,
-  formattedLegacyLiteral,
   formattedLinkAttributes,
   formattedLiteral,
   formattedNodeViews,
@@ -441,26 +440,39 @@ function measureColumns(
       changed ||= known !== null
       continue
     }
+    // A line gap the editor drew for text it estimated as wrapped leaves the
+    // rest of the line undrawn, and positions in it measure at the gap's
+    // edge: only the drawn text has columns.
+    let start = line.to,
+      end = line.start
+    for (const range of view.visibleRanges)
+      if (range.from < line.to && range.to > line.start) {
+        start = Math.min(start, Math.max(range.from, line.start))
+        end = Math.max(end, Math.min(range.to, line.to))
+      }
+    if (start >= end) continue
     const left = scroller.getBoundingClientRect().left
     const right = left + scroller.clientWidth
     const width = right - left
     const x = (pos: number) =>
-      view.coordsAtPos(pos, pos < line.to ? 1 : -1)?.left ?? left
+      view.coordsAtPos(pos, pos < end ? 1 : -1)?.left ?? left
     if (
       known &&
-      (known.from <= line.start || x(known.from) <= left) &&
-      (known.to >= line.to || x(known.to) >= right)
+      known.from < end &&
+      known.to > start &&
+      (known.from <= start || x(known.from) <= left) &&
+      (known.to >= end || x(known.to) >= right)
     ) {
       next.set(line.from, known)
       continue
     }
     const from = Math.max(
-      line.start,
-      firstWhere(line.start, line.to, (pos) => x(pos) > left - width) - 1,
+      start,
+      firstWhere(start, end, (pos) => x(pos) > left - width) - 1,
     )
     next.set(line.from, {
       from,
-      to: firstWhere(from, line.to, (pos) => x(pos) >= right + width),
+      to: firstWhere(from, end, (pos) => x(pos) >= right + width),
     })
     changed = true
   }
@@ -547,7 +559,6 @@ function inline(
   const doc = state.doc
   const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
-  const legacy = state.facet(formattedLegacyLiteral)
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
     reveal.some((range) => range.from <= to && range.to >= from)
@@ -818,31 +829,15 @@ function inline(
   })
 
   for (const range of view.visibleRanges) {
-    let legacyParent:
-      | { to: number; views: ReadonlySet<FormattedNodeView> }
-      | undefined
     tree.iterate({
       from: range.from,
       to: range.to,
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
-        if (legacyParent && legacyParent.to <= ref.from)
-          legacyParent = undefined
-        const owned = legacyParent?.views ?? legacy.get(name)
-        if (!legacyParent && owned?.size)
-          legacyParent = { to: ref.to, views: owned }
-        let skip = legacy.has(name)
-          ? !owned?.size
-          : literalText(ref.node, literal)
+        let skip = literalText(ref.node, literal)
         if (!skip) {
-          const matched = views(ref.type)
-          const contributed = owned
-            ? {
-                ...matched,
-                views: matched.views.filter((view) => owned.has(view)),
-              }
-            : matched
+          const contributed = views(ref.type)
           if (contributed.views.length) {
             const revealed = revealedAt(ref)
             const out = sink(revealed)
@@ -870,7 +865,7 @@ function inline(
             }
           }
 
-          if (!owned) skip = builtIn(ref, range) === false || skip
+          skip = builtIn(ref, range) === false || skip
         }
         if (!skip) return
         // Container syntax stays independent of skipped inline or literal nodes.
@@ -1549,7 +1544,6 @@ function chunkLayout(
   const doc = state.doc
   const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
-  const legacy = state.facet(formattedLegacyLiteral)
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
   let sensitive = false
@@ -1576,9 +1570,6 @@ function chunkLayout(
   /** Where definitions hidden from a list marker end. */
   let itemDefinitions = -1
   for (const range of covered) {
-    let legacyParent:
-      | { to: number; views: ReadonlySet<FormattedNodeView> }
-      | undefined
     /** The leaf block whose line breaks flow as spaces, except hard breaks and hidden link destinations. */
     let leaf: {
       from: number
@@ -1593,19 +1584,8 @@ function chunkLayout(
       mode: IterMode.IgnoreMounts,
       enter(ref) {
         if (ref.to <= range.from || ref.from >= range.to) return false
-        if (legacyParent && legacyParent.to <= ref.from)
-          legacyParent = undefined
-        const owned = legacyParent?.views ?? legacy.get(ref.name)
-        if (!legacyParent && owned?.size)
-          legacyParent = { to: ref.to, views: owned }
-        if (
-          legacy.has(ref.name) ? !owned?.size : literalText(ref.node, literal)
-        )
-          return false
-        const matched = views(ref.type).views
-        const contributed = owned
-          ? matched.filter((view) => owned.has(view))
-          : matched
+        if (literalText(ref.node, literal)) return false
+        const contributed = views(ref.type).views
         if (contributed.some((view) => view.layout)) {
           sensitive = true
           // A node spanning covered ranges is laid out once, where it starts.
@@ -1623,7 +1603,6 @@ function chunkLayout(
             if (view.layout?.(ref, sink, context) === false) skip = true
           if (skip) return false
         }
-        if (owned) return
         switch (ref.name) {
           case 'FencedCode': {
             sensitive = true
@@ -2356,7 +2335,7 @@ export function livePreview(
       return true
     }
   const tab = (outdent: boolean) => (view: EditorView) => {
-    const tree = syntax.tree(view.state)
+    const tree = syntax.editTree(view.state)
     let item = false
     for (
       let node: SyntaxNode | null = tree.resolveInner(
@@ -2523,27 +2502,41 @@ export function livePreview(
       keymap.of([
         {
           key: 'Enter',
-          run: run((view) => blockBreak(view.state, syntax.tree(view.state))),
+          run: run((view) =>
+            blockBreak(view.state, syntax.editTree(view.state)),
+          ),
         },
         {
           key: 'Shift-Enter',
-          run: run((view) => lineBreak(view.state, syntax.tree(view.state))),
+          run: run((view) =>
+            lineBreak(view.state, syntax.editTree(view.state)),
+          ),
         },
         {
           key: 'Backspace',
           run: run((view) =>
-            deleteBackward(view.state, syntax.tree(view.state), hidden(view)),
+            deleteBackward(
+              view.state,
+              () => syntax.editTree(view.state),
+              hidden(view),
+            ),
           ),
         },
         {
           key: 'Delete',
           run: run((view) =>
-            deleteForward(view.state, syntax.tree(view.state), hidden(view)),
+            deleteForward(
+              view.state,
+              () => syntax.editTree(view.state),
+              hidden(view),
+            ),
           ),
         },
         {
           key: 'Mod-Enter',
-          run: run((view) => exitBlock(view.state, syntax.tree(view.state))),
+          run: run((view) =>
+            exitBlock(view.state, syntax.editTree(view.state)),
+          ),
         },
         { key: 'Tab', run: tab(false), shift: tab(true) },
         { key: 'ArrowLeft', run: arrow(false) },

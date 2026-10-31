@@ -19,7 +19,7 @@ test('large sidebar preserves focus, rename, anchors and section geometry with b
       description: 'Tree fixture',
       kind: 'extension',
       version: '1.0.0',
-      apiVersion: 2,
+      apiVersion: 3,
       authors: [{ displayName: 'Test' }],
       capabilities: ['ui'],
       entry: 'index.js',

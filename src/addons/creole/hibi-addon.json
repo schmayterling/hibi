@@ -2,7 +2,7 @@
   "id": "creole",
   "name": "Creole",
   "description": "Edit, preview, and export Creole documents.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.2",
   "authors": [

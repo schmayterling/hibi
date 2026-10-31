@@ -4,17 +4,15 @@ import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import unit from 'node:test'
 import { validateAnalysisProjection } from '../src/shared/analysis.ts'
 import {
   electron,
   waitForDocumentEditor,
   waitForElectronExit,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 // biome-ignore format: preserve the historical assertion layout.
@@ -170,7 +168,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
         name: id,
         kind: 'extension',
         description: 'Analysis fixture',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         authors: [{ displayName: 'Test' }],
         capabilities: [],
@@ -213,7 +211,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const editor = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,

@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import {
-  reloadFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 test('editing awaits required addon startup and disabled pending addons cannot register late commands', {
@@ -23,7 +20,8 @@ test('editing awaits required addon startup and disabled pending addons cannot r
         name: id,
         description: 'Readiness fixture',
         kind: 'extension',
-        apiVersion: 1,
+        apiVersion: 3,
+        capabilities: [],
         version: '1.0.0',
         authors: [{ displayName: 'Test' }],
         entry: 'index.js',
@@ -63,14 +61,14 @@ test('editing awaits required addon startup and disabled pending addons cannot r
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await reloadFormattedEngine(page, t.formattedEngine)
+  await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+  await page.reload({ waitUntil: 'commit' })
   await page.waitForFunction(
     () =>
       document.documentElement.getAttribute('data-delayed-editor') ===
       'waiting',
   )
   assert.equal(await page.locator('.titlebar').isVisible(), true)
-  assert.equal(await page.locator('.tiptap').count(), 0)
   assert.equal(
     await page
       .getByRole('textbox', { name: 'Document editor', exact: true })
@@ -86,12 +84,8 @@ test('editing awaits required addon startup and disabled pending addons cannot r
   })
   await waitForDocumentEditor(app, page)
   assert.equal(
-    await editor.evaluate(
-      (element, engine) =>
-        element.matches(
-          engine === 'tiptap' ? '.tiptap' : '.hibi-formatted .cm-content',
-        ),
-      t.formattedEngine,
+    await editor.evaluate((element) =>
+      element.matches('.hibi-formatted .cm-content'),
     ),
     true,
   )

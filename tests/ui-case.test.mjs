@@ -2,17 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import nodeTest from 'node:test'
+import test from 'node:test'
 import { sentenceCase } from '../src/shared/ui-case.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-nodeTest('sentence case leaves file names in messages as they are', () => {
+test('sentence case leaves file names in messages as they are', () => {
   for (const message of [
     'notes.txt was moved or deleted outside Hibi. Save to keep this text.',
     'index.html was moved or deleted outside Hibi. Save to keep this text.',
@@ -58,7 +58,7 @@ test('sentence case is default; lowercase covers UI and menus while preserving c
     await rm(profile, { recursive: true, force: true })
   })
   let page = await launch()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ Menu }) => {
     globalThis.initialHibiMenu = Menu.getApplicationMenu()
   })

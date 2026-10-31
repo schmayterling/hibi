@@ -2,7 +2,7 @@
   "id": "writing-suggestions",
   "name": "Writing suggestions",
   "description": "Complete workspace tags, note paths, and a small text snippet.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.0",
   "authors": [

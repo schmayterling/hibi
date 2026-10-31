@@ -23,7 +23,7 @@ test('settings collapse independently and narrow sidebars overlay full-width des
       name: 'Delayed source',
       description: 'Source readiness fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       capabilities: ['source'],

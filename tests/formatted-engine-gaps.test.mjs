@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readdir, readFile } from 'node:fs/promises'
 import test from 'node:test'
 
-test('formatted product gaps are counted and ledgered before the default changes', async (t) => {
+test('formatted product gaps are counted and ledgered', async (t) => {
   const directory = new URL('.', import.meta.url)
   const gaps = []
   for (const file of await readdir(directory)) {
@@ -35,9 +35,7 @@ test('formatted product gaps are counted and ledgered before the default changes
       ledger.includes(`${gap.file}:${gap.line}`),
       `${gap.id} needs its current test location`,
     )
-  t.diagnostic(
-    `${gaps.length} formatted gap todo annotations; the default flip requires zero`,
-  )
+  t.diagnostic(`${gaps.length} formatted gap todo annotations`)
   if (process.env.HIBI_EXPECT_FORMATTED_GAPS !== undefined)
     assert.equal(gaps.length, Number(process.env.HIBI_EXPECT_FORMATTED_GAPS))
 })

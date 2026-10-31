@@ -94,19 +94,17 @@ if (command === 'build') {
     const order =
       round % 2 ? [...manifest.variants].reverse() : manifest.variants
     for (const variant of order) {
-      for (const kind of ['startup', 'input']) {
-        const file = join(variant.directory, `${kind}-${round}.json`)
-        await run(
-          process.execPath,
-          [join(repo, `scripts/benchmark-${kind}.mjs`)],
-          file,
-          {
-            cwd: variant.directory,
-            env: { ...process.env, HIBI_BENCH_RUNS: '5', HIBI_INPUT_RUNS: '5' },
-          },
-        )
-        results.push({ round, profile: variant.profile, kind, file })
-      }
+      const file = join(variant.directory, `startup-${round}.json`)
+      await run(
+        process.execPath,
+        [join(repo, 'scripts/benchmark-startup.mjs')],
+        file,
+        {
+          cwd: variant.directory,
+          env: { ...process.env, HIBI_BENCH_RUNS: '5' },
+        },
+      )
+      results.push({ round, profile: variant.profile, kind: 'startup', file })
     }
   }
   await writeFile(

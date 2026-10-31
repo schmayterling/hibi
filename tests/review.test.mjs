@@ -2,14 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import unit from 'node:test'
 import { analyze } from '../src/addons/review/analyze.ts'
 import { textProjection } from '../src/renderer/src/text-projection.ts'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -45,7 +42,7 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: 'Document editor', exact: true }),
@@ -100,9 +97,7 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
     name: 'Document editor',
     exact: true,
   })
-  if (t.formattedEngine === 'tiptap')
-    await rich.evaluate((element) => element.editor.commands.undo())
-  else await rich.press('ControlOrMeta+z')
+  await rich.press('ControlOrMeta+z')
   await waitForAsync(
     page,
     async () =>

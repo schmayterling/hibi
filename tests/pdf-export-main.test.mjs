@@ -11,15 +11,20 @@ const source = stripTypeScriptTypes(
   .replace(/^import[\s\S]*?from '[^']+'\n/gm, '')
   .replace(/^export /gm, '')
 
+/** The app's image transport, which the print page's images must use. */
+const manualFetch = async () => {
+  throw new Error('The test fetched over the network.')
+}
+
 function runtime(options = {}) {
-  const state = { windows: [], writes: [], reads: [], handler: null }
+  const state = { windows: [], writes: [], reads: [], handlers: {}, images: [] }
   const partition = new EventEmitter()
   partition.protocol = {
-    handle: (_scheme, handler) => {
-      state.handler = handler
+    handle: (scheme, handler) => {
+      state.handlers[scheme] = handler
     },
-    unhandle: () => {
-      state.handler = null
+    unhandle: (scheme) => {
+      delete state.handlers[scheme]
     },
   }
   partition.webRequest = {
@@ -74,6 +79,7 @@ function runtime(options = {}) {
   }
   const app = new EventEmitter()
   app.getLocaleCountryCode = () => 'PH'
+  app.getPath = (name) => `/app/${name}`
   const owner = new EventEmitter()
   const bindings = {
     randomUUID: () => 'print-page',
@@ -107,6 +113,11 @@ function runtime(options = {}) {
       state.writes.push({ path, bytes })
     },
     imageSources: () => new Set(['pixel.png']),
+    manualFetch,
+    remoteImageResponse: async (...request) => {
+      state.images.push(request)
+      return new Response('cached pixel')
+    },
     documentMediaPath: (source) => decodeURIComponent(source),
     readDocumentImage: async (path) => {
       state.reads.push(path)
@@ -147,7 +158,23 @@ test('print window disables scripts and releases its private page after success'
         { url: 'https://example.com/pixel.png', resourceType: 'image' },
       ])
         state.request(details, ({ cancel }) => assert.equal(cancel, false))
-      const page = await state.handler({ url: state.url })
+      // Remote images come from the exported note's image cache.
+      const image = await state.handlers.https({
+        url: 'https://example.com/pixel.png',
+      })
+      assert.equal(await image.text(), 'cached pixel')
+      assert.deepEqual(state.images, [
+        [
+          'https://example.com/pixel.png',
+          {
+            note: '/notes/garden.md',
+            workspace: '/notes',
+            data: '/app/userData',
+          },
+          manualFetch,
+        ],
+      ])
+      const page = await state.handlers['hibi-print']({ url: state.url })
       assert.equal(await page.text(), '<h1>garden</h1>')
       assert.match(
         page.headers.get('Content-Security-Policy'),
@@ -167,7 +194,7 @@ test('print window disables scripts and releases its private page after success'
     '/notes/garden.pdf',
   )
   assert.equal(state.windows[0].destroyed, true)
-  assert.equal(state.handler, null)
+  assert.deepEqual(state.handlers, {})
   assert.equal(state.connectionsClosed, true)
   assert.equal(state.request, null)
   assert.equal(state.check, null)
@@ -241,7 +268,7 @@ for (const phase of ['construct', 'load', 'print', 'write']) {
       [phase]: fail,
     })
     await assert.rejects(api.exportPdf(owner, 'tab', ''), /failed/)
-    assert.equal(state.handler, null)
+    assert.deepEqual(state.handlers, {})
     assert.equal(partition.listenerCount('will-download'), 0)
     assert.ok(state.windows.every((window) => window.destroyed))
     assert.equal(state.writes.length, 0)
@@ -277,7 +304,7 @@ for (const event of ['owner-close', 'renderer-gone']) {
     ])
     clearTimeout(timer)
     assert.equal(result, 'canceled')
-    assert.equal(state.handler, null)
+    assert.deepEqual(state.handlers, {})
     assert.equal(window.destroyed, true)
     assert.equal(state.writes.length, 0)
   })

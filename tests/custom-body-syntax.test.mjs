@@ -2,15 +2,16 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   customBodyBoldCases,
   customBodyCases,
 } from './fixtures/custom-body.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const cases = [
@@ -61,7 +62,7 @@ test('custom body preference scopes match native text', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   // Segment fixed fixture text with the editor's ICU version, which may differ from Node.
   const count = (text) =>
     page.evaluate(
@@ -118,13 +119,6 @@ test('custom body preference scopes match native text', {
       exact: true,
     })
     return editor.evaluate((element) => {
-      if (element.editor) {
-        element.editor.commands.setTextSelection(
-          element.editor.state.doc.content.size,
-        )
-        element.blur()
-        return element.editor.getText().replace(/\s+/g, ' ').trim()
-      }
       const view = element.cmTile.root.view
       view.dispatch({ selection: { anchor: view.state.doc.length } })
       element.blur()
@@ -247,67 +241,64 @@ test('custom body preference scopes match native text', {
       },
     )
 
-  if (t.formattedEngine === 'codemirror') {
-    await t.test(
-      'task items keep their native body and count scope',
-      async () => {
-        assert.equal(
-          await render('core.bold', '> [!TIP]\n> - [ ] **x** y', '\n\n\nx y'),
-          'x y tail',
-        )
-      },
-    )
-    await t.test(
-      'table cell editors preserve scope with markers shown or hidden',
-      async () => {
-        const fixture = customBodyBoldCases.find(
-          (entry) => entry.name === 'table / bold',
-        )
-        assert.ok(fixture)
-        try {
-          for (const markers of [true, false]) {
-            await page.evaluate(
-              (shown) =>
-                localStorage.setItem('markdown-markers', String(shown)),
-              markers,
+  await t.test(
+    'task items keep their native body and count scope',
+    async () => {
+      assert.equal(
+        await render('core.bold', '> [!TIP]\n> - [ ] **x** y', '\n\n\nx y'),
+        'x y tail',
+      )
+    },
+  )
+  await t.test(
+    'table cell editors preserve scope with markers shown or hidden',
+    async () => {
+      const fixture = customBodyBoldCases.find(
+        (entry) => entry.name === 'table / bold',
+      )
+      assert.ok(fixture)
+      try {
+        for (const markers of [true, false]) {
+          await page.evaluate(
+            (shown) => localStorage.setItem('markdown-markers', String(shown)),
+            markers,
+          )
+          await render('core.bold', fixture.source, fixture.text)
+          await page.locator('.rich-pane td').first().click()
+          const cell = page.getByRole('textbox', {
+            name: 'Table cell',
+            exact: true,
+          })
+          await cell.evaluate((element) => {
+            const view = element.cmTile.root.view
+            view.dispatch({ selection: { anchor: view.state.doc.length } })
+          })
+          const expected = markers ? '**x**' : 'x'
+          await page
+            .waitForFunction(
+              (text) =>
+                document
+                  .querySelector('.hibi-lp-cell-editor .cm-content')
+                  ?.innerText.trim() === text,
+              expected,
             )
-            await render('core.bold', fixture.source, fixture.text)
-            await page.locator('.rich-pane td').first().click()
-            const cell = page.getByRole('textbox', {
-              name: 'Table cell',
-              exact: true,
+            .catch((error) => {
+              if (error.name !== 'TimeoutError') throw error
             })
-            await cell.evaluate((element) => {
-              const view = element.cmTile.root.view
-              view.dispatch({ selection: { anchor: view.state.doc.length } })
-            })
-            const expected = markers ? '**x**' : 'x'
-            await page
-              .waitForFunction(
-                (text) =>
-                  document
-                    .querySelector('.hibi-lp-cell-editor .cm-content')
-                    ?.innerText.trim() === text,
-                expected,
-              )
-              .catch((error) => {
-                if (error.name !== 'TimeoutError') throw error
-              })
-            assert.equal((await cell.innerText()).trim(), expected)
-            assert.equal(await cell.locator('.hibi-lp-strong').count(), 0)
-            assert.match(
-              await cell.evaluate((element) =>
-                element.cmTile.root.view.state.doc.toString(),
-              ),
-              /\*\*x\*\*/,
-            )
-          }
-        } finally {
-          await page.evaluate(() => localStorage.removeItem('markdown-markers'))
+          assert.equal((await cell.innerText()).trim(), expected)
+          assert.equal(await cell.locator('.hibi-lp-strong').count(), 0)
+          assert.match(
+            await cell.evaluate((element) =>
+              element.cmTile.root.view.state.doc.toString(),
+            ),
+            /\*\*x\*\*/,
+          )
         }
-      },
-    )
-  }
+      } finally {
+        await page.evaluate(() => localStorage.removeItem('markdown-markers'))
+      }
+    },
+  )
 
   for (const [name, feature, source, text] of [
     [

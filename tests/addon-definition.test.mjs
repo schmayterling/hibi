@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdir, rm, rmdir, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createServer, loadConfigFromFile } from 'vite'
 
@@ -9,7 +10,7 @@ const manifest = (id, extra = {}) => ({
   name: id,
   description: 'Definition probe',
   kind: 'extension',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   authors: [{ displayName: 'Test' }],
   ...extra,
@@ -23,16 +24,18 @@ const fixture = `
     stop() {},
   }
 `
-async function registry(t) {
+async function registry(t, plugins) {
   const { config } = await loadConfigFromFile(
     { command: 'serve', mode: 'test' },
     resolve('electron.vite.config.ts'),
   )
   const server = await createServer({
     configFile: false,
-    plugins: config.renderer.plugins.filter(
-      (plugin) => plugin.name === 'addon-catalog-renderer',
-    ),
+    plugins:
+      plugins ??
+      config.renderer.plugins.filter(
+        (plugin) => plugin.name === 'addon-catalog-renderer',
+      ),
     root: resolve('.'),
     server: { middlewareMode: true },
     appType: 'custom',
@@ -45,6 +48,27 @@ async function registry(t) {
   const find = (id) =>
     addonRegistry.snapshot().find((addon) => addon.manifest.id === id)
   return { server, addonRegistry, find }
+}
+
+// A probe package lives in a project of its own, since suites running
+// alongside read the checkout's src/useraddons.
+async function project(t, id) {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-addon-definition-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const folder = join(root, 'src', 'useraddons', id)
+  await mkdir(folder, { recursive: true })
+  const loader = await createServer({
+    configFile: false,
+    optimizeDeps: { noDiscovery: true },
+    root: resolve('.'),
+    server: { middlewareMode: true },
+    appType: 'custom',
+  })
+  t.after(() => loader.close())
+  const { addonCatalog } = await loader.ssrLoadModule(
+    '/scripts/addon-packages.ts',
+  )
+  return { folder, plugins: [addonCatalog('renderer', root)] }
 }
 
 test('direct definitions and factories share one descriptor path', {
@@ -60,7 +84,7 @@ test('direct definitions and factories share one descriptor path', {
   globalThis.definitionFactoryCalls = 0
   addonRegistry.hydrate([
     {
-      // No capabilities: a factory would receive the legacy SDK, so a direct object must skip it.
+      // No capabilities: only factories load an SDK, so a direct object must skip the loader.
       manifest: manifest('direct-probe'),
       url: module(
         `${fixture} export default { ...definition, manifest: { id: 'direct-probe' } }`,
@@ -93,10 +117,17 @@ test('direct definitions and factories share one descriptor path', {
   assert.equal(factory.flavors, undefined)
   assert.equal(globalThis.definitionFactoryCalls, 0)
 
+  // The graph lists dynamic import targets; only evaluated modules carry an instance.
+  const sdkLoaded = () =>
+    [...server.moduleGraph.idToModuleMap.values()].some(
+      (node) => node.id.endsWith('/src/addons/sdk-loader.ts') && node.ssrModule,
+    )
   globalThis.definitionId = 'direct-probe'
   await direct.start({})
+  assert.ok(!sdkLoaded(), 'the SDK must not load for direct definitions')
   globalThis.definitionId = 'factory-probe'
   await factory.start({})
+  assert.ok(sdkLoaded(), 'a factory loads the SDK its capabilities select')
   assert.deepEqual(globalThis.definitionStarts, [
     'direct-probe',
     'factory-probe',
@@ -110,13 +141,6 @@ test('direct definitions and factories share one descriptor path', {
   assert.equal(globalThis.definitionFactoryCalls, 1)
   assert.ok(globalThis.definitionSdk.documents)
   assert.equal(globalThis.definitionSdk.React, undefined)
-  // The graph lists dynamic import targets; only evaluated modules carry an instance.
-  assert.ok(
-    ![...server.moduleGraph.idToModuleMap.values()].some(
-      (node) => node.id.endsWith('/src/addons/sdk.ts') && node.ssrModule,
-    ),
-    'the legacy SDK must not load for direct definitions',
-  )
 
   await assert.rejects(find('mismatch-probe').start({}), /do not match/)
   await assert.rejects(find('shape-probe').start({}), /cannot start/)
@@ -162,14 +186,7 @@ test('source theme addons still register colors from start', {
   timeout: 30000,
 }, async (t) => {
   const id = 'definition-theme-probe'
-  const root = resolve('src/useraddons')
-  const folder = resolve(root, id)
-  await mkdir(folder, { recursive: true })
-  t.after(async () => {
-    await rm(folder, { recursive: true, force: true })
-    // Leave a developer's own local addons alone.
-    await rmdir(root).catch(() => {})
-  })
+  const { folder, plugins } = await project(t, id)
   await writeFile(
     resolve(folder, 'manifest.ts'),
     `export default ${JSON.stringify(manifest(id, { kind: 'theme' }))}`,
@@ -184,7 +201,7 @@ export default {
   },
 }`,
   )
-  const { find } = await registry(t)
+  const { find } = await registry(t, plugins)
   const registered = []
   await find(id).start({
     colorschemes: { register: (scheme) => registered.push(scheme.id) },
@@ -194,13 +211,7 @@ export default {
 
 test('compiled styles and declared themes use the same owned activation path', async (t) => {
   const id = 'definition-resources-probe'
-  const root = resolve('src/useraddons')
-  const folder = resolve(root, id)
-  await mkdir(folder, { recursive: true })
-  t.after(async () => {
-    await rm(folder, { recursive: true, force: true })
-    await rmdir(root).catch(() => {})
-  })
+  const { folder, plugins } = await project(t, id)
   const theme = {
     id: 'night',
     name: 'Night',
@@ -227,7 +238,7 @@ test('compiled styles and declared themes use the same owned activation path', a
   )
   await writeFile(resolve(folder, 'index.ts'), 'export default { start() {} }')
   await writeFile(resolve(folder, 'style.css'), '.probe { color: red }')
-  const { addonRegistry, find } = await registry(t)
+  const { addonRegistry, find } = await registry(t, plugins)
   const { styles, themes } = await addonRegistry.resources(id)
   assert.equal(styles.length, 1)
   assert.ok(

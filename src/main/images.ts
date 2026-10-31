@@ -25,13 +25,42 @@ export function imageMime(data: Buffer): string | null {
   )
     return 'image/avif'
   if (
-    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/.test(
+    // A comment can't contain `-->`, so each run of comments matches one way:
+    // a lazy `[\s\S]*?` here backtracked exponentially on `<!---->` runs.
+    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--(?:[^-]|-(?!->))*-->\s*)*<svg[\s>]/.test(
       data.toString('utf8'),
     )
   )
     return 'image/svg+xml'
   return null
 }
+
+/**
+ * Request headers for a remote image that give its host nothing to recognize a
+ * returning reader by: no cookies, and no cache validators (ETag,
+ * Last-Modified). The page's memory cache sets validators on the request,
+ * where they are dropped; Chromium's HTTP cache adds its own after webRequest,
+ * so the request tells it to skip the cache.
+ */
+export const remoteImageRequestHeaders = (headers: Record<string, string>) => ({
+  ...Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) =>
+        !/^(?:cookie|cache-control|if-none-match|if-modified-since)$/i.test(
+          name,
+        ),
+    ),
+  ),
+  'Cache-Control': 'no-cache',
+})
+
+/** Response headers without Set-Cookie, so a remote image host stores no cookie. */
+export const withoutSetCookie = (headers: Record<string, string[]>) =>
+  Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() !== 'set-cookie',
+    ),
+  )
 
 export function imageSources(markdown: string): Set<string> {
   const sources = new Set<string>()

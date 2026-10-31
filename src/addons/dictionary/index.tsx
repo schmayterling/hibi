@@ -1,5 +1,4 @@
 import type { EditorView } from '@codemirror/view'
-import type { Editor } from '@tiptap/core'
 import {
   Ban,
   BookOpen,
@@ -313,18 +312,8 @@ export default defineAddon({
         }).result
       },
     })
-    const richEditors = new Map<Editor, ViewId>()
     const sourceViews = new Map<EditorView, ViewId>()
     const formattedViews = new Map<EditorView, ViewId>()
-    context.editor.registerRich({
-      id: 'lookup',
-      preview: 'deferred',
-      attach(editor, editorContext) {
-        if (!editorContext) return () => {}
-        richEditors.set(editor, editorContext.viewId)
-        return () => richEditors.delete(editor)
-      },
-    })
     const track =
       (views: Map<EditorView, ViewId>) =>
       async (editorContext?: EditorExtensionContext) => {
@@ -369,22 +358,6 @@ export default defineAddon({
       if (source && codeMirror) {
         found = source.sourceTarget(codeMirror, from, to)
         inView = () => views.get(codeMirror) === view.viewId
-      } else if (selection.editor === 'rich' && richEditors.size) {
-        // Only the Tiptap editor attaches here, so its module loads with it.
-        const { richTarget } = await import('./rich')
-        const editor = [...richEditors].find(
-          ([editor, viewId]) =>
-            !editor.isDestroyed &&
-            at(
-              viewId,
-              editor.state.selection.anchor,
-              editor.state.selection.head,
-            ),
-        )?.[0]
-        if (editor) {
-          found = richTarget(editor, from, to)
-          inView = () => richEditors.get(editor) === view.viewId
-        }
       }
       if (!found) return null
       const { editable, replace } = found

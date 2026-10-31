@@ -9,12 +9,13 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { electron, startupDiagnostics } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  startupDiagnostics,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -41,7 +42,7 @@ test('local history snapshots on save, previews, and restores without overwritin
   }, file)
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await pressShortcut(app, `${mod}+o`)

@@ -1,0 +1,12 @@
+{
+  "{\"name\":\"bare quote\",\"source\":\">~~~\\n>foo\\t\\n> \\tbar\\n>~~~\"}": true,
+  "{\"name\":\"body after indentation\",\"source\":\"> ```\\n>foo    \\n>     \\tbar\\n> ```\"}": true,
+  "{\"name\":\"item quote\",\"source\":\"- > ```\\n  > foo\\t\\n  > \\tbar\\n  > ```\"}": true,
+  "{\"name\":\"nested alert\",\"source\":\"> > [!NOTE]\\n> > ```\\n> > foo\\t\\n> > \\tbar\\n> > ```\"}": true,
+  "{\"name\":\"nested quote\",\"source\":\"> > ```js\\n> > foo\\t\\n> > \\tbar\\n> > ```\"}": true,
+  "{\"name\":\"ordered alert\",\"source\":\"> 1. > [!NOTE]\\n>    > ```\\n>    > foo\\t\\n>    > \\tbar\\n>    > ```\"}": true,
+  "{\"name\":\"ordered fence\",\"source\":\"> 1. ```\\n>    foo\\t\\n>    \\tbar\\n>    ```\"}": true,
+  "{\"name\":\"partial alert\",\"source\":\"> > > [!NOTE]\\n> > > ```\\n> > >foo  \\n> > >\\tbar\\n> > > ```\"}": true,
+  "{\"name\":\"partial structural tab\",\"source\":\"> ```\\n>foo  \\n>\\tbar\\n> ```\"}": true,
+  "{\"name\":\"quote bullet\",\"source\":\"> - item\\n>\\n>   ```\\n>   foo  \\n>   \\tbar\\n>   ```\"}": true
+}

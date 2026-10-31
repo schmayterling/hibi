@@ -1,4 +1,3 @@
-import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import { markedGithubFootnote } from '../../shared/marked-footnotes.ts'
@@ -8,9 +7,6 @@ import alertCss from './alerts.css?inline'
 import { obsidianInfo } from './flavor-info'
 import manifest from './manifest'
 import { obsidianMarkdown } from './obsidian-markdown'
-
-// The Tiptap editor loads only when it is the selected engine.
-const rich = codemirrorFormattedView ? undefined : await import('./rich')
 
 /**
  * Exports show a callout that folds as a disclosure, open for `+` and
@@ -47,9 +43,7 @@ const github: MarkdownFlavor = {
   description:
     'Alerts, footnotes, tables, task lists, strikethrough, and automatic links.',
   detect: () => true,
-  serialization: 'block-local',
   markedOptions: { gfm: true },
-  richExtensions: rich?.githubExtensions ?? [],
   export: {
     extensions: [alertMarkdown, markedGithubFootnote()],
     css: alertCss,
@@ -59,8 +53,6 @@ const github: MarkdownFlavor = {
 
 const obsidian: MarkdownFlavor = {
   ...obsidianInfo,
-  serialization: 'block-local',
-  richExtensions: rich?.obsidianExtensions ?? [],
   export: { extensions: [obsidianMarkdown] },
 }
 
@@ -93,43 +85,31 @@ export default defineAddon({
         cursor: 2,
         description: 'Two columns with a header',
         keywords: 'table grid columns',
-        rich: (chain) =>
-          chain.insertTable({ rows: 2, cols: 2, withHeaderRow: true }),
       },
       tasks: {
         markdown: '- [ ] ',
         description: 'Tasks with checkboxes',
         keywords: 'checklist todo task list',
-        rich: (chain) => chain.toggleTaskList(),
       },
       strike: {
         markdown: '~~~~',
         cursor: 2,
-        rich: (chain) => chain.toggleStrike(),
       },
       alerts: {
         markdown: '> [!NOTE]\n> ',
         keywords: 'callout admonition',
-        rich: (chain) =>
-          chain.insertContent({
-            type: 'githubAlert',
-            attrs: { alertType: 'note' },
-            content: [{ type: 'paragraph' }],
-          }),
       },
     }
-    for (const [id, label, extensions, matches, nodes] of [
+    for (const [id, label, matches, nodes] of [
       [
         'tables',
         'Tables',
-        ['tableKit'],
         (token: { type: string }) => token.type === 'table',
         ['Table'],
       ],
       [
         'tasks',
         'Task lists',
-        ['taskList', 'taskItem'],
         (token: { type: string; items?: { task?: boolean }[] }) =>
           token.type === 'list' && !!token.items?.some((item) => item.task),
         ['Task'],
@@ -137,14 +117,12 @@ export default defineAddon({
       [
         'strike',
         'Strikethrough',
-        ['strike'],
         (token: { type: string }) => token.type === 'del',
         ['Strikethrough'],
       ],
       [
         'alerts',
         'Alerts',
-        ['githubAlert'],
         (token: { type: string; text?: string }) =>
           token.type === 'githubAlert' ||
           (token.type === 'blockquote' && !!alertMarker(token.text ?? '')),
@@ -156,7 +134,6 @@ export default defineAddon({
         label,
         group: 'Markdown',
         level: id === 'strike' ? 'inline' : 'block',
-        extensions,
         nodes,
         matches,
         slash: slash[id],

@@ -22,7 +22,6 @@ export type {
   FormattedRenderContext,
 } from '../../addons/api'
 
-import { formattedCompatibility } from './formatted-compatibility.ts'
 import { type FormattedEntry, formattedRegistry } from './formatted-registry.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
 
@@ -176,23 +175,6 @@ export const formattedFormatting = Facet.define<string>()
 /** Nodes of syntax settings that are off: they and their children show as written. */
 export const formattedLiteral = Facet.define<string>()
 
-/** Legacy fallback suppresses builtins while preserving its owner's node views. */
-export const formattedLegacyLiteral = Facet.define<
-  { nodes: readonly string[]; views: readonly FormattedNodeView[] },
-  ReadonlyMap<string, ReadonlySet<FormattedNodeView>>
->({
-  combine(entries) {
-    const nodes = new Map<string, Set<FormattedNodeView>>()
-    for (const entry of entries)
-      for (const name of entry.nodes) {
-        const views = nodes.get(name) ?? new Set<FormattedNodeView>()
-        for (const view of entry.views) views.add(view)
-        nodes.set(name, views)
-      }
-    return nodes
-  },
-})
-
 /**
  * The document a formatted view edits, provided by its host: the tab that
  * shows it, and a revision that changes when its files or media may have.
@@ -344,23 +326,26 @@ const coreNodes: Partial<Record<string, readonly string[]>> = {
     'CommentBlock',
     'ProcessingInstructionBlock',
   ],
-  'core.inline-html': ['HTMLTag', 'Comment', 'ProcessingInstruction'],
+  'core.inline-html': [
+    'HTMLTag',
+    'HTMLImage',
+    'Comment',
+    'ProcessingInstruction',
+  ],
 }
 
 export const formattedContributions = {
   /** Changes when registered or loaded contributions or the syntax settings they follow change. */
   version: () =>
-    `${formattedRegistry.version()} ${loads} ${markdownSyntax.version()} ${formattedCompatibility.features().join(',')}`,
+    `${formattedRegistry.version()} ${loads} ${markdownSyntax.version()}`,
   subscribe(listener: () => void) {
     listeners.add(listener)
     const registry = formattedRegistry.subscribe(listener)
     const syntax = markdownSyntax.subscribe(listener)
-    const compatibility = formattedCompatibility.subscribe(listener)
     return () => {
       listeners.delete(listener)
       registry()
       syntax()
-      compatibility()
     }
   },
   /**
@@ -387,25 +372,11 @@ export const formattedContributions = {
         !feature.enabled ? (feature.nodes ?? coreNodes[feature.id] ?? []) : [],
       ),
     )
-    const legacy = features
-      .filter(
-        (feature) =>
-          feature.enabled &&
-          formattedCompatibility.features().includes(feature.id),
-      )
-      .map((feature) => ({
-        nodes: (feature.nodes ?? []).filter((name) => !disabled.has(name)),
-        views: contributions
-          .filter((entry) => entry.id.startsWith(`${feature.owner}.`))
-          .flatMap((entry) => entry.views ?? []),
-      }))
     return [
       formattedFlavors.of(flavors ?? []),
-      [...disabled, ...legacy.flatMap((entry) => entry.nodes)].map((name) =>
-        formattedLiteral.of(name),
-      ),
-      legacy.map((entry) => formattedLegacyLiteral.of(entry)),
-      formattedRenderInputs.of(legacy),
+      [...disabled].map((name) => formattedLiteral.of(name)),
+      // A new key per configuration: cached layout follows the loaded renderers.
+      formattedRenderInputs.of(contributions),
       contributions.map(contributionExtension),
     ]
   },

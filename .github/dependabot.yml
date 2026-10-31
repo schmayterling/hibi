@@ -13,9 +13,6 @@ updates:
       # Review the Vitest 5 migration separately.
       - dependency-name: vitest
         versions: ['>=5']
-      # Tiptap Mathematics supports KaTeX through 0.18.
-      - dependency-name: katex
-        versions: ['>=0.19']
     groups:
       development:
         patterns: ['*']

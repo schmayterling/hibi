@@ -5,11 +5,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createServer } from 'vite'
 import { codeHtml, codeLanguages } from '../src/renderer/src/code-languages.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('language loading deduplicates aliases and respects disabled preferences during import', async (t) => {
@@ -81,11 +81,6 @@ test('production entry keeps editor implementations behind demand imports', asyn
   )
   assert.ok(
     chunks.some((chunk) =>
-      chunk.modules.includes('src/renderer/src/Editor.tsx'),
-    ),
-  )
-  assert.ok(
-    chunks.some((chunk) =>
       chunk.modules.includes('src/renderer/src/SourceEditor.tsx'),
     ),
   )
@@ -109,23 +104,22 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   }
   for (const chunk of chunks) if (chunk.entry) visit(chunk.file)
   const initial = chunks.filter((chunk) => reached.has(chunk.file))
-  // Catalog baseline: 689137 bytes, plus 318 bytes for declarative styles/themes (#218)
-  // and 430 bytes for releasing closed tabs' sources from document states (#440),
-  // and 63 bytes for opening large notes in the CodeMirror formatted view (#450),
-  // and 1122 bytes for closing several tabs and middle-click closing (#455),
-  // and 10 bytes for keeping footnote notes in the formatted view (#419),
-  // plus 34 bytes for shared context-free search folding (#399),
-  // and 9 bytes for the formatted view's copy importing the synchronous export
-  // renderer from the startup chunk (#459),
-  // plus 1 byte of minified import aliases in the entry that the source outline's
-  // lazy chunks renamed; no module moved into startup (#460).
-  // API 3 adds 713 bytes for formatted registrations, publication and lazy compatibility dispatch.
-  // Its render-error route adds 22 bytes; callback guards stay in the lazy flavor module.
-  // Syntax ownership adds 115 bytes for synchronous registration identity and cleanup;
-  // parser callbacks and recovery stay behind editor imports.
+  // Catalog baseline: 677,008 bytes once the Tiptap editor was removed. Each
+  // addition to the startup closure adds its bytes here, with the reason.
+  // Keeping Settings open while a file, tab or new note opens adds 88 bytes (#742),
+  // scrolling undo and redo to the selection they restore adds 65 (#737),
+  // keeping an addon's failure notice when a note opens adds 27 (#750),
+  // running an addon's undo and redo in the view the user works in adds 491 (#745),
+  // keeping a pane's undo steps, caret and kept place when a split opens or closes adds 539 (#759),
+  // and sharing the menu store with the remote image menu, which moves it into
+  // a chunk of its own, adds 36 (#735).
+  // The dictionary's declared commands, which work before it starts, and
+  // commands that wait for their addon's editor features add 1,504 (#746).
+  // Following the view's current editor while a command waits for its
+  // addon's features adds 93 (#766).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 691124 + 713 + 22 + 115,
+    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
@@ -248,7 +242,7 @@ test('shared format registration does not statically load source parsers', async
   assert.doesNotMatch(modules, /src\/addons\/_shared\/format-language\.ts/)
 })
 
-it('blank startup leaves disabled runtimes and closed settings unloaded and source unmounted', {
+test('blank startup leaves disabled runtimes and closed settings unloaded and source unmounted', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-performance-'))
@@ -263,28 +257,20 @@ it('blank startup leaves disabled runtimes and closed settings unloaded and sour
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
   await page.evaluate(
     () => new Promise((resolve) => requestIdleCallback(resolve)),
   )
-  if (t.formattedEngine === 'tiptap') {
-    assert.equal(
-      await page.evaluate(() => document.activeElement?.matches('.tiptap')),
-      true,
-    )
-    assert.equal(await page.locator('.cm-editor').count(), 0)
-  } else {
-    assert.equal(
-      await page
-        .getByRole('textbox', { name: 'Document editor', exact: true })
-        .evaluate((element) => element === document.activeElement),
-      true,
-    )
-    assert.equal(await page.locator('.rich-pane .cm-editor').count(), 1)
-  }
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'Document editor', exact: true })
+      .evaluate((element) => element === document.activeElement),
+    true,
+  )
+  assert.equal(await page.locator('.rich-pane .cm-editor').count(), 1)
   assert.equal(await page.locator('.source-pane .cm-editor').count(), 0)
   const chunks = JSON.parse(
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
@@ -312,14 +298,9 @@ it('blank startup leaves disabled runtimes and closed settings unloaded and sour
     initial,
     /src\/renderer\/src\/(?:SettingsScreen|VersionHistory)\.tsx/,
   )
-  if (t.formattedEngine === 'tiptap') {
-    assert.doesNotMatch(initial, /@codemirror\//)
-    assert.doesNotMatch(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
-  } else {
-    // The formatted engine uses SourceEditor; its separate source pane stays unmounted.
-    assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
-    assert.doesNotMatch(initial, /node_modules\/(?:@tiptap\/|prosemirror-)/)
-  }
+  // The formatted view uses SourceEditor; its separate source pane stays unmounted.
+  assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
+  assert.doesNotMatch(initial, /node_modules\/(?:@tiptap\/|prosemirror-)/)
   assert.doesNotMatch(initial, /src\/renderer\/src\/FormatEditor\.tsx/)
   await page.evaluate(() => {
     const editor = document.querySelector('.editor-surface')
@@ -389,7 +370,7 @@ it('blank startup leaves disabled runtimes and closed settings unloaded and sour
   )
 })
 
-it('default diagrams start with markdown documents and load pele only for a diagram', {
+test('default diagrams start with markdown documents and load pele only for a diagram', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-mermaid-'))
@@ -401,7 +382,7 @@ it('default diagrams start with markdown documents and load pele only for a diag
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
@@ -422,16 +403,10 @@ it('default diagrams start with markdown documents and load pele only for a diag
       .filter((chunk) => files.has(chunk.file))
       .flatMap((chunk) => chunk.modules)
   assert.match(loaded().join('\n'), /src\/addons\/mermaid\/index\.tsx/)
-  if (t.formattedEngine === 'tiptap')
-    assert.doesNotMatch(
-      loaded().join('\n'),
-      /node_modules\/(?:pele|mermaid|@mermaid-js)\/|@codemirror\//,
-    )
-  else
-    assert.doesNotMatch(
-      loaded().join('\n'),
-      /node_modules\/(?:pele|mermaid|@mermaid-js|@tiptap|prosemirror-[a-z-]+)\//,
-    )
+  assert.doesNotMatch(
+    loaded().join('\n'),
+    /node_modules\/(?:pele|mermaid|@mermaid-js|@tiptap|prosemirror-[a-z-]+)\//,
+  )
   const note = join(profile, 'diagram.md')
   await writeFile(note, '```mermaid\nflowchart LR\n  A --> B\n```\n')
   await app.evaluate(({ dialog }, path) => {
@@ -456,7 +431,7 @@ it('default diagrams start with markdown documents and load pele only for a diag
   )
 })
 
-it('unrelated enabled formats defer source parsers until first source use', {}, async (t) => {
+test('unrelated enabled formats defer source parsers until first source use', {}, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-formats-'))
   await writeFile(
     join(profile, 'addons.json'),
@@ -470,7 +445,7 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.waitForFunction(
     () => performance.getEntriesByName('hibi:addon:rst').length,
   )
@@ -500,16 +475,10 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
       .filter((chunk) => files.has(chunk.file))
       .flatMap((chunk) => chunk.modules)
       .join('\n')
-  if (t.formattedEngine === 'tiptap')
-    assert.doesNotMatch(
-      modules(),
-      /src\/addons\/_shared\/format-language\.ts|@codemirror\//,
-    )
-  else
-    assert.doesNotMatch(
-      modules(),
-      /src\/addons\/_shared\/format-language\.ts|node_modules\/@codemirror\/lang-html\//,
-    )
+  assert.doesNotMatch(
+    modules(),
+    /src\/addons\/_shared\/format-language\.ts|node_modules\/@codemirror\/lang-html\//,
+  )
   const file = join(profile, 'note.html')
   await writeFile(file, '<h1>hello</h1>\r\n')
   await app.evaluate(({ dialog }, file) => {
@@ -527,8 +496,7 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
   assert.match(modules(), /node_modules\/@codemirror\/lang-html\//)
   assert.doesNotMatch(modules(), /node_modules\/@codemirror\/lang-markdown\//)
   // The formatted host loads the shared chunked language.
-  if (t.formattedEngine === 'codemirror')
-    assert.match(modules(), /src\/shared\/chunked-markdown\.ts/)
+  assert.match(modules(), /src\/shared\/chunked-markdown\.ts/)
   assert.doesNotMatch(
     modules(),
     /node_modules\/@codemirror\/legacy-modes\/mode\/(?:stex|textile|r)\./,
@@ -539,12 +507,12 @@ it('unrelated enabled formats defer source parsers until first source use', {}, 
   )
 })
 
-test('the default engine starts every built-in editor addon without tiptap or prosemirror', {
+test('every built-in editor addon starts without tiptap or prosemirror', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-codemirror-'))
-  // Optional addons with Tiptap features; markdown, mermaid, tags, text extras
-  // and slash commands start by default.
+  // Optional addons that had Tiptap features; markdown, mermaid, tags, text
+  // extras and slash commands start by default.
   const optional = ['math', 'typst', 'block-drag', 'dictionary', 'word-count']
   await writeFile(
     join(profile, 'addons.json'),

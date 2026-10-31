@@ -4,7 +4,7 @@ import {
   compatibleAddonManifest,
 } from '../addons/api'
 import { parseAddonRequirements } from './addon-dependencies'
-import { validCommandMenu } from './addon-hotkeys'
+import { validCommandMenu, validCommandShortcut } from './addon-hotkeys'
 import {
   MAX_ADDON_MANIFEST_BYTES,
   validAddonPath as validPath,
@@ -46,6 +46,9 @@ export type ParsedAddonManifest = {
   themes: (ColorschemeInput | string)[]
 }
 
+/** A package made for addon API 1 or 2, which Hibi no longer runs. */
+export class OutdatedAddonError extends Error {}
+
 /** `themeFiles` holds parsed JSON by declared path; without it, theme paths stay unresolved. */
 export function parseAddonManifest(
   value: unknown,
@@ -79,6 +82,15 @@ export function parseAddonManifest(
   }
   const string = (value: unknown, max: number): value is string =>
     typeof value === 'string' && !!value.trim() && value.length <= max
+  if (
+    data.apiVersion === 1 ||
+    data.apiVersion === 2 ||
+    (Array.isArray(data.capabilities) && data.capabilities.includes('rich')) ||
+    data.activation === 'rich'
+  )
+    throw new OutdatedAddonError(
+      'This addon was made for an earlier version of Hibi. Ask its author for an update to addon API 3.',
+    )
   if (
     !validId(data.id) ||
     !string(data.name, 100) ||
@@ -135,24 +147,15 @@ export function parseAddonManifest(
       new Set(data.capabilities).size !== data.capabilities.length ||
       data.capabilities.some(
         (value) =>
-          ![
-            'ui',
-            'rich',
-            'source',
-            'formatted',
-            'markdown',
-            'modalEditing',
-          ].includes(value) ||
-          (value === 'formatted' && data.apiVersion !== 3),
+          !['ui', 'source', 'formatted', 'markdown', 'modalEditing'].includes(
+            value,
+          ),
       ))
   )
     throw new Error('The addon lists invalid SDK capabilities.')
   if (
     data.activation !== undefined &&
-    (!['command', 'source', 'rich', 'formatted'].includes(
-      String(data.activation),
-    ) ||
-      (data.activation === 'formatted' && data.apiVersion !== 3))
+    !['command', 'source', 'formatted'].includes(String(data.activation))
   )
     throw new Error('The addon activation mode is invalid.')
   if (
@@ -171,6 +174,17 @@ export function parseAddonManifest(
       ))
   )
     throw new Error('The addon command descriptors are invalid.')
+  const unbound = Array.isArray(data.commands)
+    ? data.commands.find(
+        (command) =>
+          command.defaultShortcut !== undefined &&
+          !validCommandShortcut(command.defaultShortcut),
+      )
+    : undefined
+  if (unbound)
+    throw new Error(
+      `The default shortcut for the ${unbound.id} command is not available on every platform. Choose a supported key combination that Hibi does not reserve.`,
+    )
   if (
     data.activation === 'command' &&
     (!Array.isArray(data.commands) || !data.commands.length)
@@ -358,6 +372,20 @@ export function admitInstalledAddon(
       importer: undefined,
       windows: undefined,
       ...(data.kind === 'extension' ? { themes: undefined } : {}),
+      // Packages installed before shortcuts were checked keep their commands without them.
+      ...(Array.isArray(data.commands)
+        ? {
+            commands: data.commands.map((command) => {
+              if (
+                command?.defaultShortcut === undefined ||
+                validCommandShortcut(command.defaultShortcut)
+              )
+                return command
+              const { defaultShortcut: _defaultShortcut, ...rest } = command
+              return rest
+            }),
+          }
+        : {}),
     }
   }
   const parsed = parseAddonManifest(value, { themeFiles })

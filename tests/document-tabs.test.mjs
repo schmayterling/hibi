@@ -10,11 +10,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -40,7 +41,7 @@ test('disk refresh after focusing an older tab advances its revision', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   const open = async (file) => {
     await app.evaluate(({ dialog }, selected) => {
@@ -97,7 +98,7 @@ test('an inactive journal edit survives a pending disk refresh', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   const open = async (file) => {
     await app.evaluate(({ dialog }, file) => {
@@ -209,7 +210,7 @@ test('overflowing tabs reveal close buttons and reorder without losing drafts', 
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   await waitForDocumentEditor(app, page)
   await page.setViewportSize({ width: 720, height: 600 })
@@ -369,7 +370,7 @@ test('single-file mode guards replacement, closes other tabs safely, and persist
     await rm(root, { recursive: true, force: true })
   })
   let page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   await replaceRichText(
     page,
@@ -530,7 +531,7 @@ test('tab entry and exit animate, while reduced motion removes transitions', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   await waitForDocumentEditor(app, page)
   await page.emulateMedia({ reducedMotion: 'no-preference' })
@@ -636,7 +637,7 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
     }
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await waitForDocumentEditor(app, page)
@@ -856,7 +857,7 @@ test('source selection survives tab remounts with emoji and mixed line endings',
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   await waitForDocumentEditor(app, page)
   const open = async (file) => {
@@ -925,7 +926,7 @@ test('five hundred tabs skip geometry for unchanged lists and read before writin
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(15000)
   await waitForDocumentEditor(app, page)
   await page.setViewportSize({ width: 1000, height: 600 })
@@ -1043,7 +1044,7 @@ test('tab context menu closes tabs in bulk and disables impossible actions', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   await waitForDocumentEditor(app, page)
   const read = () => page.evaluate(() => window.hibi.getDocument())
@@ -1141,7 +1142,7 @@ test('context-menu bulk close confirms dirty tabs and cancels as a unit', {
     }
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   await waitForDocumentEditor(app, page)
   const read = () => page.evaluate(() => window.hibi.getDocument())
@@ -1226,7 +1227,7 @@ for (const failure of [false, true]) {
       await rm(root, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
+    await waitForFormattedEditor(app, page)
     page.setDefaultTimeout(6500)
     await waitForDocumentEditor(app, page)
     const read = () => page.evaluate(() => window.hibi.getDocument())
@@ -1366,7 +1367,7 @@ test('quit and workspace deletion keep tabs saved before a later prompt cancels'
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   await waitForDocumentEditor(app, page)
   const read = () => page.evaluate(() => window.hibi.getDocument())
@@ -1508,7 +1509,7 @@ test('middle-click closes tabs without changing the active document', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   await waitForDocumentEditor(app, page)
   const read = () => page.evaluate(() => window.hibi.getDocument())
@@ -1579,7 +1580,7 @@ test('middle-click is ignored while a tab close is awaiting confirmation', {
       })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6500)
   await waitForDocumentEditor(app, page)
   const read = () => page.evaluate(() => window.hibi.getDocument())

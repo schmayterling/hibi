@@ -2,7 +2,7 @@
   "id": "autocomplete",
   "name": "Autocomplete",
   "description": "Suggest words and phrases from offline dictionaries and your writing habits. Learning stays on this device.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.0",
   "authors": [

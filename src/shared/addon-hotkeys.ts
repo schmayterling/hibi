@@ -1,3 +1,5 @@
+import { shortcutError } from './hotkeys.ts'
+
 export const ADDON_HOTKEY_CHANNELS = {
   get: 'addon-hotkeys:get',
   register: 'addon-hotkeys:register',
@@ -27,6 +29,24 @@ export function validCommandMenu(value: unknown): boolean {
         /^[a-z][a-z0-9-]*$/.test(menu.group))) &&
     (menu.order === undefined ||
       (Number.isInteger(menu.order) && Math.abs(menu.order as number) <= 10000))
+  )
+}
+
+/** A declared default shortcut that main binds on every platform, where `mod` becomes Command or Control. */
+export function validCommandShortcut(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    ['darwin', 'linux', 'win32'].every((platform) => {
+      const shortcut = value.replace(
+        /^mod\+/i,
+        platform === 'darwin' ? 'meta+' : 'ctrl+',
+      )
+      return (
+        !!shortcut &&
+        shortcut.length <= 60 &&
+        !shortcutError(shortcut, platform)
+      )
+    })
   )
 }
 

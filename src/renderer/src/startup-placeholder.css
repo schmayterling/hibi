@@ -61,7 +61,6 @@
   text-decoration: underline;
   text-underline-offset: 0.15em;
 }
-.editor-page[data-startup="true"] .is-editor-empty::before,
 .editor-page[data-startup="true"] .cm-placeholder,
 .editor-page[data-startup="true"] .editor-cursor,
 .editor-page[data-startup="true"] .cm-cursor,

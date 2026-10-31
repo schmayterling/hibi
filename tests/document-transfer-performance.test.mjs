@@ -67,10 +67,19 @@ for (const mib of [2, 8])
       },
       [big, small],
     )
+    // Both notes open in the formatted view, so wait for each by name.
+    const shown = async (file) => {
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        basename(file),
+      )
+      await waitForDocumentEditor(app, page)
+    }
     await clickMenu(app, 'Open…')
-    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await shown(big)
     await clickMenu(app, 'Open…')
-    await waitForDocumentEditor(app, page)
+    await shown(small)
     const times = []
     for (let round = 0; round < 2; round++) {
       await app.evaluate(() => {
@@ -81,7 +90,7 @@ for (const mib of [2, 8])
         .getByRole('tab')
         .filter({ hasText: basename(big) })
         .click()
-      await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+      await shown(big)
       times.push(performance.now() - start)
       assert.equal(await app.evaluate(() => globalThis.replyProbe.reads), 0)
       if (!round) {
@@ -89,12 +98,12 @@ for (const mib of [2, 8])
           .getByRole('tab')
           .filter({ hasText: basename(small) })
           .click()
-        await waitForDocumentEditor(app, page)
+        await shown(small)
       }
     }
     await page.evaluate(() => {
-      const view = document.querySelector('.source-pane .cm-content').cmTile
-        .root.view
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
       view.dispatch({
         changes: { from: 0, to: 1, insert: 'Z' },
         userEvent: 'input.type',

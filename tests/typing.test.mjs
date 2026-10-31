@@ -18,7 +18,7 @@ async function installTypingProbe(profile) {
       name: 'Typing probe',
       description: 'Counts committed editor input.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       capabilities: [],

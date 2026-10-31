@@ -13,17 +13,18 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { electron, showTestWindows, stopElectronTree } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  showTestWindows,
+  stopElectronTree,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const captureUrl = /\/addon-window\.html$/
-const formattedEngines = new WeakMap()
 
 async function captureWindow(app) {
   const deadline = performance.now() + 10000
@@ -47,9 +48,7 @@ async function captureWindow(app) {
             }
         })
       const editor = page.locator(
-        formattedEngines.get(app) === 'tiptap'
-          ? '.tiptap[contenteditable="true"]'
-          : '.hibi-formatted .cm-content[contenteditable="true"]',
+        '.hibi-formatted .cm-content[contenteditable="true"]',
       )
       await page
         .getByRole('textbox', { name: 'Document editor', exact: true })
@@ -58,7 +57,7 @@ async function captureWindow(app) {
       assert.equal(
         await editor.count(),
         1,
-        'quick note uses the selected formatted engine',
+        'quick note uses the formatted editor',
       )
       return page
     }
@@ -217,8 +216,7 @@ async function harness(t, { draft, draftFile } = {}) {
         })
       }, workspace)
       const page = await app.firstWindow()
-      await selectFormattedEngine(app, page, t.formattedEngine)
-      formattedEngines.set(app, t.formattedEngine)
+      await waitForFormattedEditor(app, page)
       await page.getByRole('textbox', { name: /document editor/i }).waitFor()
       await page.evaluate(() => window.hibi.openWorkspace())
       return { app, page }
@@ -314,8 +312,7 @@ test('quick note captures to a chosen folder without replacing files', {
     })
   }, workspace)
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  formattedEngines.set(app, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.evaluate(() => window.hibi.openWorkspace())
   await watchMainWindow(app)
@@ -623,8 +620,7 @@ test('quick note shortcut opens one capture window without raising Hibi', {
     })
   }, workspace)
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  formattedEngines.set(app, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   const workspaceId = (await page.evaluate(() => window.hibi.openWorkspace()))
     .id
@@ -802,8 +798,7 @@ test('the capture window renders markdown like the main editor', {
     })
   }, workspace)
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  formattedEngines.set(app, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.evaluate(() => window.hibi.openWorkspace())
   await app.evaluate(
@@ -814,128 +809,63 @@ test('the capture window renders markdown like the main editor', {
     .getByRole('heading', { level: 1, name: 'Reading list', exact: true })
     .waitFor()
   // Hosted macOS sometimes measures block markers; record what moves the caret.
-  if (t.formattedEngine === 'tiptap')
-    await page.evaluate(() => {
-      const { editor } = document.querySelector('.tiptap')
-      const started = performance.now()
-      const log = []
-      window.parityLog = log
-      const record = (event) => {
-        if (log.length === 20) log.shift()
-        log.push([
-          Math.round(performance.now() - started),
-          event,
-          editor.state.selection.head,
-          editor.isFocused,
-          document.hasFocus(),
-        ])
-      }
-      for (const event of ['selectionUpdate', 'focus', 'blur'])
-        editor.on(event, () => record(event))
-      for (const event of ['focus', 'blur'])
-        window.addEventListener(event, () => record(`window ${event}`))
-      window.parityEditor = editor
-    })
+
   const capture = await openCapture(app, page)
-  if (t.formattedEngine === 'codemirror')
-    for (const editor of [page, capture]) {
-      const session = await editor.context().newCDPSession(editor)
-      focusSessions.push(session)
-      await session.send('Emulation.setFocusEmulationEnabled', {
-        enabled: true,
-      })
-    }
+  for (const editor of [page, capture]) {
+    const session = await editor.context().newCDPSession(editor)
+    focusSessions.push(session)
+    await session.send('Emulation.setFocusEmulationEnabled', {
+      enabled: true,
+    })
+  }
   const shape = async (editor) => {
-    if (t.formattedEngine === 'codemirror') {
-      const root = editor.getByRole('textbox', {
-        name: 'Document editor',
-        exact: true,
-      })
-      const paragraph = root.locator('.cm-line', {
-        hasText: /^Find the essay\.$/,
-      })
-      await click(paragraph, 'The first paragraph')
-      await root.press('End')
-      await waitForAsync(editor, () => {
-        const element = document.querySelector('.rich-pane .cm-content')
-        const view = element.cmTile.root.view
-        const selection = getSelection()
-        return (
-          document.hasFocus() &&
-          document.activeElement === element &&
-          view.hasFocus &&
-          selection?.isCollapsed &&
-          element.contains(selection.focusNode) &&
-          view.posAtDOM(selection.focusNode, selection.focusOffset) ===
-            view.state.selection.main.head &&
-          view.state.selection.main.empty &&
-          view.state.selection.main.head ===
-            view.state.doc.toString().indexOf('Find the essay.') +
-              'Find the essay.'.length
-        )
-      })
-      return {
-        shape: await root.evaluate((element) => ({
-          headings: element.querySelectorAll('[role="heading"][aria-level="1"]')
-            .length,
-          tasks: element.querySelectorAll('.hibi-lp-task').length,
-          checkboxes: element.querySelectorAll('input[type="checkbox"]').length,
-          bold: element.querySelectorAll('.hibi-lp-strong').length,
-          markers: [...element.querySelectorAll('.hibi-lp-marker')].filter(
-            (marker) => marker.getClientRects().length,
-          ).length,
-          heading: getComputedStyle(element.querySelector('.hibi-lp-h1'))
-            .fontSize,
-          text: getComputedStyle(
-            [...element.querySelectorAll('.cm-line')].find(
-              (line) => line.textContent === 'Find the essay.',
-            ),
-          ).lineHeight,
-        })),
-        diagnostic: {},
-      }
-    }
-    const root = editor.locator('.tiptap[contenteditable="true"]')
-    // The same plain caret in both: the end of the first paragraph, outside bold.
-    await click(root.locator('p').first(), 'The first paragraph')
-    await editor.keyboard.press('End')
-    // Native caret movement reaches ProseMirror after the DOM selection.
+    const root = editor.getByRole('textbox', {
+      name: 'Document editor',
+      exact: true,
+    })
+    const paragraph = root.locator('.cm-line', {
+      hasText: /^Find the essay\.$/,
+    })
+    await click(paragraph, 'The first paragraph')
+    await root.press('End')
     await waitForAsync(editor, () => {
-      const element = document.querySelector('.tiptap[contenteditable="true"]')
-      const paragraph = element.querySelector('p')
-      const { view } = element.editor
+      const element = document.querySelector('.rich-pane .cm-content')
+      const view = element.cmTile.root.view
+      const selection = getSelection()
       return (
-        view.state.selection.empty &&
-        view.state.selection.head ===
-          view.posAtDOM(paragraph, paragraph.childNodes.length)
+        document.hasFocus() &&
+        document.activeElement === element &&
+        view.hasFocus &&
+        selection?.isCollapsed &&
+        element.contains(selection.focusNode) &&
+        view.posAtDOM(selection.focusNode, selection.focusOffset) ===
+          view.state.selection.main.head &&
+        view.state.selection.main.empty &&
+        view.state.selection.main.head ===
+          view.state.doc.toString().indexOf('Find the essay.') +
+            'Find the essay.'.length
       )
     })
-    return root.evaluate((element) => {
-      const markers = [...element.querySelectorAll('.markdown-marker')].filter(
-        (marker) => marker.getClientRects().length,
-      )
-      const { selection } = element.editor.state
-      return {
-        shape: {
-          headings: element.querySelectorAll('h1').length,
-          tasks: element.querySelectorAll('ul[data-type="taskList"] > li')
-            .length,
-          checkboxes: element.querySelectorAll('input[type="checkbox"]').length,
-          bold: element.querySelectorAll('strong').length,
-          markers: markers.length,
-          heading: getComputedStyle(element.querySelector('h1')).fontSize,
-          text: getComputedStyle(element.querySelector('p')).lineHeight,
-        },
-        // Read with the marker count so a later caret move cannot hide the cause.
-        diagnostic: {
-          sameEditor: element.editor === window.parityEditor,
-          head: selection.head,
-          block: selection.$head.parent.textContent,
-          markers: markers.map((marker) => marker.dataset.marker),
-          log: window.parityLog?.slice(),
-        },
-      }
-    })
+    return {
+      shape: await root.evaluate((element) => ({
+        headings: element.querySelectorAll('[role="heading"][aria-level="1"]')
+          .length,
+        tasks: element.querySelectorAll('.hibi-lp-task').length,
+        checkboxes: element.querySelectorAll('input[type="checkbox"]').length,
+        bold: element.querySelectorAll('.hibi-lp-strong').length,
+        markers: [...element.querySelectorAll('.hibi-lp-marker')].filter(
+          (marker) => marker.getClientRects().length,
+        ).length,
+        heading: getComputedStyle(element.querySelector('.hibi-lp-h1'))
+          .fontSize,
+        text: getComputedStyle(
+          [...element.querySelectorAll('.cm-line')].find(
+            (line) => line.textContent === 'Find the essay.',
+          ),
+        ).lineHeight,
+      })),
+      diagnostic: {},
+    }
   }
   const { shape: main, diagnostic } = await shape(page)
   if (main.markers)

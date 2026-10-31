@@ -45,7 +45,7 @@ async function fixture(t) {
       description: 'Trust fixture',
       version: '1.0.0',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       capabilities: [],
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',

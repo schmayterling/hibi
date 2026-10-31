@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
+
+// The rich editor's bar color of each callout, by note digest and title,
+// recorded before its removal.
+const recorded = frozenOracle('formatted-callout-paint')
+const digest = (text) =>
+  createHash('sha256').update(text).digest('hex').slice(0, 12)
 
 // Callouts and quotes holding tables and code between empty `>` lines, as in a course note.
 const note = `# Callouts
@@ -80,8 +87,8 @@ const note = `# Callouts
 > after the table
 `
 
-/** Opens the note in one engine in a tall window, so every line is drawn, and measures it. */
-async function measure(engine, measureView) {
+/** Opens the note in a tall window, so every line is drawn, and measures it. */
+async function measure(measureView) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-paint-'))
   const file = join(folder, 'notes', 'callouts.md')
   await mkdir(join(folder, 'notes'))
@@ -97,9 +104,11 @@ async function measure(engine, measureView) {
   try {
     const page = await app.firstWindow()
     page.setDefaultTimeout(20000)
-    await selectFormattedEngine(app, page, engine)
-    await app.evaluate(({ BrowserWindow, dialog }, path) => {
-      BrowserWindow.getAllWindows()[0].setContentSize(1000, 2400)
+    await waitForFormattedEditor(app, page)
+    // macOS keeps a shown window, as hosted runners show them, within the
+    // screen; the page's own viewport can be taller.
+    await page.setViewportSize({ width: 1000, height: 2400 })
+    await app.evaluate(({ dialog }, path) => {
       // Quitting answers an unsaved-changes prompt, should the editor normalize the note.
       dialog.showMessageBox = async () => ({ response: 1 })
       dialog.showOpenDialog = async () => ({
@@ -113,27 +122,17 @@ async function measure(engine, measureView) {
     )
     await page
       .locator('.rich-pane', { hasText: 'after the table' })
-      .locator(engine === 'tiptap' ? 'table' : '.hibi-lp-table')
+      .locator('.hibi-lp-table')
       .nth(3)
       .waitFor()
     await page.locator('.rich-pane [data-type="block-math"] .katex').waitFor()
     assert.equal(
-      await page
-        .locator(
-          engine === 'tiptap' ? '.github-alert pre' : '.hibi-lp-codenest',
-        )
-        .count(),
+      await page.locator('.hibi-lp-codenest').count(),
       3,
       'the fenced code blocks are rendered',
     )
     assert.equal(
-      await page
-        .locator(
-          engine === 'tiptap'
-            ? '.github-alert li'
-            : '.hibi-lp-alert.hibi-lp-list-item',
-        )
-        .count(),
+      await page.locator('.hibi-lp-alert.hibi-lp-list-item').count(),
       3,
       'lists and nested lists are rendered inside the callout',
     )
@@ -144,34 +143,10 @@ async function measure(engine, measureView) {
   }
 }
 
-test('callout and quote bars and tints run unbroken past empty lines, tables and code, as in the rich editor', {
+test("callout and quote bars and tints run unbroken past empty lines, tables and code, with the rich editor's recorded spacing and colors", {
   timeout: 120000,
 }, async () => {
-  const rich = await measure('tiptap', () =>
-    [...document.querySelectorAll('.rich-pane .github-alert')].map((alert) => {
-      const box = alert.getBoundingClientRect()
-      const tables = alert.querySelectorAll('table')
-      const last = tables[tables.length - 1]?.getBoundingClientRect()
-      const outer = alert.parentElement
-        .closest('.github-alert')
-        ?.getBoundingClientRect()
-      const code = alert
-        .querySelector(':scope > .github-alert-body > pre:last-child')
-        ?.getBoundingClientRect()
-      return {
-        title: alert.querySelector('.github-alert-title').textContent,
-        bar: getComputedStyle(alert).borderLeftColor,
-        below: last ? box.bottom - last.bottom : null,
-        // Where a nested callout's box ends inside its parent's.
-        inset: outer && {
-          right: outer.right - box.right,
-          bottom: outer.bottom - box.bottom,
-        },
-        code: code && { height: code.height, below: box.bottom - code.bottom },
-      }
-    }),
-  )
-  const formatted = await measure('codemirror', () => {
+  const formatted = await measure(() => {
     const content = document.querySelector('.rich-pane .cm-content')
     // Lengths of the paint, which can be relative to the box it paints.
     const host = document.createElement('div')
@@ -313,22 +288,19 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
         `${run.kind} ${index}: table ${JSON.stringify(table)} lies inside the painted area`,
       )
   }
-  // A callout that ends in a table keeps the rich editor's space below it.
+  // A callout that ends in a table keeps the rich editor's 32px below it.
   const [practice] = formatted
   const last = practice.tables[practice.tables.length - 1]
-  assert.equal(rich[0].below, 32)
   assert.ok(
     Math.abs(
-      practice.blocks[practice.blocks.length - 1].bottom -
-        last.bottom -
-        rich[0].below,
+      practice.blocks[practice.blocks.length - 1].bottom - last.bottom - 32,
     ) < 0.5,
     `space below the callout's last table: ${practice.blocks[practice.blocks.length - 1].bottom - last.bottom}`,
   )
-  // A nested callout that ends its parent ends inside the parent's padding:
-  // its bar and tint stop short of the parent's right and bottom edges.
-  const inner = rich.find((alert) => alert.title === 'Inner last')
-  assert.deepEqual(inner.inset, { right: 16, bottom: 12 })
+  // A nested callout that ends its parent ends inside the parent's padding, as
+  // in the rich editor: its bar and tint stop short of the parent's right and
+  // bottom edges.
+  const inset = { right: 16, bottom: 12 }
   const nested = formatted[4].blocks.filter(
     (block) => block.layers.length === 4,
   )
@@ -337,19 +309,20 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
     ['Inner last', 'Inner text.'],
   )
   // Each callout keeps its own color, the outer one beside the inner too.
-  const outerBar = rich.find((alert) => alert.title === 'Nested last').bar
-  assert.notEqual(outerBar, inner.bar)
+  const outerBar = recorded({ note: digest(note), title: 'Nested last' })
+  const innerBar = recorded({ note: digest(note), title: 'Inner last' })
+  assert.notEqual(outerBar, innerBar)
   for (const { text, colors } of nested)
     assert.deepEqual(
       [colors[0], colors[2]],
-      [outerBar, inner.bar],
+      [outerBar, innerBar],
       `${text}: bar colors`,
     )
   for (const [at, { text, layers }] of nested.entries()) {
     const [, outer, bar, tint] = layers
-    const bottom = at === nested.length - 1 ? inner.inset.bottom : 0
+    const bottom = at === nested.length - 1 ? inset.bottom : 0
     assert.ok(
-      Math.abs(outer.right - tint.right - inner.inset.right) < 0.5,
+      Math.abs(outer.right - tint.right - inset.right) < 0.5,
       `${text}: the inner tint ends ${outer.right - tint.right}px left of the outer one`,
     )
     for (const [name, layer] of [
@@ -361,9 +334,8 @@ test('callout and quote bars and tints run unbroken past empty lines, tables and
         `${text}: the inner ${name} ends ${outer.bottom - layer.bottom}px above the outer tint`,
       )
   }
-  // A callout that ends in code keeps its padding below the code's box.
-  const code = rich.find((alert) => alert.title === 'Code last').code
-  assert.deepEqual(code, { height: 60, below: 12 })
+  // A callout that ends in code keeps the rich editor's padding below the code's box.
+  const code = { height: 60, below: 12 }
   const box = formatted[5].blocks.at(-1)
   assert.equal(box.text, 'let last = 1')
   assert.ok(

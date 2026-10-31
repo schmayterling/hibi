@@ -6,19 +6,11 @@ import { EditorState, Text } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Tree, TreeCursor } from '@lezer/common'
 import { GFM } from '@lezer/markdown'
-import { Editor } from '@tiptap/core'
-import { Markdown } from '@tiptap/markdown'
 import {
   formattedLiteral,
   formattedTree,
 } from '../src/renderer/src/formatted-contributions.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
-import { markdownSerializer } from '../src/renderer/src/markdown-serialization.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
-import {
-  preserveRichSource,
-  sameRichSourceDocument,
-} from '../src/renderer/src/rich-source-preservation.ts'
 import {
   sourceFormatting,
   storedMarkInput,
@@ -27,8 +19,11 @@ import { inlineInput } from '../src/renderer/src/source-formatting-actions.ts'
 import { formattedMarkdownParser } from '../src/shared/formatted-markdown.ts'
 import { RenderedTextIndex } from '../src/shared/rendered-text.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { renderedConfig } from './rendered-config.mjs'
 
+/** What the removed rich editor, with the GitHub flavor, did with the same input. */
+const native = frozenOracle('formatted-stored-marks')
 const grammar = formattedMarkdownParser(GFM)
 
 function typing(source, anchor, literal = [], tree) {
@@ -71,38 +66,18 @@ function typing(source, anchor, literal = [], tree) {
   return view
 }
 
-function native(source) {
-  const config = markdownConfiguration([
-    { id: 'github', markedOptions: { gfm: true } },
-  ])
-  return new Editor({
-    element: null,
-    extensions: [
-      ...config.core,
-      Markdown.configure({
-        marked: config.parser,
-        markedOptions: config.options,
-      }),
-      ...config.addons,
-    ],
-    content: source,
-    contentType: 'markdown',
-  })
-}
-
 function compare(source, from, position, actions, text, literal = []) {
-  markdownSyntax.setEnabled('core.escapes', !literal.includes('Escape'))
-  const editor = native(source)
+  const escapes = !literal.includes('Escape')
+  markdownSyntax.setEnabled('core.escapes', escapes)
   try {
     const view = typing(source, from, literal)
-    editor.commands.setTextSelection(position)
-    const commands = {
-      bold: () => editor.commands.toggleBold(),
-      italic: () => editor.commands.toggleItalic(),
-      'inline-code': () => editor.commands.toggleCode(),
-    }
-    for (const id of actions) {
-      assert.equal(view.formatting.run(id), commands[id](), id)
+    // The rich editor's command results and marks after each action at
+    // `position`, and its source once `text` was typed there.
+    const key = { source, position, actions, text, escapes }
+    const recorded = native({ kind: 'actions', ...key })
+    for (const [index, id] of actions.entries()) {
+      const step = recorded.steps[index]
+      assert.equal(view.formatting.run(id), step.run, id)
       for (const [action, mark] of [
         ['bold', 'bold'],
         ['italic', 'italic'],
@@ -110,21 +85,21 @@ function compare(source, from, position, actions, text, literal = []) {
       ])
         assert.equal(
           view.formatting.inspect().state(action).pressed,
-          editor.isActive(mark),
+          step[mark],
           action,
         )
     }
-    editor.view.dispatch(editor.state.tr.insertText(text))
     const actual = view.type(text)
-    const parsed = editor.schema.nodeFromJSON(editor.markdown.parse(actual))
-    assert.ok(
-      sameRichSourceDocument(parsed, editor.state.doc, true),
+    // The rich editor read the typed source as its own document.
+    assert.equal(
+      native({ kind: 'same', ...key, markdown: actual }),
+      true,
       JSON.stringify({
         source,
         actions,
         text,
         actual,
-        expected: editor.getMarkdown(),
+        expected: recorded.markdown,
       }),
     )
     assert.equal(undoDepth(view.state), 1)
@@ -134,7 +109,6 @@ function compare(source, from, position, actions, text, literal = []) {
     assert.equal(view.state.doc.toString(), actual)
     return view
   } finally {
-    editor.destroy()
     markdownSyntax.reset()
   }
 }
@@ -433,58 +407,32 @@ for (const placement of ['new', 'end', 'adjacent', 'middle']) {
 }
 
 test('inline replacement at consumed markers preserves surviving wrappers and exact history', () => {
-  for (const [source, from, to, expected, nativeFrom, nativeTo] of [
-    ['c _ell_', 0, 3, '_ell_', 1, 3],
-    ['c __ell__', 0, 4, '__ell__', 1, 3],
-    ['_cell_ x', 5, 8, '_cell_', 5, 7],
-    ['__cell__ x', 6, 10, '__cell__', 5, 7],
-    ['c ``ell``', 0, 4, '``ell``', 1, 3],
-    ['c `` ell ``', 0, 4, '`` ell ``', 1, 3],
-    ['c ``  ell  ``', 0, 4, '``  ell  ``', 1, 3],
+  // The rich source codec kept the same surviving wrappers.
+  for (const [source, from, to, expected] of [
+    ['c _ell_', 0, 3, '_ell_'],
+    ['c __ell__', 0, 4, '__ell__'],
+    ['_cell_ x', 5, 8, '_cell_'],
+    ['__cell__ x', 6, 10, '__cell__'],
+    ['c ``ell``', 0, 4, '``ell``'],
+    ['c `` ell ``', 0, 4, '`` ell ``'],
+    ['c ``  ell  ``', 0, 4, '``  ell  ``'],
   ])
     for (const reverse of [false, true]) {
-      const editor = native(source)
-      try {
-        const serialize = markdownSerializer(editor.markdown, true)
-        const before = serialize(editor.state.doc).source
-        editor.commands.setTextSelection({ from: nativeFrom, to: nativeTo })
-        editor.view.dispatch(editor.state.tr.deleteSelection())
-        const preserved = preserveRichSource(
-          source,
-          before,
-          serialize(editor.state.doc).source,
-          (candidate) =>
-            sameRichSourceDocument(
-              editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-              editor.state.doc,
-              true,
-            ),
-        )
-        assert.equal(preserved, expected)
-        const view = typing(source, from)
-        view.dispatch({
-          selection: { anchor: reverse ? to : from, head: reverse ? from : to },
-        })
-        assert.equal(
-          view.state
-            .facet(EditorView.inputHandler)
-            .some((input) => input(view, from, to, '', () => null)),
-          true,
-        )
-        assert.equal(view.state.doc.toString(), preserved)
-        assert.deepEqual(
-          editor.schema
-            .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-            .toJSON(),
-          editor.getJSON(),
-        )
-        assert.equal(undo(view), true)
-        assert.equal(view.state.doc.toString(), source)
-        assert.equal(redo(view), true)
-        assert.equal(view.state.doc.toString(), preserved)
-      } finally {
-        editor.destroy()
-      }
+      const view = typing(source, from)
+      view.dispatch({
+        selection: { anchor: reverse ? to : from, head: reverse ? from : to },
+      })
+      assert.equal(
+        view.state
+          .facet(EditorView.inputHandler)
+          .some((input) => input(view, from, to, '', () => null)),
+        true,
+      )
+      assert.equal(view.state.doc.toString(), expected)
+      assert.equal(undo(view), true)
+      assert.equal(view.state.doc.toString(), source)
+      assert.equal(redo(view), true)
+      assert.equal(view.state.doc.toString(), expected)
     }
 })
 
@@ -515,187 +463,90 @@ test('inline input declines safe adjacent ranges with bounded glyph reads', () =
   }
 })
 
-test('all-space code retains its complete candidate model when the native source codec declines', () => {
+test('all-space code retains its complete candidate model', () => {
   const source = 'c ``   ``'
-  const editor = native(source)
-  try {
-    const serialize = markdownSerializer(editor.markdown, true)
-    const before = serialize(editor.state.doc).source
-    editor.commands.setTextSelection({ from: 1, to: 3 })
-    editor.view.dispatch(editor.state.tr.deleteSelection())
-    const after = serialize(editor.state.doc).source
-    assert.equal(before, 'c    ')
-    assert.equal(after, '')
-    assert.equal(
-      preserveRichSource(source, before, after, (candidate) =>
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-          editor.state.doc,
-          true,
-        ),
-      ),
-      null,
-    )
-    const view = typing(source, 0)
-    view.dispatch({ selection: { anchor: 0, head: 4 } })
-    assert.equal(
-      view.state
-        .facet(EditorView.inputHandler)
-        .some((input) => input(view, 0, 4, '', () => null)),
-      true,
-    )
-    assert.equal(view.state.doc.toString(), '``   ``')
-    assert.deepEqual(
-      editor.schema
-        .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-        .toJSON(),
-      editor.getJSON(),
-    )
-    assert.equal(view.state.selection.main.head, 0)
-    assert.equal(undo(view), true)
-    assert.equal(view.state.doc.toString(), source)
-    assert.equal(redo(view), true)
-    assert.equal(view.state.doc.toString(), '``   ``')
-  } finally {
-    editor.destroy()
-  }
+  const view = typing(source, 0)
+  view.dispatch({ selection: { anchor: 0, head: 4 } })
+  assert.equal(
+    view.state
+      .facet(EditorView.inputHandler)
+      .some((input) => input(view, 0, 4, '', () => null)),
+    true,
+  )
+  assert.equal(view.state.doc.toString(), '``   ``')
+  assert.equal(view.state.selection.main.head, 0)
+  assert.equal(undo(view), true)
+  assert.equal(view.state.doc.toString(), source)
+  assert.equal(redo(view), true)
+  assert.equal(view.state.doc.toString(), '``   ``')
 })
 
 test('consumed underscore wrappers keep the full marked candidate through plain replacement and next input', () => {
-  for (const [source, from, to, expected, next, nativeFrom, nativeTo] of [
-    ['c _ell_', 0, 3, 'Z*ell*', 'ZQ*ell*', 1, 3],
-    ['c __ell__', 0, 4, 'Z**ell**', 'ZQ**ell**', 1, 3],
-    ['_cell_ x', 5, 8, '*cell*Z', '*cell*ZQ', 5, 7],
-    ['__cell__ x', 6, 10, '**cell**Z', '**cell**ZQ', 5, 7],
+  for (const [source, from, to, expected, next] of [
+    ['c _ell_', 0, 3, 'Z*ell*', 'ZQ*ell*'],
+    ['c __ell__', 0, 4, 'Z**ell**', 'ZQ**ell**'],
+    ['_cell_ x', 5, 8, '*cell*Z', '*cell*ZQ'],
+    ['__cell__ x', 6, 10, '**cell**Z', '**cell**ZQ'],
   ])
     for (const reverse of [false, true]) {
-      const editor = native(source)
-      try {
-        editor.commands.setTextSelection({ from: nativeFrom, to: nativeTo })
-        editor.view.dispatch(editor.state.tr.insertText('Z'))
-        const view = typing(source, from)
-        view.dispatch({
-          selection: { anchor: reverse ? to : from, head: reverse ? from : to },
-        })
-        assert.equal(
-          view.state
-            .facet(EditorView.inputHandler)
-            .some((input) => input(view, from, to, 'Z', () => null)),
-          true,
-        )
-        assert.deepEqual(
-          editor.schema
-            .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-            .toJSON(),
-          editor.getJSON(),
-        )
-        assert.equal(view.state.doc.toString(), expected)
-        editor.view.dispatch(editor.state.tr.insertText('Q'))
-        assert.equal(view.type('Q'), next)
-        assert.deepEqual(
-          editor.schema
-            .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-            .toJSON(),
-          editor.getJSON(),
-        )
-      } finally {
-        editor.destroy()
-      }
+      const view = typing(source, from)
+      view.dispatch({
+        selection: { anchor: reverse ? to : from, head: reverse ? from : to },
+      })
+      assert.equal(
+        view.state
+          .facet(EditorView.inputHandler)
+          .some((input) => input(view, from, to, 'Z', () => null)),
+        true,
+      )
+      assert.equal(view.state.doc.toString(), expected)
+      assert.equal(view.type('Q'), next)
     }
 })
 
 test('a plain next glyph before a retained underscore wrapper keeps its full marked candidate', () => {
   const source = 'c _ell_'
-  const editor = native(source)
-  try {
-    const serialize = markdownSerializer(editor.markdown, true)
-    const before = serialize(editor.state.doc).source
-    editor.commands.setTextSelection({ from: 1, to: 3 })
-    editor.view.dispatch(editor.state.tr.insertText('?'))
-    const preserved = preserveRichSource(
-      source,
-      before,
-      serialize(editor.state.doc).source,
-      (candidate) =>
-        sameRichSourceDocument(
-          editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-          editor.state.doc,
-          true,
-        ),
-    )
-    assert.equal(preserved, '?_ell_')
-    const view = typing(source, 0)
-    view.dispatch({ selection: { anchor: 0, head: 3 } })
-    assert.equal(
-      view.state
-        .facet(EditorView.inputHandler)
-        .some((input) => input(view, 0, 3, '?', () => null)),
-      true,
-    )
-    assert.equal(view.state.doc.toString(), preserved)
-    assert.equal(view.state.selection.main.head, 1)
-    editor.view.dispatch(editor.state.tr.insertText('Q'))
-    view.type('Q')
-    assert.deepEqual(
-      editor.schema
-        .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-        .toJSON(),
-      editor.getJSON(),
-    )
-    assert.equal(view.state.doc.toString(), '?Q*ell*')
-  } finally {
-    editor.destroy()
-  }
+  const view = typing(source, 0)
+  view.dispatch({ selection: { anchor: 0, head: 3 } })
+  assert.equal(
+    view.state
+      .facet(EditorView.inputHandler)
+      .some((input) => input(view, 0, 3, '?', () => null)),
+    true,
+  )
+  // As the rich source codec preserved it.
+  assert.equal(view.state.doc.toString(), '?_ell_')
+  assert.equal(view.state.selection.main.head, 1)
+  view.type('Q')
+  assert.equal(view.state.doc.toString(), '?Q*ell*')
 })
 
 test('adjacent underscore boundaries keep their marked candidate when replacement removes whitespace', () => {
-  for (const [source, from, to, expected, nativeFrom, nativeTo] of [
-    ['x _ell_', 0, 2, 'Z*ell*', 1, 3],
-    ['_cell_ x', 6, 8, '*cell*Z', 5, 7],
+  for (const [source, from, to, expected] of [
+    ['x _ell_', 0, 2, 'Z*ell*'],
+    ['_cell_ x', 6, 8, '*cell*Z'],
   ]) {
-    const editor = native(source)
-    try {
-      editor.commands.setTextSelection({ from: nativeFrom, to: nativeTo })
-      editor.view.dispatch(editor.state.tr.insertText('Z'))
-      const view = typing(source, from)
-      view.dispatch({ selection: { anchor: from, head: to } })
-      view.type('Z')
-      assert.deepEqual(
-        editor.schema
-          .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-          .toJSON(),
-        editor.getJSON(),
-      )
-      assert.equal(view.state.doc.toString(), expected)
-    } finally {
-      editor.destroy()
-    }
+    const view = typing(source, from)
+    view.dispatch({ selection: { anchor: from, head: to } })
+    view.type('Z')
+    assert.equal(view.state.doc.toString(), expected)
   }
 })
 
 test('pending inline marks keep input priority at unsafe underscore boundaries', () => {
   for (const action of ['bold', 'italic']) {
     const source = '?_ell_'
-    const editor = native(source)
-    try {
-      editor.commands.setTextSelection(2)
-      if (action === 'bold') editor.commands.toggleBold()
-      else editor.commands.toggleItalic()
-      editor.view.dispatch(editor.state.tr.insertText('Q'))
-      const view = typing(source, 1)
-      assert.equal(view.formatting.run(action), true)
-      assert.equal(view.state.doc.toString(), source)
-      assert.equal(view.formatting.inspect().state(action).pressed, true)
-      view.type('Q')
-      assert.deepEqual(
-        editor.schema
-          .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-          .toJSON(),
-        editor.getJSON(),
-      )
-    } finally {
-      editor.destroy()
-    }
+    const view = typing(source, 1)
+    assert.equal(view.formatting.run(action), true)
+    assert.equal(view.state.doc.toString(), source)
+    assert.equal(view.formatting.inspect().state(action).pressed, true)
+    view.type('Q')
+    // The rich editor's model of the typed source, and its own model after
+    // the same action and input at its position 2.
+    assert.deepEqual(
+      native({ kind: 'json', markdown: view.state.doc.toString() }),
+      native({ kind: 'pending', source, position: 2, action, text: 'Q' }),
+    )
   }
 })
 
@@ -729,32 +580,21 @@ test('both opaque input edges encode each Unicode scalar once', () => {
     source = left + ' c ' + right,
     text = '𐐀X',
     expected = left + '&#66560;&#88;' + right
-  const editor = native(source)
-  try {
-    editor.commands.setTextSelection({ from: 4, to: 7 })
-    editor.view.dispatch(editor.state.tr.insertText(text))
-    const view = typing(source, left.length)
-    view.dispatch({ selection: { anchor: left.length, head: left.length + 3 } })
-    assert.equal(
-      view.state
-        .facet(EditorView.inputHandler)
-        .some((input) =>
-          input(view, left.length, left.length + 3, text, () => null),
-        ),
-      true,
-    )
-    assert.equal(view.state.doc.toString(), expected)
-    assert.equal(
-      view.state.selection.main.head,
-      left.length + '&#66560;&#88;'.length,
-    )
-    assert.deepEqual(
-      editor.schema.nodeFromJSON(editor.markdown.parse(expected)).toJSON(),
-      editor.getJSON(),
-    )
-  } finally {
-    editor.destroy()
-  }
+  const view = typing(source, left.length)
+  view.dispatch({ selection: { anchor: left.length, head: left.length + 3 } })
+  assert.equal(
+    view.state
+      .facet(EditorView.inputHandler)
+      .some((input) =>
+        input(view, left.length, left.length + 3, text, () => null),
+      ),
+    true,
+  )
+  assert.equal(view.state.doc.toString(), expected)
+  assert.equal(
+    view.state.selection.main.head,
+    left.length + '&#66560;&#88;'.length,
+  )
 })
 
 for (const body of ['[ell](https://e.test)', '`ell`']) {
@@ -764,86 +604,39 @@ for (const body of ['[ell](https://e.test)', '`ell`']) {
         const source = leading ? 'c _' + body + '_' : '_' + body + '_ x'
         const from = leading ? 0 : source.length - 3,
           to = leading ? 3 : source.length
-        const editor = native(source)
-        try {
-          const serialize = markdownSerializer(editor.markdown, true)
-          const before = serialize(editor.state.doc).source
-          editor.commands.setTextSelection({
-            from: leading ? 1 : 4,
-            to: leading ? 3 : 6,
-          })
-          editor.view.dispatch(editor.state.tr.insertText('Z'))
-          const after = serialize(editor.state.doc).source
-          const preserved = preserveRichSource(
-            source,
-            before,
-            after,
-            (candidate) =>
-              sameRichSourceDocument(
-                editor.schema.nodeFromJSON(editor.markdown.parse(candidate)),
-                editor.state.doc,
-                true,
-              ),
-          )
-          if (leading) assert.equal(preserved, null)
-          const view = typing(source, from)
-          view.dispatch({
-            selection: {
-              anchor: reverse ? to : from,
-              head: reverse ? from : to,
-            },
-          })
-          const dispatch = view.dispatch,
-            events = []
-          view.dispatch = (spec) => {
-            events.push(spec.userEvent)
-            dispatch(spec)
-          }
-          const expected = leading
-            ? '&#90;_' + body + '_'
-            : '_' + body + '_&#90;'
-          view.type('Z')
-          t.diagnostic(
-            JSON.stringify({
-              source,
-              reverse,
-              before,
-              after,
-              preserved,
-              actual: view.state.doc.toString(),
-              candidate: editor.getJSON(),
-            }),
-          )
-          assert.equal(view.state.doc.toString(), expected)
-          assert.equal(
-            view.state.selection.main.head,
-            leading ? 5 : expected.length,
-          )
-          assert.deepEqual(events, ['input.type'])
-          assert.deepEqual(
-            editor.schema
-              .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-              .toJSON(),
-            editor.getJSON(),
-          )
-          editor.view.dispatch(editor.state.tr.insertText('Q'))
-          view.type('Q')
-          const next = leading ? '&#90;&#81;_' + body + '_' : expected + 'Q'
-          assert.equal(view.state.doc.toString(), next)
-          assert.equal(
-            view.state.selection.main.head,
-            leading ? 10 : next.length,
-          )
-          assert.deepEqual(events, ['input.type', 'input.type'])
-          assert.deepEqual(
-            editor.schema
-              .nodeFromJSON(editor.markdown.parse(view.state.doc.toString()))
-              .toJSON(),
-            editor.getJSON(),
-          )
-        } finally {
-          editor.destroy()
+        const view = typing(source, from)
+        view.dispatch({
+          selection: {
+            anchor: reverse ? to : from,
+            head: reverse ? from : to,
+          },
+        })
+        const dispatch = view.dispatch,
+          events = []
+        view.dispatch = (spec) => {
+          events.push(spec.userEvent)
+          dispatch(spec)
         }
+        const expected = leading ? '&#90;_' + body + '_' : '_' + body + '_&#90;'
+        view.type('Z')
+        t.diagnostic(
+          JSON.stringify({
+            source,
+            reverse,
+            actual: view.state.doc.toString(),
+          }),
+        )
+        assert.equal(view.state.doc.toString(), expected)
+        assert.equal(
+          view.state.selection.main.head,
+          leading ? 5 : expected.length,
+        )
+        assert.deepEqual(events, ['input.type'])
+        view.type('Q')
+        const next = leading ? '&#90;&#81;_' + body + '_' : expected + 'Q'
+        assert.equal(view.state.doc.toString(), next)
+        assert.equal(view.state.selection.main.head, leading ? 10 : next.length)
+        assert.deepEqual(events, ['input.type', 'input.type'])
       }
     })
   }

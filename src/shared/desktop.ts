@@ -218,6 +218,7 @@ export type DesktopApi = {
     addons: () => Promise<{
       states: AddonState[]
       packages: import('./sideload').InstalledAddon[]
+      outdated: import('./sideload').OutdatedAddon[]
       notices: string[]
     }>
     recentWorkspaces: () => Promise<import('./workspace').RecentWorkspace[]>
@@ -261,6 +262,11 @@ export type DesktopApi = {
     request: string,
   ) => Promise<import('./media').DocumentMediaResolution | null>
   cancelDocumentMedia: (request: string) => Promise<void>
+  /**
+   * Fetches a remote image again now into the image cache of the note in
+   * `tab`, keeping the cached copy if that fails.
+   */
+  refreshRemoteImage: (source: string, tab: string | null) => Promise<void>
   onDocumentMediaScopeChanged: (
     callback: (revision: number) => void,
   ) => () => void
@@ -272,6 +278,7 @@ export type DesktopApi = {
     workspace?: WorkspaceState | null
   } | null>
   getInstalledAddons: () => Promise<import('./sideload').InstalledAddon[]>
+  getOutdatedAddons: () => Promise<import('./sideload').OutdatedAddon[]>
   getAddonTrustSettings: () => Promise<
     import('./addon-trust').AddonTrustSettings
   >

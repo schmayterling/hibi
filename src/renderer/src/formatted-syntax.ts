@@ -996,13 +996,32 @@ export function formattedSyntax(
       )
         return read.tree
       const parseInline = MarkdownParser.prototype.parseInline
+      const { chunkSize, giantBlock } = grammar
       const parser = Object.assign(grammar.full.configure({}), {
         // Inline syntax only in the leaf blocks at the selection's ends.
         parseInline(this: MarkdownParser, text: string, offset: number) {
-          const end = offset + text.length
-          return (offset <= from && from <= end) || (offset <= to && to <= end)
-            ? parseInline.call(this, text, offset)
-            : []
+          const ends = [from, to].filter(
+            (pos) => offset <= pos && pos <= offset + text.length,
+          )
+          if (!ends.length) return []
+          if (text.length <= giantBlock)
+            return parseInline.call(this, text, offset)
+          // A giant leaf, such as a pasted log, reads it only in whole lines
+          // around the ends, as the view reads giant blocks in windows.
+          const windows: [number, number][] = []
+          for (const pos of ends) {
+            const at = pos - offset
+            const start =
+              text.lastIndexOf('\n', Math.max(0, at - chunkSize)) + 1
+            const next = text.indexOf('\n', at + chunkSize)
+            const end = next < 0 ? text.length : next
+            const last = windows.at(-1)
+            if (last && start <= last[1]) last[1] = Math.max(last[1], end)
+            else windows.push([start, end])
+          }
+          return windows.flatMap(([start, end]) =>
+            parseInline.call(this, text.slice(start, end), offset + start),
+          )
         },
       })
       // A prefix that is not Markdown, such as frontmatter, reads as blank lines.

@@ -54,6 +54,7 @@ import {
   indent,
   lineBreak,
   lineInput,
+  tabSyntax,
 } from './formatted-commands'
 import {
   blockMarkedNodes,
@@ -2356,11 +2357,7 @@ export function livePreview(
       return true
     }
   const tab = (outdent: boolean) => (view: EditorView) => {
-    const { from, to } = view.state.selection.main
-    // A selection can reach past the text parsed so far, as in a large note
-    // just opened; its lines are indented by their own syntax.
-    const tree =
-      syntax.selectionTree(view.state, from, to) ?? syntax.tree(view.state)
+    const tree = tabSyntax(view.state, syntax.tree(view.state))
     let item = false
     for (
       let node: SyntaxNode | null = tree.resolveInner(

@@ -19,7 +19,9 @@ import {
   indent,
   lineBreak,
   lineInput,
+  tabSyntax,
 } from '../src/renderer/src/formatted-commands.ts'
+import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import {
   codeIndentLines,
   detectIndentUnit,
@@ -1457,4 +1459,57 @@ test('multiline input keeps selections through partial inline markers valid', ()
             }, `${source}: ${from}..${to}, ${backward}, ${text}`)
           }
   }
+})
+
+test('Tab reads the blocks of a selection or caret past the parsed text with the block grammar', () => {
+  // One millisecond of parsing per transaction leaves most of a large note unparsed.
+  const partly = (doc, anchor, head = anchor) => {
+    const syntax = formattedSyntax({ slice: 1 })
+    const state = EditorState.create({
+      doc,
+      selection: { anchor, head },
+      extensions: syntax.extension,
+    })
+    return { state, tree: syntax.tree(state) }
+  }
+  const tab = (doc, anchor, head) => {
+    const { state, tree } = partly(doc, anchor, head)
+    const blocks = tabSyntax(state, tree)
+    assert.notEqual(blocks, tree, 'the parse had not reached the selection')
+    return state.update(indent(state, blocks, false, Decoration.none)).state
+  }
+  const code = Array.from({ length: 16384 }, (_, line) =>
+    `${line}`.padEnd(63, 'x'),
+  ).join('\n')
+  const fence = `\`\`\`\n${code}\n\`\`\``
+  // Every selected code line, and a caret at the start of the last one.
+  assert.equal(
+    tab(fence, 4, code.length + 4).doc.toString(),
+    `\`\`\`\n${code.replaceAll(/^/gm, '\t')}\n\`\`\``,
+  )
+  const last = fence.lastIndexOf('\n', fence.length - 5) + 1
+  assert.equal(
+    tab(fence, last).doc.toString(),
+    `${fence.slice(0, last)}\t${fence.slice(last)}`,
+  )
+  // A caret in the last item of a long list nests it, with its own child,
+  // under the item before.
+  const items = Array.from(
+    { length: 16384 },
+    (_, item) => `- item ${item} ${'y'.repeat(48)}`,
+  ).join('\n')
+  assert.equal(
+    tab(`${items}\n- last\n  - child`, items.length + 4).doc.toString(),
+    `${items}\n  - last\n    - child`,
+  )
+  // Only blocks: the inline syntax of the text is not read.
+  const prose = 'para **bold** text\n\n'.repeat(65536)
+  const { state, tree } = partly(prose, 0, prose.length)
+  const names = new Set()
+  tabSyntax(state, tree).iterate({ enter: (node) => void names.add(node.name) })
+  assert.ok(names.has('Paragraph'))
+  assert.equal(names.has('StrongEmphasis'), false)
+  // A parsed selection keeps the view's own tree.
+  const small = partly('```\nx\n```', 4)
+  assert.equal(tabSyntax(small.state, small.tree), small.tree)
 })

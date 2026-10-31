@@ -11,13 +11,17 @@ import {
   StateField,
   type TransactionSpec,
 } from '@codemirror/state'
+import { DocInput } from '@codemirror/language'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import {
   markdownLineStarts as escapeLineStarts,
   markdownLiteral as literal,
 } from '../../shared/markdown-literal.ts'
 import { uncovered } from './chunked-markdown.ts'
-import { formattedFormatting } from './formatted-contributions.ts'
+import {
+  formattedBlockParser,
+  formattedFormatting,
+} from './formatted-contributions.ts'
 import { codeIndentLines, detectIndentUnit, tabIndent } from './indentation.ts'
 import { sourceWhitespace } from './source-whitespace.ts'
 
@@ -1806,6 +1810,18 @@ export function deleteForward(
     selection: EditorSelection.cursor(pos),
     userEvent: 'delete.forward',
   }
+}
+
+/**
+ * The syntax Tab reads at the selection. A selection or caret in text the
+ * view has not parsed yet, as in a large note just opened, reads the note's
+ * blocks with the block grammar alone, so a list item keeps the children
+ * below it.
+ */
+export function tabSyntax(state: EditorState, tree: Tree) {
+  const { from, to } = state.selection.main
+  if (!uncovered(tree, Math.max(0, from - 1), to)) return tree
+  return state.facet(formattedBlockParser)(state).parse(new DocInput(state.doc))
 }
 
 /**

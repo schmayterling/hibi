@@ -14,7 +14,7 @@ UI fonts, sizes, spacing, icons, radii, and motion durations use tokens. Duratio
 
 CSS owns the editor caret's blink animation, including reduced motion. Moving the caret must not query or reset animations: animation discovery and state access can flush pending document layout. Keep its position updates immediate while the existing CSS animation continues naturally.
 
-In split view, the inactive formatted pane refreshes once after 200 ms of source inactivity when every rich attachment declares `preview: 'deferred'`, whatever the document grammar. Canonical edits, history, recovery, and saving remain synchronous. Rich interaction and host formatting flush pending content before reading selections or building transactions; attachments without the declaration keep their existing synchronization. Linked scrolling and the mirrored caret require matching canonical, rich, and published projection versions.
+In split view, both panes edit one source session, and each edit appears in the other pane at once. Canonical edits, history, recovery, and saving remain synchronous. Linked scrolling and the mirrored caret start once both panes are ready.
 
 Rectangular controls share the input's 6 px `--radius-control`; popover, panel, pill, shortcut-key, and outer-button tokens alias it. Full-width navigation rows remain square. Switches and range thumbs use `--radius-round`.
 
@@ -42,7 +42,7 @@ The titlebar holds sidebar controls, tabs, and view switches. New, open, and sav
 
 ## Layout and motion
 
-The rich editor disables font pair kerning. In native Chromium measurements, replacing a 240,000-character unbroken word in Geist otherwise spent seconds in selection-triggered layout; disabling kerning kept the same operation in tens of milliseconds. This changes adjacent-letter spacing and may shift line breaks. Wrapping, ligatures, required script shaping, selection, and source content retain their normal behavior. It does not make the complete rich document a viewport-bounded model.
+The formatted view disables font pair kerning. In native Chromium measurements, replacing a 240,000-character unbroken word in Geist otherwise spent seconds in selection-triggered layout; disabling kerning kept the same operation in tens of milliseconds. This changes adjacent-letter spacing and may shift line breaks. Wrapping, ligatures, required script shaping, selection, and source content retain their normal behavior.
 
 Headers use an opaque page-colored backing so content cannot scroll over controls. App backings move and fade with their editor/settings layer; the exported site's backing sits below its full-height sidebar. Avoid separate scroll listeners or edge animations.
 
@@ -67,6 +67,6 @@ The command palette uses one moving selection background for keyboard, pointer, 
 
 Use `ShortcutKeys` with the effective binding and platform instead of separate `kbd` markup or hard-coded modifier symbols. Its `--key-*` tokens style every shortcut hint. Text tooltips use the same formatter. Exported documentation uses its own Cmd/Ctrl+K binding.
 
-The page outline nests headings under the nearest preceding lower-level heading. Every heading navigates, and branches stay open through `collapsible: false`. Selection follows the cursor's section in rich, source, and split views.
+The page outline nests headings under the nearest preceding lower-level heading. Every heading navigates, and branches stay open through `collapsible: false`. Selection follows the cursor's section in normal, source, and split views.
 
 Addon status items use `context.statusBar`. The bar reserves space below the editor only when it has visible items, moves with the editor page, and leaves the sidebar full-height. Keep visualizations and rendered documents in their own layout styles.

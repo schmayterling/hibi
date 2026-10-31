@@ -6,7 +6,8 @@ export const manifest = {
   name: 'Foundation proof',
   description: 'A small consumer of Hibi foundation APIs.',
   version: '1.0.0',
-  apiVersion: 2,
+  apiVersion: 3,
+  kind: 'extension',
   capabilities: ['ui'],
   commands: [{ id: 'capture', label: 'Capture foundation proof' }],
 } satisfies AddonManifest

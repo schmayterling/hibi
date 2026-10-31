@@ -12,11 +12,13 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { frozenSnapshot, overlayScrollbars } from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// What the formatted view drew while it matched the removed rich view.
+const check = frozenSnapshot('formatted-diagrams')
 
 const parityNote = `# Diagrams and Typst
 
@@ -83,6 +85,13 @@ const applyPalette = (scheme) =>
     style.textContent = css
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, palette(scheme))
 
 async function open(name) {
@@ -114,14 +123,18 @@ before(
       many += `Diagram ${index}.\n\n\`\`\`mermaid\ngraph LR\n  N${index}a --> N${index}b\n\`\`\`\n\n`
     await writeFile(join(folder, 'notes', 'many.md'), many)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(30000)
-    await selectFormattedEngine(app, page, 'tiptap')
+    await waitForDocumentEditor(app, page)
   },
   { timeout: 90000 },
 )
@@ -134,29 +147,112 @@ after(
   { timeout: 30000 },
 )
 
-/** Block boxes and a screenshot of the formatted pane. */
-async function capture(name) {
-  const boxes = await page.evaluate(() =>
-    [
-      ...document.querySelectorAll(
-        '.rich-pane :is(.mermaid-block, .typst-block)',
-      ),
-    ].map((block) => {
-      const box = block.getBoundingClientRect()
-      const pane = block.closest('.rich-pane').getBoundingClientRect()
+/**
+ * Block boxes, and what the pane draws in place of its pixels: each line's,
+ * widget's and drawing element's tag, classes and paint, and its box in the
+ * pane, with the pane's scroll position. Colors are per color scheme; the rest
+ * is the same in both.
+ */
+const capture = () =>
+  page.evaluate(async () => {
+    const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+      root
+        .querySelector('.hibi-lp-h1')
+        ?.textContent.includes('Diagrams and Typst'),
+    )
+    const origin = pane.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
+    const place = (element) => {
+      let box = element.getBoundingClientRect()
+      // A diagram label's own box takes in its glyphs' ink, which Linux and
+      // Windows round out to whole pixels; its text's box is the same on all.
+      if (element instanceof SVGTextContentElement) {
+        const text = document.createRange()
+        text.selectNodeContents(element)
+        box = text.getBoundingClientRect()
+      }
       return [
-        box.left - pane.left,
-        box.top - pane.top,
-        box.width,
-        box.height,
-      ].map(Math.round)
-    }),
-  )
-  const image = await page
-    .locator('.rich-pane')
-    .screenshot({ path: `test-results/formatted-diagrams-${name}.png` })
-  return { boxes, image }
-}
+        round(box.left - origin.left),
+        round(box.top - origin.top),
+        round(box.width),
+        round(box.height),
+      ]
+    }
+    const sides = ['Top', 'Right', 'Bottom', 'Left']
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft']
+    const result = {
+      top: pane.scrollTop,
+      blocks: [...pane.querySelectorAll('.mermaid-block, .typst-block')].map(
+        place,
+      ),
+      drawn: [],
+      paint: [],
+      boxes: [],
+    }
+    for (const element of pane.querySelectorAll(
+      '.cm-content > *, .cm-content > * *',
+    )) {
+      const style = getComputedStyle(element)
+      const before = getComputedStyle(element, '::before')
+      const drawing = element instanceof SVGElement
+      const edges = sides.filter(
+        (side) => style[`border${side}Style`] !== 'none',
+      )
+      const radius = corners.map((corner) => style[`border${corner}Radius`])
+      const painted = !['none', 'normal'].includes(before.content)
+      result.drawn.push({
+        element: [
+          element.tagName.toLowerCase(),
+          ...[...element.classList]
+            .filter((name) => !/^cm-(active|focused)/.test(name))
+            .sort(),
+        ].join('.'),
+        display: style.display,
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        verticalAlign: style.verticalAlign,
+        textDecorationLine: style.textDecorationLine,
+        opacity: style.opacity,
+        ...(drawing && { strokeWidth: style.strokeWidth }),
+        ...(edges.length && {
+          borders: edges.map(
+            (side) =>
+              `${side} ${style[`border${side}Width`]} ${style[`border${side}Style`]}`,
+          ),
+        }),
+        ...(radius.some((value) => value !== '0px') && {
+          radius: radius.join(' '),
+        }),
+        ...(painted && {
+          before: [
+            before.content,
+            before.top,
+            before.right,
+            before.bottom,
+            before.left,
+          ].join(' '),
+        }),
+      })
+      result.paint.push({
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        ...(style.backgroundImage !== 'none' && {
+          backgroundImage: style.backgroundImage,
+        }),
+        ...(drawing && { fill: style.fill, stroke: style.stroke }),
+        ...(edges.length && {
+          borders: edges.map((side) => style[`border${side}Color`]),
+        }),
+        ...(painted && {
+          before: `${before.backgroundColor} ${before.backgroundImage}`,
+        }),
+      })
+      result.boxes.push(place(element))
+    }
+    return result
+  })
 
 const rendered = (root) =>
   page.waitForFunction(
@@ -168,63 +264,26 @@ const rendered = (root) =>
     { timeout: NATIVE_COMPILER_READY_TIMEOUT + 10000 },
   )
 
-test('diagrams and typst blocks render in the formatted view as in the rich view, in light and dark', {
+test('diagrams and typst blocks keep their recorded boxes and drawing in light and dark', {
   timeout: NATIVE_COMPILER_READY_TIMEOUT + 120000,
-}, async () => {
-  await open('parity.md')
-  await page.locator('.tiptap h1', { hasText: 'Diagrams and Typst' }).waitFor()
-  await rendered('.tiptap')
-  const rich = {}
-  for (const scheme of ['hibi-light', 'hibi-dark']) {
-    await applyPalette(scheme)
-    await page.waitForTimeout(100)
-    rich[scheme] = await capture(`rich-${scheme}`)
-  }
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Diagrams and Typst' })
     .waitFor()
   await rendered('.rich-pane .hibi-formatted')
-  const report = []
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
     await page.waitForTimeout(100)
-    const formatted = await capture(`formatted-${scheme}`)
-    assert.deepEqual(formatted.boxes, rich[scheme].boxes, scheme)
-    const difference = await app.evaluate(
-      ({ nativeImage }, images) => {
-        const [a, b] = images.map((image) =>
-          nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-        )
-        const size = a.getSize(),
-          other = b.getSize()
-        if (size.width !== other.width || size.height !== other.height) return 1
-        const left = a.toBitmap(),
-          right = b.toBitmap()
-        let changed = 0
-        for (let i = 0; i < left.length; i += 4)
-          if (
-            Math.abs(left[i] - right[i]) > 8 ||
-            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-            Math.abs(left[i + 2] - right[i + 2]) > 8
-          )
-            changed++
-        return changed / (left.length / 4)
-      },
-      [rich[scheme].image, formatted.image].map((image) =>
-        image.toString('base64'),
-      ),
-    )
-    report.push({ scheme, difference })
+    const formatted = await capture()
+    assert.equal(formatted.top, 0, 'the note opens at its top')
+    // Where the blocks sit, within a pixel of the rich view's when recorded.
+    check('blocks', formatted.blocks, { tolerance: 1 })
+    check('drawn', formatted.drawn)
+    check(`${scheme} paint`, formatted.paint)
+    check('boxes', formatted.boxes, { tolerance: 1 })
   }
-  console.log(JSON.stringify(report))
-  for (const { scheme, difference } of report)
-    assert.ok(difference < 0.002, `${scheme}: ${difference}`)
 })
 
 test('the caret reveals a diagram fence, and the edit dialog writes its body as one undo step', {

@@ -2,14 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import {
-  reloadFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
-test('failed rich attachments stay read-only, a failed source feature is reported, and disabling the addon restores editing', {
+test('a failed source feature is reported, the formatted view stays editable, and disabling the addon restores editing', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-addon-failure-'))
@@ -22,8 +19,9 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
       name: 'Broken editor',
       kind: 'extension',
       description: 'Failure fixture',
-      apiVersion: 1,
+      apiVersion: 3,
       version: '1.0.0',
+      capabilities: [],
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',
     }),
@@ -41,10 +39,6 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
     `export default () => ({
     start(context) {
       context.toolbar.register({id:'probe', label:'Failure probe', onClick(){}});
-      context.editor.registerRich({id:'a-first', attach() {
-        return () => document.documentElement.dataset.partialDetached = 'true';
-      }});
-      context.editor.registerRich({id:'broken', attach() { throw new Error('rich failed'); }});
       context.editor.registerSource({id:'broken', async create() { throw new Error('source failed'); }});
     },
     stop() { throw new Error('stop failed'); }
@@ -66,17 +60,14 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  // Attachment failures deliberately hold editor readiness.
-  await reloadFormattedEngine(page, t.formattedEngine)
-  const cm = t.formattedEngine === 'codemirror'
+
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(String(error)))
   page.on('console', (message) => {
     if (message.type() === 'error') pageErrors.push(message.text())
   })
-  if (cm) {
-    // API 1 rich hooks are inert. Source hooks still belong to source view.
-    // The CM counterpart checks native editing here and the failing source attachment below.
+  {
+    // Source hooks belong to source view; the formatted view keeps editing.
     await waitForDocumentEditor(app, page)
     const formatted = page.locator('.rich-pane .cm-content')
     assert.equal(
@@ -85,11 +76,11 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
     )
     assert.equal(await page.locator('.rich-pane .document-notice').count(), 0)
     await formatted.focus()
-    await page.keyboard.insertText('legacy rich hooks are inert')
+    await page.keyboard.insertText('formatted editing continues')
     await page.evaluate(() => window.hibi.flushDocumentChanges())
     assert.equal(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      'legacy rich hooks are inert',
+      'formatted editing continues',
     )
     await pressShortcut(
       app,
@@ -102,18 +93,13 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
     )
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
   }
-  // A failing rich attachment holds rich input; a failing source feature is
-  // reported and left out.
-  const failure = cm
-    ? page
-        .locator('.toast')
-        .filter({
-          hasText: 'Broken editor could not start its source editor feature.',
-        })
-        .first()
-    : page
-        .locator('.rich-pane .document-notice')
-        .filter({ hasText: /editor addon unavailable/i })
+  // A failing source feature is reported and left out.
+  const failure = page
+    .locator('.toast')
+    .filter({
+      hasText: 'Broken editor could not start its source editor feature.',
+    })
+    .first()
   try {
     await failure.waitFor()
   } catch (error) {
@@ -137,7 +123,6 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
           richPane: document
             .querySelector('.rich-pane')
             ?.outerHTML.slice(0, 800),
-          detached: document.documentElement.dataset.partialDetached,
           measures: performance
             .getEntriesByType('measure')
             .filter(({ name }) => name.startsWith('hibi:addon'))
@@ -158,27 +143,7 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
     console.error('addon failure state:', JSON.stringify({ state, pageErrors }))
     throw error
   }
-  if (cm) {
-    // API 1 rich hooks are inert. Their PM attachment/cleanup
-    // signal is TipTap-only.
-    assert.equal(
-      await page.evaluate(
-        () => document.documentElement.dataset.partialDetached,
-      ),
-      undefined,
-    )
-  } else {
-    assert.equal(
-      await page.locator('.tiptap').evaluate((el) => el.isContentEditable),
-      false,
-    )
-    assert.equal(
-      await page.evaluate(
-        () => document.documentElement.dataset.partialDetached,
-      ),
-      'true',
-    )
-  }
+
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
@@ -212,11 +177,7 @@ test('failed rich attachments stay read-only, a failed source feature is reporte
     0,
   )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  if (cm) await waitForDocumentEditor(app, page)
-  else
-    await page.waitForFunction(
-      () => document.querySelector('.tiptap')?.isContentEditable,
-    )
+  await waitForDocumentEditor(app, page)
   assert.equal(await page.locator('.rich-pane .document-notice').count(), 0)
   const editor = page.getByRole('textbox', {
     name: 'Document editor',

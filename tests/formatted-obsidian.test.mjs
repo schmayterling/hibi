@@ -12,9 +12,18 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  frozenOracle,
+  frozenSnapshot,
+  overlayScrollbars,
+} from './frozen-oracle.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// What the formatted view drew while it matched the removed rich view, and
+// the rich view's own styles for its wikilinks, highlights and embeds.
+const check = frozenSnapshot('formatted-obsidian')
+const richStyles = frozenOracle('formatted-obsidian-rich')
 const parityNote = `# Wiki parity
 
 See [[Other]] and [[Other|the other note]] here.
@@ -57,6 +66,13 @@ const applyPalette = (scheme) =>
     style.textContent = css
     document.documentElement.dataset.colorscheme = id
     document.documentElement.dataset.appearance = appearance
+    // Colors are read once transitions to the new palette end.
+    return Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => animation instanceof CSSTransition)
+        .map((animation) => animation.finished.catch(() => {})),
+    )
   }, palette(scheme))
 
 /** Open a note with the File menu's shortcut. */
@@ -79,16 +95,11 @@ async function open(name) {
   await waitForDocumentEditor(app, page)
 }
 
-/** Reload the window with the formatted engine switch and marker setting. */
-async function engine(codemirror, markers = true) {
+/** Reload the window with the marker setting. */
+async function markers(shown) {
   await page.evaluate(
-    ({ codemirror, markers }) => {
-      if (codemirror)
-        localStorage.setItem('hibi:formatted-engine', 'codemirror')
-      else localStorage.setItem('hibi:formatted-engine', 'tiptap')
-      localStorage.setItem('markdown-markers', String(markers))
-    },
-    { codemirror, markers },
+    (shown) => localStorage.setItem('markdown-markers', String(shown)),
+    shown,
   )
   await page.reload()
   await waitForDocumentEditor(app, page)
@@ -123,7 +134,11 @@ before(
     }
     await writeFile(join(folder, 'notes', 'many.md'), many)
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+      args: [
+        resolve('.'),
+        '--force-device-scale-factor=1',
+        `--user-data-dir=${join(folder, 'profile')}`,
+      ],
     })
     // Closing with edited notes answers the unsaved-changes prompt.
     await app.evaluate(({ dialog }) => {
@@ -144,8 +159,8 @@ after(
   { timeout: 30000 },
 )
 
-/** Computed styles of the obsidian elements, and a screenshot of the pane. */
-async function capture(name, selectors) {
+/** Computed styles of the obsidian elements. */
+async function capture(selectors) {
   const styles = await page.evaluate((selectors) => {
     const read = (element, keys) => {
       const style = getComputedStyle(element)
@@ -174,32 +189,104 @@ async function capture(name, selectors) {
       ),
     }
   }, selectors)
-  const image = await page
-    .locator('.rich-pane')
-    .screenshot({ path: `test-results/formatted-obsidian-${name}.png` })
-  return { styles, image }
+  return { styles }
 }
 
-test('wikilinks, embeds and highlights render in the formatted view as in the rich view, in light and dark', {
-  timeout: 120000,
-}, async () => {
-  await engine(false)
-  await open('parity.md')
-  await page.locator('.tiptap h1', { hasText: 'Wiki parity' }).waitFor()
-  await page.waitForFunction(() => {
-    const image = document.querySelector('.tiptap .obsidian-embed img')
-    return image?.complete && image.naturalWidth > 0
+/**
+ * What a pane draws in place of its pixels: each line's and inline
+ * element's tag, classes and paint, and its box in the pane. Colors are per
+ * color scheme; the rest is the same in both.
+ */
+const drawing = () =>
+  page.evaluate(() => {
+    const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+      root.querySelector('.hibi-lp-h1')?.textContent.includes('Wiki parity'),
+    )
+    const origin = pane.getBoundingClientRect()
+    const round = (value) => Math.round(value * 10) / 10
+    const sides = ['Top', 'Right', 'Bottom', 'Left']
+    const corners = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft']
+    const result = { drawn: [], paint: [], boxes: [] }
+    for (const element of pane.querySelectorAll(
+      '.cm-content > *, .cm-content > * *',
+    )) {
+      const style = getComputedStyle(element)
+      const before = getComputedStyle(element, '::before')
+      const edges = sides.filter(
+        (side) => style[`border${side}Style`] !== 'none',
+      )
+      const radius = corners.map((corner) => style[`border${corner}Radius`])
+      const listed = style.display === 'list-item'
+      const painted = !['none', 'normal'].includes(before.content)
+      result.drawn.push({
+        element: [
+          element.tagName.toLowerCase(),
+          ...[...element.classList]
+            .filter((name) => !/^cm-(active|focused)/.test(name))
+            .sort(),
+        ].join('.'),
+        display: style.display,
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        verticalAlign: style.verticalAlign,
+        textDecorationLine: style.textDecorationLine,
+        opacity: style.opacity,
+        ...(listed && { listStyleType: style.listStyleType }),
+        ...(edges.length && {
+          borders: edges.map(
+            (side) =>
+              `${side} ${style[`border${side}Width`]} ${style[`border${side}Style`]}`,
+          ),
+        }),
+        ...(radius.some((value) => value !== '0px') && {
+          radius: radius.join(' '),
+        }),
+        ...(painted && {
+          before: [
+            before.content,
+            before.top,
+            before.right,
+            before.bottom,
+            before.left,
+          ].join(' '),
+        }),
+      })
+      result.paint.push({
+        color: style.color,
+        backgroundColor: style.backgroundColor,
+        ...(style.backgroundImage !== 'none' && {
+          backgroundImage: style.backgroundImage,
+        }),
+        ...(edges.length && {
+          borders: edges.map((side) => style[`border${side}Color`]),
+        }),
+        ...(style.textDecorationLine !== 'none' && {
+          decoration: style.textDecorationColor,
+        }),
+        ...(listed && {
+          marker: getComputedStyle(element, '::marker').color,
+        }),
+        ...(painted && {
+          before: `${before.backgroundColor} ${before.backgroundImage}`,
+        }),
+      })
+      const box = element.getBoundingClientRect()
+      result.boxes.push([
+        round(box.left - origin.left),
+        round(box.top - origin.top),
+        round(box.width),
+        round(box.height),
+      ])
+    }
+    return result
   })
-  const rich = {}
-  const richSelectors = {
-    link: '.rich-pane a[data-wiki-link]',
-    highlight: '.rich-pane mark',
-  }
-  for (const scheme of ['hibi-light', 'hibi-dark']) {
-    await applyPalette(scheme)
-    rich[scheme] = await capture(`rich-${scheme}`, richSelectors)
-  }
-  await engine(true)
+
+test('wikilinks, embeds and highlights keep the rich view’s styles and their recorded drawing in light and dark', {
+  timeout: 120000,
+}, async (t) => {
+  await overlayScrollbars(t, page)
   await open('parity.md')
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Wiki parity' })
@@ -215,48 +302,24 @@ test('wikilinks, embeds and highlights render in the formatted view as in the ri
     // Text only: decoded entities beside it are separate widgets.
     highlight: '.rich-pane .hibi-lp-highlight:not(.hibi-lp-entity)',
   }
-  const report = []
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
     await settle()
-    const formatted = await capture(`formatted-${scheme}`, selectors)
-    assert.deepEqual(formatted.styles, rich[scheme].styles, scheme)
-    const difference = await app.evaluate(
-      ({ nativeImage }, images) => {
-        const [a, b] = images.map((image) =>
-          nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-        )
-        const size = a.getSize(),
-          other = b.getSize()
-        if (size.width !== other.width || size.height !== other.height) return 1
-        const left = a.toBitmap(),
-          right = b.toBitmap()
-        let changed = 0
-        for (let i = 0; i < left.length; i += 4)
-          if (
-            Math.abs(left[i] - right[i]) > 8 ||
-            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-            Math.abs(left[i + 2] - right[i + 2]) > 8
-          )
-            changed++
-        return changed / (left.length / 4)
-      },
-      [rich[scheme].image, formatted.image].map((image) =>
-        image.toString('base64'),
-      ),
-    )
-    report.push({ scheme, difference })
+    const formatted = await capture(selectors)
+    assert.deepEqual(formatted.styles, richStyles({ scheme }), scheme)
+    const drawn = await drawing()
+    check('drawn', drawn.drawn)
+    check(`${scheme} paint`, drawn.paint)
+    check('boxes', drawn.boxes, { tolerance: 1 })
   }
-  console.log(JSON.stringify(report))
-  for (const { scheme, difference } of report)
-    assert.ok(difference < 0.002, `${scheme}: ${difference}`)
   // Six wikilinks, three highlights, an image embed and a note embed, as in the rich view.
+  const rich = richStyles({ scheme: 'hibi-light' })
   assert.deepEqual(
     [
-      rich['hibi-light'].styles.links.length,
-      rich['hibi-light'].styles.highlights.length,
-      rich['hibi-light'].styles.images.length,
-      rich['hibi-light'].styles.embedLinks.length,
+      rich.links.length,
+      rich.highlights.length,
+      rich.images.length,
+      rich.embedLinks.length,
     ],
     [6, 3, 1, 1],
   )
@@ -326,7 +389,7 @@ test('clicks and keys reach wikilinks and embeds: the caret reveals their source
   await opened('Other.md')
   // With markers hidden, clicks reveal nothing; an arrow key toward an
   // embedded note focuses its link, and Enter follows it.
-  await engine(true, false)
+  await markers(false)
   await open('parity.md')
   await loaded()
   await page
@@ -347,13 +410,13 @@ test('clicks and keys reach wikilinks and embeds: the caret reveals their source
   )
   await page.keyboard.press('Enter')
   await opened('Other.md')
-  await engine(true, true)
+  await markers(true)
 })
 
 test('keys pressed while an embedded note link has focus edit beside the embed, with undo and composition', {
   timeout: 90000,
 }, async () => {
-  await engine(true, false)
+  await markers(false)
   await open('parity.md')
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -451,14 +514,14 @@ test('keys pressed while an embedded note link has focus edit beside the embed, 
           changes: { from: 0, to: view.state.doc.length, insert: note },
         })
     }, parityNote)
-    await engine(true, true)
+    await markers(true)
   }
 })
 
 test('a revealed image embed keeps its image beside its source, as core images do', {
   timeout: 90000,
 }, async () => {
-  await engine(true, true)
+  await markers(true)
   await open('parity.md')
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
@@ -500,7 +563,7 @@ test('a revealed image embed keeps its image beside its source, as core images d
 test('shift-click below an image and on decoded glyphs keeps the target through mousedown', {
   timeout: 90000,
 }, async () => {
-  await engine(true, true)
+  await markers(true)
   await app.evaluate(
     ({ dialog }, notes) => {
       dialog.showOpenDialog = async () => ({
@@ -715,7 +778,6 @@ test('table image aliases preserve dimensions and media in static and edited cel
   ].join('\n')
   await writeFile(join(folder, 'notes', 'table-embeds.md'), source)
   await writeFile(join(folder, 'notes', 'picture.png'), pixel)
-  await engine(false)
   await open('table-embeds.md')
   const pane = page.locator('.rich-pane')
   const image = (root) =>
@@ -734,8 +796,7 @@ test('table image aliases preserve dimensions and media in static and edited cel
     { alt: 'picture.png', width: null, height: null },
     { alt: 'picture.png', width: null, height: null },
   ]
-  assert.deepEqual(await image(pane.locator('table')), expected, 'rich table')
-  await engine(true, false)
+  await markers(false)
   const table = pane.locator('.hibi-lp-table')
   await table.waitFor()
   assert.deepEqual(

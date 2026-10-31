@@ -1,4 +1,3 @@
-import type { ChainedCommands } from '@tiptap/core'
 import type { Token } from 'marked'
 
 export type SyntaxSlashCommand = {
@@ -10,8 +9,6 @@ export type SyntaxSlashCommand = {
   cursor?: number
   /** Extra slash-menu search terms. */
   keywords?: string
-  /** @deprecated Tiptap-only insertion. The CodeMirror formatted view uses markdown and cursor. */
-  rich?: (chain: ChainedCommands) => ChainedCommands
 }
 
 /** One renderable Markdown feature, exposed in settings → syntax. */
@@ -24,8 +21,6 @@ export type MarkdownSyntaxFeature = {
   /** Match lexer tokens, including the token emitted by the export parser. */
   matches: (token: Readonly<Token>) => boolean
   scope?: 'markdown'
-  /** Rich extension names to disable with this feature; keep export tokenizers registered. */
-  extensions?: readonly string[]
   /** Lezer Markdown nodes the formatted view renders for this feature; while it is off they show as written. */
   nodes?: readonly string[]
   /** Optional insertion recipe shown by the slash-command addon while enabled. */

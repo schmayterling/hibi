@@ -12,8 +12,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { crc32, deflateSync } from 'node:zlib'
-import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -85,7 +84,7 @@ async function imageHost(t) {
           done(0),
         ),
       )
-      await selectFormattedEngine(host.app, host.page, 'codemirror')
+      await waitForFormattedEditor(host.app, host.page)
       return host
     },
     /** Opens `note`, inside the workspace at `workspace` if one is named. */

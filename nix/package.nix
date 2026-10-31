@@ -15,7 +15,7 @@ let
     owner = "hibigarden";
     repo = "docs";
     rev = lib.fileContents ../docs-revision;
-    hash = "sha256-r5Jtrpaf4Nq8yiipu+kzAqK3Mu2D4z4fU9lxLEJGYFo=";
+    hash = "sha256-SANJIcborSQmUkzxO8v4G8j2fU+Hm7/WncmVWUQbDgU=";
   };
 
   mimeTypes = [
@@ -33,7 +33,7 @@ buildNpmPackage {
   src = lib.cleanSource ./..;
 
   nodejs = nodejs_24;
-  npmDepsHash = "sha256-nHk/0EFclSRhIpv0hX1ZQA+U+2tFiOH9g8AQKpTAGLk=";
+  npmDepsHash = "sha256-4L3Hzvsn9KXJ2rFzcVGYEDJ0qTb391lGXGN2+FUPNoI=";
   # npmConfigHook runs `npm rebuild`, which fires the root postinstall
   # (install-electron downloads -> fetch failed). Skip it; deps are prebuilt.
   npmRebuildFlags = [ "--ignore-scripts" ];

@@ -22,6 +22,7 @@ import {
 } from '../shared/addon-directory'
 import {
   admitInstalledAddon,
+  OutdatedAddonError,
   parseAddonManifest,
   validId,
 } from '../shared/addon-manifest'
@@ -36,10 +37,12 @@ import type {
   AddonInstallResult,
   AddonInstallSession,
   InstalledAddon,
+  OutdatedAddon,
 } from '../shared/sideload'
 import {
   type InstallCandidate,
   inspectAddonCandidates,
+  type OutdatedInstall,
   sameAddonAccess,
   validateCandidateSelection,
   validateGraph,
@@ -62,6 +65,8 @@ import { runFileDialog } from './file-operation-dialog'
 
 type Package = InstalledAddon & { entry: string; hash: string; files: string[] }
 let installed: Package[] = []
+/** Installs made for addon API 1 or 2: kept so an update can replace them and uninstall can remove them. */
+let outdated: (OutdatedAddon & OutdatedInstall)[] = []
 const root = () => join(app.getPath('userData'), 'installed-addons')
 /** `files` is the recorded inventory; declared resources must appear in it. */
 async function readManifest(
@@ -175,6 +180,55 @@ export async function installedResources(
   })
   return { styles, themes }
 }
+export function outdatedAddons(): OutdatedAddon[] {
+  return outdated.map(({ id, name, version, kind }) => ({
+    id,
+    name,
+    version,
+    kind,
+  }))
+}
+/** Names an API 1 or 2 install from its manifest, which no longer validates. */
+async function outdatedAddon(
+  folder: string,
+  id: string,
+  source: OutdatedInstall['source'],
+): Promise<OutdatedAddon & OutdatedInstall> {
+  const data: Record<string, unknown> = await readFile(
+    join(folder, 'hibi-addon.json'),
+    'utf8',
+  )
+    .then((text) => JSON.parse(text))
+    .catch(() => ({}))
+  const text = (value: unknown, max: number) =>
+    typeof value === 'string' && value.trim() && value.length <= max
+      ? value.trim()
+      : undefined
+  const strings = (value: unknown) =>
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+      ? value
+      : undefined
+  const kind = data?.kind === 'theme' ? 'theme' : 'extension'
+  const network = data?.network as { origins?: unknown } | undefined
+  return {
+    id,
+    name: text(data?.name, 100) ?? id,
+    version: text(data?.version, 40) ?? '',
+    kind,
+    source,
+    // Read loosely: anything unexpected only makes the access differ.
+    access: {
+      kind,
+      capabilities: strings(data?.capabilities),
+      network: network
+        ? { origins: strings(network.origins) ?? [] }
+        : undefined,
+      dependencies: Array.isArray(data?.dependencies)
+        ? data.dependencies
+        : undefined,
+    } as OutdatedInstall['access'],
+  }
+}
 export function installedDocumentationPath(id: string, path: string) {
   const entry = installed.find((item) => item.manifest.id === id)
   if (!entry || !validPath(path)) return Promise.resolve(null)
@@ -194,6 +248,7 @@ export async function loadInstalledAddons(
     },
   )
   const next: Package[] = []
+  const nextOutdated: (OutdatedAddon & OutdatedInstall)[] = []
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
@@ -201,11 +256,13 @@ export async function loadInstalledAddons(
       builtinIds.includes(entry.name)
     )
       continue
+    const folder = join(root(), entry.name)
+    let source: OutdatedInstall['source'] = 'local'
     try {
-      const folder = join(root(), entry.name)
       const record = JSON.parse(
         await readFile(join(folder, '.hibi-install.json'), 'utf8'),
       )
+      if (record?.source === 'third-party') source = 'third-party'
       if (
         !/^[a-f\d]{64}$/.test(record.hash) ||
         !Array.isArray(record.files) ||
@@ -236,12 +293,18 @@ export async function loadInstalledAddons(
         }),
       )
     } catch (error) {
+      // The renderer offers its update or removal instead of a load error.
+      if (error instanceof OutdatedAddonError) {
+        nextOutdated.push(await outdatedAddon(folder, entry.name, source))
+        continue
+      }
       console.error(`could not load installed addon ${entry.name}:`, error)
       notices.push(
         `Could not load addon "${entry.name}": ${error instanceof Error ? error.message : String(error)}`,
       )
     }
   }
+  outdated = nextOutdated
   const all = [...builtins, ...next.map((addon) => addon.manifest)]
   try {
     validateAddonRequirements(all, { allowMissing: true })
@@ -381,6 +444,7 @@ export async function installPackage(
       session.inventory,
       builtins,
       installed,
+      outdated,
     )
     if (expected) {
       session.candidates = session.candidates.filter(
@@ -421,7 +485,12 @@ export async function installPackage(
         signature,
       )
       session.candidates = (
-        await inspectAddonCandidates(session.inventory, builtins, installed)
+        await inspectAddonCandidates(
+          session.inventory,
+          builtins,
+          installed,
+          outdated,
+        )
       ).filter((item) => item.folder === candidate.folder)
       const trust = session.candidates[0]?.review.trust
       if (trust?.status !== 'signed')
@@ -486,6 +555,7 @@ async function refreshInstallSession(
     session.inventory!,
     builtins,
     installed,
+    outdated,
   )
   for (const candidate of session.candidates) {
     const updated = current.find((item) => item.folder === candidate.folder)
@@ -654,15 +724,20 @@ async function installDirectory(
     const previous = installed.find(
       (item) => item.manifest.id === data.manifest.id,
     )
-    if (exists && !previous)
+    const old = previous
+      ? undefined
+      : outdated.find((item) => item.id === data.manifest.id)
+    if (exists && !previous && !old)
       throw new Error(
         'An unrecognized addon already uses this ID. Check the addons folder before installing.',
       )
     session.abort.signal.throwIfAborted()
     validate()
+    // The same access keeps the user's enabled setting, also over an API 1 or 2 install.
+    const kept = previous?.manifest ?? old?.access
     restore = await disable(
       data.manifest.id,
-      !!previous && sameAddonAccess(previous.manifest, data.manifest),
+      !!kept && sameAddonAccess(kept, data.manifest),
     )
     session.abort.signal.throwIfAborted()
     const currentError = addonTrustError(trust, copied.manifest)
@@ -684,6 +759,7 @@ async function installDirectory(
         trust: trust.status,
       }),
     ]
+    outdated = outdated.filter((item) => item.id !== data.manifest.id)
     if (backedUp)
       await shell
         .trashItem(backup)
@@ -698,12 +774,15 @@ async function installDirectory(
 }
 export async function removePackage(id: unknown): Promise<void> {
   const packageInfo = installed.find((item) => item.manifest.id === id)
-  if (!packageInfo)
+  const old = outdated.find((item) => item.id === id)
+  const folder = packageInfo?.manifest.id ?? old?.id
+  if (!folder)
     throw new Error(
       'Only addons you installed can be removed. Disable built-in addons instead.',
     )
-  await shell.trashItem(join(root(), packageInfo.manifest.id))
+  await shell.trashItem(join(root(), folder))
   installed = installed.filter((item) => item !== packageInfo)
+  outdated = outdated.filter((item) => item !== old)
 }
 export async function openAddonsFolder(): Promise<void> {
   await mkdir(root(), { recursive: true, mode: 0o700 })

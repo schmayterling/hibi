@@ -1,5 +1,4 @@
 import { Tags } from 'lucide-react'
-import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer'
@@ -15,11 +14,6 @@ import {
   tagVersion,
 } from './schedule'
 import css from './style.css?inline'
-
-// The Tiptap editor loads only when it is the selected engine.
-const rich = codemirrorFormattedView
-  ? undefined
-  : await import('./rich-decorations')
 
 let stop: (() => void) | undefined
 export default defineAddon({
@@ -161,7 +155,6 @@ export default defineAddon({
         document && isMarkdownDocument(document.name) ? keyFor(document) : null,
       )
     })
-    if (rich) context.editor.registerRich(rich.richTags(browse))
     const removeFormatted = formattedRegistry.register({
       id: 'tags.highlights',
       load: () =>

@@ -67,10 +67,12 @@ export function parseAddonDirectory(value: unknown): AddonDirectoryEntry[] {
     throw new Error('The addon directory is invalid.')
   const ids = new Set<string>()
   return value.flatMap((entry: unknown) => {
+    // Entries for another addon API are hidden: this version installs API 3 only.
     if (
       object(entry) &&
       Number.isSafeInteger(entry.apiVersion) &&
-      (entry.apiVersion as number) > ADDON_API_VERSION
+      (entry.apiVersion as number) >= 1 &&
+      entry.apiVersion !== ADDON_API_VERSION
     )
       return []
     if (

@@ -407,6 +407,7 @@ if (process.isMainFrame) {
         includeEntries,
       ),
     getInstalledAddons: () => ipcRenderer.invoke(SIDELOAD_CHANNELS.list),
+    getOutdatedAddons: () => ipcRenderer.invoke(SIDELOAD_CHANNELS.outdated),
     getAddonTrustSettings: () => ipcRenderer.invoke(ADDON_TRUST_CHANNELS.get),
     setAddonTrustSettings: (changes) =>
       ipcRenderer.invoke(ADDON_TRUST_CHANNELS.set, changes),

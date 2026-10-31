@@ -213,6 +213,7 @@ export type DesktopApi = {
     addons: () => Promise<{
       states: AddonState[]
       packages: import('./sideload').InstalledAddon[]
+      outdated: import('./sideload').OutdatedAddon[]
       notices: string[]
     }>
     recentWorkspaces: () => Promise<import('./workspace').RecentWorkspace[]>
@@ -269,6 +270,7 @@ export type DesktopApi = {
     workspace?: WorkspaceState | null
   } | null>
   getInstalledAddons: () => Promise<import('./sideload').InstalledAddon[]>
+  getOutdatedAddons: () => Promise<import('./sideload').OutdatedAddon[]>
   getAddonTrustSettings: () => Promise<
     import('./addon-trust').AddonTrustSettings
   >

@@ -22,7 +22,6 @@ export const referenceSources = [
     ],
   ],
   ['src/shared/addon-windows.ts', 'Addon windows', ['AddonWindowOptions']],
-  ['src/addons/sdk.ts', 'Sideloading'],
   [
     'src/addons/sdk-loader.ts',
     'Sideloading',
@@ -484,7 +483,7 @@ export async function generateReferences() {
   outputs.set(
     `${referenceRoot}/README.md`,
     generatedNotice +
-      '\n\n# addon api reference\n\nLook up the types and functions available to addon authors. Start with [Addon](Addon.md), [AddonManifest](AddonManifest.md), and [AddonContext](AddonContext.md), or follow [Creating your first addon](../addons/creating-your-first-addon.md).\n\nFor installed packages, use the [SideloadFactory](SideloadFactory.md) and the [shared SDK](sdk.md). Native modules use [NativeAddon](NativeAddon.md) and [NativeAddonContext](NativeAddonContext.md).\n\n' +
+      '\n\n# addon api reference\n\nLook up the types and functions available to addon authors. Start with [Addon](Addon.md), [AddonManifest](AddonManifest.md), and [AddonContext](AddonContext.md), or follow [Creating your first addon](../addons/creating-your-first-addon.md).\n\nInstalled packages export a [CapabilityFactory](CapabilityFactory.md), which receives the [CapabilitySdk](CapabilitySdk.md) parts their manifest lists. Native modules use [NativeAddon](NativeAddon.md) and [NativeAddonContext](NativeAddonContext.md).\n\n' +
       [...groups]
         .map(
           ([group, entries]) =>

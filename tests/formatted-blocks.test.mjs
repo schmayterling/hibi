@@ -29,9 +29,6 @@ before(
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     // Hidden windows have no focus; markers under the caret need a focused editor.

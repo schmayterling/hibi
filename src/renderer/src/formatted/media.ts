@@ -63,7 +63,8 @@ function hold(view: EditorView, media: Element) {
   if (
     !tabId ||
     !(media instanceof HTMLImageElement) ||
-    !media.complete ||
+    // A lazy image kept waiting off screen is not complete, but it is sized
+    // once a copy loaded for an earlier widget arrives.
     !media.naturalWidth ||
     !/^https:/i.test(media.src)
   )
@@ -150,20 +151,6 @@ export class MediaWidget extends WidgetType {
       if (this.height) media.height = this.height
       // A column narrower than the width scales the height with it.
       if (this.width && this.height) keepShape(media, this.width, this.height)
-      // A height alone takes its width from the image's own shape.
-      else if (this.height && media instanceof HTMLImageElement) {
-        const image = media
-        image.onload = () => {
-          if (image.naturalWidth && image.naturalHeight)
-            keepShape(
-              image,
-              Math.round(
-                (this.height * image.naturalWidth) / image.naturalHeight,
-              ),
-              this.height,
-            )
-        }
-      }
       delete media.dataset.tooltip
       if (media instanceof HTMLVideoElement) {
         media.controls = true
@@ -181,6 +168,16 @@ export class MediaWidget extends WidgetType {
         media.removeAttribute('title')
         media.dataset.tooltip =
           'Could not load this media. Check the file path. Save the note first if the path is relative to it.'
+      }
+      // A height alone takes its width from the image's own shape before the
+      // image is drawn stretched: at once for an image already in memory, else
+      // as soon as its size reaches its box, and again when a new source loads.
+      if (!this.width && this.height && media instanceof HTMLImageElement) {
+        media.onload = fitLoaded
+        if (!(media.complete && fitHeight(media))) {
+          sizing ??= new ResizeObserver(fitResized)
+          sizing.observe(media)
+        }
       }
     }
     let release: (() => void) | null = null
@@ -233,7 +230,33 @@ function keepShape(
   media.style.height = 'auto'
 }
 
+/** Images with only a height wait here until their size is known. */
+let sizing: ResizeObserver | undefined
+
+/** Gives an image with only a height its own shape's width; false until that shape is known. */
+function fitHeight(image: HTMLImageElement) {
+  if (!image.naturalWidth || !image.naturalHeight) return false
+  const height = Number(image.getAttribute('height'))
+  keepShape(
+    image,
+    Math.round((height * image.naturalWidth) / image.naturalHeight),
+    height,
+  )
+  sizing?.unobserve(image)
+  return true
+}
+
+// Shared handlers, so an image keeps no widget's DOM or view alive.
+const fitLoaded = ({ target }: Event) => {
+  if (target instanceof HTMLImageElement) fitHeight(target)
+}
+const fitResized = (entries: ResizeObserverEntry[]) => {
+  for (const { target } of entries)
+    if (target instanceof HTMLImageElement) fitHeight(target)
+}
+
 function clear(media: Element) {
+  sizing?.unobserve(media)
   media.removeAttribute('src')
   if (media instanceof HTMLVideoElement) {
     media.pause()

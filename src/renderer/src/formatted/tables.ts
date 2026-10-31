@@ -1808,6 +1808,7 @@ class TableView {
     }
     const span = this.span(editing)
     if (span) editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+    editing.editor.resend()
   }
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
@@ -2519,6 +2520,10 @@ function tableAt(view: EditorView, pos: number, strict = false) {
   }
   return null
 }
+
+/** Whether a position of the formatted view is inside a table, whose cells show their text where a collapsed range shows none. */
+export const tableShows = (view: EditorView, pos: number) =>
+  tableAt(view, pos, true) !== null
 
 /** Views that dropped a focused cell editor while taking no input, to take focus back once they do. */
 const regaining = new WeakSet<EditorView>()

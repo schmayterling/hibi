@@ -247,3 +247,21 @@ export const shiftDoubleClick = EditorView.mouseSelectionStyle.of(
     }
   },
 )
+
+/**
+ * The editor that has the focus in `view`: the view itself, or the editor
+ * of one of its table cells, whose caret the view follows.
+ */
+export function focusedEditor(view: EditorView) {
+  if (view.hasFocus) return view
+  const active = view.contentDOM.ownerDocument.activeElement
+  // findFromDOM looks inside an element first, so only a cell's own
+  // content is asked, never the view's, which holds the cells'.
+  return active instanceof HTMLElement &&
+    active.classList.contains('cm-content') &&
+    active.closest('.hibi-lp-table') &&
+    view.contentDOM.contains(active) &&
+    active.ownerDocument.hasFocus()
+    ? EditorView.findFromDOM(active)
+    : null
+}

@@ -1027,7 +1027,15 @@ class TableView {
     const row = line ? this.rendered.get(line - 2)?.element : this.head
     const element = row?.cells[column]
     if (!element) return false
-    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const editor =
+      this.editing?.element === element ? this.editing.editor.view : null
+    const { top, bottom } = visibleBand(element)
+    // Of a cell taller than the view, its editor shows the caret.
+    if (editor && element.getBoundingClientRect().height > bottom - top)
+      editor.dispatch({
+        effects: EditorView.scrollIntoView(editor.state.selection.main.head),
+      })
+    else element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     return true
   }
 

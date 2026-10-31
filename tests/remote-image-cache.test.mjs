@@ -270,6 +270,20 @@ test('Refresh image, from a right-click, Shift+F10 or the menu key, fetches a re
     await previewed(width)
   }
   assert.equal(host.requests.length, 7)
+  // The image has no description, so its stop takes its file's name, and it
+  // shows its focus with focus outlines off, as they start.
+  const image = host.page.getByRole('img', { name: 'garden.png', exact: true })
+  assert.equal(await image.count(), 1)
+  await image.focus()
+  await host.page.keyboard.press('Shift+Tab')
+  await host.page.keyboard.press('Tab')
+  assert.deepEqual(
+    await image.evaluate((node) => ({
+      focused: node.matches(':focus-visible'),
+      outline: getComputedStyle(node).outlineStyle,
+    })),
+    { focused: true, outline: 'solid' },
+  )
 })
 
 test('pages show remote images, but their scripts can read neither the bytes nor the pixels', {
@@ -299,9 +313,23 @@ test('pages show remote images, but their scripts can read neither the bytes nor
     return {
       bytes: await read(async () => (await fetch(image.src)).arrayBuffer()),
       pixels: await read(() => context.getImageData(0, 0, 1, 1)),
+      // A CORS-mode copy is untainted unless the cache refuses it.
+      corsPixels: await read(async () => {
+        const copy = new Image()
+        copy.crossOrigin = 'anonymous'
+        copy.src = `${image.src}&copy`
+        await copy.decode()
+        const canvas = document.createElement('canvas').getContext('2d')
+        canvas.drawImage(copy, 0, 0)
+        canvas.getImageData(0, 0, 1, 1)
+      }),
     }
   })
-  assert.deepEqual(reads, { bytes: 'refused', pixels: 'refused' })
+  assert.deepEqual(reads, {
+    bytes: 'refused',
+    pixels: 'refused',
+    corsPixels: 'refused',
+  })
 })
 
 test("a pane keeps its own note's remote images where that note keeps them, whichever note is active", {

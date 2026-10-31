@@ -884,11 +884,16 @@ async function serveAssetResponse(request: Request): Promise<Response> {
     )
       return await serveDocumentMedia(request)
     if (parsed.hostname === 'remote-image')
-      return await remoteImageResponse(
-        parsed.searchParams.get('src'),
-        remoteImagePlace(parsed.searchParams.get('tab')),
-        manualFetch,
-      )
+      // Only plain <img> loads: the app scheme doesn't check CORS, so a
+      // request that sends an Origin (crossorigin, fetch) would let page
+      // scripts read the image.
+      return request.headers.has('origin')
+        ? new Response(null, { status: 403 })
+        : await remoteImageResponse(
+            parsed.searchParams.get('src'),
+            remoteImagePlace(parsed.searchParams.get('tab')),
+            manualFetch,
+          )
     const isAddon = parsed.pathname.startsWith('/installed-addons/')
     const path = isAddon
       ? await installedAsset(request.url)

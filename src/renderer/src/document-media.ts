@@ -54,10 +54,21 @@ export function withCachedImages(html: string, tab: string) {
     const source = image.getAttribute('src') ?? ''
     if (!/^https:\/\//i.test(source)) continue
     image.src = remoteImageUrl(source, tab)
-    // Focus lets the keyboard open the image's menu.
+    // Focus lets the keyboard open the image's menu; a focused image needs a
+    // name, so one without a description takes its file's.
     image.tabIndex = 0
+    if (!image.alt) image.setAttribute('aria-label', imageName(source))
   }
   return template.content
+}
+
+function imageName(source: string) {
+  try {
+    const file = new URL(source).pathname.split('/').filter(Boolean).at(-1)
+    return decodeURIComponent(file ?? '') || 'Image'
+  } catch {
+    return 'Image'
+  }
 }
 
 const imageMenu = menus.scope(() => {})

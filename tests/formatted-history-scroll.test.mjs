@@ -30,7 +30,9 @@ function restored(scroller) {
   const bounds = pane.getBoundingClientRect()
   return {
     // The table's line and column.
-    cell: cell ? [Number(cell.parentElement.dataset.line), cell.cellIndex] : null,
+    cell: cell
+      ? [Number(cell.parentElement.dataset.line), cell.cellIndex]
+      : null,
     shown:
       !!box && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1,
   }

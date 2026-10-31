@@ -53,14 +53,47 @@ function showsCell(text) {
 }
 
 // Undo and redo show the selection they bring back, as native editors do,
-// also when it stays in the table cell being edited. Each step starts with
-// the note scrolled to its top, away from that selection.
+// also when it stays in the table cell being edited, and when an addon asks
+// for them. Each step starts with the note scrolled to its top, away from
+// that selection.
 test('codemirror: undo and redo scroll to the selection they restore', {
   timeout: 180000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-history-scroll-'))
   const profile = join(folder, 'profile')
-  await mkdir(profile)
+  // An addon that runs the app's undo and redo commands, as Vim mode does.
+  const addon = join(profile, 'installed-addons', 'history-commands')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'history-commands',
+      name: 'History commands',
+      description: 'Runs undo and redo',
+      kind: 'extension',
+      apiVersion: 3,
+      capabilities: [],
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['index.js', 'hibi-addon.json'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    'export default () => ({ start(context) { window.historyApp = context.app } })',
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'history-commands': true }),
+  )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -74,6 +107,9 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   await selectFormattedEngine(app, page, 'codemirror')
+  await page.waitForFunction(() => !!window.historyApp)
+  const command = (name) => () =>
+    page.evaluate((name) => window.historyApp.runCommand(name), name)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const markdown = () =>
@@ -112,13 +148,13 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   // The first note a new window opens may not take focus.
   await open('warmup', 'warmup\n', null)
   const differences = []
-  // Each step presses `key`; its selection must show, in `cell` when one
-  // is given.
+  // Each step presses `key` or makes a call; its selection must show, in
+  // `cell` when one is given.
   const step = async (name, key, text, scroller = '.rich-pane', cell) => {
     await page.evaluate((scroller) => {
       document.querySelector(scroller).scrollTop = 0
     }, scroller)
-    await page.keyboard.press(key)
+    await (typeof key === 'string' ? page.keyboard.press(key) : key())
     await waitForAsync(
       page,
       async (text) => (await window.hibi.getDocument()).markdown === text,
@@ -166,6 +202,8 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   assert.deepEqual((await page.evaluate(restored, '.rich-pane')).cell, [41, 1])
   await step('undo of typing in a middle cell', undoKey, table)
   await step('redo of typing in a middle cell', redoKey, middle)
+  await step('addon undo in a middle cell', command('undo'), table)
+  await step('addon redo in a middle cell', command('redo'), middle)
 
   // A cell taller than the pane shows the caret, not only the cell's top.
   const words = Array.from({ length: 600 }, (_, word) => `w${word}`).join(' ')
@@ -206,6 +244,8 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   const appended = await changed(paragraphs)
   await step('undo of typing in a paragraph', undoKey, paragraphs)
   await step('redo of typing in a paragraph', redoKey, appended)
+  await step('addon undo in a paragraph', command('undo'), paragraphs)
+  await step('addon redo in a paragraph', command('redo'), appended)
 
   // Each view keeps its own caret. Undoing the formatted view's edit from the
   // source view restores no selection there: the source view keeps its place,
@@ -247,6 +287,13 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   const sourced = await changed(paragraphs)
   await step('undo in the source view', undoKey, paragraphs, source)
   await step('redo in the source view', redoKey, sourced, source)
+  await step(
+    'addon undo in the source view',
+    command('undo'),
+    paragraphs,
+    source,
+  )
+  await step('addon redo in the source view', command('redo'), sourced, source)
 
   assert.deepEqual(differences, [])
 })

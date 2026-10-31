@@ -264,16 +264,15 @@ test('a cold reference lookup resolves the outline of a 50 MiB source note', {
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await page.setViewportSize({ width: 1100, height: 800 })
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   await clickMenu(app, 'Open…')
-  // Tiptap shows a note this large in the source view; CodeMirror formats it.
-  await (t.formattedEngine === 'tiptap'
-    ? page.getByRole('textbox', { name: 'Markdown editor', exact: true })
-    : page.locator('.rich-pane .cm-content', { hasText: 'plain text body' })
-  ).waitFor()
+  // The formatted view shows a note this large.
+  await page
+    .locator('.rich-pane .cm-content', { hasText: 'plain text body' })
+    .waitFor()
   await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
   await page.getByRole('button', { name: /^right sidebar views$/i }).click()
   await page

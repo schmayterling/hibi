@@ -2863,7 +2863,7 @@
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "83196172ab2e": [
-    "src/renderer/src/formatted/media.ts"
+    "src/renderer/src/document-media.ts"
   ],
   "be7e2f201293": [
     "src/addons/_shared/format-renderer.tsx"
@@ -4712,7 +4712,7 @@
     "src/renderer/src/WorkspaceSidebar.tsx"
   ],
   "0fe4661fbe52": [
-    "src/renderer/src/formatted/media.ts"
+    "src/renderer/src/document-media.ts"
   ],
   "306960dcad4c": [
     "src/renderer/src/WorkspaceSidebar.tsx",

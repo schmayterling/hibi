@@ -1,4 +1,6 @@
 import { type DocumentMedia, mediaPathsChanged } from '../../shared/media.ts'
+import { menus } from '../../ui/menu-store.ts'
+import type { MenuItem } from '../../ui/menus'
 
 type Entry = {
   source: string
@@ -28,7 +30,7 @@ export const remoteImageSource = (image: HTMLImageElement) =>
     : null
 
 /** Fetches a remote image again now, then draws the new copy wherever it shows. */
-export async function refreshRemoteImage(source: string) {
+async function refreshRemoteImage(source: string) {
   await window.hibi.refreshRemoteImage(source)
   refreshes.set(source, (refreshes.get(source) ?? 0) + 1)
   for (const image of document.images)
@@ -44,6 +46,40 @@ export function withCachedImages(html: string) {
     if (/^https:\/\//i.test(source)) image.src = remoteImageUrl(source)
   }
   return template.content
+}
+
+const imageMenu = menus.scope(() => {})
+
+/**
+ * The remote image a right-click is on and its actions, or null for any other
+ * target. Control-Command-click follows links instead.
+ */
+export function remoteImageMenu(event: MouseEvent) {
+  const image = event.target instanceof HTMLImageElement ? event.target : null
+  const source = image && remoteImageSource(image)
+  if (!image || !source || (event.ctrlKey && event.metaKey)) return null
+  const items: MenuItem[] = [
+    {
+      id: 'refresh-image',
+      label: 'Refresh image',
+      onSelect: () => refreshRemoteImage(source),
+    },
+  ]
+  const anchor = { x: event.clientX, y: event.clientY }
+  return {
+    image,
+    items,
+    /** Shows the actions in a menu of their own at the pointer. */
+    open: () => imageMenu.api.open({ label: 'Image actions', anchor, items }),
+  }
+}
+
+/** Right-clicking a remote image in a preview offers to fetch it again. */
+export function openRemoteImageMenu(event: MouseEvent) {
+  const menu = remoteImageMenu(event)
+  if (!menu) return
+  event.preventDefault()
+  menu.open()
 }
 
 function resolve(entry: Entry) {

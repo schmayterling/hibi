@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify'
 import { useEffect, useRef } from 'react'
-import { observeDocumentMedia } from './document-media'
+import { observeDocumentMedia, openRemoteImageMenu } from './document-media'
 import { renderMarkdownAsync } from './flavors'
 
 export function MarkdownFootnotePreview({
@@ -53,6 +53,7 @@ export function MarkdownFootnotePreview({
             return { image, path }
           })
           host.current.replaceChildren(fragment)
+          host.current.oncontextmenu = openRemoteImageMenu
           onReady?.()
           for (const { image, path } of images) {
             if (!path) continue

@@ -6,7 +6,10 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
-import { withCachedImages } from '../../renderer/src/document-media'
+import {
+  openRemoteImageMenu,
+  withCachedImages,
+} from '../../renderer/src/document-media'
 import { errorMessage } from '../../shared/errors'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -80,7 +83,9 @@ export function localPreview(
       }
     }, [value, enabled, document.id])
     useEffect(() => {
-      host.current?.replaceChildren(withCachedImages(result?.html ?? ''))
+      if (!host.current) return
+      host.current.replaceChildren(withCachedImages(result?.html ?? ''))
+      host.current.oncontextmenu = openRemoteImageMenu
     }, [result])
     return (
       <div className="format-preview">

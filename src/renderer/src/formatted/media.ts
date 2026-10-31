@@ -8,11 +8,9 @@ import {
 import type { SyntaxNodeRef } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import type { DocumentMedia } from '../../../shared/media.ts'
-import { menus } from '../../../ui/menu-store.ts'
-import type { MenuItem } from '../../../ui/menus'
 import {
   observeDocumentMedia,
-  refreshRemoteImage,
+  remoteImageMenu,
   remoteImageSource,
 } from '../document-media.ts'
 import { documentRuntime } from '../document-runtime.ts'
@@ -303,39 +301,31 @@ const revisions = ViewPlugin.fromClass(
 const refreshMenu = ViewPlugin.fromClass(
   class {
     view: EditorView
-    scope = menus.scope(() => {})
     constructor(view: EditorView) {
       this.view = view
       view.dom.addEventListener('contextmenu', this.context, true)
     }
     context = (event: MouseEvent) => {
-      const image =
-        event.target instanceof HTMLImageElement ? event.target : null
-      const source = image && remoteImageSource(image)
-      if (!image || !source || (event.ctrlKey && event.metaKey)) return
+      const menu = remoteImageMenu(event)
+      if (!menu) return
       event.preventDefault()
       event.stopImmediatePropagation()
-      const { clientX: x, clientY: y } = event
-      const items: MenuItem[] = [
-        {
-          id: 'refresh-image',
-          label: 'Refresh image',
-          onSelect: () => refreshRemoteImage(source),
-        },
-      ]
       const request = new CustomEvent<EditorActionsRequest>(
         'hibi:editor-actions-request',
         {
           cancelable: true,
-          detail: { position: this.view.posAtDOM(image), x, y, items },
+          detail: {
+            position: this.view.posAtDOM(menu.image),
+            x: event.clientX,
+            y: event.clientY,
+            items: menu.items,
+          },
         },
       )
-      if (this.view.contentDOM.dispatchEvent(request))
-        this.scope.api.open({ label: 'Image actions', anchor: { x, y }, items })
+      if (this.view.contentDOM.dispatchEvent(request)) menu.open()
     }
     destroy() {
       this.view.dom.removeEventListener('contextmenu', this.context, true)
-      this.scope.dispose()
     }
   },
 )

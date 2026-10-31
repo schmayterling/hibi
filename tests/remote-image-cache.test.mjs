@@ -231,4 +231,15 @@ test('right-clicking a remote image refreshes it, and notes outside a workspace 
     return image?.complete && image.naturalWidth === 3
   })
   assert.equal(host.requests.length, 2)
+  // And refresh it the same way.
+  host.width = 5
+  await host.page.locator('.bbcode-content img').click({ button: 'right' })
+  await host.page
+    .getByRole('menuitem', { name: 'Refresh image', exact: true })
+    .click()
+  await host.page.waitForFunction(() => {
+    const image = document.querySelector('.bbcode-content img')
+    return image?.complete && image.naturalWidth === 5
+  })
+  assert.equal(host.requests.length, 3)
 })

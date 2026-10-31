@@ -1,14 +1,15 @@
 /**
  * What a stand-in has to provide in place of a real module: every value export
- * with a compatible type, and for a class, every public member.
+ * with a compatible type, and for a class, every public static and instance member.
  */
 type Shape<Module> = {
   [Name in keyof Module]: Module[Name] extends abstract new (
     ...args: infer Args
   ) => infer Instance
-    ? new (
-        ...args: Args
-      ) => Pick<Instance, keyof Instance>
+    ? Omit<Module[Name], 'prototype'> &
+        (new (
+          ...args: Args
+        ) => Pick<Instance, keyof Instance>)
     : Module[Name]
 }
 

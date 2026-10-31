@@ -439,7 +439,9 @@ test('formatted split lines up a formatted table row with its source line', {
     const bounds = pane.getBoundingClientRect()
     pane.scrollTop += row.top + row.height / 2 - bounds.top - bounds.height / 2
   })
-  await waitForAsync(page, sourceLinedUp, false)
+  await waitForAsync(page, sourceLinedUp, false, {
+    label: "the source line of the row at the formatted pane's middle",
+  })
   // In a cell's editor, its caret leads, also away from the pane's middle.
   await page.locator('.rich-pane tr[data-line="60"] td').first().click()
   await page.keyboard.press('End')
@@ -450,7 +452,9 @@ test('formatted split lines up a formatted table row with its source line', {
     const bounds = pane.getBoundingClientRect()
     pane.scrollTop += row.top - bounds.top - bounds.height / 4
   })
-  await waitForAsync(page, sourceLinedUp, true)
+  await waitForAsync(page, sourceLinedUp, true, {
+    label: "the source line of the row of the cell editor's caret",
+  })
   await source(page, text)
 })
 

@@ -109,7 +109,13 @@
     "yaml": "2.9.1"
   },
   "overrides": {
-    "lodash-es": "4.18.1"
+    "lodash-es": "4.18.1",
+    "minimatch": "11.0.3",
+    "@electron/asar": {
+      ".": "4.3.1",
+      "glob": "14.0.3"
+    },
+    "@electron/universal": "3.0.6"
   },
   "dependencies": {
     "@myriaddreamin/typst-ts-node-compiler": "0.7.0",

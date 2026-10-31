@@ -1475,8 +1475,8 @@ test('multiline input keeps selections through partial inline markers valid', ()
 
 test('Tab reads the blocks of a selection or caret past the parsed text with the block grammar', () => {
   // One millisecond of parsing per transaction leaves most of a large note unparsed.
-  const partly = (doc, anchor, head = anchor) => {
-    const syntax = formattedSyntax({ slice: 1 })
+  const partly = (doc, anchor, head = anchor, slice = 1) => {
+    const syntax = formattedSyntax({ slice })
     const state = EditorState.create({
       doc,
       selection: { anchor, head },
@@ -1522,6 +1522,6 @@ test('Tab reads the blocks of a selection or caret past the parsed text with the
   assert.ok(names.has('Paragraph'))
   assert.equal(names.has('StrongEmphasis'), false)
   // A parsed selection keeps the view's own tree.
-  const small = partly('```\nx\n```', 4)
+  const small = partly('```\nx\n```', 4, 4, Number.POSITIVE_INFINITY)
   assert.equal(tabSyntax(small.state, small.tree), small.tree)
 })

@@ -1,3 +1,4 @@
+import { DocInput } from '@codemirror/language'
 import {
   countColumn,
   EditorSelection,
@@ -11,7 +12,6 @@ import {
   StateField,
   type TransactionSpec,
 } from '@codemirror/state'
-import { DocInput } from '@codemirror/language'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import {
   markdownLineStarts as escapeLineStarts,

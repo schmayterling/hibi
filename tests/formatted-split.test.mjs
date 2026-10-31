@@ -385,6 +385,16 @@ function linedUp() {
   )
 }
 
+// A line-up check that holds, and keeps holding for the next 10 frames: a
+// row can line up by chance while the following pane still moves.
+async function staysLinedUp(page, check, arg, label = check.name) {
+  await waitForAsync(page, check, arg, { label })
+  for (let frame = 0; frame < 10; frame++) {
+    await frames(page, 1)
+    assert.ok(await page.evaluate(check, arg), label)
+  }
+}
+
 const table = (count) =>
   `| aa | bb |\n| -- | -- |\n${Array.from(
     { length: count },
@@ -399,7 +409,7 @@ test('formatted split lines up a source line inside a table with its cell', {
   const { page } = await open(t, text)
   // A row away from the table's middle.
   await page.evaluate(lead, text.indexOf('| r20 |'))
-  await waitForAsync(page, linedUp)
+  await staysLinedUp(page, linedUp)
   // A position in each column of the row is in that column's cell.
   const columns = await page.evaluate(
     (positions) => {
@@ -429,7 +439,7 @@ test('formatted split lines up a source line in a row a long table has not drawn
   // The formatted pane draws only the rows near the ones it shows.
   assert.equal(await page.locator('.rich-pane tr[data-line="602"]').count(), 0)
   await page.evaluate(lead, text.indexOf('| r600 |'))
-  await waitForAsync(page, linedUp)
+  await staysLinedUp(page, linedUp)
   await source(page, text)
 })
 
@@ -464,14 +474,6 @@ function sourceLinedUp(caret) {
   )
 }
 
-// Lined up, and still once the panes settle: until the source pane follows
-// a scroll, a row can be at its line's height by chance.
-async function staysLinedUp(page, caret, label) {
-  await waitForAsync(page, sourceLinedUp, caret, { label })
-  await frames(page, 10)
-  assert.ok(await page.evaluate(sourceLinedUp, caret), label)
-}
-
 test('formatted split lines up a formatted table row with its source line', {
   timeout: 90000,
 }, async (t) => {
@@ -498,6 +500,7 @@ test('formatted split lines up a formatted table row with its source line', {
   })
   await staysLinedUp(
     page,
+    sourceLinedUp,
     false,
     "the source line of the row at the formatted pane's middle",
   )
@@ -513,6 +516,7 @@ test('formatted split lines up a formatted table row with its source line', {
   })
   await staysLinedUp(
     page,
+    sourceLinedUp,
     true,
     "the source line of the row of the cell editor's caret",
   )
@@ -547,6 +551,7 @@ test('formatted split lines up a formatted table row with its source line', {
   )
   await staysLinedUp(
     page,
+    sourceLinedUp,
     false,
     'the source line of the row at the middle beside a narrow table',
   )

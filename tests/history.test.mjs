@@ -16,7 +16,7 @@ import {
   startupDiagnostics,
   waitForFormattedEditor,
 } from './electron.mjs'
-import { pressShortcut, replaceRichText } from './keyboard.mjs'
+import { pressShortcut, redoKey, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('local history snapshots on save, previews, and restores without overwriting disk', {
@@ -148,18 +148,20 @@ test('local history snapshots on save, previews, and restores without overwritin
     /This saved version is no longer available\./,
   )
   await pressShortcut(app, `${mod}+k`)
+  await page.getByRole('combobox', { name: /search commands/i }).fill('history')
   await page
-    .getByRole('combobox', { name: /search commands/i })
-    .fill('version history')
-  await page.getByRole('option').first().waitFor()
-  await page.keyboard.press('Enter')
+    .getByRole('option')
+    .filter({ hasText: /^history/i })
+    .first()
+    .click()
   const history = page.getByRole('dialog', {
-    name: /^version history$/i,
+    name: /^history$/i,
     exact: true,
   })
   await history
-    .getByRole('navigation', { name: /saved versions/i })
-    .getByRole('button')
+    .getByRole('listbox', { name: /points to return to/i })
+    .getByRole('option')
+    .filter({ hasText: /saved version/i })
     .last()
     .click()
     .catch(async (error) => {
@@ -171,12 +173,14 @@ test('local history snapshots on save, previews, and restores without overwritin
       } catch {}
       throw error
     })
+  // The preview shows what restoring changes: all of the saved text.
   await page.waitForFunction(
     () =>
-      document.querySelector('[aria-label="version preview" i]').textContent ===
-      'original',
+      document.querySelector(
+        '[aria-label="changes from the current text" i] ins',
+      )?.textContent === 'original',
   )
-  await history.getByRole('button', { name: /restore to editor/i }).click()
+  await history.getByRole('button', { name: /^restore$/i }).click()
   await waitForAsync(page, async () => {
     const doc = await window.hibi.getDocument()
     return doc.dirty && doc.markdown === 'original'
@@ -191,6 +195,18 @@ test('local history snapshots on save, previews, and restores without overwritin
       document
         .querySelector('[aria-label="Document editor"]')
         ?.getAttribute('contenteditable') === 'true',
+  )
+  // Restoring a saved version is an edit: undo brings back the text before it.
+  await rich.focus()
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'saved change',
+  )
+  await page.keyboard.press(redoKey)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'original',
   )
   await replaceRichText(page, rich, 'unsaved buffer')
   await waitForAsync(page, async () => {

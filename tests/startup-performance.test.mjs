@@ -119,9 +119,15 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // addon's features adds 93 (#766).
   // Marking the app when Linux window controls are hidden, so the title bar
   // gives back their space, adds 109 (#733).
+  // Keeping the redo steps an edit replaces as a branch, and the step each
+  // save wrote, so a note's undo history outlives closing it, adds 2,856
+  // (#782); storing and restoring that history loads later.
+  // Going to a step of that tree, and restoring a saved version as an edit
+  // undo takes back, adds 659 (#786); the History view loads later.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109,
+    bytes <=
+      677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109 + 2856 + 659,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
@@ -298,7 +304,7 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   )
   assert.doesNotMatch(
     initial,
-    /src\/renderer\/src\/(?:SettingsScreen|VersionHistory)\.tsx/,
+    /src\/renderer\/src\/(?:SettingsScreen|History)\.tsx/,
   )
   // The formatted view uses SourceEditor; its separate source pane stays unmounted.
   assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)

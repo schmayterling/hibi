@@ -1,28 +1,40 @@
+.history-modes {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
 .version-history {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   gap: var(--space-3);
   height: min(50vh, 440px);
 }
-.version-history nav,
+.history-entries,
 .version-history section {
   overflow: auto;
   margin: 0;
 }
-.version-history nav {
+.history-entries {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  border-radius: var(--radius-control);
 }
-.version-history nav button {
-  height: auto;
-  text-align: left;
+.history-entries:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.history-entries > [role] {
   padding: var(--space-2);
+  border-radius: var(--radius-control);
+  cursor: default;
 }
-.version-history nav small {
-  display: block;
-  color: var(--muted);
-  margin-top: var(--space-1);
+.history-entries > [aria-selected="true"] {
+  background: var(--selection);
+  color: var(--selection-ink);
+}
+.history-entries > [aria-current="true"] {
+  font-weight: 600;
 }
 .version-history pre {
   min-height: 100%;
@@ -33,9 +45,16 @@
   overflow-wrap: anywhere;
   font: var(--text-ui) / 1.6 var(--font-mono);
 }
+.version-history del {
+  color: var(--status-danger);
+}
+.version-history ins {
+  text-decoration: underline;
+  color: var(--accent);
+}
 @media (max-width: 560px) {
   .version-history {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 100px minmax(0, 1fr);
+    grid-template-rows: 120px minmax(0, 1fr);
   }
 }

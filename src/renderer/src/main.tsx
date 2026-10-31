@@ -92,6 +92,7 @@ import {
   loadFlavor,
   selectedFlavors,
 } from './flavors'
+import type { HistoryResult } from './History'
 import { LoadingScreen } from './LoadingScreen'
 import { installRendererDiagnostics } from './local-diagnostics'
 import { transformMarkdown } from './markdown-projection'
@@ -133,9 +134,9 @@ const SettingsScreen = lazy(() =>
     default: module.SettingsScreen,
   })),
 )
-const VersionHistory = lazy(() =>
-  import('./VersionHistory').then((module) => ({
-    default: module.VersionHistory,
+const History = lazy(() =>
+  import('./History').then((module) => ({
+    default: module.History,
   })),
 )
 const BacklinksSidebar = lazy(() =>
@@ -2119,23 +2120,35 @@ function App() {
         break
       case 'history':
         void dialogs
-          .open<string>({
-            title: 'Version history',
+          .open<HistoryResult>({
+            title: 'History',
             size: 'wide',
             description:
-              'Hibi keeps a version each time you save. Restore a version to the editor, then save to replace the file.',
+              'Return to a saved version or to a point while you edited. Restoring is a step you can undo.',
             content: ({ close }) => (
               <Suspense fallback={<LoadingScreen />}>
-                <VersionHistory close={close} />
+                <History close={close} />
               </Suspense>
             ),
           })
-          .result.then(async (id) => {
-            if (!id || busyRef.current) return
+          .result.then(async (chosen) => {
+            if (!chosen || busyRef.current) return
+            if (!chosen.large) {
+              // The saved text comes back as an edit, which undo takes back.
+              try {
+                documentRuntime.replace(
+                  await window.hibi.previewVersion(chosen.version),
+                  'visual',
+                )
+              } catch (error) {
+                setError(String(error))
+              }
+              return
+            }
             const intent = settingsIntent.current
             startBusy()
             try {
-              const next = await window.hibi.restoreVersion(id)
+              const next = await window.hibi.restoreVersion(chosen.version)
               if (!next) return
               await acceptOperationDocument(next, true)
               showDocument(intent)

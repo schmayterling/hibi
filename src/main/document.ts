@@ -42,6 +42,7 @@ import {
   writeText,
 } from './files'
 import { recordVersions } from './history'
+import { flushUndoHistory } from './undo-history'
 import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
@@ -584,6 +585,8 @@ async function removeTabs(
   ids: Set<string>,
   preferredTab?: string,
 ) {
+  // Saves made in the prompts reach the closing tabs' undo histories first.
+  await flushUndoHistory(window)
   storeTab()
   if (ids.has(activeTab)) {
     const order = [...tabs.keys()]
@@ -733,6 +736,14 @@ export function getDocumentPath(): string | null {
 }
 export function getDocumentPathForTab(id: string): string | null {
   return id === activeTab ? path : (tabs.get(id)?.path ?? null)
+}
+/** A named tab's file and the text last saved to it, which its undo history ends at. */
+export function getSavedDocument(id: unknown) {
+  if (typeof id !== 'string') return null
+  const draft = id === activeTab ? snapshot() : tabs.get(id)
+  return draft?.path && !draft.pendingPath
+    ? { path: draft.path, saved: draft.saved }
+    : null
 }
 
 export function getDocument(): DocumentState {

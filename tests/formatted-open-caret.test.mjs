@@ -702,3 +702,106 @@ test('codemirror: a note opens at its top while diagrams above its caret draw', 
     { top: 0, head: end, focused: true },
   )
 })
+
+// A note opened again has the caret it was left with, also in a table cell:
+// leaving the note's tab drops the cell's editor, and that must not move the
+// caret to before the table. With focus, the view edits that cell again and
+// scrolls to it. A note opened for the first time opens at its top, above.
+test('codemirror: a note opened again keeps its caret in a table cell', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-open-again-'))
+  const profile = join(folder, 'profile')
+  await mkdir(profile)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await selectFormattedEngine(app, page, 'codemirror')
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const open = async (name, markdown) => {
+    const file = join(folder, `${name}.md`)
+    if (markdown !== undefined) await writeFile(file, markdown)
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      `${name}.md`,
+    )
+    await waitForDocumentEditor(app, page)
+  }
+  const table = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
+    { length: 80 },
+    (_, row) => `| r${row} | v${row} |`,
+  ).join('\n')}\n`
+  // The second cell of row r40, the table's line 42.
+  const at = table.indexOf('v40 |')
+  const head = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+          .selection.main.head,
+    )
+  await open('warmup', 'warmup\n')
+  await open('other', 'other\n')
+  await open('table', table)
+  // Bring the row on screen and edit its cell.
+  await page.evaluate(async (at) => {
+    const pane = document.querySelector('.rich-pane')
+    const view = pane.querySelector('.cm-content').cmTile.root.view
+    pane.scrollTop = view.lineBlockAt(at).top
+    for (let frame = 0; frame < 5; frame++)
+      await new Promise(requestAnimationFrame)
+  }, at)
+  await page.locator('.rich-pane td', { hasText: /^v40$/ }).click()
+  await page.waitForFunction(
+    () => document.activeElement?.closest('tr')?.dataset.line === '42',
+  )
+  const before = await head()
+  assert.ok(before >= at && before <= at + 3, `${before} not in ${at}`)
+  // Leave the note for another tab, then open it again.
+  await page
+    .locator('.document-tab [role="tab"][aria-label="other.md"]')
+    .click()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'other.md',
+  )
+  await waitForDocumentEditor(app, page)
+  await open('table')
+  const after = await head()
+  t.diagnostic(JSON.stringify({ at, before, after }))
+  assert.equal(after, before)
+  // Focus brings the cell's editor back, on screen.
+  await page.evaluate(() =>
+    document.querySelector('.rich-pane .cm-content').cmTile.root.view.focus(),
+  )
+  const edited = await (
+    await page.waitForFunction(() => {
+      const cell = document.activeElement?.closest('td')
+      if (!cell) return false
+      const box = cell.getBoundingClientRect(),
+        pane = document.querySelector('.rich-pane').getBoundingClientRect()
+      return {
+        cell: [Number(cell.parentElement.dataset.line), cell.cellIndex],
+        shown: box.top >= pane.top - 1 && box.bottom <= pane.bottom + 1,
+      }
+    })
+  ).jsonValue()
+  assert.deepEqual(edited, { cell: [42, 1], shown: true })
+})

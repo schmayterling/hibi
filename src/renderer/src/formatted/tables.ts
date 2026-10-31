@@ -1391,6 +1391,17 @@ class TableView {
     const editing = this.editing
     if (!editing) return
     this.editing = null
+    // The page selection of an editor that lost focus would fall back to
+    // before the table, which the formatted view reads as its caret while it
+    // takes no input, as a tab switch makes it: the caret left its cell.
+    const page = editing.element.ownerDocument.getSelection()
+    if (
+      page?.anchorNode &&
+      !editing.editor.view.hasFocus &&
+      editing.element.contains(page.anchorNode) &&
+      editing.element.contains(page.focusNode)
+    )
+      page.removeAllRanges()
     editing.editor.destroy()
     // The cell renders statically again unless its table is being removed.
     if (redraw && editing.line < this.lines && editing.element.isConnected)

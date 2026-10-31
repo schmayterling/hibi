@@ -154,6 +154,7 @@ test('addon windows open once per id and close with their addon', {
         title: 'Quick note',
         titleBar: 'native',
         platform: process.platform,
+        windowControlsHidden: false,
       },
     },
   )

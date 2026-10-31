@@ -52,7 +52,11 @@ window.addEventListener('pagehide', () => disposeSheets(), { once: true })
 function show(children: ReactNode) {
   root.render(
     <StrictMode>
-      <div className="app addon-window" data-platform={context?.platform}>
+      <div
+        className="app addon-window"
+        data-platform={context?.platform}
+        data-window-controls-hidden={context?.windowControlsHidden}
+      >
         {context?.titleBar === 'hibi' && (
           <header className="titlebar addon-window-titlebar">
             <div className="document-title">

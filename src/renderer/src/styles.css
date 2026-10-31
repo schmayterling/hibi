@@ -235,7 +235,8 @@ button:disabled {
   background: var(--active);
 }
 .app[data-platform="win32"] .titlebar,
-.app[data-platform="linux"] .titlebar {
+.app[data-platform="linux"]:where(:not([data-window-controls-hidden="true"]))
+  .titlebar {
   padding-right: calc(132px + var(--titlebar-edge-inset));
 }
 .app[data-platform="win32"] {
@@ -309,12 +310,16 @@ button:disabled {
   color: var(--muted);
 }
 /* Native window controls occupy this side on Windows and Linux. */
-.app:is([data-platform="win32"], [data-platform="linux"])
+.app:is([data-platform="win32"], [data-platform="linux"]):where(
+    :not([data-window-controls-hidden="true"])
+  )
   .right-sidebar-toolbar[data-open="true"] {
   width: 36px;
   padding-left: 0;
 }
-.app:is([data-platform="win32"], [data-platform="linux"])
+.app:is([data-platform="win32"], [data-platform="linux"]):where(
+    :not([data-window-controls-hidden="true"])
+  )
   .right-sidebar-view-controls {
   position: absolute;
   top: 44px;
@@ -322,7 +327,9 @@ button:disabled {
   width: calc(var(--right-sidebar-width) - 24px);
   height: 28px;
 }
-.app:is([data-platform="win32"], [data-platform="linux"])
+.app:is([data-platform="win32"], [data-platform="linux"]):where(
+    :not([data-window-controls-hidden="true"])
+  )
   .document-sidebar[data-side="right"]
   > .sidebar {
   padding-top: 84px;
@@ -1142,7 +1149,10 @@ button.ui-button.update-download-button:disabled {
 .zen-bar button {
   -webkit-app-region: no-drag;
 }
-.app:not([data-platform="darwin"]) .zen-bar {
+.app:not([data-platform="darwin"]):where(
+    :not([data-window-controls-hidden="true"])
+  )
+  .zen-bar {
   padding-right: calc(132px + var(--space-2));
 }
 .status-pill {

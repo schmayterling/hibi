@@ -44,6 +44,8 @@ export type AddonWindowContext = {
   title: string
   titleBar: 'native' | 'hibi'
   platform: string
+  /** Whether Hibi's window controls are hidden for this app session. */
+  windowControlsHidden?: boolean
 }
 
 /** The only desktop requests available inside an addon window. */

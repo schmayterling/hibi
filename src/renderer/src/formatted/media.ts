@@ -62,6 +62,8 @@ function hold(view: EditorView, media: Element) {
   const { tabId } = view.state.facet(formattedDocument)
   if (
     !tabId ||
+    // A closing tab's view is destroyed after the runtime drops its session.
+    !documentRuntime.session(tabId) ||
     !(media instanceof HTMLImageElement) ||
     // A lazy image kept waiting off screen is not complete, but it is sized
     // once a copy loaded for an earlier widget arrives.
@@ -82,6 +84,8 @@ function hold(view: EditorView, media: Element) {
     images = new Map()
     held.set(tabId, images)
   }
+  // Out of its widget, the image keeps no destroyed view's DOM alive.
+  media.remove()
   images.delete(media.src)
   images.set(media.src, media)
   const [oldest = ''] = images.keys()

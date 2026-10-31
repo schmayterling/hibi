@@ -434,5 +434,10 @@ test('a view keeps its selections and history steps when its id changes', () => 
   assert.equal(session.snapshot().materialize(), 'ab')
   assert.equal(head('left'), 1)
   assert.equal(session.historyView('redo'), 'left')
+  // A step waiting to be redone follows too.
+  session.renameView('left', 'pane')
+  assert.equal(session.historyView('redo'), 'pane')
+  session.redo()
+  assert.equal(head('pane'), 2)
   assert.deepEqual(errors, [])
 })

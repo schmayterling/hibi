@@ -483,24 +483,92 @@ test('codemirror: a pane undoes its own edits after a split opens or closes', {
       differences.push(`${name}: ${JSON.stringify({ at, ...last })}`)
   }
 
+  // The view a pane shows once it is made again, not the one it had, and
+  // takes input: a key pressed while it is still read-only does nothing.
+  const view = (pane) =>
+    page.evaluateHandle(
+      (pane) => document.querySelector(`${pane} .cm-content`).cmTile.root.view,
+      pane,
+    )
+  const remade = (pane, before) =>
+    page.waitForFunction(
+      ({ pane, before }) => {
+        const view = document.querySelector(`${pane} .cm-content`)?.cmTile.root
+          .view
+        return !!view && view !== before && !view.state.readOnly
+      },
+      { pane, before },
+    )
+  const select = (pane, anchor) =>
+    page.evaluate(
+      ({ pane, anchor }) =>
+        document
+          .querySelector(`${pane} .cm-content`)
+          .cmTile.root.view.dispatch({ selection: { anchor } }),
+      { pane, anchor },
+    )
+  // The caret a pane's view was made with.
+  const kept = async (name, pane, at) => {
+    const { head } = await caret(pane)
+    t.diagnostic(JSON.stringify({ name, at, head }))
+    if (head !== at)
+      differences.push(`${name}: ${JSON.stringify({ at, head })}`)
+  }
+  const idle = () => page.locator('.app[aria-busy="false"]').waitFor()
+  const left = '.editor-page[data-side="left"] .rich-pane'
+  const right = '.editor-page[data-side="right"] .rich-pane'
+  const openSplit = async (name) => {
+    const before = await view('.rich-pane')
+    const { tabs } = await page.evaluate(() => window.hibi.getDocument())
+    await splitTab(app, page, tabs.find((tab) => tab.name === name).id)
+    await remade(left, before)
+    await page.locator(`${right} .cm-content`).waitFor()
+    await idle()
+  }
+  const closeSplit = async () => {
+    const before = await view(left)
+    await page.getByRole('button', { name: 'Close split', exact: true }).click()
+    await remade('.rich-pane', before)
+    await waitForDocumentEditor(app, page)
+  }
+
   await open('warmup', 'warmup\n')
   await open('other', 'other\n')
   await open('paragraphs', paragraphs)
   const edit = await typeAtEnd('.rich-pane', 'x')
-  const tabs = (await page.evaluate(() => window.hibi.getDocument())).tabs
-  await splitTab(app, page, tabs.find((tab) => tab.name === 'other.md').id)
-  const left = '.editor-page[data-side="left"] .rich-pane'
-  await page.locator(`${left} .cm-content`).waitFor()
-  await page.locator('.editor-page[data-side="right"] .cm-content').waitFor()
+  await openSplit('other.md')
+  await kept('caret when a split opens', left, edit.at + 1)
   await undo('undo in a split of an edit from before it', left, edit)
 
   const split = await typeAtEnd(left, 'y')
-  await page.getByRole('button', { name: 'Close split' }).click()
-  await page.locator('.editor-page[data-side]').first().waitFor({
-    state: 'detached',
-  })
-  await waitForDocumentEditor(app, page)
+  await closeSplit()
   await undo('undo after a split closed of an edit in it', '.rich-pane', split)
+
+  // The other pane shows another note before the split closes.
+  await openSplit('other.md')
+  await select(left, 100)
+  await page.getByRole('tab', { name: 'warmup.md', exact: true }).click()
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.editor-page[data-side="right"] .split-tab-heading')
+      ?.textContent.includes('warmup.md'),
+  )
+  await idle()
+  await closeSplit()
+  await kept(
+    'caret after the other pane showed another note',
+    '.rich-pane',
+    100,
+  )
+
+  // One note in both panes: the left pane takes the note's caret, and its
+  // own caret stays when the split closes.
+  await openSplit('paragraphs.md')
+  await kept('caret of the left pane of one note in both', left, 100)
+  await select(left, 200)
+  await select(right, 50)
+  await closeSplit()
+  await kept('caret when a split of one note closes', '.rich-pane', 200)
 
   assert.deepEqual(differences, [])
 })

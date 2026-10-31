@@ -5898,6 +5898,9 @@
   "32c1f3399caa": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "d2cb42ff7704": [
+    "src/shared/addon-manifest.ts"
+  ],
   "35aa67de3cc1": [
     "src/main/workspace-entry-transfer.ts"
   ],

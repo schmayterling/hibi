@@ -33,7 +33,7 @@
     "error": "SDK capabilities"
   },
   {
-    "name": "shortcuts keep their existing acceptance",
+    "name": "installation refuses a default shortcut that cannot bind everywhere",
     "fields": {
       "commands": [
         {
@@ -43,15 +43,7 @@
         }
       ]
     },
-    "expected": {
-      "commands": [
-        {
-          "id": "run",
-          "label": "Run",
-          "defaultShortcut": "not+a+shortcut"
-        }
-      ]
-    }
+    "error": "default shortcut for the run command is not available on every platform"
   },
   {
     "name": "command syntax remains a runtime activation check",
@@ -62,7 +54,7 @@
         {
           "id": "run",
           "label": "Run",
-          "defaultShortcut": "mod+shift+r"
+          "defaultShortcut": "mod+alt+r"
         }
       ],
       "syntax": [
@@ -85,7 +77,7 @@
         {
           "id": "run",
           "label": "Run",
-          "defaultShortcut": "mod+shift+r"
+          "defaultShortcut": "mod+alt+r"
         }
       ],
       "syntax": [

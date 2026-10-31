@@ -52,6 +52,44 @@ npm run dev
 
 for build commands, tests, and addon development, see [developer and agent notes](docs/ai-agents/README.md).
 
+## docker
+
+You can use the multi-stage Docker environment to develop or build Hibi without installing Node.js or PNPM on your host system.
+
+### development environment
+
+Build the development image and run commands with your working directory mounted:
+
+```sh
+# build the dev container image
+docker build --target dev -t hibi:dev .
+
+# start an interactive shell
+docker run --rm -it -v "$(pwd):/app" -w /app hibi:dev bash
+
+# or run checks and the dev server
+docker run --rm -v "$(pwd):/app" -w /app hibi:dev pnpm run typecheck
+docker run --rm -it -v "$(pwd):/app" -w /app -p 5173:5173 hibi:dev pnpm run dev
+```
+
+### export standalone application artifact
+
+Build and export the unpacked Linux application binary directly to your host:
+
+```sh
+docker build --target artifact --output ./dist .
+```
+
+The compiled application files will be placed in `./dist`, with the executable at `./dist/hibi`.
+
+### minimal production image
+
+Build a minimal Debian runtime image containing only the packaged application and required runtime libraries:
+
+```sh
+docker build --target runner -t hibi:latest .
+```
+
 ## contributing guidelines and ai policy
 
 see this: [CONTRIBUTING.md](CONTRIBUTING.md)

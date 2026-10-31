@@ -1,0 +1,16 @@
+/**
+ * What a stand-in has to provide in place of a real module: every value export
+ * with a compatible type, and for a class, every public member.
+ */
+type Shape<Module> = {
+  [Name in keyof Module]: Module[Name] extends abstract new (
+    ...args: infer Args
+  ) => infer Instance
+    ? new (
+        ...args: Args
+      ) => Pick<Instance, keyof Instance>
+    : Module[Name]
+}
+
+/** Fails to typecheck when `StandIn` lacks or mistypes something `Real` exports. */
+export type Covers<StandIn extends Shape<Real>, Real> = StandIn

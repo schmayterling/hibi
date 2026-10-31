@@ -14,6 +14,9 @@
     "electron.vite.config.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
-    "src/shared/**/*.ts"
+    "src/shared/**/*.ts",
+    "tests/fixtures/local-diagnostics-off/runtime.ts",
+    "tests/fixtures/local-diagnostics-off/owned.ts",
+    "tests/fixtures/local-diagnostics-off/preload.ts"
   ]
 }

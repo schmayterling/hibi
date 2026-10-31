@@ -463,6 +463,83 @@ test('a 10,000-row table renders the rows in view and one row per edit', {
   }
 })
 
+test('a scroll that puts a row a long table has not drawn at the top shows it there', {
+  timeout: 120000,
+}, async () => {
+  const result = await harness.evaluate(async () => {
+    const preview = window.tables
+    const rows = Array.from({ length: 10000 }, (_, i) => `| row ${i} | v${i} |`)
+    // The note starts with the table. Lines above it would leave the drawn
+    // part of the note as the pane scrolls this far, which moves what follows
+    // by a few pixels in the formatted view, tables or not.
+    const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+    await preview.mount(doc, { width: 1000, height: 800 }, { editable: true })
+    const view = preview.view()
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const table = document.querySelector('.hibi-lp-table')
+    let added = 0
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          if (node.nodeName === 'TR') added++
+    })
+    observer.observe(table.querySelector('tbody'), { childList: true })
+    // Body row 6000 is the table's line 6002.
+    const row = () => table.querySelector('tr[data-line="6002"]')
+    const drawn = !!row()
+    const at = doc.indexOf('row 6000 ')
+    // Reading where the row is, as code does and CodeMirror does while it
+    // measures, places it in the table without drawing it.
+    const box = view.coordsAtPos(at)
+    await new Promise((done) =>
+      view.requestMeasure({ read: () => view.coordsAtPos(at), write: done }),
+    )
+    await preview.settle()
+    const bounds = table.getBoundingClientRect()
+    const reading = {
+      added,
+      inside:
+        !!box && box.top > bounds.top + 1 && box.bottom < bounds.bottom - 1,
+    }
+    added = 0
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'start' }),
+    })
+    // Where the row's text is below the pane's top, once the table has
+    // drawn and measured the rows the pane shows.
+    const top = () => {
+      const cell = row()?.querySelector('td')
+      if (!cell) return null
+      const text = document.createRange()
+      text.selectNodeContents(cell.querySelector('p') ?? cell)
+      const pane = document.querySelector('.rich-pane')
+      return text.getBoundingClientRect().top - pane.getBoundingClientRect().top
+    }
+    await preview.settle()
+    await preview.settle()
+    const first = top()
+    await preview.settle()
+    observer.disconnect()
+    return { drawn, reading, first, later: top(), scrolled: added }
+  })
+  assert.equal(result.drawn, false, 'the row starts undrawn')
+  assert.deepEqual(
+    result.reading,
+    { added: 0, inside: true },
+    JSON.stringify(result),
+  )
+  // CodeMirror leaves a few pixels above the line it scrolls to the top.
+  assert.ok(
+    result.first !== null && result.first >= 0 && result.first < 20,
+    JSON.stringify(result),
+  )
+  assert.equal(result.later, result.first, 'the row stays where it was put')
+  // The scroll draws the rows of about two panes, not the table's.
+  assert.ok(result.scrolled < 200, JSON.stringify(result))
+})
+
 /** Mount `doc` in the editable harness. */
 const mount = (doc) =>
   harness.evaluate(

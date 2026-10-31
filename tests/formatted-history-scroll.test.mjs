@@ -112,7 +112,9 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   // The first note a new window opens may not take focus.
   await open('warmup', 'warmup\n', null)
   const differences = []
-  const step = async (name, key, text, scroller = '.rich-pane') => {
+  // Each step presses `key`; its selection must show, in `cell` when one
+  // is given.
+  const step = async (name, key, text, scroller = '.rich-pane', cell) => {
     await page.evaluate((scroller) => {
       document.querySelector(scroller).scrollTop = 0
     }, scroller)
@@ -131,18 +133,23 @@ test('codemirror: undo and redo scroll to the selection they restore', {
       last = now
     }
     t.diagnostic(JSON.stringify({ name, ...last }))
-    if (!last.shown) differences.push(`${name}: ${JSON.stringify(last)}`)
+    if (
+      !last.shown ||
+      (cell && JSON.stringify(last.cell) !== JSON.stringify(cell))
+    )
+      differences.push(`${name}: ${JSON.stringify(last)}`)
   }
 
-  // Tab in the last cell adds a row. Undo takes it out with the cell editor's
-  // row, so the editor is made again; redo and the undo after it leave the
-  // editor in its cell.
+  // Tab in the last cell adds a row and edits its first cell. Undo takes it
+  // out with the cell editor's row, so the editor is made again in the cell
+  // Tab left; redo brings the caret back to the new row, as native editors
+  // do, and the undo after it to the cell Tab left.
   await open('table-rows', table, '.rich-pane td')
   await page.keyboard.press('Tab')
   const added = await changed(table)
-  await step('undo of an added row', undoKey, table)
-  await step('redo of an added row', redoKey, added)
-  await step('undo after a redo', undoKey, table)
+  await step('undo of an added row', undoKey, table, '.rich-pane', [81, 1])
+  await step('redo of an added row', redoKey, added, '.rich-pane', [82, 0])
+  await step('undo after a redo', undoKey, table, '.rich-pane', [81, 1])
 
   await open('table-typing', table, '.rich-pane td')
   await page.keyboard.type('x')

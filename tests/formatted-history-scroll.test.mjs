@@ -306,6 +306,29 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   if (!deepFound) differences.push('find in a tall cell: not shown')
   await page.keyboard.press('Escape')
 
+  // A match at the start of a tall cell above the pane: the cell comes in
+  // from above with its bottom in view, and the match is above that.
+  const high = `${lines}${rows(80, (row) => (row === 40 ? `needle ${words}` : `v${row}`))}`
+  await open('table-tall-find-above', high, '.rich-pane td')
+  await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = pane.scrollHeight
+  })
+  assert.equal(await page.evaluate(showsText, 'needle'), false)
+  await pressShortcut(app, `${mod}+f`)
+  await page
+    .getByRole('textbox', { name: 'Find in document', exact: true })
+    .fill('needle')
+  const highFound = await page.waitForFunction(showsText, 'needle').then(
+    () => true,
+    () => false,
+  )
+  t.diagnostic(
+    JSON.stringify({ name: 'find in a tall cell above', shown: highFound }),
+  )
+  if (!highFound) differences.push('find in a tall cell above: not shown')
+  await page.keyboard.press('Escape')
+
   // Outside tables the view's own scrolling shows the caret.
   await open('paragraphs', paragraphs, '.rich-pane')
   await page.keyboard.type('x')

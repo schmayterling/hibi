@@ -116,10 +116,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // The dictionary's declared commands, which work before it starts, and
   // commands that wait for their addon's editor features add 1,504 (#746).
   // Following the view's current editor while a command waits for its
-  // addon's features adds 99 (#766).
+  // addon's features adds 93 (#766).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 99,
+    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

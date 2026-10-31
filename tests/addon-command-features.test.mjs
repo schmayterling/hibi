@@ -16,7 +16,8 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 /**
  * Opens a note, then runs the declared command of a background addon whose
  * formatted editor feature does not finish creating until
- * `window.failSlowFeature()`, so the command waits for it. Its source editor
+ * `window.finishSlowFeature()` or `window.failSlowFeature()`, so the command
+ * waits for it. The command records the editor it ran in. Its source editor
  * feature is ready at once. Background starts and the wait's 5 s ceiling are
  * held.
  */
@@ -53,13 +54,16 @@ async function waitingCommand(t, { sideBySide = false } = {}) {
       context.editor.registerFormatted({ id: 'slow', create() {
         window.slowFeatureCreates = (window.slowFeatureCreates || 0) + 1;
         if (!window.slowFeatureHeld) return [];
-        return new Promise((_, reject) => {
+        return new Promise((resolve, reject) => {
+          window.finishSlowFeature = () => resolve([]);
           window.failSlowFeature = () => reject(new Error('The slow feature failed.'));
         });
       } });
       context.editor.registerSource({ id: 'quick', create: () => [] });
-      context.commands.register({ id: 'probe', label: 'Probe slow feature', run() {
+      context.commands.register({ id: 'probe', label: 'Probe slow feature', run({ view }) {
         window.slowFeatureRuns = (window.slowFeatureRuns || 0) + 1;
+        const selection = context.editorViews.getSelection(view);
+        window.slowFeatureEditor = selection.ok ? selection.value.editor : selection.code;
       } });
     } };`,
   )
@@ -167,12 +171,37 @@ test('a command waiting for its editor feature gives up once its view closes', {
   assert.equal(await page.evaluate(() => window.slowFeatureRuns ?? 0), 0)
 })
 
+/** The command has not run yet, two frames after anything that could end its wait. */
+async function stillWaiting(page) {
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  )
+  assert.equal(await page.evaluate(() => window.slowFeatureRuns ?? 0), 0)
+}
+
 test('a command waiting for its editor feature follows its view into the source editor', {
   timeout: 60000,
 }, async (t) => {
   const { page } = await waitingCommand(t)
+  await stillWaiting(page)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForAsync(page, () => window.slowFeatureRuns === 1)
+  assert.equal(await page.evaluate(() => window.slowFeatureEditor), 'source')
+})
+
+// Source view's editor mounts after the switch; the hidden formatted editor
+// showing its feature meanwhile must not end the wait.
+test('a command waiting for its editor feature waits for the source editor it switched to', {
+  timeout: 60000,
+}, async (t) => {
+  const { page } = await waitingCommand(t)
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await page.evaluate(() => window.finishSlowFeature())
+  await waitForAsync(page, () => window.slowFeatureRuns === 1)
+  assert.equal(await page.evaluate(() => window.slowFeatureEditor), 'source')
 })
 
 // Both editors are already up side by side; only focus moves.
@@ -180,6 +209,8 @@ test('a command waiting for its editor feature follows focus into the source pan
   timeout: 60000,
 }, async (t) => {
   const { page } = await waitingCommand(t, { sideBySide: true })
+  await stillWaiting(page)
   await page.locator('.source-pane .cm-content').click()
   await waitForAsync(page, () => window.slowFeatureRuns === 1)
+  assert.equal(await page.evaluate(() => window.slowFeatureEditor), 'source')
 })

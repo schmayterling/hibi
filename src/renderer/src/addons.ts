@@ -726,21 +726,20 @@ export function useAddons(
     (owner: string, view: CommandExecutionContext['view']) => {
       const selection = view && editorViewRegistry.getSelection(view)
       if (!view || !selection?.ok) return
-      let editor = selection.value.editor
       const missing = () => {
-        // The view can switch between its source and formatted editors.
+        if (!documentRuntime.isLiveView(view)) return false
+        // The view can switch between its source and formatted editors, and
+        // waits while the one it switched to mounts.
         const current = editorViewRegistry.getSelection(view)
-        if (current.ok) editor = current.value.editor
+        if (!current.ok) return true
         // The formatted view is the rich editor.
-        const presentation = editor === 'source' ? 'source' : 'formatted'
-        return (
-          documentRuntime.isLiveView(view) &&
-          [...sources.values()].some(
-            (feature) =>
-              feature.addonId === owner &&
-              feature.presentation === presentation &&
-              !feature.views.has(view.viewId),
-          )
+        const presentation =
+          current.value.editor === 'source' ? 'source' : 'formatted'
+        return [...sources.values()].some(
+          (feature) =>
+            feature.addonId === owner &&
+            feature.presentation === presentation &&
+            !feature.views.has(view.viewId),
         )
       }
       if (!missing()) return

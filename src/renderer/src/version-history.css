@@ -29,11 +29,11 @@
   border-radius: var(--radius-control);
   cursor: default;
 }
-.history-entries > [aria-selected='true'] {
+.history-entries > [aria-selected="true"] {
   background: var(--selection);
   color: var(--selection-ink);
 }
-.history-entries > [aria-current='true'] {
+.history-entries > [aria-current="true"] {
   font-weight: 600;
 }
 .version-history pre {

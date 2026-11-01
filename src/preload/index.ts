@@ -719,6 +719,8 @@ if (process.isMainFrame) {
       }
     },
     onDocumentSaved: (callback) => subscribe(DOCUMENT_CHANNELS.saved, callback),
+    onFileDialog: (callback) =>
+      subscribe(DOCUMENT_CHANNELS.fileDialog, callback),
     newDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.new),
     saveDocument: (saveAs) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.save, saveAs),

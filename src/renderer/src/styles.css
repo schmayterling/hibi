@@ -424,6 +424,10 @@ button:disabled {
   scrollbar-width: none;
   -webkit-app-region: no-drag;
 }
+/* A click while a file operation runs waits for it. */
+.document-tabs[aria-busy="true"] * {
+  cursor: progress;
+}
 .document-tab {
   position: relative;
   display: flex;

@@ -216,14 +216,16 @@ test('the history view lists every save asked for and thins autosaves, keeping o
   await replaceRichText(page, editor, replaced)
   await saved(replaced)
   const replacing = await newest()
-  // A few words typed on: that autosave holds no point, so it merges into the
-  // next one when that comes less than 5 s later.
+  // A few words typed on, then more without a pause, for longer than 5 s:
+  // that autosave holds no point, and the next comes less than 3 minutes
+  // later, so it isn't listed beside it.
   await editor.press('ControlOrMeta+End')
   await page.keyboard.type(' more')
   await saved(`${replaced} more`)
   const merging = await newest()
-  await page.keyboard.type(' words')
-  await saved(`${replaced} more words`)
+  const going = Date.now()
+  await page.keyboard.type(' and some words', { delay: 400 })
+  await saved(`${replaced} more and some words`)
   const after = await newest()
   await clickMenu(app, 'Command palette')
   await page.getByRole('combobox', { name: /search commands/i }).fill('history')
@@ -243,11 +245,15 @@ test('the history view lists every save asked for and thins autosaves, keeping o
   )
   const shows = (version) => listed.has(`history-version-${version.id}`)
   assert.ok(shows(holding))
-  assert.equal(
-    shows(merging),
-    after.savedAt - merging.savedAt >= 5000,
-    'an autosave holding no point merges into one less than 5 s later',
-  )
+  // More than the 5 s that once kept an autosave listed.
+  assert.ok(after.savedAt - merging.savedAt >= 5000)
+  // Unless a stall made a pause before typing went on, a point it would hold.
+  if (going - merging.savedAt < 2500)
+    assert.equal(
+      shows(merging),
+      false,
+      'an autosave holding no point is not listed within 3 minutes of another entry',
+    )
   assert.ok(shows(after))
   assert.ok(replacing.savedAt > holding.savedAt)
 })

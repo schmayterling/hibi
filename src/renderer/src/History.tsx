@@ -143,7 +143,12 @@ export function History({
           label: `${new Date(time).toLocaleString()} · ${reasons[reason]}${step === -1 ? '' : ` · ${summary(historySummary(tree!, previous(step), step))}`}`,
         }),
       ),
-      ...shownVersions(versions, now, tree).map(
+      ...shownVersions(
+        versions,
+        now,
+        tree,
+        points.map(({ time }) => time),
+      ).map(
         (version): Entry => ({
           id: `version-${version.id}`,
           kind: 'version',

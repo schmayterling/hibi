@@ -3597,12 +3597,22 @@ test('a long table shows the edited row in its place once the pane scrolled away
   await harness.keyboard.press('End')
   await harness.keyboard.type('Z')
   // Scrolled back to the top, the window draws the rows there and keeps the
-  // edited row mounted after them, out of its place.
-  const away = () =>
-    harness.evaluate(async () => {
-      document.querySelector('.rich-pane').scrollTop = 0
-      for (let i = 0; i < 3; i++) await window.tables.settle()
-    })
+  // edited row mounted after them, out of its place. The cell editor's own
+  // scroll to its caret, after typing, lands first, or it pulls the pane back.
+  const away = async () =>
+    assert.ok(
+      await harness.evaluate(async () => {
+        const preview = window.tables
+        await preview.settle()
+        document.querySelector('.rich-pane').scrollTop = 0
+        const placed = () =>
+          document.querySelector('.hibi-lp-table tr[data-line="1803"]')
+            ?.previousElementSibling?.dataset.line === '1802'
+        for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+        return !placed()
+      }),
+      'the edited row starts out of its place',
+    )
   // The focused cell, and whether it is inside the pane once the window is
   // drawn for where the pane scrolled.
   const shown = () =>

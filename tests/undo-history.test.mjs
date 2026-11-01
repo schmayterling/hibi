@@ -140,6 +140,25 @@ test('restarting keeps undo, with a save made at the quit prompt', {
   const first = await launch(0)
   await first.open('original')
   await first.edit('saved while quitting')
+  // The editor answers the quit's flush, so quitting needn't wait out its 5 s timeout.
+  await first.app.evaluate(
+    ({ BrowserWindow }) =>
+      new Promise((resolve, reject) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents
+        const { ipc } = contents
+        const timer = setTimeout(() => {
+          ipc.removeHandler('undo-history:flushed')
+          reject(new Error('the editor did not answer the flush'))
+        }, 4000)
+        ipc.handle('undo-history:flushed', (_event, token) => {
+          clearTimeout(timer)
+          ipc.removeHandler('undo-history:flushed')
+          if (token === 'probe') resolve()
+          else reject(new Error(`flushed ${token}`))
+        })
+        contents.send('undo-history:flush', 'probe')
+      }),
+  )
   await first.quit()
   const second = await launch()
   await second.open('saved while quitting')

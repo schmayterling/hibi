@@ -849,10 +849,12 @@ test('the reading place deep inside a huge line holds through second changes, sh
     'word25000 ',
     30,
   ]
+  // A row off there is 28 px from where the aim left the text, which can
+  // already be a px or two off.
   const paragraph = [
     `${paragraphs}\n\n${lines}\n\nAfter.\n${more}`,
     'line 15000 of',
-    30,
+    40,
   ]
   // Steps: a space of a height at a position (0 removes it), `frame` to go
   // on a frame later instead of once the text holds, `scroll` for the
@@ -871,6 +873,12 @@ test('the reading place deep inside a huge line holds through second changes, sh
     [
       'a scroll before the view draws again',
       line,
+      [{ grow: 5000, scroll: 300 }],
+    ],
+    // Each of the paragraph's lines starts after a join, between elements.
+    [
+      'a scroll before the view draws again',
+      paragraph,
       [{ grow: 5000, scroll: 300 }],
     ],
     ['a large change', line, [{ grow: 150000 }]],

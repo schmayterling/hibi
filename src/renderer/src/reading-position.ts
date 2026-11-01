@@ -191,7 +191,23 @@ function drawnText(view: EditorView, pos: number) {
  * editor updates, when it can't measure positions itself.
  */
 function drawnTop(view: EditorView, pos: number) {
-  const { node, offset } = view.domAtPos(pos, 1)
+  let { node, offset } = view.domAtPos(pos, 1)
+  // Between elements, as after a widget's buffer at a joined line's start:
+  // the line's next text.
+  if (node.nodeType !== Node.TEXT_NODE) {
+    const next = node.childNodes[offset]
+    const line = next && (node as Element).closest('.cm-line')
+    if (!line) return null
+    const walker = view.dom.ownerDocument.createTreeWalker(
+      line,
+      NodeFilter.SHOW_TEXT,
+    )
+    walker.currentNode = next
+    const text = next.nodeType === Node.TEXT_NODE ? next : walker.nextNode()
+    if (!text) return null
+    node = text
+    offset = 0
+  }
   const range = view.dom.ownerDocument.createRange()
   range.setStart(node, offset)
   // The character after the position, in the row it starts.

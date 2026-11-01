@@ -289,12 +289,14 @@ test('going to a step or restoring a point shows the change in the editor, and a
     join(profile, 'addons.json'),
     JSON.stringify({ 'readonly-probe': true }),
   )
-  // A note far longer than the window, edited at its end.
+  // A note far longer than the window, with a paragraph added at its end:
+  // long enough to be a point of its own once undone.
   const original = Array.from(
     { length: 80 },
     (_, index) => `paragraph ${index}`,
   ).join('\n\n')
-  const edited = `${original} tail`
+  const added = '\n\nthe last paragraph, added at the end'
+  const edited = `${original}${added}`
   const file = join(profile, 'note.md')
   await writeFile(file, original)
   const app = await electron.launch({
@@ -382,7 +384,7 @@ test('going to a step or restoring a point shows the change in the editor, and a
   }
   await edit({ selection: { anchor: original.length } })
   await edit({
-    changes: { from: original.length, insert: ' tail' },
+    changes: { from: original.length, insert: added },
     selection: { anchor: edited.length },
     userEvent: 'input.type',
   })

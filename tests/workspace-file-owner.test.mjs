@@ -72,6 +72,7 @@ function harness(t) {
     lookups: 0,
     calls: [],
     trashed: [],
+    removed: [],
     documentPath: '/notes/first.md',
     document: { revision: 1 },
     sent: [],
@@ -105,7 +106,14 @@ function harness(t) {
     },
     isAddonActivationCurrent: (id, generation) =>
       id === 'example' && state.enabled && generation === state.generation,
-    shell: { trashItem: async (file) => state.trashed.push(file) },
+    shell: {
+      trashItem: async (file) => {
+        if (state.trashFails) throw new Error('The trash refused.')
+        state.trashed.push(file)
+      },
+    },
+    realpath: async (file) => `/real/${file}`,
+    removeUndoHistory: async (file) => state.removed.push(file),
   }
   for (const [name, [service]] of Object.entries(operations))
     bindings[service] = async (...args) => {
@@ -172,8 +180,14 @@ for (const name of Object.keys(operations)) {
     const forwarded = reads.includes(name) ? args : args.slice(0, -1)
     if (name === 'trashFile') {
       const trash = forwarded.pop()
+      // A file the trash refuses keeps its kept undo history.
+      h.state.trashFails = true
+      await assert.rejects(trash('kept.md'))
+      h.state.trashFails = false
       await trash('removed.md')
       assert.deepEqual(h.state.trashed, ['removed.md'])
+      // Its kept undo history goes with it, by the file's real path.
+      assert.deepEqual(h.state.removed, ['/real/removed.md'])
     }
     assert.deepEqual(forwarded, operations[name].slice(1))
     assert.equal(h.state.lookups, 1)

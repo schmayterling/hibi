@@ -54,6 +54,12 @@ const serial = <T>(task: () => Promise<T>): Promise<T> => {
   return next
 }
 const writing = new Set<Promise<unknown>>()
+/** A quit waits for queued writes, moves and removals. */
+const tracked = <T>(task: Promise<T>) => {
+  writing.add(task)
+  void task.catch(() => {}).finally(() => writing.delete(task))
+  return task
+}
 
 /** Kept files by name, measured once, then followed as they change. */
 let sizes: Map<string, { bytes: number; time: number }> | undefined
@@ -85,8 +91,15 @@ async function remove(name: string) {
   notes?.delete(name)
 }
 const indexPath = () => join(app.getPath('userData'), 'undo-history-notes.json')
+/** A crash mid-write leaves the index's temporary copy beside it. */
+async function removeIndexCopies() {
+  for (const name of await readdir(app.getPath('userData')).catch(() => []))
+    if (name.startsWith('.undo-history-notes.json.') && name.endsWith('.tmp'))
+      await unlink(join(app.getPath('userData'), name)).catch(() => {})
+}
 async function indexed() {
   if (notes) return notes
+  await removeIndexCopies()
   const listed = await readFile(indexPath(), 'utf8')
     .then((text): unknown => JSON.parse(text))
     .catch(() => null)
@@ -142,9 +155,7 @@ export async function storeUndoHistory(
       total -= file.bytes
     }
   })
-  writing.add(task)
-  void task.catch(() => {}).finally(() => writing.delete(task))
-  return task
+  return tracked(task)
 }
 
 /**
@@ -192,26 +203,50 @@ export async function readUndoHistory(
  * unreadable folder can't strand a history under an old name.
  */
 export function relocateUndoHistory(from: string, to: string) {
-  return serial(async () => {
-    const files = await measure()
-    if (!files.size) return
-    const known = await indexed()
-    let changed = false
-    for (const [before, path] of [...known]) {
-      if (!isPathInside(from, path)) continue
-      const moved = join(to, relative(from, path))
-      known.delete(before)
-      changed = true
-      const file = files.get(before)
-      if (!file) continue
-      const after = fileName(moved)
-      await rename(join(folder(), before), join(folder(), after))
-      files.delete(before)
-      files.set(after, file)
-      known.set(after, moved)
-    }
-    if (changed) await writeIndex()
-  })
+  return tracked(
+    serial(async () => {
+      const files = await measure()
+      if (!files.size) return
+      const known = await indexed()
+      let changed = false
+      for (const [before, path] of [...known]) {
+        if (!isPathInside(from, path)) continue
+        const moved = join(to, relative(from, path))
+        known.delete(before)
+        changed = true
+        const file = files.get(before)
+        if (!file) continue
+        const after = fileName(moved)
+        await rename(join(folder(), before), join(folder(), after))
+        files.delete(before)
+        files.set(after, file)
+        known.set(after, moved)
+      }
+      if (changed) await writeIndex()
+    }),
+  )
+}
+
+/**
+ * Kept histories go with notes Hibi moves to the trash: the note at `path`,
+ * or every note under `path` when a folder went.
+ */
+export function removeUndoHistory(path: string) {
+  return tracked(
+    serial(async () => {
+      const files = await measure()
+      const known = await indexed()
+      let changed = false
+      for (const [name, note] of [...known])
+        if (isPathInside(path, note)) {
+          await remove(name)
+          changed = true
+        }
+      // A history kept before its note joined the index goes by its name.
+      if (files.has(fileName(path))) await remove(fileName(path))
+      if (changed) await writeIndex()
+    }),
+  )
 }
 
 export async function setKeepUndoHistory(keep: unknown) {
@@ -227,6 +262,7 @@ export function clearUndoHistory() {
   return serial(async () => {
     await rm(folder(), { recursive: true, force: true })
     await rm(indexPath(), { force: true })
+    await removeIndexCopies()
     sizes = new Map()
     notes = new Map()
   })

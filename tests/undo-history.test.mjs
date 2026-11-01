@@ -104,9 +104,10 @@ async function note(t, text = 'original', folder = '') {
         await page.keyboard.press(redoKey)
         await shows(text)
       },
-      async quit() {
+      /** Quits, by default as the Quit menu item does. */
+      async quit(how = ({ app }) => app.quit()) {
         const closed = app.waitForEvent('close')
-        await app.evaluate(({ app }) => app.quit())
+        await app.evaluate(how)
         await closed
         quit.add(app)
       },
@@ -353,4 +354,43 @@ test('closing a tab waits until its steps are sent, not until they are written',
   await app.evaluate(() => globalThis.writes.resolve())
   // The steps were kept all the same.
   assert.equal((await readdir(join(profile, 'undo-history'))).length, 1)
+})
+
+test('a quit after the editor stopped still waits for kept undo history writes', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch, profile, file } = await note(t)
+  // The dialog shown when the editor stops answers Quit.
+  const hibi = await launch(1)
+  const { app } = hibi
+  await hibi.open('original')
+  // Kept history writes wait until released, as on a slow disk.
+  await app.evaluate(() => {
+    const fs = process.getBuiltinModule('node:fs/promises')
+    const rename = fs.rename
+    const held = Promise.withResolvers()
+    globalThis.writes = { held: 0, release: held.resolve }
+    fs.rename = async (from, to) => {
+      if (/undo-history[\\/][0-9a-f]{64}\.json$/.test(to)) {
+        globalThis.writes.held++
+        await held.promise
+      }
+      return rename(from, to)
+    }
+    process.getBuiltinModule('node:module').syncBuiltinESMExports()
+  })
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await waitForAsync(app, () => globalThis.writes.held >= 1)
+  await hibi.quit(({ BrowserWindow }) => {
+    setTimeout(() => globalThis.writes.release(), 1000)
+    BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer()
+  })
+  const name = `${createHash('sha256')
+    .update(await realpath(file))
+    .digest('hex')}.json`
+  assert.match(
+    await readFile(join(profile, 'undo-history', name), 'utf8'),
+    /first draft/,
+  )
 })

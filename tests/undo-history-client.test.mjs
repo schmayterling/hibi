@@ -18,6 +18,7 @@ test('a clear forgets the steps a reopened note was still reading', async (t) =>
   const history = JSON.parse(JSON.stringify(keptHistory(session)))
   const asked = Promise.withResolvers()
   const read = Promise.withResolvers()
+  const cleared = Promise.withResolvers()
   globalThis.window = {
     hibi: {
       getKeepUndoHistory: async () => true,
@@ -25,7 +26,7 @@ test('a clear forgets the steps a reopened note was still reading', async (t) =>
         asked.resolve()
         return read.promise
       },
-      clearUndoHistory: async () => {},
+      clearUndoHistory: () => cleared.promise,
     },
   }
   const restored = []
@@ -41,8 +42,11 @@ test('a clear forgets the steps a reopened note was still reading', async (t) =>
   })
   const reading = kept.restore('n', session)
   await asked.promise
-  await kept.clear()
+  // Hibi answers the read, queued before the clear, while the clear runs.
+  const clearing = kept.clear()
   read.resolve(history)
   await reading
+  cleared.resolve()
+  await clearing
   assert.deepEqual(restored, [])
 })

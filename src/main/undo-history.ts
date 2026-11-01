@@ -263,20 +263,27 @@ export function removeUndoHistory(path: string) {
 export async function setKeepUndoHistory(keep: unknown) {
   if (typeof keep !== 'boolean')
     throw new Error('Invalid undo history setting.')
-  await serial(() => writeText(settingsPath(), JSON.stringify({ keep })))
-  keeping = Promise.resolve(keep)
-  if (!keep) await clearUndoHistory()
+  // A quit waits for the setting and for the clear turning it off asks for.
+  await tracked(
+    (async () => {
+      await serial(() => writeText(settingsPath(), JSON.stringify({ keep })))
+      keeping = Promise.resolve(keep)
+      if (!keep) await clearUndoHistory()
+    })(),
+  )
 }
 
-/** Removes every note's kept undo history. */
+/** Removes every note's kept undo history; a quit waits for it. */
 export function clearUndoHistory() {
-  return serial(async () => {
-    await rm(folder(), { recursive: true, force: true })
-    await rm(indexPath(), { force: true })
-    await removeIndexCopies()
-    sizes = new Map()
-    notes = new Map()
-  })
+  return tracked(
+    serial(async () => {
+      await rm(folder(), { recursive: true, force: true })
+      await rm(indexPath(), { force: true })
+      await removeIndexCopies()
+      sizes = new Map()
+      notes = new Map()
+    }),
+  )
 }
 
 const flushes = new Map<string, () => void>()

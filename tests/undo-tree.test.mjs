@@ -512,3 +512,22 @@ test('carets count toward the undo history a note keeps, also after reopening', 
   restore(reopened, stored(keptHistory(note.session)))
   assert.ok(reopened.session.historySize().bytes >= carets)
 })
+
+test('a reopened note counts its steps as the session that kept them did', () => {
+  const note = open('abc')
+  note.insert(0, 'x', 'typing')
+  // More carets join before the step's next edit, which merges into it.
+  note.session.select({
+    ranges: [1, 2, 3].map((at) => ({ anchor: at, head: at, association: 1 })),
+    mainIndex: 0,
+  })
+  note.insert(1, 'y', 'typing')
+  assert.equal(note.session.historySize().groups, 1)
+  note.save()
+  const reopened = open(note.text())
+  restore(reopened, stored(keptHistory(note.session)))
+  assert.equal(
+    reopened.session.historySize().bytes,
+    note.session.historySize().bytes,
+  )
+})

@@ -527,3 +527,42 @@ test('a quit waits 5 seconds at most for a move that never finishes', {
   await api.undoHistoryWritten()
   assert.equal(await exists(kept(root, '/notes/b.md')), true)
 })
+
+test('a quit waits for a clear, and for keeping turned off, asked for before it', async (t) => {
+  const root = await profile(t)
+  for (const action of ['clear', 'off']) {
+    const data = join(root, action)
+    await fs.mkdir(data)
+    // The clear (or the setting before it) is slow.
+    const slow = Promise.withResolvers()
+    const api = await main(data, {
+      ...fs,
+      rename: async (path, to, ...rest) => {
+        if (String(to).endsWith('undo-history-settings.json'))
+          await slow.promise
+        return fs.rename(path, to, ...rest)
+      },
+      rm: async (path, ...rest) => {
+        if (String(path).endsWith('undo-history')) await slow.promise
+        return fs.rm(path, ...rest)
+      },
+    })
+    const note = saved()
+    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    const asked =
+      action === 'clear'
+        ? api.clearUndoHistory()
+        : api.setKeepUndoHistory(false)
+    let quit = false
+    const quitting = api.undoHistoryWritten().then(() => {
+      quit = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(quit, false, action)
+    slow.resolve()
+    await quitting
+    // Nothing kept is left for the next launch to restore.
+    assert.equal(await exists(folder(data)), false, action)
+    await asked
+  }
+})

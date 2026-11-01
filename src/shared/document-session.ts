@@ -9,6 +9,7 @@ import { SourceMaintenance } from './source-maintenance.ts'
 import {
   composeSourceChanges,
   type DocumentKey,
+  editBytes,
   type RawEdit,
   type SourceOperation,
 } from './source-operations.ts'
@@ -18,7 +19,7 @@ import {
   sourceSelection,
 } from './source-selection.ts'
 
-type HistoryGroup = Readonly<{
+export type HistoryGroup = Readonly<{
   id: string
   origin: SourceOperation['origin']
   forward: readonly RawEdit[]
@@ -31,7 +32,15 @@ type HistoryGroup = Readonly<{
   beforeSelection: SourceSelection | null
   afterSelection: SourceSelection | null
   viewId: string
+  /** The state the step leads to; a renamed view's steps keep it. */
+  step: object
+  /** Steps are numbered in the order they were made. */
+  order: number
+  started: number
+  time: number
 }>
+/** A state as a snapshot held it: its step, how many steps were made by then, and the step's edit. */
+type StepAt = Readonly<{ step: object; order: number; after: object | null }>
 export type SessionState = Readonly<{
   document: DocumentKey
   contentVersion: number
@@ -42,6 +51,8 @@ export type SessionState = Readonly<{
 type SessionOptions = SourceBufferOptions & {
   historyBytes?: number
   historyGroups?: number
+  /** The clock history steps are timed with. */
+  now?: () => number
   /** Reject saturation before source/history/view commit; no accepted edit is dropped. */
   admit?: (operation: SourceOperation) => void
   /** Must synchronously enqueue recovery. It must not wait for acknowledgement. */
@@ -53,8 +64,17 @@ export type AcceptedSourceEdit = Readonly<{
   /** Finish after the accepted native editor transaction updates its view. */
   finish: () => void
 }>
-const editBytes = (changes: readonly RawEdit[]) =>
-  changes.reduce((sum, change) => sum + change.insert.length * 2 + 48, 0)
+/** A step's caret, or none where the text it returns to cannot hold it. */
+const restorable = (
+  snapshot: SourceSnapshot,
+  selection: SourceSelection | null,
+) => {
+  try {
+    return selection && sourceSelection(snapshot, selection)
+  } catch {
+    return null
+  }
+}
 
 /** Source authority and history live outside UI frameworks and editing widgets. */
 export class DocumentSession {
@@ -70,9 +90,25 @@ export class DocumentSession {
   readonly #identities = new WeakMap<SourceSnapshot, object>()
   #undo: HistoryGroup[] = []
   #redo: HistoryGroup[] = []
+  /** Redo stacks that edits replaced, by the state they leave from. */
+  readonly #branches = new Map<object, HistoryGroup[][]>()
+  /** The oldest state history reaches. */
+  #root: object = {}
+  readonly #opening = this.#root
+  readonly #openingLength: number
+  #restored = false
+  #order = 0
+  readonly #steps = new WeakMap<SourceSnapshot, StepAt>()
+  /** The state the last save wrote, with how many steps were made by then. */
+  #savedAt: StepAt | null = null
+  /** Edits no longer merge into the step leading to the state a save took. */
+  #sealed: object | null = null
+  /** When saves kept a state's text as a version, by its identity. */
+  readonly #versioned = new WeakMap<object, number>()
   #saved: SourceSnapshot
   #contentIdentity: object = {}
   #savedIdentity = this.#contentIdentity
+  readonly #openingIdentity = this.#contentIdentity
   #state: SessionState
   #dispatching = false
   #disposed = false
@@ -109,6 +145,9 @@ export class DocumentSession {
       throw new Error('Source operation is stale.')
     this.#saved = this.#store.snapshot()
     this.#identities.set(this.#saved, this.#contentIdentity)
+    this.#openingLength = initial.utf16Length
+    this.#savedAt = this.#at()
+    this.#steps.set(this.#saved, this.#savedAt)
     this.#state = Object.freeze({
       document: this.#saved.document,
       contentVersion: version,
@@ -144,6 +183,8 @@ export class DocumentSession {
     try {
       this.#store.commitCompaction(change)
       this.#identities.set(change.after, this.#contentIdentity)
+      const at = this.#steps.get(change.before)
+      if (at) this.#steps.set(change.after, at)
       if (this.#saved === change.before) this.#saved = change.after
       for (const listener of [...this.#storageListeners]) {
         try {
@@ -197,6 +238,8 @@ export class DocumentSession {
       })
     this.#undo = follow(this.#undo)
     this.#redo = follow(this.#redo)
+    for (const [from, chains] of this.#branches)
+      this.#branches.set(from, chains.map(follow))
     const kept: Map<string, unknown>[] = [
       this.#viewSelections,
       this.keptMargins,
@@ -235,21 +278,54 @@ export class DocumentSession {
     if (this.#disposed || this.#dispatching)
       throw new Error('Document session is disposed or busy.')
     this.#maintenance.cancel()
+    const at = this.#steps.get(this.snapshot())
     const current = this.#store.reidentify(document)
     this.#identities.set(current, this.#contentIdentity)
+    if (at) this.#steps.set(current, at)
     this.#publish()
   }
   counters(reset = false) {
     return this.#store.counters(reset)
   }
   historySize() {
-    return {
-      groups: this.#undo.length + this.#redo.length,
-      bytes: [...this.#undo, ...this.#redo].reduce(
-        (sum, group) => sum + group.bytes,
-        0,
-      ),
+    let groups = 0,
+      bytes = 0
+    for (const [group] of this.#kept()) {
+      groups++
+      bytes += group.bytes
     }
+    return { groups, bytes }
+  }
+  /** Every kept step with the state it leaves from: undo, redo, then branches. */
+  *#kept(): Generator<readonly [HistoryGroup, object]> {
+    let from = this.#root
+    for (const group of this.#undo) {
+      yield [group, from]
+      from = group.step
+    }
+    for (let index = this.#redo.length - 1; index >= 0; index--) {
+      yield [this.#redo[index]!, from]
+      from = this.#redo[index]!.step
+    }
+    for (const [start, chains] of this.#branches)
+      for (const chain of chains)
+        for (let index = chain.length - 1; index >= 0; index--)
+          yield [chain[index]!, chain[index + 1]?.step ?? start]
+  }
+  #at(): StepAt {
+    const group = this.#undo.at(-1)
+    return {
+      step: group?.step ?? this.#root,
+      order: this.#order,
+      after: group?.afterIdentity ?? null,
+    }
+  }
+  /** Whether a kept step still leads to the state a snapshot held. */
+  #holds({ step, after }: StepAt) {
+    if (step === this.#root) return true
+    for (const [group] of this.#kept())
+      if (group.step === step) return !after || group.afterIdentity === after
+    return false
   }
   /** Opaque content identity retained by undo/redo and storage compaction. */
   historyIdentity = () => this.#contentIdentity
@@ -325,18 +401,53 @@ export class DocumentSession {
     maximumBytes = this.#options.historyBytes ?? 8 * 1024 * 1024,
     maximumGroups = this.#options.historyGroups ?? 128,
   ) {
-    let bytes = this.historySize().bytes
+    let { bytes, groups } = this.historySize()
+    // Branches go first, oldest first: undo and redo never reach them. Each
+    // goes with the branches that leave from its steps.
+    if (
+      this.#branches.size &&
+      (bytes > maximumBytes || groups > maximumGroups)
+    ) {
+      const dropped = new Set<readonly HistoryGroup[]>()
+      for (const chain of [...this.#branches.values()]
+        .flat()
+        .sort((a, b) => a.at(-1)!.order - b.at(-1)!.order)) {
+        if (bytes <= maximumBytes && groups <= maximumGroups) break
+        for (const going = [chain]; going.length; ) {
+          const next = going.pop()!
+          if (dropped.has(next)) continue
+          dropped.add(next)
+          for (const group of next) {
+            bytes -= group.bytes
+            groups--
+            for (const nested of this.#branches.get(group.step) ?? [])
+              going.push(nested)
+          }
+        }
+      }
+      for (const [from, chains] of this.#branches) {
+        const kept = chains.filter((chain) => !dropped.has(chain))
+        if (kept.length) this.#branches.set(from, kept)
+        else this.#branches.delete(from)
+      }
+    }
+    // The oldest undo steps go next, then the farthest redo steps, each in one
+    // splice.
+    let undone = 0
     while (
-      this.#undo.length &&
+      undone < this.#undo.length &&
       (bytes > maximumBytes ||
-        this.#undo.length + this.#redo.length > maximumGroups)
+        this.#undo.length - undone + this.#redo.length > maximumGroups)
     )
-      bytes -= this.#undo.shift()!.bytes
+      bytes -= this.#undo[undone++]!.bytes
+    if (undone) this.#root = this.#undo.splice(0, undone).at(-1)!.step
+    let redone = 0
     while (
-      this.#redo.length &&
-      (bytes > maximumBytes || this.#redo.length > maximumGroups)
+      redone < this.#redo.length &&
+      (bytes > maximumBytes || this.#redo.length - redone > maximumGroups)
     )
-      bytes -= this.#redo.shift()!.bytes
+      bytes -= this.#redo[redone++]!.bytes
+    this.#redo.splice(0, redone)
   }
   #record(
     prepared: PreparedSourceOperation,
@@ -345,7 +456,8 @@ export class DocumentSession {
   ) {
     const previous = this.#undo.at(-1),
       operation = prepared.operation
-    const afterIdentity = {}
+    const afterIdentity = {},
+      time = this.#options.now?.() ?? Date.now()
     let forward = operation.changes,
       inverse = prepared.inverse
     const merge =
@@ -353,7 +465,13 @@ export class DocumentSession {
       previous.viewId === viewId &&
       previous.origin === operation.origin &&
       previous.operations < 256 &&
-      previous.bytes + editBytes(forward) + editBytes(inverse) < 128 * 1024
+      previous.bytes + editBytes(forward) + editBytes(inverse) < 128 * 1024 &&
+      // A merge changes the state its step leads to: never one a save took
+      // or other steps leave from. A composition stays one step, as undo
+      // takes it back, so a save during it keeps no history until the next.
+      (previous.step !== this.#sealed || operation.origin === 'composition') &&
+      !this.#redo.length &&
+      !this.#branches.has(previous.step)
     if (merge) {
       forward = composeSourceChanges(
         previous.forward,
@@ -372,9 +490,15 @@ export class DocumentSession {
         )
       ) {
         this.#contentIdentity = previous.beforeIdentity
-        this.#redo = []
         return
       }
+    } else if (this.#redo.length) {
+      // An edit after undo keeps the steps it replaces as a branch.
+      const from = previous?.step ?? this.#root
+      this.#branches.set(from, [
+        ...(this.#branches.get(from) ?? []),
+        this.#redo,
+      ])
     }
     this.#undo.push(
       Object.freeze({
@@ -392,6 +516,10 @@ export class DocumentSession {
         beforeSelection: merge ? previous.beforeSelection : beforeSelection,
         afterSelection: this.selection(viewId),
         viewId,
+        step: merge ? previous.step : {},
+        order: merge ? previous.order : ++this.#order,
+        started: merge ? previous.started : time,
+        time,
       }),
     )
     this.#contentIdentity = afterIdentity
@@ -462,6 +590,7 @@ export class DocumentSession {
           )
       history(prepared, beforeSelection)
       this.#identities.set(prepared.after, this.#contentIdentity)
+      this.#steps.set(prepared.after, this.#at())
       const changed = this.#publish(false)
       // Source is already savable when enqueue/reconcile or an observer runs.
       // Failures preserve accepted source and are reported, never rolled back.
@@ -573,7 +702,7 @@ export class DocumentSession {
         this.#contentIdentity = group.beforeIdentity
       },
       reconcile,
-      () => group.beforeSelection,
+      (prepared) => restorable(prepared.after, group.beforeSelection),
       group.viewId,
     )
   }
@@ -588,38 +717,148 @@ export class DocumentSession {
         this.#contentIdentity = group.afterIdentity
       },
       reconcile,
-      () => group.afterSelection,
+      (prepared) => restorable(prepared.after, group.afterSelection),
       group.viewId,
     )
   }
-  markSaved(snapshot: SourceSnapshot) {
+  /** `versioned`: the save kept the text it replaced and the text it wrote as saved versions. */
+  markSaved(snapshot: SourceSnapshot, versioned = true) {
     const current = this.#store.ownsCurrentSnapshot(snapshot)
     const identity = current
       ? this.#contentIdentity
       : this.#identities.get(snapshot)
     if (!identity)
       throw new Error('Saved snapshot does not belong to this session.')
+    const time = this.#options.now?.() ?? Date.now()
+    if (versioned) {
+      // The replaced text was kept already if an earlier save wrote it.
+      if (!this.#versioned.has(this.#savedIdentity))
+        this.#versioned.set(this.#savedIdentity, time)
+      this.#versioned.set(identity, time)
+    }
     this.#saved = current ? this.snapshot() : snapshot
     this.#savedIdentity = identity
+    this.#savedAt = this.#steps.get(this.#saved) ?? null
+    this.#sealed = this.#savedAt?.step ?? this.#sealed
     this.#publish()
     this.#verifySaved()
+  }
+  /** A save takes the current state: later edits start a new step, so a step still leads to it. */
+  sealHistory() {
+    this.#sealed = this.#at().step
+  }
+  /**
+   * The steps made up to the last save, each with the state it leaves from,
+   * and the state that save wrote; null when no kept step leads there. Later
+   * edits, saved or discarded, are not in them.
+   */
+  historyToSave() {
+    const saved = this.#savedAt
+    if (this.#disposed || !saved || !this.#holds(saved)) return null
+    return {
+      root: this.#root,
+      saved: saved.step,
+      snapshot: this.#saved,
+      steps: [...this.#kept()].filter(([group]) => group.order <= saved.order),
+    }
+  }
+  /**
+   * Every kept step with the state it leaves from, the oldest state, the
+   * current one, and when saves kept texts as versions, by content identity.
+   */
+  historyTree() {
+    return {
+      root: this.#root,
+      current: this.#at().step,
+      steps: [...this.#kept()],
+      versioned: this.#versioned as Pick<WeakMap<object, number>, 'get'>,
+    }
+  }
+  /**
+   * Redo follows the branch whose first step is `step`, from the current
+   * state; the steps redo followed become a branch. Returns whether it could.
+   */
+  followBranch(step: object) {
+    if (this.#redo.at(-1)?.step === step) return true
+    const from = this.#at().step
+    const chains = this.#branches.get(from) ?? []
+    const chain = chains.find((kept) => kept.at(-1)?.step === step)
+    if (this.#disposed || this.#dispatching || !chain) return false
+    const rest = chains.filter((kept) => kept !== chain)
+    if (this.#redo.length) rest.push(this.#redo)
+    if (rest.length) this.#branches.set(from, rest)
+    else this.#branches.delete(from)
+    this.#redo = chain
+    this.#publish()
+    return true
+  }
+  /**
+   * Takes steps kept from an earlier session that end at this session's
+   * opening state, while no trimming has moved past it: `build` makes them
+   * lead to its step and identity. Their redo steps become a branch once this
+   * session has edited. Returns whether it took them.
+   */
+  restoreHistory(
+    units: number,
+    build: (opening: Readonly<{ step: object; identity: object }>) => Readonly<{
+      root: object
+      undo: readonly HistoryGroup[]
+      redo: readonly HistoryGroup[]
+      branches: readonly (readonly [object, HistoryGroup[]])[]
+    }>,
+  ) {
+    if (
+      this.#disposed ||
+      this.#dispatching ||
+      this.#restored ||
+      this.#root !== this.#opening ||
+      units !== this.#openingLength
+    )
+      return false
+    this.#restored = true
+    // Kept history ends at a save, so the opening text is a saved version.
+    if (!this.#versioned.has(this.#openingIdentity))
+      this.#versioned.set(
+        this.#openingIdentity,
+        this.#options.now?.() ?? Date.now(),
+      )
+    const editing = this.#undo.length > 0 || this.#redo.length > 0
+    const restored = build({
+      step: this.#opening,
+      identity: this.#openingIdentity,
+    })
+    const branches = [...restored.branches]
+    if (!editing) this.#redo = [...restored.redo]
+    else if (restored.redo.length)
+      branches.push([this.#opening, [...restored.redo]])
+    for (const [from, chain] of branches) {
+      const chains = this.#branches.get(from)
+      if (chains) chains.push(chain)
+      else this.#branches.set(from, [chain])
+    }
+    this.#undo = [...restored.undo, ...this.#undo]
+    this.#root = restored.root
+    this.#trim()
+    this.#publish()
+    return true
   }
   /** Explicit native save/bootstrap boundary, never called for ordinary input. */
   importSaved(source: string | SourceSnapshot) {
     const current = this.snapshot()
     if (typeof source !== 'string') {
       if (current.sharesRoot(source)) {
-        this.markSaved(current)
+        this.markSaved(current, false)
         return
       }
       this.#saved = source
       this.#savedIdentity = {}
+      this.#savedAt = null
       this.#publish()
       this.#verifySaved()
       return
     }
     if (current.materialize() === source) {
-      this.markSaved(current)
+      this.markSaved(current, false)
       return
     }
     this.#saved = new SourceStore(
@@ -629,6 +868,7 @@ export class DocumentSession {
       this.#options,
     ).snapshot()
     this.#savedIdentity = {}
+    this.#savedAt = null
     this.#publish()
     this.#verifySaved()
   }
@@ -692,5 +932,6 @@ export class DocumentSession {
     this.#storageListeners.clear()
     this.#undo = []
     this.#redo = []
+    this.#branches.clear()
   }
 }

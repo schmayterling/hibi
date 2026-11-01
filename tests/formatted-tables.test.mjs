@@ -930,6 +930,9 @@ test('the reading place deep inside a huge line holds through second changes, sh
             if (step.scroll) {
               // After the slice keeps the reader, before the next frame.
               for (let i = 0; i < 3; i++) await Promise.resolve()
+              pane.dispatchEvent(
+                new WheelEvent('wheel', { deltaY: step.scroll }),
+              )
               pane.scrollTop += step.scroll
             }
             if (step.frame) await frame()

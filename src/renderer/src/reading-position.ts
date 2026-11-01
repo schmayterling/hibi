@@ -206,12 +206,25 @@ function drawnTop(view: EditorView, pos: number) {
 
 /**
  * Reading positions the editor is asked to draw so they can be scrolled
- * back, by view, with the pane's scroll when it was asked.
+ * back, by view, with the pane's scroll and the time when it was asked.
  */
 const revealing = new WeakMap<
   EditorView,
-  { position: Reading; scroll: number }
+  { position: Reading; scroll: number; asked: number }
 >()
+
+/**
+ * When the reader last scrolled a pane, or might have: the editor's own
+ * scroll corrections move the pane too, so its scroll alone can't tell.
+ */
+const readerInput = new WeakMap<Element, number>()
+function watchReader(pane: Element) {
+  if (readerInput.has(pane)) return
+  readerInput.set(pane, -1)
+  const seen = () => readerInput.set(pane, performance.now())
+  for (const type of ['wheel', 'touchmove', 'pointerdown', 'keydown'])
+    pane.addEventListener(type, seen, { capture: true, passive: true })
+}
 
 /** A scroll command the reading position sends itself. */
 const revealed = Annotation.define<boolean>()
@@ -238,7 +251,12 @@ function asksScroll(transaction: Transaction) {
  */
 function reveal(view: EditorView, position: Reading) {
   if (revealing.get(view)?.position === position) return
-  const ask = { position, scroll: position.pane.scrollTop }
+  watchReader(position.pane)
+  const ask = {
+    position,
+    scroll: position.pane.scrollTop,
+    asked: performance.now(),
+  }
   revealing.set(view, ask)
   queueMicrotask(() => {
     if (revealing.get(view) !== ask) return
@@ -332,10 +350,13 @@ export const keepRead = [
     const ask = revealing.get(view)
     revealing.delete(view)
     if (ask && range.head === ask.position.pos) {
-      const { position, scroll } = ask
+      const { position, scroll, asked } = ask
       const now = drawnTop(view, position.pos)
       if (now === null) return false
-      const scrolled = position.pane.scrollTop - scroll
+      const scrolled =
+        (readerInput.get(position.pane) ?? -1) > asked
+          ? position.pane.scrollTop - scroll
+          : 0
       position.pane.scrollTop += now - (position.top - scrolled)
       const keep = kept.get(view)
       if (Math.abs(scrolled) > 1) kept.delete(view)

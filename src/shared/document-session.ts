@@ -596,7 +596,11 @@ export class DocumentSession {
           inverse,
           beforeLength: first.beforeLength,
           beforeIdentity: first.beforeIdentity,
-          bytes: editBytes(forward) + editBytes(inverse),
+          bytes:
+            editBytes(forward) +
+            editBytes(inverse) +
+            selectionBytes(first.beforeSelection) +
+            selectionBytes(second.afterSelection),
           operations: first.operations + second.operations,
           beforeSelection: first.beforeSelection,
           started: first.started,

@@ -129,8 +129,14 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // 332 (#790).
   // Registering the undo history flush at app boot, so pages without the
   // preload can load the document runtime, adds 17 (#793).
+  // Leaving Enter and Escape to an input method while it composes, in the
+  // explorer, the palette, find and dialogs, adds 150 (#804).
+  // Counting a step's carets in the undo history's size adds 92 (#795).
+  // Running a menu or shortcut command that arrives during a file operation
+  // once it finishes, instead of dropping it, a save among them first, adds
+  // 499 (#794).
   // Past the step limit, making old steps typed without a pause into one, so
-  // undo still reaches the oldest text, adds 899 (#803).
+  // undo still reaches the oldest text, adds 940 (#803).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -148,7 +154,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         877 +
         332 +
         17 +
-        899,
+        150 +
+        92 +
+        499 +
+        940,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

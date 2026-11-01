@@ -150,6 +150,21 @@ const BacklinksSidebar = lazy(() =>
     default: module.BacklinksSidebar,
   })),
 )
+// Commands a file operation would drop wait for it instead; true marks those
+// that act on the shown tab.
+const waitsForOperation: Partial<Record<AppCommand, boolean>> = {
+  'close-tab': true,
+  back: true,
+  forward: true,
+  'previous-tab': true,
+  'next-tab': true,
+  save: true,
+  saveAs: true,
+  new: false,
+  open: false,
+  'open-workspace': false,
+}
+
 type PaneSide = 'left' | 'right'
 type SplitTabs = {
   left: string
@@ -554,6 +569,26 @@ function App() {
   function endBusy() {
     busyRef.current = focusUnsafe.current
     setBusy(focusUnsafe.current)
+    // Paused editing drops them; otherwise they run once the caller's cleanup ends.
+    if (busyRef.current) waitingCommands.current.clear()
+    else if (waitingCommands.current.size) queueMicrotask(runWaitingCommand)
+  }
+  // Menu and shortcut commands that arrive during a file operation, the latest
+  // of each with the tab they came for; they run in order when it finishes.
+  const waitingCommands = useRef(new Map<AppCommand, string | undefined>())
+  function runWaitingCommand() {
+    for (const [command, tabId] of waitingCommands.current) {
+      if (busyRef.current) return
+      // A save that follows the one just ended goes before the rest.
+      if (pendingSave.current) {
+        void pendingSave.current.finally(runWaitingCommand)
+        return
+      }
+      waitingCommands.current.delete(command)
+      // A command for a tab runs only while that tab is still the one shown.
+      if (tabId === undefined || tabId === currentDocument.current?.tabId)
+        addonHost.app.runAction(command)
+    }
   }
   useEffect(() => {
     const side = focusSplitSide.current
@@ -2106,6 +2141,14 @@ function App() {
       return
     }
     setPaletteOpen(false)
+    const forTab = waitsForOperation[command]
+    if (busyRef.current && forTab !== undefined) {
+      waitingCommands.current.set(
+        command,
+        forTab ? currentDocument.current?.tabId : undefined,
+      )
+      return
+    }
     switch (command) {
       case 'close-tab':
         if (activeAddonTab) activeAddonTab.handle.close()

@@ -1,4 +1,4 @@
-import { Facet } from '@codemirror/state'
+import { Annotation, Facet, type Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
 
@@ -213,6 +213,23 @@ const revealing = new WeakMap<
   { position: Reading; scroll: number }
 >()
 
+/** A scroll command the reading position sends itself. */
+const revealed = Annotation.define<boolean>()
+// ponytail: CodeMirror exports no type for its scroll command's effect; its
+// value's class names it. A public effect type would replace this.
+const scrollTarget = (EditorView.scrollIntoView(0).value as object).constructor
+
+/** Whether a transaction asks the view to scroll, other than to a reading position. */
+function asksScroll(transaction: Transaction) {
+  return (
+    !transaction.annotation(revealed) &&
+    (transaction.scrollIntoView ||
+      transaction.effects.some(
+        (effect) => effect.value instanceof scrollTarget,
+      ))
+  )
+}
+
 /**
  * Has the editor draw the reading position, then lines it up where it was
  * (scrollHandler). Inside the part of a long line the editor leaves undrawn,
@@ -236,6 +253,7 @@ function reveal(view: EditorView, position: Reading) {
     const yMargin = position.top - position.pane.getBoundingClientRect().top
     view.dispatch({
       effects: EditorView.scrollIntoView(position.pos, { y: 'start', yMargin }),
+      annotations: revealed.of(true),
     })
   })
 }
@@ -279,6 +297,15 @@ const kept = new WeakMap<
 >()
 export const keepRead = [
   EditorView.updateListener.of((update) => {
+    // A scroll command takes precedence from when it is sent: the view keeps
+    // only the last one, which a reading position's would replace.
+    if (update.transactions.some(asksScroll)) {
+      scrollRequests.set(
+        update.view,
+        (scrollRequests.get(update.view) ?? 0) + 1,
+      )
+      revealing.delete(update.view)
+    }
     const keep = kept.get(update.view)
     if (!keep) return
     if (

@@ -573,6 +573,11 @@ function App() {
   function runWaitingCommand() {
     for (const [command, tabId] of waitingCommands.current) {
       if (busyRef.current) return
+      // A save that follows the one just ended goes before the rest.
+      if (pendingSave.current) {
+        void pendingSave.current.finally(runWaitingCommand)
+        return
+      }
       waitingCommands.current.delete(command)
       // A command for a tab runs only while that tab is still the one shown.
       if (tabId === undefined || tabId === currentDocument.current?.tabId)

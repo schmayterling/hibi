@@ -103,6 +103,8 @@ export class DocumentSession {
   #savedAt: StepAt | null = null
   /** Edits no longer merge into the step leading to the state a save took. */
   #sealed: object | null = null
+  /** Every state a save took, landed or still writing: no step joins over one. */
+  readonly #taken = new WeakSet<object>()
   /** When saves kept a state's text as a version, by its identity. */
   readonly #versioned = new WeakMap<object, number>()
   #saved: SourceSnapshot
@@ -530,8 +532,8 @@ export class DocumentSession {
   /**
    * Past the step limit, the oldest two steps typed without a pause become
    * one, so undo still reaches the oldest text. States worth returning to
-   * stay apart: a pause, a branch, the saved text (the seal follows each
-   * save) or a version, the text before a large edit, and one state every
+   * stay apart: a pause, a branch, the text a save took (landed or still
+   * writing) or a version, the text before a large edit, and one state every
    * 3 minutes of steady typing.
    * Steps go only when no two steps can become one.
    */
@@ -550,8 +552,10 @@ export class DocumentSession {
       if (
         second.started - first.time >= 5000 ||
         second.time - first.started >= 3 * 60 * 1000 ||
+        // A step restores the caret of the view that made it.
+        first.viewId !== second.viewId ||
         this.#branches.has(first.step) ||
-        first.step === this.#sealed ||
+        this.#taken.has(first.step) ||
         this.#versioned.has(first.afterIdentity) ||
         large(first) ||
         large(second)
@@ -570,8 +574,14 @@ export class DocumentSession {
           second.beforeLength,
         ),
       )
-      // Edits that undo each other leave no step to keep.
-      if (!forward.length || !inverse.length) continue
+      // Edits that undo each other, or put back the text they took, leave no
+      // step to keep: each composed edit's insert would be the text it
+      // replaces, the one its inverse puts back, and the source takes no edit
+      // that changes nothing.
+      if (
+        forward.every((edit, index) => edit.insert === inverse[index]?.insert)
+      )
+        continue
       this.#undo.splice(
         index,
         2,
@@ -804,12 +814,14 @@ export class DocumentSession {
     this.#savedIdentity = identity
     this.#savedAt = this.#steps.get(this.#saved) ?? null
     this.#sealed = this.#savedAt?.step ?? this.#sealed
+    if (this.#sealed) this.#taken.add(this.#sealed)
     this.#publish()
     this.#verifySaved()
   }
   /** A save takes the current state: later edits start a new step, so a step still leads to it. */
   sealHistory() {
     this.#sealed = this.#at().step
+    this.#taken.add(this.#sealed)
   }
   /**
    * The steps made up to the last save, each with the state it leaves from,

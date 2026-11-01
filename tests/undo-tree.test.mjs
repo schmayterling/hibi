@@ -621,3 +621,161 @@ test('coarser steps keep an earlier save, a save in progress, and edits that und
   restore(reopened, stored(keptHistory(undone.session)))
   assert.equal(reopened.text(), 'y')
 })
+
+test('a letter deleted and typed again a moment later stays two steps, so undo still reaches the oldest text', () => {
+  // Pauses keep the older steps apart, so the backspace and the letter typed
+  // again are the oldest two that could become one: a step that changes
+  // nothing, which the source can't undo.
+  const note = open('', { historyGroups: 5 })
+  note.insert(0, 'a')
+  note.tick(10_000)
+  note.insert(1, 'b')
+  note.tick(10_000)
+  note.session.edit([{ from: 1, to: 2, insert: '' }], 'source', 'backspace')
+  note.tick(1000)
+  note.insert(1, 'b')
+  note.tick(10_000)
+  note.insert(2, 'c')
+  note.tick(1000)
+  note.insert(3, 'd')
+  assert.deepEqual(undoAll(note), ['ab', 'a', 'ab', 'a', ''])
+})
+
+test('steps made in two views stay apart, so undo gives each view back its own caret', () => {
+  const caret = (at) => ({
+    ranges: [{ anchor: at, head: at, association: 1 }],
+    mainIndex: 0,
+  })
+  const note = open('', { historyGroups: 4 })
+  note.insert(0, 'a')
+  note.tick(10_000)
+  note.session.select(caret(1))
+  note.insert(1, 'b')
+  note.tick(1000)
+  // A second pane on the same note types a moment later.
+  note.session.select(caret(0), undefined, 'other')
+  note.session.edit(
+    [{ from: 0, to: 0, insert: 'c' }],
+    'source',
+    'other-typing',
+    undefined,
+    undefined,
+    'other',
+  )
+  note.tick(10_000)
+  note.insert(3, 'd')
+  note.tick(1000)
+  note.insert(4, 'e')
+  while (note.text() !== 'cab') note.session.undo()
+  note.session.undo()
+  assert.equal(note.text(), 'ab')
+  assert.deepEqual(note.session.selection('other'), caret(0))
+  note.session.undo()
+  assert.equal(note.text(), 'a')
+  assert.deepEqual(note.session.selection(), caret(1))
+})
+
+test('undoing a coarser step puts the caret back where it was before its first part, and redoing it where its last left it', () => {
+  const caret = (at) => ({
+    ranges: [{ anchor: at, head: at, association: 1 }],
+    mainIndex: 0,
+  })
+  const note = open('ab', { historyGroups: 2 })
+  note.session.select(caret(1))
+  note.insert(1, 'x')
+  note.tick(1000)
+  note.session.select(caret(3))
+  note.insert(3, 'y')
+  note.tick(1000)
+  // Past the limit: x and y become one step.
+  note.insert(0, 'z')
+  note.session.undo()
+  note.session.undo()
+  assert.equal(note.text(), 'ab')
+  assert.deepEqual(note.session.selection(), caret(1))
+  note.session.redo()
+  assert.equal(note.text(), 'axby')
+  assert.deepEqual(note.session.selection(), caret(4))
+})
+
+test('a coarsened history counts the size the same history has once reopened', () => {
+  const note = open('', { historyGroups: 8 })
+  // With a caret, so each step has carets to count as well as edits.
+  note.session.select({
+    ranges: [{ anchor: 0, head: 0, association: 1 }],
+    mainIndex: 0,
+  })
+  for (let index = 0; index < 40; index++) {
+    note.insert(note.text().length, String(index % 10))
+    note.tick(1000)
+  }
+  note.save()
+  const reopened = open(note.text(), { historyGroups: 8 })
+  restore(reopened, stored(keptHistory(note.session)))
+  assert.deepEqual(reopened.session.historySize(), note.session.historySize())
+  // Every keystroke still counts as an edit of the step that holds it.
+  assert.equal(
+    note.session
+      .historyTree()
+      .steps.reduce((sum, [group]) => sum + group.operations, 0),
+    40,
+  )
+})
+
+test('coarser steps keep apart the text a save took when a later save begins before it lands', () => {
+  const note = open('', { historyGroups: 4 })
+  note.insert(0, 'a')
+  note.tick(10_000)
+  note.insert(1, 'b')
+  note.tick(10_000)
+  note.insert(2, 'c')
+  note.session.sealHistory()
+  const first = note.session.snapshot()
+  note.tick(1000)
+  note.insert(3, 'd')
+  // A second save begins before the first lands.
+  note.session.sealHistory()
+  const second = note.session.snapshot()
+  note.tick(1000)
+  note.insert(4, 'e')
+  note.session.markSaved(first)
+  assert.deepEqual(texts(keptHistory(note.session), 'abc'), ['ab', 'abc'])
+  note.tick(1000)
+  note.insert(5, 'f')
+  note.session.markSaved(second)
+  assert.notEqual(keptHistory(note.session), null)
+})
+
+test('coarser steps keep apart a text marked saved without a version when a later save does not land', () => {
+  const note = open('', { historyGroups: 4 })
+  note.insert(0, 'a')
+  note.tick(10_000)
+  note.insert(1, 'b')
+  note.tick(10_000)
+  note.insert(2, 'c')
+  // The file holds this text already: a save that kept no version.
+  note.session.importSaved(note.text())
+  note.tick(1000)
+  note.insert(3, 'd')
+  // A save begins and never lands.
+  note.session.sealHistory()
+  note.tick(1000)
+  note.insert(4, 'e')
+  assert.deepEqual(texts(keptHistory(note.session), 'abc'), ['ab', 'abc'])
+})
+
+test('coarser steps keep the text a reopened note opened with apart from new typing', () => {
+  const note = open('', { historyGroups: 3 })
+  note.insert(0, 'a')
+  note.tick(10_000)
+  note.insert(1, 'b')
+  note.save()
+  // The reopened note's clock reads as the first's did, so no pause shows
+  // between the kept steps and new typing.
+  const reopened = open(note.text(), { historyGroups: 3 })
+  restore(reopened, stored(keptHistory(note.session)))
+  reopened.insert(2, 'c')
+  reopened.tick(1000)
+  reopened.insert(3, 'd')
+  assert.deepEqual(undoAll(reopened), ['ab', 'a', ''])
+})

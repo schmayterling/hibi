@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  changeLines,
   goToStep,
   historyChanges,
   historyOf,
@@ -500,4 +501,37 @@ test('an autosaved version holding a point stays listed when the next save follo
   // A few words typed on merge into the next save.
   const typed = run((writer) => writer.type('more. '))
   assert.deepEqual(typed.shown, ['2', 'opened'])
+})
+
+test('a preview shows at most 300 characters of the text around a change', () => {
+  // A change beside a 3 MB line, as a pasted image or minified data.
+  const long = 'x'.repeat(3_000_000)
+  const text = `# title\n\n${long} end\nlast line`
+  const at = text.indexOf(' end')
+  const [change] = changeLines(text, [{ from: at, to: at, insert: '!' }])
+  assert.ok(change.before.length <= 301, `before: ${change.before.length}`)
+  assert.ok(change.before.startsWith('…'))
+  assert.equal(change.after, ' end\nlast line')
+  // The same after a change just before such a line.
+  const [first] = changeLines(text, [{ from: 9, to: 9, insert: '!' }])
+  assert.ok(first.after.length <= 301, `after: ${first.after.length}`)
+  assert.ok(first.after.endsWith('…'))
+  // Text that fits is shown whole, without a mark.
+  const [short] = changeLines('one\ntwo\nthree', [
+    { from: 4, to: 7, insert: 'TWO' },
+  ])
+  assert.deepEqual(short, {
+    before: 'one\n',
+    removed: 'two',
+    added: 'TWO',
+    after: '\nthree',
+  })
+})
+
+test('a span replaced with the same text is not a change to preview', () => {
+  // Two branches that made the same edit compose to such a replace.
+  assert.deepEqual(
+    changeLines('one two', [{ from: 4, to: 7, insert: 'two' }]),
+    [],
+  )
 })

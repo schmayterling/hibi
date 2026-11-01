@@ -881,6 +881,19 @@ test('the reading place deep inside a huge line holds through second changes, sh
       paragraph,
       [{ grow: 5000, scroll: 300 }],
     ],
+    // Any of the reader's input counts as scrolling, not only the wheel.
+    ...['keydown', 'pointerdown', 'touchmove'].map((input) => [
+      `a scroll after ${input} before the view draws again`,
+      line,
+      [{ grow: 5000, scroll: 300, input }],
+    ]),
+    // Without the reader's input, as a script's, the scroll in that frame
+    // doesn't count: the place holds.
+    [
+      'a scroll without input before the view draws again',
+      line,
+      [{ grow: 5000, scroll: 300, input: null }],
+    ],
     ['a large change', line, [{ grow: 150000 }]],
     ['a large change', paragraph, [{ grow: 150000 }]],
   ]
@@ -946,7 +959,7 @@ test('the reading place deep inside a huge line holds through second changes, sh
                 pane.getBoundingClientRect().top + step.scroll + 1,
               )
               mark = view.posAtDOM(caret.offsetNode, caret.offset)
-              expect = where(mark) - step.scroll
+              expect = where(mark) - (step.input === null ? 0 : step.scroll)
             }
             preview.growAt(
               step.below === undefined ? 0 : at + step.below,
@@ -955,9 +968,8 @@ test('the reading place deep inside a huge line holds through second changes, sh
             if (step.scroll) {
               // After the slice keeps the reader, before the next frame.
               for (let i = 0; i < 3; i++) await Promise.resolve()
-              pane.dispatchEvent(
-                new WheelEvent('wheel', { deltaY: step.scroll }),
-              )
+              if (step.input !== null)
+                pane.dispatchEvent(new Event(step.input ?? 'wheel'))
               pane.scrollTop += step.scroll
             }
             if (step.frame) await frame()

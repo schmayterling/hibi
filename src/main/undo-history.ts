@@ -62,10 +62,11 @@ const tracked = <T>(task: Promise<T>) => {
 }
 
 /** Kept files by name, measured once, then followed as they change. */
-let sizes: Map<string, { bytes: number; time: number }> | undefined
+type Kept = { bytes: number; time: number; digest?: string }
+let sizes: Map<string, Kept> | undefined
 async function measure() {
   if (sizes) return sizes
-  const measured = new Map<string, { bytes: number; time: number }>()
+  const measured = new Map<string, Kept>()
   for (const name of await readdir(folder()).catch(() => [])) {
     // A write a crash cut short leaves its temporary copy, with deleted text.
     // Nothing is writing while this runs in the queue.
@@ -136,9 +137,17 @@ export async function storeUndoHistory(
       return
     }
     const files = await measure()
-    await mkdir(folder(), { recursive: true, mode: 0o700 })
-    await writeText(join(folder(), name), text)
-    files.set(name, { bytes: Buffer.byteLength(text), time: Date.now() })
+    const digest = createHash('sha256').update(text).digest('base64')
+    // A save that changed no kept step leaves the file as it is.
+    if (files.get(name)?.digest !== digest) {
+      await mkdir(folder(), { recursive: true, mode: 0o700 })
+      await writeText(join(folder(), name), text)
+    }
+    files.set(name, {
+      bytes: Buffer.byteLength(text),
+      time: Date.now(),
+      digest,
+    })
     const known = await indexed()
     if (known.get(name) !== path) {
       known.set(name, path)
@@ -162,38 +171,40 @@ export async function storeUndoHistory(
  * A note's kept undo history if its file still holds the text it was kept
  * at. One changed outside Hibi, or unreadable, is removed without asking.
  */
-export async function readUndoHistory(
+export function readUndoHistory(
   path: string,
   saved: SourceSnapshot,
 ): Promise<UndoHistory | null> {
-  // A note moved just now has its history under its new name first.
-  await queue.catch(() => {})
-  if (!(await keepsUndoHistory())) return null
-  const name = fileName(path)
-  let text: string
-  try {
-    if ((await stat(join(folder(), name))).size > FILE_BYTES)
-      throw new RangeError()
-    text = await readFile(join(folder(), name), 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    text = ''
-  }
-  try {
-    const kept = JSON.parse(text) as Record<string, unknown>
-    const history = parseUndoHistory(kept.history)
-    if (
-      kept.format === 1 &&
-      history.units === saved.utf16Length &&
-      kept.bytes === saved.utf8Bytes &&
-      kept.hash === (await sourceHash(saved)).hash
-    )
-      return history
-  } catch {
-    // Unreadable history starts over.
-  }
-  await serial(() => remove(name))
-  return null
+  // In the queue: a note moved just now has its history under its new name
+  // first, and no store lands between finding a stale file and removing it.
+  return serial(async () => {
+    if (!(await keepsUndoHistory())) return null
+    const name = fileName(path)
+    let text: string
+    try {
+      if ((await stat(join(folder(), name))).size > FILE_BYTES)
+        throw new RangeError()
+      text = await readFile(join(folder(), name), 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      text = ''
+    }
+    try {
+      const kept = JSON.parse(text) as Record<string, unknown>
+      const history = parseUndoHistory(kept.history)
+      if (
+        kept.format === 1 &&
+        history.units === saved.utf16Length &&
+        kept.bytes === saved.utf8Bytes &&
+        kept.hash === (await sourceHash(saved)).hash
+      )
+        return history
+    } catch {
+      // Unreadable history starts over.
+    }
+    await remove(name)
+    return null
+  })
 }
 
 /**
@@ -252,20 +263,27 @@ export function removeUndoHistory(path: string) {
 export async function setKeepUndoHistory(keep: unknown) {
   if (typeof keep !== 'boolean')
     throw new Error('Invalid undo history setting.')
-  await serial(() => writeText(settingsPath(), JSON.stringify({ keep })))
-  keeping = Promise.resolve(keep)
-  if (!keep) await clearUndoHistory()
+  // A quit waits for the setting and for the clear turning it off asks for.
+  await tracked(
+    (async () => {
+      await serial(() => writeText(settingsPath(), JSON.stringify({ keep })))
+      keeping = Promise.resolve(keep)
+      if (!keep) await clearUndoHistory()
+    })(),
+  )
 }
 
-/** Removes every note's kept undo history. */
+/** Removes every note's kept undo history; a quit waits for it. */
 export function clearUndoHistory() {
-  return serial(async () => {
-    await rm(folder(), { recursive: true, force: true })
-    await rm(indexPath(), { force: true })
-    await removeIndexCopies()
-    sizes = new Map()
-    notes = new Map()
-  })
+  return tracked(
+    serial(async () => {
+      await rm(folder(), { recursive: true, force: true })
+      await rm(indexPath(), { force: true })
+      await removeIndexCopies()
+      sizes = new Map()
+      notes = new Map()
+    }),
+  )
 }
 
 const flushes = new Map<string, () => void>()
@@ -274,8 +292,9 @@ export function acceptUndoHistoryFlushed(token: unknown) {
 }
 /**
  * Asks the editor for the undo histories of saves it has not sent yet, as
- * a save prompt's, and waits until they are written. An editor that does not
- * answer in 5 seconds keeps them.
+ * a save prompt's, and waits until they are queued, so a closing tab doesn't
+ * wait on other notes' writes. An editor that does not answer in 5 seconds
+ * keeps them.
  */
 export async function flushUndoHistory(window: BrowserWindow) {
   if (window.isDestroyed()) return
@@ -290,5 +309,18 @@ export async function flushUndoHistory(window: BrowserWindow) {
     flushes.set(token, done)
     window.webContents.send(UNDO_HISTORY_CHANNELS.flush, token)
   })
-  await Promise.allSettled(writing)
+}
+/**
+ * Waits for queued writes, moves and removals, as a quit must, for 5 seconds
+ * at most: a disk that stops answering doesn't keep Hibi from quitting.
+ */
+export async function undoHistoryWritten() {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    Promise.allSettled(writing),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, 5000)
+    }),
+  ])
+  clearTimeout(timer)
 }

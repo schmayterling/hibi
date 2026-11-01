@@ -235,6 +235,7 @@ import {
   removeUndoHistory,
   setKeepUndoHistory,
   storeUndoHistory,
+  undoHistoryWritten,
 } from './undo-history'
 import {
   cancelUpdateInstall,
@@ -1187,6 +1188,7 @@ function createWindow(): void {
       if (await confirmDiscardAll(window)) {
         // Saves made in the prompts reach the notes' undo histories first.
         if (journalReady && !rendererGone) await flushUndoHistory(window)
+        await undoHistoryWritten()
         const installed = finishUpdateInstall()
         if (installed === false) {
           quitting = false

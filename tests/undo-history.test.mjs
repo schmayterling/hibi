@@ -81,6 +81,9 @@ async function note(t, text = 'original', folder = '') {
           page,
           async () => !(await window.hibi.getDocument()).dirty,
         )
+        // The window still finishes the save after the file is written, and
+        // drops a shortcut that comes meanwhile (cmd+w closing no tab).
+        await page.locator('.app[aria-busy="false"]').waitFor()
         assert.equal(await readFile(file, 'utf8'), text)
       },
       /** Waits until the kept steps reach the reopened note; whether redo has any. */
@@ -101,9 +104,10 @@ async function note(t, text = 'original', folder = '') {
         await page.keyboard.press(redoKey)
         await shows(text)
       },
-      async quit() {
+      /** Quits, by default as the Quit menu item does. */
+      async quit(how = ({ app }) => app.quit()) {
         const closed = app.waitForEvent('close')
-        await app.evaluate(({ app }) => app.quit())
+        await app.evaluate(how)
         await closed
         quit.add(app)
       },
@@ -333,4 +337,79 @@ test('a note Hibi moves to the trash takes its kept undo history, with the steps
     window.hibi.workspaceAction({ action: 'delete', path: 'note.md' }),
   )
   await kept(0)
+})
+
+test('closing a tab waits until its steps are sent, not until they are written', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch, profile } = await note(t)
+  const hibi = await launch()
+  const { app, page } = hibi
+  await hibi.open('original')
+  // The save's steps wait until its tab closes and asks for them.
+  await page.evaluate(() => {
+    const idle = window.requestIdleCallback
+    window.requestIdleCallback = (callback, options) =>
+      options?.timeout === 5000 ? 0 : idle(callback, options)
+  })
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  // Writes answer late, as one queued behind another note's long write does.
+  await app.evaluate(({ ipcMain }) => {
+    const store = ipcMain._invokeHandlers.get('undo-history:store')
+    globalThis.writes = Promise.withResolvers()
+    ipcMain._invokeHandlers.set('undo-history:store', async (...args) => {
+      const result = await store(...args)
+      await globalThis.writes.promise
+      return result
+    })
+  })
+  const closing = performance.now()
+  await pressShortcut(app, `${mod}+w`)
+  await hibi.shows('')
+  // An editor that doesn't answer holds a closing tab for 5 s.
+  const took = performance.now() - closing
+  assert.ok(took < 4000, `closing took ${Math.round(took)} ms`)
+  await app.evaluate(() => globalThis.writes.resolve())
+  // The steps were kept all the same.
+  assert.equal((await readdir(join(profile, 'undo-history'))).length, 1)
+})
+
+test('a quit after the editor stopped still waits for kept undo history writes', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch, profile, file } = await note(t)
+  // The dialog shown when the editor stops answers Quit.
+  const hibi = await launch(1)
+  const { app } = hibi
+  await hibi.open('original')
+  // Kept history writes wait until released, as on a slow disk.
+  await app.evaluate(() => {
+    const fs = process.getBuiltinModule('node:fs/promises')
+    const rename = fs.rename
+    const held = Promise.withResolvers()
+    globalThis.writes = { held: 0, release: held.resolve }
+    fs.rename = async (from, to) => {
+      if (/undo-history[\\/][0-9a-f]{64}\.json$/.test(to)) {
+        globalThis.writes.held++
+        await held.promise
+      }
+      return rename(from, to)
+    }
+    process.getBuiltinModule('node:module').syncBuiltinESMExports()
+  })
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await waitForAsync(app, () => globalThis.writes.held >= 1)
+  await hibi.quit(({ BrowserWindow }) => {
+    setTimeout(() => globalThis.writes.release(), 1000)
+    BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer()
+  })
+  const name = `${createHash('sha256')
+    .update(await realpath(file))
+    .digest('hex')}.json`
+  assert.match(
+    await readFile(join(profile, 'undo-history', name), 'utf8'),
+    /first draft/,
+  )
 })

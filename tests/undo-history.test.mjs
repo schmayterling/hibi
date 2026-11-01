@@ -315,3 +315,39 @@ test('a note Hibi moves to the trash takes its kept undo history, with the steps
   )
   await kept(0)
 })
+
+test('closing a tab waits until its steps are sent, not until they are written', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch, profile } = await note(t)
+  const hibi = await launch()
+  const { app, page } = hibi
+  await hibi.open('original')
+  // The save's steps wait until its tab closes and asks for them.
+  await page.evaluate(() => {
+    const idle = window.requestIdleCallback
+    window.requestIdleCallback = (callback, options) =>
+      options?.timeout === 5000 ? 0 : idle(callback, options)
+  })
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  // Writes answer late, as one queued behind another note's long write does.
+  await app.evaluate(({ ipcMain }) => {
+    const store = ipcMain._invokeHandlers.get('undo-history:store')
+    globalThis.writes = Promise.withResolvers()
+    ipcMain._invokeHandlers.set('undo-history:store', async (...args) => {
+      const result = await store(...args)
+      await globalThis.writes.promise
+      return result
+    })
+  })
+  const closing = performance.now()
+  await pressShortcut(app, `${mod}+w`)
+  await hibi.shows('')
+  // An editor that doesn't answer holds a closing tab for 5 s.
+  const took = performance.now() - closing
+  assert.ok(took < 4000, `closing took ${Math.round(took)} ms`)
+  await app.evaluate(() => globalThis.writes.resolve())
+  // The steps were kept all the same.
+  assert.equal((await readdir(join(profile, 'undo-history'))).length, 1)
+})

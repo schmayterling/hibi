@@ -140,7 +140,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Keeping the newest 32 undo steps as they were typed adds 20 (#807).
   // Letting tab clicks, tab closes, links, file opens, media and addon
   // commands wait for a file operation like keys do, and dropping what
-  // arrives behind a file dialog, adds 787 (#PR).
+  // arrives behind a file dialog, adds 787 (#808).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=

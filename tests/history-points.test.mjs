@@ -6,6 +6,7 @@ import {
   historyOf,
   historyPoints,
   historySummary,
+  shownVersions,
 } from '../src/renderer/src/history-points.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 
@@ -247,4 +248,162 @@ test('summaries count the words added and removed between two states', () => {
     removed: 3,
     line: 'keep',
   })
+})
+
+test('a saved state is listed once, as its saved version', () => {
+  const writer = note()
+  writer.type('first sentence of the note. ')
+  writer.wait(6 * second)
+  writer.type('ok')
+  // A save as autosave or the save shortcut makes it.
+  writer.session.sealHistory()
+  writer.session.markSaved(writer.session.snapshot())
+  writer.wait(second)
+  writer.type('more words after the save, typed at once. ')
+  writer.wait(10 * second)
+  writer.type('and the end of the note.')
+  const tree = historyOf(writer.session)
+  const listed = (versionsSince) =>
+    historyPoints(tree, writer.now(), versionsSince).map(({ step, reason }) => [
+      step,
+      reason,
+    ])
+  // With no version kept since the save, its states are points like any.
+  assert.deepEqual(listed(writer.now()), [
+    [2, 'paused'],
+    [0, 'paused'],
+    [-1, 'oldest'],
+  ])
+  // Its versions are listed: the state it wrote and the opening text it
+  // replaced are not points, and the pause two characters before the save
+  // merges into it.
+  assert.deepEqual(listed(start), [[2, 'paused']])
+})
+
+test('a reopened note lists the text it opened with once, as its saved version', async () => {
+  const { keptHistory, restoredHistory } = await import(
+    '../src/shared/undo-history.ts'
+  )
+  const first = note()
+  first.type('text saved before closing the note. ')
+  first.session.sealHistory()
+  first.session.markSaved(first.session.snapshot())
+  const kept = keptHistory(first.session)
+  const second = note(first.text())
+  second.wait(minute)
+  assert.equal(
+    second.session.restoreHistory(kept.units, restoredHistory(kept)),
+    true,
+  )
+  second.wait(minute)
+  second.type('typed after reopening, more than a few characters.')
+  assert.deepEqual(
+    historyPoints(historyOf(second.session), second.now(), start).map(
+      ({ step, reason }) => [step, reason],
+    ),
+    [[-1, 'oldest']],
+  )
+})
+
+test('an undone change of a few characters is not a point of its own', () => {
+  const writer = note()
+  writer.type('a sentence long enough to stand alone. ')
+  writer.wait(10 * second)
+  for (const word of ['teh', 'hte', 'eth']) {
+    writer.type(word)
+    writer.session.undo()
+  }
+  writer.type('the end of the note, typed after trying.')
+  assert.deepEqual(
+    points(writer).map(({ step, reason }) => [step, reason]),
+    [
+      [0, 'branched'],
+      [-1, 'oldest'],
+    ],
+  )
+})
+
+test('fast steady typing is not a large edit', () => {
+  const writer = note()
+  // One typing run, a key every 100 ms: the session starts a step every 256.
+  writer.type('x'.repeat(600))
+  assert.equal(historyOf(writer.session).steps.length, 3)
+  assert.deepEqual(
+    points(writer).map(({ reason }) => reason),
+    ['oldest'],
+  )
+})
+
+test('the text a note opened with is a saved version once a save keeps it', () => {
+  const writer = note(
+    'text on disk, changed outside hibi since its last version. ',
+  )
+  // As the runtime does when the note opens.
+  writer.session.importSaved(writer.text())
+  writer.wait(10 * second)
+  writer.type('typed after opening, more than a few characters. ')
+  const listed = (versionsSince) =>
+    historyPoints(historyOf(writer.session), writer.now(), versionsSince).map(
+      ({ step, reason }) => [step, reason],
+    )
+  // Versions from before are kept, but none has this text yet.
+  assert.deepEqual(listed(start - day), [[-1, 'oldest']])
+  writer.wait(10 * second)
+  const saving = writer.now()
+  writer.session.sealHistory()
+  writer.session.markSaved(writer.session.snapshot())
+  writer.wait(10 * second)
+  writer.type('and more typed after the save.')
+  // The save kept the text it replaced, the opening text, as a version too.
+  assert.deepEqual(listed(saving), [])
+  // The runtime passes the opened snapshot itself when it has one.
+  const other = note('text on disk, opened from a snapshot. ')
+  other.session.importSaved(other.session.snapshot())
+  other.wait(10 * second)
+  other.type('typed after opening, more than a few characters. ')
+  assert.deepEqual(
+    historyPoints(historyOf(other.session), other.now(), start - day).map(
+      ({ reason }) => reason,
+    ),
+    ['oldest'],
+  )
+})
+
+test('autosaved versions thin as points do, and every save asked for shows', () => {
+  const now = start + 30 * day
+  const at = (ago, automatic) => ({
+    id: `${ago}`,
+    savedAt: now - ago,
+    ...(automatic ? { automatic: true } : {}),
+  })
+  const versions = [
+    // Today: autosaves 2 s apart merge into the newest; a pause keeps one.
+    at(10 * second, true),
+    at(12 * second, true),
+    at(14 * second, true),
+    at(2 * minute, true),
+    // Three days ago, all in one clock hour: one autosave, and every save
+    // asked for.
+    at(3 * day + 5 * minute, true),
+    at(3 * day + 15 * minute, true),
+    at(3 * day + 25 * minute, false),
+    at(3 * day + 35 * minute, false),
+    // Ten days ago, on one day: one autosave.
+    at(10 * day + hour, true),
+    at(10 * day + 3 * hour, true),
+  ]
+  assert.deepEqual(
+    shownVersions(versions, now).map(({ id }) => Number(id)),
+    [
+      10 * second,
+      2 * minute,
+      3 * day + 5 * minute,
+      3 * day + 25 * minute,
+      3 * day + 35 * minute,
+      10 * day + hour,
+    ],
+  )
+  // Saves the user asked for never thin.
+  const asked = versions.map(({ id, savedAt }) => ({ id, savedAt }))
+  assert.equal(shownVersions(asked, now).length, versions.length)
 })

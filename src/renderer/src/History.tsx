@@ -14,12 +14,14 @@ import {
   historyOf,
   historyPoints,
   historySummary,
+  shownVersions,
 } from './history-points'
 import './version-history.css'
 
 /**
  * A saved version to restore; points and steps are taken in the dialog. One
- * too large to preview replaces the editor's text instead of editing it.
+ * too large to preview or to undo replaces the editor's text instead of
+ * editing it.
  */
 export type HistoryResult = { version: string; large: boolean }
 type Entry = { id: string; label: string; time: number } & (
@@ -128,7 +130,15 @@ export function History({
       for (const child of top) visit(child, child === top.at(-1) ? 2 : 3)
       return ordered
     }
-    const points = tree ? historyPoints(tree, Date.now()) : []
+    const now = Date.now()
+    // Saved states are listed once, as their saved versions.
+    const points = tree
+      ? historyPoints(
+          tree,
+          now,
+          versions.at(-1)?.savedAt ?? Number.POSITIVE_INFINITY,
+        )
+      : []
     const listed = new Set(points.map(({ step }) => step))
     // A point's summary covers the edits since the point before it.
     const previous = (step: number) => {
@@ -148,7 +158,7 @@ export function History({
           label: `${new Date(time).toLocaleString()} · ${reasons[reason]}${step === -1 ? '' : ` · ${summary(historySummary(tree!, previous(step), step))}`}`,
         }),
       ),
-      ...versions.map(
+      ...shownVersions(versions, now).map(
         (version): Entry => ({
           id: `version-${version.id}`,
           kind: 'version',
@@ -160,6 +170,20 @@ export function History({
     ].sort((a, b) => b.time - a.time)
   }, [mode, tree, versions])
   const entry = entries.find(({ id }) => id === selected) ?? null
+  // The selected entry stays in view as the keyboard moves it.
+  useEffect(() => {
+    if (selected)
+      document
+        .getElementById(`history-${selected}`)
+        ?.scrollIntoView({ block: 'nearest' })
+  }, [selected])
+  // A restore past a session's 8 MiB history cap would be trimmed as it is
+  // recorded, losing unsaved text: such a version replaces the text as before,
+  // after asking to save.
+  const replaces =
+    entry?.kind === 'version' &&
+    (entry.version.bytes > HISTORY_PREVIEW_BYTES ||
+      2 * (entry.version.bytes + text.length) + 96 > 8 * 1024 * 1024)
   useEffect(() => {
     setPreview(null)
     setError('')
@@ -203,10 +227,7 @@ export function History({
   function act() {
     if (!entry || !session || !tree || current) return
     if (entry.kind === 'version') {
-      close({
-        version: entry.version.id,
-        large: entry.version.bytes > HISTORY_PREVIEW_BYTES,
-      })
+      close({ version: entry.version.id, large: replaces })
       return
     }
     try {
@@ -386,6 +407,12 @@ export function History({
             )}
           </section>
         </div>
+      )}
+      {replaces && (
+        <p>
+          Restoring this version replaces the text and its undo history, so undo
+          cannot take it back.
+        </p>
       )}
       {error && <p role="alert">{error}</p>}
       <div className="dialog-actions">

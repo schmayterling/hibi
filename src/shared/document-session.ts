@@ -103,6 +103,8 @@ export class DocumentSession {
   #savedAt: StepAt | null = null
   /** Edits no longer merge into the step leading to the state a save took. */
   #sealed: object | null = null
+  /** When saves kept a state's text as a version, by its identity. */
+  readonly #versioned = new WeakMap<object, number>()
   #saved: SourceSnapshot
   #contentIdentity: object = {}
   #savedIdentity = this.#contentIdentity
@@ -719,13 +721,21 @@ export class DocumentSession {
       group.viewId,
     )
   }
-  markSaved(snapshot: SourceSnapshot) {
+  /** `versioned`: the save kept the text it replaced and the text it wrote as saved versions. */
+  markSaved(snapshot: SourceSnapshot, versioned = true) {
     const current = this.#store.ownsCurrentSnapshot(snapshot)
     const identity = current
       ? this.#contentIdentity
       : this.#identities.get(snapshot)
     if (!identity)
       throw new Error('Saved snapshot does not belong to this session.')
+    const time = this.#options.now?.() ?? Date.now()
+    if (versioned) {
+      // The replaced text was kept already if an earlier save wrote it.
+      if (!this.#versioned.has(this.#savedIdentity))
+        this.#versioned.set(this.#savedIdentity, time)
+      this.#versioned.set(identity, time)
+    }
     this.#saved = current ? this.snapshot() : snapshot
     this.#savedIdentity = identity
     this.#savedAt = this.#steps.get(this.#saved) ?? null
@@ -752,12 +762,16 @@ export class DocumentSession {
       steps: [...this.#kept()].filter(([group]) => group.order <= saved.order),
     }
   }
-  /** Every kept step with the state it leaves from, the oldest state and the current one. */
+  /**
+   * Every kept step with the state it leaves from, the oldest state, the
+   * current one, and when saves kept texts as versions, by content identity.
+   */
   historyTree() {
     return {
       root: this.#root,
       current: this.#at().step,
       steps: [...this.#kept()],
+      versioned: this.#versioned as Pick<WeakMap<object, number>, 'get'>,
     }
   }
   /**
@@ -802,6 +816,12 @@ export class DocumentSession {
     )
       return false
     this.#restored = true
+    // Kept history ends at a save, so the opening text is a saved version.
+    if (!this.#versioned.has(this.#openingIdentity))
+      this.#versioned.set(
+        this.#openingIdentity,
+        this.#options.now?.() ?? Date.now(),
+      )
     const editing = this.#undo.length > 0 || this.#redo.length > 0
     const restored = build({
       step: this.#opening,
@@ -827,7 +847,7 @@ export class DocumentSession {
     const current = this.snapshot()
     if (typeof source !== 'string') {
       if (current.sharesRoot(source)) {
-        this.markSaved(current)
+        this.markSaved(current, false)
         return
       }
       this.#saved = source
@@ -838,7 +858,7 @@ export class DocumentSession {
       return
     }
     if (current.materialize() === source) {
-      this.markSaved(current)
+      this.markSaved(current, false)
       return
     }
     this.#saved = new SourceStore(

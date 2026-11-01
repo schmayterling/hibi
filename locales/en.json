@@ -1571,6 +1571,7 @@
   "159713231bf6": "Restart and install",
   "e154258ffb08": "Restart development after adding an addon.",
   "a76e13b98392": "Restore",
+  "94edd7a89755": "Restoring this version replaces the text and its undo history, so undo cannot take it back.",
   "37da11d0e772": "Results in this language are shown first. Other supported languages follow when they have an entry.",
   "942087cc2d41": "Retry",
   "3823b2b1ccc2": "Retry document focus",

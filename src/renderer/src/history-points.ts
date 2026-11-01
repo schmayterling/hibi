@@ -14,6 +14,8 @@ export type HistoryTree = Readonly<{
   current: number
   /** By parent index + 1, oldest first. */
   children: readonly (readonly number[])[]
+  /** When saves kept a state's text as a saved version, by step. */
+  versioned: ReadonlyMap<number, number>
 }>
 export type HistoryPoint = Readonly<{
   step: number
@@ -42,7 +44,7 @@ const PAUSE = 5000,
 export function historyOf(
   session: Pick<DocumentSession, 'historyTree'>,
 ): HistoryTree {
-  const { root, current, steps } = session.historyTree()
+  const { root, current, steps, versioned } = session.historyTree()
   const sorted = [...steps].sort(([a], [b]) => a.order - b.order)
   const index = new Map(sorted.map(([group], at) => [group.step, at]))
   const at = (step: object) => (step === root ? -1 : index.get(step)!)
@@ -50,12 +52,24 @@ export function historyOf(
     { length: sorted.length + 1 },
     () => [] as number[],
   )
-  for (const [step, [, from]] of sorted.entries())
+  // A state's text is a saved version when a save kept its identity: a
+  // step's by the identity it leads to, the oldest state's by the one its
+  // first steps leave from.
+  const saved = new Map<number, number>()
+  const mark = (state: number, identity: object) => {
+    const time = versioned.get(identity)
+    if (time !== undefined) saved.set(state, time)
+  }
+  for (const [step, [group, from]] of sorted.entries()) {
     children[at(from) + 1]!.push(step)
+    mark(step, group.afterIdentity)
+    if (from === root) mark(-1, group.beforeIdentity)
+  }
   return {
     steps: sorted.map(([group, from]) => ({ group, parent: at(from) })),
     current: at(current),
     children,
+    versioned: saved,
   }
 }
 
@@ -71,10 +85,23 @@ const after = (group: HistoryGroup) =>
     group.beforeLength,
   )
 
-/** The points a note's history can go back to, newest first. */
-export function historyPoints(tree: HistoryTree, now: number): HistoryPoint[] {
+/**
+ * The points a note's history can go back to, newest first. States saved
+ * since `versionsSince`, the oldest saved version still kept, are listed as
+ * those versions: other points merge into them, and they are not listed.
+ */
+export function historyPoints(
+  tree: HistoryTree,
+  now: number,
+  versionsSince = Number.POSITIVE_INFINITY,
+): HistoryPoint[] {
   const { steps, children } = tree
   if (!steps.length) return []
+  const saved = new Set(
+    [...tree.versioned].flatMap(([step, time]) =>
+      time >= versionsSince ? [step] : [],
+    ),
+  )
   const kids = (step: number) => children[step + 1]!
   const time = (step: number) =>
     step === -1 ? steps[kids(-1)[0]!]!.group.started : steps[step]!.group.time
@@ -85,9 +112,14 @@ export function historyPoints(tree: HistoryTree, now: number): HistoryPoint[] {
     else if (next.length > 1) reasons.set(step, 'branched')
     else if (next[0]!.started - time(step) >= PAUSE) reasons.set(step, 'paused')
   }
-  // The state before a large edit, as a paste or a replace.
+  // The state before a large edit, as a paste or a replace: one edit, not
+  // a step of steady typing.
   for (const { group, parent } of steps)
-    if (changed(group) >= LARGE && !reasons.has(parent))
+    if (
+      group.operations === 1 &&
+      changed(group) >= LARGE &&
+      !reasons.has(parent)
+    )
       reasons.set(parent, 'before-large')
   // Steady typing gets a point every few minutes.
   const last = new Map<number, number>([[-1, time(-1)]])
@@ -100,7 +132,18 @@ export function historyPoints(tree: HistoryTree, now: number): HistoryPoint[] {
   // into it; a point with more than one after it stays.
   const kept = new Set<number>()
   for (let step = steps.length - 1; step >= -1; step--) {
-    if (!reasons.has(step)) continue
+    if (saved.has(step)) kept.add(step)
+    if (!reasons.has(step) || kept.has(step)) continue
+    // An undone tip a few characters from the point before it merges into it.
+    if (step !== tree.current && !kids(step).length) {
+      let units = 0
+      for (let from = step; ; from = steps[from]!.parent) {
+        units += changed(steps[from]!.group)
+        const parent = steps[from]!.parent
+        if (reasons.has(parent) || saved.has(parent)) break
+      }
+      if (units < TINY) continue
+    }
     const after: number[] = []
     let distance = 0
     const walk = (from: number, units: number) => {
@@ -116,7 +159,7 @@ export function historyPoints(tree: HistoryTree, now: number): HistoryPoint[] {
     if (after.length !== 1 || distance >= TINY) kept.add(step)
   }
   const points = [...kept]
-    .filter((step) => step !== tree.current)
+    .filter((step) => step !== tree.current && !saved.has(step))
     .map((step) => ({ step, time: time(step), reason: reasons.get(step)! }))
     .sort((a, b) => b.time - a.time || b.step - a.step)
   // Past a day, the newest point an hour; past a week, the newest a day.
@@ -134,6 +177,33 @@ export function historyPoints(tree: HistoryTree, now: number): HistoryPoint[] {
       return true
     })
     .slice(0, POINTS)
+}
+
+/**
+ * The saved versions the list shows, newest first. Every save the user asked
+ * for shows; autosaved versions thin as points do: one less than a pause
+ * before the next save merges into it, and past a day the newest an hour
+ * stays, past a week the newest a day. The files themselves stay.
+ */
+export function shownVersions<
+  Version extends Readonly<{ savedAt: number; automatic?: true }>,
+>(versions: readonly Version[], now: number): Version[] {
+  const sorted = [...versions].sort((a, b) => b.savedAt - a.savedAt)
+  const buckets = new Set<string>()
+  return sorted.filter((version, index) => {
+    if (!version.automatic) return true
+    const newer = sorted[index - 1]
+    if (newer && newer.savedAt - version.savedAt < PAUSE) return false
+    const age = now - version.savedAt
+    if (age <= DAY) return true
+    const bucket =
+      age > 7 * DAY
+        ? `d${Math.floor(version.savedAt / DAY)}`
+        : `h${Math.floor(version.savedAt / HOUR)}`
+    if (buckets.has(bucket)) return false
+    buckets.add(bucket)
+    return true
+  })
 }
 
 /** The steps to undo from `from` and redo to `to`, in the order to take them. */

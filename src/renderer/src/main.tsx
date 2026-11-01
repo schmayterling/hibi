@@ -151,8 +151,11 @@ const BacklinksSidebar = lazy(() =>
   })),
 )
 // Commands a file operation would drop wait for it instead; true marks those
-// that act on the shown tab.
-const waitsForOperation: Partial<Record<AppCommand, boolean>> = {
+// that act on the shown tab. Undo and redo act on the text as it is when they
+// run, so they drop.
+const waitsForOperation: Partial<
+  Record<AppCommand | DocumentCommand, boolean>
+> = {
   'close-tab': true,
   back: true,
   forward: true,
@@ -583,13 +586,14 @@ function App() {
   // as main drops its commands then.
   // Each runs with true, or drops with false.
   type Waiting = (go: boolean) => unknown
-  const waiting = useRef(new Map<string, [Waiting, string | undefined]>())
-  const waitingPresses = useRef(0)
+  const waiting = useRef(
+    new Map<string | symbol, [Waiting, string | undefined]>(),
+  )
   const fileDialogOpen = useRef(false)
   const runWhenIdle = useRef<() => void>(undefined)
   const shownTab = () =>
     addonViews.snapshot().activeTab ?? currentDocument.current?.tabId
-  function wait(key: string, run: Waiting, forTab = false): void {
+  function wait(key: string | symbol, run: Waiting, forTab = false): void {
     if (fileDialogOpen.current) {
       run(false)
       return
@@ -598,24 +602,28 @@ function App() {
     waiting.current.get(key)?.[0](false)
     waiting.current.set(key, [run, forTab ? shownTab() : undefined])
   }
-  function waitFor<T>(key: string, run: () => Promise<T>, dropped: T) {
+  function waitFor<T>(
+    key: string,
+    run: () => Promise<T>,
+    dropped: T,
+    forTab?: boolean,
+  ) {
     return new Promise<T>((resolve) =>
-      wait(key, (go) => resolve(go ? run() : dropped)),
+      wait(key, (go) => resolve(go ? run() : dropped), forTab),
     )
   }
   function runWaiting() {
     for (const [key, [run, tab]] of waiting.current) {
       if (busyRef.current) return
-      // A save that follows the one just ended goes before the rest.
-      if (pendingSave.current) {
-        void pendingSave.current.finally(runWaiting)
-        return
-      }
+      if (pendingSave.current) break
       waiting.current.delete(key)
       // One for a tab runs only while that tab is still the one shown.
       run(tab === undefined || tab === shownTab())
     }
-    if (!busyRef.current) runWhenIdle.current?.()
+    // A save that follows the one just ended goes before the rest, files
+    // opened from outside among them.
+    if (pendingSave.current) void pendingSave.current.finally(runWaiting)
+    else if (!busyRef.current) runWhenIdle.current?.()
   }
   useEffect(() => {
     const side = focusSplitSide.current
@@ -1439,7 +1447,8 @@ function App() {
       requested = true
       void drain()
     })
-    const unsubscribeDialogs = dialogService.subscribe(() => void drain())
+    // After a dialog closes, the action it was answered for starts first.
+    const unsubscribeDialogs = dialogService.subscribe(() => setTimeout(drain))
     runWhenIdle.current = () => void drain()
     void drain()
     return () => {
@@ -1547,8 +1556,12 @@ function App() {
         return pendingSave.current
       }
       if (dialogs.isOpen()) return Promise.resolve(false)
-      if (busyRef.current)
-        return waitFor(`run ${command}`, () => runCommand(command), false)
+      if (busyRef.current) {
+        const forTab = waitsForOperation[command]
+        return forTab === undefined
+          ? Promise.resolve(false)
+          : waitFor(`run ${command}`, () => runCommand(command), false, forTab)
+      }
       const operation = performCommand(command)
       if (command === 'save' || command === 'saveAs') {
         savingCommand.current = operation
@@ -2145,19 +2158,15 @@ function App() {
     return true
   }
 
+  const tabOpen = (id: string) =>
+    currentDocument.current?.tabs.some((tab) => tab.id === id)
   function selectTab(id: string): void {
     if (focusUnsafe.current) {
       if (id === currentDocument.current?.tabId) void retryDocumentFocus()
       return
     }
     if (busyRef.current) {
-      wait(
-        'select',
-        (go) =>
-          go &&
-          currentDocument.current?.tabs.some((tab) => tab.id === id) &&
-          selectTab(id),
-      )
+      wait('select', (go) => go && tabOpen(id) && selectTab(id))
       return
     }
     addonViews.selectDocument()
@@ -2181,8 +2190,7 @@ function App() {
       wait(`close ${ids}`, (go) => go && closeTabs(ids, preferred))
       return
     }
-    const open = currentDocument.current?.tabs.map((tab) => tab.id) ?? []
-    if (ids.concat(preferred ?? []).every((id) => open.includes(id)))
+    if (ids.concat(preferred ?? []).every(tabOpen))
       void applyDocumentOperation(
         () => window.hibi.closeDocumentTabs(ids, preferred),
         false,
@@ -2217,7 +2225,7 @@ function App() {
     if (busyRef.current && forTab !== undefined) {
       // Each new note or open waits; a tab's command waits once.
       wait(
-        forTab ? command : `${command} ${++waitingPresses.current}`,
+        forTab ? command : Symbol(),
         (go) => go && addonHost.app.runAction(command),
         forTab,
       )

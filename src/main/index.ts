@@ -231,9 +231,11 @@ import {
   flushUndoHistory,
   keepsUndoHistory,
   readUndoHistory,
+  relocateUndoHistory,
   removeUndoHistory,
   setKeepUndoHistory,
   storeUndoHistory,
+  undoHistoryWritten,
 } from './undo-history'
 import {
   cancelUpdateInstall,
@@ -1078,8 +1080,7 @@ function createWindow(): void {
       shortcut && actions.find(({ id }) => hotkeys[id] === shortcut)
     if (action) {
       event.preventDefault()
-      if (!input.isAutoRepeat)
-        window.webContents.send(HOTKEY_CHANNELS.command, action.id)
+      if (!input.isAutoRepeat) sendCommand(window, action.id)
       return
     }
     const addon = shortcut ? addonHotkeys.resolve(shortcut) : undefined
@@ -1186,6 +1187,7 @@ function createWindow(): void {
       if (await confirmDiscardAll(window)) {
         // Saves made in the prompts reach the notes' undo histories first.
         if (journalReady && !rendererGone) await flushUndoHistory(window)
+        await undoHistoryWritten()
         const installed = finishUpdateInstall()
         if (installed === false) {
           quitting = false
@@ -1293,9 +1295,16 @@ function createWindow(): void {
   })
 }
 
+// The renderer runs a command that arrives during a file operation once the
+// operation ends. One sent while its dialog or prompt is open would run after
+// that is answered, so it is dropped, as file operations are then.
+function sendCommand(window: BrowserWindow | null, action: AppCommand) {
+  if (!fileOperationHasDialog())
+    window?.webContents.send(HOTKEY_CHANNELS.command, action)
+}
+
 function installMenu(): void {
-  const command = (action: AppCommand) => () =>
-    mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
+  const command = (action: AppCommand) => () => sendCommand(mainWindow, action)
   // The app window runs undo and redo in its focused editor; its devtools and
   // other windows keep the browser's own.
   const history =
@@ -2535,15 +2544,26 @@ if (!app.requestSingleInstanceLock()) {
           destinationPath: unknown,
           expectedVersion: unknown,
         ) =>
-          mutateAddonFile(event, owner, (isCurrent) =>
-            renameWorkspaceFile(
+          mutateAddonFile(event, owner, async (isCurrent) => {
+            const root = workspaceRoot()
+            const result = await renameWorkspaceFile(
               target as WorkspaceTarget,
               sourcePath,
               destinationPath,
               expectedVersion,
               isCurrent,
-            ),
-          ),
+            )
+            // A note an addon moves keeps its undo history, as one Hibi
+            // moves does; a move that kept both names moved nothing.
+            if (root && result.ok && result.value.sourceRemoved)
+              void relocateUndoHistory(
+                join(root, result.value.path),
+                join(root, result.value.destinationPath),
+              ).catch((error: unknown) =>
+                console.error('Could not move undo history:', error),
+              )
+            return result
+          }),
       )
       handle(
         WORKSPACE_CHANNELS.trashFile,

@@ -4,10 +4,10 @@ import {
   type DocumentVersion,
   HISTORY_PREVIEW_BYTES,
 } from '../../shared/history'
-import type { RawEdit } from '../../shared/source-operations'
 import { Button } from '../../ui/Controls'
 import { documentRuntime } from './document-runtime'
 import {
+  changeLines,
   goToStep,
   type HistoryPoint,
   historyChanges,
@@ -49,25 +49,6 @@ const summary = ({
     : line
       ? `Changed “${line.slice(0, 60)}”`
       : 'Spacing or punctuation'
-
-// ponytail: a preview part shows its first 10,000 characters; a streamed
-// viewport would show all of a whole-note change.
-const shown = (part: string) =>
-  part.length > 10_000 ? `${part.slice(0, 10_000)}…` : part
-/** Each change with the line before it and after it. */
-function changeLines(text: string, changes: readonly RawEdit[]) {
-  const start = (at: number) => text.lastIndexOf('\n', at - 1) + 1
-  const end = (at: number) => {
-    const found = text.indexOf('\n', at)
-    return found < 0 ? text.length : found
-  }
-  return changes.map(({ from, to, insert }) => ({
-    before: text.slice(start(Math.max(0, start(from) - 1)), from),
-    removed: shown(text.slice(from, to)),
-    added: shown(insert),
-    after: text.slice(to, end(Math.min(text.length, end(to) + 1))),
-  }))
-}
 
 export function History({
   close,

@@ -492,3 +492,42 @@ test('restoring a large stored history takes time in proportion to its steps, wh
     assert.equal(reopened.session.historySize().groups, 128)
   }
 })
+
+test('carets count toward the undo history a note keeps, also after reopening', () => {
+  const note = open('a'.repeat(10_000))
+  note.session.select({
+    ranges: Array.from({ length: 10_000 }, (_, at) => ({
+      anchor: at,
+      head: at,
+      association: 1,
+    })),
+    mainIndex: 0,
+  })
+  note.insert(0, 'x')
+  // 10,000 carets before the step and after it, each counted as an edit's overhead.
+  const carets = 2 * 10_000 * 48
+  assert.ok(note.session.historySize().bytes >= carets)
+  note.save()
+  const reopened = open(note.text())
+  restore(reopened, stored(keptHistory(note.session)))
+  assert.ok(reopened.session.historySize().bytes >= carets)
+})
+
+test('a reopened note counts its steps as the session that kept them did', () => {
+  const note = open('abc')
+  note.insert(0, 'x', 'typing')
+  // More carets join before the step's next edit, which merges into it.
+  note.session.select({
+    ranges: [1, 2, 3].map((at) => ({ anchor: at, head: at, association: 1 })),
+    mainIndex: 0,
+  })
+  note.insert(1, 'y', 'typing')
+  assert.equal(note.session.historySize().groups, 1)
+  note.save()
+  const reopened = open(note.text())
+  restore(reopened, stored(keptHistory(note.session)))
+  assert.equal(
+    reopened.session.historySize().bytes,
+    note.session.historySize().bytes,
+  )
+})

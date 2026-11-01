@@ -73,6 +73,7 @@ function harness(t) {
     calls: [],
     trashed: [],
     removed: [],
+    relocated: [],
     documentPath: '/notes/first.md',
     document: { revision: 1 },
     sent: [],
@@ -114,6 +115,9 @@ function harness(t) {
     },
     realpath: async (file) => `/real/${file}`,
     removeUndoHistory: async (file) => state.removed.push(file),
+    workspaceRoot: () => '/notes',
+    join: (...parts) => parts.join('/'),
+    relocateUndoHistory: async (from, to) => state.relocated.push([from, to]),
   }
   for (const [name, [service]] of Object.entries(operations))
     bindings[service] = async (...args) => {
@@ -235,3 +239,20 @@ for (const name of mutations)
       h.state.pause.resolve()
       assert.deepEqual(await pending, unavailable)
     })
+
+test('renameFile moves the kept undo history of a note an addon moved', async (t) => {
+  const h = harness(t)
+  const moved = (sourceRemoved) => ({
+    ok: true,
+    value: { path: 'a.md', destinationPath: 'b/a.md', sourceRemoved },
+  })
+  h.state.result = moved(true)
+  assert.equal(await h.invoke('renameFile'), h.state.result)
+  assert.deepEqual(h.state.relocated, [['/notes/a.md', '/notes/b/a.md']])
+  // A move that kept both names, or that failed, moves nothing.
+  h.state.result = moved(false)
+  await h.invoke('renameFile')
+  h.state.result = { ok: false, code: 'conflict', message: 'Taken.' }
+  await h.invoke('renameFile')
+  assert.equal(h.state.relocated.length, 1)
+})

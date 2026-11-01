@@ -141,7 +141,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Letting tab clicks, tab closes, links, file opens, media and addon
   // commands wait for a file operation like keys do, and dropping what
   // arrives behind a file dialog, adds 785 (#808).
-  // Finding History by "version" in the palette adds 61 (#813).
+  // Finding History by "version" in the palette adds 61 (#814).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=

@@ -123,11 +123,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // save wrote, so a note's undo history outlives closing it, adds 2,933
   // (#782); storing and restoring that history loads later.
   // Autosave waiting until an input method commits what it composes adds
-  // 320 (#790).
+  // 332 (#790).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
-      677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109 + 2933 + 320,
+      677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109 + 2933 + 332,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

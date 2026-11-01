@@ -87,7 +87,10 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
         next.tabId,
         setTimeout(async () => {
           timers.delete(next.tabId)
-          if (composing?.isConnected) return
+          // A field removed from the page mid-composition never reports
+          // its end: a held attempt comes due again instead of ending.
+          if (composing?.isConnected) return schedule(next)
+          composing = null
           if (busyNow.current) {
             timers.set(
               next.tabId,

@@ -319,7 +319,13 @@ test('autosave waits while an input method composes, then saves the committed te
   )
   await shows('x')
   await saves('x')
-  // A composition whose field left the page holds autosave no longer.
+  // Committing the reading as it stands changes no text, and still saves.
+  await compose('に')
+  await shows('xに')
+  await cdp.send('Input.insertText', { text: 'に' })
+  await saves('xに')
+  // A composition whose field left the page holds autosave no longer: the
+  // attempt it held comes due again, with no later edit.
   await page.evaluate(() => {
     const field = document.createElement('textarea')
     field.id = 'composition-field'
@@ -327,12 +333,28 @@ test('autosave waits while an input method composes, then saves the committed te
     field.focus()
   })
   await compose('か')
+  const held = await page.evaluate(() => window.autosaveRuns.length)
+  await rich.evaluate((element) => {
+    const { view } = element.cmTile.root
+    view.dispatch({ changes: { from: view.state.doc.length, insert: 'y' } })
+  })
+  await shows('xにy')
+  await waitForAsync(page, (held) => window.autosaveRuns.length > held, held)
+  await page.evaluate(() => Promise.all(window.autosaveRuns))
+  assert.equal(await readFile(file, 'utf8'), 'xに')
   await page.evaluate(() =>
     document.getElementById('composition-field').remove(),
   )
+  await saves('xにy')
+  // Turned off, autosave keeps no composition listener that saves.
+  await page.locator('[data-status-id="autosave"]').click()
+  await page.getByRole('checkbox', { name: /^autosave$/i }).uncheck()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await rich.focus()
   await rich.press('End')
-  await page.keyboard.insertText('y')
-  await shows('xy')
-  await saves('xy')
+  await compose('か')
+  await cdp.send('Input.insertText', { text: '火' })
+  await shows('xにy火')
+  await page.waitForTimeout(1200)
+  assert.equal(await readFile(file, 'utf8'), 'xにy')
 })

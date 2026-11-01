@@ -324,6 +324,60 @@ test('branches go first, oldest first, when history is over its limits', () => {
   assert.deepEqual(texts(history, note.text()), ['a', 'ac', 'ad', 'ade'])
 })
 
+test('trimming takes a branch with the branches inside it, counts each step once, and roots history at the newest dropped state', () => {
+  // Branches from a: b, then c with d branching inside it; f is the newest edit.
+  const tree = () => {
+    const note = open('', { historyGroups: 100 })
+    note.insert(0, 'a')
+    note.insert(1, 'b')
+    note.session.undo()
+    note.insert(1, 'c')
+    note.insert(2, 'd')
+    note.session.undo()
+    note.insert(2, 'e')
+    note.session.undo()
+    note.session.undo()
+    note.insert(1, 'f')
+    assert.equal(note.session.historySize().groups, 6)
+    return note
+  }
+  // Going past three steps takes b, then c with e and the d inside it.
+  const nested = tree()
+  nested.session.limitHistory(Number.MAX_SAFE_INTEGER, 3)
+  assert.equal(nested.session.historySize().groups, 2)
+  nested.save()
+  assert.deepEqual(texts(keptHistory(nested.session), 'af'), ['a', 'af'])
+  // A byte limit of one step: d, already gone with c, is not counted twice.
+  const counted = tree()
+  const step = counted.session.historySize().bytes / 6
+  counted.session.limitHistory(step, 100)
+  assert.deepEqual(counted.session.historyDepth(), { undo: 1, redo: 0 })
+  // Dropping several old steps at once roots history at the last of them,
+  // so a save there still has its history.
+  const rooted = open('')
+  rooted.insert(0, 'a')
+  rooted.insert(1, 'b')
+  rooted.insert(2, 'c')
+  rooted.save()
+  rooted.insert(3, 'd')
+  rooted.session.limitHistory(Number.MAX_SAFE_INTEGER, 1)
+  const kept = keptHistory(rooted.session)
+  assert.notEqual(kept, null)
+  assert.equal(kept.saved, -1)
+  // A reopened note redoes the newest of the steps leaving its saved state.
+  const branched = open('')
+  branched.insert(0, 'a')
+  branched.insert(1, 'b')
+  branched.session.undo()
+  branched.insert(1, 'c')
+  branched.session.undo()
+  branched.save()
+  const reopened = open('a')
+  assert.equal(restore(reopened, stored(keptHistory(branched.session))), true)
+  reopened.session.redo()
+  assert.equal(reopened.text(), 'ac')
+})
+
 test('stored history is checked before it is used', () => {
   const note = open('base')
   note.insert(4, ' one')

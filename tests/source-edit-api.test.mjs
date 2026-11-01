@@ -182,11 +182,14 @@ test('a review addon applies source edits atomically, preserves undo, and reject
       () => '😀\r\nteh note\r\n',
     ),
   )
-  await page.waitForFunction(() =>
-    document
-      .querySelector('.source-pane .cm-content')
-      ?.textContent.includes('teh note'),
-  )
+  // The update remounts the source view, which shows the text before it takes
+  // input; until then edits are refused as busy.
+  await page.waitForFunction(() => {
+    const content = document.querySelector('.source-pane .cm-content')
+    return (
+      content?.isContentEditable && content.textContent.includes('teh note')
+    )
+  })
   const lineEndings = await page.evaluate(() => {
     const { context, sdk } = window.reviewFixture
     const view = sdk.codeMirror.view.EditorView.findFromDOM(

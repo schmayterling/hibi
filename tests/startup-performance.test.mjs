@@ -135,6 +135,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Running a menu or shortcut command that arrives during a file operation
   // once it finishes, instead of dropping it, a save among them first, adds
   // 499 (#794).
+  // Past the step limit, making old steps typed without a pause into one, so
+  // undo still reaches the oldest text, adds 940 (#803).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -154,7 +156,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         17 +
         150 +
         92 +
-        499,
+        499 +
+        940,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

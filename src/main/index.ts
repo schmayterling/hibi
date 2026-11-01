@@ -174,6 +174,7 @@ import { externalFileArguments } from './external-files'
 import {
   fileOperationDialogOpened,
   fileOperationHasDialog,
+  onFileOperationDialog,
   withinFileOperation,
 } from './file-operation-dialog'
 import { GlobalShortcuts } from './global-shortcuts'
@@ -1302,6 +1303,11 @@ function sendCommand(window: BrowserWindow | null, action: AppCommand) {
   if (!fileOperationHasDialog())
     window?.webContents.send(HOTKEY_CHANNELS.command, action)
 }
+// The renderer drops clicks and requests that arrive behind one too.
+onFileOperationDialog((open) => {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(DOCUMENT_CHANNELS.fileDialog, open)
+})
 
 function installMenu(): void {
   const command = (action: AppCommand) => () => sendCommand(mainWindow, action)

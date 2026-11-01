@@ -898,17 +898,17 @@ test('the reading place deep inside a huge line holds through second changes, sh
         const pane = document.querySelector('.rich-pane')
         const frame = () => new Promise(requestAnimationFrame)
         const at = doc.indexOf(target)
-        const where = () => {
-          const box = view.coordsAtPos(at, 1)
+        const where = (pos = at) => {
+          const box = view.coordsAtPos(pos, 1)
           return box
             ? Math.round(box.top - pane.getBoundingClientRect().top)
             : null
         }
-        const still = async () => {
+        const still = async (pos = at) => {
           let last
           for (let i = 0, same = 0; i < 300 && same < 6; i++) {
             await frame()
-            const now = where()
+            const now = where(pos)
             same = now === last ? same + 1 : 0
             last = now
           }
@@ -931,6 +931,23 @@ test('the reading place deep inside a huge line holds through second changes, sh
         for (const step of steps) {
           if (step.aim) tops.push(await aim())
           else {
+            // A scroll leaves the text above the screen, maybe undrawn: the
+            // text it brings to the pane's top, read before, is measured.
+            let mark = at
+            let expect = 0
+            if (step.scroll) {
+              const content = view.contentDOM.getBoundingClientRect()
+              const caret = document.caretPositionFromPoint(
+                content.left +
+                  Number.parseFloat(
+                    getComputedStyle(view.contentDOM).paddingLeft,
+                  ) +
+                  1,
+                pane.getBoundingClientRect().top + step.scroll + 1,
+              )
+              mark = view.posAtDOM(caret.offsetNode, caret.offset)
+              expect = where(mark) - step.scroll
+            }
             preview.growAt(
               step.below === undefined ? 0 : at + step.below,
               step.grow,
@@ -944,7 +961,7 @@ test('the reading place deep inside a huge line holds through second changes, sh
               pane.scrollTop += step.scroll
             }
             if (step.frame) await frame()
-            else tops.push((await still()) + (step.scroll ?? 0))
+            else tops.push((await still(mark)) - expect)
           }
         }
         return tops

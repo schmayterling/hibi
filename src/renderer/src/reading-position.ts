@@ -55,6 +55,23 @@ function readingPosition(view: EditorView): Reading | null {
   // A caret the view placed is not where the reader is.
   let at = view.state.facet(placedSelection) ? null : view.coordsAtPos(pos, 1)
   if (!at || at.top < top || at.top > bottom) {
+    // The place held last, while nothing but holding it scrolled the pane:
+    // read again, the text at the top of a line the editor lays out again
+    // can start a row earlier each time, and the place would creep a row
+    // per slice.
+    const held = anchors.get(view)
+    if (
+      held &&
+      held.position.doc === view.state.doc &&
+      held.position.pane === scroller &&
+      Math.abs(held.position.pane.scrollTop - held.scroll) <= 1
+    )
+      return {
+        ...held.position,
+        moved: false,
+        selection: view.state.selection,
+        scrollRequest: scrollRequests.get(view) ?? 0,
+      }
     const { documentTop } = view
     let block = view.lineBlockAtHeight(top - documentTop)
     // The text the page shows at the pane's top, inside a block that starts
@@ -303,6 +320,12 @@ function screenTop(view: EditorView, position: Reading) {
   return view.documentTop + view.lineBlockAt(position.pos).top + position.offset
 }
 
+/** The place each view held last, with the pane's scroll once it was held. */
+const anchors = new WeakMap<EditorView, { position: Reading; scroll: number }>()
+function hold(view: EditorView, position: Reading) {
+  anchors.set(view, { position, scroll: position.pane.scrollTop })
+}
+
 /** Scrolls the reading position back to where it was on screen. */
 function restore(view: EditorView, position: Reading) {
   // Text the editor doesn't draw now: a widget's position keeps its own
@@ -317,6 +340,7 @@ function restore(view: EditorView, position: Reading) {
   if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
   if (Math.abs(now - position.top) >= 0.5)
     position.pane.scrollTop += now - position.top
+  hold(view, position)
   return true
 }
 
@@ -377,6 +401,8 @@ export const keepRead = [
       const keep = kept.get(view)
       if (Math.abs(scrolled) > 1) kept.delete(view)
       else if (keep) keep.scroll = keep.pane.scrollTop
+      // Where the reader's scrolling put it.
+      hold(view, { ...position, top: position.top - scrolled })
       return true
     }
     scrollRequests.set(view, (scrollRequests.get(view) ?? 0) + 1)

@@ -103,9 +103,11 @@ export async function sourceHash(markdown: string | SourceSnapshot) {
   if (typeof markdown !== 'string') hashes.set(markdown, hashed)
   return hashed
 }
+/** `automatic`: autosave wrote the last of `markdowns`. */
 export async function recordVersions(
   path: string,
   markdowns: (string | SourceSnapshot)[],
+  automatic = false,
 ): Promise<void> {
   const current = await versions(path)
   const folder = directory(path)
@@ -127,6 +129,9 @@ export async function recordVersions(
         hash,
         savedAt: Date.now(),
         bytes,
+        ...(automatic && markdown === markdowns.at(-1)
+          ? { automatic: true as const }
+          : {}),
       })
     }
   } catch (error) {

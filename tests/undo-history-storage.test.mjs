@@ -496,3 +496,34 @@ test("a closing tab waits until its steps are queued, not for other notes' write
   await api.undoHistoryWritten()
   assert.equal(written, true)
 })
+
+test('a quit waits 5 seconds at most for a move that never finishes', {
+  timeout: 20000,
+}, async (t) => {
+  const root = await profile(t)
+  const stuck = Promise.withResolvers()
+  const api = await main(root, {
+    ...fs,
+    rename: async (path, ...rest) => {
+      if (/[0-9a-f]{64}\.json$/.test(path)) await stuck.promise
+      return fs.rename(path, ...rest)
+    },
+  })
+  const note = saved()
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  void api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let quit = false
+  const quitting = api.undoHistoryWritten().then(() => {
+    quit = true
+  })
+  t.mock.timers.tick(4999)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(quit, false)
+  t.mock.timers.tick(1)
+  await quitting
+  t.mock.timers.reset()
+  stuck.resolve()
+  await api.undoHistoryWritten()
+  assert.equal(await exists(kept(root, '/notes/b.md')), true)
+})

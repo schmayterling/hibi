@@ -303,5 +303,17 @@ export async function flushUndoHistory(window: BrowserWindow) {
     window.webContents.send(UNDO_HISTORY_CHANNELS.flush, token)
   })
 }
-/** Waits for queued writes, moves and removals, as a quit must. */
-export const undoHistoryWritten = () => Promise.allSettled(writing)
+/**
+ * Waits for queued writes, moves and removals, as a quit must, for 5 seconds
+ * at most: a disk that stops answering doesn't keep Hibi from quitting.
+ */
+export async function undoHistoryWritten() {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    Promise.allSettled(writing),
+    new Promise((resolve) => {
+      timer = setTimeout(resolve, 5000)
+    }),
+  ])
+  clearTimeout(timer)
+}

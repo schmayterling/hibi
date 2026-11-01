@@ -138,6 +138,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Past the step limit, making old steps typed without a pause into one, so
   // undo still reaches the oldest text, adds 940 (#803).
   // Keeping the newest 32 undo steps as they were typed adds 20 (#807).
+  // Finding History by "version" in the palette adds 61 (#812).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -159,7 +160,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         92 +
         499 +
         940 +
-        20,
+        20 +
+        61,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

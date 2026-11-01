@@ -10,6 +10,9 @@ import {
 } from '../src/renderer/src/history-points.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 
+// Older points thin by local clock hours and calendar days: the tests run in
+// UTC unless one picks a zone.
+process.env.TZ = 'UTC'
 const second = 1000,
   minute = 60 * second,
   hour = 60 * minute,
@@ -406,4 +409,95 @@ test('autosaved versions thin as points do, and every save asked for shows', () 
   // Saves the user asked for never thin.
   const asked = versions.map(({ id, savedAt }) => ({ id, savedAt }))
   assert.equal(shownVersions(asked, now).length, versions.length)
+})
+
+test('older points and autosaved versions thin by the local clock and calendar, across DST', () => {
+  // A zone, two local times, how long after the second the list shows, and
+  // how many of the two stay.
+  const cases = [
+    // One local day that is two UTC days, then two local days in one UTC day.
+    ['Asia/Shanghai', '2026-10-10T07:00', '2026-10-10T09:00', 11 * day, 1],
+    ['Asia/Shanghai', '2026-10-10T23:00', '2026-10-11T01:00', 11 * day, 2],
+    // Local hours half an hour from UTC ones, and one hour on two days.
+    ['Asia/Kolkata', '2026-10-28T10:10', '2026-10-28T10:40', 3 * day, 1],
+    ['Asia/Kolkata', '2026-10-28T10:40', '2026-10-28T11:10', 3 * day, 2],
+    ['Asia/Kolkata', '2026-10-27T10:10', '2026-10-28T10:10', 3 * day, 2],
+    // The day DST ends has 25 hours and the day it starts 23: each is one day.
+    ['America/New_York', '2026-11-01T00:30', '2026-11-01T23:30', 11 * day, 1],
+    ['America/New_York', '2027-03-14T00:30', '2027-03-14T23:30', 11 * day, 1],
+  ]
+  try {
+    for (const [zone, first, then, after, stay] of cases) {
+      process.env.TZ = zone
+      // Dates and times with no offset are local.
+      const now = Date.parse(then) + after
+      const versions = [first, then].map((at, id) => ({
+        id,
+        savedAt: Date.parse(at),
+        automatic: true,
+      }))
+      assert.equal(shownVersions(versions, now).length, stay, zone)
+      const writer = note()
+      for (const at of [first, then]) {
+        writer.wait(Date.parse(at) - writer.now())
+        writer.type('a sentence long enough to stand alone. ')
+      }
+      writer.wait(now - minute - writer.now())
+      writer.type('typed today, long enough to stand alone. ')
+      const found = historyPoints(historyOf(writer.session), now)
+      assert.equal(found.filter(({ step }) => step < 2).length, stay, zone)
+    }
+  } finally {
+    process.env.TZ = 'UTC'
+  }
+})
+
+test('an autosaved version holding a point stays listed when the next save follows within 5 seconds', () => {
+  const run = (change) => {
+    const writer = note('the opening text of the note, saved before. ')
+    // Newest first, as the History view gets them.
+    const versions = [{ id: 'opened', savedAt: start - hour }]
+    // Autosave saves 2 s after the last edit: main records the version, then
+    // the session marks the state saved.
+    const autosave = () => {
+      writer.wait(2 * second)
+      writer.session.sealHistory()
+      versions.unshift({
+        id: `${versions.length}`,
+        savedAt: writer.now(),
+        automatic: true,
+      })
+      writer.wait(5)
+      writer.session.markSaved(writer.session.snapshot())
+    }
+    writer.type('a sentence long enough to stand on its own. ')
+    autosave()
+    writer.wait(second)
+    change(writer)
+    autosave()
+    writer.wait(minute)
+    const tree = historyOf(writer.session)
+    return {
+      points: historyPoints(tree, writer.now(), versions.at(-1).savedAt).map(
+        ({ step }) => step,
+      ),
+      shown: shownVersions(versions, writer.now(), tree).map(({ id }) => id),
+    }
+  }
+  // A paste, or an undo and other words, a second after an autosave: the
+  // state before is not a point, as a version holds it, so that version stays.
+  assert.deepEqual(
+    run((writer) => writer.paste('pasted reference text, '.repeat(20))),
+    { points: [], shown: ['2', '1', 'opened'] },
+  )
+  assert.deepEqual(
+    run((writer) => {
+      writer.session.undo()
+      writer.type('other words. ')
+    }),
+    { points: [], shown: ['2', '1', 'opened'] },
+  )
+  // A few words typed on merge into the next save.
+  const typed = run((writer) => writer.type('more. '))
+  assert.deepEqual(typed.shown, ['2', 'opened'])
 })

@@ -3,7 +3,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -140,4 +145,109 @@ test('the history view restores a point as a step undo takes back, and goes to a
   await shows(texts.first)
   await page.keyboard.press(redoKey)
   await shows(texts.second)
+})
+
+test('the history view lists every save asked for and thins autosaves, keeping one that holds a point', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-autosave-'))
+  const file = join(profile, 'note.md')
+  await writeFile(file, texts.original)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const editor = page.getByRole('textbox', { name: /document editor/i })
+  const saved = (text) =>
+    waitForAsync(
+      page,
+      async (text) => {
+        const document = await window.hibi.getDocument()
+        return document.savedMarkdown === text && !document.dirty
+      },
+      text,
+    )
+  const newest = async () =>
+    (await page.evaluate(() => window.hibi.listVersions()))[0]
+  const flags = async () =>
+    (await page.evaluate(() => window.hibi.listVersions())).map(
+      ({ automatic }) => automatic ?? false,
+    )
+  await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    texts.original,
+  )
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[aria-label="Document editor"]')
+        ?.isContentEditable,
+  )
+  // A save asked for keeps the text it replaced and the text it wrote.
+  await replaceRichText(page, editor, texts.first)
+  await pressShortcut(app, `${mod}+s`)
+  await saved(texts.first)
+  assert.deepEqual(await flags(), [false, false])
+  await page.locator('[data-status-id="autosave"]').click()
+  await page.getByRole('checkbox', { name: /^autosave$/i, exact: true }).check()
+  await page.getByLabel(/^save after$/i, { exact: true }).selectOption('1000')
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await waitForDocumentEditor(app, page)
+  await replaceRichText(page, editor, texts.second)
+  await saved(texts.second)
+  assert.deepEqual(await flags(), [true, false, false])
+  // Replacing the text right after an autosave: the state before it is not a
+  // point while a version holds it, so that version stays listed.
+  const holding = await newest()
+  const replaced = `${texts.third} ${'and a long paragraph pasted after it. '.repeat(8)}`
+  await replaceRichText(page, editor, replaced)
+  await saved(replaced)
+  const replacing = await newest()
+  // A few words typed on: that autosave holds no point, so it merges into the
+  // next one when that comes less than 5 s later.
+  await editor.press('ControlOrMeta+End')
+  await page.keyboard.type(' more')
+  await saved(`${replaced} more`)
+  const merging = await newest()
+  await page.keyboard.type(' words')
+  await saved(`${replaced} more words`)
+  const after = await newest()
+  await clickMenu(app, 'Command palette')
+  await page.getByRole('combobox', { name: /search commands/i }).fill('history')
+  await page
+    .getByRole('option')
+    .filter({ hasText: /^history/i })
+    .first()
+    .click()
+  const history = page.getByRole('dialog', { name: /^history$/i })
+  await history.waitFor()
+  const points = history.getByRole('listbox', { name: /points to return to/i })
+  await points.getByRole('option').first().waitFor()
+  const listed = new Set(
+    await points
+      .getByRole('option')
+      .evaluateAll((options) => options.map((option) => option.id)),
+  )
+  const shows = (version) => listed.has(`history-version-${version.id}`)
+  assert.ok(shows(holding))
+  assert.equal(
+    shows(merging),
+    after.savedAt - merging.savedAt >= 5000,
+    'an autosave holding no point merges into one less than 5 s later',
+  )
+  assert.ok(shows(after))
+  assert.ok(replacing.savedAt > holding.savedAt)
 })

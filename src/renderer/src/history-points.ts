@@ -105,29 +105,7 @@ export function historyPoints(
   const kids = (step: number) => children[step + 1]!
   const time = (step: number) =>
     step === -1 ? steps[kids(-1)[0]!]!.group.started : steps[step]!.group.time
-  const reasons = new Map<number, HistoryPoint['reason']>([[-1, 'oldest']])
-  for (let step = 0; step < steps.length; step++) {
-    const next = kids(step).map((child) => steps[child]!.group)
-    if (!next.length) reasons.set(step, 'stopped')
-    else if (next.length > 1) reasons.set(step, 'branched')
-    else if (next[0]!.started - time(step) >= PAUSE) reasons.set(step, 'paused')
-  }
-  // The state before a large edit, as a paste or a replace: one edit, not
-  // a step of steady typing.
-  for (const { group, parent } of steps)
-    if (
-      group.operations === 1 &&
-      changed(group) >= LARGE &&
-      !reasons.has(parent)
-    )
-      reasons.set(parent, 'before-large')
-  // Steady typing gets a point every few minutes.
-  const last = new Map<number, number>([[-1, time(-1)]])
-  for (const [step, { parent }] of steps.entries()) {
-    if (!reasons.has(step) && time(step) - last.get(parent)! >= TYPING)
-      reasons.set(step, 'typing')
-    last.set(step, reasons.has(step) ? time(step) : last.get(parent)!)
-  }
+  const reasons = reasonsOf(tree)
   // From the newest, a point a few characters from the one after it merges
   // into it; a point with more than one after it stays.
   const kept = new Set<number>()
@@ -163,20 +141,59 @@ export function historyPoints(
     .map((step) => ({ step, time: time(step), reason: reasons.get(step)! }))
     .sort((a, b) => b.time - a.time || b.step - a.step)
   // Past a day, the newest point an hour; past a week, the newest a day.
+  const keep = thinning(now)
+  return points.filter(({ time }) => keep(time)).slice(0, POINTS)
+}
+
+/** Why each state of a tree with steps is a point, before points merge. */
+function reasonsOf({ steps, children }: HistoryTree) {
+  const kids = (step: number) => children[step + 1]!
+  const time = (step: number) =>
+    step === -1 ? steps[kids(-1)[0]!]!.group.started : steps[step]!.group.time
+  const reasons = new Map<number, HistoryPoint['reason']>([[-1, 'oldest']])
+  for (let step = 0; step < steps.length; step++) {
+    const next = kids(step).map((child) => steps[child]!.group)
+    if (!next.length) reasons.set(step, 'stopped')
+    else if (next.length > 1) reasons.set(step, 'branched')
+    else if (next[0]!.started - time(step) >= PAUSE) reasons.set(step, 'paused')
+  }
+  // The state before a large edit, as a paste or a replace: one edit, not
+  // a step of steady typing.
+  for (const { group, parent } of steps)
+    if (
+      group.operations === 1 &&
+      changed(group) >= LARGE &&
+      !reasons.has(parent)
+    )
+      reasons.set(parent, 'before-large')
+  // Steady typing gets a point every few minutes.
+  const last = new Map<number, number>([[-1, time(-1)]])
+  for (const [step, { parent }] of steps.entries()) {
+    if (!reasons.has(step) && time(step) - last.get(parent)! >= TYPING)
+      reasons.set(step, 'typing')
+    last.set(step, reasons.has(step) ? time(step) : last.get(parent)!)
+  }
+  return reasons
+}
+
+/**
+ * Past a day, the newest an hour; past a week, the newest a day, in the
+ * hours and days of the local clock and calendar. Ask newest first.
+ */
+function thinning(now: number) {
   const buckets = new Set<string>()
-  return points
-    .filter(({ time }) => {
-      const age = now - time
-      if (age <= DAY) return true
-      const bucket =
-        age > 7 * DAY
-          ? `d${Math.floor(time / DAY)}`
-          : `h${Math.floor(time / HOUR)}`
-      if (buckets.has(bucket)) return false
-      buckets.add(bucket)
-      return true
-    })
-    .slice(0, POINTS)
+  return (time: number) => {
+    const age = now - time
+    if (age <= DAY) return true
+    const date = new Date(time)
+    const bucket =
+      age > 7 * DAY
+        ? date.toDateString()
+        : `${date.toDateString()} ${date.getHours()}`
+    if (buckets.has(bucket)) return false
+    buckets.add(bucket)
+    return true
+  }
 }
 
 /**
@@ -187,22 +204,35 @@ export function historyPoints(
  */
 export function shownVersions<
   Version extends Readonly<{ savedAt: number; automatic?: true }>,
->(versions: readonly Version[], now: number): Version[] {
+>(
+  versions: readonly Version[],
+  now: number,
+  tree: HistoryTree | null = null,
+): Version[] {
   const sorted = [...versions].sort((a, b) => b.savedAt - a.savedAt)
-  const buckets = new Set<string>()
+  // A state saved as a version is not listed as a point (historyPoints), so
+  // a version holding a point of its own does not merge: the newest saved
+  // before the session marked the state, as main records it first. The
+  // oldest text kept a version of its own before this session's saves.
+  const reasons = tree?.steps.length ? reasonsOf(tree) : new Map()
+  const holding = new Set(
+    [...(tree?.versioned ?? [])].flatMap(([step, time]) =>
+      step >= 0 && reasons.has(step)
+        ? [sorted.find(({ savedAt }) => savedAt <= time)]
+        : [],
+    ),
+  )
+  const keep = thinning(now)
   return sorted.filter((version, index) => {
     if (!version.automatic) return true
     const newer = sorted[index - 1]
-    if (newer && newer.savedAt - version.savedAt < PAUSE) return false
-    const age = now - version.savedAt
-    if (age <= DAY) return true
-    const bucket =
-      age > 7 * DAY
-        ? `d${Math.floor(version.savedAt / DAY)}`
-        : `h${Math.floor(version.savedAt / HOUR)}`
-    if (buckets.has(bucket)) return false
-    buckets.add(bucket)
-    return true
+    if (
+      newer &&
+      newer.savedAt - version.savedAt < PAUSE &&
+      !holding.has(version)
+    )
+      return false
+    return keep(version.savedAt)
   })
 }
 

@@ -1099,12 +1099,16 @@ class TableView {
   coordsAt(pos: number) {
     if (!this.current) return this.near(pos)
     if (pos <= this.widget.from || pos >= this.widget.to) return null
+    // A row the window has not drawn in its place, as the edited row beside
+    // a window that scrolled away from it, is where its place would be.
+    const estimate = this.estimate(pos)
+    if (estimate) return estimate
     const editing = this.editing
     const span = editing && this.span(editing)
     if (editing && span && pos >= span.from && pos <= span.to)
       return editing.editor.view.coordsAtPos(pos - span.from)
     const point = this.point(pos)
-    if (!point) return this.estimate(pos)
+    if (!point) return null
     const range = this.dom.ownerDocument.createRange()
     range.setStart(point.node, point.offset)
     // An empty cell's paragraph has no text to measure.

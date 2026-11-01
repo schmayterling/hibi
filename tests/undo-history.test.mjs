@@ -81,6 +81,9 @@ async function note(t, text = 'original', folder = '') {
           page,
           async () => !(await window.hibi.getDocument()).dirty,
         )
+        // The window still finishes the save after the file is written, and
+        // drops a shortcut that comes meanwhile (cmd+w closing no tab).
+        await page.locator('.app[aria-busy="false"]').waitFor()
         assert.equal(await readFile(file, 'utf8'), text)
       },
       /** Waits until the kept steps reach the reopened note; whether redo has any. */

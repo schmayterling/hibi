@@ -75,6 +75,7 @@ import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
+import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
@@ -148,6 +149,7 @@ import {
   getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
+  getSavedDocument,
   hasOpenDocumentPath,
   hasUnsavedDocuments,
   loadDocument,
@@ -223,6 +225,15 @@ import {
   outdatedAddons,
 } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
+import {
+  acceptUndoHistoryFlushed,
+  clearUndoHistory,
+  flushUndoHistory,
+  keepsUndoHistory,
+  readUndoHistory,
+  setKeepUndoHistory,
+  storeUndoHistory,
+} from './undo-history'
 import {
   cancelUpdateInstall,
   checkForUpdates,
@@ -1172,6 +1183,8 @@ function createWindow(): void {
       )
         showMainWindow()
       if (await confirmDiscardAll(window)) {
+        // Saves made in the prompts reach the notes' undo histories first.
+        if (journalReady && !rendererGone) await flushUndoHistory(window)
         const installed = finishUpdateInstall()
         if (installed === false) {
           quitting = false
@@ -2290,6 +2303,43 @@ if (!app.requestSingleInstanceLock()) {
           return restoreDocument(window, content)
         }),
       )
+      // Not a file operation: tab closes wait on these.
+      handle(
+        UNDO_HISTORY_CHANNELS.store,
+        (event, tabId: unknown, history: unknown) => {
+          trustedWindow(event)
+          const document = getSavedDocument(tabId)
+          return document
+            ? storeUndoHistory(document.path, document.saved, history)
+            : undefined
+        },
+      )
+      handle(UNDO_HISTORY_CHANNELS.flushed, (event, token: unknown) => {
+        trustedWindow(event)
+        acceptUndoHistoryFlushed(token)
+      })
+      handle(
+        UNDO_HISTORY_CHANNELS.read,
+        (event, tabId: unknown, version: unknown) =>
+          readAfterFileOperation(event, async () => {
+            const document = getSavedDocument(tabId)
+            return document && document.saved.version === version
+              ? readUndoHistory(document.path, document.saved)
+              : null
+          }),
+      )
+      handle(UNDO_HISTORY_CHANNELS.keep, (event) => {
+        trustedWindow(event)
+        return keepsUndoHistory()
+      })
+      handle(UNDO_HISTORY_CHANNELS.setKeep, (event, keep: unknown) => {
+        trustedWindow(event)
+        return setKeepUndoHistory(keep)
+      })
+      handle(UNDO_HISTORY_CHANNELS.clear, (event) => {
+        trustedWindow(event)
+        return clearUndoHistory()
+      })
       handle(DOCUMENT_CHANNELS.pdfImage, (event, source, revision) => {
         trustedWindow(event)
         return readPdfImage(source, revision)

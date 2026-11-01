@@ -21,7 +21,7 @@ const base = {
   id: 'sample',
   name: 'Sample',
   description: 'Compiled manifest fixture',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   kind: 'extension',
   authors: [{ displayName: 'Test' }],
@@ -170,16 +170,13 @@ test('compiled source themes can register colors through their renderer entry', 
   )
 })
 
-test('api compatibility uses one format and caller-owned compiled trust', () => {
-  for (const apiVersion of [1, 2, 3]) {
-    const parsed = compiled({ apiVersion, native: { entry: 'native.ts' } })
-    assert.equal(parsed.manifest.apiVersion, 3)
-    assert.equal(parsed.manifest.defaultEnabled, false)
-    assert.deepEqual(
-      compiled({ apiVersion }).manifest,
-      parseAddonManifest({ ...base, apiVersion }).manifest,
-    )
-  }
+test('api 3 uses one format and caller-owned compiled trust', () => {
+  const parsed = compiled({ native: { entry: 'native.ts' } })
+  assert.equal(parsed.manifest.apiVersion, 3)
+  assert.equal(parsed.manifest.defaultEnabled, false)
+  assert.deepEqual(compiled().manifest, parseAddonManifest(base).manifest)
+  for (const apiVersion of [1, 2])
+    assert.throws(() => compiled({ apiVersion }), /an update to addon API 3/)
   assert.throws(() => compiled({ kind: undefined }), /kind/)
   assert.throws(() => compiled({ apiVersion: 4 }), /API version/)
 })

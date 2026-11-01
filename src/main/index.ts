@@ -75,7 +75,9 @@ import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
+import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
 import { UPDATE_CHANNELS } from '../shared/updates'
+import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { followAccessibilitySupport } from './accessibility-support'
@@ -147,6 +149,7 @@ import {
   getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
+  getSavedDocument,
   hasOpenDocumentPath,
   hasUnsavedDocuments,
   loadDocument,
@@ -192,6 +195,7 @@ import {
   openRemoteDocument,
 } from './links'
 import { LocalDiagnostics } from './local-diagnostics/runtime'
+import { manualFetch } from './manual-fetch'
 import {
   attachMedia,
   documentMedia,
@@ -206,6 +210,7 @@ import {
   observeKnownWorkspaces,
   setKnownWorkspace,
 } from './recent-workspaces'
+import { refreshRemoteImage, remoteImageResponse } from './remote-images'
 import {
   CONTENT_SECURITY_POLICY,
   isTrustedRendererUrl,
@@ -217,8 +222,18 @@ import {
   installedAddons,
   installedAsset,
   openAddonsFolder,
+  outdatedAddons,
 } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
+import {
+  acceptUndoHistoryFlushed,
+  clearUndoHistory,
+  flushUndoHistory,
+  keepsUndoHistory,
+  readUndoHistory,
+  setKeepUndoHistory,
+  storeUndoHistory,
+} from './undo-history'
 import {
   cancelUpdateInstall,
   checkForUpdates,
@@ -233,6 +248,12 @@ import {
   setUpdateStartupCheck,
   startUpdateChecks,
 } from './updates'
+import {
+  getHideWindowControls,
+  loadWindowControls,
+  saveHideWindowControls,
+  windowControlsHidden,
+} from './window-controls'
 import { createBrowserWindow } from './window-creation'
 import {
   cancelWorkspaceSelection,
@@ -543,6 +564,7 @@ let fileOperation: Promise<unknown> | null = null
 const pendingFileOperations = new Set<Promise<void>>()
 let closing = false
 let quitting = false
+let windowControlsRestartRequested = false
 let recordingHotkey = false
 const globalShortcuts = new GlobalShortcuts(globalShortcut)
 const addonHotkeys = new AddonHotkeys(
@@ -649,6 +671,9 @@ app.on('before-quit', () => {
   quitting = true
   // With no main window to confirm, kept-alive addon windows must not block quitting.
   if (!mainWindow) releaseAddonWindows()
+})
+app.once('quit', () => {
+  if (windowControlsRestartRequested) app.relaunch()
 })
 let devRestartRequested = false
 function cancelDevRestart() {
@@ -858,6 +883,13 @@ async function readAfterFileOperation<T>(
   return read(window)
 }
 
+/** Remote images of the note in `tab` are kept with its workspace, or else with the app. */
+const remoteImagePlace = (tab: unknown) => ({
+  note: typeof tab === 'string' ? getDocumentPathForTab(tab) : null,
+  workspace: workspaceRoot(),
+  data: app.getPath('userData'),
+})
+
 function serveAsset(request: Request): Promise<Response> {
   return localDiagnostics.observeAsset(request.url, () =>
     serveAssetResponse(request),
@@ -873,6 +905,17 @@ async function serveAssetResponse(request: Request): Promise<Response> {
       parsed.pathname.startsWith('/document-media/')
     )
       return await serveDocumentMedia(request)
+    if (parsed.hostname === 'remote-image')
+      // Only plain <img> loads: the app scheme doesn't check CORS, so a
+      // request that sends an Origin (crossorigin, fetch) would let page
+      // scripts read the image.
+      return request.headers.has('origin')
+        ? new Response(null, { status: 403 })
+        : await remoteImageResponse(
+            parsed.searchParams.get('src'),
+            remoteImagePlace(parsed.searchParams.get('tab')),
+            manualFetch,
+          )
     const isAddon = parsed.pathname.startsWith('/installed-addons/')
     const path = isAddon
       ? await installedAsset(request.url)
@@ -967,7 +1010,10 @@ function createWindow(): void {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     ...(process.platform === 'darwin'
       ? { trafficLightPosition: { x: 12, y: 11 } }
-      : { titleBarOverlay: titleBarColors(), autoHideMenuBar: true }),
+      : {
+          titleBarOverlay: windowControlsHidden() ? false : titleBarColors(),
+          autoHideMenuBar: true,
+        }),
     backgroundColor: appearanceColors().background,
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
@@ -1137,6 +1183,8 @@ function createWindow(): void {
       )
         showMainWindow()
       if (await confirmDiscardAll(window)) {
+        // Saves made in the prompts reach the notes' undo histories first.
+        if (journalReady && !rendererGone) await flushUndoHistory(window)
         const installed = finishUpdateInstall()
         if (installed === false) {
           quitting = false
@@ -1165,7 +1213,10 @@ function createWindow(): void {
       .finally(() => {
         confirmingClose = false
         if (!allowClose) closing = false
-        if (!quitting) cancelDevRestart()
+        if (!quitting) {
+          windowControlsRestartRequested = false
+          cancelDevRestart()
+        }
       })
   })
   window.once('ready-to-show', () => {
@@ -1480,7 +1531,10 @@ if (!app.requestSingleInstanceLock()) {
       ])
       // Handle rejection immediately while appearance and renderer loading overlap it.
       void preferences.catch(() => {})
-      await startupSpan('appearance', loadAppearance)
+      await Promise.all([
+        startupSpan('appearance', loadAppearance),
+        startupSpan('window-controls', loadWindowControls),
+      ])
       applyAppIcon()
       const handle = (
         channel: string,
@@ -1555,10 +1609,10 @@ if (!app.requestSingleInstanceLock()) {
         event.preventDefault(),
       )
 
-      // App pages are app://hibi, so every https image is cross-site. Image
-      // hosts get no cookies or cache validators to follow a reader with, so
-      // remote images download again instead of coming from the cache, and
-      // don't show offline.
+      // App pages are app://hibi, so every https image is cross-site. Notes'
+      // remote images come from Hibi's image cache; images loaded straight
+      // from a host give it no cookies or cache validators to follow a reader
+      // with.
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: ['https://*/*'] },
         ({ resourceType, requestHeaders }, callback) =>
@@ -1597,6 +1651,7 @@ if (!app.requestSingleInstanceLock()) {
         version: app.getVersion(),
         electron: process.versions.electron,
         platform: process.platform,
+        windowControlsHidden: windowControlsHidden(),
       })
       handle(
         BOOTSTRAP_CHANNELS.document,
@@ -1619,6 +1674,7 @@ if (!app.requestSingleInstanceLock()) {
         () => ({
           states: getAddonStates(),
           packages: installedAddons(),
+          outdated: outdatedAddons(),
           notices: getAddonStartupNotices(),
         }),
         addonsReady,
@@ -1699,10 +1755,24 @@ if (!app.requestSingleInstanceLock()) {
         const window = trustedWindow(event)
         const saved = saveAppearance(value)
         window.setBackgroundColor(appearanceColors().background)
-        if (process.platform !== 'darwin')
+        if (process.platform !== 'darwin' && !windowControlsHidden())
           window.setTitleBarOverlay(titleBarColors())
         refreshAddonWindowColors()
         await saved
+      })
+      handle(WINDOW_CONTROLS_CHANNELS.get, () => getHideWindowControls())
+      handle(WINDOW_CONTROLS_CHANNELS.set, (_event, value: unknown) =>
+        saveHideWindowControls(value),
+      )
+      handle(WINDOW_CONTROLS_CHANNELS.restart, () => {
+        if (
+          process.platform !== 'linux' ||
+          getHideWindowControls() === windowControlsHidden()
+        )
+          return
+        if (closing || quitting) throw fileOperationUnavailable()
+        windowControlsRestartRequested = true
+        app.quit()
       })
       handle(ABOUT_CHANNELS.licenses, (event) => {
         trustedWindow(event)
@@ -1892,6 +1962,10 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return installedAddons()
       })
+      handle(SIDELOAD_CHANNELS.outdated, (event) => {
+        trustedWindow(event)
+        return outdatedAddons()
+      })
       handle(SIDELOAD_CHANNELS.resources, (_event, id: unknown) =>
         installedAddonResources(id),
       )
@@ -2028,9 +2102,24 @@ if (!app.requestSingleInstanceLock()) {
       )
       // Addon windows reach only their owner's native handlers.
       ipcMain.handle(ADDON_WINDOW_CHANNELS.context, (event) => {
-        const { addonId, id, input, title, titleBar, platform } =
-          addonWindowSender(event)
-        return { addonId, id, input, title, titleBar, platform }
+        const {
+          addonId,
+          id,
+          input,
+          title,
+          titleBar,
+          platform,
+          windowControlsHidden,
+        } = addonWindowSender(event)
+        return {
+          addonId,
+          id,
+          input,
+          title,
+          titleBar,
+          platform,
+          windowControlsHidden,
+        }
       })
       ipcMain.handle(ADDON_WINDOW_CHANNELS.states, (event) => {
         addonWindowSender(event)
@@ -2214,6 +2303,43 @@ if (!app.requestSingleInstanceLock()) {
           return restoreDocument(window, content)
         }),
       )
+      // Not a file operation: tab closes wait on these.
+      handle(
+        UNDO_HISTORY_CHANNELS.store,
+        (event, tabId: unknown, history: unknown) => {
+          trustedWindow(event)
+          const document = getSavedDocument(tabId)
+          return document
+            ? storeUndoHistory(document.path, document.saved, history)
+            : undefined
+        },
+      )
+      handle(UNDO_HISTORY_CHANNELS.flushed, (event, token: unknown) => {
+        trustedWindow(event)
+        acceptUndoHistoryFlushed(token)
+      })
+      handle(
+        UNDO_HISTORY_CHANNELS.read,
+        (event, tabId: unknown, version: unknown) =>
+          readAfterFileOperation(event, async () => {
+            const document = getSavedDocument(tabId)
+            return document && document.saved.version === version
+              ? readUndoHistory(document.path, document.saved)
+              : null
+          }),
+      )
+      handle(UNDO_HISTORY_CHANNELS.keep, (event) => {
+        trustedWindow(event)
+        return keepsUndoHistory()
+      })
+      handle(UNDO_HISTORY_CHANNELS.setKeep, (event, keep: unknown) => {
+        trustedWindow(event)
+        return setKeepUndoHistory(keep)
+      })
+      handle(UNDO_HISTORY_CHANNELS.clear, (event) => {
+        trustedWindow(event)
+        return clearUndoHistory()
+      })
       handle(DOCUMENT_CHANNELS.pdfImage, (event, source, revision) => {
         trustedWindow(event)
         return readPdfImage(source, revision)
@@ -2295,6 +2421,13 @@ if (!app.requestSingleInstanceLock()) {
         if (typeof request === 'string' && request.length <= 128)
           documentMedia.cancel(request)
       })
+      handle(
+        MEDIA_CHANNELS.refreshRemote,
+        (event, source: unknown, tab: unknown) => {
+          trustedWindow(event)
+          return refreshRemoteImage(source, remoteImagePlace(tab), manualFetch)
+        },
+      )
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )
@@ -2759,7 +2892,7 @@ if (!app.requestSingleInstanceLock()) {
       nativeTheme.on('updated', () => {
         applyAppIcon()
         mainWindow?.setBackgroundColor(appearanceColors().background)
-        if (process.platform !== 'darwin')
+        if (process.platform !== 'darwin' && !windowControlsHidden())
           mainWindow?.setTitleBarOverlay(titleBarColors())
         refreshAddonWindowColors()
       })

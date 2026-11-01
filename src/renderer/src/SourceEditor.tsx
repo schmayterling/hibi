@@ -148,7 +148,7 @@ import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
-import { readDOMPosition } from './native-dom-selection'
+import { mappedPositionAt } from './native-dom-selection'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -426,22 +426,29 @@ const sameReferenceSyntax = (
   !!a.math === !!b.math &&
   a.frontmatter === b.frontmatter
 
-/** An editor feature. `fail` reports its failure and removes it from every editor; input waits for one without it. */
+/**
+ * An editor feature. `fail` reports its failure and removes it from every editor; input waits for one without it.
+ * `background` features come from addons that start after editing is ready, which are not input addons.
+ */
 type EditorFeature = (SourceExtension | FormattedExtension) & {
   fail?: (error: unknown) => void
+  background?: boolean
 }
 type InstalledFeature = { feature: EditorFeature; extension: Extension }
 
-/** Input does not wait for features this editor removed after they failed to leave. */
+/** Input does not wait for background features to arrive or leave, or for features this editor removed after they failed to leave. */
 const installedFor = (
   installed: readonly EditorFeature[],
   wanted: readonly EditorFeature[],
   failed: WeakSet<EditorFeature>,
 ) =>
   installed === wanted ||
-  (wanted.every((feature) => installed.includes(feature)) &&
+  (wanted.every(
+    (feature) => feature.background || installed.includes(feature),
+  ) &&
     installed.every(
-      (feature) => wanted.includes(feature) || failed.has(feature),
+      (feature) =>
+        feature.background || wanted.includes(feature) || failed.has(feature),
     ))
 
 const featureExtensions = (
@@ -2667,19 +2674,10 @@ export function SourceEditor({
             return
           detachInteractions = attachEditorInteractions({
             element: editor.contentDOM,
-            positionAt: (x, y) => {
+            positionAt: (x, y) =>
               // A table cell's text has its own positions.
-              const range = editor.contentDOM.ownerDocument.caretRangeFromPoint(
-                x,
-                y,
-              )
-              const cell =
-                range &&
-                readDOMPosition(editor, range.startContainer, range.startOffset)
-              return cell?.mapped
-                ? cell.at
-                : editor.posAtCoords({ x, y }, false)
-            },
+              mappedPositionAt(editor, x, y) ??
+              editor.posAtCoords({ x, y }, false),
             anchorAt: (position) => editor.coordsAtPos(position),
             selectionPosition: () => editor.state.selection.main.head,
             capture: captureInteraction,
@@ -2949,25 +2947,43 @@ export function SourceEditor({
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
-    void Promise.allSettled(
-      sourceExtensions.map(async (feature) => feature.create(context)),
-    ).then((results) => {
+    const created = sourceExtensions.map(async (feature) =>
+      feature.create(context),
+    )
+    // Each feature's outcome by index, absent while it is still being set up.
+    const results: PromiseSettledResult<Extension>[] = []
+    created.forEach((promise, index) => {
+      void promise.then(
+        (value) => {
+          results[index] = { status: 'fulfilled', value }
+        },
+        (reason) => {
+          results[index] = { status: 'rejected', reason }
+        },
+      )
+    })
+    const install = () => {
       if (canceled) return
       const errors: unknown[] = []
       let parts: InstalledFeature[] = []
-      results.forEach((result, index) => {
-        const feature = sourceExtensions[index]!
-        if (result.status === 'fulfilled')
+      sourceExtensions.forEach((feature, index) => {
+        const result = results[index]
+        // One still being set up keeps what it had installed until it is ready.
+        if (!result)
+          parts.push(
+            ...installed.current.filter((part) => part.feature === feature),
+          )
+        else if (result.status === 'fulfilled')
           parts.push({ feature, extension: result.value })
         else if (feature.fail) feature.fail(result.reason)
         else errors.push(result.reason)
       })
-      const install = () =>
+      const reconfigure = () =>
         reconfiguration(
           editor.state,
           addons.current.reconfigure(featureExtensions(parts, formatted)),
         )
-      let transaction = install()
+      let transaction = reconfigure()
       if (!transactionState(transaction)) {
         parts = isolateFeatures(
           editor.state,
@@ -2976,12 +2992,32 @@ export function SourceEditor({
           addons.current,
           formatted,
         )
-        transaction = install()
+        transaction = reconfigure()
       }
       installed.current = parts
       editor.dispatch(transaction)
       if (errors.length) setExtensionError(String(errors[0]))
       else setInstalledExtensions({ bridge, extensions: sourceExtensions })
+    }
+    // Background features set up at the same moment join in one install.
+    let joining = false
+    const join = () => {
+      if (joining) return
+      joining = true
+      queueMicrotask(() => {
+        joining = false
+        install()
+      })
+    }
+    // Input waits only for the features it needs. Background ones each join
+    // once they are set up, however long the others take.
+    void Promise.allSettled(
+      created.filter((_, index) => !sourceExtensions[index]?.background),
+    ).then(() => {
+      install()
+      created.forEach((promise, index) => {
+        if (!(index in results)) void promise.then(join, join)
+      })
     })
     return () => {
       canceled = true

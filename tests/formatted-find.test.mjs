@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { renderedReplaceEdits } from '../src/shared/rendered-replace.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -85,15 +88,11 @@ async function settleFindHighlights(rich) {
 }
 
 // The rich editor highlights matches overlapping the lines on screen and about
-// a screen of text, at least 2,000 characters, to each side.
-async function denseHighlights(page, rich, query = 'needle') {
-  await measureFindLayout(rich)
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  )
+// a screen of text, at least 2,000 characters, to each side. A layout change,
+// such as the pane widening after the view switch, measures a new window and
+// asks the worker again: read once every tracked request has its answer.
+async function denseHighlights(rich, query = 'needle') {
+  await settleFindHighlights(rich)
   return rich.evaluate((element, query) => {
     const view = element.cmTile.root.view
     const box = element.getBoundingClientRect()
@@ -339,7 +338,7 @@ async function openFind(
         return post.call(this, message, ...rest)
       }
     }, markdown.replace(/\r\n?/g, '\n').length)
-  const rich = await selectFormattedEngine(app, page, 'codemirror', {
+  const rich = await waitForFormattedEditor(app, page, {
     reload: instrument || renderedProbe,
   })
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
@@ -624,9 +623,10 @@ test('formatted dense find counts every match, bounds highlights, and preserves 
 }, async (t) => {
   const dense = 'needle word '.repeat(10000).trimEnd()
   const { app, page, rich, input, count } = await openFind(t, dense)
+  await trackFindRequests(page)
   await input.fill('NEEDLE')
   await count('1/10000')
-  const nearby = await denseHighlights(page, rich)
+  const nearby = await denseHighlights(rich)
   assert.ok(nearby.count > 1, JSON.stringify(nearby))
   assert.deepEqual(
     nearby.highlighted,
@@ -686,9 +686,10 @@ test('formatted find keeps highlights bounded when match count grows from ten th
 }, async (t) => {
   const dense = 'needle word '.repeat(10000).trimEnd()
   const { app, page, rich, source, input, count } = await openFind(t, dense)
+  await trackFindRequests(page)
   await input.fill('needle')
   await count('1/10000')
-  const nearby = await denseHighlights(page, rich)
+  const nearby = await denseHighlights(rich)
   assert.ok(nearby.count > 1, JSON.stringify(nearby))
   assert.deepEqual(
     nearby.highlighted,
@@ -698,7 +699,7 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   const scrolled = []
   for (const fraction of [0.2, 0.7]) {
     await scrollFormatted(rich, fraction)
-    scrolled.push(await denseHighlights(page, rich))
+    scrolled.push(await denseHighlights(rich))
   }
   await scrollFormatted(rich, 0)
   await input.press('Escape')
@@ -717,10 +718,10 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await pressShortcut(app, `${mod}+f`)
   await input.fill('needle')
   await count('1/100000')
-  const more = await denseHighlights(page, rich)
+  const more = await denseHighlights(rich)
   for (const fraction of [0.2, 0.7]) {
     await scrollFormatted(rich, fraction)
-    scrolled.push(await denseHighlights(page, rich))
+    scrolled.push(await denseHighlights(rich))
   }
   t.diagnostic(JSON.stringify({ nearby, more, scrolled }))
   assert.deepEqual(more.highlighted, more.expected)
@@ -747,7 +748,7 @@ test('formatted find keeps highlights bounded when match count grows from ten th
   await scrollFormatted(rich, 0)
   await input.fill('e')
   await count('1/300000')
-  const paged = await denseHighlights(page, rich, 'e')
+  const paged = await denseHighlights(rich, 'e')
   assert.ok(paged.count > 512, JSON.stringify(paged))
   assert.deepEqual(paged.highlighted, paged.expected)
   assert.equal(

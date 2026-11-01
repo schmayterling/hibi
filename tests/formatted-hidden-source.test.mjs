@@ -49,7 +49,6 @@ async function open(
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
   await page.evaluate((lineNumbers) => {
-    localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('line-numbers', String(lineNumbers))
   }, lineNumbers)
   await page.reload()

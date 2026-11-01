@@ -2,7 +2,7 @@
   "id": "import-bear",
   "name": "Import from Bear",
   "description": "Bring notes and images from a Bear export.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.0",
   "authors": [

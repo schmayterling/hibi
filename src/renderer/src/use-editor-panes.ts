@@ -54,8 +54,7 @@ export function useEditorPanes(
         '.settings-screen, [role="dialog"], input, textarea, select',
       ) &&
       (active === window.document.body ||
-        (content.current?.contains(active) &&
-          active?.matches('.tiptap, .cm-content')) ||
+        (content.current?.contains(active) && active?.matches('.cm-content')) ||
         (active !== null && active === focusOwner.current))
     )
   }, [])

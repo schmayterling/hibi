@@ -36,7 +36,7 @@ test('addon colorscheme subscriptions stop with their owner', async (t) => {
         name: id,
         description: 'Colorscheme lifecycle fixture',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         authors: [{ displayName: 'Test' }],
         entry: 'index.js',

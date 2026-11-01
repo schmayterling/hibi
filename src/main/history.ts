@@ -76,6 +76,33 @@ export async function* readVersionChunks(
 ): AsyncGenerator<string> {
   yield* readMarkdownChunks(await versionPath(path, id))
 }
+/** The SHA-256 of a source's saved bytes, hashed between other work and kept per snapshot. */
+export async function sourceHash(markdown: string | SourceSnapshot) {
+  const cached = typeof markdown === 'string' ? undefined : hashes.get(markdown)
+  if (cached) return cached
+  const digest = createHash('sha256')
+  let bytes = 0
+  if (typeof markdown === 'string') {
+    digest.update(markdown)
+    bytes = Buffer.byteLength(markdown)
+  } else {
+    let started = performance.now(),
+      scanned = 0
+    for (const chunk of markdown.encodedChunks()) {
+      digest.update(chunk)
+      bytes += chunk.byteLength
+      scanned += chunk.byteLength
+      if (scanned >= 65536 || performance.now() - started >= 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        scanned = 0
+        started = performance.now()
+      }
+    }
+  }
+  const hashed = { hash: digest.digest('hex'), bytes }
+  if (typeof markdown !== 'string') hashes.set(markdown, hashed)
+  return hashed
+}
 export async function recordVersions(
   path: string,
   markdowns: (string | SourceSnapshot)[],
@@ -86,30 +113,7 @@ export async function recordVersions(
   let copyFailure: { error: unknown } | undefined
   try {
     for (const markdown of markdowns) {
-      const cached =
-        typeof markdown === 'string' ? undefined : hashes.get(markdown)
-      const digest = cached ? null : createHash('sha256')
-      let bytes = cached?.bytes ?? 0
-      if (typeof markdown === 'string') {
-        digest!.update(markdown)
-        bytes = Buffer.byteLength(markdown)
-      } else if (!cached) {
-        let started = performance.now(),
-          scanned = 0
-        for (const chunk of markdown.encodedChunks()) {
-          digest!.update(chunk)
-          bytes += chunk.byteLength
-          scanned += chunk.byteLength
-          if (scanned >= 65536 || performance.now() - started >= 1) {
-            await new Promise<void>((resolve) => setImmediate(resolve))
-            scanned = 0
-            started = performance.now()
-          }
-        }
-      }
-      const hash = cached?.hash ?? digest!.digest('hex')
-      if (typeof markdown !== 'string' && !cached)
-        hashes.set(markdown, { hash, bytes })
+      const { hash, bytes } = await sourceHash(markdown)
       if (next.at(-1)?.hash === hash) continue
       if (next.length === current.length)
         await mkdir(folder, { recursive: true, mode: 0o700 })

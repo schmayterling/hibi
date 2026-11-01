@@ -831,7 +831,7 @@ export function startSite(workspace: SiteData, root: Root) {
                     </details>
                   )}
                   <article
-                    className="tiptap"
+                    className="site-article"
                     // biome-ignore lint/security/noDangerouslySetInnerHtml: strict DOMPurify allowlist sanitizes this markdown before rendering.
                     dangerouslySetInnerHTML={{ __html: html }}
                   />

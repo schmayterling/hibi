@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import unit from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { crc32, deflateSync } from 'node:zlib'
@@ -12,11 +13,7 @@ import {
   readDocumentImage,
   resolveDocumentMediaPath,
 } from '../src/main/images.ts'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 unit(
@@ -132,7 +129,7 @@ test('local images resolve from the note, validate content, and retain their Mar
   }, first)
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
-  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  const rich = await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Open…')
   await page.waitForFunction(
@@ -185,13 +182,10 @@ test('local images resolve from the note, validate content, and retain their Mar
     ),
     null,
   )
-  if (t.formattedEngine === 'tiptap') {
-    await rich.locator('p').last().click()
-    await page.keyboard.press('End')
-  } else {
-    await rich.focus()
-    await rich.press('ControlOrMeta+End')
-  }
+
+  await rich.focus()
+  await rich.press('ControlOrMeta+End')
+
   await page.keyboard.type(' edited')
   const markdown = (await page.evaluate(() => window.hibi.getDocument()))
     .markdown
@@ -290,7 +284,7 @@ unit(
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
-    await selectFormattedEngine(app, page, 'codemirror')
+    await waitForFormattedEditor(app, page)
     await app.evaluate(({ dialog }, note) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -334,6 +328,11 @@ unit(
 async function openTallRemoteImage(t, delay) {
   const image = blankPng(1600, 900)
   const requests = []
+  let markServed
+  /** Settles once the host has sent the image. */
+  const served = new Promise((resolve) => {
+    markServed = resolve
+  })
   const server = createServer(
     {
       cert: await readFile('tests/fixtures/host-network-localhost-cert.pem'),
@@ -343,7 +342,7 @@ async function openTallRemoteImage(t, delay) {
       requests.push(request.url)
       setTimeout(() => {
         response.writeHead(200, { 'Content-Type': 'image/png' })
-        response.end(image)
+        response.end(image, markServed)
       }, delay)
     },
   )
@@ -373,7 +372,7 @@ async function openTallRemoteImage(t, delay) {
   )
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, note) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -389,7 +388,7 @@ async function openTallRemoteImage(t, delay) {
       (line) => line.textContent === 'Line 8 below the image.',
     ),
   )
-  return { page, requests }
+  return { page, requests, served }
 }
 
 unit(
@@ -465,7 +464,7 @@ unit(
     timeout: 60000,
   },
   async (t) => {
-    const { page, requests } = await openTallRemoteImage(t, 1500)
+    const { page, requests, served } = await openTallRemoteImage(t, 1500)
     // Before the image arrives, "Line 8" goes to the top, the image above it.
     await page.evaluate(() => {
       const pane = document.querySelector('.rich-pane')
@@ -476,22 +475,32 @@ unit(
         line.getBoundingClientRect().top - pane.getBoundingClientRect().top
     })
     // There, out of sight, its line takes the image's shape once it arrives.
-    const shaped = await page.waitForFunction(
-      () => {
+    // The wait starts when the host has sent it, so a slow machine doesn't
+    // spend it before the image exists. The widget's own <img> can't be
+    // watched: once shaped, the line's widget is redrawn and the loaded
+    // image moves out of the page to the tab's held images.
+    await served
+    const lineHeight = () =>
+      page.evaluate(() => {
         const { view } = document.querySelector('.rich-pane .cm-content').cmTile
           .root
-        const { height } = view.lineBlockAt(
-          view.state.doc.toString().indexOf('<img'),
-        )
-        window.arrivalWait ??= performance.now()
-        return height < 900 || performance.now() - window.arrivalWait > 4000
-          ? height
-          : null
-      },
-      null,
-      { timeout: 15000 },
-    )
-    const height = await shaped.jsonValue()
+        return view.lineBlockAt(view.state.doc.toString().indexOf('<img'))
+          .height
+      })
+    const height = await page
+      .waitForFunction(
+        () => {
+          const { view } = document.querySelector('.rich-pane .cm-content')
+            .cmTile.root
+          const { height } = view.lineBlockAt(
+            view.state.doc.toString().indexOf('<img'),
+          )
+          return height < 900 ? height : null
+        },
+        null,
+        { timeout: 15000 },
+      )
+      .then((shaped) => shaped.jsonValue(), lineHeight)
     assert.ok(height < 900, `image line shaped, not 900 px tall: ${height}`)
     // Scrolled to, even after a collection, it shows in shape at once and
     // without another download.
@@ -553,7 +562,7 @@ unit(
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
-    const editor = await selectFormattedEngine(app, page, 'codemirror')
+    const editor = await waitForFormattedEditor(app, page)
     await app.evaluate(({ dialog }, note) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,

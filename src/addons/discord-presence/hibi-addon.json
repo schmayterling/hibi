@@ -2,7 +2,7 @@
   "id": "discord-presence",
   "name": "Discord Rich Presence",
   "description": "Show your Hibi activity in the Discord desktop app.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.1.0",
   "authors": [

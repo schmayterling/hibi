@@ -19,22 +19,30 @@ test('content versions advance on edits and undo while tab switching preserves t
   })
   const page = await app.firstWindow()
   await waitForEditor(page)
-  const result = await page.evaluate(async () => {
-    const editor = document.querySelector('.tiptap').editor
+  const edited = await page.evaluate(async () => {
+    const editor = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
     const initial = await window.hibi.getDocument()
-    editor.commands.insertContent('hello')
+    editor.dispatch({
+      changes: { from: 0, insert: 'hello' },
+      userEvent: 'input.type',
+    })
     const changed = await window.hibi.getDocument()
-    editor.commands.setTextSelection(2)
+    editor.dispatch({ selection: { anchor: 2 } })
     await window.hibi.updateDocument(changed.markdown)
     const same = await window.hibi.getDocument()
-    editor.commands.undo()
-    const undone = await window.hibi.getDocument()
-    editor.commands.redo()
-    const redone = await window.hibi.getDocument()
-    await window.hibi.newDocument()
-    const restored = await window.hibi.selectDocumentTab(initial.tabId)
-    return { initial, changed, same, undone, redone, restored }
+    editor.focus()
+    return { initial, changed, same }
   })
+  await page.keyboard.press('ControlOrMeta+z')
+  const undone = await page.evaluate(() => window.hibi.getDocument())
+  await page.keyboard.press('ControlOrMeta+Shift+z')
+  const redone = await page.evaluate(() => window.hibi.getDocument())
+  const restored = await page.evaluate(async (tabId) => {
+    await window.hibi.newDocument()
+    return window.hibi.selectDocumentTab(tabId)
+  }, edited.initial.tabId)
+  const result = { ...edited, undone, redone, restored }
   assert.equal(result.changed.revision, result.initial.revision)
   assert.ok(result.changed.contentVersion > result.initial.contentVersion)
   assert.equal(result.same.contentVersion, result.changed.contentVersion)

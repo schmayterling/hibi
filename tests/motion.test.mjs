@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { checkSidebarResize } from './sidebar-resize.mjs'
@@ -28,7 +29,7 @@ test('switching documents retains split/source layout without replaying view tra
     await rm(folder, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   const chooseFile = (file) =>
     app.evaluate(({ dialog }, file) => {
@@ -139,12 +140,8 @@ test('split panes align corresponding carets in both directions without feedback
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
-  if (t.formattedEngine === 'tiptap')
-    await page.evaluate(() => {
-      document.hasFocus = () => true
-    })
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
@@ -203,36 +200,26 @@ test('split panes align corresponding carets in both directions without feedback
     true,
   )
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  const cm = t.formattedEngine === 'codemirror'
-  if (cm) {
-    // The formatted viewport virtualizes distant headings; reveal the same source location before clicking.
-    // Focused, the formatted view leads linked scrolling, which otherwise scrolls it back to the source caret.
-    await rich.evaluate((element) => {
-      const view = element.cmTile.root.view
-      view.focus()
-      view.dispatch({
-        selection: {
-          anchor: view.state.doc.toString().indexOf('## section 45'),
-        },
-        scrollIntoView: true,
-      })
+  // The formatted viewport virtualizes distant headings; reveal the same source location before clicking.
+  // Focused, the formatted view leads linked scrolling, which otherwise scrolls it back to the source caret.
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.focus()
+    view.dispatch({
+      selection: {
+        anchor: view.state.doc.toString().indexOf('## section 45'),
+      },
+      scrollIntoView: true,
     })
-    await rich.locator('.hibi-lp-h2').filter({ hasText: 'section 45' }).click()
-    // Accepted difference: the codemirror split pane stays editable, with its caret.
-    assert.equal(await rich.getAttribute('contenteditable'), 'true')
-    await page.locator('.rich-pane .editor-cursor').waitFor()
-  } else {
-    await rich.locator('h2').nth(45).click()
-    assert.equal(await rich.getAttribute('aria-readonly'), 'true')
-    assert.equal(await page.locator('.rich-pane .editor-cursor').count(), 0)
-  }
-  await page.waitForFunction((cm) => {
-    const editor = document.querySelector('.rich-pane .tiptap')?.editor
+  })
+  await rich.locator('.hibi-lp-h2').filter({ hasText: 'section 45' }).click()
+  // The split pane stays editable, with its caret.
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
+  await page.locator('.rich-pane .editor-cursor').waitFor()
+  await page.waitForFunction(() => {
     const view = document.querySelector('.rich-pane .cm-content')?.cmTile.root
       .view
-    const caret = cm
-      ? view?.coordsAtPos(view.state.selection.main.head)
-      : editor?.view.coordsAtPos(editor.state.selection.head)
+    const caret = view?.coordsAtPos(view.state.selection.main.head)
     const mirror = document
       .querySelector('.source-pane .mirror-cursor')
       ?.getBoundingClientRect()
@@ -243,7 +230,7 @@ test('split panes align corresponding carets in both directions without feedback
         (caret.top + caret.bottom) / 2 - mirror.top - mirror.height / 2,
       ) < 3
     )
-  }, cm)
+  })
   assert.equal(
     await rich.evaluate((element) => element === document.activeElement),
     true,
@@ -263,24 +250,21 @@ test('split panes align corresponding carets in both directions without feedback
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     markdown,
   )
-  if (cm) {
-    await page.evaluate(() => window.hibi.flushDocumentChanges())
-    const before = await page.evaluate(() => window.hibi.getDocument())
-    await page.keyboard.insertText('x')
-    await page.evaluate(() => window.hibi.flushDocumentChanges())
-    const typed = await page.evaluate(() => window.hibi.getDocument())
-    // Typing in the codemirror split pane makes one source edit, and undo takes it back.
-    assert.equal(typed.markdown.length, markdown.length + 1)
-    assert.equal(typed.markdown.replace('x', ''), markdown)
-    assert.equal(typed.contentVersion, before.contentVersion + 1)
-    await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
-    await waitForAsync(
-      page,
-      async (markdown) =>
-        (await window.hibi.getDocument()).markdown === markdown,
-      markdown,
-    )
-  }
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  const before = await page.evaluate(() => window.hibi.getDocument())
+  await page.keyboard.insertText('x')
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  const typed = await page.evaluate(() => window.hibi.getDocument())
+  // Typing in the split pane makes one source edit, and undo takes it back.
+  assert.equal(typed.markdown.length, markdown.length + 1)
+  assert.equal(typed.markdown.replace('x', ''), markdown)
+  assert.equal(typed.contentVersion, before.contentVersion + 1)
+  await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await waitForAsync(
+    page,
+    async (markdown) => (await window.hibi.getDocument()).markdown === markdown,
+    markdown,
+  )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await page.evaluate(() =>
     Promise.all(
@@ -322,7 +306,7 @@ test('source font and layout are ready before the pane starts moving', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.addInitScript(() => {
     const load = document.fonts.load.bind(document.fonts)
@@ -371,17 +355,10 @@ test('source font and layout are ready before the pane starts moving', {
         .querySelector('.source-pane .cm-content')
         ?.getAttribute('contenteditable') === 'true',
   )
-  if (t.formattedEngine === 'codemirror')
-    // The formatted ready flag describes its visible editor while source waits.
-    assert.equal(
-      await page.locator('.source-pane').evaluate((element) => element.inert),
-      true,
-    )
-  else
-    assert.equal(
-      await page.locator('.editor-panes').getAttribute('data-source-ready'),
-      'false',
-    )
+  assert.equal(
+    await page.locator('.source-pane').evaluate((element) => element.inert),
+    true,
+  )
   assert.match(
     await page.locator('.editor-panes').getAttribute('class'),
     /mode-normal/,
@@ -398,17 +375,10 @@ test('source font and layout are ready before the pane starts moving', {
       window.sourceFontLoadSettled &&
       typeof window.releaseSourceMeasure === 'function',
   )
-  if (t.formattedEngine === 'codemirror')
-    // The formatted ready flag describes its visible editor while source waits.
-    assert.equal(
-      await page.locator('.source-pane').evaluate((element) => element.inert),
-      true,
-    )
-  else
-    assert.equal(
-      await page.locator('.editor-panes').getAttribute('data-source-ready'),
-      'false',
-    )
+  assert.equal(
+    await page.locator('.source-pane').evaluate((element) => element.inert),
+    true,
+  )
   assert.match(
     await page.locator('.editor-panes').getAttribute('class'),
     /mode-normal/,
@@ -448,7 +418,7 @@ test('reduced motion disables transitions and compact windows keep the palette v
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Settings')
   await page.getByRole('main', { name: /^settings$/i, exact: true }).waitFor()
@@ -499,7 +469,7 @@ test('workspace sidebar remains above editor content during motion and preserves
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.getByRole('button', { name: /toggle workspace sidebar/i }).click()

@@ -134,6 +134,30 @@ test('a hidden pane keeps its top line mapped through the edits it has not shown
   f.session.dispose()
 })
 
+test('a kept place follows its pane to a new id, and back when no view took it', () => {
+  const f = fixture('line\n'.repeat(1000))
+  // The source pane a split's pane hosts keeps its place as it closes.
+  const keep = () => {
+    const source = f.attach('P:source')
+    source.dispatch({ selection: { anchor: 500 } })
+    source.bridge.keepPlace(source.view, 400, -5)
+    source.dispose()
+  }
+  keep()
+  f.session.renameView('P', 'left')
+  const place = createSourceSession(f.session, 'left:source').place()
+  assert.equal(place?.selection.main.head, 500)
+  assert.equal(place.top, 400)
+  assert.equal(place.margin, -5)
+  keep()
+  f.session.renameView('P', 'left')
+  f.session.renameView('left', 'P')
+  assert.equal(createSourceSession(f.session, 'P:source').place()?.margin, -5)
+  assert.equal(createSourceSession(f.session, 'left:source').place(), null)
+  assert.deepEqual(f.errors, [])
+  f.session.dispose()
+})
+
 test('addon admission uses exact ranges and rejects native vetoes without flattening', () => {
   for (const extensions of [
     [],
@@ -340,12 +364,13 @@ test('a view that undoes or redoes its own edit scrolls to what that restores; o
   assert.equal(right.bridge.redo(), true)
   right.dispatch(type(1, 'Y', 2))
   assert.equal(right.bridge.undo(), true)
+  assert.equal(right.bridge.redo(), true)
   // Session history moves no view either.
   f.session.undo()
   hidden.bridge.setVisible(true)
   assert.deepEqual(logs, [
-    [true, false, false, false, false],
-    [false, false, false, true, false],
+    [true, false, false, false, false, false],
+    [false, false, false, true, true, false],
     [false],
   ])
   assert.deepEqual(f.errors, [])

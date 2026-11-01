@@ -13,9 +13,12 @@ import {
   waitForAsync,
   waitForDocumentEditor,
 } from './electron.mjs'
+import { frozenOracle } from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+// The status label the removed rich view showed for each opened note.
+const richLabel = frozenOracle('formatted-word-count-rich')
 const syntax = { ...defaultNoteSyntax, textExtras: true, alerts: true }
 const prefix = '---\r\ntitle: Hidden metadata words\r\n---\r\n'
 const body =
@@ -81,11 +84,7 @@ after(
   { timeout: 30000 },
 )
 
-async function engine(formatted) {
-  await page.evaluate((formatted) => {
-    if (formatted) localStorage.setItem('hibi:formatted-engine', 'codemirror')
-    else localStorage.setItem('hibi:formatted-engine', 'tiptap')
-  }, formatted)
+async function reload() {
   await page.reload()
   await waitForDocumentEditor(app, page)
 }
@@ -109,11 +108,9 @@ async function open(name) {
 test('formatted counts match rich document totals and ignore selections', {
   timeout: 90000,
 }, async () => {
-  await engine(false)
+  const rich = richLabel({ note: 'counts.md' })
+  assert.equal(rich, expected(body))
   await open('counts.md')
-  await counts(expected(body))
-  const rich = await status().textContent()
-  await engine(true)
   await page.locator('.rich-pane .cm-content').waitFor()
   await counts(rich)
   for (const selection of ['all', 'word', 'empty']) {
@@ -144,60 +141,44 @@ test('formatted counts match rich document totals and ignore selections', {
   }
 })
 test('source view counts literal text while split and normal views keep formatted totals', async () => {
-  for (const formatted of [false, true]) {
-    const name = `mode-${Number(formatted)}.md`
-    await writeFile(join(folder, name), source)
-    await engine(formatted)
-    await open(name)
-    await counts(expected(body))
-    await page.getByRole('button', { name: /^side-by-side$/i }).click()
-    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-    const editor = page.getByRole('textbox', {
-      name: 'Markdown editor',
-      exact: true,
-    })
-    await editor.press('ControlOrMeta+End')
-    await page.keyboard.insertText(' added')
-    await waitForAsync(
-      page,
-      async (text) => (await window.hibi.getDocument()).markdown === text,
-      source + ' added',
-    )
-    await counts(expected(body + ' added'))
-    await pressShortcut(app, mod + '+Shift+]')
-    await page.locator('.editor-panes.mode-markdown').waitFor()
-    await counts(label(countText(source + ' added')))
-    await pressShortcut(app, mod + '+Shift+[')
-    await page.locator('.editor-panes.mode-normal').waitFor()
-    await counts(expected(body + ' added'))
-  }
+  const name = 'mode.md'
+  await writeFile(join(folder, name), source)
+  await open(name)
+  await counts(expected(body))
+  await page.getByRole('button', { name: /^side-by-side$/i }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  const editor = page.getByRole('textbox', {
+    name: 'Markdown editor',
+    exact: true,
+  })
+  await editor.press('ControlOrMeta+End')
+  await page.keyboard.insertText(' added')
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    source + ' added',
+  )
+  await counts(expected(body + ' added'))
+  await pressShortcut(app, mod + '+Shift+]')
+  await page.locator('.editor-panes.mode-markdown').waitFor()
+  await counts(label(countText(source + ' added')))
+  await pressShortcut(app, mod + '+Shift+[')
+  await page.locator('.editor-panes.mode-normal').waitFor()
+  await counts(expected(body + ' added'))
 })
 
-test('tab-separated tasks count their text in both formatted engines', {
+test('tab-separated tasks count their text in the formatted view', {
   timeout: 90000,
 }, async () => {
-  for (const formatted of [false, true]) {
-    await engine(formatted)
-    await open('tasks.md')
-    await counts(label({ words: 3, characters: 13 }))
-    assert.equal(await sourceText(), '- [ ] a\n- [ ]\tbuy milk')
-    assert.equal(
-      await page
-        .locator(
-          formatted
-            ? '.rich-pane .hibi-lp-task'
-            : '.rich-pane .tiptap input[type="checkbox"]',
-        )
-        .count(),
-      2,
-    )
-  }
+  await open('tasks.md')
+  await counts(label({ words: 3, characters: 13 }))
+  assert.equal(await sourceText(), '- [ ] a\n- [ ]\tbuy milk')
+  assert.equal(await page.locator('.rich-pane .hibi-lp-task').count(), 2)
 })
 
 test('edits and undo retain exact source and rapid document switches keep their own totals', {
   timeout: 90000,
 }, async () => {
-  await engine(true)
   await open('counts.md')
   await counts(expected(body))
   await page.evaluate(() => {
@@ -229,12 +210,9 @@ for (const [language, name, text] of [
   test(`${language} formatted counts match native opaque blocks through toggles and undo`, {
     timeout: 90000,
   }, async () => {
-    await engine(false)
+    const native = richLabel({ note: name })
+    assert.equal(native, label(countText('before\n\nafter')))
     await open(name)
-    await page.locator(`.rich-pane .tiptap .${language}-block`).waitFor()
-    await counts(label(countText('before\n\nafter')))
-    const native = await status().textContent()
-    await engine(true)
     await page.locator(`.rich-pane .${language}-block`).waitFor()
     await counts(native)
     await page.evaluate(
@@ -304,9 +282,7 @@ for (const [language, name, text] of [
         await counts(enabled ? native : visible)
         assert.equal(await sourceText(), text)
         if (!enabled) {
-          await engine(false)
-          await counts(visible)
-          await engine(true)
+          await reload()
           await counts(visible)
         }
       }

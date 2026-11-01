@@ -29,9 +29,6 @@ before(
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     // Hidden windows have no focus; markers under the caret need a focused editor.
@@ -331,5 +328,87 @@ test('task checkboxes are named by the text they show, without markdown', {
       'Task item checkbox for call & write',
       'Task item checkbox for read alias today',
     ],
+  )
+})
+
+test('edit keys act on the blocks of text the view has not parsed yet', {
+  timeout: 120000,
+}, async () => {
+  await open('unparsed.md', 'unparsed\n', 'unparsed')
+  const content = pane('.hibi-formatted .cm-content')
+  const filler = Array.from({ length: 8192 }, (_, n) => `para ${n} text`).join(
+    '\n\n',
+  )
+  const start = filler.length + 2
+  // The text after the paragraphs, with `‸` at the caret, before and after the key.
+  const cases = [
+    [
+      'Enter',
+      '```js\nlet a = 1‸\nlet b = 2\n```',
+      '```js\nlet a = 1\n‸\nlet b = 2\n```',
+    ],
+    ['Enter', '- one\n- two‸', '- one\n- two\n- ‸'],
+    ['Enter', '> quoted‸ text', '> quoted\n> ‸ text'],
+    ['Enter', 'some **bo‸ld** text', 'some **bo**\n\n**‸ld** text'],
+    ['Shift+Enter', '- one\n- two‸', '- one\n- two  \n  ‸'],
+    ['Backspace', '```\ncode\n```\n‸after', '```\ncode\n```\n‸after'],
+    ['Delete', 'before‸\n```\ncode\n```', 'before‸\n```\ncode\n```'],
+    [
+      `${mod}+Enter`,
+      'start\n\n```\nco‸de\n```',
+      'start\n\n```\ncode\n```\n\n‸',
+    ],
+  ]
+  // A slow machine is still parsing the note when the key arrives: hold the
+  // view's idle parse steps and slow the ones edits run.
+  await page.evaluate(() => {
+    const held = []
+    const request = window.requestIdleCallback
+    window.requestIdleCallback = (callback) => {
+      held.push(callback)
+      return 0
+    }
+    window.releaseIdle = () => {
+      window.requestIdleCallback = request
+      for (const callback of held) request(callback)
+    }
+  })
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 20 })
+  const results = []
+  try {
+    for (const [key, before] of cases) {
+      await content.evaluate(
+        (element, { text, anchor }) => {
+          const view = element.cmTile.root.view
+          view.focus()
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: text },
+            selection: { anchor },
+            scrollIntoView: true,
+            userEvent: 'input.fixture',
+          })
+        },
+        {
+          text: `${filler}\n\n${before.replace('‸', '')}`,
+          anchor: start + before.indexOf('‸'),
+        },
+      )
+      await page.keyboard.press(key)
+      results.push(
+        await content.evaluate((element, start) => {
+          const { state } = element.cmTile.root.view
+          const head = state.selection.main.head
+          return `${state.sliceDoc(start, head)}‸${state.sliceDoc(head)}`
+        }, start),
+      )
+    }
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+    await page.evaluate(() => window.releaseIdle())
+  }
+  assert.deepEqual(
+    results,
+    cases.map(([, , after]) => after),
   )
 })

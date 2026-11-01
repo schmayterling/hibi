@@ -21,7 +21,7 @@ test('header-only workspace reads preserve export options, snapshots and disk ex
       name: 'Snapshot probe',
       description: 'Workspace snapshot fixture.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',

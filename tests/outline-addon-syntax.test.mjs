@@ -3,8 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const install = async (profile, id, manifest, code) => {
@@ -33,7 +32,7 @@ const install = async (profile, id, manifest, code) => {
   )
 }
 
-test('the source outline follows addon syntax and names addons it cannot follow', {
+test('the source outline follows addon syntax', {
   timeout: 90000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-outline-addons-'))
@@ -67,28 +66,10 @@ test('the source outline follows addon syntax and names addons it cannot follow'
         } })
     } })`,
   )
-  // Marked block syntax only the visual editor reads.
-  await install(
-    profile,
-    'outline-boxes',
-    { name: 'Box blocks', apiVersion: 2 },
-    `export default () => ({ start(context) {
-      context.editor.registerFlavor({ id: 'boxes', name: 'Box blocks',
-        kind: 'syntax', description: 'Fixture', detect: () => false,
-        export: { extensions: [{ extensions: [{ name: 'outlineBox',
-          level: 'block', start: (src) => src.indexOf(':::box'),
-          tokenizer(src) {
-            const match = /^:::box\\n[\\s\\S]*?\\n:::(?:\\n|$)/.exec(src)
-            if (match) return { type: 'outlineBox', raw: match[0] }
-          },
-          renderer: () => '' }] }] } })
-    } })`,
-  )
   await writeFile(
     join(profile, 'addons.json'),
     JSON.stringify({
       'outline-notes': true,
-      'outline-boxes': false,
       typst: true,
     }),
   )
@@ -104,15 +85,12 @@ test('the source outline follows addon syntax and names addons it cannot follow'
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
-  // Box blocks are syntax only the Tiptap editor reads, so its outline names them.
-  await selectFormattedEngine(app, page, 'tiptap')
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   await clickMenu(app, 'Open…')
-  await page.waitForFunction(() =>
-    document.querySelector('.tiptap')?.editor?.getText().includes('words'),
-  )
+  await page.locator('.rich-pane .cm-content', { hasText: 'words' }).waitFor()
   await page.getByRole('button', { name: /^source view$/i }).click()
   await page
     .getByRole('textbox', { name: 'Markdown editor', exact: true })
@@ -138,37 +116,5 @@ test('the source outline follows addon syntax and names addons it cannot follow'
       text: await outline.textContent(),
     }),
   )
-  assert.deepEqual(await headings(), ['Top', 'After'])
-
-  const toggle = async (id) => {
-    await clickMenu(app, 'Settings')
-    await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-    const checked = await page.locator(`#addon-${id}`).isChecked()
-    await page.locator(`#addon-${id}`).click()
-    await page.waitForFunction(
-      ([id, checked]) =>
-        document.querySelector(`#addon-${id}`)?.checked !== checked,
-      [id, checked],
-    )
-    await page.getByRole('button', { name: 'Back to app', exact: true }).click()
-    await page.locator('.settings-screen').waitFor({ state: 'hidden' })
-  }
-  // Block syntax the outline cannot read names its addon and what to do.
-  await toggle('outline-boxes')
-  const notice = outline.getByText(
-    'The outline can’t find headings in source view while Box blocks is on. Switch to visual mode to see them, or turn off Box blocks in Settings → Addon Manager.',
-    { exact: true },
-  )
-  await notice.waitFor()
-  assert.deepEqual(await headings(), [])
-  // Visual mode still lists the note's headings.
-  await page.getByRole('button', { name: 'normal', exact: true }).click()
-  await outline.getByRole('treeitem', { name: 'Top', exact: true }).waitFor()
-  assert.equal(await notice.count(), 0)
-  // Turning the addon off restores the source outline.
-  await page.getByRole('button', { name: /^source view$/i }).click()
-  await notice.waitFor()
-  await toggle('outline-boxes')
-  await outline.getByRole('treeitem', { name: 'After', exact: true }).waitFor()
   assert.deepEqual(await headings(), ['Top', 'After'])
 })

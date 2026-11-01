@@ -4,11 +4,7 @@ import { DocInput } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { GFM } from '@lezer/markdown'
-import { Editor } from '@tiptap/core'
-import { Markdown } from '@tiptap/markdown'
 import { formattedTree } from '../src/renderer/src/formatted-contributions.ts'
-import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
-import { sameRichSourceDocument } from '../src/renderer/src/rich-source-preservation.ts'
 import {
   sourceFormatting,
   storedMarkInput,
@@ -16,7 +12,10 @@ import {
 import { createSourceSession } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { formattedMarkdownParser } from '../src/shared/formatted-markdown.ts'
+import { frozenOracle } from './frozen-oracle.mjs'
 
+/** What the removed rich editor, with the GitHub flavor, read after the same input. */
+const native = frozenOracle('formatted-stored-marks-history')
 const grammar = formattedMarkdownParser(GFM)
 
 function fixture(t, source = 'a `b`', at = source.length) {
@@ -77,30 +76,6 @@ function fixture(t, source = 'a `b`', at = source.length) {
   return { session, bridge, view, formatting, type }
 }
 
-function nativeCode(source, text) {
-  const config = markdownConfiguration([
-    { id: 'github', markedOptions: { gfm: true } },
-  ])
-  const editor = new Editor({
-    element: null,
-    extensions: [
-      ...config.core,
-      Markdown.configure({
-        marked: config.parser,
-        markedOptions: config.options,
-      }),
-      ...config.addons,
-    ],
-    content: source,
-    contentType: 'markdown',
-  })
-  editor.commands.setTextSelection(4)
-  editor.commands.toggleCode()
-  editor.commands.toggleCode()
-  editor.view.dispatch(editor.state.tr.insertText(text))
-  return editor
-}
-
 test('source history restores stored code before undo and after redo', (t) => {
   for (const redo of [false, true]) {
     const f = fixture(t)
@@ -115,13 +90,19 @@ test('source history restores stored code before undo and after redo', (t) => {
       assert.equal(f.view.state.doc.toString(), typed)
     }
     const actual = f.type('Z')
-    const native = nativeCode('a `b`', redo ? 'x`yZ' : 'Z')
-    try {
-      const parsed = native.schema.nodeFromJSON(native.markdown.parse(actual))
-      assert.ok(sameRichSourceDocument(parsed, native.state.doc, true), actual)
-    } finally {
-      native.destroy()
-    }
+    // The rich editor, with code toggled twice at its position 4 and the
+    // same text typed there, read the typed source as its own document.
+    assert.equal(
+      native({
+        kind: 'stored code',
+        source: 'a `b`',
+        position: 4,
+        text: redo ? 'x`yZ' : 'Z',
+        markdown: actual,
+      }),
+      true,
+      actual,
+    )
   }
 })
 
@@ -212,50 +193,26 @@ test('retained opaque input edges keep exact source history and one version per 
 })
 
 test('retained code input grows fences and keeps whitespace inside them with an exact caret', (t) => {
-  for (const [source, from, to, text, expected, head, nativeFrom, nativeTo] of [
-    ['``ab``', 2, 4, ' x ', '``  x  ``', 6, 1, 3],
-    ['`` ab ``', 3, 5, '   ', '``   ``', 5, 1, 3],
-    ['``ab``', 2, 3, '``', '``` ``b ```', 6, 1, 2],
-    ['``ab``', 2, 4, '`', '`` ` ``', 4, 1, 3],
+  for (const [source, from, to, text, expected, head] of [
+    ['``ab``', 2, 4, ' x ', '``  x  ``', 6],
+    ['`` ab ``', 3, 5, '   ', '``   ``', 5],
+    ['``ab``', 2, 3, '``', '``` ``b ```', 6],
+    ['``ab``', 2, 4, '`', '`` ` ``', 4],
   ]) {
-    const config = markdownConfiguration([])
-    const editor = new Editor({
-      element: null,
-      extensions: [
-        ...config.core,
-        Markdown.configure({
-          marked: config.parser,
-          markedOptions: config.options,
-        }),
-        ...config.addons,
-      ],
-      content: source,
-      contentType: 'markdown',
-    })
-    try {
-      editor.commands.setTextSelection({ from: nativeFrom, to: nativeTo })
-      editor.view.dispatch(editor.state.tr.insertText(text))
-      const { view, bridge } = fixture(t, source, from)
-      view.dispatch({ selection: { anchor: from, head: to } })
-      assert.equal(
-        view.state
-          .facet(EditorView.inputHandler)
-          .some((input) => input(view, from, to, text, () => null)),
-        true,
-      )
-      assert.equal(view.state.doc.toString(), expected)
-      assert.equal(view.state.selection.main.head, head)
-      assert.deepEqual(
-        editor.schema.nodeFromJSON(editor.markdown.parse(expected)).toJSON(),
-        editor.getJSON(),
-      )
-      assert.equal(bridge.undo(), true)
-      assert.equal(view.state.doc.toString(), source)
-      assert.equal(bridge.redo(), true)
-      assert.equal(view.state.doc.toString(), expected)
-      assert.equal(view.state.selection.main.head, head)
-    } finally {
-      editor.destroy()
-    }
+    const { view, bridge } = fixture(t, source, from)
+    view.dispatch({ selection: { anchor: from, head: to } })
+    assert.equal(
+      view.state
+        .facet(EditorView.inputHandler)
+        .some((input) => input(view, from, to, text, () => null)),
+      true,
+    )
+    assert.equal(view.state.doc.toString(), expected)
+    assert.equal(view.state.selection.main.head, head)
+    assert.equal(bridge.undo(), true)
+    assert.equal(view.state.doc.toString(), source)
+    assert.equal(bridge.redo(), true)
+    assert.equal(view.state.doc.toString(), expected)
+    assert.equal(view.state.selection.main.head, head)
   }
 })

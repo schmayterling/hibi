@@ -3,11 +3,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { crashAndReload, electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  crashAndReload,
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -60,7 +62,8 @@ for (const size of sizes)
           name: 'Scale review',
           description: 'Source edit fixture',
           kind: 'extension',
-          apiVersion: 1,
+          apiVersion: 3,
+          capabilities: ['source'],
           version: '1.0.0',
           authors: [{ displayName: 'Test' }],
           entry: 'index.js',
@@ -93,8 +96,8 @@ for (const size of sizes)
       await rm(root, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
-    const cm = t.formattedEngine === 'codemirror'
+    await waitForFormattedEditor(app, page)
+
     await app.evaluate(({ dialog, ipcMain }, file) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -172,17 +175,7 @@ for (const size of sizes)
         })
       }
     }, file)
-    if (!cm)
-      await page.evaluate(() => {
-        window.scaleRichUnits = 0
-        const manager = document.querySelector('.tiptap').editor.markdown,
-          prototype = Object.getPrototypeOf(manager),
-          parse = prototype.parse
-        prototype.parse = function (source) {
-          window.scaleRichUnits = Math.max(window.scaleRichUnits, source.length)
-          return parse.call(this, source)
-        }
-      })
+
     const started = performance.now()
     await clickMenu(app, 'Open…')
     await waitForAsync(app, () => !!globalThis.scaleProbe.open)
@@ -204,13 +197,12 @@ for (const size of sizes)
         '[role="tab"][aria-selected="true"]',
       )
       const source = document.querySelector(
-          '.cm-content[contenteditable="true"]',
-        ),
-        rich = document.querySelector('.tiptap[contenteditable="true"]')
+        '.cm-content[contenteditable="true"]',
+      )
       return (
         active?.textContent.includes(name) &&
         document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
-        (source?.closest('[data-source-ready="true"]') || rich)
+        source?.closest('[data-source-ready="true"]')
       )
     }, basename(file))
     const openMs = performance.now() - started
@@ -219,12 +211,6 @@ for (const size of sizes)
         await page.locator('.cm-content[contenteditable="true"]').count(),
         1,
       )
-      if (cm) assert.equal(await page.locator('.tiptap').count(), 0)
-      else
-        assert.ok(
-          await page.evaluate(() => window.scaleRichUnits <= 256 * 1024),
-          'large opening parsed complete rich source',
-        )
     }
     if (!(await page.locator('.cm-content[contenteditable="true"]').count())) {
       await page
@@ -232,7 +218,7 @@ for (const size of sizes)
         .click()
       await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     }
-    if (!baseline && cm) {
+    if (!baseline) {
       await t.test(
         'formatted mib notes stay editable and preserve their source',
         async () => {
@@ -302,81 +288,6 @@ for (const size of sizes)
           assert.equal(await page.locator('.large-markdown-preview').count(), 0)
         },
       )
-    } else if (!baseline) {
-      await page.evaluate(() => {
-        window.scaleSourceView = document.querySelector(
-          '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
-        ).cmTile.root.view
-      })
-      await page.getByRole('button', { name: 'normal', exact: true }).click()
-      const preview = page.locator('.large-markdown-preview')
-      await preview.locator('.format-content').waitFor()
-      assert.ok(
-        (await preview.locator('.format-content').textContent()).length <= 4096,
-      )
-      assert.equal(
-        await page.locator('.tiptap[contenteditable="true"]').count(),
-        0,
-      )
-      await preview
-        .getByRole('button', { name: 'Next part', exact: true })
-        .click()
-      await page.waitForFunction(
-        () =>
-          Number(
-            document
-              .querySelector('.large-markdown-preview')
-              ?.getAttribute('data-preview-from'),
-          ) > 0,
-      )
-      await preview.locator('.format-content').waitFor()
-      assert.ok(
-        (await preview.locator('.format-content').textContent()).length <= 4096,
-      )
-      await preview
-        .getByRole('button', { name: 'Previous part', exact: true })
-        .click()
-      await page.waitForFunction(
-        () =>
-          document
-            .querySelector('.large-markdown-preview')
-            ?.getAttribute('data-preview-from') === '0',
-      )
-      if (size === 2) {
-        await page.evaluate(() => {
-          const view = window.scaleSourceView
-          view.dispatch({
-            changes: { from: 0, to: 1, insert: 'Q' },
-            userEvent: 'input.type',
-          })
-          view.dispatch({
-            changes: { from: 0, to: 1, insert: '#' },
-            userEvent: 'input.type',
-          })
-          return window.hibi.flushDocumentChanges()
-        })
-        await preview.locator('.format-content').waitFor()
-        await page.waitForFunction(() =>
-          document
-            .querySelector('.large-markdown-preview .format-content')
-            ?.textContent.replace(/^# /, '')
-            .startsWith('scale-start'),
-        )
-      }
-      await page
-        .getByRole('button', { name: 'Source view', exact: true })
-        .click()
-      await preview.waitFor({ state: 'detached' })
-      assert.equal(
-        await page.evaluate(
-          () =>
-            document.querySelector(
-              '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
-            ).cmTile.root.view === window.scaleSourceView,
-        ),
-        true,
-      )
-      assert.ok(await page.evaluate(() => window.scaleRichUnits <= 4096))
     }
     if (size === 50 && !baseline) {
       const statuses = await page.evaluate(async () => {

@@ -9,12 +9,13 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -185,7 +186,7 @@ test('exports the active note as a PDF from the palette and the File menu', {
   page.setDefaultTimeout(15000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() => {
     localStorage.setItem(
       'hibi-colorscheme',
@@ -230,20 +231,18 @@ test('exports the active note as a PDF from the palette and the File menu', {
     ),
   )
   await waitForDocumentEditor(app, page)
-  const draft = `Unsaved formatted ${t.formattedEngine} content`
+  const draft = `Unsaved formatted codemirror content`
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: 'Document editor' }),
     draft,
   )
-  const draftPdf = join(output, `${t.formattedEngine}-draft.pdf`)
+  const draftPdf = join(output, `codemirror-draft.pdf`)
   await app.evaluate(({ dialog }, target) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: target })
   }, draftPdf)
   await clickMenu(app, 'Export as PDF…')
-  await page
-    .getByText(uiName(`Exported ${t.formattedEngine}-draft.pdf.`))
-    .waitFor()
+  await page.getByText(uiName(`Exported codemirror-draft.pdf.`)).waitFor()
   assert.ok((await pdfText(draftPdf)).text.includes(draft))
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).savedMarkdown,
@@ -263,7 +262,7 @@ test('exports the active note as a PDF from the palette and the File menu', {
   )
 
   async function exportTo(name, run) {
-    const target = join(output, `${t.formattedEngine}-${name}.pdf`)
+    const target = join(output, `codemirror-${name}.pdf`)
     await app.evaluate(({ dialog, BrowserWindow }, target) => {
       globalThis.pdfSaveOptions = null
       dialog.showSaveDialog = async (window, options) => {
@@ -274,9 +273,7 @@ test('exports the active note as a PDF from the palette and the File menu', {
       }
     }, target)
     await run()
-    await page
-      .getByText(uiName(`Exported ${t.formattedEngine}-${name}.pdf.`))
-      .waitFor()
+    await page.getByText(uiName(`Exported codemirror-${name}.pdf.`)).waitFor()
     const options = await app.evaluate(() => globalThis.pdfSaveOptions)
     assert.equal(options.defaultPath, join(notes, 'garden.pdf'))
     assert.deepEqual(options.filters, [{ name: 'PDF', extensions: ['pdf'] }])
@@ -378,9 +375,9 @@ test('exports the active note as a PDF from the palette and the File menu', {
   )
   await exportTo('menu', () => clickMenu(app, 'Export as PDF…'))
   assert.ok(
-    (
-      await pdfText(join(output, `${t.formattedEngine}-menu.pdf`))
-    ).text.includes('Unsaved source content'),
+    (await pdfText(join(output, `codemirror-menu.pdf`))).text.includes(
+      'Unsaved source content',
+    ),
     'accepted unsaved source edits are included in the PDF',
   )
   assert.equal(await readFile(file, 'utf8'), note)
@@ -403,14 +400,12 @@ test('exports the active note as a PDF from the palette and the File menu', {
     page,
     async () => (await window.hibi.getDocument()).name === 'diagram.mmd',
   )
-  const diagramPdf = join(output, `${t.formattedEngine}-diagram.pdf`)
+  const diagramPdf = join(output, `codemirror-diagram.pdf`)
   await app.evaluate(({ dialog }, target) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: target })
   }, diagramPdf)
   await clickMenu(app, 'Export as PDF…')
-  await page
-    .getByText(uiName(`Exported ${t.formattedEngine}-diagram.pdf.`))
-    .waitFor()
+  await page.getByText(uiName(`Exported codemirror-diagram.pdf.`)).waitFor()
   assertLightDiagram(await app.evaluate(() => globalThis.pdfHtml))
   assert.ok((await pdfText(diagramPdf)).text.includes('Sprout'))
   assert.equal(

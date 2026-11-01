@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -33,7 +30,7 @@ test('explorer status updates keep the tree model and wait while the explorer is
       description: 'Explorer decoration fixture',
       kind: 'extension',
       version: '1.0.0',
-      apiVersion: 2,
+      apiVersion: 3,
       authors: [{ displayName: 'Test' }],
       capabilities: [],
       startup: 'background',
@@ -73,7 +70,7 @@ test('explorer status updates keep the tree model and wait while the explorer is
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(8000)
   await page.setViewportSize({ width: 1100, height: 800 })
   const editor = page.getByRole('textbox', { name: /document editor/i })

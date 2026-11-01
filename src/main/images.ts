@@ -25,7 +25,9 @@ export function imageMime(data: Buffer): string | null {
   )
     return 'image/avif'
   if (
-    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/.test(
+    // A comment can't contain `-->`, so each run of comments matches one way:
+    // a lazy `[\s\S]*?` here backtracked exponentially on `<!---->` runs.
+    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--(?:[^-]|-(?!->))*-->\s*)*<svg[\s>]/.test(
       data.toString('utf8'),
     )
   )

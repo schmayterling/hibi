@@ -2376,6 +2376,9 @@ function App() {
                       ? 'Keep top bar visible'
                       : 'Hide top bar while typing'
                     : label,
+          ...(id === 'history'
+            ? { keywords: 'version versions saved undo' }
+            : {}),
           shortcut: hotkeys[id],
           run: () => addonHost.app.runAction(id),
         })),

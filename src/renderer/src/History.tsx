@@ -16,6 +16,7 @@ import {
   historySummary,
   returnTo,
   shownVersions,
+  stepTime,
 } from './history-points'
 import { sourceCurrent } from './SourceEditor'
 import { editorPosition, sourceView } from './source-view'
@@ -32,26 +33,40 @@ type Entry = { id: string; label: string; time: number } & (
   | { kind: 'version'; version: DocumentVersion }
 )
 
-const reasons: Record<HistoryPoint['reason'], string> = {
-  oldest: 'Oldest kept text',
-  stopped: 'Before undo',
-  branched: 'Where edits branched',
-  paused: 'Pause',
-  'before-large': 'Before a large edit',
-  typing: 'While typing',
+// `label` fields are collected into the UI copy catalog.
+const reasons: Record<HistoryPoint['reason'], { label: string }> = {
+  oldest: { label: 'Oldest kept text' },
+  stopped: { label: 'Before undo' },
+  branched: { label: 'Where edits branched' },
+  paused: { label: 'Pause' },
+  'before-large': { label: 'Before a large edit' },
+  typing: { label: 'While typing' },
 }
+const copy = {
+  added: (count: number) =>
+    count === 1 ? { label: '1 word added' } : { label: `${count} words added` },
+  removed: (count: number) =>
+    count === 1
+      ? { label: '1 word removed' }
+      : { label: `${count} words removed` },
+  changed: (line: string) => ({ label: `Changed “${line}”` }),
+  spacing: { label: 'Spacing or punctuation' },
+  current: { label: 'Current' },
+}
+/** An entry's depth in the steps tree; points and versions are all at the top. */
+const level = (item?: Entry) => (item && 'level' in item ? item.level : 1)
 const summary = ({
   added,
   removed,
   line,
 }: ReturnType<typeof historySummary>) =>
   added || removed
-    ? [added && `${added} words added`, removed && `${removed} words removed`]
+    ? [added && copy.added(added).label, removed && copy.removed(removed).label]
         .filter(Boolean)
         .join(', ')
     : line
-      ? `Changed “${line.slice(0, 60)}”`
-      : 'Spacing or punctuation'
+      ? copy.changed(line.slice(0, 60)).label
+      : copy.spacing.label
 
 export function History({
   close,
@@ -84,8 +99,11 @@ export function History({
     }
   }, [])
   const entries = useMemo((): Entry[] => {
+    const now = Date.now()
     if (mode === 'steps') {
       if (!tree) return []
+      const current = (step: number) =>
+        step === tree.current ? ` · ${copy.current.label}` : ''
       // Oldest first; a step undo replaced sits one level in, under the
       // step it left from.
       const ordered: Entry[] = []
@@ -97,7 +115,7 @@ export function History({
           step,
           level,
           time: group.time,
-          label: `${new Date(group.time).toLocaleTimeString()} · ${summary(historySummary(tree, parent, step))}${step === tree.current ? ' · Current' : ''}`,
+          label: `${stepTime(group.time, now)} · ${summary(historySummary(tree, parent, step))}${current(step)}`,
         })
         const children = tree.children[step + 1]!
         for (const child of children)
@@ -109,13 +127,12 @@ export function History({
         step: -1,
         level: 1,
         time: 0,
-        label: `Oldest kept text${tree.current === -1 ? ' · Current' : ''}`,
+        label: `${reasons.oldest.label}${current(-1)}`,
       })
       const top = tree.children[0]!
       for (const child of top) visit(child, child === top.at(-1) ? 2 : 3)
       return ordered
     }
-    const now = Date.now()
     // Saved states are listed once, as their saved versions.
     const points = tree
       ? historyPoints(
@@ -140,7 +157,7 @@ export function History({
           step,
           level: 1,
           time,
-          label: `${new Date(time).toLocaleString()} · ${reasons[reason]}${step === -1 ? '' : ` · ${summary(historySummary(tree!, previous(step), step))}`}`,
+          label: `${new Date(time).toLocaleString()} · ${reasons[reason].label}${step === -1 ? '' : ` · ${summary(historySummary(tree!, previous(step), step))}`}`,
         }),
       ),
       ...shownVersions(versions, now, tree).map(
@@ -252,8 +269,6 @@ export function History({
   }
   function key(event: KeyboardEvent) {
     const index = entries.findIndex(({ id }) => id === selected)
-    const parentOf = (step: number) =>
-      step === -1 ? null : `step-${tree!.steps[step]!.parent}`
     const next =
       event.key === 'ArrowDown'
         ? entries[Math.min(entries.length - 1, index + 1)]?.id
@@ -263,11 +278,15 @@ export function History({
             ? entries[0]?.id
             : event.key === 'End'
               ? entries.at(-1)?.id
-              : event.key === 'ArrowLeft' && entry?.kind === 'step'
-                ? parentOf(entry.step)
+              : // As in a tree, Left goes to the item holding this one, and
+                // Right to the first item this one holds.
+                event.key === 'ArrowLeft' && entry?.kind === 'step'
+                ? (entries
+                    .slice(0, index)
+                    .findLast((item) => level(item) < level(entry))?.id ?? null)
                 : event.key === 'ArrowRight' && entry?.kind === 'step'
-                  ? tree!.children[entry.step + 1]![0] !== undefined
-                    ? `step-${tree!.children[entry.step + 1]![0]}`
+                  ? holds(index)
+                    ? entries[index + 1]!.id
                     : null
                   : undefined
     if (event.key === 'Enter') act()
@@ -276,6 +295,9 @@ export function History({
     event.preventDefault()
   }
   const steps = mode === 'steps'
+  // An item with deeper items after it holds them, always shown.
+  const holds = (index: number) =>
+    level(entries[index + 1]) > level(entries[index])
   return (
     <>
       <div className="history-modes">
@@ -315,13 +337,14 @@ export function History({
               className="history-entries"
               onKeyDown={key}
             >
-              {entries.map((item) => (
+              {entries.map((item, index) => (
                 <div
                   key={item.id}
                   id={`history-${item.id}`}
                   role="treeitem"
                   aria-selected={item.id === selected}
                   aria-level={'level' in item ? item.level : 1}
+                  aria-expanded={holds(index) || undefined}
                   aria-current={
                     item.kind === 'step' && item.step === tree?.current
                       ? 'true'

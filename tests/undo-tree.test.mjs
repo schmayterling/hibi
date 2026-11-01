@@ -852,3 +852,63 @@ test('three hours of writing keep the newest 32 steps as they were typed', () =>
   )
   assert.notEqual(undoAll(note).at(-1), '')
 })
+
+test('kept history holds no text typed after its save, also through a step redone and typed on', () => {
+  const note = open('ab')
+  note.insert(1, 'x', 'one')
+  note.tick(1000)
+  note.insert(2, 'y', 'two')
+  note.session.undo()
+  // A save takes 'axb', with the 'y' step to redo.
+  note.session.sealHistory()
+  const taken = note.session.snapshot()
+  note.session.redo()
+  note.tick(100)
+  note.insert(3, 'later', 'two')
+  note.session.markSaved(taken)
+  const kept = texts(keptHistory(note.session), 'axb')
+  assert.ok(
+    kept.every((text) => !text.includes('later')),
+    JSON.stringify(kept),
+  )
+})
+
+test('a save landing after a newer one began leaves the newer one its kept history', () => {
+  const note = open('')
+  note.insert(0, 'a', 'one')
+  note.session.sealHistory()
+  const first = note.session.snapshot()
+  note.insert(1, 'b', 'two')
+  // A second save begins before the first lands.
+  note.session.sealHistory()
+  const second = note.session.snapshot()
+  note.session.markSaved(first)
+  // Typing goes on in the group of the step the second save took.
+  note.insert(2, 'c', 'two')
+  note.session.markSaved(second)
+  const kept = keptHistory(note.session)
+  assert.notEqual(kept, null)
+  assert.deepEqual(texts(kept, 'ab'), ['a', 'ab'])
+})
+
+test('a save keeps no history once its text is the oldest and a composition went on past it', () => {
+  // Without the composition, the save's text as the oldest is its history.
+  const kept = open('', { historyGroups: 1 })
+  kept.insert(0, 'a')
+  kept.save()
+  kept.tick(10_000)
+  kept.insert(1, 'b')
+  assert.notEqual(kept.session.historyToSave(), null)
+  const note = open('', { historyGroups: 1 })
+  note.session.edit([{ from: 0, to: 0, insert: 'k' }], 'composition', 'ime')
+  // A save takes the text mid-composition, which goes on in the same step.
+  note.session.sealHistory()
+  const taken = note.session.snapshot()
+  note.session.edit([{ from: 0, to: 1, insert: 'か' }], 'composition', 'ime')
+  // The next step pushes the composed one out: its text is the oldest now,
+  // and isn't the text the save took.
+  note.tick(10_000)
+  note.insert(1, 'x')
+  note.session.markSaved(taken)
+  assert.equal(note.session.historyToSave(), null)
+})

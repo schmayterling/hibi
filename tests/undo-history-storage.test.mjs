@@ -24,8 +24,8 @@ async function profile(t) {
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   return root
 }
-/** A fresh main process over the same app data. */
-async function main(root) {
+/** A fresh main process over the same app data; `io` stands in for node:fs/promises. */
+async function main(root, io) {
   const module = { exports: {} }
   const require = createRequire(import.meta.url)
   new Function(
@@ -35,7 +35,11 @@ async function main(root) {
     (await bundle).outputFiles[0].text,
   )(
     (id) =>
-      id === 'electron' ? { app: { getPath: () => root } } : require(id),
+      id === 'electron'
+        ? { app: { getPath: () => root } }
+        : id === 'node:fs/promises' && io
+          ? io
+          : require(id),
     module,
     module.exports,
   )
@@ -328,23 +332,75 @@ test('notes Hibi moves to the trash take their kept histories with them', async 
   const root = await profile(t)
   const api = await main(root)
   const note = saved()
-  for (const path of ['/notes/a.md', '/notes/inner/b.md', '/other/c.md'])
+  for (const path of [
+    '/notes/a.md',
+    '/notes/inner/b.md',
+    '/notes/inner-c.md',
+    '/other/c.md',
+  ])
     await api.storeUndoHistory(path, note.file, note.history)
   await api.removeUndoHistory('/notes/a.md')
   assert.equal(await exists(kept(root, '/notes/a.md')), false)
-  // A trashed folder takes every note under it.
+  // A trashed folder takes every note under it, and only those.
   await api.removeUndoHistory('/notes/inner')
   assert.equal(await exists(kept(root, '/notes/inner/b.md')), false)
+  assert.equal(await exists(kept(root, '/notes/inner-c.md')), true)
   assert.equal(await exists(kept(root, '/other/c.md')), true)
-  // The index forgets them, so a later move brings nothing back.
-  const later = await main(root)
-  await later.relocateUndoHistory('/notes', '/moved')
+  // The index forgets them at once.
   assert.deepEqual(
     JSON.parse(
       await fs.readFile(join(root, 'undo-history-notes.json'), 'utf8'),
-    ),
-    ['/other/c.md'],
+    ).sort(),
+    ['/notes/inner-c.md', '/other/c.md'],
   )
+  // A history the index doesn't list goes by its name.
+  await fs.rm(join(root, 'undo-history-notes.json'))
+  await (await main(root)).removeUndoHistory('/other/c.md')
+  assert.equal(await exists(kept(root, '/other/c.md')), false)
+})
+
+test('a quit waits for a move or a removal still in progress', async (t) => {
+  const root = await profile(t)
+  for (const operation of ['rename', 'unlink']) {
+    // Moves rename kept files and removals unlink them; this one is slow.
+    const slow = Promise.withResolvers()
+    const data = join(root, operation)
+    await fs.mkdir(data)
+    const real = operation === 'rename' ? fs.rename : fs.unlink
+    const api = await main(data, {
+      ...fs,
+      [operation]: async (path, ...rest) => {
+        if (/[0-9a-f]{64}\.json$/.test(path)) await slow.promise
+        return real(path, ...rest)
+      },
+    })
+    const note = saved()
+    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    void (operation === 'rename'
+      ? api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
+      : api.removeUndoHistory('/notes/a.md'))
+    let quit = false
+    const quitting = api
+      .flushUndoHistory({
+        isDestroyed: () => false,
+        webContents: {
+          send: (_channel, token) =>
+            queueMicrotask(() => api.acceptUndoHistoryFlushed(token)),
+        },
+      })
+      .then(() => {
+        quit = true
+      })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(quit, false, operation)
+    slow.resolve()
+    await quitting
+    assert.equal(await exists(kept(data, '/notes/a.md')), false)
+    assert.equal(
+      await exists(kept(data, '/notes/b.md')),
+      operation === 'rename',
+    )
+  }
 })
 
 test('a quit waits for moves and removals queued behind a write', async (t) => {
@@ -379,5 +435,9 @@ test("the index's temporary copy a crash left behind is removed", async (t) => {
   const api = await main(root)
   const note = saved()
   await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  assert.equal(await exists(left), false)
+  // Turning keeping off removes one too, though nothing reads the index then.
+  await fs.writeFile(left, '["/notes/a.md"]')
+  await (await main(root)).setKeepUndoHistory(false)
   assert.equal(await exists(left), false)
 })

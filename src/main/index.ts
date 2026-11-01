@@ -2560,9 +2560,12 @@ if (!app.requestSingleInstanceLock()) {
               path,
               expectedVersion,
               async (file) => {
+                // Kept histories go by the note's real path, whatever case
+                // the addon spelled it in.
+                const note = await realpath(file).catch(() => file)
                 await shell.trashItem(file)
                 // Open notes aren't trashed here, so no tab sends steps later.
-                void removeUndoHistory(file).catch((error: unknown) =>
+                void removeUndoHistory(note).catch((error: unknown) =>
                   console.error('Could not remove undo history:', error),
                 )
               },

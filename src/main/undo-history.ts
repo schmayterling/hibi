@@ -91,12 +91,15 @@ async function remove(name: string) {
   notes?.delete(name)
 }
 const indexPath = () => join(app.getPath('userData'), 'undo-history-notes.json')
-async function indexed() {
-  if (notes) return notes
-  // A crash mid-write leaves the index's temporary copy beside it.
+/** A crash mid-write leaves the index's temporary copy beside it. */
+async function removeIndexCopies() {
   for (const name of await readdir(app.getPath('userData')).catch(() => []))
     if (name.startsWith('.undo-history-notes.json.') && name.endsWith('.tmp'))
       await unlink(join(app.getPath('userData'), name)).catch(() => {})
+}
+async function indexed() {
+  if (notes) return notes
+  await removeIndexCopies()
   const listed = await readFile(indexPath(), 'utf8')
     .then((text): unknown => JSON.parse(text))
     .catch(() => null)
@@ -259,6 +262,7 @@ export function clearUndoHistory() {
   return serial(async () => {
     await rm(folder(), { recursive: true, force: true })
     await rm(indexPath(), { force: true })
+    await removeIndexCopies()
     sizes = new Map()
     notes = new Map()
   })

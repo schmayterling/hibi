@@ -890,11 +890,13 @@ async function recordSaveHistory(
   destination: string,
   previous: SourceSnapshot | null,
   content: SourceSnapshot,
+  automatic = false,
 ) {
   try {
     await recordVersions(
       destination,
       previous === null ? [content] : [previous, content],
+      automatic,
     )
   } catch (error) {
     console.error('local history failed:', error)
@@ -1001,6 +1003,7 @@ export async function autosaveDocument(
   expectedRevision: unknown,
   expectedContentVersion?: number,
   canContinue: () => boolean = () => true,
+  automatic = true,
 ): Promise<AutosaveResult> {
   if (
     typeof target !== 'string' ||
@@ -1049,7 +1052,7 @@ export async function autosaveDocument(
   }
   storeTab()
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, draft.saved, content)
+  await recordSaveHistory(window, destination, draft.saved, content, automatic)
   return { status: 'saved', document: getDocumentForTab(id) }
 }
 
@@ -1089,6 +1092,7 @@ export async function saveTargetDocument(
     expectedRevision,
     expectedContentVersion as number,
     canContinue,
+    false,
   )
   if (result.status === 'skipped') return { status: 'stale', document: null }
   return { status: result.status, document: result.document }

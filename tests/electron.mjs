@@ -796,9 +796,8 @@ function startupEntries({ BrowserWindow } = {}) {
       []),
   ]
   const histories = [
-    ...(doc?.querySelectorAll(
-      'dialog.app-dialog[aria-label="Version history" i]',
-    ) ?? []),
+    ...(doc?.querySelectorAll('dialog.app-dialog[aria-label="History" i]') ??
+      []),
   ]
   const palettes = [...(doc?.querySelectorAll('dialog.command-palette') ?? [])]
   const text = (value, limit = 80) => String(value ?? '').slice(0, limit)
@@ -881,23 +880,23 @@ function startupEntries({ BrowserWindow } = {}) {
       historyDialogs: {
         count: histories.length,
         samples: histories.slice(0, 2).map((dialog) => {
-          const navs = dialog.querySelectorAll(
-            'nav[aria-label="Saved versions" i]',
+          const lists = dialog.querySelectorAll(
+            '[role="listbox"][aria-label="Points to return to" i]',
           )
-          const buttons = [
+          const options = [
             ...dialog.querySelectorAll(
-              'nav[aria-label="Saved versions" i] button',
+              '[role="listbox"][aria-label="Points to return to" i] [role="option"]',
             ),
           ]
-          const last = buttons.at(-1)
+          const last = options.at(-1)
           return {
             open: dialog.open,
             closing: dialog.classList.contains('closing'),
-            navCount: navs.length,
-            buttonCount: buttons.length,
-            lastButton: last && {
-              disabled: last.disabled,
-              pressed: last.getAttribute('aria-pressed') === 'true',
+            listCount: lists.length,
+            optionCount: options.length,
+            lastOption: last && {
+              selected: last.getAttribute('aria-selected') === 'true',
+              label: text(last.textContent),
             },
           }
         }),

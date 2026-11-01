@@ -231,6 +231,7 @@ import {
   flushUndoHistory,
   keepsUndoHistory,
   readUndoHistory,
+  relocateUndoHistory,
   removeUndoHistory,
   setKeepUndoHistory,
   storeUndoHistory,
@@ -2535,15 +2536,26 @@ if (!app.requestSingleInstanceLock()) {
           destinationPath: unknown,
           expectedVersion: unknown,
         ) =>
-          mutateAddonFile(event, owner, (isCurrent) =>
-            renameWorkspaceFile(
+          mutateAddonFile(event, owner, async (isCurrent) => {
+            const root = workspaceRoot()
+            const result = await renameWorkspaceFile(
               target as WorkspaceTarget,
               sourcePath,
               destinationPath,
               expectedVersion,
               isCurrent,
-            ),
-          ),
+            )
+            // A note an addon moves keeps its undo history, as one Hibi
+            // moves does; a move that kept both names moved nothing.
+            if (root && result.ok && result.value.sourceRemoved)
+              void relocateUndoHistory(
+                join(root, result.value.path),
+                join(root, result.value.destinationPath),
+              ).catch((error: unknown) =>
+                console.error('Could not move undo history:', error),
+              )
+            return result
+          }),
       )
       handle(
         WORKSPACE_CHANNELS.trashFile,

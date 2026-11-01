@@ -186,7 +186,7 @@ export function DocumentTabs({
     id: string,
     anchor: HTMLElement | { x: number; y: number },
   ) => {
-    if (busy || !currentIds.has(id)) return
+    if (!currentIds.has(id)) return
     const ids = document.tabs.map((tab) => tab.id)
     const index = ids.indexOf(id)
     if (index < 0) return
@@ -225,6 +225,7 @@ export function DocumentTabs({
       ref={strip}
       role="tablist"
       aria-label="Open tabs"
+      aria-busy={busy}
       aria-description="Drag document tabs to reorder, or use Alt+Shift+Left or Right on a focused document tab."
       onKeyDown={(event) => {
         if (
@@ -385,7 +386,6 @@ export function DocumentTabs({
               aria-label={name}
               aria-selected={selected}
               aria-description={dirty ? 'Unsaved changes' : undefined}
-              aria-disabled={busy}
               tabIndex={selected ? 0 : -1}
               data-tooltip={name}
               data-verbatim="true"
@@ -397,15 +397,15 @@ export function DocumentTabs({
               onAuxClick={(event) => {
                 if (event.button !== 1) return
                 event.preventDefault()
-                if (!busy && !closing) onClose(tab.id)
+                if (!closing) onClose(tab.id)
               }}
               onClick={() => {
                 cancelNavigationFocus()
-                if (!busy && !selected) onSelect(tab.id)
+                if (!selected) onSelect(tab.id)
               }}
               onContextMenu={(event) => {
                 event.preventDefault()
-                if (busy || closing) return
+                if (closing) return
                 event.currentTarget.focus({ preventScroll: true })
                 openTabMenu(tab.id, {
                   x: event.clientX,
@@ -430,7 +430,6 @@ export function DocumentTabs({
               className="tab-close"
               aria-label={`Close ${name}`}
               title="Close tab"
-              disabled={busy}
               onClick={() => onClose(tab.id)}
             >
               <X size={12} />

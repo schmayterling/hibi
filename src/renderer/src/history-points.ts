@@ -292,6 +292,40 @@ export function goToStep(
   return true
 }
 
+/**
+ * Takes the session to state `to` as the history view does: a step along
+ * undo and redo, a point as one new edit undo takes back. `tree`, `text` and
+ * `version` are what the view read. Returns where the text changed, after
+ * its first change, or null when it didn't.
+ */
+export function returnTo(
+  session: Pick<
+    DocumentSession,
+    'snapshot' | 'edit' | 'undo' | 'redo' | 'followBranch'
+  >,
+  tree: HistoryTree,
+  text: string,
+  version: number,
+  to: number,
+  step: boolean,
+) {
+  // Offsets read before an edit made since would change other text.
+  if (session.snapshot().version !== version)
+    throw new Error('The note changed while History was open. Open it again.')
+  const changes = historyChanges(tree, tree.current, to).filter(
+    ({ from, to, insert }) => text.slice(from, to) !== insert,
+  )
+  if (step) {
+    if (!goToStep(session, tree, to))
+      throw new Error(
+        'History stopped partway to this step. Open it again to go on.',
+      )
+  } else if (changes.length)
+    session.edit(changes, 'visual', crypto.randomUUID())
+  const first = changes[0]
+  return first ? first.from + first.insert.length : null
+}
+
 const words = (text: string) => text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0
 /** Words a span of steps added and removed, and the first line it changed. */
 export function historySummary(tree: HistoryTree, from: number, to: number) {

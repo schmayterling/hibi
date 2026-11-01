@@ -223,6 +223,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'openExternalDocuments',
         'onExternalDocuments',
         'onDocumentSaved',
+        'onFileDialog',
         'newDocument',
         'saveDocument',
         'saveTargetDocument',

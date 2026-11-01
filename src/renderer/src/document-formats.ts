@@ -1,5 +1,5 @@
-import { createElement } from 'react'
-import type { DocumentFormat } from '../../addons/api'
+import { createElement, useEffect, useState } from 'react'
+import type { DocumentFormat, DocumentPreviewProps } from '../../addons/api'
 import type { DocumentState } from '../../shared/desktop'
 import {
   type DocumentView,
@@ -22,11 +22,62 @@ const plainText: DocumentFormat = {
     css: '',
   }),
 }
-const registry = new Map<string, DocumentFormat>([[plainText.id, plainText]])
+/** Shows the image file through the existing document image read. */
+function ImagePreview({ document }: DocumentPreviewProps) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let current = true
+    setUrl(null)
+    // The read decodes the source, so the name is encoded to stay exact.
+    void window.hibi
+      ?.readDocumentImage(
+        encodeURIComponent(document.name),
+        document.revision,
+      )
+      .then((image) => {
+        if (current) setUrl(image)
+      })
+    return () => {
+      current = false
+    }
+  }, [document.name, document.revision])
+  return url
+    ? createElement('img', {
+        className: 'image-preview',
+        src: url,
+        alt: document.name,
+      })
+    : null
+}
+/** Images open in their own view and are never edited as source. */
+const image: DocumentFormat = {
+  id: 'core.image',
+  name: 'Image',
+  extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'],
+  views: ['image'],
+  Preview: ImagePreview,
+}
+const registry = new Map<string, DocumentFormat>([
+  [plainText.id, plainText],
+  [image.id, image],
+])
 const listeners = new Set<() => void>()
 const sourceViews: readonly DocumentView[] = ['markdown']
 const previewViews: readonly DocumentView[] = ['side-by-side', 'markdown']
-let snapshot: readonly DocumentFormat[] = [plainText]
+let snapshot: readonly DocumentFormat[] = [plainText, image]
+/** The requested view when the document has it, else the view it falls back to. */
+export function documentView(
+  available: readonly DocumentView[],
+  requested: DocumentView,
+): DocumentView {
+  return available.includes(requested)
+    ? requested
+    : available.includes('side-by-side')
+      ? 'side-by-side'
+      : available.includes('image')
+        ? 'image'
+        : 'markdown'
+}
 export const documentFormats = {
   snapshot: () => snapshot,
   subscribe(listener: () => void) {

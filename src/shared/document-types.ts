@@ -2,7 +2,8 @@ import { fileAssociations } from './file-associations.ts'
 
 export const markdownExtensions = fileAssociations.markdown.ext
 export const documentViews = ['normal', 'side-by-side', 'markdown'] as const
-export type DocumentView = (typeof documentViews)[number]
+export const imageView = 'image' as const
+export type DocumentView = (typeof documentViews)[number] | typeof imageView
 export const isDocumentView = (value: string): value is DocumentView =>
   documentViews.some((view) => view === value)
 export const documentExtension = (name: string) =>

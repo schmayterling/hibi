@@ -7,6 +7,7 @@ import {
   historyOf,
   historyPoints,
   historySummary,
+  returnTo,
   shownVersions,
 } from '../src/renderer/src/history-points.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
@@ -534,4 +535,74 @@ test('a span replaced with the same text is not a change to preview', () => {
     changeLines('one two', [{ from: 4, to: 7, insert: 'two' }]),
     [],
   )
+})
+
+test('going to a step or restoring a point tells where the text changed', () => {
+  const writer = note('one two')
+  writer.paste(' three')
+  let tree = historyOf(writer.session)
+  const read = () => [writer.text(), writer.session.snapshot().version]
+  // Back to the text before the paste: the caret goes where it was taken out.
+  assert.equal(returnTo(writer.session, tree, ...read(), -1, true), 7)
+  assert.equal(writer.text(), 'one two')
+  // Restoring the paste puts the caret after it, in one step undo takes back.
+  tree = historyOf(writer.session)
+  assert.equal(returnTo(writer.session, tree, ...read(), 0, false), 13)
+  assert.equal(writer.text(), 'one two three')
+  writer.session.undo()
+  assert.equal(writer.text(), 'one two')
+  // Where the text is already the same, nothing changes.
+  tree = historyOf(writer.session)
+  assert.equal(
+    returnTo(writer.session, tree, ...read(), tree.current, true),
+    null,
+  )
+})
+
+test('the history view changes nothing after an edit made since it read the note', () => {
+  const writer = note('one')
+  writer.type(' two')
+  const tree = historyOf(writer.session)
+  const text = writer.text()
+  const { version } = writer.session.snapshot()
+  // An addon edits the note while the view is open.
+  writer.session.edit([{ from: 0, to: 0, insert: '> ' }], 'addon', 'addon')
+  for (const step of [true, false])
+    assert.throws(
+      () => returnTo(writer.session, tree, text, version, -1, step),
+      /changed while History was open/,
+    )
+  assert.equal(writer.text(), '> one two')
+})
+
+test('going to a step that stops partway is an error, not a closed view', () => {
+  const writer = note('a')
+  writer.type('b')
+  writer.type('c')
+  const { session } = writer
+  session.undo()
+  session.undo()
+  const tree = historyOf(session)
+  // The editor takes the first redo and then no more.
+  let redos = 0
+  const stalling = {
+    snapshot: () => session.snapshot(),
+    edit: (...edit) => session.edit(...edit),
+    undo: () => session.undo(),
+    redo: () => (redos++ ? null : session.redo()),
+    followBranch: (step) => session.followBranch(step),
+  }
+  assert.throws(
+    () =>
+      returnTo(
+        stalling,
+        tree,
+        writer.text(),
+        session.snapshot().version,
+        tree.steps.findIndex(({ group }) => group.forward[0].insert === 'c'),
+        true,
+      ),
+    /stopped partway/,
+  )
+  assert.equal(writer.text(), 'ab')
 })

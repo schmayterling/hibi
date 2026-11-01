@@ -2827,6 +2827,9 @@
     "src/renderer/src/main.tsx",
     "src/shared/hotkeys.ts"
   ],
+  "a29576c69bf2": [
+    "src/renderer/src/history-points.ts"
+  ],
   "11d58b08de98": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
@@ -6076,6 +6079,9 @@
   "4ef953980674": [
     "src/renderer/src/SourceEditor.tsx"
   ],
+  "403a5bd7603b": [
+    "src/renderer/src/History.tsx"
+  ],
   "b813945dd20c": [
     "src/renderer/src/SourceEditor.tsx"
   ],
@@ -6146,6 +6152,9 @@
   ],
   "c7085d2772ec": [
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "2469fb10d7a2": [
+    "src/renderer/src/history-points.ts"
   ],
   "95e4db0dfa62": [
     "src/main/workspace-settings.ts"

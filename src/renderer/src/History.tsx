@@ -6,16 +6,19 @@ import {
 } from '../../shared/history'
 import { Button } from '../../ui/Controls'
 import { documentRuntime } from './document-runtime'
+import { editorViewRegistry } from './editor-view-api'
 import {
   changeLines,
-  goToStep,
   type HistoryPoint,
   historyChanges,
   historyOf,
   historyPoints,
   historySummary,
+  returnTo,
   shownVersions,
 } from './history-points'
+import { sourceCurrent } from './SourceEditor'
+import { editorPosition, sourceView } from './source-view'
 import './version-history.css'
 
 /**
@@ -65,6 +68,7 @@ export function History({
   const [error, setError] = useState('')
   const tree = useMemo(() => (session ? historyOf(session) : null), [session])
   const text = useMemo(() => session?.snapshot().materialize() ?? '', [session])
+  const version = useMemo(() => session?.snapshot().version ?? 0, [session])
   useEffect(() => {
     let active = true
     void window.hibi.listVersions().then(
@@ -211,14 +215,35 @@ export function History({
       close({ version: entry.version.id, large: replaces })
       return
     }
+    // The editor the user works in, as undo from the palette finds it.
+    const view = documentRuntime.captureActiveView()
+    const surface =
+      view && view.documentId === documentRuntime.captureDocument()?.documentId
+        ? editorViewRegistry.surface(view)
+        : null
+    const editor = surface && sourceView(surface)
+    // As with its own undo, a read-only editor takes no step.
+    if (editor?.state.readOnly) {
+      setError('The editor is read-only right now.')
+      return
+    }
     try {
-      if (entry.kind === 'step') goToStep(session, tree, entry.step)
-      else {
-        // Restoring is a new step: undo goes back to the text before it.
-        const changes = historyChanges(tree, tree.current, entry.step).filter(
-          ({ from, to, insert }) => text.slice(from, to) !== insert,
-        )
-        if (changes.length) session.edit(changes, 'visual', crypto.randomUUID())
+      const at = returnTo(
+        session,
+        tree,
+        text,
+        version,
+        entry.step,
+        entry.kind === 'step',
+      )
+      // The editor shows the change, with its caret after it.
+      if (editor && at !== null && sourceCurrent(editor)) {
+        const position = editorPosition(editor, at)
+        if (position !== null)
+          editor.dispatch({
+            selection: { anchor: position },
+            scrollIntoView: true,
+          })
       }
       close(null)
     } catch (error) {

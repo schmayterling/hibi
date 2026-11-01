@@ -794,10 +794,20 @@ class TableView {
     this.start = from
     this.end = to
     if (this.heights) {
-      this.spacerHeight(this.before, this.heights.before(from))
+      // The kept row's own element stands for its height, so the spacer on
+      // its side of the window leaves that out.
+      const height = kept
+        ? this.heights.before(editing + 1) - this.heights.before(editing)
+        : 0
+      this.spacerHeight(
+        this.before,
+        this.heights.before(from) - (editing < from ? height : 0),
+      )
       this.spacerHeight(
         this.after,
-        this.heights.before(widget.rows) - this.heights.before(to),
+        this.heights.before(widget.rows) -
+          this.heights.before(to) -
+          (editing >= to ? height : 0),
       )
     }
   }
@@ -1085,7 +1095,16 @@ class TableView {
     const heights = this.heights
     if (index === null || !heights) return null
     const after = index >= this.end
-    const spacer = (after ? this.after : this.before)?.getBoundingClientRect()
+    // Rows after the window start where it ends: at the after spacer, or at
+    // the edited row kept mounted between them.
+    const editing = this.editing ? this.editing.line - 2 : -1
+    const kept =
+      after && editing >= this.end
+        ? this.rendered.get(editing)?.element
+        : undefined
+    const spacer = (
+      kept ?? (after ? this.after : this.before)
+    )?.getBoundingClientRect()
     if (!spacer) return null
     const top =
       spacer.top +

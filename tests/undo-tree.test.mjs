@@ -616,19 +616,19 @@ test('past the step limit, steps typed without a pause become one before a branc
   const note = open('', { historyGroups: 4 })
   note.insert(0, 'a')
   note.insert(1, 'b')
+  note.insert(2, 'c')
   note.session.undo()
-  note.insert(1, 'c')
+  note.insert(2, 'd')
   note.session.undo()
-  note.insert(1, 'd')
   note.insert(2, 'e')
   assert.equal(note.session.historySize().groups, 4)
   note.save()
-  // d and e became one step; both branches stayed.
+  // a and b became one step; both branches stayed.
   assert.deepEqual(texts(keptHistory(note.session), note.text()).sort(), [
-    'a',
     'ab',
-    'ac',
-    'ade',
+    'abc',
+    'abd',
+    'abe',
   ])
 })
 
@@ -665,7 +665,7 @@ test('a letter deleted and typed again a moment later stays two steps, so undo s
   // Pauses keep the older steps apart, so the backspace and the letter typed
   // again are the oldest two that could become one: a step that changes
   // nothing, which the source can't undo.
-  const note = open('', { historyGroups: 5 })
+  const note = open('', { historyGroups: 6 })
   note.insert(0, 'a')
   note.tick(10_000)
   note.insert(1, 'b')
@@ -677,7 +677,9 @@ test('a letter deleted and typed again a moment later stays two steps, so undo s
   note.insert(2, 'c')
   note.tick(1000)
   note.insert(3, 'd')
-  assert.deepEqual(undoAll(note), ['ab', 'a', 'ab', 'a', ''])
+  note.tick(1000)
+  note.insert(4, 'e')
+  assert.deepEqual(undoAll(note), ['abcd', 'ab', 'a', 'ab', 'a', ''])
 })
 
 test('steps made in two views stay apart, so undo gives each view back its own caret', () => {
@@ -817,4 +819,36 @@ test('coarser steps keep the text a reopened note opened with apart from new typ
   reopened.tick(1000)
   reopened.insert(3, 'd')
   assert.deepEqual(undoAll(reopened), ['ab', 'a', ''])
+})
+
+test('three hours of writing keep the newest 32 steps as they were typed', () => {
+  // Words a second apart, a pause after each sentence, a save every few
+  // minutes. The same writing with no step limit keeps every step as typed.
+  const note = open('')
+  const unlimited = open('', { historyGroups: 1_000_000 })
+  for (let sentence = 0; sentence < 600; sentence++) {
+    for (let word = 0; word < 8; word++)
+      for (const writer of [note, unlimited]) {
+        writer.insert(writer.text().length, `w${word} `)
+        writer.tick(1000)
+      }
+    for (const writer of [note, unlimited]) {
+      writer.tick(10_000)
+      if (sentence % 20 === 19) writer.save()
+    }
+  }
+  const steps = (writer) =>
+    writer.session
+      .historyTree()
+      .steps.map(([group]) => [group.started, group.time, group.operations])
+  assert.equal(steps(unlimited).length, 4800)
+  assert.equal(steps(note).length, 128)
+  assert.deepEqual(steps(note).slice(-32), steps(unlimited).slice(-32))
+  // Older sentences became one step each; past that, the oldest went.
+  assert.ok(
+    steps(note)
+      .slice(0, -32)
+      .every(([, , operations]) => operations === 8),
+  )
+  assert.notEqual(undoAll(note).at(-1), '')
 })

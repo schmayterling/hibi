@@ -539,8 +539,9 @@ export class DocumentSession {
    * one, so undo still reaches the oldest text. States worth returning to
    * stay apart: a pause, a branch, the text a save took (landed or still
    * writing) or a version, the text before a large edit, and one state every
-   * 3 minutes of steady typing.
-   * Steps go only when no two steps can become one.
+   * 3 minutes of steady typing. The newest quarter of the steps (32 of 128)
+   * never join, so undo takes back recent typing as it was typed.
+   * Steps go only when no two older steps can become one.
    */
   #coarsen(maximumGroups = this.#options.historyGroups ?? 128) {
     if (this.historySize().groups <= maximumGroups) return
@@ -551,7 +552,8 @@ export class DocumentSession {
         (sum, edit) => sum + edit.insert.length + edit.to - edit.from,
         0,
       ) >= 200
-    for (let index = 0; index + 1 < this.#undo.length; index++) {
+    const older = this.#undo.length - Math.floor(maximumGroups / 4)
+    for (let index = 0; index + 1 < older; index++) {
       const first = this.#undo[index]!,
         second = this.#undo[index + 1]!
       if (

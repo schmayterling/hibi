@@ -231,6 +231,7 @@ import {
   flushUndoHistory,
   keepsUndoHistory,
   readUndoHistory,
+  removeUndoHistory,
   setKeepUndoHistory,
   storeUndoHistory,
 } from './undo-history'
@@ -2558,7 +2559,13 @@ if (!app.requestSingleInstanceLock()) {
               target as WorkspaceTarget,
               path,
               expectedVersion,
-              (file) => shell.trashItem(file),
+              async (file) => {
+                await shell.trashItem(file)
+                // Open notes aren't trashed here, so no tab sends steps later.
+                void removeUndoHistory(file).catch((error: unknown) =>
+                  console.error('Could not remove undo history:', error),
+                )
+              },
               isCurrent,
             ),
           ),

@@ -72,6 +72,7 @@ function harness(t) {
     lookups: 0,
     calls: [],
     trashed: [],
+    removed: [],
     documentPath: '/notes/first.md',
     document: { revision: 1 },
     sent: [],
@@ -106,6 +107,7 @@ function harness(t) {
     isAddonActivationCurrent: (id, generation) =>
       id === 'example' && state.enabled && generation === state.generation,
     shell: { trashItem: async (file) => state.trashed.push(file) },
+    removeUndoHistory: async (file) => state.removed.push(file),
   }
   for (const [name, [service]] of Object.entries(operations))
     bindings[service] = async (...args) => {
@@ -174,6 +176,8 @@ for (const name of Object.keys(operations)) {
       const trash = forwarded.pop()
       await trash('removed.md')
       assert.deepEqual(h.state.trashed, ['removed.md'])
+      // Its kept undo history goes with it.
+      assert.deepEqual(h.state.removed, ['removed.md'])
     }
     assert.deepEqual(forwarded, operations[name].slice(1))
     assert.equal(h.state.lookups, 1)

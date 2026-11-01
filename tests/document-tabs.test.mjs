@@ -1628,3 +1628,119 @@ test('middle-click is ignored while a tab close is awaiting confirmation', {
   assert.equal(current.tabs.length, 2)
   assert.equal(current.tabId, b.id)
 })
+
+test('close tab pressed during a file operation runs after it, for the tab it was pressed on', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-busy-close-'))
+  const a = join(root, 'a.md'),
+    b = join(root, 'b.md')
+  await writeFile(a, 'note a')
+  await writeFile(b, 'note b')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForFormattedEditor(app, page)
+  page.setDefaultTimeout(6500)
+  await waitForDocumentEditor(app, page)
+  const read = () => page.evaluate(() => window.hibi.getDocument())
+  const idle = () =>
+    page.waitForFunction(
+      () =>
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+    )
+  for (const file of [a, b]) {
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      basename(file),
+    )
+    await idle()
+  }
+  const [tabA, tabB] = (await read()).tabs
+  assert.ok(tabA && tabB)
+  await page.evaluate(() => {
+    window.commands = 0
+    window.hibi.onCommand((command) => {
+      if (command === 'close-tab') window.commands++
+    })
+  })
+  // Holds the next call on a channel in the main process until released.
+  await app.evaluate(({ ipcMain }) => {
+    const handlers = ipcMain._invokeHandlers
+    const close = handlers.get('document:close-tab')
+    globalThis.closes = 0
+    handlers.set('document:close-tab', (...args) => {
+      globalThis.closes++
+      return close(...args)
+    })
+    globalThis.hold = (channel) => {
+      const original = handlers.get(channel)
+      globalThis.held = new Promise((entered) => {
+        handlers.set(channel, async (...args) => {
+          handlers.set(channel, original)
+          await new Promise((release) => {
+            globalThis.release = release
+            entered()
+          })
+          return original(...args)
+        })
+      })
+    }
+  })
+  const closeDuring = async (start, pressed) => {
+    await start()
+    await app.evaluate(() => globalThis.held)
+    await page.locator('.app[aria-busy="true"]').waitFor()
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+w' : 'Control+w',
+    )
+    await page.waitForFunction((count) => window.commands === count, pressed)
+    await app.evaluate(() => globalThis.release())
+  }
+
+  // Pressed on b while a's tab was opening: b is no longer shown, so it waits for nothing.
+  await closeDuring(async () => {
+    await app.evaluate(() => globalThis.hold('document:select-tab'))
+    await page.locator(`[data-tab-id="${tabA.id}"]`).click()
+  }, 1)
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    tabA.id,
+  )
+  await idle()
+  assert.equal((await read()).tabs.length, 2)
+  assert.equal(await app.evaluate(() => globalThis.closes), 0)
+
+  // Pressed on a while it saved: a closes once the save is done.
+  await closeDuring(async () => {
+    await app.evaluate(() => globalThis.hold('document:save'))
+    await clickMenu(app, 'Save')
+  }, 2)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 1,
+  )
+  await idle()
+  const current = await read()
+  assert.deepEqual(
+    current.tabs.map((tab) => tab.id),
+    [tabB.id],
+  )
+  assert.equal(await app.evaluate(() => globalThis.closes), 1)
+  assert.equal(await readFile(a, 'utf8'), 'note a')
+})

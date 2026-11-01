@@ -324,17 +324,36 @@ export function historySummary(tree: HistoryTree, from: number, to: number) {
 // viewport would show all of a whole-note change.
 const shown = (part: string) =>
   part.length > 10_000 ? `${part.slice(0, 10_000)}…` : part
-/** Each change with the line before it and after it. */
+/**
+ * Each change with the line before it and after it, 300 characters of each
+ * at most: a change beside a long line (a pasted image, minified data)
+ * shows only the text nearest it.
+ */
 export function changeLines(text: string, changes: readonly RawEdit[]) {
   const start = (at: number) => text.lastIndexOf('\n', at - 1) + 1
   const end = (at: number) => {
     const found = text.indexOf('\n', at)
     return found < 0 ? text.length : found
   }
-  return changes.map(({ from, to, insert }) => ({
-    before: text.slice(start(Math.max(0, start(from) - 1)), from),
-    removed: shown(text.slice(from, to)),
-    added: shown(insert),
-    after: text.slice(to, end(Math.min(text.length, end(to) + 1))),
-  }))
+  return (
+    changes
+      // Two branches that made the same edit replace a span with itself.
+      .filter(({ from, to, insert }) => text.slice(from, to) !== insert)
+      .map(({ from, to, insert }) => {
+        const before = start(Math.max(0, start(from) - 1)),
+          after = end(Math.min(text.length, end(to) + 1))
+        return {
+          before:
+            from - before > 300
+              ? `…${text.slice(from - 300, from)}`
+              : text.slice(before, from),
+          removed: shown(text.slice(from, to)),
+          added: shown(insert),
+          after:
+            after - to > 300
+              ? `${text.slice(to, to + 300)}…`
+              : text.slice(to, after),
+        }
+      })
+  )
 }

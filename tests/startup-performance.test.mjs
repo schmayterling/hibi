@@ -127,6 +127,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // 877 (#786); the History view loads later.
   // Autosave waiting until an input method commits what it composes adds
   // 332 (#790).
+  // Running a menu or shortcut command that arrives during a file operation
+  // once it finishes, instead of dropping it, adds 454 (#PR).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -142,7 +144,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         109 +
         2933 +
         877 +
-        332,
+        332 +
+        454,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

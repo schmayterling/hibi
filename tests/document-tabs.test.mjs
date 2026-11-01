@@ -1744,3 +1744,262 @@ test('close tab pressed during a file operation runs after it, for the tab it wa
   assert.equal(await app.evaluate(() => globalThis.closes), 1)
   assert.equal(await readFile(a, 'utf8'), 'note a')
 })
+
+const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+
+// Opens the files in order, the last one shown. Counts the commands the page
+// receives and the calls on the given channels, cancels discard prompts, and
+// can hold a channel's next call.
+async function launchHolding(t, prefix, files, channels) {
+  const root = await mkdtemp(join(tmpdir(), prefix))
+  const paths = Object.fromEntries(
+    Object.keys(files).map((name) => [name, join(root, name)]),
+  )
+  for (const [name, text] of Object.entries(files))
+    await writeFile(paths[name], text)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    // Quit without saving what a test left unsaved.
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  const editor = await waitForFormattedEditor(app, page)
+  page.setDefaultTimeout(6500)
+  const idle = () =>
+    page.waitForFunction(
+      () =>
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+    )
+  for (const file of Object.values(paths)) {
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      basename(file),
+    )
+    await idle()
+  }
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() => {
+    window.commands = 0
+    window.hibi.onCommand(() => window.commands++)
+  })
+  await app.evaluate(({ ipcMain, dialog }, channels) => {
+    const handlers = ipcMain._invokeHandlers
+    globalThis.calls = {}
+    for (const channel of channels) {
+      const original = handlers.get(channel)
+      handlers.set(channel, (...args) => {
+        globalThis.calls[channel] = (globalThis.calls[channel] ?? 0) + 1
+        return original(...args)
+      })
+    }
+    globalThis.held = {}
+    globalThis.release = {}
+    // Before the call runs, or after it ran and before its reply.
+    globalThis.hold = (channel, after = false) => {
+      const original = handlers.get(channel)
+      globalThis.held[channel] = new Promise((entered) => {
+        handlers.set(channel, async (...args) => {
+          handlers.set(channel, original)
+          const reply = after ? await original(...args) : undefined
+          await new Promise((release) => {
+            globalThis.release[channel] = release
+            entered()
+          })
+          return after ? reply : original(...args)
+        })
+      })
+    }
+    globalThis.prompts = 0
+    dialog.showMessageBox = async () => {
+      globalThis.prompts++
+      return { response: 2 }
+    }
+  }, channels)
+  const commands = (count) =>
+    page.waitForFunction((count) => window.commands === count, count)
+  return { app, page, editor, paths, idle, commands }
+}
+
+test('save, close tab and save pressed during a save run in that order', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, editor, paths, idle, commands } = await launchHolding(
+    t,
+    'hibi-tab-busy-order-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+  )
+  await app.evaluate(() => globalThis.hold('document:save', true))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  // The saved tab stays writable; this text comes after what the save wrote.
+  await replaceRichText(page, editor, 'note a, more')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'note a, more',
+  )
+  for (const key of ['s', 'w', 's']) await pressShortcut(app, `${mod}+${key}`)
+  await commands(4)
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 1,
+  )
+  await idle()
+  assert.equal(await app.evaluate(() => globalThis.prompts), 0)
+  assert.equal(await readFile(paths['a.md'], 'utf8'), 'note a, more')
+})
+
+test('close tab pressed again while its prompt is open asks once', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, editor, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-prompt-',
+    { 'a.md': 'note a' },
+    ['document:close-tab'],
+  )
+  await replaceRichText(page, editor, 'note a, edited')
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
+  await app.evaluate(({ BrowserWindow, dialog }) => {
+    // Main's own shortcut handler runs first, so a counted key was handled.
+    globalThis.keys = 0
+    BrowserWindow.getAllWindows()[0].webContents.on(
+      'before-input-event',
+      (_event, input) => {
+        if (input.type === 'keyDown' && input.key.toLowerCase() === 'w')
+          globalThis.keys++
+      },
+    )
+    const cancel = dialog.showMessageBox
+    dialog.showMessageBox = () => {
+      dialog.showMessageBox = cancel
+      globalThis.prompts++
+      return new Promise((answer) => {
+        globalThis.answer = () => answer({ response: 2 })
+      })
+    }
+  })
+  await pressShortcut(app, `${mod}+w`)
+  await waitForAsync(app, () => globalThis.prompts === 1)
+  // Again, by its shortcut and from the menu, while the prompt is open.
+  await pressShortcut(app, `${mod}+w`)
+  await waitForAsync(app, () => globalThis.keys === 2)
+  await clickMenu(app, 'Close tab')
+  await app.evaluate(() => globalThis.answer())
+  await idle()
+  assert.equal(await app.evaluate(() => globalThis.prompts), 1)
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:close-tab']),
+    1,
+  )
+})
+
+test('a save pressed while a file opens leaves its tab writable', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle, commands } = await launchHolding(
+    t,
+    'hibi-tab-busy-writable-',
+    { 'a.md': 'note a' },
+    ['document:save'],
+  )
+  await app.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = async () => ({ canceled: true, filePaths: [] })
+    globalThis.hold('document:open')
+  })
+  await clickMenu(app, 'Open…')
+  await app.evaluate(() => globalThis.held['document:open'])
+  await page.locator('.app[aria-busy="true"]').waitFor()
+  await pressShortcut(app, `${mod}+s`)
+  await commands(2)
+  await app.evaluate(() => {
+    globalThis.hold('document:save')
+    globalThis.release['document:open']()
+  })
+  await app.evaluate(() => globalThis.held['document:save'])
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.app')?.getAttribute('aria-busy') === 'true' &&
+      document
+        .querySelector('.rich-pane .hibi-formatted .cm-content')
+        ?.getAttribute('contenteditable') === 'true',
+  )
+  await app.evaluate(() => globalThis.release['document:save']())
+  await idle()
+  assert.equal(await app.evaluate(() => globalThis.calls['document:save']), 1)
+})
+
+test('a command waiting when editing pauses does not run after recovery', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle, commands } = await launchHolding(
+    t,
+    'hibi-tab-busy-paused-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    ['document:close-tab'],
+  )
+  const { tabId: a, tabs } = await page.evaluate(() =>
+    window.hibi.getDocument(),
+  )
+  const b = tabs.find((tab) => tab.id !== a).id
+  // Focusing b fails, and so does going back to a: editing pauses.
+  await app.evaluate(
+    ({ ipcMain }, ids) => {
+      const handlers = ipcMain._invokeHandlers
+      const focus = handlers.get('document:focus-tab')
+      let phase = 0
+      handlers.set('document:focus-tab', async (...args) => {
+        if (phase === 0 && args[1] === ids.b) {
+          phase = 1
+          await new Promise((release) => {
+            globalThis.releaseFocus = release
+          })
+          const metadata = await focus(...args)
+          return { ...metadata, contentVersion: metadata.contentVersion + 1 }
+        }
+        if (phase === 1 && args[1] === ids.a) {
+          phase = 2
+          throw new Error('Simulated focus rollback failure.')
+        }
+        return focus(...args)
+      })
+    },
+    { a, b },
+  )
+  await splitTab(app, page, b)
+  await waitForAsync(app, () => !!globalThis.releaseFocus)
+  await page
+    .getByRole('dialog', { name: /^command palette$/i })
+    .waitFor({ state: 'hidden' })
+  await pressShortcut(app, `${mod}+w`)
+  // The palette came from the menu too.
+  await commands(2)
+  await app.evaluate(() => globalThis.releaseFocus())
+  const retry = page.getByRole('button', { name: 'Retry document focus' })
+  await retry.click()
+  await retry.waitFor({ state: 'hidden' })
+  await idle()
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:close-tab'] ?? 0),
+    0,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    2,
+  )
+})

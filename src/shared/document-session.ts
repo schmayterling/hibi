@@ -16,6 +16,7 @@ import {
 import {
   mapSourceSelection,
   type SourceSelection,
+  selectionBytes,
   sourceSelection,
 } from './source-selection.ts'
 
@@ -511,7 +512,11 @@ export class DocumentSession {
           : prepared.before.utf16Length,
         beforeIdentity: merge ? previous.beforeIdentity : this.#contentIdentity,
         afterIdentity,
-        bytes: editBytes(forward) + editBytes(inverse),
+        bytes:
+          editBytes(forward) +
+          editBytes(inverse) +
+          selectionBytes(merge ? previous.beforeSelection : beforeSelection) +
+          selectionBytes(this.selection(viewId)),
         operations: merge ? previous.operations + 1 : 1,
         beforeSelection: merge ? previous.beforeSelection : beforeSelection,
         afterSelection: this.selection(viewId),

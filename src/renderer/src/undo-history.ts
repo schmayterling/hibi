@@ -9,6 +9,7 @@ import { documentRuntime } from './document-runtime.ts'
 /** Tabs whose undo steps changed with a save and are not kept yet. */
 const unsent = new Set<string>()
 let idle: number | undefined
+let clears = 0
 let keeping: Promise<boolean> | undefined
 const keeps = () =>
   (keeping ??= window.hibi.getKeepUndoHistory().catch(() => false))
@@ -16,12 +17,14 @@ const keeps = () =>
 /** Undo steps kept for a saved note's file join the session that opened it. */
 export async function restore(tabId: string, session: DocumentSession) {
   if (!(await keeps())) return
+  const cleared = clears
   try {
     const stored = await window.hibi.readUndoHistory(
       tabId,
       session.savedSnapshot().version,
     )
-    if (!stored) return
+    // Steps read before a clear stay forgotten.
+    if (!stored || cleared !== clears) return
     const history = parseUndoHistory(stored)
     documentRuntime.restoreHistory(
       tabId,
@@ -50,18 +53,18 @@ export async function flush() {
   const tabs = [...unsent]
   unsent.clear()
   if (!tabs.length || !(await keeps())) return
-  await Promise.all(
-    tabs.map(async (tabId) => {
-      const session = documentRuntime.session(tabId)
-      const history = session && keptHistory(session)
-      if (history)
-        await window.hibi
-          .storeUndoHistory(tabId, history)
-          .catch((error: unknown) =>
-            console.error('Could not keep undo history:', error),
-          )
-    }),
-  )
+  // Sent, not awaited: Hibi queues each as it arrives, so a closing tab
+  // waits until its steps are queued, not for other notes' writes.
+  for (const tabId of tabs) {
+    const session = documentRuntime.session(tabId)
+    const history = session && keptHistory(session)
+    if (history)
+      void window.hibi
+        .storeUndoHistory(tabId, history)
+        .catch((error: unknown) =>
+          console.error('Could not keep undo history:', error),
+        )
+  }
 }
 
 export async function setKeep(next: boolean) {
@@ -72,6 +75,7 @@ export async function setKeep(next: boolean) {
 
 /** Forgets open notes' undo steps and every note's kept ones. */
 export async function clear() {
+  clears++
   unsent.clear()
   documentRuntime.clearHistory()
   await window.hibi.clearUndoHistory()

@@ -388,6 +388,7 @@ test('a quit waits for a move or a removal still in progress', async (t) => {
             queueMicrotask(() => api.acceptUndoHistoryFlushed(token)),
         },
       })
+      .then(() => api.undoHistoryWritten())
       .then(() => {
         quit = true
       })
@@ -423,6 +424,7 @@ test('a quit waits for moves and removals queued behind a write', async (t) => {
     },
   }
   await api.flushUndoHistory(window)
+  await api.undoHistoryWritten()
   assert.equal(await exists(kept(root, '/notes/renamed.md')), true)
   assert.equal(await exists(kept(root, '/notes/a.md')), false)
   assert.equal(await exists(kept(root, '/notes/b.md')), false)
@@ -440,4 +442,127 @@ test("the index's temporary copy a crash left behind is removed", async (t) => {
   await fs.writeFile(left, '["/notes/a.md"]')
   await (await main(root)).setKeepUndoHistory(false)
   assert.equal(await exists(left), false)
+})
+
+test('a store that changes no kept step leaves the file as it is', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  const file = kept(root, '/notes/a.md')
+  const past = new Date(2020, 0, 1)
+  await fs.utimes(file, past, past)
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  assert.equal((await fs.stat(file)).mtimeMs, past.getTime())
+  const next = saved('base', [' one', ' two', ' three'])
+  await api.storeUndoHistory('/notes/a.md', next.file, next.history)
+  assert.notEqual((await fs.stat(file)).mtimeMs, past.getTime())
+})
+
+test('a stale history a read finds is removed before a store queued after the read', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  // Kept for text the note no longer has.
+  const old = saved('other')
+  await api.storeUndoHistory('/notes/a.md', old.file, old.history)
+  const note = saved()
+  const reading = api.readUndoHistory('/notes/a.md', note.file)
+  const storing = api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  assert.equal(await reading, null)
+  await storing
+  // The fresh history stays.
+  const later = await main(root)
+  assert.notEqual(await later.readUndoHistory('/notes/a.md', note.file), null)
+})
+
+test("a closing tab waits until its steps are queued, not for other notes' writes", async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const big = saved('x', ['y'.repeat(4_000_000)])
+  let written = false
+  void api.storeUndoHistory('/other/big.md', big.file, big.history).then(() => {
+    written = true
+  })
+  const window = {
+    isDestroyed: () => false,
+    webContents: {
+      send: (_channel, token) =>
+        queueMicrotask(() => api.acceptUndoHistoryFlushed(token)),
+    },
+  }
+  await api.flushUndoHistory(window)
+  assert.equal(written, false)
+  // A quit waits for it.
+  await api.undoHistoryWritten()
+  assert.equal(written, true)
+})
+
+test('a quit waits 5 seconds at most for a move that never finishes', {
+  timeout: 20000,
+}, async (t) => {
+  const root = await profile(t)
+  const stuck = Promise.withResolvers()
+  const api = await main(root, {
+    ...fs,
+    rename: async (path, ...rest) => {
+      if (/[0-9a-f]{64}\.json$/.test(path)) await stuck.promise
+      return fs.rename(path, ...rest)
+    },
+  })
+  const note = saved()
+  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  void api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let quit = false
+  const quitting = api.undoHistoryWritten().then(() => {
+    quit = true
+  })
+  t.mock.timers.tick(4999)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(quit, false)
+  t.mock.timers.tick(1)
+  await quitting
+  t.mock.timers.reset()
+  stuck.resolve()
+  await api.undoHistoryWritten()
+  assert.equal(await exists(kept(root, '/notes/b.md')), true)
+})
+
+test('a quit waits for a clear, and for keeping turned off, asked for before it', async (t) => {
+  const root = await profile(t)
+  for (const action of ['clear', 'off']) {
+    const data = join(root, action)
+    await fs.mkdir(data)
+    // The clear (or the setting before it) is slow.
+    const slow = Promise.withResolvers()
+    const api = await main(data, {
+      ...fs,
+      rename: async (path, to, ...rest) => {
+        if (String(to).endsWith('undo-history-settings.json'))
+          await slow.promise
+        return fs.rename(path, to, ...rest)
+      },
+      rm: async (path, ...rest) => {
+        if (String(path).endsWith('undo-history')) await slow.promise
+        return fs.rm(path, ...rest)
+      },
+    })
+    const note = saved()
+    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    const asked =
+      action === 'clear'
+        ? api.clearUndoHistory()
+        : api.setKeepUndoHistory(false)
+    let quit = false
+    const quitting = api.undoHistoryWritten().then(() => {
+      quit = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.equal(quit, false, action)
+    slow.resolve()
+    await quitting
+    // Nothing kept is left for the next launch to restore.
+    assert.equal(await exists(folder(data)), false, action)
+    await asked
+  }
 })

@@ -3651,6 +3651,106 @@ test('a long table shows the edited row in its place once the pane scrolled away
   )
 })
 
+test("a scroll to the start or end of a long table's edited row lands on it in its place once the pane scrolled away from it", {
+  timeout: 120000,
+}, async () => {
+  // Every fifth row breaks a cell over three lines: the rows drawn around the
+  // edited row measure taller than the estimate a scroll would start from.
+  const rows = Array.from(
+    { length: 3000 },
+    (_, i) => `| row ${i} | ${i % 5 ? `v${i}` : 'a<br>b<br>c'} |`,
+  )
+  // As in the test above: the note starts with the table, in a pane that
+  // fits the harness window.
+  const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 606 },
+        { editable: true },
+      ),
+    doc,
+  )
+  await harness.evaluate(async (at) => {
+    const preview = window.tables
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const view = preview.view()
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+    await preview.settle()
+    await preview.settle()
+  }, doc.indexOf('v1801 '))
+  await harness.locator('.hibi-lp-table tr[data-line="1803"] td').nth(1).click()
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('Z')
+  // Scrolled to the note's top, the window draws the rows there and keeps
+  // the edited row after them; scrolled to its end, before them. A scroll
+  // that puts the caret at the pane's top or bottom, as no in-app caller asks
+  // of a cell yet, then lands on the row in its place.
+  const scroll = (to, y) =>
+    harness.evaluate(
+      async ({ to, y }) => {
+        const preview = window.tables
+        const pane = document.querySelector('.rich-pane')
+        // The cell editor scrolls to its caret after the typing first.
+        await preview.settle()
+        pane.scrollTop = to === 'top' ? 0 : pane.scrollHeight
+        const row = () =>
+          document.querySelector('.hibi-lp-table tr[data-line="1803"]')
+        const placed = () =>
+          row().previousElementSibling?.dataset.line === '1802' &&
+          row().nextElementSibling?.dataset.line === '1804'
+        // The window moves to the rows there once the table measures there.
+        for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+        const away = !placed()
+        const view = preview.view()
+        view.dispatch({
+          effects: view.constructor.scrollIntoView(
+            view.state.selection.main.head,
+            { y },
+          ),
+        })
+        for (let i = 0; i < 4; i++) await preview.settle()
+        const editor = view.constructor.findFromDOM(
+          document.activeElement.closest('.cm-editor'),
+        )
+        const caret = editor.coordsAtPos(editor.state.selection.main.head)
+        const cell = document.activeElement.closest('td')
+        const bounds = pane.getBoundingClientRect()
+        return {
+          away,
+          cell: `${cell.parentElement.dataset.line}:${cell.cellIndex}`,
+          placed: placed(),
+          // How far the caret is from the pane edge it was scrolled to.
+          edge: Math.round(
+            y === 'start'
+              ? caret.top - bounds.top
+              : bounds.bottom - caret.bottom,
+          ),
+        }
+      },
+      { to, y },
+    )
+  for (const [to, y] of [
+    ['top', 'start'],
+    ['bottom', 'end'],
+  ]) {
+    const result = await scroll(to, y)
+    assert.ok(result.away, `the edited row starts out of its place: ${to}`)
+    assert.deepEqual(
+      [result.cell, result.placed],
+      ['1803:1', true],
+      JSON.stringify(result),
+    )
+    // CodeMirror leaves a few pixels between the line and the pane's edge.
+    assert.ok(result.edge >= 0 && result.edge < 20, JSON.stringify(result))
+  }
+})
+
 test('a cell editor shows its cell formatted as it opens', {
   timeout: 30000,
 }, async () => {

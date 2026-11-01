@@ -349,8 +349,14 @@ function lead(at) {
   const scroller = document.querySelector('.source-pane .cm-scroller')
   const view = scroller.querySelector('.cm-content').cmTile.root.view
   scroller.dispatchEvent(new WheelEvent('wheel'))
+  // The document starts below the scroller's top by the content's padding.
   const block = view.lineBlockAt(at)
-  scroller.scrollTop = block.top + block.height / 2 - scroller.clientHeight / 2
+  const bounds = scroller.getBoundingClientRect()
+  scroller.scrollTop +=
+    view.documentTop +
+    block.top +
+    block.height / 2 -
+    (bounds.top + bounds.height / 2)
 }
 
 // Whether the formatted pane shows the text of the table row at the source
@@ -441,6 +447,54 @@ test('formatted split lines up a source line in a row a long table has not drawn
   await page.evaluate(lead, text.indexOf('| r600 |'))
   await staysLinedUp(page, linedUp)
   await source(page, text)
+})
+
+test("formatted split lines up a long table's edited row out of its place with its source line", {
+  timeout: 90000,
+}, async (t) => {
+  const lines = 'line\n\n'.repeat(30)
+  const text = `${lines}${table(1000)}${lines}`
+  const { page } = await open(t, text)
+  // The formatted pane leads to a row, which it then draws.
+  const near = (at) => {
+    const pane = document.querySelector('.rich-pane')
+    const view = pane.querySelector('.cm-content').cmTile.root.view
+    pane.dispatchEvent(new WheelEvent('wheel'))
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+  }
+  await page.evaluate(near, text.indexOf('| r600 |') + 3)
+  await page.locator('.rich-pane tr[data-line="602"] td').nth(1).click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('Z')
+  // Led to the table's top rows, the window draws them and keeps the edited
+  // row mounted after them, out of its place.
+  await page.evaluate(near, text.indexOf('| r20 |') + 3)
+  await waitForAsync(
+    page,
+    () =>
+      document.querySelector('.rich-pane tr[data-line="602"]')
+        ?.previousElementSibling?.dataset.line !== '601',
+    undefined,
+    { label: 'the edited row out of its place' },
+  )
+  // The source pane leads straight back to the row's line, as a drag of its
+  // scrollbar does, while the cell editor keeps the focus.
+  await page.evaluate(lead, text.indexOf('| r600 |'))
+  await staysLinedUp(page, linedUp)
+  assert.ok(
+    await page.evaluate(() => {
+      const row = document.querySelector('.rich-pane tr[data-line="602"]')
+      return (
+        row.previousElementSibling?.dataset.line === '601' &&
+        row.nextElementSibling?.dataset.line === '603' &&
+        row.contains(document.activeElement)
+      )
+    }),
+    'the edited row in its place, its cell editor focused',
+  )
+  await source(page, text.replace('| v600 |', '| v600Z |'))
 })
 
 // Whether the source pane shows the line of the formatted table row that

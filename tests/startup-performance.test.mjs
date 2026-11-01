@@ -127,6 +127,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // 877 (#786); the History view loads later.
   // Autosave waiting until an input method commits what it composes adds
   // 332 (#790).
+  // Registering the undo history flush at app boot, so pages without the
+  // preload can load the document runtime, adds 17 (#793).
   // Counting a step's carets in the undo history's size adds 92 (#795).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
@@ -144,6 +146,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         2933 +
         877 +
         332 +
+        17 +
         92,
     `startup catalog grew to ${bytes} bytes`,
   )

@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { IconButton, TextInput } from '../../ui/Controls'
+import { composing } from '../../ui/composing'
 
 export type FindStatus = {
   current: number
@@ -61,6 +62,7 @@ export function FindBar({
           spellCheck={false}
           onChange={(event) => onQuery(event.target.value)}
           onKeyDown={(event) => {
+            if (composing(event)) return
             if (event.key === 'Enter') {
               event.preventDefault()
               onMove(event.shiftKey ? 'previous' : 'next')

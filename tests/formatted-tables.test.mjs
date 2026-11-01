@@ -720,6 +720,113 @@ test('the text above a long table growing keeps the row under the pane top in pl
   )
 })
 
+test('the text above growing far keeps the text at the pane top in place in every layout', {
+  timeout: 300000,
+}, async () => {
+  const paragraphs = Array.from(
+    { length: 300 },
+    (_, i) => `Paragraph ${i} of the text above.`,
+  ).join('\n\n')
+  const rows = Array.from({ length: 10000 }, (_, i) => `| row ${i} | v${i} |`)
+  const table = `| a | b |\n| --- | --- |\n${rows.join('\n')}`
+  const lines = Array.from(
+    { length: 3000 },
+    (_, i) => `line ${i} of one long paragraph`,
+  ).join('\n')
+  const code = Array.from({ length: 3000 }, (_, i) => `code ${i}`).join('\n')
+  const words = Array.from({ length: 3000 }, (_, i) => `word${i}`).join(' ')
+  const more = '\nmore\n'.repeat(200)
+  // A note, the text put at the pane's top, how far below the top, and how
+  // far it may move: inside a long paragraph's one line, the view starts its
+  // rows again after the part it draws, so the text can land one row off.
+  const layouts = [
+    [
+      'table first row',
+      `${paragraphs}\n\n${table}\n\nAfter.\n`,
+      '| row 0 |',
+      10,
+      1,
+    ],
+    [
+      'long paragraph',
+      `${paragraphs}\n\n${lines}\n\nAfter.\n${more}`,
+      'line 1500 of',
+      0,
+      29,
+    ],
+    [
+      'code block',
+      `${paragraphs}\n\n\`\`\`\n${code}\n\`\`\`\n\nAfter.\n`,
+      'code 1500',
+      0,
+      1,
+    ],
+    [
+      'one long line',
+      `${paragraphs}\n\n${words}\n\nAfter.\n${more}`,
+      'word1500 ',
+      0,
+      1,
+    ],
+  ]
+  const results = []
+  for (const grow of [5000, 50000])
+    for (const [name, doc, target, offset, slack] of layouts) {
+      const result = await harness.evaluate(
+        async ({ doc, target, offset, grow }) => {
+          const preview = window.tables
+          await preview.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true },
+          )
+          const view = preview.view()
+          const pane = document.querySelector('.rich-pane')
+          const frame = () => new Promise(requestAnimationFrame)
+          const at = doc.indexOf(target)
+          const where = () => {
+            const box = view.coordsAtPos(at, 1)
+            return box
+              ? Math.round(box.top - pane.getBoundingClientRect().top)
+              : null
+          }
+          // Aimed again until the text shows where the view put it.
+          for (let i = 0; i < 60; i++) {
+            view.dispatch({
+              effects: view.constructor.scrollIntoView(at, {
+                y: 'start',
+                yMargin: -offset,
+              }),
+            })
+            for (let frames = 0; frames < 4; frames++) await frame()
+            const top = where()
+            if (top !== null && Math.abs(top - offset) < 2) break
+          }
+          const still = async () => {
+            let last
+            for (let i = 0, same = 0; i < 200 && same < 5; i++) {
+              await frame()
+              const now = where()
+              same = now === last ? same + 1 : 0
+              last = now
+            }
+            return last
+          }
+          const before = await still()
+          preview.growAbove(grow)
+          return { before, after: await still() }
+        },
+        { doc, target, offset, grow },
+      )
+      results.push({ name, grow, slack, ...result })
+    }
+  const report = JSON.stringify(results)
+  for (const { before, after, slack } of results) {
+    assert.ok(before !== null && after !== null, report)
+    assert.ok(Math.abs(after - before) <= slack, report)
+  }
+})
+
 /** Mount `doc` in the editable harness. */
 const mount = (doc) =>
   harness.evaluate(

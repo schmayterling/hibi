@@ -127,6 +127,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // 877 (#786); the History view loads later.
   // Autosave waiting until an input method commits what it composes adds
   // 332 (#790).
+  // Past the step limit, making old steps typed without a pause into one, so
+  // undo still reaches the oldest text, adds 792 (#798).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -142,7 +144,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         109 +
         2933 +
         877 +
-        332,
+        332 +
+        792,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

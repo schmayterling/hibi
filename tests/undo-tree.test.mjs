@@ -297,8 +297,10 @@ test('stored steps join only the session that opened at their saved text, once',
   note.save()
   const history = stored(keptHistory(note.session))
   assert.equal(restore(open('other text'), history), false)
+  // A pause keeps the two steps apart, so the oldest goes.
   const trimmed = open('base one', { historyGroups: 1 })
   trimmed.insert(0, 'a')
+  trimmed.tick(10_000)
   trimmed.insert(0, 'b')
   assert.equal(restore(trimmed, history), false)
   const once = open('base one')
@@ -308,14 +310,19 @@ test('stored steps join only the session that opened at their saved text, once',
 })
 
 test('branches go first, oldest first, when history is over its limits', () => {
+  // Pauses keep each step apart, so none can become one.
   const note = open('', { historyGroups: 4 })
   note.insert(0, 'a')
+  note.tick(10_000)
   note.insert(1, 'b')
   note.session.undo()
+  note.tick(10_000)
   note.insert(1, 'c')
   note.session.undo()
+  note.tick(10_000)
   note.insert(1, 'd')
   assert.equal(note.session.historySize().groups, 4)
+  note.tick(10_000)
   note.insert(2, 'e')
   assert.equal(note.session.historySize().groups, 4)
   note.save()
@@ -491,4 +498,126 @@ test('restoring a large stored history takes time in proportion to its steps, wh
     assert.ok(took < 50 * copy + 50, `${shape}: ${took} ms, copy ${copy} ms`)
     assert.equal(reopened.session.historySize().groups, 128)
   }
+})
+
+/** Undoes every kept step; the texts undo passes through, oldest last. */
+function undoAll(note) {
+  const texts = []
+  while (note.session.historyDepth().undo) {
+    note.session.undo()
+    texts.push(note.text())
+  }
+  return texts
+}
+
+test('past the step limit, steps typed without a pause become one, and undo still reaches the oldest text', () => {
+  const note = open('', { historyGroups: 8 })
+  for (let index = 0; index < 40; index++) {
+    note.insert(note.text().length, String(index % 10))
+    note.tick(1000)
+  }
+  assert.ok(note.session.historySize().groups <= 8)
+  assert.equal(undoAll(note).at(-1), '')
+  // Back at the text it opened with, the note is unchanged again.
+  assert.equal(note.session.state().dirty, false)
+})
+
+test('coarser steps keep a pause, the saved text and the text before a large edit apart', () => {
+  const note = open('', { historyGroups: 8 })
+  const type = (letter, count) => {
+    for (let index = 0; index < count; index++) {
+      note.insert(note.text().length, letter)
+      note.tick(1000)
+    }
+  }
+  type('a', 4)
+  note.tick(10_000)
+  type('b', 4)
+  note.save()
+  note.tick(1000)
+  type('c', 4)
+  note.insert(note.text().length, 'X'.repeat(300))
+  note.tick(1000)
+  type('d', 20)
+  assert.ok(note.session.historySize().groups <= 8)
+  const texts = undoAll(note)
+  for (const text of ['aaaa', 'aaaabbbb', 'aaaabbbbcccc', ''])
+    assert.ok(texts.includes(text), `undo passes ${JSON.stringify(text)}`)
+})
+
+test('a coarser step spans less than 3 minutes of steady typing', () => {
+  const note = open('', { historyGroups: 8 })
+  for (let index = 0; index < 600; index++) {
+    note.insert(note.text().length, 'a')
+    note.tick(1000)
+  }
+  // One letter a second: no step holds more than 3 minutes of them.
+  for (const [group] of note.session.historyTree().steps) {
+    assert.ok(group.time - group.started < 3 * 60 * 1000)
+    assert.ok(
+      group.forward.reduce((sum, edit) => sum + edit.insert.length, 0) <= 180,
+    )
+  }
+  assert.equal(undoAll(note).at(-1), '')
+})
+
+test('a coarsened history is kept and restored, down to the oldest text', () => {
+  const note = open('', { historyGroups: 8 })
+  for (let index = 0; index < 40; index++) {
+    note.insert(note.text().length, String(index % 10))
+    note.tick(1000)
+  }
+  note.save()
+  const reopened = open(note.text(), { historyGroups: 8 })
+  restore(reopened, stored(keptHistory(note.session)))
+  assert.equal(undoAll(reopened).at(-1), '')
+})
+
+test('past the step limit, steps typed without a pause become one before a branch goes', () => {
+  const note = open('', { historyGroups: 4 })
+  note.insert(0, 'a')
+  note.insert(1, 'b')
+  note.session.undo()
+  note.insert(1, 'c')
+  note.session.undo()
+  note.insert(1, 'd')
+  note.insert(2, 'e')
+  assert.equal(note.session.historySize().groups, 4)
+  note.save()
+  // d and e became one step; both branches stayed.
+  assert.deepEqual(texts(keptHistory(note.session), note.text()).sort(), [
+    'a',
+    'ab',
+    'ac',
+    'ade',
+  ])
+})
+
+test('coarser steps keep an earlier save, a save in progress, and edits that undo each other apart', () => {
+  // An earlier save's text stays a state of its own after a later save.
+  const versions = open('', { historyGroups: 4 })
+  versions.insert(0, 'a')
+  versions.save()
+  versions.insert(1, 'b')
+  versions.save()
+  for (const letter of 'cdefgh') versions.insert(versions.text().length, letter)
+  assert.ok(undoAll(versions).includes('a'))
+  // The text a save in progress takes still has its step when the save lands.
+  const saving = open('', { historyGroups: 4 })
+  saving.insert(0, 'a')
+  saving.session.sealHistory()
+  const taken = saving.session.snapshot()
+  for (const letter of 'bcdefg') saving.insert(saving.text().length, letter)
+  saving.session.markSaved(taken)
+  assert.notEqual(saving.session.historyToSave(), null)
+  // Typing then deleting the same letter leaves no step to keep, so those
+  // two steps stay apart, and the kept history still reads back.
+  const undone = open('', { historyGroups: 2 })
+  undone.insert(0, 'x')
+  undone.session.edit([{ from: 0, to: 1, insert: '' }], 'source', 'delete')
+  undone.insert(0, 'y')
+  undone.save()
+  const reopened = open(undone.text(), { historyGroups: 2 })
+  restore(reopened, stored(keptHistory(undone.session)))
+  assert.equal(reopened.text(), 'y')
 })

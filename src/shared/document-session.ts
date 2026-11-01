@@ -524,7 +524,71 @@ export class DocumentSession {
     )
     this.#contentIdentity = afterIdentity
     this.#redo = []
+    this.#coarsen()
     this.#trim()
+  }
+  /**
+   * Past the step limit, the oldest two steps typed without a pause become
+   * one, so undo still reaches the oldest text. States worth returning to
+   * stay apart: a pause, a branch, the saved text (the seal follows each
+   * save) or a version, the text before a large edit, and one state every
+   * 3 minutes of steady typing.
+   * Steps go only when no two steps can become one.
+   */
+  #coarsen(maximumGroups = this.#options.historyGroups ?? 128) {
+    if (this.historySize().groups <= maximumGroups) return
+    // A paste or a replace stays a step of its own, with the text before it.
+    const large = (group: HistoryGroup) =>
+      group.operations === 1 &&
+      group.forward.reduce(
+        (sum, edit) => sum + edit.insert.length + edit.to - edit.from,
+        0,
+      ) >= 200
+    for (let index = 0; index + 1 < this.#undo.length; index++) {
+      const first = this.#undo[index]!,
+        second = this.#undo[index + 1]!
+      if (
+        second.started - first.time >= 5000 ||
+        second.time - first.started >= 3 * 60 * 1000 ||
+        this.#branches.has(first.step) ||
+        first.step === this.#sealed ||
+        this.#versioned.has(first.afterIdentity) ||
+        large(first) ||
+        large(second)
+      )
+        continue
+      const forward = composeSourceChanges(
+        first.forward,
+        second.forward,
+        first.beforeLength,
+      )
+      const inverse = composeSourceChanges(
+        second.inverse,
+        first.inverse,
+        second.forward.reduce(
+          (length, edit) => length + edit.insert.length - (edit.to - edit.from),
+          second.beforeLength,
+        ),
+      )
+      // Edits that undo each other leave no step to keep.
+      if (!forward.length || !inverse.length) continue
+      this.#undo.splice(
+        index,
+        2,
+        Object.freeze({
+          ...second,
+          forward,
+          inverse,
+          beforeLength: first.beforeLength,
+          beforeIdentity: first.beforeIdentity,
+          bytes: editBytes(forward) + editBytes(inverse),
+          operations: first.operations + second.operations,
+          beforeSelection: first.beforeSelection,
+          started: first.started,
+        }),
+      )
+      return
+    }
   }
   #operation(
     changes: readonly RawEdit[],

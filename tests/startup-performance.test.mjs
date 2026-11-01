@@ -127,6 +127,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // 877 (#786); the History view loads later.
   // Autosave waiting until an input method commits what it composes adds
   // 332 (#790).
+  // Registering the undo history flush at app boot, so pages without the
+  // preload can load the document runtime, adds 17 (#793).
+  // Leaving Enter and Escape to an input method while it composes, in the
+  // explorer, the palette, find and dialogs, adds 150 (#804).
   // Running a menu or shortcut command that arrives during a file operation
   // once it finishes, instead of dropping it, a save among them first, adds
   // 499 (#794).
@@ -146,6 +150,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         2933 +
         877 +
         332 +
+        17 +
+        150 +
         499,
     `startup catalog grew to ${bytes} bytes`,
   )

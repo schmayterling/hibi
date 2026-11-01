@@ -75,7 +75,11 @@ import { useAutosave } from './autosave'
 import { CommandPalette, type PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
 import { documentFormats, editorDocument } from './document-formats'
-import { documentRuntime, observeDocumentErrors } from './document-runtime'
+import {
+  documentRuntime,
+  flushUndoHistory,
+  observeDocumentErrors,
+} from './document-runtime'
 import { subscribeDocumentShell } from './document-shell'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
@@ -117,6 +121,8 @@ import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
 startupMark('renderer-entry')
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
 import.meta.hot?.dispose(stopLocalDiagnostics)
+// Registered here, not where the runtime loads: harness pages load it without the preload.
+window.hibi.onUndoHistoryFlush(flushUndoHistory)
 // Only the app writes default-view, so its absence marks a profile's first launch.
 // The introduction stays pending until a launch without files can show it.
 if (localStorage.getItem('introduction') === null)

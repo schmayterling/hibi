@@ -923,6 +923,9 @@
   "766db4dda5c6": [
     "src/addons/git/native.ts"
   ],
+  "8cec11b14767": [
+    "src/main/document.ts"
+  ],
   "8afb17585fb2": [
     "src/main/media.ts"
   ],
@@ -2750,6 +2753,9 @@
   "a0b88bf9965c": [
     "src/addons/quick-note/CaptureWindow.tsx"
   ],
+  "617987c5b12e": [
+    "src/main/document.ts"
+  ],
   "e43664c0638d": [
     "src/main/workspace-actions.ts"
   ],
@@ -2891,6 +2897,9 @@
   ],
   "47fa752d5df7": [
     "src/renderer/src/markdown-syntax.ts"
+  ],
+  "352f68dafab4": [
+    "src/main/document.ts"
   ],
   "33ffe414fe4e": [
     "src/addons/_shared/import-worker-client.ts"
@@ -6130,6 +6139,9 @@
   "60dbdf909175": [
     "src/main/files.ts"
   ],
+  "92c0abac5f21": [
+    "src/renderer/src/ImageViewer.tsx"
+  ],
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
   ],
@@ -7038,6 +7050,9 @@
     "src/addons/ui-preview/hibi-addon.json",
     "src/addons/ui-preview/index.tsx"
   ],
+  "764ccc9c6651": [
+    "src/renderer/src/ImageViewer.tsx"
+  ],
   "eecd4c4fc8ee": [
     "src/renderer/src/addons.ts"
   ],
@@ -7775,6 +7790,9 @@
   ],
   "b2fe97e14407": [
     "src/renderer/src/addons.ts"
+  ],
+  "0f8954748d93": [
+    "src/main/document.ts"
   ],
   "7f659c8c45d8": [
     "src/addons/frontmatter/Properties.tsx"

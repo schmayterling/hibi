@@ -74,7 +74,11 @@ import { addons, useAddons, useEditorAddons } from './addons'
 import { useAutosave } from './autosave'
 import { CommandPalette, type PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
-import { documentFormats, editorDocument } from './document-formats'
+import {
+  documentFormats,
+  documentView,
+  editorDocument,
+} from './document-formats'
 import {
   documentRuntime,
   flushUndoHistory,
@@ -1051,10 +1055,8 @@ function App() {
         ),
     },
     document?.name,
-    documentFormat?.views && !documentFormat.views.includes(selectedMode)
-      ? documentFormat.views.includes('side-by-side')
-        ? 'side-by-side'
-        : 'markdown'
+    documentFormat?.views
+      ? documentView(documentFormat.views, selectedMode)
       : selectedMode,
   )
   useEffect(() => {
@@ -1107,11 +1109,7 @@ function App() {
   const availableViews = addonHost.sourceOnly
     ? ['markdown' as const]
     : documentFormats.views(document?.name ?? 'untitled.md')
-  const mode: ViewMode = availableViews.includes(selectedMode)
-    ? selectedMode
-    : availableViews.includes('side-by-side')
-      ? 'side-by-side'
-      : 'markdown'
+  const mode: ViewMode = documentView(availableViews, selectedMode)
   useLayoutEffect(() => {
     if (settingsOpen || !settingsFocus.current) return
     const { intent, previous } = settingsFocus.current
@@ -2814,11 +2812,7 @@ function App() {
     const paneViews: readonly ViewMode[] = addonHost.sourceOnly
       ? ['markdown']
       : documentFormats.views(paneDocument?.name ?? 'untitled.md')
-    const paneMode: ViewMode = paneViews.includes(requestedMode)
-      ? requestedMode
-      : paneViews.includes('side-by-side')
-        ? 'side-by-side'
-        : 'markdown'
+    const paneMode: ViewMode = documentView(paneViews, requestedMode)
     const paneChoice = splitFlavors?.[side].choice ?? flavorChoice
     const paneChosen = splitFlavors?.[side].selected ?? chosenFlavors
     const paneSourceName =

@@ -27,7 +27,10 @@ type Reading = {
 }
 const reading = new WeakMap<EditorView, Reading | null>()
 
-/** Where the reader is: the caret while it is on screen, else the first line below the top of the scrolled pane. */
+/**
+ * Where the reader is: the caret while it is on screen, else the first line
+ * below the top of the scrolled pane, or the block the pane's top is in.
+ */
 function readingPosition(view: EditorView): Reading | null {
   let pane: Element | null = view.scrollDOM
   while (
@@ -53,6 +56,17 @@ function readingPosition(view: EditorView): Reading | null {
       block = view.lineBlockAt(block.to + 1)
     pos = block.from
     at = view.coordsAtPos(pos, 1)
+    // Under a block taller than the pane, such as a long table, the next
+    // line may be far below and not drawn, and while the editor's heights
+    // for the text above are new estimates the page does not show yet, they
+    // name another block. The block the page shows there holds the reader.
+    if (!at) {
+      const shown = blockAt(view, top + 1)
+      if (shown !== null) {
+        pos = shown
+        at = view.coordsAtPos(pos, 1)
+      }
+    }
   }
   return at && scroller
     ? {
@@ -68,14 +82,35 @@ function readingPosition(view: EditorView): Reading | null {
     : null
 }
 
+/** The start of the block the page shows at the start of the content's line at `y`. */
+function blockAt(view: EditorView, y: number) {
+  const box = view.contentDOM.getBoundingClientRect()
+  const x =
+    box.left +
+    Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
+    1
+  // Under what covers the pane's top, as the find bar over a narrow pane.
+  const element = view.dom.ownerDocument
+    .elementsFromPoint(x, y)
+    .find((element) => element.parentElement === view.contentDOM)
+  if (!element) return null
+  try {
+    return view.posAtDOM(element, 0)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Preserve the reader through asynchronous rendering or syntax changes.
  * Measure after CodeMirror applies its own anchoring, then correct the screen
  * delta once per slice. Later edits, selections and scrolling still stand.
  */
 export function keepReading(view: EditorView, at = 0) {
-  // Changes below what is on screen never move it, nor do hidden editors.
-  if (!view.inView || at >= (view.visibleRanges.at(-1)?.to ?? 0)) return
+  // Changes below what is on screen never move it, nor do hidden editors. A
+  // screen inside one block, as a long table, has no visible ranges.
+  const end = view.visibleRanges.at(-1)?.to ?? view.viewport.to
+  if (!view.inView || at >= end) return
   let position = reading.get(view)
   if (position === undefined) {
     position = readingPosition(view)

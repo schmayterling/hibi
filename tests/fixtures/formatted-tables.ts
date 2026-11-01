@@ -1,6 +1,18 @@
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { Compartment, EditorState, Transaction } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import {
+  Compartment,
+  EditorState,
+  StateEffect,
+  StateField,
+  Transaction,
+} from '@codemirror/state'
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  keymap,
+  WidgetType,
+} from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
 import {
   type ChunkedMarkdownProbe,
@@ -14,6 +26,7 @@ import {
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 import { markdownSyntax } from '../../src/renderer/src/markdown-syntax'
+import { keepReading } from '../../src/renderer/src/reading-position'
 import {
   sourceFormatting,
   tableActions,
@@ -67,6 +80,40 @@ Object.assign(window, {
   },
 })
 const editable = new Compartment()
+class Space extends WidgetType {
+  constructor(readonly height: number) {
+    super()
+  }
+  override eq(other: Space) {
+    return other.height === this.height
+  }
+  toDOM() {
+    const space = document.createElement('div')
+    space.style.height = `${this.height}px`
+    return space
+  }
+  override get estimatedHeight() {
+    return this.height
+  }
+}
+const grow = StateEffect.define<number>()
+/** Space at the note's start, standing in for text above whose height the view estimates again. */
+const above = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    for (const effect of transaction.effects)
+      if (effect.is(grow))
+        return Decoration.set(
+          Decoration.widget({
+            widget: new Space(effect.value),
+            block: true,
+            side: -1,
+          }).range(0),
+        )
+    return value.map(transaction.changes)
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
 const access = (on: boolean) => [
   EditorState.readOnly.of(!on),
   EditorView.editable.of(on),
@@ -130,6 +177,7 @@ Object.assign(window, {
               ? [history(), keymap.of([...defaultKeymap, ...historyKeymap])]
               : [],
             editable.of(access(!!options.editable)),
+            above,
             showMarkdownMarkers.of(true),
             options.tabId
               ? formattedDocument.of({ revision: 0, tabId: options.tabId })
@@ -195,6 +243,15 @@ Object.assign(window, {
     },
     /** Run a toolbar formatting action, as the toolbar does. */
     runFormatting: (id: string) => !!view && sourceFormatting(view).run(id),
+    /**
+     * Give the text above `height` px more, keeping the reader as a parsing
+     * slice does, as when the view estimates text it has not drawn again.
+     */
+    growAbove(height: number) {
+      if (!view) return
+      keepReading(view)
+      view.dispatch({ effects: grow.of(height) })
+    },
     /** Make the mounted editor read-only and not editable, or editable again. */
     setEditable: (on: boolean) =>
       view?.dispatch({ effects: editable.reconfigure(access(on)) }),

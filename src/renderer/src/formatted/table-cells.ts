@@ -523,6 +523,8 @@ export type CellHost = {
   exit(): boolean
   /** Focus left the editor for something outside it. */
   blurred(editor: CellEditor): void
+  /** Draw the cell's row in its place before the editor scrolls to its caret. */
+  place(): void
 }
 
 /**
@@ -682,6 +684,12 @@ export class CellEditor {
         doc: text,
         selection: { anchor, head },
         extensions: [
+          // Typing scrolls the editor's caret into view, past the table's
+          // window when the pane scrolled away from the cell's row.
+          EditorView.scrollHandler.of(() => {
+            host.place()
+            return false
+          }),
           preview,
           storedMarkInput,
           shiftDoubleClick,

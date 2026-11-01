@@ -549,6 +549,8 @@ test('going to a step or restoring a point tells where the text changed', () => 
   tree = historyOf(writer.session)
   assert.equal(returnTo(writer.session, tree, ...read(), 0, false), 13)
   assert.equal(writer.text(), 'one two three')
+  // A new step: the paste stays, as the branch the restore left.
+  assert.equal(writer.session.historySize().groups, 2)
   writer.session.undo()
   assert.equal(writer.text(), 'one two')
   // Where the text is already the same, nothing changes.

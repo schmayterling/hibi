@@ -230,6 +230,7 @@ import {
   clearUndoHistory,
   flushUndoHistory,
   keepsUndoHistory,
+  pruneUndoHistory,
   readUndoHistory,
   relocateUndoHistory,
   removeUndoHistory,
@@ -2554,14 +2555,17 @@ if (!app.requestSingleInstanceLock()) {
               isCurrent,
             )
             // A note an addon moves keeps its undo history, as one Hibi
-            // moves does; a move that kept both names moved nothing.
-            if (root && result.ok && result.value.sourceRemoved)
+            // moves does; a move that kept both names moved nothing. It goes
+            // by the note's real path, whatever case the addon spelled it in.
+            if (root && result.ok && result.value.sourceRemoved) {
+              const moved = join(root, result.value.destinationPath)
               void relocateUndoHistory(
                 join(root, result.value.path),
-                join(root, result.value.destinationPath),
+                await realpath(moved).catch(() => moved),
               ).catch((error: unknown) =>
                 console.error('Could not move undo history:', error),
               )
+            }
             return result
           }),
       )
@@ -2932,6 +2936,15 @@ if (!app.requestSingleInstanceLock()) {
       installMenu()
       await updatesReady
       startUpdateChecks()
+      // Once a launch, after it settles: notes deleted outside Hibi let go
+      // of their kept undo history.
+      setTimeout(
+        () =>
+          void pruneUndoHistory().catch((error: unknown) =>
+            console.error('Could not prune undo history:', error),
+          ),
+        15_000,
+      ).unref()
     })
     .catch((error: unknown) => {
       console.error('startup failed:', error)

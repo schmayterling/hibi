@@ -566,3 +566,92 @@ test('a quit waits for a clear, and for keeping turned off, asked for before it'
     await asked
   }
 })
+
+const index = async (root) =>
+  JSON.parse(
+    await fs.readFile(join(root, 'undo-history-notes.json'), 'utf8'),
+  ).sort()
+
+test('a history let go past 64 MiB leaves the index too', async (t) => {
+  const root = await profile(t)
+  await fs.mkdir(folder(root), { recursive: true })
+  const older = ['/old/1.md', '/old/2.md', '/old/3.md']
+  for (const [index, path] of older.entries()) {
+    await fs.writeFile(kept(root, path), '')
+    await fs.truncate(kept(root, path), 30 * mib)
+    const time = new Date(Date.UTC(2026, 0, 1 + index))
+    await fs.utimes(kept(root, path), time, time)
+  }
+  await fs.writeFile(
+    join(root, 'undo-history-notes.json'),
+    JSON.stringify(older),
+  )
+  const api = await main(root)
+  const note = saved()
+  await api.storeUndoHistory('/notes/new.md', note.file, note.history)
+  assert.equal(await exists(kept(root, '/old/1.md')), false)
+  assert.deepEqual(await index(root), [
+    '/notes/new.md',
+    '/old/2.md',
+    '/old/3.md',
+  ])
+})
+
+test('a temporary copy a crash left behind is removed by the first read, too', async (t) => {
+  const root = await profile(t)
+  await fs.mkdir(folder(root), { recursive: true })
+  const left = join(folder(root), `.${'a'.repeat(64)}.json.left.tmp`)
+  await fs.writeFile(left, 'deleted text from a cut-short write')
+  const api = await main(root)
+  assert.equal(await api.readUndoHistory('/notes/a.md', reopened('a')), null)
+  assert.equal(await exists(left), false)
+})
+
+test('notes deleted outside Hibi let go of their kept histories, and notes on a missing drive keep them', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  const notes = join(root, 'notes')
+  await fs.mkdir(notes)
+  for (const name of ['a.md', 'b.md']) {
+    await fs.writeFile(join(notes, name), note.source)
+    await api.storeUndoHistory(join(notes, name), note.file, note.history)
+  }
+  // A drive that isn't mounted: the note's folder is missing too.
+  const unmounted = join(root, 'drive', 'c.md')
+  await api.storeUndoHistory(unmounted, note.file, note.history)
+  await fs.rm(join(notes, 'b.md'))
+  await api.pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, join(notes, 'a.md'))), true)
+  assert.equal(await exists(kept(root, join(notes, 'b.md'))), false)
+  assert.equal(await exists(kept(root, unmounted)), true)
+  assert.deepEqual(await index(root), [join(notes, 'a.md'), unmounted].sort())
+  // A note gone at the first look and back by the second, as a branch
+  // switch puts it back, keeps its history.
+  await fs.rm(join(notes, 'a.md'))
+  const pruning = api.pruneUndoHistory(1000)
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  await fs.writeFile(join(notes, 'a.md'), note.source)
+  await pruning
+  assert.equal(await exists(kept(root, join(notes, 'a.md'))), true)
+})
+
+test('a note Hibi moves while missing notes are looked for keeps its history', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  const from = join(root, 'a.md'),
+    to = join(root, 'b.md')
+  await fs.writeFile(from, note.source)
+  await api.storeUndoHistory(from, note.file, note.history)
+  // Hibi moved the note on disk; its history follows once the move is done,
+  // after the first look found the note missing.
+  await fs.rename(from, to)
+  const pruning = api.pruneUndoHistory(50)
+  await api.relocateUndoHistory(from, to)
+  await pruning
+  assert.deepEqual(
+    await api.readUndoHistory(to, reopened(note.source)),
+    note.history,
+  )
+})

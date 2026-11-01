@@ -827,6 +827,127 @@ test('the text above growing far keeps the text at the pane top in place in ever
   }
 })
 
+test('the reading place deep inside a huge line holds through second changes, shrinks and splits', {
+  timeout: 300000,
+}, async () => {
+  const paragraphs = Array.from(
+    { length: 300 },
+    (_, i) => `Paragraph ${i} of the text above.`,
+  ).join('\n\n')
+  const more = '\nmore\n'.repeat(200)
+  const words = Array.from({ length: 30000 }, (_, i) => `word${i}`).join(' ')
+  const lines = Array.from(
+    { length: 20000 },
+    (_, i) => `line ${i} of one long paragraph`,
+  ).join('\n')
+  // Lines so long the view draws only the part near the screen: elsewhere
+  // a position's coordinates are the edge of the space standing in for the
+  // rest. The view starts the line's rows again after the part it draws, so
+  // the text can land one row off.
+  const line = [
+    `${paragraphs}\n\n${words}\n\nAfter.\n${more}`,
+    'word25000 ',
+    30,
+  ]
+  const paragraph = [
+    `${paragraphs}\n\n${lines}\n\nAfter.\n${more}`,
+    'line 15000 of',
+    30,
+  ]
+  // Steps: a space of a height at a position (0 removes it), `frame` to go
+  // on a frame later instead of once the text holds, `scroll` for the
+  // reader's scrolling before the view draws again, `aim` to put the text at
+  // the pane's top again.
+  const runs = [
+    [
+      'a second change a frame after the first',
+      line,
+      [{ grow: 5000, frame: true }, { grow: 10000 }],
+    ],
+    ['a shrink', line, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
+    ['a shrink', paragraph, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
+    ['a split below the screen', paragraph, [{ grow: 5000, below: 4000 }]],
+    // The reader's scrolling stands, from where the text is put back.
+    [
+      'a scroll before the view draws again',
+      line,
+      [{ grow: 5000, scroll: 300 }],
+    ],
+    ['a large change', line, [{ grow: 150000 }]],
+    ['a large change', paragraph, [{ grow: 150000 }]],
+  ]
+  const results = []
+  for (const [name, [doc, target, slack], steps] of runs) {
+    const result = await harness.evaluate(
+      async ({ doc, target, steps }) => {
+        const preview = window.tables
+        await preview.mount(
+          doc,
+          { width: 1000, height: 800 },
+          { editable: true },
+        )
+        const view = preview.view()
+        const pane = document.querySelector('.rich-pane')
+        const frame = () => new Promise(requestAnimationFrame)
+        const at = doc.indexOf(target)
+        const where = () => {
+          const box = view.coordsAtPos(at, 1)
+          return box
+            ? Math.round(box.top - pane.getBoundingClientRect().top)
+            : null
+        }
+        const still = async () => {
+          let last
+          for (let i = 0, same = 0; i < 300 && same < 6; i++) {
+            await frame()
+            const now = where()
+            same = now === last ? same + 1 : 0
+            last = now
+          }
+          return last
+        }
+        const aim = async () => {
+          for (let i = 0; i < 60; i++) {
+            view.dispatch({
+              effects: view.constructor.scrollIntoView(at, {
+                y: 'start',
+                yMargin: 0,
+              }),
+            })
+            for (let frames = 0; frames < 4; frames++) await frame()
+            if (Math.abs(where() ?? 99) < 1) break
+          }
+          return still()
+        }
+        const tops = [await aim()]
+        for (const step of steps) {
+          if (step.aim) tops.push(await aim())
+          else {
+            preview.growAt(
+              step.below === undefined ? 0 : at + step.below,
+              step.grow,
+            )
+            if (step.scroll) {
+              // After the slice keeps the reader, before the next frame.
+              for (let i = 0; i < 3; i++) await Promise.resolve()
+              pane.scrollTop += step.scroll
+            }
+            if (step.frame) await frame()
+            else tops.push((await still()) + (step.scroll ?? 0))
+          }
+        }
+        return tops
+      },
+      { doc, target, steps },
+    )
+    results.push({ name, target, slack, tops: result })
+  }
+  const report = JSON.stringify(results)
+  for (const { tops, slack } of results)
+    for (const top of tops)
+      assert.ok(top !== null && Math.abs(top) <= slack, report)
+})
+
 /** Mount `doc` in the editable harness. */
 const mount = (doc) =>
   harness.evaluate(

@@ -21,6 +21,8 @@ type Reading = {
   top: number
   /** How far below its line block's top in the editor's heights `pos` showed. */
   offset: number
+  /** Whether the editor drew `pos` as its own text, not in a widget. */
+  text: boolean
   /** The end of the line `pos` is on. */
   line: number
   moved: boolean
@@ -93,6 +95,7 @@ function reader(
         pos,
         top,
         offset: top - view.documentTop - view.lineBlockAt(pos).top,
+        text: drawnText(view, pos),
         line: view.state.doc.lineAt(pos).to,
         moved: false,
         doc: view.state.doc,
@@ -176,6 +179,67 @@ export function keepReading(view: EditorView, at = 0) {
   if (position && at <= position.line) position.moved = true
 }
 
+/** Whether the editor draws `pos` as text: not in a widget, nor in the undrawn part of a long line. */
+function drawnText(view: EditorView, pos: number) {
+  return view.visibleRanges.some(
+    (range) => range.from <= pos && pos <= range.to,
+  )
+}
+
+/**
+ * Where the page draws the text at `pos`. Scroll handlers run while the
+ * editor updates, when it can't measure positions itself.
+ */
+function drawnTop(view: EditorView, pos: number) {
+  const { node, offset } = view.domAtPos(pos, 1)
+  const range = view.dom.ownerDocument.createRange()
+  range.setStart(node, offset)
+  // The character after the position, in the row it starts.
+  if (
+    node.nodeType === Node.TEXT_NODE &&
+    offset < (node.nodeValue?.length ?? 0)
+  )
+    range.setEnd(node, offset + 1)
+  const box = range.getClientRects()[0]
+  return box ? box.top : null
+}
+
+/**
+ * Reading positions the editor is asked to draw so they can be scrolled
+ * back, by view, with the pane's scroll when it was asked.
+ */
+const revealing = new WeakMap<
+  EditorView,
+  { position: Reading; scroll: number }
+>()
+
+/**
+ * Has the editor draw the reading position, then lines it up where it was
+ * (scrollHandler). Inside the part of a long line the editor leaves undrawn,
+ * a position's coordinates are a line gap's edge and its heights there are
+ * estimates, so neither can line it up.
+ */
+function reveal(view: EditorView, position: Reading) {
+  if (revealing.get(view)?.position === position) return
+  const ask = { position, scroll: position.pane.scrollTop }
+  revealing.set(view, ask)
+  queueMicrotask(() => {
+    if (revealing.get(view) !== ask) return
+    if (
+      !view.dom.isConnected ||
+      (scrollRequests.get(view) ?? 0) !== position.scrollRequest
+    ) {
+      revealing.delete(view)
+      return
+    }
+    // Where the editor scrolls it when the page can't place it either.
+    const yMargin = position.top - position.pane.getBoundingClientRect().top
+    view.dispatch({
+      effects: EditorView.scrollIntoView(position.pos, { y: 'start', yMargin }),
+    })
+  })
+}
+
 /**
  * Where the reading position is on screen: where it is drawn, else where the
  * editor's heights put it. New heights above can move it out of what the
@@ -189,6 +253,13 @@ function screenTop(view: EditorView, position: Reading) {
 
 /** Scrolls the reading position back to where it was on screen. */
 function restore(view: EditorView, position: Reading) {
+  // Text the editor doesn't draw now: a widget's position keeps its own
+  // coordinates, without a scroll command for each correction.
+  if (position.text && !drawnText(view, position.pos)) {
+    if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
+    reveal(view, position)
+    return true
+  }
   const now = screenTop(view, position)
   // Measuring can execute a pending scroll command; its destination takes precedence.
   if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
@@ -228,7 +299,22 @@ export const keepRead = [
     restore(update.view, keep)
     keep.scroll = keep.pane.scrollTop
   }),
-  EditorView.scrollHandler.of((view) => {
+  EditorView.scrollHandler.of((view, range) => {
+    // The editor drew a reading position it was asked to: line it up, moved
+    // by what the reader scrolled meanwhile, whose scrolling then stands.
+    const ask = revealing.get(view)
+    revealing.delete(view)
+    if (ask && range.head === ask.position.pos) {
+      const { position, scroll } = ask
+      const now = drawnTop(view, position.pos)
+      if (now === null) return false
+      const scrolled = position.pane.scrollTop - scroll
+      position.pane.scrollTop += now - (position.top - scrolled)
+      const keep = kept.get(view)
+      if (Math.abs(scrolled) > 1) kept.delete(view)
+      else if (keep) keep.scroll = keep.pane.scrollTop
+      return true
+    }
     scrollRequests.set(view, (scrollRequests.get(view) ?? 0) + 1)
     reading.delete(view)
     kept.delete(view)

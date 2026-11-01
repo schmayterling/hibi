@@ -75,6 +75,7 @@ import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
+import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
@@ -148,6 +149,7 @@ import {
   getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
+  getSavedDocument,
   hasOpenDocumentPath,
   hasUnsavedDocuments,
   loadDocument,
@@ -223,6 +225,18 @@ import {
   outdatedAddons,
 } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
+import {
+  acceptUndoHistoryFlushed,
+  clearUndoHistory,
+  flushUndoHistory,
+  keepsUndoHistory,
+  readUndoHistory,
+  relocateUndoHistory,
+  removeUndoHistory,
+  setKeepUndoHistory,
+  storeUndoHistory,
+  undoHistoryWritten,
+} from './undo-history'
 import {
   cancelUpdateInstall,
   checkForUpdates,
@@ -1066,8 +1080,7 @@ function createWindow(): void {
       shortcut && actions.find(({ id }) => hotkeys[id] === shortcut)
     if (action) {
       event.preventDefault()
-      if (!input.isAutoRepeat)
-        window.webContents.send(HOTKEY_CHANNELS.command, action.id)
+      if (!input.isAutoRepeat) sendCommand(window, action.id)
       return
     }
     const addon = shortcut ? addonHotkeys.resolve(shortcut) : undefined
@@ -1172,6 +1185,9 @@ function createWindow(): void {
       )
         showMainWindow()
       if (await confirmDiscardAll(window)) {
+        // Saves made in the prompts reach the notes' undo histories first.
+        if (journalReady && !rendererGone) await flushUndoHistory(window)
+        await undoHistoryWritten()
         const installed = finishUpdateInstall()
         if (installed === false) {
           quitting = false
@@ -1279,9 +1295,16 @@ function createWindow(): void {
   })
 }
 
+// The renderer runs a command that arrives during a file operation once the
+// operation ends. One sent while its dialog or prompt is open would run after
+// that is answered, so it is dropped, as file operations are then.
+function sendCommand(window: BrowserWindow | null, action: AppCommand) {
+  if (!fileOperationHasDialog())
+    window?.webContents.send(HOTKEY_CHANNELS.command, action)
+}
+
 function installMenu(): void {
-  const command = (action: AppCommand) => () =>
-    mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
+  const command = (action: AppCommand) => () => sendCommand(mainWindow, action)
   // The app window runs undo and redo in its focused editor; its devtools and
   // other windows keep the browser's own.
   const history =
@@ -2290,6 +2313,43 @@ if (!app.requestSingleInstanceLock()) {
           return restoreDocument(window, content)
         }),
       )
+      // Not a file operation: tab closes wait on these.
+      handle(
+        UNDO_HISTORY_CHANNELS.store,
+        (event, tabId: unknown, history: unknown) => {
+          trustedWindow(event)
+          const document = getSavedDocument(tabId)
+          return document
+            ? storeUndoHistory(document.path, document.saved, history)
+            : undefined
+        },
+      )
+      handle(UNDO_HISTORY_CHANNELS.flushed, (event, token: unknown) => {
+        trustedWindow(event)
+        acceptUndoHistoryFlushed(token)
+      })
+      handle(
+        UNDO_HISTORY_CHANNELS.read,
+        (event, tabId: unknown, version: unknown) =>
+          readAfterFileOperation(event, async () => {
+            const document = getSavedDocument(tabId)
+            return document && document.saved.version === version
+              ? readUndoHistory(document.path, document.saved)
+              : null
+          }),
+      )
+      handle(UNDO_HISTORY_CHANNELS.keep, (event) => {
+        trustedWindow(event)
+        return keepsUndoHistory()
+      })
+      handle(UNDO_HISTORY_CHANNELS.setKeep, (event, keep: unknown) => {
+        trustedWindow(event)
+        return setKeepUndoHistory(keep)
+      })
+      handle(UNDO_HISTORY_CHANNELS.clear, (event) => {
+        trustedWindow(event)
+        return clearUndoHistory()
+      })
       handle(DOCUMENT_CHANNELS.pdfImage, (event, source, revision) => {
         trustedWindow(event)
         return readPdfImage(source, revision)
@@ -2484,15 +2544,26 @@ if (!app.requestSingleInstanceLock()) {
           destinationPath: unknown,
           expectedVersion: unknown,
         ) =>
-          mutateAddonFile(event, owner, (isCurrent) =>
-            renameWorkspaceFile(
+          mutateAddonFile(event, owner, async (isCurrent) => {
+            const root = workspaceRoot()
+            const result = await renameWorkspaceFile(
               target as WorkspaceTarget,
               sourcePath,
               destinationPath,
               expectedVersion,
               isCurrent,
-            ),
-          ),
+            )
+            // A note an addon moves keeps its undo history, as one Hibi
+            // moves does; a move that kept both names moved nothing.
+            if (root && result.ok && result.value.sourceRemoved)
+              void relocateUndoHistory(
+                join(root, result.value.path),
+                join(root, result.value.destinationPath),
+              ).catch((error: unknown) =>
+                console.error('Could not move undo history:', error),
+              )
+            return result
+          }),
       )
       handle(
         WORKSPACE_CHANNELS.trashFile,
@@ -2508,7 +2579,16 @@ if (!app.requestSingleInstanceLock()) {
               target as WorkspaceTarget,
               path,
               expectedVersion,
-              (file) => shell.trashItem(file),
+              async (file) => {
+                // Kept histories go by the note's real path, whatever case
+                // the addon spelled it in.
+                const note = await realpath(file).catch(() => file)
+                await shell.trashItem(file)
+                // Open notes aren't trashed here, so no tab sends steps later.
+                void removeUndoHistory(note).catch((error: unknown) =>
+                  console.error('Could not remove undo history:', error),
+                )
+              },
               isCurrent,
             ),
           ),

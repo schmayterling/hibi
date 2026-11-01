@@ -65,6 +65,10 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
   useEffect(() => {
     const timers = new Map<string, ReturnType<typeof setTimeout>>()
     const paused = new Map<string, unknown>()
+    // Text an input method is still composing isn't final: autosave waits
+    // until the composition ends, then saves the text it committed. A
+    // composition whose element left the page ended with it.
+    let composing: Node | null = null
     const schedule = (next: DocumentState) => {
       clearTimeout(timers.get(next.tabId))
       timers.delete(next.tabId)
@@ -83,6 +87,10 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
         next.tabId,
         setTimeout(async () => {
           timers.delete(next.tabId)
+          // A field removed from the page mid-composition never reports
+          // its end: a held attempt comes due again instead of ending.
+          if (composing?.isConnected) return schedule(next)
+          composing = null
           if (busyNow.current) {
             timers.set(
               next.tabId,
@@ -126,12 +134,24 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
         }, settings.delay),
       )
     }
+    const compose = (event: CompositionEvent) => {
+      composing = event.target as Node
+    }
+    const commit = () => {
+      if (!composing) return
+      composing = null
+      for (const pending of documentRuntime.documents()) schedule(pending)
+    }
+    window.addEventListener('compositionstart', compose, true)
+    window.addEventListener('compositionend', commit, true)
     // Each document keeps its quiet timer even when another pane gains focus.
     const unsubscribe = documentRuntime.subscribeDocument(schedule)
     for (const next of documentRuntime.documents()) schedule(next)
     return () => {
       for (const timer of timers.values()) clearTimeout(timer)
       unsubscribe()
+      window.removeEventListener('compositionstart', compose, true)
+      window.removeEventListener('compositionend', commit, true)
     }
   }, [settings])
   const label = !settings.enabled

@@ -42,6 +42,11 @@ import {
   writeText,
 } from './files'
 import { recordVersions } from './history'
+import {
+  flushUndoHistory,
+  relocateUndoHistory,
+  removeUndoHistory,
+} from './undo-history'
 import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
@@ -584,6 +589,8 @@ async function removeTabs(
   ids: Set<string>,
   preferredTab?: string,
 ) {
+  // Saves made in the prompts reach the closing tabs' undo histories first.
+  await flushUndoHistory(window)
   storeTab()
   if (ids.has(activeTab)) {
     const order = [...tabs.keys()]
@@ -679,14 +686,22 @@ export async function closeDeletedDocuments(
   window: BrowserWindow,
   parent: string,
 ) {
-  return removeTabs(
-    window,
-    new Set(
-      getOpenDocuments()
-        .filter((draft) => containsPath(parent, draft.file))
-        .map((draft) => draft.tabId),
-    ),
-  )
+  try {
+    return await removeTabs(
+      window,
+      new Set(
+        getOpenDocuments()
+          .filter((draft) => containsPath(parent, draft.file))
+          .map((draft) => draft.tabId),
+      ),
+    )
+  } finally {
+    // Deleted notes' kept undo history goes too, once their closing tabs
+    // have sent the steps their last saves left.
+    void removeUndoHistory(parent).catch((error: unknown) =>
+      console.error('Could not remove undo history:', error),
+    )
+  }
 }
 
 function rememberLocation() {
@@ -733,6 +748,14 @@ export function getDocumentPath(): string | null {
 }
 export function getDocumentPathForTab(id: string): string | null {
   return id === activeTab ? path : (tabs.get(id)?.path ?? null)
+}
+/** A named tab's file and the text last saved to it, which its undo history ends at. */
+export function getSavedDocument(id: unknown) {
+  if (typeof id !== 'string') return null
+  const draft = id === activeTab ? snapshot() : tabs.get(id)
+  return draft?.path && !draft.pendingPath
+    ? { path: draft.path, saved: draft.saved }
+    : null
 }
 
 export function getDocument(): DocumentState {
@@ -879,11 +902,13 @@ async function recordSaveHistory(
   destination: string,
   previous: SourceSnapshot | null,
   content: SourceSnapshot,
+  automatic = false,
 ) {
   try {
     await recordVersions(
       destination,
       previous === null ? [content] : [previous, content],
+      automatic,
     )
   } catch (error) {
     console.error('local history failed:', error)
@@ -990,6 +1015,7 @@ export async function autosaveDocument(
   expectedRevision: unknown,
   expectedContentVersion?: number,
   canContinue: () => boolean = () => true,
+  automatic = true,
 ): Promise<AutosaveResult> {
   if (
     typeof target !== 'string' ||
@@ -1038,7 +1064,7 @@ export async function autosaveDocument(
   }
   storeTab()
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, draft.saved, content)
+  await recordSaveHistory(window, destination, draft.saved, content, automatic)
   return { status: 'saved', document: getDocumentForTab(id) }
 }
 
@@ -1078,6 +1104,7 @@ export async function saveTargetDocument(
     expectedRevision,
     expectedContentVersion as number,
     canContinue,
+    false,
   )
   if (result.status === 'skipped') return { status: 'stale', document: null }
   return { status: result.status, document: result.document }
@@ -1184,6 +1211,10 @@ export function relocateDocument(from: string, to: string): void {
         : current
   }
   storeTab()
+  // Notes keep their undo history under their new paths.
+  void relocateUndoHistory(from, to).catch((error: unknown) =>
+    console.error('Could not move undo history:', error),
+  )
   if (!activeTabOpen) return
   for (const draft of tabs.values()) {
     draft.path = relocate(draft.path)

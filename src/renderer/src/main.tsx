@@ -75,7 +75,11 @@ import { useAutosave } from './autosave'
 import { CommandPalette, type PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
 import { documentFormats, editorDocument } from './document-formats'
-import { documentRuntime, observeDocumentErrors } from './document-runtime'
+import {
+  documentRuntime,
+  flushUndoHistory,
+  observeDocumentErrors,
+} from './document-runtime'
 import { subscribeDocumentShell } from './document-shell'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
@@ -92,6 +96,7 @@ import {
   loadFlavor,
   selectedFlavors,
 } from './flavors'
+import type { HistoryResult } from './History'
 import { LoadingScreen } from './LoadingScreen'
 import { installRendererDiagnostics } from './local-diagnostics'
 import { transformMarkdown } from './markdown-projection'
@@ -116,6 +121,8 @@ import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
 startupMark('renderer-entry')
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
 import.meta.hot?.dispose(stopLocalDiagnostics)
+// Registered here, not where the runtime loads: harness pages load it without the preload.
+window.hibi.onUndoHistoryFlush(flushUndoHistory)
 // Only the app writes default-view, so its absence marks a profile's first launch.
 // The introduction stays pending until a launch without files can show it.
 if (localStorage.getItem('introduction') === null)
@@ -133,9 +140,9 @@ const SettingsScreen = lazy(() =>
     default: module.SettingsScreen,
   })),
 )
-const VersionHistory = lazy(() =>
-  import('./VersionHistory').then((module) => ({
-    default: module.VersionHistory,
+const History = lazy(() =>
+  import('./History').then((module) => ({
+    default: module.History,
   })),
 )
 const BacklinksSidebar = lazy(() =>
@@ -143,6 +150,21 @@ const BacklinksSidebar = lazy(() =>
     default: module.BacklinksSidebar,
   })),
 )
+// Commands a file operation would drop wait for it instead; true marks those
+// that act on the shown tab.
+const waitsForOperation: Partial<Record<AppCommand, boolean>> = {
+  'close-tab': true,
+  back: true,
+  forward: true,
+  'previous-tab': true,
+  'next-tab': true,
+  save: true,
+  saveAs: true,
+  new: false,
+  open: false,
+  'open-workspace': false,
+}
+
 type PaneSide = 'left' | 'right'
 type SplitTabs = {
   left: string
@@ -547,6 +569,26 @@ function App() {
   function endBusy() {
     busyRef.current = focusUnsafe.current
     setBusy(focusUnsafe.current)
+    // Paused editing drops them; otherwise they run once the caller's cleanup ends.
+    if (busyRef.current) waitingCommands.current.clear()
+    else if (waitingCommands.current.size) queueMicrotask(runWaitingCommand)
+  }
+  // Menu and shortcut commands that arrive during a file operation, the latest
+  // of each with the tab they came for; they run in order when it finishes.
+  const waitingCommands = useRef(new Map<AppCommand, string | undefined>())
+  function runWaitingCommand() {
+    for (const [command, tabId] of waitingCommands.current) {
+      if (busyRef.current) return
+      // A save that follows the one just ended goes before the rest.
+      if (pendingSave.current) {
+        void pendingSave.current.finally(runWaitingCommand)
+        return
+      }
+      waitingCommands.current.delete(command)
+      // A command for a tab runs only while that tab is still the one shown.
+      if (tabId === undefined || tabId === currentDocument.current?.tabId)
+        addonHost.app.runAction(command)
+    }
   }
   useEffect(() => {
     const side = focusSplitSide.current
@@ -2099,6 +2141,14 @@ function App() {
       return
     }
     setPaletteOpen(false)
+    const forTab = waitsForOperation[command]
+    if (busyRef.current && forTab !== undefined) {
+      waitingCommands.current.set(
+        command,
+        forTab ? currentDocument.current?.tabId : undefined,
+      )
+      return
+    }
     switch (command) {
       case 'close-tab':
         if (activeAddonTab) activeAddonTab.handle.close()
@@ -2119,23 +2169,35 @@ function App() {
         break
       case 'history':
         void dialogs
-          .open<string>({
-            title: 'Version history',
+          .open<HistoryResult>({
+            title: 'History',
             size: 'wide',
             description:
-              'Hibi keeps a version each time you save. Restore a version to the editor, then save to replace the file.',
+              'Return to a saved version or to a point while you edited. Restoring is a step you can undo.',
             content: ({ close }) => (
               <Suspense fallback={<LoadingScreen />}>
-                <VersionHistory close={close} />
+                <History close={close} />
               </Suspense>
             ),
           })
-          .result.then(async (id) => {
-            if (!id || busyRef.current) return
+          .result.then(async (chosen) => {
+            if (!chosen || busyRef.current) return
+            if (!chosen.large) {
+              // The saved text comes back as an edit, which undo takes back.
+              try {
+                documentRuntime.replace(
+                  await window.hibi.previewVersion(chosen.version),
+                  'visual',
+                )
+              } catch (error) {
+                setError(String(error))
+              }
+              return
+            }
             const intent = settingsIntent.current
             startBusy()
             try {
-              const next = await window.hibi.restoreVersion(id)
+              const next = await window.hibi.restoreVersion(chosen.version)
               if (!next) return
               await acceptOperationDocument(next, true)
               showDocument(intent)

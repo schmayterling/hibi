@@ -42,6 +42,7 @@ import type {
 } from '../shared/source-transfer'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
+import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
 import {
@@ -462,6 +463,20 @@ if (process.isMainFrame) {
     listVersions: () => ipcRenderer.invoke(HISTORY_CHANNELS.list),
     previewVersion: (id) => ipcRenderer.invoke(HISTORY_CHANNELS.preview, id),
     restoreVersion: (id) => ipcRenderer.invoke(HISTORY_CHANNELS.restore, id),
+    storeUndoHistory: (tabId, history) =>
+      ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.store, tabId, history),
+    readUndoHistory: (tabId, version) =>
+      ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.read, tabId, version),
+    onUndoHistoryFlush: (callback) =>
+      subscribe<string>(UNDO_HISTORY_CHANNELS.flush, (token) => {
+        void callback()
+          .catch(() => {})
+          .then(() => ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.flushed, token))
+      }),
+    getKeepUndoHistory: () => ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.keep),
+    setKeepUndoHistory: (keep) =>
+      ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.setKeep, keep),
+    clearUndoHistory: () => ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.clear),
     onNotice: (callback) => {
       const listener = (
         _event: Electron.IpcRendererEvent,

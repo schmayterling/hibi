@@ -72,6 +72,8 @@ function harness(t) {
     lookups: 0,
     calls: [],
     trashed: [],
+    removed: [],
+    relocated: [],
     documentPath: '/notes/first.md',
     document: { revision: 1 },
     sent: [],
@@ -105,7 +107,17 @@ function harness(t) {
     },
     isAddonActivationCurrent: (id, generation) =>
       id === 'example' && state.enabled && generation === state.generation,
-    shell: { trashItem: async (file) => state.trashed.push(file) },
+    shell: {
+      trashItem: async (file) => {
+        if (state.trashFails) throw new Error('The trash refused.')
+        state.trashed.push(file)
+      },
+    },
+    realpath: async (file) => `/real/${file}`,
+    removeUndoHistory: async (file) => state.removed.push(file),
+    workspaceRoot: () => '/notes',
+    join: (...parts) => parts.join('/'),
+    relocateUndoHistory: async (from, to) => state.relocated.push([from, to]),
   }
   for (const [name, [service]] of Object.entries(operations))
     bindings[service] = async (...args) => {
@@ -172,8 +184,14 @@ for (const name of Object.keys(operations)) {
     const forwarded = reads.includes(name) ? args : args.slice(0, -1)
     if (name === 'trashFile') {
       const trash = forwarded.pop()
+      // A file the trash refuses keeps its kept undo history.
+      h.state.trashFails = true
+      await assert.rejects(trash('kept.md'))
+      h.state.trashFails = false
       await trash('removed.md')
       assert.deepEqual(h.state.trashed, ['removed.md'])
+      // Its kept undo history goes with it, by the file's real path.
+      assert.deepEqual(h.state.removed, ['/real/removed.md'])
     }
     assert.deepEqual(forwarded, operations[name].slice(1))
     assert.equal(h.state.lookups, 1)
@@ -221,3 +239,20 @@ for (const name of mutations)
       h.state.pause.resolve()
       assert.deepEqual(await pending, unavailable)
     })
+
+test('renameFile moves the kept undo history of a note an addon moved', async (t) => {
+  const h = harness(t)
+  const moved = (sourceRemoved) => ({
+    ok: true,
+    value: { path: 'a.md', destinationPath: 'b/a.md', sourceRemoved },
+  })
+  h.state.result = moved(true)
+  assert.equal(await h.invoke('renameFile'), h.state.result)
+  assert.deepEqual(h.state.relocated, [['/notes/a.md', '/notes/b/a.md']])
+  // A move that kept both names, or that failed, moves nothing.
+  h.state.result = moved(false)
+  await h.invoke('renameFile')
+  h.state.result = { ok: false, code: 'conflict', message: 'Taken.' }
+  await h.invoke('renameFile')
+  assert.equal(h.state.relocated.length, 1)
+})

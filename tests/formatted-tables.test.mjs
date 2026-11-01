@@ -3761,6 +3761,98 @@ test("a scroll to the start or end of a long table's edited row lands on it in i
   }
 })
 
+test("a long table keeps its height and its rows' places while the edited row is out of its place", {
+  timeout: 120000,
+}, async () => {
+  const rows = Array.from({ length: 3000 }, (_, i) => `| row ${i} | v${i} |`)
+  // As in the tests above: the note starts with the table, in a pane that
+  // fits the harness window.
+  const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  // The pane scrolled to the note's top leaves the edited row after the
+  // window; to its end, before it. Then the row goes back in its place.
+  for (const to of ['top', 'bottom']) {
+    await harness.evaluate(
+      (doc) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 606 },
+          { editable: true },
+        ),
+      doc,
+    )
+    await harness.evaluate(async (at) => {
+      const preview = window.tables
+      for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+        await new Promise((done) => setTimeout(done, 20))
+      await preview.settle()
+      const view = preview.view()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+      })
+      await preview.settle()
+      await preview.settle()
+    }, doc.indexOf('v1801 '))
+    await harness
+      .locator('.hibi-lp-table tr[data-line="1803"] td')
+      .nth(1)
+      .click()
+    await harness.keyboard.press('End')
+    await harness.keyboard.type('Z')
+    const result = await harness.evaluate(async (to) => {
+      const preview = window.tables
+      const view = preview.view()
+      const pane = document.querySelector('.rich-pane')
+      const table = document.querySelector('.hibi-lp-table')
+      const row = (line) => table.querySelector(`tr[data-line="${line}"]`)
+      const placed = () =>
+        row(1803).previousElementSibling?.dataset.line === '1802' &&
+        row(1803).nextElementSibling?.dataset.line === '1804'
+      const top = (box) =>
+        box ? Math.round(box.top - table.getBoundingClientRect().top) : null
+      // Where a table line's first cell shows; table line n is the note's
+      // line n + 1.
+      const shows = (line) =>
+        top(view.coordsAtPos(view.state.doc.line(line + 1).from + 3))
+      // A row the window hasn't drawn, on the far side of the edited row.
+      const far = to === 'top' ? 2400 : 1200
+      // The cell editor scrolls to its caret after the typing first.
+      await preview.settle()
+      pane.scrollTop = to === 'top' ? 0 : pane.scrollHeight
+      for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+      const away = {
+        out: !placed(),
+        height: Math.round(table.getBoundingClientRect().height),
+        kept: shows(1803),
+        far: shows(far),
+      }
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(
+          view.state.selection.main.head,
+        ),
+      })
+      for (let i = 0; i < 4; i++) await preview.settle()
+      return {
+        away,
+        placed: {
+          in: placed(),
+          height: Math.round(table.getBoundingClientRect().height),
+          kept: top(row(1803).getBoundingClientRect()),
+          far: shows(far),
+        },
+      }
+    }, to)
+    const { away, placed } = result
+    assert.ok(away.out && placed.in, `${to}: ${JSON.stringify(result)}`)
+    // Out of its place, the table is as tall as with the row in it, and the
+    // row and the far one estimate where they show once drawn.
+    for (const key of ['height', 'kept', 'far'])
+      assert.ok(
+        Math.abs(away[key] - placed[key]) <= 1,
+        `${to}, ${key}: ${JSON.stringify(result)}`,
+      )
+  }
+})
+
 test('a cell editor shows its cell formatted as it opens', {
   timeout: 30000,
 }, async () => {

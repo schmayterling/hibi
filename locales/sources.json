@@ -6080,7 +6080,8 @@
     "src/renderer/src/SourceEditor.tsx"
   ],
   "403a5bd7603b": [
-    "src/renderer/src/History.tsx"
+    "src/renderer/src/History.tsx",
+    "src/renderer/src/main.tsx"
   ],
   "b813945dd20c": [
     "src/renderer/src/SourceEditor.tsx"
@@ -6285,6 +6286,9 @@
   ],
   "b22c9541adab": [
     "src/main/updates.ts"
+  ],
+  "fbdb2fff1c81": [
+    "src/renderer/src/main.tsx"
   ],
   "842b90180293": [
     "src/main/links.ts"

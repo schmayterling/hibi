@@ -453,3 +453,171 @@ test('going to a step or restoring a point shows the change in the editor, and a
     .waitFor()
   assert.equal(await markdown(), `# ${edited}`)
 })
+
+test('restoring a saved version shows the change in the editor, and one chosen while a save runs follows it', {
+  timeout: 90000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-version-'))
+  // A note far longer than the window, with a paragraph added at its end.
+  const original = Array.from(
+    { length: 80 },
+    (_, index) => `paragraph ${index}`,
+  ).join('\n\n')
+  const edited = `${original}\n\nthe last paragraph, added at the end`
+  const file = join(profile, 'note.md')
+  await writeFile(file, original)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      globalThis.release?.()
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const editor = page.getByRole('textbox', { name: /document editor/i })
+  const markdown = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+  const shows = (text) =>
+    waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  await pressShortcut(app, `${mod}+o`)
+  await shows(original)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  // The test edits through the formatted view, as typing does.
+  const edit = (spec) =>
+    page.evaluate((spec) => {
+      document
+        .querySelector('.rich-pane .cm-content')
+        .cmTile.root.view.dispatch(spec)
+    }, spec)
+  // The editor works with its caret and view at the note's top.
+  const top = async () => {
+    await edit({ selection: { anchor: 0 } })
+    await editor.focus()
+    await page.evaluate(() => {
+      document.querySelector('.rich-pane').scrollTop = 0
+    })
+  }
+  // Where the caret is and whether the view shows it, once it settles.
+  const caret = async () => {
+    let last = null
+    for (let read = 0; read < 20; read++) {
+      await page.waitForTimeout(100)
+      const now = await page.evaluate(() => {
+        const pane = document.querySelector('.rich-pane')
+        const { view } = pane.querySelector('.cm-content').cmTile.root
+        const bounds = pane.getBoundingClientRect()
+        const box = view.coordsAtPos(view.state.selection.main.head)
+        return {
+          at: view.state.selection.main.head,
+          shown:
+            !!box &&
+            box.top >= bounds.top - 1 &&
+            box.bottom <= bounds.bottom + 1,
+        }
+      })
+      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    return last
+  }
+  // Restores a saved version of `text` from the History view.
+  const restore = async (text) => {
+    const [version] = (
+      await Promise.all(
+        (
+          await page.evaluate(() => window.hibi.listVersions())
+        ).map(async (version) => ({
+          version,
+          text: await page.evaluate(
+            (id) => window.hibi.previewVersion(id),
+            version.id,
+          ),
+        })),
+      )
+    ).filter((found) => found.text === text)
+    const history = page.getByRole('dialog', { name: /^history$/i })
+    await history.waitFor()
+    await history.locator(`#history-version-${version.version.id}`).click()
+    await history.getByRole('button', { name: /^restore$/i }).click()
+    await history.waitFor({ state: 'hidden' })
+  }
+  const openHistory = async () => {
+    await clickMenu(app, 'Command palette')
+    await page
+      .getByRole('combobox', { name: /search commands/i })
+      .fill('history')
+    await page
+      .getByRole('option')
+      .filter({ hasText: /^history/i })
+      .first()
+      .click()
+  }
+  await edit({ selection: { anchor: original.length } })
+  await edit({
+    changes: { from: original.length, insert: edited.slice(original.length) },
+    selection: { anchor: edited.length },
+    userEvent: 'input.type',
+  })
+  await shows(edited)
+  await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(
+    page,
+    async (text) => {
+      const document = await window.hibi.getDocument()
+      return document.savedMarkdown === text && !document.dirty
+    },
+    edited,
+  )
+
+  // Restoring the text the save replaced puts the caret where the paragraph
+  // was taken out, in view.
+  await top()
+  await openHistory()
+  await restore(original)
+  await shows(original)
+  assert.deepEqual(await caret(), { at: original.length, shown: true })
+
+  // History opened while a save runs, as a shortcut can: the version chosen
+  // is restored once the save is done, not dropped.
+  await edit({ changes: { from: 0, insert: '# ' } })
+  await shows(`# ${original}`)
+  await app.evaluate(({ ipcMain }) => {
+    const handlers = ipcMain._invokeHandlers
+    const save = handlers.get('document:save')
+    globalThis.held = new Promise((entered) => {
+      handlers.set('document:save', async (...args) => {
+        handlers.set('document:save', save)
+        await new Promise((release) => {
+          globalThis.release = release
+          entered()
+        })
+        return save(...args)
+      })
+    })
+  })
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held)
+  await page.locator('.app[aria-busy="true"]').waitFor()
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send('app:command', 'history'),
+  )
+  await restore(edited)
+  assert.equal(await markdown(), `# ${original}`)
+  await app.evaluate(() => globalThis.release())
+  await shows(edited)
+})

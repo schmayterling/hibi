@@ -110,7 +110,7 @@ import { StartupPlaceholder } from './StartupPlaceholder'
 import { StatusBar, type StatusBarVisibility } from './StatusBar'
 import { settingsCategories } from './settings-categories'
 import { settingsPages } from './settings-pages'
-import { sourceView } from './source-view'
+import { editorPosition, sourceView } from './source-view'
 import { Titlebar } from './Titlebar'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
@@ -150,6 +150,16 @@ const BacklinksSidebar = lazy(() =>
     default: module.BacklinksSidebar,
   })),
 )
+/** The editor the user works in, as its keys reach it. */
+function activeEditor() {
+  const active = documentRuntime.captureDocument()
+  const view = documentRuntime.captureActiveView()
+  const surface =
+    view && view.documentId === active?.documentId
+      ? editorViewRegistry.surface(view)
+      : null
+  return surface && sourceView(surface)
+}
 // Commands a file operation would drop wait for it instead; true marks those
 // that act on the shown tab. Undo and redo act on the text as it is when they
 // run, so they drop.
@@ -1465,13 +1475,7 @@ function App() {
       if (command === 'undo' || command === 'redo') {
         // The view the user works in takes the step, as its keys do, and
         // scrolls to what it restores.
-        const active = documentRuntime.captureDocument()
-        const view = documentRuntime.captureActiveView()
-        const surface =
-          view && view.documentId === active?.documentId
-            ? editorViewRegistry.surface(view)
-            : null
-        const editor = surface && sourceView(surface)
+        const editor = activeEditor()
         return Boolean(
           editor
             ? runSourceHistory(editor, command)
@@ -2214,6 +2218,46 @@ function App() {
     else selectTab(id)
   }
 
+  /** Restores a saved version History returned. */
+  async function restoreChosen(chosen: HistoryResult) {
+    if (!chosen.large) {
+      const editor = activeEditor()
+      // As with its own undo, a read-only editor takes no edit.
+      if (editor?.state.readOnly) {
+        setError('The editor is read-only right now.')
+        return
+      }
+      // The saved text comes back as an edit, which undo takes back, and the
+      // editor shows it, with its caret after the change.
+      try {
+        const change = documentRuntime.replace(
+          await window.hibi.previewVersion(chosen.version),
+          'visual',
+        )?.operation.changes[0]
+        const at =
+          editor && change
+            ? editorPosition(editor, change.from + change.insert.length)
+            : null
+        if (editor && at !== null && at <= editor.state.doc.length)
+          editor.dispatch({ selection: { anchor: at }, scrollIntoView: true })
+      } catch (error) {
+        setError(String(error))
+      }
+      return
+    }
+    const intent = settingsIntent.current
+    startBusy()
+    try {
+      const next = await window.hibi.restoreVersion(chosen.version)
+      if (!next) return
+      await acceptOperationDocument(next, true)
+      showDocument(intent)
+    } catch (error) {
+      setError(String(error))
+    } finally {
+      endBusy()
+    }
+  }
   function runAction(command: AppCommand) {
     if (dialogs.isOpen()) return
     if (command === 'palette') {
@@ -2262,32 +2306,22 @@ function App() {
               </Suspense>
             ),
           })
-          .result.then(async (chosen) => {
-            if (!chosen || busyRef.current) return
-            if (!chosen.large) {
-              // The saved text comes back as an edit, which undo takes back.
-              try {
-                documentRuntime.replace(
-                  await window.hibi.previewVersion(chosen.version),
-                  'visual',
-                )
-              } catch (error) {
-                setError(String(error))
-              }
-              return
-            }
-            const intent = settingsIntent.current
-            startBusy()
-            try {
-              const next = await window.hibi.restoreVersion(chosen.version)
-              if (!next) return
-              await acceptOperationDocument(next, true)
-              showDocument(intent)
-            } catch (error) {
-              setError(String(error))
-            } finally {
-              endBusy()
-            }
+          .result.then((chosen) => {
+            if (!chosen) return
+            // Chosen while a file operation runs, it follows that, in the
+            // tab it was chosen in.
+            if (busyRef.current)
+              wait(
+                'history-restore',
+                (go) =>
+                  go
+                    ? restoreChosen(chosen)
+                    : setError(
+                        'The version wasn’t restored. Restore it again.',
+                      ),
+                true,
+              )
+            else void restoreChosen(chosen)
           })
         break
       case 'new':

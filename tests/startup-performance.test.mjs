@@ -129,6 +129,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // 332 (#790).
   // Registering the undo history flush at app boot, so pages without the
   // preload can load the document runtime, adds 17 (#793).
+  // Leaving Enter and Escape to an input method while it composes, in the
+  // explorer, the palette, find and dialogs, adds 150 (#804).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -145,7 +147,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         2933 +
         877 +
         332 +
-        17,
+        17 +
+        150,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import {
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -9,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, redoKey, replaceRichText } from './keyboard.mjs'
@@ -17,9 +18,10 @@ import { renameDocument } from './rename.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-async function note(t, text = 'original') {
+async function note(t, text = 'original', folder = '') {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-undo-history-'))
-  const file = join(profile, 'note.md')
+  const file = join(profile, folder, 'note.md')
+  await mkdir(dirname(file), { recursive: true })
   await writeFile(file, text)
   const apps = [],
     quit = new WeakSet()
@@ -138,6 +140,25 @@ test('restarting keeps undo, with a save made at the quit prompt', {
   const first = await launch(0)
   await first.open('original')
   await first.edit('saved while quitting')
+  // The editor answers the quit's flush, so quitting needn't wait out its 5 s timeout.
+  await first.app.evaluate(
+    ({ BrowserWindow }) =>
+      new Promise((resolve, reject) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents
+        const { ipc } = contents
+        const timer = setTimeout(() => {
+          ipc.removeHandler('undo-history:flushed')
+          reject(new Error('the editor did not answer the flush'))
+        }, 4000)
+        ipc.handle('undo-history:flushed', (_event, token) => {
+          clearTimeout(timer)
+          ipc.removeHandler('undo-history:flushed')
+          if (token === 'probe') resolve()
+          else reject(new Error(`flushed ${token}`))
+        })
+        contents.send('undo-history:flush', 'probe')
+      }),
+  )
   await first.quit()
   const second = await launch()
   await second.open('saved while quitting')
@@ -269,4 +290,47 @@ test('a note renamed inside Hibi keeps its undo history under its new name', {
   await hibi.restored()
   await hibi.undo('original')
   assert.deepEqual(await readdir(folder), [await named(renamed)])
+})
+
+test('a note Hibi moves to the trash takes its kept undo history, with the steps its closing tab sends', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch, profile, file } = await note(t, 'original', 'notes')
+  const hibi = await launch()
+  const { app, page } = hibi
+  const folder = join(profile, 'undo-history')
+  const kept = (count) =>
+    waitForAsync(
+      app,
+      async (_electron, [folder, count]) => {
+        const { readdir } = process.getBuiltinModule('node:fs/promises')
+        return (await readdir(folder).catch(() => [])).length === count
+      },
+      [folder, count],
+    )
+  await hibi.open('original')
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await kept(1)
+  // The next save's steps wait until its tab closes and asks for them.
+  await page.evaluate(() => {
+    const idle = window.requestIdleCallback
+    window.requestIdleCallback = (callback, options) =>
+      options?.timeout === 5000 ? 0 : idle(callback, options)
+  })
+  await hibi.edit('second draft')
+  await hibi.save('second draft')
+  await app.evaluate(({ dialog, shell }, notes) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [notes],
+    })
+    shell.trashItem = (path) =>
+      process.getBuiltinModule('node:fs/promises').rm(path, { recursive: true })
+  }, dirname(file))
+  await page.evaluate(() => window.hibi.openWorkspace())
+  await page.evaluate(() =>
+    window.hibi.workspaceAction({ action: 'delete', path: 'note.md' }),
+  )
+  await kept(0)
 })

@@ -42,7 +42,11 @@ import {
   writeText,
 } from './files'
 import { recordVersions } from './history'
-import { flushUndoHistory, relocateUndoHistory } from './undo-history'
+import {
+  flushUndoHistory,
+  relocateUndoHistory,
+  removeUndoHistory,
+} from './undo-history'
 import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
@@ -682,14 +686,22 @@ export async function closeDeletedDocuments(
   window: BrowserWindow,
   parent: string,
 ) {
-  return removeTabs(
-    window,
-    new Set(
-      getOpenDocuments()
-        .filter((draft) => containsPath(parent, draft.file))
-        .map((draft) => draft.tabId),
-    ),
-  )
+  try {
+    return await removeTabs(
+      window,
+      new Set(
+        getOpenDocuments()
+          .filter((draft) => containsPath(parent, draft.file))
+          .map((draft) => draft.tabId),
+      ),
+    )
+  } finally {
+    // Deleted notes' kept undo history goes too, once their closing tabs
+    // have sent the steps their last saves left.
+    void removeUndoHistory(parent).catch((error: unknown) =>
+      console.error('Could not remove undo history:', error),
+    )
+  }
 }
 
 function rememberLocation() {

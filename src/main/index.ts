@@ -168,7 +168,7 @@ import {
   updateDocumentEdited,
 } from './document'
 import { createDocumentTransfers } from './document-transfer'
-import { isDocumentName } from './document-types'
+import { isOpenableName } from './document-types'
 import { sweepSiteScratch } from './export-scratch'
 import { externalFileArguments } from './external-files'
 import {
@@ -2797,7 +2797,7 @@ if (!app.requestSingleInstanceLock()) {
           const kept = new Set<string>()
           for (const path of externalFiles.splice(0)) {
             try {
-              if (!isDocumentName(path))
+              if (!isOpenableName(path))
                 throw new Error('Unsupported document format.')
               const file = await realpath(path).catch(() => path)
               if (kept.has(file)) continue

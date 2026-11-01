@@ -2103,6 +2103,32 @@ summary {
   padding: var(--editor-padding, 48px);
   font: inherit;
 }
+.image-viewer {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: var(--editor-padding, 48px);
+}
+.image-preview {
+  display: block;
+}
+.image-unavailable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 100%;
+  text-align: center;
+}
+.image-unavailable strong {
+  color: var(--ink);
+  font-size: var(--text-ui);
+}
+.image-unavailable p {
+  margin: 0;
+}
 .setting-availability {
   color: var(--muted);
   font: var(--text-sm) var(--font-ui);

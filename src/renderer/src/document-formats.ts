@@ -1,14 +1,16 @@
-import { createElement, useEffect, useState } from 'react'
-import type { DocumentFormat, DocumentPreviewProps } from '../../addons/api'
+import { createElement } from 'react'
+import type { DocumentFormat } from '../../addons/api'
 import type { DocumentState } from '../../shared/desktop'
 import {
   type DocumentView,
   documentExtension,
   documentViews,
+  imageExtensions,
   isDocumentView,
 } from '../../shared/document-types'
 import type { RawEdit } from '../../shared/source-operations'
 import { documentRuntime } from './document-runtime'
+import { ImageViewer } from './ImageViewer'
 
 const plainText: DocumentFormat = {
   id: 'core.text',
@@ -22,40 +24,13 @@ const plainText: DocumentFormat = {
     css: '',
   }),
 }
-/** Shows the image file through the existing document image read. */
-function ImagePreview({ document }: DocumentPreviewProps) {
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => {
-    let current = true
-    setUrl(null)
-    // The read decodes the source, so the name is encoded to stay exact.
-    void window.hibi
-      ?.readDocumentImage(
-        encodeURIComponent(document.name),
-        document.revision,
-      )
-      .then((image) => {
-        if (current) setUrl(image)
-      })
-    return () => {
-      current = false
-    }
-  }, [document.name, document.revision])
-  return url
-    ? createElement('img', {
-        className: 'image-preview',
-        src: url,
-        alt: document.name,
-      })
-    : null
-}
 /** Images open in their own view and are never edited as source. */
 const image: DocumentFormat = {
   id: 'core.image',
   name: 'Image',
-  extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'],
+  extensions: [...imageExtensions],
   views: ['image'],
-  Preview: ImagePreview,
+  Preview: ImageViewer,
 }
 const registry = new Map<string, DocumentFormat>([
   [plainText.id, plainText],

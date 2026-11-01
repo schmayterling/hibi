@@ -1,4 +1,8 @@
-import { documentExtension, markdownExtensions } from '../shared/document-types'
+import {
+  documentExtension,
+  isImageDocument,
+  markdownExtensions,
+} from '../shared/document-types'
 
 let extra: readonly string[] = []
 export function setDocumentExtensions(extensions: readonly string[]) {
@@ -10,4 +14,8 @@ export function documentExtensions() {
 export function isDocumentName(name: string, _workspace = false) {
   const extension = documentExtension(name)
   return documentExtensions().includes(extension)
+}
+/** Documents plus images, which open read-only in the viewer. */
+export function isOpenableName(name: string) {
+  return isDocumentName(name) || isImageDocument(name)
 }

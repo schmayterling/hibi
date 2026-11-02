@@ -122,9 +122,50 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Keeping the redo steps an edit replaces as a branch, and the step each
   // save wrote, so a note's undo history outlives closing it, adds 2,933
   // (#782); storing and restoring that history loads later.
+  // Going to a step of that tree, knowing which of its states saves kept as
+  // versions, and restoring a saved version as an edit undo takes back, adds
+  // 877 (#786); the History view loads later.
+  // Autosave waiting until an input method commits what it composes adds
+  // 332 (#790).
+  // Registering the undo history flush at app boot, so pages without the
+  // preload can load the document runtime, adds 17 (#793).
+  // Leaving Enter and Escape to an input method while it composes, in the
+  // explorer, the palette, find and dialogs, adds 150 (#804).
+  // Counting a step's carets in the undo history's size adds 92 (#795).
+  // Running a menu or shortcut command that arrives during a file operation
+  // once it finishes, instead of dropping it, a save among them first, adds
+  // 499 (#794).
+  // Past the step limit, making old steps typed without a pause into one, so
+  // undo still reaches the oldest text, adds 940 (#803).
+  // Keeping the newest 32 undo steps as they were typed adds 20 (#807).
+  // Letting tab clicks, tab closes, links, file opens, media and addon
+  // commands wait for a file operation like keys do, and dropping what
+  // arrives behind a file dialog, adds 785 (#808).
+  // Finding History by "version" in the palette adds 61 (#814).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 677008 + 88 + 65 + 27 + 491 + 539 + 36 + 1504 + 93 + 109 + 2933,
+    bytes <=
+      677008 +
+        88 +
+        65 +
+        27 +
+        491 +
+        539 +
+        36 +
+        1504 +
+        93 +
+        109 +
+        2933 +
+        877 +
+        332 +
+        17 +
+        150 +
+        92 +
+        499 +
+        940 +
+        20 +
+        785 +
+        61,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
@@ -301,7 +342,7 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   )
   assert.doesNotMatch(
     initial,
-    /src\/renderer\/src\/(?:SettingsScreen|VersionHistory)\.tsx/,
+    /src\/renderer\/src\/(?:SettingsScreen|History)\.tsx/,
   )
   // The formatted view uses SourceEditor; its separate source pane stays unmounted.
   assert.match(initial, /src\/renderer\/src\/SourceEditor\.tsx/)

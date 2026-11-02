@@ -21,6 +21,7 @@ import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import { foldSearchText } from '../../shared/search-fold'
 import { sentenceCase } from '../../shared/ui-case'
 import { IconButton, TextInput } from '../../ui/Controls'
+import { composing } from '../../ui/composing'
 import { Modal } from '../../ui/Modal'
 import { ShortcutKeys } from '../../ui/ShortcutKeys'
 
@@ -288,7 +289,7 @@ export function CommandPalette({
       className="command-palette"
       aria-label="Command palette"
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
+        if (event.key === 'Escape' && !composing(event)) {
           event.preventDefault()
           if (menuPath.length) backTo(menuPath.length - 1)
           else close()
@@ -336,6 +337,7 @@ export function CommandPalette({
             setSelected(0)
           }}
           onKeyDown={(event) => {
+            if (composing(event)) return
             if (event.key === 'Backspace' && !query && menuPath.length) {
               event.preventDefault()
               backTo(menuPath.length - 1)

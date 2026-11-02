@@ -294,3 +294,13 @@ test('both saved reads reject malformed ids even when indexed with an existing f
   }, /This saved version is no longer available\./)
   assert.equal(state.reads, 0)
 })
+
+test('a version autosave wrote is flagged; the text it replaced and saves asked for are not', async (t) => {
+  const { api, file } = await runtime(t)
+  await api.recordVersions(file, ['opened', 'autosaved'], true)
+  await api.recordVersions(file, ['asked for'])
+  assert.deepEqual(
+    (await api.listVersions(file)).map(({ automatic }) => automatic ?? false),
+    [false, true, false],
+  )
+})

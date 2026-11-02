@@ -9,7 +9,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
@@ -225,4 +225,136 @@ test('autosave preserves later edits, pauses on external changes, and never prom
     await page.getByLabel(/^save after$/i, { exact: true }).inputValue(),
     '1000',
   )
+})
+
+test('autosave waits while an input method composes, then saves the committed text', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-autosave-composition-'))
+  const file = join(profile, 'note.md')
+  await writeFile(file, 'x')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const shows = (text) =>
+    waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  const saves = (text) =>
+    waitForAsync(
+      app,
+      async (_electron, [file, text]) => {
+        const { readFile } = process.getBuiltinModule('node:fs/promises')
+        return (await readFile(file, 'utf8')) === text
+      },
+      [file, text],
+      { label: `the file holds ${JSON.stringify(text)}` },
+    )
+  await clickMenu(app, 'Open…')
+  await shows('x')
+  await page.locator('[data-status-id="autosave"]').click()
+  await page.getByRole('checkbox', { name: /^autosave$/i }).check()
+  await page.getByLabel(/^save after$/i).selectOption('1000')
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  // Each autosave attempt is the async callback of a 1 s timer; keep them so
+  // the test can wait for one to finish.
+  await page.evaluate(() => {
+    const later = window.setTimeout
+    window.autosaveRuns = []
+    window.setTimeout = (callback, ms, ...rest) =>
+      later(
+        (...args) => {
+          const run = callback(...args)
+          if (ms === 1000 && run instanceof Promise)
+            window.autosaveRuns.push(run)
+          return run
+        },
+        ms,
+        ...rest,
+      )
+  })
+  const rich = page.getByRole('textbox', { name: /document editor/i })
+  await rich.focus()
+  await rich.press('End')
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const compose = async (...texts) => {
+    for (const text of texts)
+      await cdp.send('Input.imeSetComposition', {
+        text,
+        selectionStart: text.length,
+        selectionEnd: text.length,
+      })
+  }
+  await compose('n', 'に')
+  await shows('xに')
+  // The candidate window stays open past the delay: the attempt that comes
+  // due writes nothing, since the reading isn't the text.
+  await waitForAsync(page, () => window.autosaveRuns.length > 0)
+  await page.evaluate(() => Promise.all(window.autosaveRuns))
+  assert.equal(await readFile(file, 'utf8'), 'x')
+  await compose('にほ', 'にほん')
+  await cdp.send('Input.insertText', { text: '日本' })
+  await shows('x日本')
+  await saves('x日本')
+  // The composition is still one undo step.
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
+  await shows('x')
+  await saves('x')
+  // Committing the reading as it stands changes no text, and still saves.
+  await compose('に')
+  await shows('xに')
+  await cdp.send('Input.insertText', { text: 'に' })
+  await saves('xに')
+  // A composition whose field left the page holds autosave no longer: the
+  // attempt it held comes due again, with no later edit.
+  await page.evaluate(() => {
+    const field = document.createElement('textarea')
+    field.id = 'composition-field'
+    document.body.append(field)
+    field.focus()
+  })
+  await compose('か')
+  const held = await page.evaluate(() => window.autosaveRuns.length)
+  await rich.evaluate((element) => {
+    const { view } = element.cmTile.root
+    view.dispatch({ changes: { from: view.state.doc.length, insert: 'y' } })
+  })
+  await shows('xにy')
+  await waitForAsync(page, (held) => window.autosaveRuns.length > held, held)
+  await page.evaluate(() => Promise.all(window.autosaveRuns))
+  assert.equal(await readFile(file, 'utf8'), 'xに')
+  await page.evaluate(() =>
+    document.getElementById('composition-field').remove(),
+  )
+  await saves('xにy')
+  // Turned off, autosave keeps no composition listener that saves.
+  await page.locator('[data-status-id="autosave"]').click()
+  await page.getByRole('checkbox', { name: /^autosave$/i }).uncheck()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await rich.focus()
+  await rich.press('End')
+  await compose('か')
+  await cdp.send('Input.insertText', { text: '火' })
+  await shows('xにy火')
+  await page.waitForTimeout(1200)
+  assert.equal(await readFile(file, 'utf8'), 'xにy')
 })

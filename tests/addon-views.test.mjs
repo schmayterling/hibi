@@ -755,7 +755,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     .waitFor()
   await page
     .locator(
-      '[role="tab"][id^="document-tab-"][aria-selected="true"][aria-disabled="false"]',
+      '.document-tabs[aria-busy="false"] [role="tab"][id^="document-tab-"][aria-selected="true"]',
     )
     .waitFor()
   await page.waitForFunction(
@@ -781,7 +781,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await page.keyboard.press('ArrowLeft')
   await page
     .locator(
-      '[role="tab"][id^="document-tab-"][aria-selected="true"][aria-disabled="false"]',
+      '.document-tabs[aria-busy="false"] [role="tab"][id^="document-tab-"][aria-selected="true"]',
     )
     .waitFor()
   await addonTab.click()

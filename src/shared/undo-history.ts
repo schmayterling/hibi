@@ -1,6 +1,6 @@
 import type { DocumentSession, HistoryGroup } from './document-session.ts'
 import { editBytes, type RawEdit, safePosition } from './source-operations.ts'
-import type { SourceSelection } from './source-selection.ts'
+import { type SourceSelection, selectionBytes } from './source-selection.ts'
 
 export const UNDO_HISTORY_CHANNELS = {
   store: 'undo-history:store',
@@ -203,7 +203,11 @@ export const restoredHistory =
           beforeIdentity:
             step.parent === -1 ? rootIdentity : identities[step.parent]!,
           afterIdentity: identities[index]!,
-          bytes: editBytes(step.forward) + editBytes(step.inverse),
+          bytes:
+            editBytes(step.forward) +
+            editBytes(step.inverse) +
+            selectionBytes(step.before) +
+            selectionBytes(step.after),
           operations: step.operations,
           beforeSelection: step.before,
           afterSelection: step.after,

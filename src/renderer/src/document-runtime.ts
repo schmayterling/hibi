@@ -815,10 +815,9 @@ export const documentRuntime = new DocumentRuntime({
     void keptHistory().then((kept) => kept.keep(tabId))
   },
 })
-if (globalThis.window)
-  window.hibi.onUndoHistoryFlush(async () => {
-    await (await undoHistory)?.flush()
-  })
+export const flushUndoHistory = async () => {
+  await (await undoHistory)?.flush()
+}
 export const observeDocumentErrors = (listener: (error: unknown) => void) => {
   errors.add(listener)
   return () => {

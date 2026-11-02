@@ -29,6 +29,7 @@ import {
   type DocumentTab,
 } from '../shared/desktop'
 import type { DocumentSaveResult } from '../shared/document-edits'
+import { imageExtensions, isImageDocument } from '../shared/document-types'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
@@ -42,7 +43,12 @@ import {
   writeText,
 } from './files'
 import { recordVersions } from './history'
-import { flushUndoHistory, relocateUndoHistory } from './undo-history'
+import { MAX_IMAGE_BYTES } from './images'
+import {
+  flushUndoHistory,
+  relocateUndoHistory,
+  removeUndoHistory,
+} from './undo-history'
 import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
@@ -90,12 +96,36 @@ function makeSource(text: string, tabId = activeTab, version = 0) {
   materialized.set(store.snapshot(), text)
   return store
 }
+async function* noText(): AsyncGenerator<string> {}
 async function readSource(file: string, tabId = activeTab, version = 0) {
-  return SourceStore.load(
-    readMarkdownChunks(file),
-    { tabId, revision },
-    version,
-  )
+  // An image has no text; the viewer reads its bytes on its own.
+  if (isImageDocument(file)) {
+    const info = await stat(file)
+    if (!info.isFile())
+      throw new Error('Choose an image file, not a folder or device.')
+    // The viewer would read nothing past the limit, so refuse before a tab opens.
+    if (info.size > MAX_IMAGE_BYTES)
+      throw new Error(
+        `${basename(file)} is larger than 8 MiB, so Hibi can’t display it.`,
+      )
+    return SourceStore.load(noText(), { tabId, revision }, version)
+  }
+  try {
+    return await SourceStore.load(
+      readMarkdownChunks(file),
+      { tabId, revision },
+      version,
+    )
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code ===
+      'ERR_ENCODING_INVALID_ENCODED_DATA'
+    )
+      throw new Error(
+        `Hibi can’t open ${basename(file)}. Choose a UTF-8 text file or a PNG, JPEG, WebP, GIF, or SVG image.`,
+      )
+    throw error
+  }
 }
 async function sameSource(a: SourceSnapshot, b: SourceSnapshot) {
   const comparison = a.compare(b)
@@ -449,7 +479,11 @@ export async function selectDocumentTab(
     const reload = discard && (modified || !draft.path)
     let content: SourceStore | null = null
     try {
-      if (reload || !(await matchesMarkdown(file, target)))
+      // Images have no text to compare; the viewer rereads them on a new revision.
+      if (
+        !isImageDocument(file) &&
+        (reload || !(await matchesMarkdown(file, target)))
+      )
         content = await readSource(file, id, target.version + 1)
     } catch (error) {
       // A file moved or deleted outside Hibi leaves the tab's text as it is.
@@ -682,14 +716,22 @@ export async function closeDeletedDocuments(
   window: BrowserWindow,
   parent: string,
 ) {
-  return removeTabs(
-    window,
-    new Set(
-      getOpenDocuments()
-        .filter((draft) => containsPath(parent, draft.file))
-        .map((draft) => draft.tabId),
-    ),
-  )
+  try {
+    return await removeTabs(
+      window,
+      new Set(
+        getOpenDocuments()
+          .filter((draft) => containsPath(parent, draft.file))
+          .map((draft) => draft.tabId),
+      ),
+    )
+  } finally {
+    // Deleted notes' kept undo history goes too, once their closing tabs
+    // have sent the steps their last saves left.
+    void removeUndoHistory(parent).catch((error: unknown) =>
+      console.error('Could not remove undo history:', error),
+    )
+  }
 }
 
 function rememberLocation() {
@@ -890,11 +932,13 @@ async function recordSaveHistory(
   destination: string,
   previous: SourceSnapshot | null,
   content: SourceSnapshot,
+  automatic = false,
 ) {
   try {
     await recordVersions(
       destination,
       previous === null ? [content] : [previous, content],
+      automatic,
     )
   } catch (error) {
     console.error('local history failed:', error)
@@ -911,6 +955,14 @@ export async function saveDocument(
   defaultPath?: string,
   automatic = false,
 ): Promise<DocumentState | null> {
+  // Images are viewed, never written.
+  if (path && isImageDocument(path)) {
+    if (saveAs && !automatic)
+      throw new Error(
+        'Images open read-only in Hibi. Copy the file in your file manager to save it under another name.',
+      )
+    return null
+  }
   let destination = path ?? pendingPath
   const exclusive = !!pendingPath && !saveAs
   const saving = source.snapshot(),
@@ -1001,6 +1053,7 @@ export async function autosaveDocument(
   expectedRevision: unknown,
   expectedContentVersion?: number,
   canContinue: () => boolean = () => true,
+  automatic = true,
 ): Promise<AutosaveResult> {
   if (
     typeof target !== 'string' ||
@@ -1049,7 +1102,7 @@ export async function autosaveDocument(
   }
   storeTab()
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, draft.saved, content)
+  await recordSaveHistory(window, destination, draft.saved, content, automatic)
   return { status: 'saved', document: getDocumentForTab(id) }
 }
 
@@ -1089,6 +1142,7 @@ export async function saveTargetDocument(
     expectedRevision,
     expectedContentVersion as number,
     canContinue,
+    false,
   )
   if (result.status === 'skipped') return { status: 'stale', document: null }
   return { status: result.status, document: result.document }
@@ -1290,7 +1344,12 @@ export async function openDocument(
   const result = await runFileDialog(() =>
     dialog.showOpenDialog(window, {
       properties: ['openFile'],
-      filters: [{ name: 'Documents', extensions: documentExtensions() }],
+      filters: [
+        {
+          name: 'Documents and images',
+          extensions: [...documentExtensions(), ...imageExtensions],
+        },
+      ],
     }),
   )
   const selected = result.filePaths[0]

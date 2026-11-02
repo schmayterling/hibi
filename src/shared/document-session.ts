@@ -16,6 +16,7 @@ import {
 import {
   mapSourceSelection,
   type SourceSelection,
+  selectionBytes,
   sourceSelection,
 } from './source-selection.ts'
 
@@ -103,6 +104,10 @@ export class DocumentSession {
   #savedAt: StepAt | null = null
   /** Edits no longer merge into the step leading to the state a save took. */
   #sealed: object | null = null
+  /** Every state a save took, landed or still writing: no step joins over one. */
+  readonly #taken = new WeakSet<object>()
+  /** When saves kept a state's text as a version, by its identity. */
+  readonly #versioned = new WeakMap<object, number>()
   #saved: SourceSnapshot
   #contentIdentity: object = {}
   #savedIdentity = this.#contentIdentity
@@ -509,7 +514,11 @@ export class DocumentSession {
           : prepared.before.utf16Length,
         beforeIdentity: merge ? previous.beforeIdentity : this.#contentIdentity,
         afterIdentity,
-        bytes: editBytes(forward) + editBytes(inverse),
+        bytes:
+          editBytes(forward) +
+          editBytes(inverse) +
+          selectionBytes(merge ? previous.beforeSelection : beforeSelection) +
+          selectionBytes(this.selection(viewId)),
         operations: merge ? previous.operations + 1 : 1,
         beforeSelection: merge ? previous.beforeSelection : beforeSelection,
         afterSelection: this.selection(viewId),
@@ -522,7 +531,85 @@ export class DocumentSession {
     )
     this.#contentIdentity = afterIdentity
     this.#redo = []
+    this.#coarsen()
     this.#trim()
+  }
+  /**
+   * Past the step limit, the oldest two steps typed without a pause become
+   * one, so undo still reaches the oldest text. States worth returning to
+   * stay apart: a pause, a branch, the text a save took (landed or still
+   * writing) or a version, the text before a large edit, and one state every
+   * 3 minutes of steady typing. The newest quarter of the steps (32 of 128)
+   * never join, so undo takes back recent typing as it was typed.
+   * Steps go only when no two older steps can become one.
+   */
+  #coarsen(maximumGroups = this.#options.historyGroups ?? 128) {
+    if (this.historySize().groups <= maximumGroups) return
+    // A paste or a replace stays a step of its own, with the text before it.
+    const large = (group: HistoryGroup) =>
+      group.operations === 1 &&
+      group.forward.reduce(
+        (sum, edit) => sum + edit.insert.length + edit.to - edit.from,
+        0,
+      ) >= 200
+    const older = this.#undo.length - Math.floor(maximumGroups / 4)
+    for (let index = 0; index + 1 < older; index++) {
+      const first = this.#undo[index]!,
+        second = this.#undo[index + 1]!
+      if (
+        second.started - first.time >= 5000 ||
+        second.time - first.started >= 3 * 60 * 1000 ||
+        // A step restores the caret of the view that made it.
+        first.viewId !== second.viewId ||
+        this.#branches.has(first.step) ||
+        this.#taken.has(first.step) ||
+        this.#versioned.has(first.afterIdentity) ||
+        large(first) ||
+        large(second)
+      )
+        continue
+      const forward = composeSourceChanges(
+        first.forward,
+        second.forward,
+        first.beforeLength,
+      )
+      const inverse = composeSourceChanges(
+        second.inverse,
+        first.inverse,
+        second.forward.reduce(
+          (length, edit) => length + edit.insert.length - (edit.to - edit.from),
+          second.beforeLength,
+        ),
+      )
+      // Edits that undo each other, or put back the text they took, leave no
+      // step to keep: each composed edit's insert would be the text it
+      // replaces, the one its inverse puts back, and the source takes no edit
+      // that changes nothing.
+      if (
+        forward.every((edit, index) => edit.insert === inverse[index]?.insert)
+      )
+        continue
+      this.#undo.splice(
+        index,
+        2,
+        Object.freeze({
+          ...second,
+          forward,
+          inverse,
+          beforeLength: first.beforeLength,
+          beforeIdentity: first.beforeIdentity,
+          bytes:
+            editBytes(forward) +
+            editBytes(inverse) +
+            selectionBytes(first.beforeSelection) +
+            selectionBytes(second.afterSelection),
+          operations: first.operations + second.operations,
+          beforeSelection: first.beforeSelection,
+          started: first.started,
+        }),
+      )
+      return
+    }
   }
   #operation(
     changes: readonly RawEdit[],
@@ -719,23 +806,33 @@ export class DocumentSession {
       group.viewId,
     )
   }
-  markSaved(snapshot: SourceSnapshot) {
+  /** `versioned`: the save kept the text it replaced and the text it wrote as saved versions. */
+  markSaved(snapshot: SourceSnapshot, versioned = true) {
     const current = this.#store.ownsCurrentSnapshot(snapshot)
     const identity = current
       ? this.#contentIdentity
       : this.#identities.get(snapshot)
     if (!identity)
       throw new Error('Saved snapshot does not belong to this session.')
+    const time = this.#options.now?.() ?? Date.now()
+    if (versioned) {
+      // The replaced text was kept already if an earlier save wrote it.
+      if (!this.#versioned.has(this.#savedIdentity))
+        this.#versioned.set(this.#savedIdentity, time)
+      this.#versioned.set(identity, time)
+    }
     this.#saved = current ? this.snapshot() : snapshot
     this.#savedIdentity = identity
     this.#savedAt = this.#steps.get(this.#saved) ?? null
     this.#sealed = this.#savedAt?.step ?? this.#sealed
+    if (this.#sealed) this.#taken.add(this.#sealed)
     this.#publish()
     this.#verifySaved()
   }
   /** A save takes the current state: later edits start a new step, so a step still leads to it. */
   sealHistory() {
     this.#sealed = this.#at().step
+    this.#taken.add(this.#sealed)
   }
   /**
    * The steps made up to the last save, each with the state it leaves from,
@@ -751,6 +848,36 @@ export class DocumentSession {
       snapshot: this.#saved,
       steps: [...this.#kept()].filter(([group]) => group.order <= saved.order),
     }
+  }
+  /**
+   * Every kept step with the state it leaves from, the oldest state, the
+   * current one, and when saves kept texts as versions, by content identity.
+   */
+  historyTree() {
+    return {
+      root: this.#root,
+      current: this.#at().step,
+      steps: [...this.#kept()],
+      versioned: this.#versioned as Pick<WeakMap<object, number>, 'get'>,
+    }
+  }
+  /**
+   * Redo follows the branch whose first step is `step`, from the current
+   * state; the steps redo followed become a branch. Returns whether it could.
+   */
+  followBranch(step: object) {
+    if (this.#redo.at(-1)?.step === step) return true
+    const from = this.#at().step
+    const chains = this.#branches.get(from) ?? []
+    const chain = chains.find((kept) => kept.at(-1)?.step === step)
+    if (this.#disposed || this.#dispatching || !chain) return false
+    const rest = chains.filter((kept) => kept !== chain)
+    if (this.#redo.length) rest.push(this.#redo)
+    if (rest.length) this.#branches.set(from, rest)
+    else this.#branches.delete(from)
+    this.#redo = chain
+    this.#publish()
+    return true
   }
   /**
    * Takes steps kept from an earlier session that end at this session's
@@ -776,6 +903,12 @@ export class DocumentSession {
     )
       return false
     this.#restored = true
+    // Kept history ends at a save, so the opening text is a saved version.
+    if (!this.#versioned.has(this.#openingIdentity))
+      this.#versioned.set(
+        this.#openingIdentity,
+        this.#options.now?.() ?? Date.now(),
+      )
     const editing = this.#undo.length > 0 || this.#redo.length > 0
     const restored = build({
       step: this.#opening,
@@ -801,7 +934,7 @@ export class DocumentSession {
     const current = this.snapshot()
     if (typeof source !== 'string') {
       if (current.sharesRoot(source)) {
-        this.markSaved(current)
+        this.markSaved(current, false)
         return
       }
       this.#saved = source
@@ -812,7 +945,7 @@ export class DocumentSession {
       return
     }
     if (current.materialize() === source) {
-      this.markSaved(current)
+      this.markSaved(current, false)
       return
     }
     this.#saved = new SourceStore(

@@ -122,12 +122,11 @@ export function validateExportOptions(value: unknown): ExportOptions {
   for (const key of ['logo', 'favicon'] as const)
     if (
       options[key] &&
-      (!/^data:image\/(?:png|jpeg|gif|webp|avif|svg\+xml);base64,[a-z\d+/=]+$/i.test(
+      !/^data:image\/(?:png|jpeg|gif|webp|avif|svg\+xml);base64,[a-z\d+/=]+$/i.test(
         options[key],
-      ) ||
-        options[key].length > 4 * 1024 * 1024)
+      )
     )
-      throw new Error('Choose a logo or favicon smaller than 3 MiB.')
+      throw new Error('Choose a supported image for the logo or favicon.')
   const addons = Object.keys(options.addons)
   if (
     addons.length > 100 ||

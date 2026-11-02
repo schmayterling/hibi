@@ -10,7 +10,7 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { downloadUrl } from '../shared/addon-package.ts'
 import { writeText } from './files.ts'
@@ -18,9 +18,7 @@ import { imageMime } from './images.ts'
 import { isPathInside } from './workspace-paths.ts'
 
 const HOUR = 60 * 60 * 1000
-/** A host can't fill the disk: a larger image is neither kept nor shown. */
-const MAX_IMAGE_BYTES = 64 * 1024 * 1024
-/** Past this, a folder's least recently checked images are deleted. */
+/** Cache target: evict older copies, retaining the newest even if it exceeds it. */
 const MAX_FOLDER_BYTES = 512 * 1024 * 1024
 /** A host that sends nothing for this long has failed, so a kept copy shows. */
 const QUIET_MS = 15_000
@@ -188,7 +186,7 @@ async function download(
         return checked
       }
       const length = Number(response.headers.get('content-length'))
-      if (!response.ok || !response.body || length > MAX_IMAGE_BYTES) {
+      if (!response.ok || !response.body) {
         await response.body?.cancel()
         throw new Error(`The image host answered ${response.status}.`)
       }
@@ -209,10 +207,11 @@ async function download(
             const { done, value } = await wait(reader.read())
             if (done) break
             size += value.length
-            if (size > MAX_IMAGE_BYTES)
-              throw new Error('The image is too large to keep.')
             if (head.length < 4096)
-              head = Buffer.concat([head, value.subarray(0, 4096)])
+              head = Buffer.concat([
+                head,
+                value.subarray(0, 4096 - head.length),
+              ])
             yield value
           }
           type = imageMime(head) ?? declared ?? ''
@@ -309,7 +308,7 @@ function check(
         fetch,
         stop.signal,
       )
-      void prune(dirname(path), fetched.size - (kept?.size ?? 0))
+      void prune(path, fetched.size - (kept?.size ?? 0))
       return fetched
     } catch {
       return kept
@@ -329,7 +328,8 @@ const pruned = new Map<string, { at: number; bytes: number }>()
  * interrupted downloads left: hourly, or at once when downloads since the last
  * prune would take the folder past its size.
  */
-async function prune(directory: string, added: number) {
+async function prune(path: string, added: number) {
+  const directory = dirname(path)
   const last = pruned.get(directory)
   if (last) last.bytes += added
   if (last && Date.now() - last.at < HOUR && last.bytes <= MAX_FOLDER_BYTES)
@@ -354,8 +354,15 @@ async function prune(directory: string, added: number) {
       })
     }
     let total = images.reduce((sum, image) => sum + image.size, 0)
-    images.sort((left, right) => left.checked - right.checked)
-    for (const { name, size } of images) {
+    const newest = basename(path)
+    images.sort(
+      (left, right) =>
+        left.checked - right.checked ||
+        Number(left.name === newest) - Number(right.name === newest),
+    )
+    // A cache target must not become a per-image display cap. Keep the
+    // newest entry, even when that one image exceeds the target.
+    for (const { name, size } of images.slice(0, -1)) {
       if (total <= MAX_FOLDER_BYTES) break
       total -= size
       await rm(join(directory, `${name}.json`), { force: true })
@@ -392,7 +399,12 @@ export async function remoteImageResponse(
     return new Response(null, { status: 404 })
   }
   return new Response(
-    Readable.toWeb(file.createReadStream()) as ReadableStream<Uint8Array>,
+    Readable.toWeb(file.createReadStream(), {
+      strategy: {
+        highWaterMark: 64 * 1024,
+        size: (chunk: Uint8Array) => chunk.byteLength,
+      },
+    }) as ReadableStream<Uint8Array>,
     {
       headers: {
         'Content-Type': kept.type,

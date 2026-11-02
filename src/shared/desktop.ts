@@ -39,6 +39,7 @@ export const DOCUMENT_CHANNELS = {
   exportPdf: 'document:export-pdf',
   pdfImage: 'document:pdf-image',
   image: 'document:image',
+  pdf: 'document:pdf',
   navigate: 'document:navigate',
   link: 'document:link',
   remote: 'document:remote',
@@ -659,6 +660,8 @@ export type DesktopApi = {
     source: string,
     revision: number,
   ) => Promise<string | null>
+  /** The active tab's PDF bytes; null when the revision is stale or the tab is not a readable PDF. */
+  readDocumentPdf: (revision: number) => Promise<Uint8Array | null>
   readPdfImage: (source: string, revision: number) => Promise<string | null>
   /** Save a tab's sanitized print page as a PDF; resolves to the saved path, or null when canceled. */
   exportPdf: (tabId: string, html: string) => Promise<string | null>

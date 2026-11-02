@@ -230,6 +230,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'autosaveDocument',
         'renameDocument',
         'readDocumentImage',
+        'readDocumentPdf',
         'readPdfImage',
         'exportPdf',
         'getHotkeys',

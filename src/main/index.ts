@@ -51,6 +51,7 @@ import {
   createJournalReceiver,
   MAX_JOURNAL_INSERT_UNITS,
 } from '../shared/document-journal'
+import { isPdfDocument } from '../shared/document-types'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
 import type { AddonId, WorkspaceTarget } from '../shared/foundation-contracts'
 import {
@@ -204,6 +205,7 @@ import {
   readDocumentMedia,
   serveDocumentMedia,
 } from './media'
+import { readPdfBytes } from './pdf-document'
 import { exportPdf, readPdfImage } from './pdf-export'
 import {
   getKnownWorkspaces,
@@ -2374,6 +2376,17 @@ if (!app.requestSingleInstanceLock()) {
             : null
         },
       )
+      handle(DOCUMENT_CHANNELS.pdf, async (event, revision: unknown) => {
+        trustedWindow(event)
+        if (revision !== getDocument().revision) return null
+        const path = getDocumentPath()
+        if (!path || !isPdfDocument(path)) return null
+        const bytes = await readPdfBytes(path)
+        return revision === getDocument().revision &&
+          path === getDocumentPath()
+          ? bytes
+          : null
+      })
       let legacyWorkspaceListeners = false
       handle(WORKSPACE_CHANNELS.legacySubscribe, (event, enabled: unknown) => {
         trustedWindow(event)

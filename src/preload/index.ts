@@ -738,6 +738,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(DOCUMENT_CHANNELS.rename, name),
     readDocumentImage: (source, revision) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.image, source, revision),
+    readDocumentPdf: (revision) =>
+      ipcRenderer.invoke(DOCUMENT_CHANNELS.pdf, revision),
     readPdfImage: (source, revision) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.pdfImage, source, revision),
     exportPdf: (tabId, html) =>

@@ -75,10 +75,11 @@ test('history above its retention budget keeps a distinct version restorable thr
     .fill('version history')
   await page.getByRole('option').first().waitFor()
   await page.keyboard.press('Enter')
-  const dialog = page.getByRole('dialog', { name: /^version history$/i })
+  const dialog = page.getByRole('dialog', { name: /^history$/i })
   await dialog
-    .getByRole('navigation', { name: /saved versions/i })
-    .getByRole('button')
+    .getByRole('listbox', { name: /points to return to/i })
+    .getByRole('option')
+    .filter({ hasText: /saved version/i })
     .last()
     .click()
   assert.equal(
@@ -86,7 +87,7 @@ test('history above its retention budget keeps a distinct version restorable thr
     0,
   )
   await dialog
-    .getByRole('region', { name: 'Version preview' })
+    .getByRole('region', { name: 'Changes from the current text' })
     .getByRole('status')
     .filter({ hasText: /too large to preview.*still restore/i })
     .waitFor()
@@ -95,7 +96,7 @@ test('history above its retention budget keeps a distinct version restorable thr
     await dialog.getByText('Loading preview…', { exact: true }).count(),
     0,
   )
-  const restore = dialog.getByRole('button', { name: /restore to editor/i })
+  const restore = dialog.getByRole('button', { name: /^restore$/i })
   assert.equal(await restore.isEnabled(), true)
   await restore.click()
   await dialog.waitFor({ state: 'hidden' })

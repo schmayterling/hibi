@@ -16,6 +16,8 @@ const load = (data: Uint8Array) =>
     useSystemFonts: false,
   })
 
+export { load as loadPdf }
+
 function Page({
   document,
   number,

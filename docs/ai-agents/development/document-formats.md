@@ -24,7 +24,7 @@ Use `registerDocumentSyntax` for format-specific syntax switches. It needs no Ma
 
 ## Views and formatting
 
-`views` declares supported modes: `normal` is editable rich content, `side-by-side` is source with preview, and `markdown` is the historical ID for source-only mode. Source must remain available. Markdown supports all three; plain text supports source only. Other bundled formats support source and split view. Unsupported buttons are disabled, palette actions are omitted, and shortcuts cannot select them. A disabled format falls back to source.
+`views` declares supported modes: `normal` is editable rich content, `side-by-side` is source with preview, and `markdown` is the historical ID for source-only mode. Source must remain available. Markdown supports all three; plain text supports source only. Other bundled formats support source and split view. Unsupported buttons are disabled, palette actions are omitted, and shortcuts cannot select them. A disabled format falls back to source. Images and PDFs use the core-only `image` and `pdf` views, which show a read-only viewer with no source editor; addons cannot register or select them.
 
 `formatting: 'markdown'` reuses Markdown's source toolbar and shortcuts. Other formats supply `DocumentFormatting`: supported action IDs, a pure `apply(action, selection)`, and optional `isActive`. The host applies the returned `DocumentEdit` as one validated undo step and preserves selections.
 

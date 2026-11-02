@@ -2113,7 +2113,8 @@ summary {
 .image-preview {
   display: block;
 }
-.image-unavailable {
+.image-unavailable,
+.pdf-unavailable {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2122,11 +2123,13 @@ summary {
   min-height: 100%;
   text-align: center;
 }
-.image-unavailable strong {
+.image-unavailable strong,
+.pdf-unavailable strong {
   color: var(--ink);
   font-size: var(--text-ui);
 }
-.image-unavailable p {
+.image-unavailable p,
+.pdf-unavailable p {
   margin: 0;
 }
 /* The toolbar sits above the viewer instead of covering it. */
@@ -2147,6 +2150,13 @@ summary {
   width: 4ch;
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+.pdf-page-error {
+  margin: 0;
+  padding: var(--space-4, 16px);
+  color: var(--muted);
+  font: var(--text-sm) var(--font-ui);
+  text-align: center;
 }
 .pdf-toolbar-label {
   color: var(--muted);

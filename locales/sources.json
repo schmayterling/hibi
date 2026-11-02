@@ -737,6 +737,9 @@
   "b02e490743df": [
     "src/addons/import-notion/convert.ts"
   ],
+  "9ae77817427f": [
+    "src/main/document.ts"
+  ],
   "5389a69dd998": [
     "src/main/files.ts",
     "src/main/workspace-files.ts"
@@ -2583,6 +2586,9 @@
   "358fbe3b898f": [
     "src/addons/graph/Canvas.tsx"
   ],
+  "b911c419e49d": [
+    "src/renderer/src/PdfViewer.tsx"
+  ],
   "9d3cab2b5efe": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
@@ -2753,7 +2759,7 @@
   "a0b88bf9965c": [
     "src/addons/quick-note/CaptureWindow.tsx"
   ],
-  "617987c5b12e": [
+  "2632ef0f4d7c": [
     "src/main/document.ts"
   ],
   "e43664c0638d": [
@@ -3870,6 +3876,9 @@
   "115967f77ac6": [
     "src/renderer/src/FindBar.tsx"
   ],
+  "c08ac736a5e2": [
+    "src/renderer/src/PdfViewer.tsx"
+  ],
   "1ef9522a9a8a": [
     "src/main/index.ts",
     "src/shared/hotkeys.ts"
@@ -4361,6 +4370,9 @@
   "af86c616ae9c": [
     "src/addons/_shared/FormatPdf.tsx"
   ],
+  "a6663bb149fb": [
+    "src/main/document.ts"
+  ],
   "3f302a2a7158": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -4375,6 +4387,9 @@
   ],
   "a469ab4ca4e5": [
     "src/site/main.tsx"
+  ],
+  "05fa2e3b0a10": [
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "217fbef16da6": [
     "src/addons/documentation/ExportDialog.tsx"
@@ -4560,6 +4575,9 @@
   ],
   "a1ac3c3a93fa": [
     "src/renderer/src/FindBar.tsx"
+  ],
+  "1208ec01f223": [
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "c88d5e7ec3a8": [
     "src/main/index.ts",
@@ -6142,6 +6160,9 @@
   "92c0abac5f21": [
     "src/renderer/src/ImageViewer.tsx"
   ],
+  "163eaf2428a2": [
+    "src/renderer/src/PdfViewer.tsx"
+  ],
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
   ],
@@ -7050,6 +7071,9 @@
     "src/addons/ui-preview/hibi-addon.json",
     "src/addons/ui-preview/index.tsx"
   ],
+  "d7ad77f95a11": [
+    "src/renderer/src/PdfViewer.tsx"
+  ],
   "764ccc9c6651": [
     "src/renderer/src/ImageViewer.tsx"
   ],
@@ -7516,10 +7540,12 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "0e47f09a748f": [
-    "src/addons/graph/Canvas.tsx"
+    "src/addons/graph/Canvas.tsx",
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "bc7b631a689b": [
-    "src/addons/graph/Canvas.tsx"
+    "src/addons/graph/Canvas.tsx",
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "89b0f77ce276": [
     "src/renderer/src/markdown-syntax.ts"
@@ -7657,6 +7683,7 @@
   ],
   "28391d3bc64e": [
     "src/addons/graph/Panel.tsx",
+    "src/renderer/src/PdfViewer.tsx",
     "src/renderer/src/ToolbarSettings.tsx"
   ],
   "03b0f1b66a14": [
@@ -7791,7 +7818,7 @@
   "b2fe97e14407": [
     "src/renderer/src/addons.ts"
   ],
-  "0f8954748d93": [
+  "e3a611f34ee1": [
     "src/main/document.ts"
   ],
   "7f659c8c45d8": [

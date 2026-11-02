@@ -13,6 +13,7 @@ import {
   diagnosticsBuild,
   diagnosticsDefines,
 } from './scripts/local-diagnostics-build'
+import { pdfjsAssets } from './scripts/pdfjs-assets'
 import { startupBundle } from './scripts/startup-bundle'
 
 if (!existsSync('docs/README.md'))
@@ -145,6 +146,7 @@ export default defineConfig({
       addonCatalog('renderer'),
       addonDevelopmentStyles(),
       react(),
+      pdfjsAssets(),
       startupBundle(),
       diagnosticArtifacts.renderer,
     ],

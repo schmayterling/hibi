@@ -221,9 +221,11 @@ function PdfPages({
     const release = (number: number) => {
       const slot = slots[number - 1]
       if (!slot) return
-      for (const canvas of slot.querySelectorAll('canvas'))
+      // A page's error message stays, so scrolling back doesn't retry it.
+      for (const canvas of slot.querySelectorAll('canvas')) {
         canvas.width = canvas.height = 0
-      slot.replaceChildren()
+        canvas.remove()
+      }
       drawn.delete(number)
     }
 
@@ -286,7 +288,12 @@ function PdfPages({
         })
         .catch(() => {
           // A cancelled render is expected; any other failure skips the page.
-          if (!job.cancelled) failed.add(number)
+          if (job.cancelled) return
+          failed.add(number)
+          const message = window.document.createElement('p')
+          message.className = 'pdf-page-error'
+          message.textContent = `Could not render page ${number}.`
+          slots[number - 1]?.replaceChildren(message)
         })
         .finally(() => {
           if (active === job) active = null
@@ -455,7 +462,16 @@ export function PdfViewer({ document, toolbar }: DocumentPreviewProps) {
       async (bytes) => {
         if (!current) return
         if (!bytes) return setPdf(null)
-        task = loadPdf(bytes)
+        // The script decoders and font data ship in the app; WebAssembly is off
+        // because the app's policy doesn't allow it.
+        task = loadPdf(bytes, {
+          useWasm: false,
+          wasmUrl: new URL('pdfjs/wasm/', window.document.baseURI).href,
+          standardFontDataUrl: new URL(
+            'pdfjs/standard_fonts/',
+            window.document.baseURI,
+          ).href,
+        })
         try {
           const loaded = await task.promise
           if (current) setPdf(loaded)
@@ -472,6 +488,15 @@ export function PdfViewer({ document, toolbar }: DocumentPreviewProps) {
   return pdf ? (
     <PdfPages key={document.revision} pdf={pdf} toolbar={toolbar} />
   ) : (
-    <div className="pdf-viewer" />
+    <div className="pdf-viewer">
+      {pdf === null && (
+        <div className="format-unavailable pdf-unavailable" role="status">
+          <strong>Unable to display PDF</strong>
+          <p>
+            The file may be missing, damaged, password-protected, or not a PDF.
+          </p>
+        </div>
+      )}
+    </div>
   )
 }

@@ -9,11 +9,19 @@ import { DocumentNotice } from '../../ui/DocumentNotice'
 
 GlobalWorkerOptions.workerSrc = worker
 
-const load = (data: Uint8Array) =>
+/** Where a caller that ships the decoders and font data points pdf.js at them. */
+type LoadOptions = {
+  useWasm?: boolean
+  wasmUrl?: string
+  standardFontDataUrl?: string
+}
+
+const load = (data: Uint8Array, options: LoadOptions = {}) =>
   getDocument({
     data: new Uint8Array(data),
     disableFontFace: true,
     useSystemFonts: false,
+    ...options,
   })
 
 export { load as loadPdf }

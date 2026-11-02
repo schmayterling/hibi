@@ -1,6 +1,6 @@
 import {
   documentExtension,
-  isImageDocument,
+  isViewedDocument,
   markdownExtensions,
 } from '../shared/document-types'
 
@@ -15,7 +15,7 @@ export function isDocumentName(name: string, _workspace = false) {
   const extension = documentExtension(name)
   return documentExtensions().includes(extension)
 }
-/** Documents plus images, which open read-only in the viewer. */
+/** Documents plus images and PDFs, which open read-only in a viewer. */
 export function isOpenableName(name: string) {
-  return isDocumentName(name) || isImageDocument(name)
+  return isDocumentName(name) || isViewedDocument(name)
 }

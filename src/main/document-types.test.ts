@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { isImageDocument } from '../shared/document-types'
+import {
+  isImageDocument,
+  isPdfDocument,
+  isViewedDocument,
+} from '../shared/document-types'
 import { isDocumentName, isOpenableName } from './document-types'
 
 describe('image opening', () => {
@@ -22,5 +26,29 @@ describe('image opening', () => {
   it('keeps images out of the document check used by scans and search', () => {
     for (const ext of images)
       expect(isDocumentName(`photo.${ext}`), ext).toBe(false)
+  })
+})
+
+describe('pdf opening', () => {
+  it('recognizes PDFs in any case and nothing else', () => {
+    for (const name of ['doc.pdf', 'DOC.PDF'])
+      expect(isPdfDocument(name), name).toBe(true)
+    for (const name of ['note.md', 'photo.png', 'doc.pdfx'])
+      expect(isPdfDocument(name), name).toBe(false)
+  })
+
+  it('treats images and PDFs as viewed documents', () => {
+    for (const name of ['photo.png', 'doc.pdf'])
+      expect(isViewedDocument(name), name).toBe(true)
+    expect(isViewedDocument('note.md')).toBe(false)
+  })
+
+  it('opens PDFs', () => {
+    for (const name of ['doc.pdf', 'DOC.PDF'])
+      expect(isOpenableName(name), name).toBe(true)
+  })
+
+  it('keeps PDFs out of the document check used by scans and search', () => {
+    expect(isDocumentName('doc.pdf')).toBe(false)
   })
 })

@@ -29,7 +29,12 @@ import {
   type DocumentTab,
 } from '../shared/desktop'
 import type { DocumentSaveResult } from '../shared/document-edits'
-import { imageExtensions, isImageDocument } from '../shared/document-types'
+import {
+  imageExtensions,
+  isPdfDocument,
+  isViewedDocument,
+  pdfExtensions,
+} from '../shared/document-types'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
@@ -44,6 +49,7 @@ import {
 } from './files'
 import { recordVersions } from './history'
 import { MAX_IMAGE_BYTES } from './images'
+import { MAX_PDF_BYTES } from './pdf-document'
 import {
   flushUndoHistory,
   relocateUndoHistory,
@@ -98,15 +104,20 @@ function makeSource(text: string, tabId = activeTab, version = 0) {
 }
 async function* noText(): AsyncGenerator<string> {}
 async function readSource(file: string, tabId = activeTab, version = 0) {
-  // An image has no text; the viewer reads its bytes on its own.
-  if (isImageDocument(file)) {
+  // An image or PDF has no text; the viewer reads its bytes on its own.
+  if (isViewedDocument(file)) {
+    const pdf = isPdfDocument(file)
     const info = await stat(file)
     if (!info.isFile())
-      throw new Error('Choose an image file, not a folder or device.')
-    // The viewer would read nothing past the limit, so refuse before a tab opens.
-    if (info.size > MAX_IMAGE_BYTES)
       throw new Error(
-        `${basename(file)} is larger than 8 MiB, so Hibi can’t display it.`,
+        pdf
+          ? 'Choose a PDF file, not a folder or device.'
+          : 'Choose an image file, not a folder or device.',
+      )
+    // The viewer would read nothing past the limit, so refuse before a tab opens.
+    if (info.size > (pdf ? MAX_PDF_BYTES : MAX_IMAGE_BYTES))
+      throw new Error(
+        `${basename(file)} is larger than ${pdf ? 64 : 8} MiB, so Hibi can’t display it.`,
       )
     return SourceStore.load(noText(), { tabId, revision }, version)
   }
@@ -122,7 +133,7 @@ async function readSource(file: string, tabId = activeTab, version = 0) {
       'ERR_ENCODING_INVALID_ENCODED_DATA'
     )
       throw new Error(
-        `Hibi can’t open ${basename(file)}. Choose a UTF-8 text file or a PNG, JPEG, WebP, GIF, or SVG image.`,
+        `Hibi can’t open ${basename(file)}. Choose a UTF-8 text file, a PNG, JPEG, WebP, GIF, or SVG image, or a PDF.`,
       )
     throw error
   }
@@ -479,9 +490,9 @@ export async function selectDocumentTab(
     const reload = discard && (modified || !draft.path)
     let content: SourceStore | null = null
     try {
-      // Images have no text to compare; the viewer rereads them on a new revision.
+      // Images and PDFs have no text to compare; the viewer rereads them on a new revision.
       if (
-        !isImageDocument(file) &&
+        !isViewedDocument(file) &&
         (reload || !(await matchesMarkdown(file, target)))
       )
         content = await readSource(file, id, target.version + 1)
@@ -955,11 +966,13 @@ export async function saveDocument(
   defaultPath?: string,
   automatic = false,
 ): Promise<DocumentState | null> {
-  // Images are viewed, never written.
-  if (path && isImageDocument(path)) {
+  // Images and PDFs are viewed, never written.
+  if (path && isViewedDocument(path)) {
     if (saveAs && !automatic)
       throw new Error(
-        'Images open read-only in Hibi. Copy the file in your file manager to save it under another name.',
+        isPdfDocument(path)
+          ? 'PDFs open read-only in Hibi. Copy the file in your file manager to save it under another name.'
+          : 'Images open read-only in Hibi. Copy the file in your file manager to save it under another name.',
       )
     return null
   }
@@ -1346,8 +1359,12 @@ export async function openDocument(
       properties: ['openFile'],
       filters: [
         {
-          name: 'Documents and images',
-          extensions: [...documentExtensions(), ...imageExtensions],
+          name: 'Documents, images, and PDFs',
+          extensions: [
+            ...documentExtensions(),
+            ...imageExtensions,
+            ...pdfExtensions,
+          ],
         },
       ],
     }),

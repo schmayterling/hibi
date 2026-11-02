@@ -19,6 +19,13 @@ export const documentExtension = (name: string) =>
   name.split('.').at(-1)?.toLowerCase() ?? ''
 export const isImageDocument = (name: string) =>
   imageExtensions.some((extension) => extension === documentExtension(name))
+/** Files Hibi shows in the PDF viewer instead of editing as text. */
+export const pdfExtensions = ['pdf'] as const
+export const isPdfDocument = (name: string) =>
+  pdfExtensions.some((extension) => extension === documentExtension(name))
+/** Files that open read-only in a viewer and have no text to edit. */
+export const isViewedDocument = (name: string) =>
+  isImageDocument(name) || isPdfDocument(name)
 export const isMarkdownDocument =(name: string) =>
   markdownExtensions.includes(documentExtension(name))
 export function validDocumentExtensions(value: unknown): value is string[] {

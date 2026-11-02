@@ -1,4 +1,4 @@
-import { createElement, lazy } from 'react'
+import { createElement } from 'react'
 import type { DocumentFormat } from '../../addons/api'
 import type { DocumentState } from '../../shared/desktop'
 import {
@@ -10,10 +10,7 @@ import {
 } from '../../shared/document-types'
 import type { RawEdit } from '../../shared/source-operations'
 import { documentRuntime } from './document-runtime'
-
-const ImageViewer = lazy(() =>
-  import('./ImageViewer').then((module) => ({ default: module.ImageViewer })),
-)
+import { ImageViewer } from './ImageViewer'
 
 const plainText: DocumentFormat = {
   id: 'core.text',

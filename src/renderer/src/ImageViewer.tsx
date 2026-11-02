@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { DocumentPreviewProps } from '../../addons/api'
-import { observeDocumentMedia } from './document-media'
 
 const MIN_ZOOM = 1
 const MAX_ZOOM = 8
@@ -59,16 +58,31 @@ export function ImageViewer({ document }: DocumentPreviewProps) {
   const frame = useRef<HTMLDivElement>(null)
   const zoomRef = useRef(1)
   useEffect(() => {
+    let current = true
+    let unsubscribe: (() => void) | undefined
     setUrl(undefined)
     zoomRef.current = 1
     setZoom(1)
     // Use the note editor's shared, cancellable stream instead of copying
     // the whole image through IPC as a base64 string.
-    return observeDocumentMedia(
-      encodeURIComponent(document.name),
-      document.revision,
-      (media) => setUrl(media?.kind === 'image' ? media.url : null),
-    )
+    // Import inside the effect so startup stays small without a second
+    // Suspense fallback delaying the first image request.
+    void import('./document-media')
+      .then(({ observeDocumentMedia }) => {
+        if (!current) return
+        unsubscribe = observeDocumentMedia(
+          encodeURIComponent(document.name),
+          document.revision,
+          (media) => setUrl(media?.kind === 'image' ? media.url : null),
+        )
+      })
+      .catch(() => {
+        if (current) setUrl(null)
+      })
+    return () => {
+      current = false
+      unsubscribe?.()
+    }
   }, [document.name, document.revision])
   useEffect(() => {
     const element = frame.current

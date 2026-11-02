@@ -613,7 +613,8 @@
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/History.tsx",
     "src/renderer/src/HotkeyRow.tsx",
-    "src/renderer/src/ImportDialog.tsx"
+    "src/renderer/src/ImportDialog.tsx",
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "8fa63eb3c5e1": [
     "src/renderer/src/HotkeyRow.tsx"
@@ -2310,8 +2311,17 @@
   "6dbba6a933ca": [
     "src/main/dependencies.ts"
   ],
+  "f65bfbd056a5": [
+    "src/renderer/src/PdfViewer.tsx"
+  ],
+  "7014aff13517": [
+    "src/renderer/src/PdfViewer.tsx"
+  ],
   "e6de684e0915": [
     "src/addons/documentation/site.ts"
+  ],
+  "ed23e1a14e5e": [
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "192509c9dae2": [
     "src/renderer/src/main.tsx"
@@ -4440,10 +4450,14 @@
   ],
   "e7cf3ef4f17c": [
     "src/addons/documentation/ExportDialog.tsx",
+    "src/renderer/src/PdfViewer.tsx",
     "src/site/bootstrap.tsx"
   ],
   "497dfa20d4ad": [
     "src/addons/documentation/ExportDialog.tsx"
+  ],
+  "d89f8159ad5e": [
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "da06be9ad96a": [
     "src/renderer/src/main.tsx"
@@ -6228,6 +6242,9 @@
   "cf9108c9789b": [
     "src/addons/mcp-server/tools.ts"
   ],
+  "9923e70b8fd9": [
+    "src/renderer/src/PdfViewer.tsx"
+  ],
   "8b3833b3d6d6": [
     "src/main/document.ts"
   ],
@@ -6429,6 +6446,9 @@
   ],
   "b3010da17d9f": [
     "src/main/workspace-layout.ts"
+  ],
+  "a288213156ea": [
+    "src/renderer/src/PdfViewer.tsx"
   ],
   "31430920dff7": [
     "src/addons/_shared/FormatPdf.tsx"
@@ -7128,6 +7148,7 @@
     "src/main/workspace-settings.ts"
   ],
   "4ac709aa58bc": [
+    "src/renderer/src/PdfViewer.tsx",
     "src/site/bootstrap.tsx"
   ],
   "a4114da03bdf": [

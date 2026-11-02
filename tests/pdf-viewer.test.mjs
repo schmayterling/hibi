@@ -7,6 +7,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   pageAt,
+  passwordError,
   readPdf,
   renderScale,
   wheelZoom,
@@ -119,4 +120,9 @@ test('the wheel zooms between a quarter and four times fit', () => {
 
 test('the wheel returns to fit when zooming in and back out', () => {
   assert.ok(Math.abs(wheelZoom(wheelZoom(1, -100), 100) - 1) < 1e-9)
+})
+
+test('the password prompt explains a wrong password and not the first ask', () => {
+  assert.equal(passwordError(1), null)
+  assert.equal(passwordError(2), 'Incorrect password. Try again.')
 })

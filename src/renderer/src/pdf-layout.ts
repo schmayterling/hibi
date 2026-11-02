@@ -15,6 +15,10 @@ export async function readPdf(
   }
 }
 
+export function passwordError(reason: number) {
+  return reason === 2 ? 'Incorrect password. Try again.' : null
+}
+
 /** The scale that fits a page of `page` points across `pane` pixels. */
 export function fitScale(pane: number, page: number) {
   const scale = pane / page

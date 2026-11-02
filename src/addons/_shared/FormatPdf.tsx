@@ -14,6 +14,8 @@ type LoadOptions = {
   useWasm?: boolean
   wasmUrl?: string
   standardFontDataUrl?: string
+  cMapUrl?: string
+  cMapPacked?: boolean
 }
 
 const load = (data: Uint8Array, options: LoadOptions = {}) =>

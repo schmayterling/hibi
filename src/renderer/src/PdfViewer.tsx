@@ -9,6 +9,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -16,7 +17,8 @@ import {
 } from 'react'
 import { loadPdf } from '../../addons/_shared/FormatPdf'
 import type { DocumentPreviewProps } from '../../addons/api'
-import { IconButton, TextInput } from '../../ui/Controls'
+import { Button, IconButton, TextInput } from '../../ui/Controls'
+import { useDialogs } from '../../ui/DialogProvider'
 import { PreviewActions } from '../../ui/PreviewActions'
 import {
   clampPage,
@@ -24,6 +26,7 @@ import {
   MAX_ZOOM,
   MIN_ZOOM,
   pageAt,
+  passwordError,
   readPdf,
   renderScale,
   wheelZoom,
@@ -450,20 +453,74 @@ function PdfPages({
   )
 }
 
+function PdfPasswordForm({
+  error,
+  close,
+}: {
+  error: string | null
+  close: (value: string | null) => void
+}) {
+  const [value, setValue] = useState('')
+  const id = useId()
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    input.current?.focus()
+  }, [])
+  return (
+    <form
+      className="dialog-form"
+      onSubmit={(event) => {
+        event.preventDefault()
+        close(value)
+      }}
+    >
+      <label htmlFor={id}>Password</label>
+      <TextInput
+        ref={input}
+        id={id}
+        type="password"
+        autoComplete="off"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        aria-invalid={!!error}
+        aria-describedby={error ? `${id}-error` : undefined}
+      />
+      {error && (
+        <p id={`${id}-error`} role="alert">
+          {error}
+        </p>
+      )}
+      <div className="dialog-actions">
+        <Button onClick={() => close(null)}>Cancel</Button>
+        <Button type="submit" className="dialog-primary">
+          Unlock
+        </Button>
+      </div>
+    </form>
+  )
+}
+
 /** Shows every page of a PDF in one scroll, drawing only the pages near the view. */
 export function PdfViewer({ document, toolbar }: DocumentPreviewProps) {
-  // undefined is still loading, null is unavailable.
-  const [pdf, setPdf] = useState<PDFDocumentProxy | null | undefined>(undefined)
+  const dialogs = useDialogs()
+  // undefined is still loading, null is unavailable, locked is a cancelled password.
+  const [pdf, setPdf] = useState<
+    PDFDocumentProxy | null | 'locked' | undefined
+  >(undefined)
+  const [attempt, setAttempt] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt reruns the load after a cancelled password.
   useEffect(() => {
     let current = true
     let task: ReturnType<typeof loadPdf> | null = null
+    let prompt: ReturnType<typeof dialogs.open<string>> | null = null
+    let cancelled = false
     setPdf(undefined)
     void readPdf(document.revision, window.hibi?.readDocumentPdf).then(
       async (bytes) => {
         if (!current) return
         if (!bytes) return setPdf(null)
-        // The script decoders and font data ship in the app; WebAssembly is off
-        // because the app's policy doesn't allow it.
+        // The script decoders, font data and CMaps ship in the app; WebAssembly
+        // is off because the app's policy doesn't allow it.
         task = loadPdf(bytes, {
           useWasm: false,
           wasmUrl: new URL('pdfjs/wasm/', window.document.baseURI).href,
@@ -471,23 +528,47 @@ export function PdfViewer({ document, toolbar }: DocumentPreviewProps) {
             'pdfjs/standard_fonts/',
             window.document.baseURI,
           ).href,
+          cMapUrl: new URL('pdfjs/cmaps/', window.document.baseURI).href,
+          cMapPacked: true,
         })
+        // The password stays in this dialog and the pdf.js call.
+        task.onPassword = (
+          update: (password: string | Error) => void,
+          reason: number,
+        ) => {
+          prompt = dialogs.open<string>({
+            title: 'Password required',
+            description: `Enter the password to open ${document.name}.`,
+            closeOnOutsideClick: false,
+            content: ({ close }) => (
+              <PdfPasswordForm error={passwordError(reason)} close={close} />
+            ),
+          })
+          void prompt.result.then((value) => {
+            if (!current) return
+            if (value === null) {
+              cancelled = true
+              update(new Error('The password prompt was cancelled.'))
+            } else update(value)
+          })
+        }
         try {
           const loaded = await task.promise
           if (current) setPdf(loaded)
         } catch {
-          if (current) setPdf(null)
+          if (current) setPdf(cancelled ? 'locked' : null)
         }
       },
     )
     return () => {
       current = false
+      prompt?.close()
       void task?.destroy()
     }
-  }, [document.name, document.revision])
-  return pdf ? (
-    <PdfPages key={document.revision} pdf={pdf} toolbar={toolbar} />
-  ) : (
+  }, [document.name, document.revision, attempt, dialogs])
+  if (pdf && pdf !== 'locked')
+    return <PdfPages key={document.revision} pdf={pdf} toolbar={toolbar} />
+  return (
     <div className="pdf-viewer">
       {pdf === null && (
         <div className="format-unavailable pdf-unavailable" role="status">
@@ -495,6 +576,15 @@ export function PdfViewer({ document, toolbar }: DocumentPreviewProps) {
           <p>
             The file may be missing, damaged, password-protected, or not a PDF.
           </p>
+        </div>
+      )}
+      {pdf === 'locked' && (
+        <div className="format-unavailable pdf-unavailable" role="status">
+          <strong>This PDF is password-protected.</strong>
+          <p>Enter its password to view it.</p>
+          <Button onClick={() => setAttempt((count) => count + 1)}>
+            Enter password
+          </Button>
         </div>
       )}
     </div>

@@ -1,5 +1,9 @@
 import { describe, expect, it, onTestFinished } from 'vitest'
-import { documentViews } from '../../shared/document-types'
+import {
+  documentViews,
+  isDocumentView,
+  isViewerView,
+} from '../../shared/document-types'
 import { documentFormats, documentView } from './document-formats'
 
 describe('image routing', () => {
@@ -49,5 +53,30 @@ describe('image routing', () => {
     expect(documentView(documentFormats.views('data.xyz'), 'normal')).toBe(
       'markdown',
     )
+  })
+})
+
+describe('pdf routing', () => {
+  it('gives every PDF name the non-editable pdf format', () => {
+    for (const name of ['report.pdf', 'REPORT.PDF']) {
+      const format = documentFormats.get(name)
+      expect(format?.id, name).toBe('core.pdf')
+      expect(format?.views, name).toEqual(['pdf'])
+      expect(format?.editing, name).toBeUndefined()
+      expect(documentFormats.isMarkdown(name), name).toBe(false)
+    }
+  })
+
+  it('routes a PDF to the pdf view whatever view was requested', () => {
+    const available = documentFormats.views('report.pdf')
+    for (const requested of documentViews)
+      expect(documentView(available, requested)).toBe('pdf')
+  })
+
+  it('treats image and pdf as viewer views, not switchable document views', () => {
+    expect(isViewerView('image')).toBe(true)
+    expect(isViewerView('pdf')).toBe(true)
+    for (const view of documentViews) expect(isViewerView(view)).toBe(false)
+    expect(isDocumentView('pdf')).toBe(false)
   })
 })

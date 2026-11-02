@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import { isViewerView } from '../../shared/document-types'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import { documentProjections } from './document-projections'
@@ -37,7 +38,7 @@ export function FormatEditor({
   onOutlineUnavailable,
   onActiveOutline,
 }: Parameters<typeof MarkdownEditor>[0]) {
-  // An image shows only its preview: no source editor is mounted.
+  // An image or PDF shows only its preview: no source editor is mounted.
   const {
     content,
     paneMode,
@@ -48,7 +49,7 @@ export function FormatEditor({
     setSourceReady,
     setSourceSettled,
     focusOwnedByEditor,
-  } = useEditorPanes(mode === 'image' ? 'normal' : mode, false)
+  } = useEditorPanes(isViewerView(mode) ? 'normal' : mode, false)
   const [findQuery, setFindQuery] = useState('')
   const [findStatus, setFindStatus] = useState<FindStatus>({
     current: 0,

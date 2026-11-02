@@ -12,9 +12,18 @@ export const imageExtensions = [
   'svg',
 ] as const
 export const imageView = 'image' as const
-export type DocumentView = (typeof documentViews)[number] | typeof imageView
+export const pdfView = 'pdf' as const
+/** Views that show a file read-only in a viewer, with no source editor. */
+export const viewerViews = [imageView, pdfView] as const
+export type DocumentView =
+  | (typeof documentViews)[number]
+  | (typeof viewerViews)[number]
 export const isDocumentView = (value: string): value is DocumentView =>
   documentViews.some((view) => view === value)
+export const isViewerView = (
+  value: string,
+): value is (typeof viewerViews)[number] =>
+  viewerViews.some((view) => view === value)
 export const documentExtension = (name: string) =>
   name.split('.').at(-1)?.toLowerCase() ?? ''
 export const isImageDocument = (name: string) =>

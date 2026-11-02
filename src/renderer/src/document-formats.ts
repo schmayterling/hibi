@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, lazy } from 'react'
 import type { DocumentFormat } from '../../addons/api'
 import type { DocumentState } from '../../shared/desktop'
 import {
@@ -7,6 +7,8 @@ import {
   documentViews,
   imageExtensions,
   isDocumentView,
+  isViewerView,
+  pdfExtensions,
 } from '../../shared/document-types'
 import type { RawEdit } from '../../shared/source-operations'
 import { documentRuntime } from './document-runtime'
@@ -32,14 +34,25 @@ const image: DocumentFormat = {
   views: ['image'],
   Preview: ImageViewer,
 }
+/** PDFs open in their own view; the viewer loads on demand so pdf.js stays out of startup. */
+const pdf: DocumentFormat = {
+  id: 'core.pdf',
+  name: 'PDF',
+  extensions: [...pdfExtensions],
+  views: ['pdf'],
+  Preview: lazy(() =>
+    import('./PdfViewer').then((module) => ({ default: module.PdfViewer })),
+  ),
+}
 const registry = new Map<string, DocumentFormat>([
   [plainText.id, plainText],
   [image.id, image],
+  [pdf.id, pdf],
 ])
 const listeners = new Set<() => void>()
 const sourceViews: readonly DocumentView[] = ['markdown']
 const previewViews: readonly DocumentView[] = ['side-by-side', 'markdown']
-let snapshot: readonly DocumentFormat[] = [plainText, image]
+let snapshot: readonly DocumentFormat[] = [plainText, image, pdf]
 /** The requested view when the document has it, else the view it falls back to. */
 export function documentView(
   available: readonly DocumentView[],
@@ -49,9 +62,7 @@ export function documentView(
     ? requested
     : available.includes('side-by-side')
       ? 'side-by-side'
-      : available.includes('image')
-        ? 'image'
-        : 'markdown'
+      : (available.find(isViewerView) ?? 'markdown')
 }
 export const documentFormats = {
   snapshot: () => snapshot,

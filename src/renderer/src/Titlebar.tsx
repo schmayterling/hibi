@@ -67,7 +67,7 @@ export function Titlebar({
   settingsOpen: boolean
   mode: ViewMode
   availableViews: readonly ViewMode[]
-  /** Only the views the switch offers; the image view is not one. */
+  /** Only the views the switch offers; the image and PDF views are not among them. */
   onMode: (mode: (typeof documentViews)[number]) => void
   hotkeys: Hotkeys
   platform: string

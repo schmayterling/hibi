@@ -24,6 +24,42 @@ const texts = {
   third: 'third version, typed after undoing the second.',
 }
 
+// An addon that hands the test CodeMirror, to make the editor read-only.
+async function installReadonlyProbe(profile) {
+  const addon = join(profile, 'installed-addons', 'readonly-probe')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'readonly-probe',
+      name: 'Readonly probe',
+      description: 'Public CodeMirror readonly facets',
+      kind: 'extension',
+      apiVersion: 3,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      capabilities: ['source'],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['index.js', 'hibi-addon.json'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    'export default ({ codeMirror }) => ({ start() { window.readonlyCodeMirror = codeMirror } })',
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'readonly-probe': true }),
+  )
+}
+
 test('the history view restores a point as a step undo takes back, and goes to an undone branch', {
   timeout: 60000,
 }, async (t) => {
@@ -270,39 +306,7 @@ test('going to a step or restoring a point shows the change in the editor, and a
   timeout: 90000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-change-'))
-  // An addon that hands the test CodeMirror, to make the editor read-only.
-  const addon = join(profile, 'installed-addons', 'readonly-probe')
-  await mkdir(addon, { recursive: true })
-  await writeFile(
-    join(addon, 'hibi-addon.json'),
-    JSON.stringify({
-      id: 'readonly-probe',
-      name: 'Readonly probe',
-      description: 'Public CodeMirror readonly facets',
-      kind: 'extension',
-      apiVersion: 3,
-      version: '1.0.0',
-      authors: [{ displayName: 'Test' }],
-      capabilities: ['source'],
-      entry: 'index.js',
-    }),
-  )
-  await writeFile(
-    join(addon, '.hibi-install.json'),
-    JSON.stringify({
-      hash: 'a'.repeat(64),
-      files: ['index.js', 'hibi-addon.json'],
-      source: 'local',
-    }),
-  )
-  await writeFile(
-    join(addon, 'index.js'),
-    'export default ({ codeMirror }) => ({ start() { window.readonlyCodeMirror = codeMirror } })',
-  )
-  await writeFile(
-    join(profile, 'addons.json'),
-    JSON.stringify({ 'readonly-probe': true }),
-  )
+  await installReadonlyProbe(profile)
   // A note far longer than the window, with a paragraph added at its end:
   // long enough to be a point of its own once undone.
   const original = Array.from(
@@ -468,10 +472,11 @@ test('going to a step or restoring a point shows the change in the editor, and a
   assert.equal(await markdown(), `# ${edited}`)
 })
 
-test('restoring a saved version shows the change in the editor, and one chosen while a save runs follows it', {
+test('restoring a saved version shows the change in the editor, one chosen while a save runs follows it in its tab, and a read-only editor stops it', {
   timeout: 90000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-version-'))
+  await installReadonlyProbe(profile)
   // A note far longer than the window, with a paragraph added at its end.
   const original = Array.from(
     { length: 80 },
@@ -606,32 +611,91 @@ test('restoring a saved version shows the change in the editor, and one chosen w
   await shows(original)
   assert.deepEqual(await caret(), { at: original.length, shown: true })
 
-  // History opened while a save runs, as a shortcut can: the version chosen
-  // is restored once the save is done, not dropped.
-  await edit({ changes: { from: 0, insert: '# ' } })
-  await shows(`# ${original}`)
-  await app.evaluate(({ ipcMain }) => {
-    const handlers = ipcMain._invokeHandlers
-    const save = handlers.get('document:save')
-    globalThis.held = new Promise((entered) => {
-      handlers.set('document:save', async (...args) => {
-        handlers.set('document:save', save)
-        await new Promise((release) => {
-          globalThis.release = release
-          entered()
+  // A save held on its way to main keeps the app busy.
+  const holdSave = async () => {
+    await app.evaluate(({ ipcMain }) => {
+      const handlers = ipcMain._invokeHandlers
+      const save = handlers.get('document:save')
+      globalThis.held = new Promise((entered) => {
+        handlers.set('document:save', async (...args) => {
+          handlers.set('document:save', save)
+          await new Promise((release) => {
+            globalThis.release = release
+            entered()
+          })
+          return save(...args)
         })
-        return save(...args)
       })
     })
-  })
-  await clickMenu(app, 'Save')
-  await app.evaluate(() => globalThis.held)
-  await page.locator('.app[aria-busy="true"]').waitFor()
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].webContents.send('app:command', 'history'),
-  )
+    await clickMenu(app, 'Save')
+    await app.evaluate(() => globalThis.held)
+    await page.locator('.app[aria-busy="true"]').waitFor()
+  }
+  const historyDuringSave = () =>
+    app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send(
+        'app:command',
+        'history',
+      ),
+    )
+
+  // The version chosen while a save runs is restored once the save is done,
+  // not dropped, and the editor shows its change.
+  await edit({ changes: { from: 0, insert: '# ' } })
+  await shows(`# ${original}`)
+  await holdSave()
+  await historyDuringSave()
   await restore(edited)
   assert.equal(await markdown(), `# ${original}`)
   await app.evaluate(() => globalThis.release())
   await shows(edited)
+  assert.deepEqual(await caret(), { at: edited.length, shown: true })
+
+  // A tab chosen before it goes first: the version isn't restored in that one.
+  const other = join(profile, 'other.md')
+  await writeFile(other, 'the other note')
+  await app.evaluate(({ dialog }, other) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [other],
+    })
+  }, other)
+  await pressShortcut(app, `${mod}+o`)
+  await shows('the other note')
+  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+  await shows(edited)
+  await holdSave()
+  await page
+    .getByRole('tab', { name: 'other.md', exact: true })
+    .click({ force: true })
+  await historyDuringSave()
+  await restore(original)
+  await app.evaluate(() => globalThis.release())
+  await shows('the other note')
+  await page.getByText(/the version wasn.t restored/i).waitFor()
+  assert.equal(await markdown(), 'the other note')
+  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+  await shows(edited)
+
+  // A read-only editor takes no edit, as with its own undo.
+  await page.waitForFunction(() => !!window.readonlyCodeMirror)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  await top()
+  await openHistory()
+  await page.evaluate(() => {
+    const { Compartment, EditorState, Prec, StateEffect } =
+      window.readonlyCodeMirror.state
+    const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+      .root
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        new Compartment().of(Prec.highest(EditorState.readOnly.of(true))),
+      ),
+    })
+  })
+  await restore(original)
+  await page.getByText(/the editor is read-only right now/i).waitFor()
+  assert.equal(await markdown(), edited)
 })

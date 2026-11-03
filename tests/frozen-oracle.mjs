@@ -35,7 +35,11 @@ export function frozenSnapshot(name) {
   } catch (error) {
     if (!recording) throw error
   }
-  return (key, actual, { tolerance = 0 } = {}) => {
+  return (
+    key,
+    actual,
+    { tolerance = 0, normalize = (value) => value } = {},
+  ) => {
     const id = typeof key === 'string' ? key : JSON.stringify(key)
     if (recording) {
       values[id] = actual
@@ -51,7 +55,7 @@ export function frozenSnapshot(name) {
       Object.hasOwn(values, id),
       `${name}: nothing recorded for ${id}; HIBI_RECORD_SNAPSHOTS=1 records ${JSON.stringify(actual)}`,
     )
-    near(actual, values[id], tolerance, `${name}: ${id}`)
+    near(normalize(actual), normalize(values[id]), tolerance, `${name}: ${id}`)
   }
 }
 

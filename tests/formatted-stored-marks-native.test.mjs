@@ -192,6 +192,12 @@ test('stored mark review cases through native input and toolbar', {
     )
   }
   const action = async (id) => {
+    await page.waitForFunction((id) => {
+      const button = document.querySelector(
+        `.editor-toolbar [data-toolbar-id="format.${id}"]`,
+      )
+      return button && !button.disabled
+    }, id)
     await page.evaluate((id) => {
       const button = document.querySelector(
         `.editor-toolbar [data-toolbar-id="format.${id}"]`,

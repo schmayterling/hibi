@@ -176,6 +176,12 @@ function reasonsOf({ steps, children }: HistoryTree) {
   return reasons
 }
 
+/** A step's time, with its date when it isn't today's by the local calendar. */
+export const stepTime = (time: number, now: number) =>
+  new Date(time).toDateString() === new Date(now).toDateString()
+    ? new Date(time).toLocaleTimeString()
+    : new Date(time).toLocaleString()
+
 /**
  * Past a day, the newest an hour; past a week, the newest a day, in the
  * hours and days of the local clock and calendar. Ask newest first.

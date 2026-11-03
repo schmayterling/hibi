@@ -61,17 +61,20 @@ function readingPosition(view: EditorView): Reading | null {
     // per slice.
     const held = anchors.get(view)
     if (
-      held &&
-      held.position.doc === view.state.doc &&
-      held.position.pane === scroller &&
-      Math.abs(held.position.pane.scrollTop - held.scroll) <= 1
-    )
-      return {
-        ...held.position,
-        moved: false,
-        selection: view.state.selection,
-        scrollRequest: scrollRequests.get(view) ?? 0,
-      }
+      held?.position.doc === view.state.doc &&
+      held.position.pane === scroller
+    ) {
+      // Reading the layout runs a pending scroll command first, which moves
+      // the pane, as every fresh read does.
+      view.coordsAtPos(held.position.pos, 1)
+      if (Math.abs(held.position.pane.scrollTop - held.scroll) <= 1)
+        return {
+          ...held.position,
+          moved: false,
+          selection: view.state.selection,
+          scrollRequest: scrollRequests.get(view) ?? 0,
+        }
+    }
     const { documentTop } = view
     let block = view.lineBlockAtHeight(top - documentTop)
     // The text the page shows at the pane's top, inside a block that starts

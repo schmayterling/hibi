@@ -9,7 +9,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
@@ -1614,7 +1614,9 @@ test('middle-click is ignored while a tab close is awaiting confirmation', {
     async (id) => (await window.hibi.getDocument()).tabId === id,
     b.id,
   )
-  await page.locator(`[data-tab-key="${a.id}"] .tab-close`).click()
+  await heardPrompt(page, () =>
+    page.locator(`[data-tab-key="${a.id}"] .tab-close`).click(),
+  )
   await waitForAsync(app, () => globalThis.dialogEntered)
   await page.locator('.app[aria-busy="true"]').waitFor()
   await page
@@ -1747,11 +1749,32 @@ test('close tab pressed during a file operation runs after it, for the tab it wa
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
+// Runs start, then waits until the page hears that a file prompt opened; a
+// click made behind it drops there.
+async function heardPrompt(page, start) {
+  await page.evaluate(() => {
+    window.prompted = new Promise((resolve) => {
+      const stop = window.hibi.onFileDialog((open) => {
+        if (!open) return
+        stop()
+        resolve()
+      })
+    })
+  })
+  await start()
+  await page.evaluate(() => window.prompted)
+}
+
 // Opens the files in order, the last one shown. Counts the commands the page
 // receives and the calls on the given channels, cancels discard prompts, and
 // can hold a channel's next call.
-async function launchHolding(t, prefix, files, channels) {
+async function launchHolding(t, prefix, files, channels, profileFiles = {}) {
   const root = await mkdtemp(join(tmpdir(), prefix))
+  for (const [name, text] of Object.entries(profileFiles)) {
+    const path = join(root, 'profile', name)
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, text)
+  }
   const paths = Object.fromEntries(
     Object.keys(files).map((name) => [name, join(root, name)]),
   )
@@ -2002,4 +2025,437 @@ test('a command waiting when editing pauses does not run after recovery', {
     (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
     2,
   )
+})
+
+test('a tab click and a tab close made during a save run after it', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-click-',
+    { 'c.md': 'note c', 'b.md': 'note b', 'a.md': 'note a' },
+    ['document:close-tabs'],
+  )
+  const [c, b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b && c)
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  // The strip shows the operation, and its tabs still take clicks.
+  await page.locator('.document-tabs[aria-busy="true"]').waitFor()
+  await page.locator(`[data-tab-key="${c.id}"] .tab-close`).click()
+  await page.locator(`[data-tab-id="${b.id}"]`).click()
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b.id,
+  )
+  await idle()
+  assert.deepEqual(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.map(
+      (tab) => tab.id,
+    ),
+    [b.id, a.id],
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:close-tabs']),
+    1,
+  )
+})
+
+test('tab clicks made behind a close prompt drop', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, editor, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-click-prompt-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    ['document:close-tab', 'document:select-tab', 'document:close-tabs'],
+  )
+  const [b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b)
+  await replaceRichText(page, editor, 'note a, edited')
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
+  await app.evaluate(({ dialog }) => {
+    const cancel = dialog.showMessageBox
+    dialog.showMessageBox = () => {
+      dialog.showMessageBox = cancel
+      globalThis.prompts++
+      return new Promise((answer) => {
+        globalThis.answer = () => answer({ response: 2 })
+      })
+    }
+  })
+  await heardPrompt(page, () => pressShortcut(app, `${mod}+w`))
+  await waitForAsync(app, () => globalThis.prompts === 1)
+  await page.locator(`[data-tab-id="${b.id}"]`).click()
+  await page.locator(`[data-tab-key="${b.id}"] .tab-close`).click()
+  await app.evaluate(() => globalThis.answer())
+  await idle()
+  const current = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(current.tabId, a.id)
+  assert.equal(current.tabs.length, 2)
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:close-tab']),
+    1,
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:select-tab'] ?? 0),
+    0,
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:close-tabs'] ?? 0),
+    0,
+  )
+})
+
+test('new note pressed twice during a save opens two', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle, commands } = await launchHolding(
+    t,
+    'hibi-tab-busy-new-',
+    { 'a.md': 'note a' },
+    [],
+  )
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await pressShortcut(app, `${mod}+n`)
+  await pressShortcut(app, `${mod}+n`)
+  await commands(3)
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 3,
+  )
+  await idle()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    3,
+  )
+})
+
+test('a file opened from outside during a save opens when it ends', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, paths, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-external-',
+    { 'a.md': 'note a' },
+    [],
+  )
+  const b = join(dirname(paths['a.md']), 'b.md')
+  await writeFile(b, 'note b')
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await page.evaluate(() => {
+    window.heard = new Promise((resolve) => {
+      const stop = window.hibi.onExternalDocuments(() => {
+        stop()
+        resolve()
+      })
+    })
+  })
+  await app.evaluate(
+    ({ app }, path) => app.emit('open-file', { preventDefault() {} }, path),
+    b,
+  )
+  // The request reached the page while the save was still running.
+  await page.evaluate(() => window.heard)
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'b.md',
+  )
+  await idle()
+})
+
+test('close tab pressed on a note drops when an addon tab is shown by the time it runs', {
+  timeout: 30000,
+}, async (t) => {
+  const fixture = 'installed-addons/tab-fixture'
+  const { app, page, idle, commands } = await launchHolding(
+    t,
+    'hibi-tab-busy-addon-',
+    { 'a.md': 'note a' },
+    ['document:close-tab'],
+    {
+      'addons.json': JSON.stringify({ 'tab-fixture': true }),
+      [`${fixture}/hibi-addon.json`]: JSON.stringify({
+        id: 'tab-fixture',
+        name: 'Tab fixture',
+        description: 'Tab fixture',
+        kind: 'extension',
+        authors: [{ displayName: 'Test' }],
+        apiVersion: 3,
+        version: '1.0.0',
+        capabilities: ['ui'],
+        entry: 'index.js',
+      }),
+      [`${fixture}/.hibi-install.json`]: JSON.stringify({
+        hash: 'a'.repeat(64),
+        files: ['index.js', 'hibi-addon.json'],
+        source: 'local',
+      }),
+      [`${fixture}/index.js`]: `export default ({ React }) => ({ start(context) {
+        window.tabFixture = context.views.register({ id: 'tab', label: 'Fixture tab', location: 'tab', lifetime: 'session', Content() { return React.createElement('p', null, 'fixture') } });
+      }});`,
+    },
+  )
+  await page.waitForFunction(() => window.tabFixture)
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await pressShortcut(app, `${mod}+w`)
+  await commands(2)
+  // The addon tab is shown before the save ends; the press was for the note.
+  await page.evaluate(() => window.tabFixture.open({ id: 'one' }))
+  const addonTab = page.getByRole('tab', {
+    name: 'Fixture tab',
+    selected: true,
+  })
+  await addonTab.waitFor()
+  await app.evaluate(() => globalThis.release['document:save']())
+  await idle()
+  assert.equal(await addonTab.count(), 1)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    1,
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:close-tab'] ?? 0),
+    0,
+  )
+})
+
+// An addon that hands its editor.runCommand to the page, as the Vim addon's
+// u, Ctrl+R and :w call it.
+const runFixture = {
+  'addons.json': JSON.stringify({ 'run-fixture': true }),
+  'installed-addons/run-fixture/hibi-addon.json': JSON.stringify({
+    id: 'run-fixture',
+    name: 'Run fixture',
+    description: 'Run fixture',
+    kind: 'extension',
+    authors: [{ displayName: 'Test' }],
+    apiVersion: 3,
+    version: '1.0.0',
+    capabilities: ['ui'],
+    entry: 'index.js',
+  }),
+  'installed-addons/run-fixture/.hibi-install.json': JSON.stringify({
+    hash: 'a'.repeat(64),
+    files: ['index.js', 'hibi-addon.json'],
+    source: 'local',
+  }),
+  'installed-addons/run-fixture/index.js': `export default () => ({ start(context) {
+    window.fixtureRun = (command) => context.editor.runCommand(command)
+  }});`,
+}
+
+// Waits until the page has heard a file opened from outside.
+async function openFromOutside(app, page, path) {
+  await page.evaluate(() => {
+    window.heard = new Promise((resolve) => {
+      const stop = window.hibi.onExternalDocuments(() => {
+        stop()
+        resolve()
+      })
+    })
+  })
+  await app.evaluate(
+    ({ app }, path) => app.emit('open-file', { preventDefault() {} }, path),
+    path,
+  )
+  await page.evaluate(() => window.heard)
+}
+
+test('an addon undo asked during a save drops instead of undoing the note a waiting click shows', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, editor, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-undo-tab-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+    runFixture,
+  )
+  await page.waitForFunction(() => window.fixtureRun)
+  const [b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b)
+  const show = async (id) => {
+    await page.locator(`[data-tab-id="${id}"]`).click()
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId === id,
+      id,
+    )
+    await idle()
+    await waitForDocumentEditor(app, page)
+  }
+  await show(b.id)
+  await replaceRichText(page, editor, 'note b, edited')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'note b, edited',
+  )
+  await show(a.id)
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  // A click on b waits; the addon asks for undo while a is still shown.
+  await page.locator(`[data-tab-id="${b.id}"]`).click()
+  await page.evaluate(() => {
+    window.undone = window.fixtureRun('undo')
+  })
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b.id,
+  )
+  assert.equal(await page.evaluate(() => window.undone), false)
+  await idle()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'note b, edited',
+  )
+})
+
+test('an addon undo asked during a save does not take back text typed after it', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, editor, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-undo-later-',
+    { 'a.md': 'note a' },
+    [],
+    runFixture,
+  )
+  await page.waitForFunction(() => window.fixtureRun)
+  await replaceRichText(page, editor, 'note a, edited')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'note a, edited',
+  )
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await page.evaluate(() => {
+    window.undone = window.fixtureRun('undo')
+  })
+  // The saved tab stays writable.
+  await replaceRichText(page, editor, 'note a, edited, more')
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown === 'note a, edited, more',
+  )
+  await app.evaluate(() => globalThis.release['document:save']())
+  assert.equal(await page.evaluate(() => window.undone), false)
+  await idle()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'note a, edited, more',
+  )
+})
+
+test('an addon save asked during a tab switch drops once another tab is shown', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, editor, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-addon-save-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    ['document:save'],
+    runFixture,
+  )
+  await page.waitForFunction(() => window.fixtureRun)
+  const [b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b)
+  await replaceRichText(page, editor, 'note a, edited')
+  await waitForAsync(page, async () => (await window.hibi.getDocument()).dirty)
+  await app.evaluate(() => globalThis.hold('document:select-tab'))
+  await page.locator(`[data-tab-id="${b.id}"]`).click()
+  await app.evaluate(() => globalThis.held['document:select-tab'])
+  // Asked while a is shown: it is a's save, not b's.
+  await page.evaluate(() => {
+    window.saved = window.fixtureRun('save')
+  })
+  await app.evaluate(() => globalThis.release['document:select-tab']())
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b.id,
+  )
+  assert.equal(await page.evaluate(() => window.saved), false)
+  await idle()
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:save'] ?? 0),
+    0,
+  )
+})
+
+test('a dialog answered while a file opened from outside waits runs its own action first', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, paths, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-dialog-external-',
+    { 'a.md': 'note a' },
+    ['document:remote'],
+  )
+  const b = join(dirname(paths['a.md']), 'b.md')
+  await writeFile(b, 'note b')
+  await clickMenu(app, 'Open from URL…')
+  const prompt = page.getByRole('dialog', { name: 'Open from URL' })
+  await prompt.waitFor()
+  await openFromOutside(app, page, b)
+  // A closed local port fails at once; only the call matters.
+  await prompt.getByRole('textbox').fill('http://127.0.0.1:9/x.md')
+  await prompt.getByRole('button', { name: 'Open' }).click()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'b.md',
+  )
+  await idle()
+  assert.equal(
+    await app.evaluate(() => globalThis.calls['document:remote'] ?? 0),
+    1,
+  )
+})
+
+test('a save pressed during a save goes before a file opened from outside meanwhile', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, editor, paths, idle, commands } = await launchHolding(
+    t,
+    'hibi-tab-busy-save-external-',
+    { 'a.md': 'note a' },
+    [],
+  )
+  const b = join(dirname(paths['a.md']), 'b.md')
+  await writeFile(b, 'note b')
+  // Main writes "note a", then holds its reply.
+  await app.evaluate(() => globalThis.hold('document:save', true))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await replaceRichText(page, editor, 'note a, more')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'note a, more',
+  )
+  await pressShortcut(app, `${mod}+s`)
+  await commands(2)
+  await openFromOutside(app, page, b)
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'b.md',
+  )
+  await idle()
+  assert.equal(await readFile(paths['a.md'], 'utf8'), 'note a, more')
 })

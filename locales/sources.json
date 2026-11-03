@@ -32,6 +32,12 @@
   "b8a899cafe7b": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "12bad4c9a91e": [
+    "src/renderer/src/History.tsx"
+  ],
+  "1dbe660954d9": [
+    "src/renderer/src/History.tsx"
+  ],
   "8b13cd5c78ad": [
     "src/renderer/src/markdown-syntax.ts"
   ],
@@ -505,6 +511,12 @@
   "ceefa76015c9": [
     "src/renderer/src/BacklinksSidebar.tsx"
   ],
+  "a30b978c19ee": [
+    "src/renderer/src/History.tsx"
+  ],
+  "878b68bd0286": [
+    "src/renderer/src/History.tsx"
+  ],
   "adbadd2131b2": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -630,6 +642,9 @@
   ],
   "5d4041aa7af3": [
     "src/addons/git/Panel.tsx"
+  ],
+  "7bba5c53bc42": [
+    "src/renderer/src/History.tsx"
   ],
   "45f83ce734b5": [
     "src/renderer/src/History.tsx"
@@ -907,6 +922,9 @@
   ],
   "766db4dda5c6": [
     "src/addons/git/native.ts"
+  ],
+  "8cec11b14767": [
+    "src/main/document.ts"
   ],
   "8afb17585fb2": [
     "src/main/media.ts"
@@ -1593,6 +1611,9 @@
   ],
   "cae2d6782eb3": [
     "src/addons/creole/hibi-addon.json"
+  ],
+  "e0d1b68224bf": [
+    "src/renderer/src/History.tsx"
   ],
   "184c749f9915": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -2732,6 +2753,9 @@
   "a0b88bf9965c": [
     "src/addons/quick-note/CaptureWindow.tsx"
   ],
+  "617987c5b12e": [
+    "src/main/document.ts"
+  ],
   "e43664c0638d": [
     "src/main/workspace-actions.ts"
   ],
@@ -2827,6 +2851,9 @@
     "src/renderer/src/main.tsx",
     "src/shared/hotkeys.ts"
   ],
+  "a29576c69bf2": [
+    "src/renderer/src/history-points.ts"
+  ],
   "11d58b08de98": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
@@ -2870,6 +2897,9 @@
   ],
   "47fa752d5df7": [
     "src/renderer/src/markdown-syntax.ts"
+  ],
+  "352f68dafab4": [
+    "src/main/document.ts"
   ],
   "33ffe414fe4e": [
     "src/addons/_shared/import-worker-client.ts"
@@ -4069,7 +4099,7 @@
   "22ae1d4736ab": [
     "src/addons/diagnostics/Settings.tsx"
   ],
-  "5863a3881560": [
+  "894727a01d2d": [
     "src/renderer/src/History.tsx"
   ],
   "edcb430f6947": [
@@ -4411,6 +4441,9 @@
   ],
   "849e9d67849e": [
     "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "858e4ba7a29f": [
+    "src/renderer/src/History.tsx"
   ],
   "a4f17dfc576b": [
     "src/addons/vim/engine.ts"
@@ -5530,6 +5563,9 @@
   "55260a7157b3": [
     "src/renderer/src/AddonInstallChooser.tsx"
   ],
+  "f76f6da9abde": [
+    "src/renderer/src/History.tsx"
+  ],
   "c75049813154": [
     "src/renderer/src/Introduction.tsx",
     "src/renderer/src/SettingsScreen.tsx"
@@ -6076,6 +6112,9 @@
   "4ef953980674": [
     "src/renderer/src/SourceEditor.tsx"
   ],
+  "403a5bd7603b": [
+    "src/renderer/src/History.tsx"
+  ],
   "b813945dd20c": [
     "src/renderer/src/SourceEditor.tsx"
   ],
@@ -6099,6 +6138,9 @@
   ],
   "60dbdf909175": [
     "src/main/files.ts"
+  ],
+  "92c0abac5f21": [
+    "src/renderer/src/ImageViewer.tsx"
   ],
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
@@ -6146,6 +6188,9 @@
   ],
   "c7085d2772ec": [
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "2469fb10d7a2": [
+    "src/renderer/src/history-points.ts"
   ],
   "95e4db0dfa62": [
     "src/main/workspace-settings.ts"
@@ -7005,6 +7050,9 @@
     "src/addons/ui-preview/hibi-addon.json",
     "src/addons/ui-preview/index.tsx"
   ],
+  "764ccc9c6651": [
+    "src/renderer/src/ImageViewer.tsx"
+  ],
   "eecd4c4fc8ee": [
     "src/renderer/src/addons.ts"
   ],
@@ -7280,6 +7328,12 @@
   ],
   "fb54cddcd7f2": [
     "src/renderer/src/Introduction.tsx"
+  ],
+  "870be89cb87a": [
+    "src/renderer/src/History.tsx"
+  ],
+  "bf52188d7622": [
+    "src/renderer/src/History.tsx"
   ],
   "147170e793c6": [
     "src/addons/documentation/ExportDialog.tsx"
@@ -7680,6 +7734,12 @@
   "e72eb5b181a8": [
     "src/renderer/src/Introduction.tsx"
   ],
+  "87ae5d88abd4": [
+    "src/renderer/src/History.tsx"
+  ],
+  "351b656f4564": [
+    "src/renderer/src/History.tsx"
+  ],
   "bb174a00dfce": [
     "src/renderer/src/SourceEditor.tsx"
   ],
@@ -7730,6 +7790,9 @@
   ],
   "b2fe97e14407": [
     "src/renderer/src/addons.ts"
+  ],
+  "0f8954748d93": [
+    "src/main/document.ts"
   ],
   "7f659c8c45d8": [
     "src/addons/frontmatter/Properties.tsx"

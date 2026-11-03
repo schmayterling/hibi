@@ -372,7 +372,8 @@ function linedUp() {
   })
   if (at === null) return false
   const line = view.state.doc.lineAt(at)
-  const row = /^\| r(\d+) \|/.exec(line.text)
+  // Rows with or without outer pipes, their first cell maybe typed in.
+  const row = /^(?:\| )?r(\d+)Z? \|/.exec(line.text)
   const point = view.coordsAtPos(line.from)
   // The text of the row's first cell, as the source line has it.
   const cell = row
@@ -449,53 +450,69 @@ test('formatted split lines up a source line in a row a long table has not drawn
   await source(page, text)
 })
 
-test("formatted split lines up a long table's edited row out of its place with its source line", {
-  timeout: 90000,
-}, async (t) => {
-  const lines = 'line\n\n'.repeat(30)
-  const text = `${lines}${table(1000)}${lines}`
-  const { page } = await open(t, text)
-  // The formatted pane leads to a row, which it then draws.
-  const near = (at) => {
-    const pane = document.querySelector('.rich-pane')
-    const view = pane.querySelector('.cm-content').cmTile.root.view
-    pane.dispatchEvent(new WheelEvent('wheel'))
-    view.dispatch({
-      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
-    })
-  }
-  await page.evaluate(near, text.indexOf('| r600 |') + 3)
-  await page.locator('.rich-pane tr[data-line="602"] td').nth(1).click()
-  await page.keyboard.press('End')
-  await page.keyboard.type('Z')
-  // Led to the table's top rows, the window draws them and keeps the edited
-  // row mounted after them, out of its place.
-  await page.evaluate(near, text.indexOf('| r20 |') + 3)
-  await waitForAsync(
-    page,
-    () =>
-      document.querySelector('.rich-pane tr[data-line="602"]')
-        ?.previousElementSibling?.dataset.line !== '601',
-    undefined,
-    { label: 'the edited row out of its place' },
-  )
-  // The source pane leads straight back to the row's line, as a drag of its
-  // scrollbar does, while the cell editor keeps the focus.
-  await page.evaluate(lead, text.indexOf('| r600 |'))
-  await staysLinedUp(page, linedUp)
-  assert.ok(
-    await page.evaluate(() => {
-      const row = document.querySelector('.rich-pane tr[data-line="602"]')
-      return (
-        row.previousElementSibling?.dataset.line === '601' &&
-        row.nextElementSibling?.dataset.line === '603' &&
-        row.contains(document.activeElement)
-      )
-    }),
-    'the edited row in its place, its cell editor focused',
-  )
-  await source(page, text.replace('| v600 |', '| v600Z |'))
-})
+// Rows without outer pipes start with their first cell's text: with that cell
+// edited, the source line's start is in the cell editor's text, and the row's
+// place still answers for it while the row is out of its place.
+for (const pipes of [true, false])
+  test(`formatted split lines up a long table's edited row out of its place with its source line${pipes ? '' : ', its first cell edited in rows without outer pipes'}`, {
+    timeout: 90000,
+  }, async (t) => {
+    const lines = 'line\n\n'.repeat(30)
+    const rows = pipes ? table(1000) : table(1000).replace(/^\| | \|$/gm, '')
+    const text = `${lines}${rows}${lines}`
+    // Where row `index`'s line starts.
+    const start = (index) =>
+      text.search(new RegExp(`^(\\| )?r${index} \\|`, 'm'))
+    const { page } = await open(t, text)
+    // The formatted pane leads to a row, which it then draws.
+    const near = (at) => {
+      const pane = document.querySelector('.rich-pane')
+      const view = pane.querySelector('.cm-content').cmTile.root.view
+      pane.dispatchEvent(new WheelEvent('wheel'))
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+      })
+    }
+    await page.evaluate(near, start(600) + 3)
+    await page
+      .locator('.rich-pane tr[data-line="602"] td')
+      .nth(pipes ? 1 : 0)
+      .click()
+    await page.keyboard.press('End')
+    await page.keyboard.type('Z')
+    // Led to the table's top rows, the window draws them and keeps the edited
+    // row mounted after them, out of its place.
+    await page.evaluate(near, start(20) + 3)
+    await waitForAsync(
+      page,
+      () =>
+        document.querySelector('.rich-pane tr[data-line="602"]')
+          ?.previousElementSibling?.dataset.line !== '601',
+      undefined,
+      { label: 'the edited row out of its place' },
+    )
+    // The source pane leads straight back to the row's line, as a drag of its
+    // scrollbar does, while the cell editor keeps the focus.
+    await page.evaluate(lead, start(600))
+    await staysLinedUp(page, linedUp)
+    assert.ok(
+      await page.evaluate(() => {
+        const row = document.querySelector('.rich-pane tr[data-line="602"]')
+        return (
+          row.previousElementSibling?.dataset.line === '601' &&
+          row.nextElementSibling?.dataset.line === '603' &&
+          row.contains(document.activeElement)
+        )
+      }),
+      'the edited row in its place, its cell editor focused',
+    )
+    await source(
+      page,
+      pipes
+        ? text.replace('| v600 |', '| v600Z |')
+        : text.replace(/^r600 \|/m, 'r600Z |'),
+    )
+  })
 
 // Whether the source pane shows the line of the formatted table row that
 // leads, the row at the formatted pane's middle or the focused cell's, at the

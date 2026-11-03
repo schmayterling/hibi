@@ -44,6 +44,7 @@ export const DOCUMENT_CHANNELS = {
   remote: 'document:remote',
   requestRemote: 'document:request-remote',
   saved: 'document:saved',
+  fileDialog: 'document:file-dialog',
 } as const
 
 export type DocumentState = {
@@ -642,6 +643,8 @@ export type DesktopApi = {
   onExternalDocuments: (callback: () => void) => () => void
   /** Saves from close, quit and delete prompts, including ones a later prompt cancels. */
   onDocumentSaved: (callback: (saved: DocumentSaved) => void) => () => void
+  /** A file operation's first dialog or prompt opened (true) or its last closed. */
+  onFileDialog: (callback: (open: boolean) => void) => () => void
   newDocument: () => Promise<DocumentState | null>
   saveDocument: (saveAs: boolean) => Promise<DocumentSaveReply | null>
   saveTargetDocument: (

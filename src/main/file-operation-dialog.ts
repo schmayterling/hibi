@@ -7,6 +7,12 @@ type Operation = {
 }
 const operations = new AsyncLocalStorage<Operation>()
 let active: Operation | null = null
+let dialogListener: (open: boolean) => void = () => {}
+
+/** Hears when a file operation's first dialog opens and its last closes. */
+export function onFileOperationDialog(listener: (open: boolean) => void) {
+  dialogListener = listener
+}
 
 export const fileOperationHasDialog = () => (active?.dialogs ?? 0) > 0
 export function fileOperationDialogOpened() {
@@ -31,7 +37,7 @@ export async function withinFileOperation<T>(operation: () => Promise<T>) {
 export async function runFileDialog<T>(open: () => Promise<T>) {
   const current = operations.getStore()
   if (current) {
-    current.dialogs++
+    if (current.dialogs++ === 0) dialogListener(true)
     current.notify?.()
   }
   try {
@@ -40,6 +46,7 @@ export async function runFileDialog<T>(open: () => Promise<T>) {
     if (current && --current.dialogs === 0) {
       delete current.opened
       delete current.notify
+      dialogListener(false)
     }
   }
 }

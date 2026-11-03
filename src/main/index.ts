@@ -168,12 +168,13 @@ import {
   updateDocumentEdited,
 } from './document'
 import { createDocumentTransfers } from './document-transfer'
-import { isDocumentName } from './document-types'
+import { isOpenableName } from './document-types'
 import { sweepSiteScratch } from './export-scratch'
 import { externalFileArguments } from './external-files'
 import {
   fileOperationDialogOpened,
   fileOperationHasDialog,
+  onFileOperationDialog,
   withinFileOperation,
 } from './file-operation-dialog'
 import { GlobalShortcuts } from './global-shortcuts'
@@ -1302,6 +1303,11 @@ function sendCommand(window: BrowserWindow | null, action: AppCommand) {
   if (!fileOperationHasDialog())
     window?.webContents.send(HOTKEY_CHANNELS.command, action)
 }
+// The renderer drops clicks and requests that arrive behind one too.
+onFileOperationDialog((open) => {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(DOCUMENT_CHANNELS.fileDialog, open)
+})
 
 function installMenu(): void {
   const command = (action: AppCommand) => () => sendCommand(mainWindow, action)
@@ -2791,7 +2797,7 @@ if (!app.requestSingleInstanceLock()) {
           const kept = new Set<string>()
           for (const path of externalFiles.splice(0)) {
             try {
-              if (!isDocumentName(path))
+              if (!isOpenableName(path))
                 throw new Error('Unsupported document format.')
               const file = await realpath(path).catch(() => path)
               if (kept.has(file)) continue

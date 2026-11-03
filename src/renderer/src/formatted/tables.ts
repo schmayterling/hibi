@@ -794,10 +794,20 @@ class TableView {
     this.start = from
     this.end = to
     if (this.heights) {
-      this.spacerHeight(this.before, this.heights.before(from))
+      // The kept row's own element stands for its height, so the spacer on
+      // its side of the window leaves that out.
+      const height = kept
+        ? this.heights.before(editing + 1) - this.heights.before(editing)
+        : 0
+      this.spacerHeight(
+        this.before,
+        this.heights.before(from) - (editing < from ? height : 0),
+      )
       this.spacerHeight(
         this.after,
-        this.heights.before(widget.rows) - this.heights.before(to),
+        this.heights.before(widget.rows) -
+          this.heights.before(to) -
+          (editing >= to ? height : 0),
       )
     }
   }
@@ -1079,20 +1089,26 @@ class TableView {
     this.reveal(index, Math.ceil((bottom - top) / MIN.row))
   }
 
-  /** Where a row the window has not drawn in its place would show, from its spacer and the rows' heights, without drawing it. */
+  /** Where a row the window has not drawn in its place would show, from the window's edge and the rows' heights, without drawing it. */
   private estimate(pos: number) {
     const index = this.undrawn(pos)
     const heights = this.heights
     if (index === null || !heights) return null
     const after = index >= this.end
-    const spacer = (after ? this.after : this.before)?.getBoundingClientRect()
-    if (!spacer) return null
+    // Rows before the window start below the header, where `read` measures
+    // from, and rows after it where its last row ends: a spacer hides while
+    // empty, and the edited row stays mounted next to the window, also after
+    // its editing stops until the window draws again.
+    const edge = (
+      after ? this.rendered.get(this.end - 1)?.element : this.head
+    )?.getBoundingClientRect()
+    if (!edge) return null
     const top =
-      spacer.top +
+      edge.bottom +
       heights.before(index) -
       (after ? heights.before(this.end) : 0)
     const bottom = top + heights.before(index + 1) - heights.before(index)
-    return { left: spacer.left, right: spacer.left, top, bottom }
+    return { left: edge.left, right: edge.left, top, bottom }
   }
 
   /** Where a position inside the table shows: in its cell's editor, or in its drawn row's text. */

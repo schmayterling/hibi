@@ -7,7 +7,8 @@ import sanitizeHtml from 'sanitize-html'
 import { lexMarkdown } from '../shared/marked-blocks.ts'
 import { isPathInside } from './workspace-paths.ts'
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+/** The largest local image Hibi reads into memory to show. */
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 export function imageMime(data: Buffer): string | null {
   const start = data.subarray(0, 16).toString('hex')

@@ -247,8 +247,8 @@ test("a workspace cache folder Hibi can't write to, such as in a shared folder, 
   const images = join(host.workspace, '.hibi', 'cache', 'images')
   await mkdir(images, { recursive: true })
   if (process.platform === 'win32') {
-    // Deny writes to the folder and the files created in it, for every user.
-    execFileSync('icacls', [images, '/deny', '*S-1-1-0:(OI)(CI)(W)', '/Q'])
+    // Deny writes to the folder and new files, while keeping directory reads.
+    execFileSync('icacls', [images, '/deny', '*S-1-1-0:(OI)(CI)(WD,AD)', '/Q'])
   } else await chmod(images, 0o500)
   await assert.rejects(
     writeFile(join(images, 'write-probe'), 'unwritable'),

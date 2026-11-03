@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmod,
@@ -12,7 +13,7 @@ import {
   utimes,
   writeFile,
 } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -245,7 +246,19 @@ test("a workspace cache folder Hibi can't write to, such as in a shared folder, 
   const host = await setup(t)
   const images = join(host.workspace, '.hibi', 'cache', 'images')
   await mkdir(images, { recursive: true })
-  await chmod(images, 0o500)
+  if (process.platform === 'win32') {
+    // Windows ignores POSIX write bits; deny file and subdirectory creation.
+    execFileSync('icacls', [
+      images,
+      '/deny',
+      `${userInfo().username}:(WD,AD)`,
+      '/Q',
+    ])
+  } else await chmod(images, 0o500)
+  await assert.rejects(
+    writeFile(join(images, 'write-probe'), 'unwritable'),
+    (error) => ['EACCES', 'EPERM'].includes(error.code),
+  )
   assert.deepEqual(await host.draw(), drawn('first'))
   assert.deepEqual(await host.draw(), drawn('first'))
   assert.equal(host.requests.length, 1)

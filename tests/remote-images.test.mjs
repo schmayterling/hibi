@@ -13,7 +13,7 @@ import {
   utimes,
   writeFile,
 } from 'node:fs/promises'
-import { tmpdir, userInfo } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -247,13 +247,8 @@ test("a workspace cache folder Hibi can't write to, such as in a shared folder, 
   const images = join(host.workspace, '.hibi', 'cache', 'images')
   await mkdir(images, { recursive: true })
   if (process.platform === 'win32') {
-    // Windows ignores POSIX write bits; deny file and subdirectory creation.
-    execFileSync('icacls', [
-      images,
-      '/deny',
-      `${userInfo().username}:(WD,AD)`,
-      '/Q',
-    ])
+    // Deny writes to the folder and the files created in it, for every user.
+    execFileSync('icacls', [images, '/deny', '*S-1-1-0:(OI)(CI)(W)', '/Q'])
   } else await chmod(images, 0o500)
   await assert.rejects(
     writeFile(join(images, 'write-probe'), 'unwritable'),

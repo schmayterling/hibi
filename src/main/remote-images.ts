@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
-  access,
   lstat,
   mkdir,
   open,
@@ -59,13 +58,21 @@ type Kept = {
 async function folder(path: string) {
   await mkdir(path, { mode: 0o700 }).catch(() => {})
   const stat = await lstat(path).catch(() => null)
-  return stat?.isDirectory() &&
-    (await access(path, constants.W_OK).then(
-      () => true,
-      () => false,
-    ))
-    ? path
-    : null
+  if (!stat?.isDirectory()) return null
+  // fs.access does not check Windows ACLs. Try creating the kind of file
+  // a download needs, without replacing anything already in the folder.
+  const probe = join(path, `.${randomUUID()}.tmp`)
+  try {
+    const file = await open(probe, 'wx', 0o600)
+    try {
+      await file.close()
+    } finally {
+      await rm(probe, { force: true })
+    }
+    return path
+  } catch {
+    return null
+  }
 }
 
 /**

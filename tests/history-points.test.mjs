@@ -9,6 +9,7 @@ import {
   historySummary,
   returnTo,
   shownVersions,
+  stepTime,
 } from '../src/renderer/src/history-points.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 
@@ -607,4 +608,12 @@ test('going to a step that stops partway is an error, not a closed view', () => 
     /stopped partway/,
   )
   assert.equal(writer.text(), 'ab')
+})
+
+test('a step from another day shows its date with its time', () => {
+  const now = Date.UTC(2026, 9, 1, 18)
+  const morning = Date.UTC(2026, 9, 1, 9),
+    yesterday = Date.UTC(2026, 8, 30, 23)
+  assert.equal(stepTime(morning, now), new Date(morning).toLocaleTimeString())
+  assert.equal(stepTime(yesterday, now), new Date(yesterday).toLocaleString())
 })

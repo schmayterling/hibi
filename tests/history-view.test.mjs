@@ -70,11 +70,9 @@ test('the history view restores a point as a step undo takes back, and goes to a
   await shows(texts.first)
   await replaceRichText(page, editor, texts.third)
   await shows(texts.third)
-  const openHistory = async () => {
+  const openHistory = async (search = 'history') => {
     await clickMenu(app, 'Command palette')
-    await page
-      .getByRole('combobox', { name: /search commands/i })
-      .fill('history')
+    await page.getByRole('combobox', { name: /search commands/i }).fill(search)
     await page
       .getByRole('option')
       .filter({ hasText: /^history/i })
@@ -115,27 +113,43 @@ test('the history view restores a point as a step undo takes back, and goes to a
   await shows(texts.second)
 
   // All steps: the undone branch sits a level in, and going to it lets undo
-  // and redo go on from there.
-  history = await openHistory()
+  // and redo go on from there. The palette finds History as "version" too.
+  history = await openHistory('version')
   await history.getByRole('button', { name: /^all steps$/i }).click()
   const tree = history.getByRole('tree', { name: /all undo steps/i })
   const items = tree.getByRole('treeitem')
   assert.equal(await items.count(), 5)
+  // Items holding others say they are expanded, as they always are.
   assert.deepEqual(
     await items.evaluateAll((items) =>
       items.map((item) => [
         item.getAttribute('aria-level'),
         item.getAttribute('aria-current'),
+        item.getAttribute('aria-expanded'),
       ]),
     ),
     [
-      ['1', null],
-      ['2', null],
-      ['3', null],
-      ['2', null],
-      ['2', 'true'],
+      ['1', null, 'true'],
+      ['2', null, 'true'],
+      ['3', null, null],
+      ['2', null, null],
+      ['2', 'true', null],
     ],
   )
+  // Left goes to the item holding this one, Right to the first it holds.
+  const active = async (index) =>
+    (await tree.getAttribute('aria-activedescendant')) ===
+    (await items.nth(index).getAttribute('id'))
+  await items.nth(3).click()
+  for (const [key, to] of [
+    ['ArrowLeft', 0],
+    ['ArrowRight', 1],
+    ['ArrowRight', 2],
+    ['ArrowLeft', 1],
+  ]) {
+    await page.keyboard.press(key)
+    assert.ok(await active(to), `${key} to item ${to}`)
+  }
   await items.nth(2).click()
   await history.getByRole('button', { name: /^go to step$/i }).click()
   await history.waitFor({ state: 'hidden' })

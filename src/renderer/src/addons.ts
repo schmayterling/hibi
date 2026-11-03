@@ -445,14 +445,15 @@ export function useAddons(
   const triggered = useCallback(
     (manifest: AddonManifest) => {
       const activation = manifest.activation
+      // The image view has neither a source nor a formatted editor.
       return (
         requested.has(manifest.id) ||
         (activation === 'command'
           ? false
           : activation === 'source'
-            ? activeView !== 'normal'
+            ? activeView === 'side-by-side' || activeView === 'markdown'
             : activation === 'formatted'
-              ? activeView !== 'markdown'
+              ? activeView === 'normal' || activeView === 'side-by-side'
               : true)
       )
     },

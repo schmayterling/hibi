@@ -229,9 +229,12 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
   await block.waitFor()
   await block.evaluate(async (pre, box) => {
     // A redraw may replace the box; wait for the new one.
-    while (box && !pre.isConnected) {
+    const started = performance.now()
+    while (!pre.isConnected || pre.scrollWidth <= pre.clientWidth) {
       pre = document.querySelector(box) ?? pre
-      if (!pre.isConnected) await new Promise(requestAnimationFrame)
+      if (performance.now() - started > 8000)
+        throw new Error('no wide code box is drawn')
+      await new Promise(requestAnimationFrame)
     }
     pre.scrollLeft = pre.scrollWidth
     if (pre.matches('.rich-pane')) pre.scrollTop = pre.scrollHeight

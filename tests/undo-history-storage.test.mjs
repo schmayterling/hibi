@@ -11,6 +11,8 @@ import { SourceStore } from '../src/shared/source-buffer.ts'
 import { keptHistory } from '../src/shared/undo-history.ts'
 
 const mib = 1024 * 1024
+// Synthetic note identities use the platform's native separators, like real files.
+const notePath = (name) => join('/notes', name)
 const bundle = build({
   entryPoints: ['src/main/undo-history.ts'],
   bundle: true,
@@ -87,9 +89,9 @@ test('a note reopens with the history kept for the text it saved', async (t) => 
   const root = await profile(t)
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
   const stored = JSON.parse(
-    await fs.readFile(kept(root, '/notes/a.md'), 'utf8'),
+    await fs.readFile(kept(root, notePath('a.md')), 'utf8'),
   )
   assert.equal(stored.format, 1)
   assert.equal(
@@ -99,11 +101,11 @@ test('a note reopens with the history kept for the text it saved', async (t) => 
   // Another launch reads it for a tab that loaded the same text.
   const later = await main(root)
   assert.deepEqual(
-    await later.readUndoHistory('/notes/a.md', reopened(note.source)),
+    await later.readUndoHistory(notePath('a.md'), reopened(note.source)),
     note.history,
   )
   assert.equal(
-    await later.readUndoHistory('/notes/b.md', reopened(note.source)),
+    await later.readUndoHistory(notePath('b.md'), reopened(note.source)),
     null,
   )
 })
@@ -112,22 +114,22 @@ test('a note changed outside Hibi drops its kept history without asking', async 
   const root = await profile(t)
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
   // Same length, other text.
   assert.equal(
-    await api.readUndoHistory('/notes/a.md', reopened('BASE ONE TWO')),
+    await api.readUndoHistory(notePath('a.md'), reopened('BASE ONE TWO')),
     null,
   )
-  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  assert.equal(await exists(kept(root, notePath('a.md'))), false)
 })
 
 test('an unreadable kept history is ignored and removed', async (t) => {
   const root = await profile(t)
   const api = await main(root)
   const note = saved()
-  const path = kept(root, '/notes/a.md')
+  const path = kept(root, notePath('a.md'))
   const valid = async () => {
-    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
     return JSON.parse(await fs.readFile(path, 'utf8'))
   }
   for (const write of [
@@ -152,7 +154,7 @@ test('an unreadable kept history is ignored and removed', async (t) => {
     await fs.mkdir(folder(root), { recursive: true })
     await write()
     assert.equal(
-      await api.readUndoHistory('/notes/a.md', reopened(note.source)),
+      await api.readUndoHistory(notePath('a.md'), reopened(note.source)),
       null,
     )
     assert.equal(await exists(path), false)
@@ -168,10 +170,10 @@ test('a history for an older save is not kept', async (t) => {
     { tabId: 'n', revision: 0 },
     note.history.version + 1,
   ).snapshot()
-  await api.storeUndoHistory('/notes/a.md', newer, note.history)
-  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  await api.storeUndoHistory(notePath('a.md'), newer, note.history)
+  assert.equal(await exists(kept(root, notePath('a.md'))), false)
   await assert.rejects(
-    api.storeUndoHistory('/notes/a.md', note.file, {
+    api.storeUndoHistory(notePath('a.md'), note.file, {
       ...note.history,
       saved: 9,
     }),
@@ -191,12 +193,12 @@ test('past 64 MiB, notes saved longest ago lose their kept history first', async
   }
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/new.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('new.md'), note.file, note.history)
   assert.deepEqual(
     await Promise.all(older.map((path) => exists(kept(root, path)))),
     [false, true, true],
   )
-  assert.equal(await exists(kept(root, '/notes/new.md')), true)
+  assert.equal(await exists(kept(root, notePath('new.md'))), true)
 })
 
 test('keeping turned off removes kept histories and keeps no new ones', async (t) => {
@@ -204,21 +206,21 @@ test('keeping turned off removes kept histories and keeps no new ones', async (t
   const api = await main(root)
   const note = saved()
   assert.equal(await api.keepsUndoHistory(), true)
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
   await api.setKeepUndoHistory(false)
-  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  assert.equal(await exists(kept(root, notePath('a.md'))), false)
   const later = await main(root)
   assert.equal(await later.keepsUndoHistory(), false)
-  await later.storeUndoHistory('/notes/a.md', note.file, note.history)
-  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  await later.storeUndoHistory(notePath('a.md'), note.file, note.history)
+  assert.equal(await exists(kept(root, notePath('a.md'))), false)
   assert.equal(
-    await later.readUndoHistory('/notes/a.md', reopened(note.source)),
+    await later.readUndoHistory(notePath('a.md'), reopened(note.source)),
     null,
   )
   await assert.rejects(later.setKeepUndoHistory('no'), /Invalid/)
   await later.setKeepUndoHistory(true)
-  await later.storeUndoHistory('/notes/a.md', note.file, note.history)
-  assert.equal(await exists(kept(root, '/notes/a.md')), true)
+  await later.storeUndoHistory(notePath('a.md'), note.file, note.history)
+  assert.equal(await exists(kept(root, notePath('a.md'))), true)
   await later.clearUndoHistory()
   assert.equal(await exists(folder(root)), false)
 })
@@ -227,11 +229,11 @@ test('kept histories follow notes renamed or moved inside Hibi', async (t) => {
   const root = await profile(t)
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
-  await api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
-  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
+  await api.relocateUndoHistory(notePath('a.md'), notePath('b.md'))
+  assert.equal(await exists(kept(root, notePath('a.md'))), false)
   assert.deepEqual(
-    await api.readUndoHistory('/notes/b.md', reopened(note.source)),
+    await api.readUndoHistory(notePath('b.md'), reopened(note.source)),
     note.history,
   )
   // A moved folder takes the histories of every note under it.
@@ -259,7 +261,7 @@ test('kept histories follow notes renamed or moved inside Hibi', async (t) => {
     null,
   )
   // b.md's history stayed where it was.
-  assert.equal(await exists(kept(root, '/notes/b.md')), true)
+  assert.equal(await exists(kept(root, notePath('b.md'))), true)
 })
 
 test('moves made before their histories follow apply in order, and an unreadable folder strands none', async (t) => {
@@ -308,9 +310,9 @@ test('a temporary copy a crash left behind is removed by the next store', async 
   await fs.writeFile(left, 'deleted text from a cut-short write')
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
   assert.equal(await exists(left), false)
-  assert.equal(await exists(kept(root, '/notes/a.md')), true)
+  assert.equal(await exists(kept(root, notePath('a.md'))), true)
 })
 
 test('an unreadable undo history setting keeps nothing until it is set again', async (t) => {
@@ -320,8 +322,8 @@ test('an unreadable undo history setting keeps nothing until it is set again', a
     await fs.writeFile(join(root, 'undo-history-settings.json'), text)
     const api = await main(root)
     assert.equal(await api.keepsUndoHistory(), false)
-    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
-    assert.equal(await exists(kept(root, '/notes/a.md')), false)
+    await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
+    assert.equal(await exists(kept(root, notePath('a.md'))), false)
   }
   const api = await main(root)
   await api.setKeepUndoHistory(true)
@@ -333,30 +335,30 @@ test('notes Hibi moves to the trash take their kept histories with them', async 
   const api = await main(root)
   const note = saved()
   for (const path of [
-    '/notes/a.md',
-    '/notes/inner/b.md',
-    '/notes/inner-c.md',
-    '/other/c.md',
+    notePath('a.md'),
+    notePath('inner/b.md'),
+    notePath('inner-c.md'),
+    join('/other', 'c.md'),
   ])
     await api.storeUndoHistory(path, note.file, note.history)
-  await api.removeUndoHistory('/notes/a.md')
-  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  await api.removeUndoHistory(notePath('a.md'))
+  assert.equal(await exists(kept(root, notePath('a.md'))), false)
   // A trashed folder takes every note under it, and only those.
-  await api.removeUndoHistory('/notes/inner')
-  assert.equal(await exists(kept(root, '/notes/inner/b.md')), false)
-  assert.equal(await exists(kept(root, '/notes/inner-c.md')), true)
-  assert.equal(await exists(kept(root, '/other/c.md')), true)
+  await api.removeUndoHistory(notePath('inner'))
+  assert.equal(await exists(kept(root, notePath('inner/b.md'))), false)
+  assert.equal(await exists(kept(root, notePath('inner-c.md'))), true)
+  assert.equal(await exists(kept(root, join('/other', 'c.md'))), true)
   // The index forgets them at once.
   assert.deepEqual(
     JSON.parse(
       await fs.readFile(join(root, 'undo-history-notes.json'), 'utf8'),
     ).sort(),
-    ['/notes/inner-c.md', '/other/c.md'],
+    [notePath('inner-c.md'), join('/other', 'c.md')],
   )
   // A history the index doesn't list goes by its name.
   await fs.rm(join(root, 'undo-history-notes.json'))
-  await (await main(root)).removeUndoHistory('/other/c.md')
-  assert.equal(await exists(kept(root, '/other/c.md')), false)
+  await (await main(root)).removeUndoHistory(join('/other', 'c.md'))
+  assert.equal(await exists(kept(root, join('/other', 'c.md'))), false)
 })
 
 test('a quit waits for a move or a removal still in progress', async (t) => {
@@ -375,10 +377,10 @@ test('a quit waits for a move or a removal still in progress', async (t) => {
       },
     })
     const note = saved()
-    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
     void (operation === 'rename'
-      ? api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
-      : api.removeUndoHistory('/notes/a.md'))
+      ? api.relocateUndoHistory(notePath('a.md'), notePath('b.md'))
+      : api.removeUndoHistory(notePath('a.md')))
     let quit = false
     const quitting = api
       .flushUndoHistory({
@@ -396,9 +398,9 @@ test('a quit waits for a move or a removal still in progress', async (t) => {
     assert.equal(quit, false, operation)
     slow.resolve()
     await quitting
-    assert.equal(await exists(kept(data, '/notes/a.md')), false)
+    assert.equal(await exists(kept(data, notePath('a.md'))), false)
     assert.equal(
-      await exists(kept(data, '/notes/b.md')),
+      await exists(kept(data, notePath('b.md'))),
       operation === 'rename',
     )
   }
@@ -408,13 +410,13 @@ test('a quit waits for moves and removals queued behind a write', async (t) => {
   const root = await profile(t)
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
-  await api.storeUndoHistory('/notes/b.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
+  await api.storeUndoHistory(notePath('b.md'), note.file, note.history)
   // Another note's big history holds the queue.
   const big = saved('x', ['y'.repeat(4_000_000)])
-  void api.storeUndoHistory('/other/big.md', big.file, big.history)
-  void api.relocateUndoHistory('/notes/a.md', '/notes/renamed.md')
-  void api.removeUndoHistory('/notes/b.md')
+  void api.storeUndoHistory(join('/other', 'big.md'), big.file, big.history)
+  void api.relocateUndoHistory(notePath('a.md'), notePath('renamed.md'))
+  void api.removeUndoHistory(notePath('b.md'))
   // The editor answers at once; the quit then waits for the queue.
   const window = {
     isDestroyed: () => false,
@@ -425,9 +427,9 @@ test('a quit waits for moves and removals queued behind a write', async (t) => {
   }
   await api.flushUndoHistory(window)
   await api.undoHistoryWritten()
-  assert.equal(await exists(kept(root, '/notes/renamed.md')), true)
-  assert.equal(await exists(kept(root, '/notes/a.md')), false)
-  assert.equal(await exists(kept(root, '/notes/b.md')), false)
+  assert.equal(await exists(kept(root, notePath('renamed.md'))), true)
+  assert.equal(await exists(kept(root, notePath('a.md'))), false)
+  assert.equal(await exists(kept(root, notePath('b.md'))), false)
 })
 
 test("the index's temporary copy a crash left behind is removed", async (t) => {
@@ -436,7 +438,7 @@ test("the index's temporary copy a crash left behind is removed", async (t) => {
   await fs.writeFile(left, '["/notes/a.md"]')
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
   assert.equal(await exists(left), false)
   // Turning keeping off removes one too, though nothing reads the index then.
   await fs.writeFile(left, '["/notes/a.md"]')
@@ -448,14 +450,14 @@ test('a store that changes no kept step leaves the file as it is', async (t) => 
   const root = await profile(t)
   const api = await main(root)
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
-  const file = kept(root, '/notes/a.md')
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
+  const file = kept(root, notePath('a.md'))
   const past = new Date(2020, 0, 1)
   await fs.utimes(file, past, past)
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
   assert.equal((await fs.stat(file)).mtimeMs, past.getTime())
   const next = saved('base', [' one', ' two', ' three'])
-  await api.storeUndoHistory('/notes/a.md', next.file, next.history)
+  await api.storeUndoHistory(notePath('a.md'), next.file, next.history)
   assert.notEqual((await fs.stat(file)).mtimeMs, past.getTime())
 })
 
@@ -464,15 +466,22 @@ test('a stale history a read finds is removed before a store queued after the re
   const api = await main(root)
   // Kept for text the note no longer has.
   const old = saved('other')
-  await api.storeUndoHistory('/notes/a.md', old.file, old.history)
+  await api.storeUndoHistory(notePath('a.md'), old.file, old.history)
   const note = saved()
-  const reading = api.readUndoHistory('/notes/a.md', note.file)
-  const storing = api.storeUndoHistory('/notes/a.md', note.file, note.history)
+  const reading = api.readUndoHistory(notePath('a.md'), note.file)
+  const storing = api.storeUndoHistory(
+    notePath('a.md'),
+    note.file,
+    note.history,
+  )
   assert.equal(await reading, null)
   await storing
   // The fresh history stays.
   const later = await main(root)
-  assert.notEqual(await later.readUndoHistory('/notes/a.md', note.file), null)
+  assert.notEqual(
+    await later.readUndoHistory(notePath('a.md'), note.file),
+    null,
+  )
 })
 
 test("a closing tab waits until its steps are queued, not for other notes' writes", async (t) => {
@@ -480,9 +489,11 @@ test("a closing tab waits until its steps are queued, not for other notes' write
   const api = await main(root)
   const big = saved('x', ['y'.repeat(4_000_000)])
   let written = false
-  void api.storeUndoHistory('/other/big.md', big.file, big.history).then(() => {
-    written = true
-  })
+  void api
+    .storeUndoHistory(join('/other', 'big.md'), big.file, big.history)
+    .then(() => {
+      written = true
+    })
   const window = {
     isDestroyed: () => false,
     webContents: {
@@ -510,8 +521,8 @@ test('a quit waits 5 seconds at most for a move that never finishes', {
     },
   })
   const note = saved()
-  await api.storeUndoHistory('/notes/a.md', note.file, note.history)
-  void api.relocateUndoHistory('/notes/a.md', '/notes/b.md')
+  await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
+  void api.relocateUndoHistory(notePath('a.md'), notePath('b.md'))
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let quit = false
   const quitting = api.undoHistoryWritten().then(() => {
@@ -525,7 +536,7 @@ test('a quit waits 5 seconds at most for a move that never finishes', {
   t.mock.timers.reset()
   stuck.resolve()
   await api.undoHistoryWritten()
-  assert.equal(await exists(kept(root, '/notes/b.md')), true)
+  assert.equal(await exists(kept(root, notePath('b.md'))), true)
 })
 
 test('a quit waits for a clear, and for keeping turned off, asked for before it', async (t) => {
@@ -548,7 +559,7 @@ test('a quit waits for a clear, and for keeping turned off, asked for before it'
       },
     })
     const note = saved()
-    await api.storeUndoHistory('/notes/a.md', note.file, note.history)
+    await api.storeUndoHistory(notePath('a.md'), note.file, note.history)
     const asked =
       action === 'clear'
         ? api.clearUndoHistory()

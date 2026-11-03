@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
   mkdir,
+  opendir,
   readdir,
   readFile,
   rename,
@@ -8,7 +9,7 @@ import {
   stat,
   unlink,
 } from 'node:fs/promises'
-import { dirname, join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
 import type { SourceSnapshot } from '../shared/source-buffer'
 import {
@@ -98,7 +99,8 @@ async function remove(name: string) {
     if (error.code !== 'ENOENT') throw error
   })
   sizes?.delete(name)
-  return notes?.delete(name) ?? false
+  // Loaded here too: a launch's first read can find a stale history.
+  return (await indexed()).delete(name)
 }
 const indexPath = () => join(app.getPath('userData'), 'undo-history-notes.json')
 /** A crash mid-write leaves the index's temporary copy beside it. */
@@ -223,20 +225,34 @@ export function readUndoHistory(
 /**
  * Kept histories of notes deleted outside Hibi go: a note missing from a
  * folder that is there, at two looks `wait` ms apart, so a note Hibi moved
- * has its history moved before the second. A folder that is missing, as on
- * a drive that isn't mounted, keeps its notes' histories.
+ * has its history moved before the second. A folder that is missing or
+ * empty, as on a drive that isn't mounted, keeps its notes' histories.
  */
 export async function pruneUndoHistory(wait = 10_000) {
-  const gone = async (path: string) =>
-    (await stat(path).then(
+  const absent = (path: string) =>
+    stat(path).then(
       () => false,
       (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
-    )) &&
-    (await stat(dirname(path)).then(
-      (info) => info.isDirectory(),
-      () => false,
-    ))
-  const listed = await serial(async () => [...(await indexed())])
+    )
+  const holds = (path: string) =>
+    opendir(path)
+      .then(async (entries) => {
+        try {
+          return (await entries.read()) !== null
+        } finally {
+          await entries.close()
+        }
+      })
+      .catch(() => false)
+  const gone = async (path: string) =>
+    (await absent(path)) &&
+    // iCloud Drive before macOS 14 swaps a note it evicts for `.name.icloud`.
+    (await absent(join(dirname(path), `.${basename(path)}.icloud`))) &&
+    (await holds(dirname(path)))
+  const listed = await serial(async () => {
+    await sweep()
+    return [...(await indexed())]
+  })
   const missing: [string, string][] = []
   for (const [name, path] of listed)
     if (await gone(path)) missing.push([name, path])

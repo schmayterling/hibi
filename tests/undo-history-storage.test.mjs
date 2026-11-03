@@ -55,12 +55,13 @@ const exists = (path) =>
   )
 
 /** A note edited and saved: its history, and main's copy of the saved text. */
-function saved(text = 'base', edits = [' one', ' two']) {
+function saved(text = 'base', edits = [' one', ' two'], options = {}) {
   const session = new DocumentSession(text, { tabId: 'n', revision: 0 }, 0, {
     enqueue() {},
     onError(error) {
       throw error
     },
+    ...options,
   })
   for (const [index, insert] of edits.entries()) {
     const end = session.snapshot().utf16Length
@@ -613,6 +614,9 @@ test('notes deleted outside Hibi let go of their kept histories, and notes on a 
   const note = saved()
   const notes = join(root, 'notes')
   await fs.mkdir(notes)
+  // The folder holds something else when a.md is gone below, so it is not
+  // taken for the empty mount point of a drive that isn't mounted.
+  await fs.writeFile(join(notes, 'other.txt'), '')
   for (const name of ['a.md', 'b.md']) {
     await fs.writeFile(join(notes, name), note.source)
     await api.storeUndoHistory(join(notes, name), note.file, note.history)
@@ -654,4 +658,217 @@ test('a note Hibi moves while missing notes are looked for keeps its history', a
     await api.readUndoHistory(to, reopened(note.source)),
     note.history,
   )
+})
+
+test('missing notes are looked at again only after the moves Hibi queued, even a slow one', async (t) => {
+  const root = await profile(t)
+  const from = join(root, 'a.md'),
+    to = join(root, 'b.md')
+  const moved = Promise.withResolvers()
+  let moving = false
+  const api = await main(root, {
+    ...fs,
+    rename: async (path, ...rest) => {
+      if (path === kept(root, from)) {
+        moving = true
+        await moved.promise
+      }
+      return fs.rename(path, ...rest)
+    },
+  })
+  const note = saved()
+  await fs.writeFile(from, note.source)
+  await api.storeUndoHistory(from, note.file, note.history)
+  await fs.rename(from, to)
+  const pruning = api.pruneUndoHistory(10)
+  const relocating = api.relocateUndoHistory(from, to)
+  while (!moving) await new Promise((resolve) => setTimeout(resolve, 10))
+  // The second look is due while the history's move is still on its way.
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  moved.resolve()
+  await Promise.all([relocating, pruning])
+  assert.deepEqual(
+    await api.readUndoHistory(to, reopened(note.source)),
+    note.history,
+  )
+})
+
+test('a note that cannot be looked at, iCloud evicted, or on an empty mount point keeps its history', async (t) => {
+  const root = await profile(t)
+  const note = saved()
+  const unreadable = join(root, 'locked', 'a.md'),
+    evicted = join(root, 'Documents', 'b.md'),
+    unmounted = join(root, 'mnt', 'usb', 'c.md'),
+    unsure = join(root, 'flaky', 'd.md')
+  const api = await main(root, {
+    ...fs,
+    stat: async (path, ...rest) => {
+      if (path === unreadable || path === join(root, 'flaky', '.d.md.icloud'))
+        throw Object.assign(new Error('EIO'), { code: 'EIO' })
+      return fs.stat(path, ...rest)
+    },
+  })
+  for (const path of [unreadable, evicted, unmounted, unsure]) {
+    await fs.mkdir(join(path, '..'), { recursive: true })
+    await fs.writeFile(path, note.source)
+    await api.storeUndoHistory(path, note.file, note.history)
+  }
+  // Before macOS 14, iCloud Drive swaps a file it evicts for `.name.icloud`.
+  await fs.rename(evicted, join(root, 'Documents', '.b.md.icloud'))
+  // A drive that isn't mounted leaves its mount point an empty folder.
+  await fs.rm(unmounted)
+  await fs.writeFile(join(root, 'flaky', 'other.txt'), '')
+  await fs.rm(unsure)
+  await api.pruneUndoHistory(0)
+  for (const path of [unreadable, evicted, unmounted, unsure])
+    assert.equal(await exists(kept(root, path)), true, path)
+})
+
+test('a quit waits for the histories a prune removes, not for the wait between its looks', async (t) => {
+  const root = await profile(t)
+  const path = join(root, 'a.md')
+  const removed = Promise.withResolvers()
+  let removing = false
+  const api = await main(root, {
+    ...fs,
+    unlink: async (file, ...rest) => {
+      if (file === kept(root, path)) {
+        removing = true
+        await removed.promise
+      }
+      return fs.unlink(file, ...rest)
+    },
+  })
+  const note = saved()
+  await fs.writeFile(path, note.source)
+  await api.storeUndoHistory(path, note.file, note.history)
+  await fs.rm(path)
+  const pruning = api.pruneUndoHistory(300)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  let quit = false
+  await api.undoHistoryWritten().then(() => {
+    quit = true
+  })
+  assert.equal(quit, true)
+  while (!removing) await new Promise((resolve) => setTimeout(resolve, 10))
+  quit = false
+  const quitting = api.undoHistoryWritten().then(() => {
+    quit = true
+  })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(quit, false)
+  removed.resolve()
+  await Promise.all([quitting, pruning])
+  assert.equal(await exists(kept(root, path)), false)
+})
+
+test('the first read of a launch that finds a stale history drops it from the index, and only it', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  for (const path of ['/notes/a.md', '/notes/b.md'])
+    await api.storeUndoHistory(path, note.file, note.history)
+  const later = await main(root)
+  assert.equal(
+    await later.readUndoHistory('/notes/a.md', reopened('BASE ONE TWO')),
+    null,
+  )
+  assert.deepEqual(await index(root), ['/notes/b.md'])
+})
+
+test('a prune that is the first task of a launch leaves nothing of the note', async (t) => {
+  const root = await profile(t)
+  const api = await main(root)
+  const note = saved()
+  const path = join(root, 'a.md')
+  await fs.writeFile(path, note.source)
+  await api.storeUndoHistory(path, note.file, note.history)
+  // A crash cut short a write of its history.
+  await fs.copyFile(
+    kept(root, path),
+    join(
+      folder(root),
+      `.${createHash('sha256').update(path).digest('hex')}.json.left.tmp`,
+    ),
+  )
+  await fs.rm(path)
+  const later = await main(root)
+  await later.pruneUndoHistory(0)
+  assert.deepEqual(await fs.readdir(folder(root)), [])
+  assert.deepEqual(await index(root), [])
+})
+
+test('a note the index spells another way, or reached through a link, keeps its history', async (t) => {
+  const root = await fs.realpath(await profile(t))
+  const api = await main(root)
+  const note = saved()
+  const folders = ['notes', 'caf\u00e9', 'caf\u0065\u0301 2', 'elsewhere']
+  for (const name of folders) {
+    await fs.mkdir(join(root, name))
+    await fs.writeFile(join(root, name, 'a.md'), note.source)
+  }
+  await fs.symlink(join(root, 'elsewhere'), join(root, 'linked'))
+  await fs.symlink(join(root, 'not there'), join(root, 'dangling'))
+  const paths = [join(root, 'linked', 'a.md'), join(root, 'dangling', 'a.md')]
+  // A disk that folds case and unicode finds these under other spellings;
+  // one that doesn't has other notes under them.
+  if (await exists(join(root, 'NOTES'))) paths.push(join(root, 'NOTES', 'A.md'))
+  if (await exists(join(root, 'caf\u0065\u0301')))
+    paths.push(
+      join(root, 'caf\u0065\u0301', 'a.md'),
+      join(root, 'caf\u00e9 2', 'a.md'),
+    )
+  for (const path of paths)
+    await api.storeUndoHistory(path, note.file, note.history)
+  await api.pruneUndoHistory(0)
+  for (const path of paths)
+    assert.equal(await exists(kept(root, path)), true, path)
+  assert.deepEqual(await index(root), [...paths].sort())
+})
+
+test('a clear, keeping off or a trash between the looks leaves nothing behind', async (t) => {
+  for (const action of ['clear', 'off', 'trash']) {
+    const root = await profile(t)
+    const api = await main(root)
+    const note = saved()
+    const notes = join(root, 'notes')
+    await fs.mkdir(notes)
+    for (const name of ['a.md', 'b.md']) {
+      await fs.writeFile(join(notes, name), note.source)
+      await api.storeUndoHistory(join(notes, name), note.file, note.history)
+    }
+    await fs.rm(join(notes, 'a.md'))
+    const pruning = api.pruneUndoHistory(100)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    if (action === 'clear') await api.clearUndoHistory()
+    else if (action === 'off') await api.setKeepUndoHistory(false)
+    else await api.removeUndoHistory(notes)
+    await pruning
+    assert.deepEqual(await fs.readdir(folder(root)).catch(() => []), [], action)
+    // A clear's index stays gone: the second look writes none back.
+    if (action === 'trash') assert.deepEqual(await index(root), [], action)
+    else
+      assert.equal(
+        await exists(join(root, 'undo-history-notes.json')),
+        false,
+        action,
+      )
+  }
+})
+
+test('a history grown too large to keep leaves the index too', async (t) => {
+  const root = await profile(t)
+  const first = await main(root)
+  const small = saved()
+  for (const path of ['/notes/a.md', '/notes/b.md'])
+    await first.storeUndoHistory(path, small.file, small.history)
+  // Escaped, 6 MiB of control characters is 36 MiB of JSON. An editor keeps
+  // less than that; the store doesn't take its word for it.
+  const large = saved('base', ['\u0001'.repeat(6 * mib)], {
+    historyBytes: 64 * mib,
+  })
+  const later = await main(root)
+  await later.storeUndoHistory('/notes/a.md', large.file, large.history)
+  assert.equal(await exists(kept(root, '/notes/a.md')), false)
+  assert.deepEqual(await index(root), ['/notes/b.md'])
 })

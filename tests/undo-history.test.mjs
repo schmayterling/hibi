@@ -6,6 +6,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   writeFile,
 } from 'node:fs/promises'
@@ -195,6 +196,45 @@ test("Don't save leaves no trace of the discarded text in kept history", {
   assert.equal(await second.restored(), false)
   await second.undo('original')
   await second.redo('kept draft')
+})
+
+test('a save waiting its turn keeps the version it wrote, with typing going on behind it', {
+  timeout: 90000,
+}, async (t) => {
+  const { launch, file } = await note(t)
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('draft')
+  // The save's handler waits, as it does behind another file operation.
+  await hibi.app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:save')
+    const turn = new Promise((resolve) => {
+      globalThis.saveTurn = resolve
+    })
+    ipcMain._invokeHandlers.set('document:save', async (...args) => {
+      await turn
+      ipcMain._invokeHandlers.set('document:save', save)
+      return save(...args)
+    })
+  })
+  await pressShortcut(hibi.app, `${mod}+s`)
+  await hibi.page.locator('.app[aria-busy="true"]').waitFor()
+  await hibi.page.keyboard.type('x')
+  await hibi.shows('draftx')
+  await hibi.app.evaluate(() => globalThis.saveTurn())
+  // The save wrote what there was when its turn came. More typing joins that
+  // typing's group while the reply is on its way.
+  for (;;) if ((await readFile(file, 'utf8')) === 'draftx') break
+  await hibi.page.keyboard.type('y')
+  await hibi.shows('draftxy')
+  await hibi.page.locator('.app[aria-busy="false"]').waitFor()
+  await hibi.undo('draftx')
+  await pressShortcut(hibi.app, `${mod}+w`)
+  await hibi.shows('')
+  await hibi.open('draftx')
+  await hibi.restored()
+  await hibi.undo('draft')
+  await hibi.undo('original')
 })
 
 test('clearing undo history forgets open and kept steps, and keeping it can be turned off', {
@@ -416,4 +456,59 @@ test('a quit after the editor stopped still waits for kept undo history writes',
     await readFile(join(profile, 'undo-history', name), 'utf8'),
     /first draft/,
   )
+})
+
+test('a launch lets go of the kept history of a note deleted outside Hibi, and keeps one on a drive that is not mounted', {
+  timeout: 120000,
+}, async (t) => {
+  const { file, profile, launch } = await note(t, 'original', 'notes')
+  const away = join(profile, 'drive', 'away.md')
+  await mkdir(dirname(away))
+  await writeFile(away, 'far away')
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await hibi.app.evaluate(({ dialog }, away) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [away],
+    })
+  }, away)
+  await hibi.open('far away')
+  await hibi.edit('further away')
+  await pressShortcut(hibi.app, `${mod}+s`)
+  await waitForAsync(
+    hibi.page,
+    async () => !(await window.hibi.getDocument()).dirty,
+  )
+  await hibi.page.locator('.app[aria-busy="false"]').waitFor()
+  const kept = (path) =>
+    `${createHash('sha256').update(path).digest('hex')}.json`
+  const deleted = kept(await realpath(file)),
+    unmounted = kept(await realpath(away))
+  const folder = join(profile, 'undo-history')
+  await waitForAsync(
+    hibi.app,
+    async (_electron, [folder, names]) => {
+      const { readdir } = process.getBuiltinModule('node:fs/promises')
+      const files = await readdir(folder).catch(() => [])
+      return names.every((name) => files.includes(name))
+    },
+    [folder, [deleted, unmounted]],
+  )
+  await hibi.quit()
+  await writeFile(join(dirname(file), 'other.md'), 'still here')
+  await rm(file)
+  await rename(dirname(away), `${dirname(away)} unmounted`)
+  const started = Date.now()
+  await launch()
+  // The prune starts 15 s into the launch and looks again 10 s later.
+  while (
+    (await readdir(folder)).includes(deleted) &&
+    Date.now() - started < 90000
+  )
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.ok(Date.now() - started > 15000, 'let go too early')
+  assert.deepEqual(await readdir(folder), [unmounted])
 })

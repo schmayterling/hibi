@@ -2884,37 +2884,77 @@ async function mediaDrop(t, prefix) {
     await editor.dispatchEvent('drop', { dataTransfer: transfer })
     await transfer.dispose()
   }
-  const notice = () =>
-    page
-      .getByText(/The note changed before the files could be inserted/)
-      .waitFor()
+  const notice = page.getByText(
+    /The note changed before the files could be inserted/,
+  )
+  const links = (count) =>
+    waitForAsync(
+      page,
+      async (count) =>
+        (await window.hibi.getDocument()).markdown.match(/assets\/dot/g)
+          ?.length === count,
+      count,
+    )
   const assets = join(dirname(paths['a.md']), 'assets')
-  return { ...launched, drop, notice, assets }
+  return { ...launched, drop, notice, links, assets }
 }
 
-test('two media drops during a save both attach, the later one with a notice', {
+test('media drops during a save all go in the note when it ends, with typing behind them', {
   timeout: 45000,
 }, async (t) => {
-  const { app, page, drop, notice, assets, idle } = await mediaDrop(
-    t,
-    'hibi-tab-busy-drops-',
-  )
+  const { app, page, editor, drop, notice, assets, idle, links } =
+    await mediaDrop(t, 'hibi-tab-busy-drops-')
   await app.evaluate(() => globalThis.hold('document:save'))
   await clickMenu(app, 'Save')
   await app.evaluate(() => globalThis.held['document:save'])
   // The saved tab stays writable, so drops into it wait for the save.
   await drop()
   await drop()
+  await editor.evaluate((element) => {
+    element.cmTile.root.view.dispatch({ changes: { from: 0, insert: 'x' } })
+  })
   await app.evaluate(() => globalThis.release['document:save']())
-  // One goes where it was dropped; the note changed before the other, whose
-  // files stay in the assets folder, as the notice says.
-  await notice()
+  await links(2)
   await idle()
   assert.deepEqual((await readdir(assets)).sort(), ['dot-2.gif', 'dot.gif'])
-  await waitForAsync(page, async () => {
-    const { markdown } = await window.hibi.getDocument()
-    return markdown.match(/assets\/dot/g)?.length === 1
-  })
+  assert.equal(await notice.count(), 0)
+  assert.match(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    /x/,
+  )
+})
+
+test('a media drop goes in the note before the next one starts', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, drop, notice, links } = await mediaDrop(t, 'hibi-tab-next-drop-')
+  // Both drops are in when the first one's files come back, and the next one's
+  // take their time: the one before doesn't wait for them.
+  await app.evaluate(({ ipcMain }, channel) => {
+    const attach = ipcMain._invokeHandlers.get(channel)
+    const replies = [
+      new Promise((resolve) => {
+        globalThis.releaseFirst = resolve
+      }),
+      new Promise((resolve) => {
+        globalThis.releaseSecond = resolve
+      }),
+    ]
+    let calls = 0
+    ipcMain._invokeHandlers.set(channel, async (...args) => {
+      const reply = replies[calls++]
+      const result = await attach(...args)
+      await reply
+      return result
+    })
+  }, MEDIA_CHANNELS.attach)
+  await drop()
+  await drop()
+  await app.evaluate(() => globalThis.releaseFirst())
+  await links(1)
+  await app.evaluate(() => globalThis.releaseSecond())
+  await links(2)
+  assert.equal(await notice.count(), 0)
 })
 
 test('a media drop whose files come back after an edit has the same notice', {
@@ -2946,7 +2986,7 @@ test('a media drop whose files come back after an edit has the same notice', {
   })
   await page.evaluate(() => window.hibi.flushDocumentChanges())
   await app.evaluate(() => globalThis.releaseAttach())
-  await notice()
+  await notice.waitFor()
   assert.deepEqual(await readdir(assets), ['dot.gif'])
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,

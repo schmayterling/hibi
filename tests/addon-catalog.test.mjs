@@ -68,9 +68,11 @@ test('all builtin author records retain shared identifiers, order, and port role
     const expected =
       manifest.id === 'vim'
         ? [authors.may, authors.angelo]
-        : manifest.id === 'keybeats'
-          ? [{ ...authors.may, role: 'Hibi port' }]
-          : [authors.may]
+        : manifest.id === 'editor-width'
+          ? [authors.enocla]
+          : manifest.id === 'keybeats'
+            ? [{ ...authors.may, role: 'Hibi port' }]
+            : [authors.may]
     assert.deepEqual(manifest.authors, expected, manifest.id)
   }
 })

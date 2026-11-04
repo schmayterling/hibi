@@ -4,6 +4,8 @@ export type WidthPreferences = {
   unit: string
   width: number
   capped: boolean
+  showSlider: boolean
+  showToggle: boolean
 }
 
 const key = 'editor-width.preferences'
@@ -15,6 +17,8 @@ const defaults: WidthPreferences = {
   unit: 'px',
   width: 800,
   capped: true,
+  showSlider: true,
+  showToggle: true,
 }
 
 export function validUnit(unit: string) {
@@ -42,6 +46,8 @@ function normalize(value: Partial<WidthPreferences>): WidthPreferences {
     unit: validUnit(unit) ? unit : defaults.unit,
     width: Math.max(min, Math.min(max, Number(width.toPrecision(12)))),
     capped: value.capped !== false,
+    showSlider: value.showSlider !== false,
+    showToggle: value.showToggle !== false,
   }
 }
 

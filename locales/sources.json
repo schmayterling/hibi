@@ -6912,6 +6912,9 @@
   "2b065c7c9ce4": [
     "src/renderer/src/Introduction.tsx"
   ],
+  "ce3ec6bfc92b": [
+    "src/addons/editor-width/index.ts"
+  ],
   "dfc1e6d16ba5": [
     "src/site/main.tsx"
   ],

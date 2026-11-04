@@ -1,8 +1,15 @@
-import { useState } from 'react'
-import { DocumentNotice, SettingRow, TextInput } from '../ui'
-import { getPreferences, setPreferences, validUnit } from './preferences'
+import { useEffect, useState } from 'react'
+import { DocumentNotice, SettingRow, TextInput, Toggle } from '../ui'
+import {
+  getPreferences,
+  onPreferencesChange,
+  setPreferences,
+  validUnit,
+} from './preferences'
 
 export function Settings() {
+  const [preferences, update] = useState(getPreferences)
+  useEffect(() => onPreferencesChange(() => update(getPreferences())), [])
   const [draft, setDraft] = useState(() => {
     const preferences = getPreferences()
     return {
@@ -63,30 +70,63 @@ export function Settings() {
             label={label}
             description={description}
           >
-            <TextInput
-              id={`editor-width-${field}`}
-              type={field === 'unit' ? 'text' : 'number'}
-              min={field === 'unit' ? undefined : 0}
-              step="any"
-              spellCheck={false}
-              value={draft[field]}
-              aria-invalid={!!error}
-              aria-describedby={
-                error
-                  ? 'editor-width-settings-error'
-                  : `editor-width-${field}-description`
-              }
-              onChange={(event) => {
-                setDraft({ ...draft, [field]: event.currentTarget.value })
-                setError('')
-              }}
-              onBlur={save}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  save()
+            <div className="setting-controls">
+              <TextInput
+                id={`editor-width-${field}`}
+                type={field === 'unit' ? 'text' : 'number'}
+                min={field === 'unit' ? undefined : 0}
+                step="any"
+                spellCheck={false}
+                value={draft[field]}
+                aria-invalid={!!error}
+                aria-describedby={
+                  error
+                    ? 'editor-width-settings-error'
+                    : `editor-width-${field}-description`
                 }
-              }}
+                onChange={(event) => {
+                  setDraft({ ...draft, [field]: event.currentTarget.value })
+                  setError('')
+                }}
+                onBlur={save}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    save()
+                  }
+                }}
+              />
+            </div>
+          </SettingRow>
+        ))}
+      </div>
+      <div className="settings-group">
+        {(
+          [
+            [
+              'showSlider',
+              'Show width slider',
+              'Show the editor width slider in the status bar.',
+            ],
+            [
+              'showToggle',
+              'Show width toggle',
+              'Show the width cap switch in the status bar. You can also assign Toggle editor width a shortcut in Settings → Hotkeys.',
+            ],
+          ] as const
+        ).map(([field, label, description]) => (
+          <SettingRow
+            key={field}
+            id={`editor-width-${field}`}
+            label={label}
+            description={description}
+          >
+            <Toggle
+              id={`editor-width-${field}`}
+              checked={preferences[field]}
+              onChange={(event) =>
+                setPreferences({ [field]: event.currentTarget.checked })
+              }
             />
           </SettingRow>
         ))}

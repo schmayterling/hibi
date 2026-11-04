@@ -8,6 +8,8 @@ Turn off **Width cap** beside the slider to use the full pane width. The slider 
 
 Open **Editor width** in Settings to change **Minimum width**, **Maximum width**, and **Width unit**. Use any CSS length unit supported by Hibi, such as `px`, `rem`, `ch`, `vw`, or `%`. The unit applies to both limits and the chosen width. Changes save when you leave a field or press Enter, and the chosen width stays within the new limits.
 
+Turn off **Show width slider** or **Show width toggle** in the addon settings to hide either control independently. Hiding a control keeps the width cap and your saved width unchanged. Run **Toggle editor width** from the command palette to turn the cap on or off, even with both controls hidden. Assign this command a shortcut under **Settings → Hotkeys**.
+
 Pixel widths stay fixed when you resize a sidebar; the editor only becomes narrower when the available pane cannot fit it. Relative units follow CSS sizing: for example, `%` follows the pane width and `vw` follows the window width.
 
 Hibi remembers the width, limits, unit, and cap state on this device and applies them to all documents. Disabling the addon restores the usual full width. Both controls follow your status bar visibility setting under **Settings → Appearance**.

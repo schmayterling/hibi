@@ -66,8 +66,12 @@ test('width preferences preserve the previous width, custom units, range clamps,
 test('width controls update live, restore the cap, and stop observing preferences on shutdown', () => {
   const settings = fixture()
   const items = new Map()
+  const commands = new Map()
   let css = ''
   settings.addon.start({
+    commands: {
+      register: (command) => commands.set(command.id, command),
+    },
     styles: {
       register: () => ({
         update: (value) => {
@@ -112,6 +116,19 @@ test('width controls update live, restore the cap, and stop observing preference
     }),
   )
   assert.equal(items.get('width').slider.value, 90)
+  settings.setPreferences({ showSlider: false, showToggle: false })
+  assert.equal(items.get('width').label, '')
+  assert.equal(items.get('cap').label, '')
+  const widthBeforeToggle = settings.getPreferences().width
+  commands.get('toggle').run()
+  assert.equal(settings.getPreferences().capped, false)
+  assert.equal(css, '')
+  commands.get('toggle').run()
+  assert.equal(settings.getPreferences().capped, true)
+  assert.equal(settings.getPreferences().width, widthBeforeToggle)
+  settings.setPreferences({ showSlider: true, showToggle: true })
+  assert.equal(items.get('width').label, 'Editor width')
+  assert.equal(items.get('cap').label, 'Width cap')
   settings.addon.stop()
   settings.setPreferences({ width: 100 })
   assert.equal(items.get('width').slider.value, 90)

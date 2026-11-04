@@ -7,10 +7,11 @@
   "version": "1.0.0",
   "authors": [
     {
-      "discordId": "1262793452236570667",
-      "displayName": "may"
+      "displayName": "enocla",
+      "github": "enocla"
     }
   ],
+  "settings": { "icon": "ruler-dimension-line" },
   "defaultEnabled": false,
   "startup": "background",
   "entry": "index.ts"

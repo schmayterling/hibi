@@ -77,6 +77,7 @@ export function useAutosave(
       ? result
       : null
   const inFlight = useRef(false)
+  const scheduleNow = useRef<(next: DocumentState) => void>(() => {})
   const busyNow = useRef(busy)
   busyNow.current = busy
   // A manual save, another document, or toggling autosave clears a paused attempt.
@@ -92,16 +93,13 @@ export function useAutosave(
       settings.enabled,
     ],
   )
-  // Saved another way, closed, or autosave turned off: nothing is held any more.
+  // Saved another way or closed: nothing is held any more.
   // biome-ignore lint/correctness/useExhaustiveDependencies: each document change can be one of these.
   useEffect(() => {
     for (const [tabId, hold] of holds)
-      if (
-        !settings.enabled ||
-        documentRuntime.session(tabId)?.savedSnapshot() !== hold.baseline
-      )
+      if (documentRuntime.session(tabId)?.savedSnapshot() !== hold.baseline)
         release(tabId)
-  }, [document, settings.enabled])
+  }, [document])
   useEffect(() => {
     const timers = new Map<string, ReturnType<typeof setTimeout>>()
     const paused = new Map<string, unknown>()
@@ -115,7 +113,7 @@ export function useAutosave(
       const baseline = documentRuntime.session(next.tabId)?.savedSnapshot()
       if (paused.has(next.tabId) && paused.get(next.tabId) !== baseline)
         paused.delete(next.tabId)
-      if (!next.dirty) release(next.tabId)
+      if (!next.dirty || !settings.enabled) release(next.tabId)
       if (
         !settings.enabled ||
         !next.dirty ||
@@ -199,19 +197,18 @@ export function useAutosave(
           } finally {
             documentRuntime.endSave(token)
             inFlight.current = false
-            // Timers of one length run in order: this tab goes after the others.
-            for (const pending of documentRuntime
-              .documents()
-              .toSorted(
-                (a, b) =>
-                  Number(a.tabId === next.tabId) -
-                  Number(b.tabId === next.tabId),
-              ))
-              schedule(pending)
+            // Timers of one length run in order: the tabs after this one go
+            // first, so each gets a turn however many are held. Settings may
+            // have changed during the attempt.
+            const pending = documentRuntime.documents()
+            const turn = pending.findIndex((tab) => tab.tabId === next.tabId) + 1
+            for (const tab of [...pending.slice(turn), ...pending.slice(0, turn)])
+              scheduleNow.current(tab)
           }
         }, wait),
       )
     }
+    scheduleNow.current = schedule
     const compose = (event: CompositionEvent) => {
       composing = event.target as Node
     }

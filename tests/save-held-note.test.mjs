@@ -548,6 +548,84 @@ test(
 )
 
 test(
+  'a tab after two held ones gets its turn before their notices',
+  limits,
+  async (t) => {
+    // Tabs are tried in the order they opened: the free one comes last.
+    const { page, folder, edit, hold, shows, status } = await open(t, {
+      autosave: true,
+      notes: ['free.md', 'b.md', 'a.md'],
+    })
+    for (const note of ['a.md', 'b.md']) {
+      await page.getByRole('tab', { name: note }).click()
+      await shows(note)
+      await hold(undefined, join(folder, note))
+      await edit(`${note} edited`)
+      await status.getByText('Autosave · retrying').waitFor()
+    }
+    await page.getByRole('tab', { name: 'free.md' }).click()
+    await shows('free.md')
+    await edit('free edited')
+    await waitForAsync(
+      page,
+      async () => !(await window.hibi.getDocument()).dirty,
+      undefined,
+      { timeout: 30000 },
+    )
+    assert.equal(await readFile(join(folder, 'free.md'), 'utf8'), 'free edited')
+  },
+)
+
+test(
+  'turning autosave off during an attempt ends the attempts',
+  limits,
+  async (t) => {
+    const { app, page, file, edit, hold, status, ...rest } = await open(t, {
+      autosave: true,
+    })
+    const { watchAttempts, attempts, moreAttempts } = rest
+    await watchAttempts()
+    await page.clock.install()
+    const release = await hold()
+    await edit('held')
+    await status.getByText('Autosave · retrying').waitFor()
+    // The next attempt waits in main until autosave is off.
+    await app.evaluate(({ ipcMain }) => {
+      const channel = 'document:autosave'
+      const handler = ipcMain._invokeHandlers.get(channel)
+      globalThis.attemptGate = {}
+      ipcMain._invokeHandlers.set(channel, async (...args) => {
+        ipcMain._invokeHandlers.set(channel, handler)
+        await new Promise((go) => {
+          globalThis.attemptGate.go = go
+        })
+        return handler(...args)
+      })
+    })
+    await waitForAsync(app, () => !!globalThis.attemptGate.go, undefined, {
+      label: 'an attempt under way',
+    })
+    await status.click()
+    await page.getByRole('checkbox', { name: /^autosave$/i }).setChecked(false)
+    await page.getByRole('button', { name: /^back to app$/i }).click()
+    await status.getByText('Autosave off').waitFor()
+    const seen = (await attempts()).length
+    await app.evaluate(() => globalThis.attemptGate.go())
+    await moreAttempts(seen)
+    const ended = (await attempts()).length
+    await page.clock.fastForward(61000)
+    await delay(2500)
+    assert.equal((await attempts()).length, ended)
+    assert.equal(await page.locator('.toast').count(), 0)
+    await release()
+    await page.clock.fastForward(31000)
+    await delay(1000)
+    assert.equal(await readFile(file, 'utf8'), 'note.md')
+    await status.getByText('Autosave off').waitFor()
+  },
+)
+
+test(
   'autosave firing behind a close prompt is not paused by it',
   limits,
   async (t) => {

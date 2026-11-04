@@ -11,14 +11,14 @@ import { pressShortcut, replaceRichText } from './keyboard.mjs'
 const windows = { skip: process.platform !== 'win32', timeout: 60000 }
 
 /** A second program with the note open for reading, until released. */
-async function holding(path) {
+async function holding(path, share = 'Read') {
   const holder = spawn(
     'powershell',
     [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$f=[IO.File]::OpenRead('${path}');[Console]::Out.WriteLine('HELD');[Console]::Out.Flush();[void][Console]::In.ReadLine();$f.Close()`,
+      `$f=[IO.File]::Open('${path}','Open','Read','${share}');[Console]::Out.WriteLine('HELD');[Console]::Out.Flush();[void][Console]::In.ReadLine();$f.Close()`,
     ],
     { stdio: ['pipe', 'pipe', 'ignore'] },
   )
@@ -89,8 +89,8 @@ async function open(t, autosave = false) {
     ).then(async () => {
       assert.equal(await readFile(file, 'utf8'), text)
     })
-  const hold = async () => {
-    const release = await holding(file)
+  const hold = async (share) => {
+    const release = await holding(file, share)
     releases.push(release)
     return release
   }
@@ -104,6 +104,18 @@ test('a save waits out a program holding the note', windows, async (t) => {
   await pressShortcut(app, 'Control+s')
   // Past where a save used to give up.
   await new Promise((done) => setTimeout(done, 3000))
+  await release()
+  await saved('saved')
+  assert.equal(await page.locator('.toast').count(), 0)
+})
+
+test('a save waits out a program that shares nothing', windows, async (t) => {
+  const { app, page, edit, saved, hold } = await open(t)
+  await edit('saved')
+  const release = await hold('None')
+  await pressShortcut(app, 'Control+s')
+  await new Promise((done) => setTimeout(done, 3000))
+  assert.equal(await page.locator('.toast').count(), 0)
   await release()
   await saved('saved')
   assert.equal(await page.locator('.toast').count(), 0)

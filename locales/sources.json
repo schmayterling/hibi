@@ -1546,6 +1546,9 @@
   "9694f0144303": [
     "src/main/document.ts"
   ],
+  "42a0765195f3": [
+    "src/main/files.ts"
+  ],
   "98bdb8dbc149": [
     "src/addons/dictionary/SideView.tsx",
     "src/addons/dictionary/custom-word-storage.ts",

@@ -489,6 +489,7 @@
   "2a30abd5f2ce": "Could not run {value1}: {value2}",
   "91dcce8f7449": "Could not save autocomplete settings. Changes apply until Hibi restarts.",
   "9694f0144303": "Could not save because another program is using this file, or Windows does not allow changes to it. Your text is still here and the file is unchanged. Close the other program and save again.",
+  "42a0765195f3": "Could not save because this file changed outside Hibi while Hibi was waiting to save it. Your text is still here. Save again to review the change.",
   "98bdb8dbc149": "Could not save custom words.",
   "b8d93c6a0c27": "Could not save learned words. Try again.",
   "a4c30f907288": "Could not save quick note settings.",

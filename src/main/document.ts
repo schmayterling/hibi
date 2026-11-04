@@ -33,7 +33,7 @@ import { imageExtensions, isImageDocument } from '../shared/document-types'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
-import { fileHeldOpen, PATIENT_RENAME } from './atomic-rename'
+import { fileHeldOpen, PATIENT_RENAME, retryRename } from './atomic-rename'
 import { documentExtensions, isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
 import {
@@ -946,6 +946,16 @@ async function recordSaveHistory(
   }
 }
 
+/** A program holding a note shut refuses reads as well as the rename. */
+const patiently = <T>(read: () => Promise<T>) =>
+  retryRename(read, undefined, undefined, PATIENT_RENAME)
+const heldNote = (error: unknown): never => {
+  if (!fileHeldOpen(error)) throw error
+  throw new Error(
+    'Could not save because another program is using this file, or Windows does not allow changes to it. Your text is still here and the file is unchanged. Close the other program and save again.',
+  )
+}
+
 export async function saveDocument(
   window: BrowserWindow,
   saveAs = false,
@@ -1007,10 +1017,16 @@ export async function saveDocument(
   if (destination === path || appeared) {
     let unchanged =
       !appeared &&
-      (await matchesMarkdown(destination, saved).catch(missingFile))
+      (await patiently(() => matchesMarkdown(destination, saved))
+        .catch(missingFile)
+        .catch(heldNote))
     previous = unchanged
       ? saved
-      : ((await readSource(destination).catch(missingFile))?.snapshot() ?? null)
+      : ((
+          await patiently(() => readSource(destination))
+            .catch(missingFile)
+            .catch(heldNote)
+        )?.snapshot() ?? null)
     while (!unchanged) {
       if (automatic) return null
       const choice = await runFileDialog(() =>
@@ -1028,7 +1044,11 @@ export async function saveDocument(
       // Another app can write again while the prompt is open; ask about that text too.
       const shown = previous
       previous =
-        (await readSource(destination).catch(missingFile))?.snapshot() ?? null
+        (
+          await patiently(() => readSource(destination))
+            .catch(missingFile)
+            .catch(heldNote)
+        )?.snapshot() ?? null
       unchanged =
         shown === null
           ? previous === null
@@ -1041,12 +1061,7 @@ export async function saveDocument(
     exclusive && !appeared,
     undefined,
     PATIENT_RENAME,
-  ).catch((error: unknown) => {
-    if (!fileHeldOpen(error)) throw error
-    throw new Error(
-      'Could not save because another program is using this file, or Windows does not allow changes to it. Your text is still here and the file is unchanged. Close the other program and save again.',
-    )
-  })
+  ).catch(heldNote)
   // A new path, or a file another app changed, keeps no copy of the text last saved.
   const replacedSaved = previous === saved
   path = destination

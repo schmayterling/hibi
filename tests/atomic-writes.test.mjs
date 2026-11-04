@@ -242,6 +242,58 @@ test('a save someone is waiting on keeps trying about 10 s for a program to let 
   assert.deepEqual(await fs.readdir(root), ['note.md'])
 })
 
+for (const [name, change, kept] of [
+  [
+    'wrote the same length',
+    async (file, past) => {
+      await fs.writeFile(file, 'outsider')
+      await fs.utimes(file, past, past)
+    },
+    'outsider',
+  ],
+  [
+    'wrote at the same time',
+    async (file, _past, time) => {
+      await fs.writeFile(file, 'outside text')
+      await fs.utimes(file, time, time)
+    },
+    'outside text',
+  ],
+  [
+    'replaced the file',
+    async (file, _past, time) => {
+      await fs.writeFile(`${file}.other`, 'outsider')
+      await fs.utimes(`${file}.other`, time, time)
+      await fs.rename(`${file}.other`, file)
+    },
+    'outsider',
+  ],
+  ['removed the file', (file) => fs.rm(file), null],
+]) {
+  test(`a save that waits leaves alone what a program ${name} meanwhile`, async (t) => {
+    const { module, state } = await runtime({ failures: Infinity })
+    const root = await fs.mkdtemp(join(tmpdir(), 'hibi-patient-rename-'))
+    t.after(() => fs.rm(root, { recursive: true, force: true }))
+    const file = join(root, 'note.md')
+    await fs.writeFile(file, 'original')
+    // Whole seconds, so a change can put back the very same time.
+    const time = new Date(1_700_000_000_000)
+    await fs.utimes(file, time, time)
+    state.onDelay = async () => {
+      state.onDelay = undefined
+      await change(file, new Date(time.getTime() - 60000), time)
+    }
+    const { PATIENT_RENAME, writeText } = module.exports
+    await assert.rejects(
+      writeText(file, 'replacement', false, undefined, PATIENT_RENAME),
+      /changed outside Hibi/,
+    )
+    assert.equal(state.attempts, 1)
+    assert.equal(await fs.readFile(file, 'utf8').catch(() => null), kept)
+    assert.deepEqual(await fs.readdir(root), kept === null ? [] : ['note.md'])
+  })
+}
+
 for (const kind of ['document', 'storage', 'workspace']) {
   for (const [code, failures] of [
     ['EPERM', 1],

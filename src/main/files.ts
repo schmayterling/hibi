@@ -213,7 +213,24 @@ export async function writeText(
           checkCommit()
           return rename(temp, path)
         },
-        undefined,
+        // A wait this long can outlast the program writing or removing the file.
+        renameDelays &&
+          (async () => {
+            const now = await stat(path).catch(
+              (error: NodeJS.ErrnoException) => {
+                if (error.code !== 'ENOENT') throw error
+                return null
+              },
+            )
+            if (
+              now?.size !== existing?.size ||
+              now?.mtimeMs !== existing?.mtimeMs ||
+              now?.ino !== existing?.ino
+            )
+              throw new Error(
+                'Could not save because this file changed outside Hibi while Hibi was waiting to save it. Your text is still here. Save again to review the change.',
+              )
+          }),
         undefined,
         renameDelays,
       )

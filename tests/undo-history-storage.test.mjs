@@ -876,13 +876,21 @@ test('a clock set back keeps the wait, and a time ahead of the clock never lets 
     setClock(time)
     await (await main(root)).pruneUndoHistory(0)
   }
-  await recorded(root, [path], today)
-  // Set back a year, then right again: the note waits from the same time.
+  const other = join(root, 'b.md')
+  await fs.writeFile(
+    indexFile(root),
+    JSON.stringify([{ path, missingSince: today }, other]),
+  )
+  // Set back a year, then right again: the note waits from the same time,
+  // though the launch writes the index for another note it finds missing.
   await launch(today - 365 * day)
-  assert.deepEqual(await records(root), { [path]: today })
+  assert.deepEqual(await records(root), {
+    [path]: today,
+    [other]: today - 365 * day,
+  })
   await launch(today + day)
   assert.equal(await exists(kept(root, path)), true)
-  assert.deepEqual(await records(root), { [path]: today })
+  assert.equal((await records(root))[path], today)
   await launch(today + 30 * day)
   assert.equal(await exists(kept(root, path)), false)
   // A time far past the clock waits for the clock, whatever wrote it.

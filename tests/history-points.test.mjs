@@ -287,14 +287,16 @@ test('a saved state is listed once, as its saved version', () => {
 })
 
 test('a reopened note lists the text it opened with once, as its saved version', async () => {
-  const { keptHistory, restoredHistory } = await import(
+  const { keptHistory, parseUndoHistory, restoredHistory } = await import(
     '../src/shared/undo-history.ts'
   )
   const first = note()
   first.type('text saved before closing the note. ')
   first.session.sealHistory()
   first.session.markSaved(first.session.snapshot())
-  const kept = keptHistory(first.session)
+  const kept = parseUndoHistory(
+    JSON.parse(JSON.stringify(keptHistory(first.session))),
+  )
   const second = note(first.text())
   second.wait(minute)
   assert.equal(
@@ -303,12 +305,100 @@ test('a reopened note lists the text it opened with once, as its saved version',
   )
   second.wait(minute)
   second.type('typed after reopening, more than a few characters.')
+  const listed = (versionsSince) =>
+    historyPoints(historyOf(second.session), second.now(), versionsSince).map(
+      ({ step, reason }) => [step, reason],
+    )
+  // The first save kept the text it replaced too, so that is no point either.
+  assert.deepEqual(listed(start), [])
+  // With no version kept since, its states are points like any.
+  assert.deepEqual(listed(Number.POSITIVE_INFINITY), [
+    [0, 'paused'],
+    [-1, 'oldest'],
+  ])
+})
+
+test('a reopened note lists the text of an earlier save once, as its saved version', async () => {
+  const { keptHistory, parseUndoHistory, restoredHistory } = await import(
+    '../src/shared/undo-history.ts'
+  )
+  const first = note()
+  const save = () => {
+    first.session.sealHistory()
+    first.session.markSaved(first.session.snapshot())
+  }
+  first.type('the text of the earlier save, kept. ')
+  save()
+  first.wait(10 * second)
+  first.type('the text of the last save before closing. ')
+  save()
+  const kept = parseUndoHistory(
+    JSON.parse(JSON.stringify(keptHistory(first.session))),
+  )
+  assert.deepEqual(kept.versioned.map(([step]) => step).sort(), [-1, 0, 1])
+  const earlier = kept.versioned.find(([step]) => step === 0)[1]
+  const reopened = note(first.text())
+  reopened.wait(minute)
+  reopened.session.restoreHistory(kept.units, restoredHistory(kept))
+  reopened.type('typed after reopening, more than a few characters.')
+  const tree = historyOf(reopened.session)
+  assert.equal(tree.versioned.get(0), earlier)
+  assert.deepEqual(historyPoints(tree, reopened.now(), start), [])
+  // A history kept before saves were recorded in it still reads.
+  const { versioned: _, ...older } = kept
+  const old = note(first.text())
+  old.session.restoreHistory(
+    older.units,
+    restoredHistory(parseUndoHistory(older)),
+  )
+  old.type('typed after reopening, more than a few characters.')
   assert.deepEqual(
-    historyPoints(historyOf(second.session), second.now(), start).map(
+    historyPoints(historyOf(old.session), old.now(), start).map(
       ({ step, reason }) => [step, reason],
     ),
-    [[-1, 'oldest']],
+    [
+      [0, 'paused'],
+      [-1, 'oldest'],
+    ],
   )
+})
+
+test('a stored history marks the states saves kept, by step, past trimmed steps', async () => {
+  const { keptHistory, restoredHistory } = await import(
+    '../src/shared/undo-history.ts'
+  )
+  const writer = note('', { historyGroups: 4 })
+  const save = () => {
+    writer.session.sealHistory()
+    writer.session.markSaved(writer.session.snapshot())
+    return writer.now()
+  }
+  const step = (text) => {
+    writer.type(text)
+    writer.wait(10 * second)
+  }
+  step('a0 ')
+  const oldest = save()
+  step('b1 ')
+  step('c2 ')
+  const middle = save()
+  step('d3 ')
+  step('e4 ')
+  const last = save()
+  const kept = JSON.parse(JSON.stringify(keptHistory(writer.session)))
+  // The first step went, so the state of the first save is the oldest; the
+  // steps saves never wrote stay unmarked.
+  assert.equal(kept.steps.length, 4)
+  const expected = [
+    [-1, oldest],
+    [1, middle],
+    [3, last],
+  ]
+  const sorted = (marks) => [...marks].sort(([a], [b]) => a - b)
+  assert.deepEqual(sorted(kept.versioned), expected)
+  const reopened = note(writer.text(), { historyGroups: 4 })
+  reopened.session.restoreHistory(kept.units, restoredHistory(kept))
+  assert.deepEqual(sorted(historyOf(reopened.session).versioned), expected)
 })
 
 test('an undone change of a few characters is not a point of its own', () => {
@@ -383,11 +473,15 @@ test('autosaved versions thin as points do, and every save asked for shows', () 
     ...(automatic ? { automatic: true } : {}),
   })
   const versions = [
-    // Today: autosaves 2 s apart merge into the newest; a pause keeps one.
+    // Today: autosaves less than 3 minutes apart show once, the newest.
     at(10 * second, true),
     at(12 * second, true),
     at(14 * second, true),
     at(2 * minute, true),
+    // Two days ago, an autosave 2 minutes before a save asked for: past a day,
+    // only autosaves less than a pause apart merge.
+    at(2 * day, false),
+    at(2 * day + 2 * minute, true),
     // Three days ago, all in one clock hour: one autosave, and every save
     // asked for.
     at(3 * day + 5 * minute, true),
@@ -402,7 +496,8 @@ test('autosaved versions thin as points do, and every save asked for shows', () 
     shownVersions(versions, now).map(({ id }) => Number(id)),
     [
       10 * second,
-      2 * minute,
+      2 * day,
+      2 * day + 2 * minute,
       3 * day + 5 * minute,
       3 * day + 25 * minute,
       3 * day + 35 * minute,
@@ -503,6 +598,45 @@ test('an autosaved version holding a point stays listed when the next save follo
   // A few words typed on merge into the next save.
   const typed = run((writer) => writer.type('more. '))
   assert.deepEqual(typed.shown, ['2', 'opened'])
+})
+
+test('within a day, an autosave holding no point shows only 3 minutes or more from every listed entry, points included', () => {
+  const now = start + 30 * day
+  // Minutes ago; saves asked for and points list whatever their neighbours.
+  const at = (ago, automatic = true) => ({
+    id: ago,
+    savedAt: now - ago * minute,
+    ...(automatic ? { automatic: true } : {}),
+  })
+  const versions = [at(1), at(2), at(5), at(9), at(10, false), at(20)]
+  const points = [now - 21 * minute]
+  assert.deepEqual(
+    shownVersions(versions, now, null, points).map(({ id }) => id),
+    [1, 5, 10],
+  )
+  // With no point beside it, the oldest autosave shows.
+  assert.deepEqual(
+    shownVersions(versions, now).map(({ id }) => id),
+    [1, 5, 10, 20],
+  )
+})
+
+test('the newest version shows whatever is listed beside it, and older autosaves keep 3 minutes from it', () => {
+  const now = start + 30 * day
+  const at = (ago, automatic = true) => ({
+    id: ago,
+    savedAt: now - ago * minute,
+    ...(automatic ? { automatic: true } : {}),
+  })
+  // A short session with no steps left: the text it replaced and two autosaves.
+  assert.deepEqual(
+    shownVersions([at(1), at(2), at(2.0001, false)], now).map(({ id }) => id),
+    [1, 2.0001],
+  )
+  assert.deepEqual(
+    shownVersions([at(1), at(2), at(9)], now, null, [now]).map(({ id }) => id),
+    [1, 9],
+  )
 })
 
 test('a preview shows at most 300 characters of the text around a change', () => {

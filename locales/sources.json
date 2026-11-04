@@ -4313,6 +4313,9 @@
   "f5cc17a5ad18": [
     "src/addons/graph/Canvas.tsx"
   ],
+  "7d0e85133759": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
   "1f1d592bdd1a": [
     "src/main/index.ts"
   ],
@@ -7120,6 +7123,9 @@
     "src/renderer/src/Titlebar.tsx"
   ],
   "e64920301b72": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
+  "7dac420929d4": [
     "src/renderer/src/DocumentTabs.tsx"
   ],
   "59d881eadded": [

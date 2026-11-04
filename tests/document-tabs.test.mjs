@@ -2014,6 +2014,10 @@ test('a command waiting when editing pauses does not run after recovery', {
   await commands(2)
   await app.evaluate(() => globalThis.releaseFocus())
   const retry = page.getByRole('button', { name: 'Retry document focus' })
+  await retry.waitFor()
+  // Nor does one pressed while it is paused.
+  await pressShortcut(app, `${mod}+w`)
+  await commands(3)
   await retry.click()
   await retry.waitFor({ state: 'hidden' })
   await idle()
@@ -2173,37 +2177,40 @@ test('a file opened from outside during a save opens when it ends', {
   await idle()
 })
 
+const tabFixtureDir = 'installed-addons/tab-fixture'
+// An addon with one tab view, opened by window.tabFixture.open().
+const tabFixture = {
+  'addons.json': JSON.stringify({ 'tab-fixture': true }),
+  [`${tabFixtureDir}/hibi-addon.json`]: JSON.stringify({
+    id: 'tab-fixture',
+    name: 'Tab fixture',
+    description: 'Tab fixture',
+    kind: 'extension',
+    authors: [{ displayName: 'Test' }],
+    apiVersion: 3,
+    version: '1.0.0',
+    capabilities: ['ui'],
+    entry: 'index.js',
+  }),
+  [`${tabFixtureDir}/.hibi-install.json`]: JSON.stringify({
+    hash: 'a'.repeat(64),
+    files: ['index.js', 'hibi-addon.json'],
+    source: 'local',
+  }),
+  [`${tabFixtureDir}/index.js`]: `export default ({ React }) => ({ start(context) {
+      window.tabFixture = context.views.register({ id: 'tab', label: 'Fixture tab', location: 'tab', lifetime: 'session', Content() { return React.createElement('p', null, 'fixture') } });
+    }});`,
+}
+
 test('close tab pressed on a note drops when an addon tab is shown by the time it runs', {
   timeout: 30000,
 }, async (t) => {
-  const fixture = 'installed-addons/tab-fixture'
   const { app, page, idle, commands } = await launchHolding(
     t,
     'hibi-tab-busy-addon-',
     { 'a.md': 'note a' },
     ['document:close-tab'],
-    {
-      'addons.json': JSON.stringify({ 'tab-fixture': true }),
-      [`${fixture}/hibi-addon.json`]: JSON.stringify({
-        id: 'tab-fixture',
-        name: 'Tab fixture',
-        description: 'Tab fixture',
-        kind: 'extension',
-        authors: [{ displayName: 'Test' }],
-        apiVersion: 3,
-        version: '1.0.0',
-        capabilities: ['ui'],
-        entry: 'index.js',
-      }),
-      [`${fixture}/.hibi-install.json`]: JSON.stringify({
-        hash: 'a'.repeat(64),
-        files: ['index.js', 'hibi-addon.json'],
-        source: 'local',
-      }),
-      [`${fixture}/index.js`]: `export default ({ React }) => ({ start(context) {
-        window.tabFixture = context.views.register({ id: 'tab', label: 'Fixture tab', location: 'tab', lifetime: 'session', Content() { return React.createElement('p', null, 'fixture') } });
-      }});`,
-    },
+    tabFixture,
   )
   await page.waitForFunction(() => window.tabFixture)
   await app.evaluate(() => globalThis.hold('document:save'))
@@ -2458,4 +2465,296 @@ test('a save pressed during a save goes before a file opened from outside meanwh
   )
   await idle()
   assert.equal(await readFile(paths['a.md'], 'utf8'), 'note a, more')
+})
+
+test('arrow keys on the tabs during a save choose a tab that opens after it, and say so', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-keys-',
+    { 'c.md': 'note c', 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+  )
+  const [c, b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b && c)
+  await page.locator(`[data-tab-id="${a.id}"]`).focus()
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await page.locator('.document-tabs[aria-busy="true"]').waitFor()
+  assert.equal(
+    await page
+      .locator(`[data-tab-id="${b.id}"]`)
+      .getAttribute('aria-description'),
+    'Opens when the current file operation ends',
+  )
+  // Focus moves at once; the last tab chosen opens when the save ends.
+  await page.keyboard.press('ArrowLeft')
+  await page.keyboard.press('ArrowLeft')
+  await page.locator(`[data-tab-id="${c.id}"]:focus`).waitFor()
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    c.id,
+  )
+  await idle()
+  assert.equal(
+    await page
+      .locator(`[data-tab-id="${b.id}"]`)
+      .getAttribute('aria-description'),
+    null,
+  )
+})
+
+test('an addon tab clicked during a save shows when it ends', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-addon-click-',
+    { 'a.md': 'note a' },
+    [],
+    tabFixture,
+  )
+  await page.waitForFunction(() => window.tabFixture)
+  await page.evaluate(() => window.tabFixture.open({ id: 'one' }))
+  const addonTab = page.getByRole('tab', { name: 'Fixture tab' })
+  await page.getByRole('tab', { name: 'a.md' }).click()
+  await page.getByRole('tab', { name: 'a.md', selected: true }).waitFor()
+  await idle()
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  assert.equal(
+    await addonTab.getAttribute('aria-description'),
+    'Opens when the current file operation ends',
+  )
+  await addonTab.click()
+  assert.equal(await addonTab.getAttribute('aria-selected'), 'false')
+  await app.evaluate(() => globalThis.release['document:save']())
+  await page.getByRole('tab', { name: 'Fixture tab', selected: true }).waitFor()
+  await idle()
+  assert.equal(await addonTab.getAttribute('aria-selected'), 'true')
+})
+
+test('a click back on the shown tab during a save takes the place of a waiting click', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-click-back-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+  )
+  const [b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b)
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await page.locator(`[data-tab-id="${b.id}"]`).click()
+  await page.locator(`[data-tab-id="${a.id}"]`).click()
+  await app.evaluate(() => globalThis.release['document:save']())
+  await idle()
+  // Anything still queued has run by the time the next operation is answered.
+  await clickMenu(app, 'Save')
+  await idle()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    a.id,
+  )
+})
+
+test('tab moves by key during a save each run after it and the tab keeps focus', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-move-keys-',
+    { 'c.md': 'note c', 'b.md': 'note b', 'a.md': 'note a' },
+    ['document:move-tab'],
+  )
+  const [c, b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b && c)
+  const order = async () =>
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.map(
+      (tab) => tab.id,
+    )
+  const moves = (count) =>
+    waitForAsync(
+      app,
+      (_, count) => globalThis.calls['document:move-tab'] === count,
+      count,
+    )
+  const holdSave = async () => {
+    await app.evaluate(() => globalThis.hold('document:save'))
+    await clickMenu(app, 'Save')
+    await app.evaluate(() => globalThis.held['document:save'])
+  }
+  const release = () =>
+    app.evaluate(() => globalThis.release['document:save']())
+  // Moving right makes React move the focused tab's own node.
+  await page.locator(`[data-tab-id="${c.id}"]`).focus()
+  await holdSave()
+  await page.keyboard.press('Alt+Shift+ArrowRight')
+  await page.keyboard.press('Alt+Shift+ArrowRight')
+  assert.deepEqual(await order(), [c.id, b.id, a.id])
+  await release()
+  await moves(2)
+  await idle()
+  assert.deepEqual(await order(), [b.id, a.id, c.id])
+  await page.locator(`[data-tab-id="${c.id}"]:focus`).waitFor()
+  // Shown last, it can still go left and then right again.
+  await holdSave()
+  await page.keyboard.press('Alt+Shift+ArrowLeft')
+  await page.keyboard.press('Alt+Shift+ArrowRight')
+  await release()
+  await moves(4)
+  await idle()
+  assert.deepEqual(await order(), [b.id, a.id, c.id])
+  // Focus the user moved elsewhere stays there when the move runs.
+  await page.locator(`[data-tab-id="${c.id}"]`).focus()
+  await holdSave()
+  await page.keyboard.press('Alt+Shift+ArrowLeft')
+  await page.locator(`[data-tab-id="${a.id}"]`).click()
+  await release()
+  await moves(5)
+  await idle()
+  assert.deepEqual(await order(), [b.id, c.id, a.id])
+  await page.locator(`[data-tab-id="${a.id}"]:focus`).waitFor()
+})
+
+test('a tab dragged during a save moves after it, unless the tab it went before closed', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-move-drag-',
+    { 'c.md': 'note c', 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+  )
+  const [c, b, a] = (await page.evaluate(() => window.hibi.getDocument())).tabs
+  assert.ok(a && b && c)
+  const order = async () =>
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.map(
+      (tab) => tab.id,
+    )
+  const settled = () =>
+    page
+      .locator('.document-tabs')
+      .evaluate((strip) =>
+        Promise.all(
+          strip
+            .getAnimations({ subtree: true })
+            .map((animation) => animation.finished),
+        ),
+      )
+  const drag = (id, before) =>
+    page
+      .locator(`[data-tab-key="${id}"]`)
+      .dragTo(page.locator(`[data-tab-key="${before}"]`), {
+        targetPosition: { x: 8, y: 10 },
+      })
+  const holdSave = async () => {
+    await app.evaluate(() => globalThis.hold('document:save'))
+    await clickMenu(app, 'Save')
+    await app.evaluate(() => globalThis.held['document:save'])
+  }
+  await settled()
+  await holdSave()
+  await drag(a.id, b.id)
+  assert.deepEqual(await order(), [c.id, b.id, a.id])
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabs[1].id === id,
+    a.id,
+  )
+  await idle()
+  assert.deepEqual(await order(), [c.id, a.id, b.id])
+  await settled()
+  // The close waits first and runs first; the move then has nothing to go before.
+  await holdSave()
+  await page.getByRole('button', { name: 'Close c.md' }).click()
+  await drag(b.id, c.id)
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 2,
+  )
+  await idle()
+  assert.deepEqual(await order(), [a.id, b.id])
+  assert.equal(await page.getByText('This tab is no longer open.').count(), 0)
+})
+
+test('tabs promise nothing and take no keys while editing is paused', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-paused-',
+    { 'c.md': 'note c', 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+  )
+  const { tabId: a, tabs } = await page.evaluate(() =>
+    window.hibi.getDocument(),
+  )
+  const b = tabs.find((tab) => tab.name === 'b.md').id
+  const c = tabs.find((tab) => tab.name === 'c.md').id
+  await splitTab(app, page, b)
+  await page.getByRole('button', { name: 'Close split' }).waitFor()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b,
+  )
+  await idle()
+  // Going to the left pane's note fails, and so does going back.
+  await app.evaluate(
+    ({ ipcMain }, ids) => {
+      const handlers = ipcMain._invokeHandlers
+      const focus = handlers.get('document:focus-tab')
+      let phase = 0
+      handlers.set('document:focus-tab', async (...args) => {
+        if (phase === 0 && args[1] === ids.a) {
+          phase = 1
+          const metadata = await focus(...args)
+          return { ...metadata, contentVersion: metadata.contentVersion + 1 }
+        }
+        if (phase === 1 && args[1] === ids.b) {
+          phase = 2
+          throw new Error('Simulated focus rollback failure.')
+        }
+        globalThis.focusedAfter = (globalThis.focusedAfter ?? 0) + 1
+        return focus(...args)
+      })
+    },
+    { a, b },
+  )
+  await page.locator(`[data-tab-id="${a}"]`).click()
+  const retry = page.getByRole('button', { name: 'Retry document focus' })
+  await retry.waitFor()
+  const other = page.locator(`[data-tab-id="${c}"]`)
+  assert.equal(await other.getAttribute('aria-description'), null)
+  assert.equal(
+    await page.locator(`[data-tab-key="${c}"]`).getAttribute('draggable'),
+    'false',
+  )
+  // Main is on the note going back failed from; the strip shows the other.
+  const shown = await page
+    .locator('.document-tabs [role="tab"][aria-selected="true"]')
+    .getAttribute('data-tab-id')
+  // An arrow key from beside the shown tab neither moves focus nor retries.
+  const beside = tabs[tabs.findIndex((tab) => tab.id === shown) + 1] ?? tabs[0]
+  const focused = page.locator(`[data-tab-id="${beside.id}"]`)
+  await focused.focus()
+  await page.keyboard.press('ArrowLeft')
+  await page.locator(`[data-tab-id="${beside.id}"]:focus`).waitFor()
+  // Nor does a click on the shown tab retry; only the notice's button does.
+  await page.locator(`[data-tab-id="${shown}"]`).click()
+  // Its call would reach main before this one.
+  await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(await app.evaluate(() => globalThis.focusedAfter ?? 0), 0)
+  assert.equal(await retry.isVisible(), true)
 })

@@ -3100,6 +3100,7 @@ export function SourceEditor({
      * with is named and stays out. If none is, the next failure takes them all.
      */
     const oneAtATime = (parts: readonly InstalledFeature[]) => {
+      triedForWidget.current = true
       const kept = parts.filter(({ feature }) => !feature.fail)
       const set = (shown: readonly InstalledFeature[]) => {
         installed.current = [...shown]
@@ -3144,7 +3145,7 @@ export function SourceEditor({
       // After a dead view, none named: the next death is theirs.
       if (featuresSuspect.current) blameFeatures.current = kept.length > 0
       featuresSuspect.current = false
-      if (kept.length < parts.length) set(kept)
+      set(kept)
     }
     const install = () => {
       if (canceled) return

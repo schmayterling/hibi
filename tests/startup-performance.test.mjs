@@ -146,6 +146,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Sending repeated Save commands to their coalescing handler adds 27 (#818).
   // Loading the stream resolver inside the image viewer's effect, without a
   // nested Suspense delay, adds 132 (#817).
+  // Letting tab keys, addon tab clicks and tab moves wait for a file operation,
+  // telling screen readers so, and dropping what arrives while editing is paused, adds 391 (#821).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -172,7 +174,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         61 +
         1801 +
         27 +
-        132,
+        132 +
+        391,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

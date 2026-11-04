@@ -165,13 +165,14 @@ test('api 2 source edits preserve canonical source, history and projection guard
     const api = window.sourceReview
     const now = api.getDocument()
     const at = now.markdown.indexOf('the')
-    return api.applySourceEdits({
+    window.composingRequest = {
       requestId: 'ime',
       tabId: now.tabId,
       revision: now.revision,
       contentVersion: now.contentVersion,
       changes: [{ from: at, to: at + 3, insert: 'our', expectedText: 'the' }],
-    })
+    }
+    return api.applySourceEdits(window.composingRequest)
   })
   assert.equal(composing.status, 'composing')
   await cdp.send('Input.imeSetComposition', {
@@ -185,6 +186,49 @@ test('api 2 source edits preserve canonical source, history and projection guard
     corrected,
   )
   await cdp.detach()
+  assert.notEqual(
+    await page.evaluate(
+      () =>
+        window.sourceReview.applySourceEdits(window.composingRequest).status,
+    ),
+    'composing',
+  )
+
+  // A request answered busy runs when the addon sends it again.
+  await app.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = () =>
+      new Promise((resolve) => {
+        globalThis.releaseOpen = () =>
+          resolve({ canceled: true, filePaths: [] })
+      })
+  })
+  await clickMenu(app, 'Open…')
+  await page.locator('[aria-busy="true"]').first().waitFor()
+  const whileBusy = await page.evaluate(() => {
+    const api = window.sourceReview
+    const now = api.getDocument()
+    const at = now.markdown.indexOf('A note')
+    window.busyRequest = {
+      requestId: 'busy',
+      tabId: now.tabId,
+      revision: now.revision,
+      contentVersion: now.contentVersion,
+      changes: [{ from: at, to: at + 1, insert: 'B', expectedText: 'A' }],
+    }
+    return api.applySourceEdits(window.busyRequest)
+  })
+  assert.equal(whileBusy.status, 'busy')
+  await app.evaluate(() => globalThis.releaseOpen())
+  await page
+    .locator('[aria-busy="true"]')
+    .first()
+    .waitFor({ state: 'detached' })
+  assert.equal(
+    await page.evaluate(
+      () => window.sourceReview.applySourceEdits(window.busyRequest).status,
+    ),
+    'applied',
+  )
 
   const longSource = 'some teh words here\n\n'.repeat(20000)
   const longFile = join(profile, 'long.md')

@@ -100,6 +100,13 @@ export const documentEdits = {
                   }
                 })()
           Object.freeze(result)
+          // An addon sends these again once the editor can take the edit.
+          if (
+            result.status === 'busy' ||
+            result.status === 'composing' ||
+            result.status === 'unsupported-view'
+          )
+            return result
           results.set(request.requestId, { fingerprint, result })
           cachedSize += fingerprint.length
           while (results.size > 128 || cachedSize > 8 * 1024 * 1024) {

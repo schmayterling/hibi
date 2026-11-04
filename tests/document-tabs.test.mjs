@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { MEDIA_CHANNELS } from '../src/shared/media.ts'
 import {
   electron,
   waitForDocumentEditor,
@@ -2853,15 +2854,9 @@ test('a link followed during a save opens when it ends', {
   await idle()
 })
 
-test('two media drops during a save both attach, the later one with a notice', {
-  timeout: 45000,
-}, async (t) => {
-  const { app, page, editor, paths, idle } = await launchHolding(
-    t,
-    'hibi-tab-busy-drops-',
-    { 'a.md': 'note a' },
-    [],
-  )
+async function mediaDrop(t, prefix) {
+  const launched = await launchHolding(t, prefix, { 'a.md': 'note a' }, [])
+  const { page, editor, paths } = launched
   const gif = join(dirname(paths['a.md']), 'dot.gif')
   await writeFile(
     gif,
@@ -2889,6 +2884,21 @@ test('two media drops during a save both attach, the later one with a notice', {
     await editor.dispatchEvent('drop', { dataTransfer: transfer })
     await transfer.dispose()
   }
+  const notice = () =>
+    page
+      .getByText(/The note changed before the files could be inserted/)
+      .waitFor()
+  const assets = join(dirname(paths['a.md']), 'assets')
+  return { ...launched, drop, notice, assets }
+}
+
+test('two media drops during a save both attach, the later one with a notice', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, drop, notice, assets, idle } = await mediaDrop(
+    t,
+    'hibi-tab-busy-drops-',
+  )
   await app.evaluate(() => globalThis.hold('document:save'))
   await clickMenu(app, 'Save')
   await app.evaluate(() => globalThis.held['document:save'])
@@ -2896,17 +2906,52 @@ test('two media drops during a save both attach, the later one with a notice', {
   await drop()
   await drop()
   await app.evaluate(() => globalThis.release['document:save']())
-  // The first goes where it was dropped; the note changed before the second,
-  // whose files stay in the assets folder, as the notice says.
-  await page
-    .getByText(/The note changed before the files could be inserted/)
-    .waitFor()
+  // One goes where it was dropped; the note changed before the other, whose
+  // files stay in the assets folder, as the notice says.
+  await notice()
   await idle()
-  const assets = join(dirname(paths['a.md']), 'assets')
   assert.deepEqual((await readdir(assets)).sort(), ['dot-2.gif', 'dot.gif'])
-  const markdown = (await page.evaluate(() => window.hibi.getDocument()))
-    .markdown
-  assert.equal(markdown.match(/assets\/dot/g)?.length, 1)
+  await waitForAsync(page, async () => {
+    const { markdown } = await window.hibi.getDocument()
+    return markdown.match(/assets\/dot/g)?.length === 1
+  })
+})
+
+test('a media drop whose files come back after an edit has the same notice', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, editor, drop, notice, assets } = await mediaDrop(
+    t,
+    'hibi-tab-late-drop-',
+  )
+  // Another drop's text lands as the files are saved.
+  await app.evaluate(({ ipcMain }, channel) => {
+    const attach = ipcMain._invokeHandlers.get(channel)
+    const late = new Promise((resolve) => {
+      globalThis.releaseAttach = resolve
+    })
+    globalThis.attached = new Promise((resolve) => {
+      ipcMain._invokeHandlers.set(channel, async (...args) => {
+        const result = await attach(...args)
+        resolve()
+        await late
+        return result
+      })
+    })
+  }, MEDIA_CHANNELS.attach)
+  await drop()
+  await app.evaluate(() => globalThis.attached)
+  await editor.evaluate((element) => {
+    element.cmTile.root.view.dispatch({ changes: { from: 0, insert: 'x' } })
+  })
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  await app.evaluate(() => globalThis.releaseAttach())
+  await notice()
+  assert.deepEqual(await readdir(assets), ['dot.gif'])
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'xnote a',
+  )
 })
 
 test('the image button pressed twice during a save opens one picker', {

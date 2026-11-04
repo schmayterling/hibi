@@ -287,6 +287,11 @@ function InsertForm({
   )
 }
 
+const mediaNotInserted = () =>
+  new Error(
+    'The note changed before the files could be inserted. They are saved in the assets folder. Drop them again to add them to the note.',
+  )
+
 export function useFormattingToolbar(
   mode: ViewMode,
   focusedPane: 'rich' | 'source',
@@ -362,14 +367,16 @@ export function useFormattingToolbar(
               latest.current.format?.insertMedia?.(attachments) ??
                 attachmentMarkdown(attachments),
             ) ?? false
-        if (!inserted)
-          throw new Error(
-            'The note changed before the files could be inserted. They are saved in the assets folder. Drop them again to add them to the note.',
-          )
+        if (!inserted) throw mediaNotInserted()
       } catch (error) {
+        // Edits made while the files were saved, as another drop's, keep this
+        // note's text in place of the one the files came back with.
+        const shown = /local edits waiting/.test(String(error))
+          ? mediaNotInserted()
+          : error
         toasts.show({
           message:
-            error instanceof Error ? error.message : 'Could not attach media.',
+            shown instanceof Error ? shown.message : 'Could not attach media.',
           variant: 'error',
         })
       }

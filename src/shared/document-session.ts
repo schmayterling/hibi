@@ -861,6 +861,7 @@ export class DocumentSession {
       saved: saved.step,
       snapshot: this.#saved,
       steps: [...this.#kept()].filter(([group]) => group.order <= saved.order),
+      versioned: this.#versioned as Pick<WeakMap<object, number>, 'get'>,
     }
   }
   /**
@@ -906,6 +907,7 @@ export class DocumentSession {
       undo: readonly HistoryGroup[]
       redo: readonly HistoryGroup[]
       branches: readonly (readonly [object, HistoryGroup[]])[]
+      versioned: readonly (readonly [object, number])[]
     }>,
   ) {
     if (
@@ -928,6 +930,8 @@ export class DocumentSession {
       step: this.#opening,
       identity: this.#openingIdentity,
     })
+    for (const [identity, time] of restored.versioned)
+      this.#versioned.set(identity, time)
     const branches = [...restored.branches]
     if (!editing) this.#redo = [...restored.redo]
     else if (restored.redo.length)

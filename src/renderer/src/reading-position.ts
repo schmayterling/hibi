@@ -70,6 +70,12 @@ function readingPosition(view: EditorView): Reading | null {
       if (Math.abs(held.position.pane.scrollTop - held.scroll) <= 1)
         return {
           ...held.position,
+          // The pane can have moved on the page since, as under a bar that
+          // appeared: the text's place in the pane is what holds.
+          top:
+            held.position.top +
+            held.position.pane.getBoundingClientRect().top -
+            held.paneTop,
           moved: false,
           selection: view.state.selection,
           scrollRequest: scrollRequests.get(view) ?? 0,
@@ -323,10 +329,20 @@ function screenTop(view: EditorView, position: Reading) {
   return view.documentTop + view.lineBlockAt(position.pos).top + position.offset
 }
 
-/** The place each view held last, with the pane's scroll once it was held. */
-const anchors = new WeakMap<EditorView, { position: Reading; scroll: number }>()
+/**
+ * The place each view held last, with the pane's scroll once it was held and
+ * where the pane's top was on screen.
+ */
+const anchors = new WeakMap<
+  EditorView,
+  { position: Reading; scroll: number; paneTop: number }
+>()
 function hold(view: EditorView, position: Reading) {
-  anchors.set(view, { position, scroll: position.pane.scrollTop })
+  anchors.set(view, {
+    position,
+    scroll: position.pane.scrollTop,
+    paneTop: position.pane.getBoundingClientRect().top,
+  })
 }
 
 /** Scrolls the reading position back to where it was on screen. */

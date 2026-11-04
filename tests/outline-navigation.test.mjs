@@ -57,6 +57,7 @@ test('large outline follows rich and source carets with bounded rows and ignores
     page,
     async () => (await window.hibi.getDocument()).name === 'headings.md',
   )
+  await waitForDocumentEditor(app, page)
   await rich.press('ControlOrMeta+End')
   await rich.evaluate((element) => element.blur())
 

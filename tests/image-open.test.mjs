@@ -127,7 +127,10 @@ test('every supported image type decodes in the viewer', {
     await open(file)
     const shown = page.locator(`.image-viewer img.image-preview[alt="${name}"]`)
     await shown.waitFor()
-    assert.ok((await shown.getAttribute('src')).startsWith(`data:${mime};`), name)
+    assert.ok(
+      (await shown.getAttribute('src')).startsWith(`data:${mime};`),
+      name,
+    )
     const width = await shown.evaluate(async (img) => {
       await img.decode()
       return img.naturalWidth
@@ -150,7 +153,9 @@ test('broken, empty, oversized and unsupported images fail visibly', {
       Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
       Buffer.from('not really a jpeg'),
     ]),
-    'unclosed.svg': Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect'),
+    'unclosed.svg': Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect',
+    ),
     'empty.gif': Buffer.alloc(0),
   }
   const status = page
@@ -161,7 +166,9 @@ test('broken, empty, oversized and unsupported images fail visibly', {
     await writeFile(join(temp, name), bytes)
     // A valid image first, so the message can only come from the next file.
     await open(photo)
-    await page.locator('.image-viewer img.image-preview[alt="photo.png"]').waitFor()
+    await page
+      .locator('.image-viewer img.image-preview[alt="photo.png"]')
+      .waitFor()
     await open(join(temp, name))
     await status.waitFor()
     assert.equal(await status.isVisible(), true, name)

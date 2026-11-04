@@ -604,6 +604,7 @@ test('a source view released as its note grows keeps its place after the note sh
 }, async (t) => {
   const { page, view } = await open(t, 16)
   await view('Source view')
+  await sourceShown(page, 16 * 1024 - 1)
   await page.evaluate(() => {
     const view = document.querySelector('.source-pane .cm-content').cmTile.root
       .view
@@ -644,10 +645,7 @@ test('a source view released as its note grows keeps its place after the note sh
     const content = document.querySelector('.source-pane .cm-content')
     return content?.cmTile?.root?.view?.state.doc.length === 16 * 1024
   })
-  await page.evaluate(async () => {
-    await new Promise(requestAnimationFrame)
-    await new Promise(requestAnimationFrame)
-  })
+  await sourceShown(page, 16 * 1024 - 1)
   // It comes back scrolled to the place it kept, not to the start.
   const after = await place(page)
   assert.deepEqual([after.anchor, after.head], [9000, 9010])

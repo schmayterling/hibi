@@ -161,6 +161,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Letting an addon send an edit again after a busy answer adds 41 (#836).
   // Saving through a program holding a note, and saying why it can't, adds 225 (#858).
   // Letting dropped files wait, each going in before the next starts, adds 139 (#862).
+  // Saying when a program holds a note, and a held autosave's turns and notice,
+  // adds 901 (#866).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -197,7 +199,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         24 +
         41 +
         225 +
-        139,
+        139 +
+        901,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

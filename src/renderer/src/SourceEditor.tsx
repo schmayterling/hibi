@@ -722,7 +722,7 @@ export function SourceEditor({
   // A draw failure names no feature, so the features go back one at a time:
   // the one being tried is the one a failure comes with.
   const tryingFeature = useRef<InstalledFeature | null>(null)
-  const tryingFailure = useRef<{ error: unknown } | null>(null)
+  const tryingFailure = useRef<{ error: unknown; failed: boolean } | null>(null)
   const tryFeatures = useRef<(() => void) | null>(null)
   const triedForWidget = useRef(false)
   const noticedFeatures = useRef(sourceExtensions)
@@ -1968,7 +1968,8 @@ export function SourceEditor({
             else console.error(error)
             if (context !== 'widget') return
             setWidgetError(errorMessage(error))
-            if (tryingFeature.current) tryingFailure.current = { error }
+            if (tryingFailure.current)
+              tryingFailure.current = { error, failed: true }
             else if (!triedForWidget.current) {
               // CodeMirror is drawing. The features go back once it is done.
               triedForWidget.current = true
@@ -3112,22 +3113,34 @@ export function SourceEditor({
         )
         ;(editor as unknown as MeasuredView).measure()
       }
-      set(kept)
+      /** Draws these and says what failed in it, from CodeMirror's widgets. */
+      const failureWith = (shown: readonly InstalledFeature[]) => {
+        tryingFailure.current = { error: null, failed: false }
+        set(shown)
+        const failure = tryingFailure.current
+        tryingFailure.current = null
+        return failure.failed ? failure : null
+      }
+      // What fails with no feature in, or stays once one is out, is not theirs.
+      if (failureWith(kept)) {
+        if (!isViewDead(editor)) set(parts)
+        featuresSuspect.current = false
+        return
+      }
       for (const part of parts) {
         if (isViewDead(editor)) return
         if (!part.feature.fail || failedFeatures.current.has(part.feature))
           continue
         tryingFeature.current = part
-        tryingFailure.current = null
-        set([...kept, part])
+        const failure = failureWith([...kept, part])
         if (isViewDead(editor)) return
         tryingFeature.current = null
-        const failure = tryingFailure.current as { error: unknown } | null
-        if (failure) {
+        if (failure && !failureWith(kept)) {
           failedFeatures.current.add(part.feature)
           reportFailure(part, failure.error)
         } else kept.push(part)
       }
+      if (isViewDead(editor)) return
       // After a dead view, none named: the next death is theirs.
       if (featuresSuspect.current) blameFeatures.current = kept.length > 0
       featuresSuspect.current = false

@@ -758,6 +758,79 @@ test('a core widget that fails at the first draw of a note shows the notice', {
   await answers(context)
 })
 
+test('a core widget that fails is not blamed on a healthy addon', {
+  timeout: 60000,
+}, async (t) => {
+  const source = '# Title\n\n- [ ] task\n\nend\n\n'
+  const context = await open(t, {
+    source: plain,
+    code: goodAddon('formatted').replace("'good'", "'other'"),
+  })
+  await opened(context, plain)
+  const next = `${context.file}.next.md`
+  await writeFile(next, source)
+  await context.app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, next)
+  await context.page.evaluate(() => {
+    const create = Document.prototype.createElement
+    Document.prototype.createElement = function (tag, ...rest) {
+      if (tag === 'input' && new Error().stack.includes('toDOM'))
+        throw new Error('core widget boom')
+      return create.call(this, tag, ...rest)
+    }
+  })
+  await pressShortcut(context.app, `${mod}+o`)
+  await context.page
+    .locator('.document-notice')
+    .filter({ hasText: 'core widget boom' })
+    .waitFor({ timeout: 10000 })
+  await editorReady(context)
+  // What goes wrong would be done by now: the features go back in a microtask.
+  await context.page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  assert.deepEqual(
+    await context.page.evaluate(() =>
+      [...window.shownToasts].filter((toast) => toast.includes('boom')),
+    ),
+    [],
+  )
+  assert.equal(
+    await context.page.locator(`${context.pane} .cm-editor[data-good]`).count(),
+    1,
+  )
+  await type(context, 'x')
+  await typingAndSavingWork(context, source, 'x')
+})
+
+test('a source view that fails drawing what its own scroll brings in is named and comes back', {
+  timeout: 60000,
+}, async (t) => {
+  const far = Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')
+  const source = `${far}end\n\n`
+  const context = await open(t, {
+    source,
+    presentation: 'source',
+    code: decorationsAddon(
+      'source',
+      'view.viewport.to === view.state.doc.length',
+    ),
+  })
+  await opened(context, source, 'source')
+  await context.page.evaluate((pane) => {
+    const scroller = document.querySelector(`${pane} .cm-scroller`)
+    scroller.scrollTop = scroller.scrollHeight
+  }, context.pane)
+  await named(context, 'bad-ext.bad: decorations boom')
+  await editorReady(context)
+  await type(context, 'x')
+  await typingAndSavingWork(context, source, 'x')
+})
+
 for (const presentation of ['formatted', 'source'])
   test(`the rebuilt ${presentation} editor keeps the place being read`, {
     timeout: 60000,

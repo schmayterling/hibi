@@ -3183,6 +3183,7 @@ function App() {
         onCloseTab={(id) => closeTabs([id])}
         onCloseTabs={closeTabs}
         onMoveTab={moveTab}
+        paused={focusRecoveryNeeded}
         addonTabs={addonTabs}
         activeAddonTab={activeAddonTab?.id ?? null}
         onSelectAddonTab={selectAddonTab}

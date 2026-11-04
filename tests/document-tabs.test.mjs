@@ -2687,3 +2687,74 @@ test('a tab dragged during a save moves after it, unless the tab it went before 
   assert.deepEqual(await order(), [a.id, b.id])
   assert.equal(await page.getByText('This tab is no longer open.').count(), 0)
 })
+
+test('tabs promise nothing and take no keys while editing is paused', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-paused-',
+    { 'c.md': 'note c', 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+  )
+  const { tabId: a, tabs } = await page.evaluate(() =>
+    window.hibi.getDocument(),
+  )
+  const b = tabs.find((tab) => tab.name === 'b.md').id
+  const c = tabs.find((tab) => tab.name === 'c.md').id
+  await splitTab(app, page, b)
+  await page.getByRole('button', { name: 'Close split' }).waitFor()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b,
+  )
+  await idle()
+  // Going to the left pane's note fails, and so does going back.
+  await app.evaluate(
+    ({ ipcMain }, ids) => {
+      const handlers = ipcMain._invokeHandlers
+      const focus = handlers.get('document:focus-tab')
+      let phase = 0
+      handlers.set('document:focus-tab', async (...args) => {
+        if (phase === 0 && args[1] === ids.a) {
+          phase = 1
+          const metadata = await focus(...args)
+          return { ...metadata, contentVersion: metadata.contentVersion + 1 }
+        }
+        if (phase === 1 && args[1] === ids.b) {
+          phase = 2
+          throw new Error('Simulated focus rollback failure.')
+        }
+        globalThis.focusedAfter = (globalThis.focusedAfter ?? 0) + 1
+        return focus(...args)
+      })
+    },
+    { a, b },
+  )
+  await page.locator(`[data-tab-id="${a}"]`).click()
+  const retry = page.getByRole('button', { name: 'Retry document focus' })
+  await retry.waitFor()
+  const other = page.locator(`[data-tab-id="${c}"]`)
+  assert.equal(await other.getAttribute('aria-description'), null)
+  assert.equal(
+    await page.locator(`[data-tab-key="${c}"]`).getAttribute('draggable'),
+    'false',
+  )
+  // Main is on the note going back failed from; the strip shows the other.
+  const shown = await page
+    .locator('.document-tabs [role="tab"][aria-selected="true"]')
+    .getAttribute('data-tab-id')
+  // An arrow key from beside the shown tab neither moves focus nor retries.
+  const beside = tabs[tabs.findIndex((tab) => tab.id === shown) + 1] ?? tabs[0]
+  const focused = page.locator(`[data-tab-id="${beside.id}"]`)
+  await focused.focus()
+  await page.keyboard.press('ArrowLeft')
+  await page.locator(`[data-tab-id="${beside.id}"]:focus`).waitFor()
+  // Nor does a click on the shown tab retry; only the notice's button does.
+  await page.locator(`[data-tab-id="${shown}"]`).click()
+  // Its call would reach main before this one.
+  await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(await app.evaluate(() => globalThis.focusedAfter ?? 0), 0)
+  assert.equal(await retry.isVisible(), true)
+})

@@ -26,6 +26,7 @@ export function DocumentTabs({
   onSelectAddon,
   onCloseAddon,
   splitTabs,
+  paused,
 }: {
   document: DocumentState
   busy: boolean
@@ -39,7 +40,10 @@ export function DocumentTabs({
   onSelectAddon: (id: string) => void
   onCloseAddon: (id: string) => void
   splitTabs: { left: string; right: string } | null
+  paused: boolean
 }) {
+  // While editing is paused nothing waits; what arrives drops.
+  const waits = busy && !paused
   const strip = useRef<HTMLDivElement>(null)
   const active = useRef<HTMLDivElement>(null)
   const positions = useRef(new Map<string, number>())
@@ -229,6 +233,7 @@ export function DocumentTabs({
       aria-description="Drag document tabs to reorder, or use Alt+Shift+Left or Right on a focused document tab."
       onKeyDown={(event) => {
         if (
+          paused ||
           !(event.target instanceof HTMLElement) ||
           event.target.getAttribute('role') !== 'tab'
         )
@@ -313,7 +318,7 @@ export function DocumentTabs({
             data-tab-key={tab.id}
             data-drop-side={drop?.id === tab.id ? drop.side : undefined}
             ref={selected ? active : undefined}
-            draggable={!closing}
+            draggable={!closing && !paused}
             onDragStart={(event) => {
               dragged.current = tab.id
               event.dataTransfer.setData('application/x-hibi-tab', tab.id)
@@ -383,7 +388,7 @@ export function DocumentTabs({
               aria-label={name}
               aria-selected={selected}
               aria-description={
-                busy && !selected
+                waits && !selected
                   ? dirty
                     ? 'Unsaved changes. Opens when the current file operation ends'
                     : 'Opens when the current file operation ends'
@@ -407,7 +412,7 @@ export function DocumentTabs({
               onClick={() => {
                 cancelNavigationFocus()
                 // While busy, this click takes the place of one still waiting.
-                if (busy || !selected) onSelect(tab.id)
+                if (waits || !selected) onSelect(tab.id)
               }}
               onContextMenu={(event) => {
                 event.preventDefault()
@@ -464,7 +469,7 @@ export function DocumentTabs({
               aria-label={name}
               aria-selected={selected}
               aria-description={
-                busy && !selected
+                waits && !selected
                   ? 'Opens when the current file operation ends'
                   : undefined
               }

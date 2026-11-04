@@ -305,12 +305,14 @@ for (const [shape, unit] of Object.entries({
   const source = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
   for (const operation of ['export', 'count']) {
     test(`one MiB ${shape} quote ${operation} stays under 20 seconds`, () => {
-      const start = performance.now()
+      // Processor time, so a busy machine can't spend the budget.
+      const start = process.cpuUsage()
       const result =
         operation === 'export'
           ? parser().parse(source, { async: false })
           : countText(richText(source, syntax))
-      const elapsed = performance.now() - start
+      const { user, system } = process.cpuUsage(start)
+      const elapsed = (user + system) / 1000
       const units = source.length / unit.length
       if (operation === 'export') {
         const pattern =

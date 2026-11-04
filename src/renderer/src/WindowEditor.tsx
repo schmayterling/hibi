@@ -172,7 +172,7 @@ function Host({
               document={current}
               format={documentFormats.get(name)}
               formatName="Markdown"
-              onAttach={async () => null}
+              onAttach={async () => {}}
               onLink={() => {}}
               flavors={chosen}
               sourceExtensions={host.sourceExtensions}

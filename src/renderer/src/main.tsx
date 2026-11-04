@@ -41,6 +41,7 @@ import { DialogProvider, useDialogService } from '../../ui/DialogProvider'
 import { MenuHost } from '../../ui/MenuHost'
 import { ToastProvider, useToasts } from '../../ui/Sonner'
 import type { ToastHandle } from '../../ui/toasts'
+import type { PrepareMediaInsert } from './FormattingToolbar'
 import { createWorkspaceView, type WorkspaceView } from './workspace-view'
 import './styles.css'
 import '../../ui/ui-case'
@@ -595,6 +596,8 @@ function App() {
   )
   const fileDialogOpen = useRef(false)
   const runWhenIdle = useRef<() => void>(undefined)
+  // The editor is writable again for this, so busy no longer holds the queue.
+  const insertingMedia = useRef(false)
   const shownTab = () =>
     addonViews.snapshot().activeTab ?? currentDocument.current?.tabId
   function wait(key: string | symbol, run: Waiting, forTab = false): void {
@@ -617,6 +620,7 @@ function App() {
     )
   }
   function runWaiting() {
+    if (insertingMedia.current) return
     for (const [key, [run, tab]] of waiting.current) {
       if (busyRef.current) return
       if (pendingSave.current) break
@@ -1792,13 +1796,14 @@ function App() {
     files: File[] | null,
     tabId: string,
     side: PaneSide,
-  ): Promise<MediaAttachment[] | null> {
-    if (busyRef.current)
+    prepare: PrepareMediaInsert,
+  ): Promise<void> {
+    if (busyRef.current || insertingMedia.current)
       return waitFor(
         // Each drop waits; a press of the picker waits once.
         files ? Symbol() : 'attach',
-        () => attachMedia(files, tabId, side),
-        null,
+        () => attachMedia(files, tabId, side, prepare),
+        undefined,
       )
     const target = currentDocument.current
     const split = splitTabsRef.current
@@ -1808,17 +1813,27 @@ function App() {
       target.tabId !== tabId ||
       (split ? split[side] !== tabId || split.active !== side : side !== 'left')
     )
-      return null
+      return
+    const insert = prepare()
     startBusy()
+    let attachments: MediaAttachment[] | null = null
     try {
       const result = await window.hibi.attachMedia(files, target.revision)
-      if (!result) return null
+      if (!result) return
       await acceptOperationDocument(result.document)
       refreshWorkspaceView()
-      return result.attachments
+      attachments = result.attachments
+      insertingMedia.current = true
     } finally {
-      // Restore editor editability before the caller inserts its captured selection.
+      // Restore editor editability before inserting at the captured selection.
       flushSync(endBusy)
+    }
+    // What waits, another drop among them, goes after these files are in the note.
+    try {
+      await insert(attachments)
+    } finally {
+      insertingMedia.current = false
+      runWaiting()
     }
   }
 
@@ -2985,7 +3000,9 @@ function App() {
               document={paneDocument}
               format={paneFormat}
               formatName={paneSourceName}
-              onAttach={(files) => attachMedia(files, paneDocument.tabId, side)}
+              onAttach={(files, prepare) =>
+                attachMedia(files, paneDocument.tabId, side, prepare)
+              }
               onLink={(href) => void openLink(href, paneDocument.tabId, side)}
               flavors={paneChosen}
               sourceExtensions={addonHost.sourceExtensions}

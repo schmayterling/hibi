@@ -357,7 +357,7 @@ test(`a note opens with the caret at the end of its last text`, {
   ]
   for (const name of atoms) {
     const kept = notes[name].trimEnd()
-    // formatted-atom-actions runs the toolbar on these notes, but for a `***`
+    // formatted-atom-matrix runs the toolbar on these notes, but for a `***`
     // rule and an image that is missing.
     const taken = actions.filter(
       (action) => name === 'rule' || name === 'image' || action.includes('+'),

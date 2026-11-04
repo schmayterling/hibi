@@ -230,14 +230,16 @@ test('the history view lists every save asked for and thins autosaves, keeping o
   await replaceRichText(page, editor, replaced)
   await saved(replaced)
   const replacing = await newest()
-  // A few words typed on: that autosave holds no point, so it merges into the
-  // next one when that comes less than 5 s later.
+  // A few words typed on, then more without a pause, for longer than 5 s:
+  // that autosave holds no point, and the next comes less than 3 minutes
+  // later, so it isn't listed beside it.
   await editor.press('ControlOrMeta+End')
   await page.keyboard.type(' more')
   await saved(`${replaced} more`)
   const merging = await newest()
-  await page.keyboard.type(' words')
-  await saved(`${replaced} more words`)
+  const going = Date.now()
+  await page.keyboard.type(' and some words', { delay: 400 })
+  await saved(`${replaced} more and some words`)
   const after = await newest()
   await clickMenu(app, 'Command palette')
   await page.getByRole('combobox', { name: /search commands/i }).fill('history')
@@ -257,13 +259,90 @@ test('the history view lists every save asked for and thins autosaves, keeping o
   )
   const shows = (version) => listed.has(`history-version-${version.id}`)
   assert.ok(shows(holding))
-  assert.equal(
-    shows(merging),
-    after.savedAt - merging.savedAt >= 5000,
-    'an autosave holding no point merges into one less than 5 s later',
-  )
+  // More than the 5 s that once kept an autosave listed.
+  assert.ok(after.savedAt - merging.savedAt >= 5000)
+  // Unless a stall made a pause before typing went on, a point it would hold.
+  if (going - merging.savedAt < 2500)
+    assert.equal(
+      shows(merging),
+      false,
+      'an autosave holding no point is not listed within 3 minutes of another entry',
+    )
   assert.ok(shows(after))
   assert.ok(replacing.savedAt > holding.savedAt)
+})
+
+test('the history view leaves out an autosave within 3 minutes of a point it lists', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-beside-'))
+  const file = join(profile, 'note.md')
+  await writeFile(file, texts.original)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const editor = page.getByRole('textbox', { name: /document editor/i })
+  await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    texts.original,
+  )
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[aria-label="Document editor"]')
+        ?.isContentEditable,
+  )
+  // Nothing saved, so the only entry near the edit is the text it replaced, a
+  // point; main answers with an autosave beside that and one far from it, and
+  // a newest one, which always shows, far from them both.
+  await replaceRichText(page, editor, texts.first)
+  await app.evaluate(({ ipcMain }) => {
+    const autosave = (id, ago) => ({
+      id,
+      hash: id,
+      bytes: 1,
+      savedAt: Date.now() - ago,
+      automatic: true,
+    })
+    ipcMain.removeHandler('history:list')
+    ipcMain.handle('history:list', () => [
+      autosave('newest', -10 * 60 * 1000),
+      autosave('beside', 1000),
+      autosave('apart', 10 * 60 * 1000),
+    ])
+  })
+  await clickMenu(app, 'Command palette')
+  await page.getByRole('combobox', { name: /search commands/i }).fill('history')
+  await page
+    .getByRole('option')
+    .filter({ hasText: /^history/i })
+    .first()
+    .click()
+  const history = page.getByRole('dialog', { name: /^history$/i })
+  await history.waitFor()
+  const points = history.getByRole('listbox', { name: /points to return to/i })
+  await points.getByRole('option').first().waitFor()
+  const listed = await points
+    .getByRole('option')
+    .evaluateAll((options) => options.map((option) => option.id))
+  assert.ok(listed.some((id) => id.startsWith('history-point-')))
+  assert.ok(listed.includes('history-version-newest'))
+  assert.ok(listed.includes('history-version-apart'))
+  assert.ok(!listed.includes('history-version-beside'))
 })
 
 test('going to a step or restoring a point shows the change in the editor, and an edit made meanwhile or a read-only editor stops them', {

@@ -207,6 +207,10 @@ const deadViews = new WeakSet<object>()
 const deathListeners = new WeakMap<object, (error: unknown) => void>()
 export const onViewDeath = (view: object, listener: (error: unknown) => void) =>
   deathListeners.set(view, listener)
+/** What a view still knows only until it is redrawn. */
+const redrawListeners = new WeakMap<object, () => void>()
+export const onRedraw = (view: object, listener: () => void) =>
+  redrawListeners.set(view, listener)
 export const isViewDead = (view: object) => deadViews.has(view)
 export function viewDied(view: object, error: unknown) {
   if (deadViews.has(view)) return
@@ -214,11 +218,13 @@ export function viewDied(view: object, error: unknown) {
   deathListeners.get(view)?.(error)
 }
 
-/** Draws a state anew. A view this fails on is dead. */
+/** Draws a state anew. A view this fails on is dead, unless it refused because it is still updating (internal; 0 is idle). */
 export function redraw(view: Pick<EditorView, 'setState'>, state: EditorState) {
+  redrawListeners.get(view)?.()
   try {
     view.setState(state)
   } catch (error) {
+    if ((view as unknown as { updateState?: number }).updateState) throw error
     viewDied(view, error)
   }
 }
@@ -234,7 +240,6 @@ function update(
 ) {
   // A state an extension failed on never reaches the view.
   for (const transaction of transactions) reachedState(transaction)
-  if (deadViews.has(view)) throw new Error('The source editor stopped drawing.')
   try {
     view.update(transactions)
   } catch (error) {

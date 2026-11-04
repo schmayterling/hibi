@@ -176,6 +176,7 @@ import {
   failingParts,
   firstStateRead,
   isViewDead,
+  onRedraw,
   onViewDeath,
   reconfiguration,
   redraw,
@@ -204,6 +205,24 @@ export const sourceCurrent = (view: EditorView) =>
   bridges.get(view)?.isCurrent() ?? false
 
 /** The line at a view's top, and where its block starts relative to the top. */
+/**
+ * The place of a view whose drawing failed. A redraw forgets its measured
+ * heights, and asking CodeMirror measures, which draws. Internal.
+ */
+function placeWithoutDrawing(view: EditorView) {
+  const { viewState } = view as unknown as {
+    viewState: { paddingTop: number } & Pick<EditorView, 'lineBlockAtHeight'>
+  }
+  // The formatted view scrolls with its pane.
+  const scroller = view.scrollDOM.closest('.rich-pane') ?? view.scrollDOM
+  const height =
+    scroller.getBoundingClientRect().top -
+    view.contentDOM.getBoundingClientRect().top -
+    viewState.paddingTop
+  const line = viewState.lineBlockAtHeight(height)
+  return { top: line.from, margin: line.top - height }
+}
+
 function placeOf(view: EditorView) {
   const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
   const line = view.lineBlockAtHeight(height)
@@ -706,6 +725,7 @@ export function SourceEditor({
   const tryingFailure = useRef<{ error: unknown } | null>(null)
   const tryFeatures = useRef<(() => void) | null>(null)
   const triedForWidget = useRef(false)
+  const noticedFeatures = useRef(sourceExtensions)
   const featuresSuspect = useRef(false)
   const blameFeatures = useRef(false)
   // The note has all it accepted and nothing here can draw it: recovery can save it.
@@ -1814,7 +1834,7 @@ export function SourceEditor({
         viewDied(view, error)
         return
       }
-      setInputError(error instanceof Error ? error.message : String(error))
+      setInputError(errorMessage(error))
       const kept = edit
         ? isolateFeatures(
             start,
@@ -1868,6 +1888,7 @@ export function SourceEditor({
      * note's text. Each new view takes out a feature or names the rest, so this
      * ends: with none left to take out, recovery takes over.
      */
+    let placeBeforeRedraw: ReturnType<typeof placeOf> | null = null
     const rebuild = (view: EditorView, error: unknown) => {
       restoreFocus.current ??= captureEditorFocus(view.contentDOM)
       // What is typed from here shows nowhere and is not in the note.
@@ -1875,7 +1896,7 @@ export function SourceEditor({
       const suspects = installed.current.filter(({ feature }) => feature.fail)
       if (!suspects.length) {
         setUnrecoverable(
-          error instanceof Error ? error : new Error(String(error)),
+          error instanceof Error ? error : new Error(errorMessage(error)),
         )
         return
       }
@@ -1890,13 +1911,12 @@ export function SourceEditor({
       }
       tryingFeature.current = null
       featuresSuspect.current = true
-      if (shownPlace.current)
-        bridge.keepPlace(
-          view,
-          shownPlace.current.top,
-          shownPlace.current.margin,
-        )
-      retryBridge((retry) => retry + 1)
+      // The session takes no selection until the edit that got here returns.
+      queueMicrotask(() => {
+        const place = placeBeforeRedraw ?? shownPlace.current
+        if (place) bridge.keepPlace(view, place.top, place.margin)
+        retryBridge((retry) => retry + 1)
+      })
     }
     const editor = new EditorView({
       parent: host.current,
@@ -2469,9 +2489,13 @@ export function SourceEditor({
       try {
         drawMeasured(flush)
       } catch (error) {
+        placeBeforeRedraw = placeWithoutDrawing(editor)
         viewDied(editor, error)
       }
     }
+    onRedraw(editor, () => {
+      placeBeforeRedraw = placeWithoutDrawing(editor)
+    })
     onViewDeath(editor, (error) => rebuild(editor, error))
     view.current = editor
     setMountedView(editor)
@@ -2479,9 +2503,7 @@ export function SourceEditor({
       if (isViewDead(editor)) return
       setFailedEcho({
         bridge,
-        message:
-          (error instanceof Error ? error.message : String(error)) ||
-          'The source editor is synchronizing.',
+        message: errorMessage(error) || 'The source editor is synchronizing.',
       })
     })
     // Kept undo steps can reach the session after the toolbar looked, with no
@@ -3053,7 +3075,11 @@ export function SourceEditor({
   useEffect(() => {
     const editor = view.current
     setExtensionError('')
-    setWidgetError('')
+    // A widget's failure may have left with a feature. One from the first draw,
+    // moments ago in this same commit, has not.
+    if (noticedFeatures.current.some((f) => !sourceExtensions.includes(f)))
+      setWidgetError('')
+    noticedFeatures.current = sourceExtensions
     triedForWidget.current = false
     tryFeatures.current = null
     if (!editor || preparedText?.bridge !== bridge) return

@@ -411,6 +411,54 @@ for (const presentation of ['formatted', 'source'])
       )
     })
 
+test('keys typed right after a view fails are in the note and on screen, or in neither', {
+  timeout: 60000,
+}, async (t) => {
+  const context = await open(t, {
+    source: plain,
+    code: decorationsAddon('formatted'),
+  })
+  await opened(context, plain)
+  await type(context, 'before ')
+  for (const key of 'Qmore') await context.page.keyboard.insertText(key)
+  await named(context, 'bad-ext.bad: decorations boom')
+  await editorReady(context)
+  const note = (await context.page.evaluate(() => window.hibi.getDocument()))
+    .markdown
+  assert.ok(note.startsWith(`${plain}before Q`), note)
+  await typingAndSavingWork(context, plain, note.slice(plain.length))
+})
+
+test('an addon plugin that dispatches while the view updates costs its own plugin, not the editor', {
+  timeout: 60000,
+}, async (t) => {
+  const context = await open(t, {
+    source: plain,
+    code: `export default (sdk) => ({ start(context) {
+      const { ViewPlugin } = sdk.codeMirror.view
+      context.editor.registerFormatted({ id: 'bad', create: () => ViewPlugin.define(() => ({
+        update(update) {
+          if (update.state.doc.toString().includes('Q')) update.view.dispatch({ selection: { anchor: 0 } })
+        },
+      })) })
+    } })`,
+  })
+  await opened(context, plain)
+  await context.page.evaluate((pane) => {
+    window.firstContent = document.querySelector(`${pane} .cm-content`)
+  }, context.pane)
+  await type(context, 'Qmore')
+  await typingAndSavingWork(context, plain, 'Qmore')
+  assert.equal(
+    await context.page.evaluate(
+      (pane) =>
+        window.firstContent === document.querySelector(`${pane} .cm-content`),
+      context.pane,
+    ),
+    true,
+  )
+})
+
 test('a note already holding what a decoration source throws on opens, names it and saves', {
   timeout: 60000,
 }, async (t) => {
@@ -540,4 +588,237 @@ for (const [name, withAddons] of [
     await context.page.getByRole('button', { name: 'Save a copy' }).click()
     await context.page.getByText('Copy saved.').waitFor({ timeout: 10000 })
     assert.equal(await readFile(copy, 'utf8'), `${plain}before Q`)
+  })
+
+/** Addon code with the SDK's view names in scope, whose `extension` is its feature. */
+const featureAddon = (
+  presentation,
+  body,
+) => `export default (sdk) => ({ start(context) {
+  const { StateField } = sdk.codeMirror.state
+  const { BlockWrapper, Decoration, EditorView, WidgetType } = sdk.codeMirror.view
+  ${body}
+  context.editor.${registerIn(presentation)}({ id: 'bad', create: () => extension })
+} })`
+
+/** A field decorating as `decorate(state, at)` says, at each edit that leaves a `Q`. */
+const qField = (decorate) => `
+  const decorate = (state) => {
+    const at = state.doc.toString().indexOf('Q')
+    return at < 0 ? Decoration.none : Decoration.set([${decorate}])
+  }
+  const extension = StateField.define({
+    create: decorate,
+    update: (_, transaction) => decorate(transaction.state),
+    provide: (self) => EditorView.decorations.from(self),
+  })`
+
+const drawFaults = {
+  'line attributes with a bad name': qField(
+    `Decoration.line({ attributes: { 'bad name': '1' } }).range(state.doc.lineAt(at).from)`,
+  ),
+  'mark attributes with a bad name': qField(
+    `Decoration.mark({ attributes: { 'bad name': '1' } }).range(at, at + 1)`,
+  ),
+  'a mark with a bad tag': qField(
+    `Decoration.mark({ tagName: 'bad tag' }).range(at, at + 1)`,
+  ),
+  'a block wrapper with a bad tag': `const extension = EditorView.blockWrappers.of((view) => {
+    const at = view.state.doc.toString().indexOf('Q')
+    if (at < 0) return BlockWrapper.set([])
+    const line = view.state.doc.lineAt(at)
+    return BlockWrapper.set([BlockWrapper.create({ tagName: 'bad tag' }).range(line.from, line.to)])
+  })`,
+  'a decoration function that throws': `const extension = EditorView.decorations.of((view) => {
+    if (view.state.doc.toString().includes('Q')) throw new Error('decorations boom')
+    return Decoration.none
+  })`,
+}
+
+for (const [name, body] of Object.entries(drawFaults))
+  for (const [presentation, kind, source] of [
+    ['formatted', 'a plain note', plain],
+    ['formatted', 'a note with a table', withTable],
+    ['source', 'a note with a table', withTable],
+  ])
+    test(`${name} in a ${presentation} view of ${kind} is named, and typing, saving and the page keep working`, {
+      timeout: 60000,
+    }, async (t) => {
+      const context = await open(t, {
+        source,
+        presentation,
+        code: featureAddon(presentation, body),
+      })
+      await opened(context, source, presentation)
+      await type(context, 'before ')
+      await context.page.keyboard.insertText('Q')
+      await named(context, 'bad-ext.bad: ')
+      await answers(context)
+      await editorReady(context)
+      await type(context, 'more')
+      await typingAndSavingWork(context, source, 'before Qmore')
+      assert.equal(await context.page.locator('.document-notice').count(), 0)
+    })
+
+/** What a failure can be that does not turn into text. */
+const unreadable = {
+  'an object with no prototype': 'Object.create(null)',
+  'an object whose toString throws': `{ toString() { throw new Error('no text') } }`,
+  'an error whose message throws': `Object.defineProperty(new Error(), 'message', { get() { throw new Error('no text') } })`,
+}
+
+for (const [name, thrown] of Object.entries(unreadable))
+  for (const [where, body] of [
+    [
+      'a widget',
+      `class Bad extends WidgetType { toDOM() { throw ${thrown} } }
+      ${qField('Decoration.widget({ widget: new Bad() }).range(at)')}`,
+    ],
+    [
+      'a decoration function',
+      `const extension = EditorView.decorations.of((view) => {
+        if (view.state.doc.toString().includes('Q')) throw ${thrown}
+        return Decoration.none
+      })`,
+    ],
+  ])
+    test(`${where} throwing ${name} is still named, and the note keeps working`, {
+      timeout: 60000,
+    }, async (t) => {
+      const context = await open(t, {
+        source: withTable,
+        code: featureAddon('formatted', body),
+      })
+      await opened(context, withTable)
+      await type(context, 'before ')
+      await context.page.keyboard.insertText('Q')
+      await named(context, 'bad-ext.bad: ')
+      await answers(context)
+      await editorReady(context)
+      await type(context, 'more')
+      await typingAndSavingWork(context, withTable, 'before Qmore')
+    })
+
+test('a very long error leaves the editor on screen', {
+  timeout: 60000,
+}, async (t) => {
+  const context = await open(t, {
+    source: plain,
+    code: featureAddon(
+      'formatted',
+      `class Bad extends WidgetType { toDOM() { throw new Error('long '.repeat(4000)) } }
+      ${qField('Decoration.widget({ widget: new Bad() }).range(at)')}`,
+    ),
+  })
+  await opened(context, plain)
+  await type(context, 'Q')
+  await named(context, 'bad-ext.bad: long')
+  const { top, height, longest } = await context.page.evaluate((pane) => {
+    const box = document.querySelector(`${pane} .cm-editor`)
+    return {
+      top: box.getBoundingClientRect().top,
+      height: window.innerHeight,
+      longest: Math.max(
+        ...[...window.shownToasts].map((toast) => toast.length),
+        ...[...document.querySelectorAll('.document-notice')].map(
+          (notice) => notice.textContent.length,
+        ),
+      ),
+    }
+  }, context.pane)
+  assert.ok(top < height / 2, `editor top ${top} of ${height}`)
+  assert.ok(longest < 600, `longest text ${longest}`)
+})
+
+test('a core widget that fails at the first draw of a note shows the notice', {
+  timeout: 60000,
+}, async (t) => {
+  const source = '# Title\n\n- [ ] task\n\nend\n\n'
+  const context = await open(t, { source: plain, noAddons: true })
+  await opened(context, plain)
+  const next = `${context.file}.next.md`
+  await writeFile(next, source)
+  await context.app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, next)
+  await context.page.evaluate(() => {
+    // The task checkbox's own draw, not the app's other inputs.
+    const create = Document.prototype.createElement
+    Document.prototype.createElement = function (tag, ...rest) {
+      if (tag === 'input' && new Error().stack.includes('toDOM'))
+        throw new Error('core widget boom')
+      return create.call(this, tag, ...rest)
+    }
+  })
+  await pressShortcut(context.app, `${mod}+o`)
+  await context.page
+    .locator('.document-notice')
+    .filter({ hasText: 'core widget boom' })
+    .waitFor({ timeout: 10000 })
+  await answers(context)
+})
+
+for (const presentation of ['formatted', 'source'])
+  test(`the rebuilt ${presentation} editor keeps the place being read`, {
+    timeout: 60000,
+  }, async (t) => {
+    const far = Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')
+    const source = `${far}end\n\n`
+    const context = await open(t, {
+      source,
+      presentation,
+      code: decorationsAddon(presentation),
+    })
+    await opened(context, source, presentation)
+    const at = source.indexOf('line 300')
+    const lineTop = () =>
+      context.page.evaluate(
+        ({ pane, at }) => {
+          const content = document.querySelector(`${pane} .cm-content`)
+          const view = content.cmTile.root.view
+          return view.coordsAtPos(at)?.top ?? null
+        },
+        { pane: context.pane, at },
+      )
+    await context.page.evaluate(
+      ({ pane, at }) => {
+        const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+          .view
+        view.focus()
+        view.dispatch({
+          selection: { anchor: at + 8 },
+          effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+        })
+      },
+      { pane: context.pane, at },
+    )
+    await context.page.waitForFunction(
+      ({ pane, at }) => {
+        const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+          .view
+        return view.coordsAtPos(at) !== null
+      },
+      { pane: context.pane, at },
+    )
+    await context.page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+    const before = await lineTop()
+    await context.page.keyboard.insertText('Q')
+    await named(context, 'bad-ext.bad: decorations boom')
+    await editorReady(context)
+    await context.page.waitForFunction(
+      ({ pane, at }) => {
+        const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+          .view
+        return view.coordsAtPos(at) !== null
+      },
+      { pane: context.pane, at },
+      { timeout: 5000 },
+    )
+    const after = await lineTop()
+    assert.ok(Math.abs(after - before) < 60, `line moved ${before} to ${after}`)
   })

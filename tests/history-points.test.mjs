@@ -621,6 +621,24 @@ test('within a day, an autosave holding no point shows only 3 minutes or more fr
   )
 })
 
+test('the newest version shows whatever is listed beside it, and older autosaves keep 3 minutes from it', () => {
+  const now = start + 30 * day
+  const at = (ago, automatic = true) => ({
+    id: ago,
+    savedAt: now - ago * minute,
+    ...(automatic ? { automatic: true } : {}),
+  })
+  // A short session with no steps left: the text it replaced and two autosaves.
+  assert.deepEqual(
+    shownVersions([at(1), at(2), at(2.0001, false)], now).map(({ id }) => id),
+    [1, 2.0001],
+  )
+  assert.deepEqual(
+    shownVersions([at(1), at(2), at(9)], now, null, [now]).map(({ id }) => id),
+    [1, 9],
+  )
+})
+
 test('a preview shows at most 300 characters of the text around a change', () => {
   // A change beside a 3 MB line, as a pasted image or minified data.
   const long = 'x'.repeat(3_000_000)

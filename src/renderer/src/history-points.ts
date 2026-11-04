@@ -204,12 +204,12 @@ function thinning(now: number) {
 
 /**
  * The saved versions the list shows, newest first, beside the points it
- * shows, by time. Every save the user asked for shows; autosaved versions
- * thin as points do. Within a day, one that holds no point shows only 3
- * minutes or more from every entry listed, as steady typing gets a point
- * every 3 minutes. Past a day, one less than a pause before the next save
- * merges into it, the newest an hour stays, and past a week the newest a
- * day. The files themselves stay.
+ * shows, by time. Every save the user asked for and the newest version show;
+ * other autosaved versions thin as points do. Within a day, one that holds no
+ * point shows only 3 minutes or more from every entry listed, as steady typing
+ * gets a point every 3 minutes. Past a day, one less than a pause before the
+ * next save merges into it, the newest an hour stays, and past a week the
+ * newest a day. The files themselves stay.
  */
 export function shownVersions<
   Version extends Readonly<{ savedAt: number; automatic?: true }>,
@@ -232,6 +232,9 @@ export function shownVersions<
         : [],
     ),
   )
+  // The last text saved stays reachable when no step holds it, as after
+  // another app overwrites the note.
+  holding.add(sorted[0])
   const keep = thinning(now)
   // Entries listed whatever their neighbours: points, saves asked for, and
   // versions holding a point; then autosaves as they are listed, newest first.

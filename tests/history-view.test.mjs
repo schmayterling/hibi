@@ -307,7 +307,8 @@ test('the history view leaves out an autosave within 3 minutes of a point it lis
         ?.isContentEditable,
   )
   // Nothing saved, so the only entry near the edit is the text it replaced, a
-  // point; main answers with an autosave beside that and one far from it.
+  // point; main answers with an autosave beside that and one far from it, and
+  // a newest one, which always shows, far from them both.
   await replaceRichText(page, editor, texts.first)
   await app.evaluate(({ ipcMain }) => {
     const autosave = (id, ago) => ({
@@ -319,6 +320,7 @@ test('the history view leaves out an autosave within 3 minutes of a point it lis
     })
     ipcMain.removeHandler('history:list')
     ipcMain.handle('history:list', () => [
+      autosave('newest', -10 * 60 * 1000),
       autosave('beside', 1000),
       autosave('apart', 10 * 60 * 1000),
     ])
@@ -338,6 +340,7 @@ test('the history view leaves out an autosave within 3 minutes of a point it lis
     .getByRole('option')
     .evaluateAll((options) => options.map((option) => option.id))
   assert.ok(listed.some((id) => id.startsWith('history-point-')))
+  assert.ok(listed.includes('history-version-newest'))
   assert.ok(listed.includes('history-version-apart'))
   assert.ok(!listed.includes('history-version-beside'))
 })

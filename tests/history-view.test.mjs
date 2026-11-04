@@ -677,6 +677,46 @@ test('restoring a saved version shows the change in the editor, one chosen while
   await page.getByRole('tab', { name: 'note.md', exact: true }).click()
   await shows(edited)
 
+  // A note with CRLF line ends: the editor's positions are not the text's, and
+  // the caret goes to the editor's.
+  const windows = join(profile, 'windows.md')
+  const lines = 'the first line\r\n\r\nthe second line'
+  const linesEdited = `${lines} and more words after it`
+  await writeFile(windows, lines)
+  await app.evaluate(({ dialog }, windows) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [windows],
+    })
+  }, windows)
+  await pressShortcut(app, `${mod}+o`)
+  await shows(lines)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  const inEditor = lines.replaceAll('\r\n', '\n').length
+  await edit({
+    changes: { from: inEditor, insert: linesEdited.slice(lines.length) },
+    userEvent: 'input.type',
+  })
+  await shows(linesEdited)
+  await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(
+    page,
+    async (text) => {
+      const document = await window.hibi.getDocument()
+      return document.savedMarkdown === text && !document.dirty
+    },
+    linesEdited,
+  )
+  await top()
+  await openHistory()
+  await restore(lines)
+  await shows(lines)
+  assert.deepEqual(await caret(), { at: inEditor, shown: true })
+  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+  await shows(edited)
+
   // A read-only editor takes no edit, as with its own undo.
   await page.waitForFunction(() => !!window.readonlyCodeMirror)
   await page.waitForFunction(

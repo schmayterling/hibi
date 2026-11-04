@@ -27,27 +27,30 @@ test('editor width slider changes both panes, persists, and cleans up when disab
   page.on('pageerror', (error) => errors.push(error.message))
   const slider = page.getByRole('slider', { name: 'Editor width', exact: true })
   await slider.waitFor()
-  assert.equal(await slider.inputValue(), '100')
+  assert.equal(await slider.inputValue(), '800')
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   const before = await page.evaluate(() => window.hibi.getDocument())
   await slider.press('Home')
-  assert.equal(await slider.inputValue(), '30')
+  assert.equal(await slider.inputValue(), '320')
   await slider.press('ArrowRight')
-  assert.equal(await slider.inputValue(), '31')
-  assert.equal(await slider.getAttribute('aria-valuetext'), '31%')
+  assert.equal(await slider.inputValue(), '330')
+  assert.equal(await slider.getAttribute('aria-valuetext'), '330 pixels')
   await slider.press('End')
   // Pointer input applies continuously before the drag is released.
   const track = await slider.boundingBox()
   await page.mouse.move(track.x + track.width - 7, track.y + track.height / 2)
   await page.mouse.down()
   await page.mouse.move(track.x + track.width / 2, track.y + track.height / 2)
-  assert.ok(Number(await slider.inputValue()) < 100)
+  assert.ok(Number(await slider.inputValue()) < 1600)
   await page.mouse.up()
+  // Keep the chosen width smaller than both panes to check fixed sizing.
+  await slider.press('Home')
+  for (let step = 0; step < 8; step++) await slider.press('ArrowRight')
   const saved = await slider.inputValue()
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await pressShortcut(app, `${mod}+Shift+\\`)
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
-  await page.waitForFunction((percentage) => {
+  await page.waitForFunction((width) => {
     const panes = [...document.querySelectorAll('.rich-pane, .source-pane')]
     return (
       panes.length === 2 &&
@@ -56,10 +59,7 @@ test('editor width slider changes both panes, persists, and cleans up when disab
         if (!editor) return false
         const bounds = editor.getBoundingClientRect()
         const parent = pane.getBoundingClientRect()
-        const expected = Math.min(
-          parent.width,
-          Math.max(240, (parent.width * percentage) / 100),
-        )
+        const expected = Math.min(parent.width, width)
         return (
           Math.abs(bounds.width - expected) < 2 &&
           Math.abs(

@@ -1,20 +1,22 @@
 import { defineAddon } from '../api'
 import manifest from './manifest'
 
-const preference = 'editor-width.percentage'
-const minimum = 30
-const maximum = 100
+const preference = 'editor-width.pixels'
+const minimum = 320
+const maximum = 1600
+const step = 10
+const defaultWidth = 800
 
 function readWidth() {
-  const saved = Number(localStorage.getItem(preference) ?? maximum)
+  const saved = Number(localStorage.getItem(preference) ?? defaultWidth)
   return Number.isFinite(saved)
-    ? Math.max(minimum, Math.min(maximum, Math.round(saved)))
-    : maximum
+    ? Math.max(minimum, Math.min(maximum, Math.round(saved / step) * step))
+    : defaultWidth
 }
 
 function styles(width: number) {
   return `.editor-panes :is(.source-editor, .rich-editor-host) {
-    width: min(100%, max(240px, ${width}%));
+    width: min(100%, ${width}px);
     margin-inline: auto;
   }`
 }
@@ -27,11 +29,14 @@ export default defineAddon({
     const slider = (value: number) => ({
       min: minimum,
       max: maximum,
-      step: 1,
+      step,
       value,
-      valueText: `${value}%`,
+      valueText: `${value} pixels`,
       onChange(value: number) {
-        const width = Math.max(minimum, Math.min(maximum, Math.round(value)))
+        const width = Math.max(
+          minimum,
+          Math.min(maximum, Math.round(value / step) * step),
+        )
         style.update(styles(width))
         status.update({ slider: slider(width) })
         localStorage.setItem(preference, String(width))

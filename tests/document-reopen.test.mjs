@@ -1138,8 +1138,9 @@ test('a link to a heading of another note or the note itself moves to the headin
     const from = markdown.indexOf('## Far away') + 3
     await waitForAsync(
       page,
+      // Between notes the pane has no editor for a moment.
       (from) =>
-        document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+        document.querySelector('.rich-pane .cm-content')?.cmTile.root.view.state
           .selection.main.head === from,
       from,
     )

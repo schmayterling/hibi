@@ -4423,6 +4423,9 @@
   "2c329b81557d": [
     "src/shared/source-parser.ts"
   ],
+  "6991d3763180": [
+    "src/renderer/src/SourceEditor.tsx"
+  ],
   "e7cf3ef4f17c": [
     "src/addons/documentation/ExportDialog.tsx",
     "src/site/bootstrap.tsx"

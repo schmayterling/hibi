@@ -665,6 +665,7 @@ export function SourceEditor({
     extensions: readonly EditorFeature[]
   } | null>(null)
   const [extensionError, setExtensionError] = useState('')
+  const [widgetError, setWidgetError] = useState('')
   const [languageError, setLanguageError] = useState('')
   const [languageReady, setLanguageReady] = useState(!codeLanguage)
   const [inputError, setInputError] = useState('')
@@ -1877,6 +1878,13 @@ export function SourceEditor({
         ...(selection ? { selection } : {}),
         extensions: [
           firstStateRead,
+          // A widget that fails shows empty and the editor goes on: the user
+          // sees why it is empty, and every failure still reaches the console.
+          EditorView.exceptionSink.of((error: unknown, context?: string) => {
+            if (context) console.error(`${context}:`, error)
+            else console.error(error)
+            if (context === 'widget') setWidgetError(errorMessage(error))
+          }),
           restore ? restore.extension : [],
           ViewPlugin.define((view) => ({
             destroy: observeClipboard(view.contentDOM),
@@ -2944,6 +2952,7 @@ export function SourceEditor({
   useEffect(() => {
     const editor = view.current
     setExtensionError('')
+    setWidgetError('')
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
@@ -3187,14 +3196,26 @@ export function SourceEditor({
 
   return (
     <>
-      {(extensionError || languageError || inputError || echoError) && (
+      {(extensionError ||
+        languageError ||
+        inputError ||
+        echoError ||
+        widgetError) && (
         <DocumentNotice
           title={
             echoError || inputError
               ? 'Edit could not be applied'
-              : 'Editor addon unavailable'
+              : extensionError || languageError
+                ? 'Editor addon unavailable'
+                : 'Part of this note could not be shown'
           }
-          message={echoError || inputError || extensionError || languageError}
+          message={
+            echoError ||
+            inputError ||
+            extensionError ||
+            languageError ||
+            widgetError
+          }
         >
           {echoError && (
             <Button onClick={() => retryBridge((retry) => retry + 1)}>

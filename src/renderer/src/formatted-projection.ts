@@ -148,15 +148,22 @@ export function formattedProjection(
         (state) => !state.readOnly,
       ),
     ),
-    EditorView.decorations.compute([body], (state) => {
-      const { from, to } = state.field(body)
-      const prefix =
-        from && state.sliceDoc(from - 1, from) === '\n' ? from - 1 : from
-      return Decoration.set([
-        ...(prefix ? [hidden.range(0, prefix)] : []),
-        ...(to < state.doc.length ? [hidden.range(to, state.doc.length)] : []),
-      ])
-    }),
+    // Ahead of the frontmatter's shorter hide, which it covers: of two that end
+    // apart, CodeMirror can draw one block where its height map keeps two, and
+    // each measured height then lands a block off, so clicks miss their lines.
+    Prec.high(
+      EditorView.decorations.compute([body], (state) => {
+        const { from, to } = state.field(body)
+        const prefix =
+          from && state.sliceDoc(from - 1, from) === '\n' ? from - 1 : from
+        return Decoration.set([
+          ...(prefix ? [hidden.range(0, prefix)] : []),
+          ...(to < state.doc.length
+            ? [hidden.range(to, state.doc.length)]
+            : []),
+        ])
+      }),
+    ),
     EditorState.transactionFilter.of((transaction) => {
       const previous = transaction.startState.field(body, false)
       if (!previous) return transaction

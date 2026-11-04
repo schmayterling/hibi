@@ -224,7 +224,16 @@ test('a save waiting its turn keeps the version it wrote, with typing going on b
   await hibi.app.evaluate(() => globalThis.saveTurn())
   // The save wrote what there was when its turn came. More typing joins that
   // typing's group while the reply is on its way.
-  for (;;) if ((await readFile(file, 'utf8')) === 'draftx') break
+  // With gaps: reading a file nonstop keeps a Windows rename, and so the save,
+  // from going through.
+  await waitForAsync(
+    hibi.app,
+    async (_electron, file) => {
+      const { readFile } = process.getBuiltinModule('node:fs/promises')
+      return (await readFile(file, 'utf8').catch(() => '')) === 'draftx'
+    },
+    file,
+  )
   await hibi.page.keyboard.type('y')
   await hibi.shows('draftxy')
   await hibi.page.locator('.app[aria-busy="false"]').waitFor()

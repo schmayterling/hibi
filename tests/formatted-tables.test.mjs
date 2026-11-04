@@ -829,7 +829,7 @@ test('the text above growing far keeps the text at the pane top in place in ever
 
 test('the reading place deep inside a huge line holds through second changes, shrinks and splits', {
   timeout: 300000,
-}, async () => {
+}, async (t) => {
   const paragraphs = Array.from(
     { length: 300 },
     (_, i) => `Paragraph ${i} of the text above.`,
@@ -859,7 +859,9 @@ test('the reading place deep inside a huge line holds through second changes, sh
   // Steps: a space of a height at a position (0 removes it), `frame` to go
   // on a frame later instead of once the text holds, `scroll` for the
   // reader's scrolling before the view draws again, `aim` to put the text at
-  // the pane's top again.
+  // the pane's top again, `top` to measure the text at the pane's top instead,
+  // `read` for the reader's scrolling once the text holds, `cut` to delete the
+  // text and all after it, `shift` to move the pane down the page.
   const runs = [
     [
       'a second change a frame after the first',
@@ -896,9 +898,44 @@ test('the reading place deep inside a huge line holds through second changes, sh
     ],
     ['a large change', line, [{ grow: 150000 }]],
     ['a large change', paragraph, [{ grow: 150000 }]],
+    // The place held for one change isn't the reader's for the next, when
+    // the reader, an edit or the page moved on after it.
+    [
+      'a change after scrolling on',
+      paragraph,
+      [{ grow: 5000 }, { read: 300 }, { grow: 5000, top: true }],
+    ],
+    [
+      'a change after the text is cut',
+      paragraph,
+      [{ grow: 5000 }, { cut: true }, { grow: 5000, top: true }],
+    ],
+    [
+      'a change after the pane moves',
+      paragraph,
+      [{ grow: 5000 }, { shift: 80 }, { grow: 5000, top: true }],
+    ],
   ]
   const results = []
-  for (const [name, [doc, target, slack], steps] of runs) {
+  // A slower machine runs more parsing slices during each sequence, and a
+  // place read again per slice would lose a row in each: in the paragraph,
+  // where the misses were.
+  const slowed = runs.filter(
+    ([, doc, steps]) => doc === paragraph && !steps.some((step) => step.top),
+  )
+  const cpu = await harness.context().newCDPSession(harness)
+  // The harness is shared: the tests after this one run at full speed.
+  t.after(async () => {
+    await cpu.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+    await cpu.detach()
+  })
+  const sequences = [
+    ...runs.map((run) => [1, run]),
+    ...slowed.map((run) => [2, run]),
+    ...slowed.map((run) => [4, run]),
+  ]
+  for (const [rate, [name, [doc, target, slack], steps]] of sequences) {
+    await cpu.send('Emulation.setCPUThrottlingRate', { rate })
     const result = await harness.evaluate(
       async ({ doc, target, steps }) => {
         const preview = window.tables
@@ -943,12 +980,23 @@ test('the reading place deep inside a huge line holds through second changes, sh
         const tops = [await aim()]
         for (const step of steps) {
           if (step.aim) tops.push(await aim())
-          else {
+          else if (step.read || step.cut || step.shift) {
+            if (step.read) {
+              pane.dispatchEvent(new Event('wheel'))
+              pane.scrollTop += step.read
+            }
+            if (step.cut)
+              view.dispatch({
+                changes: { from: at - 50, to: view.state.doc.length },
+              })
+            if (step.shift) pane.style.marginTop = `${step.shift}px`
+            for (let frames = 0; frames < 6; frames++) await frame()
+          } else {
             // A scroll leaves the text above the screen, maybe undrawn: the
             // text it brings to the pane's top, read before, is measured.
             let mark = at
             let expect = 0
-            if (step.scroll) {
+            if (step.scroll || step.top) {
               const content = view.contentDOM.getBoundingClientRect()
               const caret = document.caretPositionFromPoint(
                 content.left +
@@ -956,10 +1004,12 @@ test('the reading place deep inside a huge line holds through second changes, sh
                     getComputedStyle(view.contentDOM).paddingLeft,
                   ) +
                   1,
-                pane.getBoundingClientRect().top + step.scroll + 1,
+                pane.getBoundingClientRect().top + (step.scroll ?? 0) + 1,
               )
               mark = view.posAtDOM(caret.offsetNode, caret.offset)
-              expect = where(mark) - (step.input === null ? 0 : step.scroll)
+              expect =
+                where(mark) -
+                (step.scroll && step.input !== null ? step.scroll : 0)
             }
             preview.growAt(
               step.below === undefined ? 0 : at + step.below,
@@ -976,11 +1026,12 @@ test('the reading place deep inside a huge line holds through second changes, sh
             else tops.push((await still(mark)) - expect)
           }
         }
+        pane.style.marginTop = ''
         return tops
       },
       { doc, target, steps },
     )
-    results.push({ name, target, slack, tops: result })
+    results.push({ name, rate, target, slack, tops: result })
   }
   const report = JSON.stringify(results)
   for (const { tops, slack } of results)

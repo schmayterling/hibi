@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { planChecks, shardTests } from '../scripts/ci.mjs'
 
@@ -215,4 +222,90 @@ test('a test file change selects that test alone even though the harness starts 
     'tests/other.test.mjs',
     'tests/spawns.test.mjs',
   ])
+})
+
+test('a pull request rebuilds an app the cache kept from another revision, and sees both ends of a move', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-stale-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const write = (file, text) => {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), text)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, {
+      cwd: repo,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    }).trim()
+  const commit = () => {
+    git('add', '.')
+    git('commit', '-qm', 'next')
+    return git('rev-parse', 'HEAD')
+  }
+  write('.gitignore', 'out/\n.cache/\n')
+  write('src/app.ts', 'export const version = 1\n')
+  write('scripts/tool.mjs', '// a script the app build runs\n'.repeat(4))
+  write(
+    'tests/one.test.mjs',
+    "import test from 'node:test'\ntest('one', () => {})\n",
+  )
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  const built = commit()
+  for (const file of [
+    'out/main/index.js',
+    'out/preload/index.cjs',
+    'out/renderer/index.html',
+    'out/site/template.html',
+  ])
+    write(file, '')
+  const runtime = `${process.platform}/${process.arch}/${process.version}/${process.env.ImageVersion ?? 'local'}/0/1`
+  const stub = join(root, 'npm.cjs')
+  const calls = join(root, 'calls')
+  writeFileSync(
+    stub,
+    "require('node:fs').appendFileSync(process.env.CALLS, process.argv.slice(2).join(' ') + '\\n')\n",
+  )
+  const check = (base, sha = built) => {
+    write(
+      '.cache/ci/success.json',
+      JSON.stringify({
+        version: 1,
+        runtime,
+        sha,
+        tests: ['tests/one.test.mjs'],
+      }),
+    )
+    writeFileSync(calls, '')
+    execFileSync(process.execPath, [resolve('scripts/ci.mjs')], {
+      cwd: repo,
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        CALLS: calls,
+        CI_BASE: base,
+        CI_CLEAN: '',
+        CI_FULL: '',
+        CI_SHARD: '0/1',
+        npm_execpath: stub,
+      },
+    })
+    return readFileSync(calls, 'utf8').includes('run build:app')
+  }
+  write('src/app.ts', 'export const version = 2\n')
+  const base = commit()
+  write(
+    'tests/one.test.mjs',
+    "import test from 'node:test'\ntest('two', () => {})\n",
+  )
+  commit()
+  assert.equal(check(base), true)
+  assert.equal(check(base, base), false)
+  assert.equal(check(base, 'f'.repeat(40)), true)
+  assert.equal(check(base, 'no revision'), true)
+  renameSync(join(repo, 'scripts/tool.mjs'), join(repo, 'tests/tool.test.mjs'))
+  const moved = commit()
+  assert.equal(check(git('rev-parse', 'HEAD~1'), moved), true)
 })

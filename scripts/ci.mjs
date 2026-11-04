@@ -17,6 +17,11 @@ const git = (root, ...args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trimEnd()
 const paths = (text) => text.split('\0').filter(Boolean)
+// Without --no-renames, a moved file lists only its new path.
+const changedFiles = (root, ...revisions) =>
+  paths(
+    git(root, 'diff', '--name-only', '--no-renames', '-z', ...revisions, '--'),
+  )
 const appInput =
   /^(src\/|build\/|scripts\/|docs\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|\.nvmrc$|\.npmrc$)/
 const globalInput =
@@ -211,10 +216,8 @@ function runCI() {
     try {
       changed = [
         ...new Set([
-          ...paths(
-            git(root, 'diff', '--name-only', '-z', baseline, 'HEAD', '--'),
-          ),
-          ...paths(git(root, 'diff', '--name-only', '-z', 'HEAD', '--')),
+          ...changedFiles(root, baseline, 'HEAD'),
+          ...changedFiles(root, 'HEAD'),
         ]),
       ]
       if (pullRequestBase)
@@ -276,7 +279,19 @@ function runCI() {
         '--tsBuildInfoFile',
         `.cache/ci/${target}.tsbuildinfo`,
       )
-  if (plan.build || !outputAvailable) npm('run', 'build:app')
+  // The cache can hold another revision's app, and a pull request's diff can't say.
+  const outputStale = () => {
+    if (!/^[a-f0-9]{40}$/.test(previous?.sha ?? '')) return true
+    try {
+      return changedFiles(root, previous.sha, 'HEAD').some((file) =>
+        appInput.test(file),
+      )
+    } catch {
+      return true
+    }
+  }
+  if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
+    npm('run', 'build:app')
   // TAP prints each failure's details immediately; spec defers them to the end.
   if (unitTests.length)
     run(['--test', '--test-reporter=tap', '--test-concurrency=4', ...unitTests])

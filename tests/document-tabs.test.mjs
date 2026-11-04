@@ -2551,16 +2551,16 @@ test('close split that retries focus lets a file opened from outside go first', 
   await page.locator(`[data-tab-id="${a}"]`).click()
   await page.getByRole('button', { name: 'Retry document focus' }).waitFor()
   await openFromOutside(app, page, outside)
-  await app.evaluate(() => globalThis.hold('document:open-external'))
+  await app.evaluate(() => globalThis.hold('document:external'))
   await closeSplit.click()
-  await app.evaluate(() => globalThis.held['document:open-external'])
+  await app.evaluate(() => globalThis.held['document:external'])
   await page.evaluate(
     () => new Promise((done) => requestAnimationFrame(() => setTimeout(done))),
   )
   // Only the retry moved focus; the split waits for the file.
   assert.equal(await app.evaluate(() => globalThis.focusedAfter), 1)
   assert.equal(await closeSplit.isVisible(), true)
-  await app.evaluate(() => globalThis.release['document:open-external']())
+  await app.evaluate(() => globalThis.release['document:external']())
   await closeSplit.waitFor({ state: 'hidden' })
   await idle()
   const final = await page.evaluate(() => window.hibi.getDocument())

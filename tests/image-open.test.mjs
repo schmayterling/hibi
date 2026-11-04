@@ -47,7 +47,7 @@ async function start(t, prefix) {
     }, file)
     await clickMenu(app, 'Open…')
   }
-  return { temp, page, open }
+  return { app, temp, page, open }
 }
 
 test('images open in the viewer, stay unchanged on save, and explain failures', {
@@ -64,7 +64,10 @@ test('images open in the viewer, stay unchanged on save, and explain failures', 
   await open(photo)
   const image = page.locator('.image-viewer img.image-preview')
   await image.waitFor()
-  assert.match(await image.getAttribute('src'), /^data:image\/png;base64,/)
+  assert.match(
+    await image.getAttribute('src'),
+    /^app:\/\/hibi\/document-media\//,
+  )
   assert.equal(await image.getAttribute('alt'), 'photo.png')
   assert.equal(await page.locator('.cm-content').count(), 0)
 
@@ -92,7 +95,13 @@ test('images open in the viewer, stay unchanged on save, and explain failures', 
 test('every supported image type decodes in the viewer', {
   timeout: 90000,
 }, async (t) => {
-  const { temp, page, open } = await start(t, 'hibi-image-types-')
+  const { app, temp, page, open } = await start(t, 'hibi-image-types-')
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('document:image')
+    ipcMain.handle('document:image', () => {
+      throw new Error('Image tabs must not copy image bytes through IPC.')
+    })
+  })
   // Chromium encodes the JPEG and WebP, so both are real files it can decode.
   const encode = async (type) => {
     const url = await page.evaluate((type) => {
@@ -109,8 +118,10 @@ test('every supported image type decodes in the viewer', {
   }
   const jpeg = await encode('image/jpeg')
   const webp = await encode('image/webp')
-  // A valid PNG padded to exactly the 8 MiB limit still opens.
-  const edge = Buffer.concat([png, Buffer.alloc(8 * mib - png.length)])
+  // A valid PNG larger than both former local and remote caps still opens.
+  const large = join(temp, 'large photo #1.png')
+  await writeFile(large, png)
+  await truncate(large, 65 * mib)
   const cases = [
     ['photo.png', png, 'image/png'],
     ['photo.jpg', jpeg, 'image/jpeg'],
@@ -119,16 +130,31 @@ test('every supported image type decodes in the viewer', {
     ['photo.gif', gif, 'image/gif'],
     ['photo.svg', svg, 'image/svg+xml'],
     ['UPPER.PNG', png, 'image/png'],
-    ['edge.png', edge, 'image/png'],
+    ['large photo #1.png', null, 'image/png'],
   ]
   for (const [name, bytes, mime] of cases) {
     const file = join(temp, name)
-    await writeFile(file, bytes)
+    if (bytes) await writeFile(file, bytes)
     await open(file)
     const shown = page.locator(`.image-viewer img.image-preview[alt="${name}"]`)
     await shown.waitFor()
-    assert.ok(
-      (await shown.getAttribute('src')).startsWith(`data:${mime};`),
+    const url = await shown.getAttribute('src')
+    assert.match(url, /^app:\/\/hibi\/document-media\//, name)
+    const response = await page.evaluate(async (url) => {
+      const response = await fetch(url, { headers: { range: 'bytes=0-15' } })
+      return {
+        status: response.status,
+        type: response.headers.get('content-type'),
+        bytes: (await response.arrayBuffer()).byteLength,
+      }
+    }, url)
+    assert.deepEqual(
+      response,
+      {
+        status: 206,
+        type: mime,
+        bytes: Math.min(16, bytes?.length ?? 65 * mib),
+      },
       name,
     )
     const width = await shown.evaluate(async (img) => {
@@ -140,7 +166,7 @@ test('every supported image type decodes in the viewer', {
   }
 })
 
-test('broken, empty, oversized and unsupported images fail visibly', {
+test('broken, empty and unsupported images fail visibly', {
   timeout: 90000,
 }, async (t) => {
   const { temp, page, open } = await start(t, 'hibi-image-broken-')
@@ -181,18 +207,6 @@ test('broken, empty, oversized and unsupported images fail visibly', {
     page.evaluate(async () =>
       (await window.hibi.getDocument()).tabs.map((tab) => tab.name),
     )
-
-  // Past the limit, the file is refused up front and no tab opens.
-  const big = join(temp, 'big.png')
-  await writeFile(big, png)
-  await truncate(big, 8 * mib + 1)
-  await open(big)
-  await page.locator('.toast').filter({ hasText: 'big.png' }).first().waitFor()
-  assert.match(
-    (await toasts()).join('\n'),
-    /big\.png is larger than 8 MiB, so Hibi can’t display it\./,
-  )
-  assert.equal((await tabs()).includes('big.png'), false)
 
   // A folder with an image name is not an image.
   await mkdir(join(temp, 'folder.png'))

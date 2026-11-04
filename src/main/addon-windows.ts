@@ -233,6 +233,8 @@ async function create(
       nodeIntegration: false,
       webSecurity: true,
       webviewTag: false,
+      // Match the main window so test frames keep running when occluded.
+      backgroundThrottling: !testing,
     },
   })
   const entry: Entry = {

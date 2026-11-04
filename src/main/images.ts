@@ -7,9 +7,6 @@ import sanitizeHtml from 'sanitize-html'
 import { lexMarkdown } from '../shared/marked-blocks.ts'
 import { isPathInside } from './workspace-paths.ts'
 
-/** The largest local image Hibi reads into memory to show. */
-export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
-
 export function imageMime(data: Buffer): string | null {
   const start = data.subarray(0, 16).toString('hex')
   if (start.startsWith('89504e470d0a1a0a')) return 'image/png'
@@ -80,7 +77,7 @@ export function imageSources(markdown: string): Set<string> {
   return sources
 }
 
-/** Local image bytes only; never exposes a general filesystem read API. */
+/** Compatibility and export bytes; interactive views use streamed media URLs. */
 export async function readDocumentImage(
   source: string,
   documentPath: string | null,
@@ -99,13 +96,19 @@ export async function readDocumentImage(
     )
     try {
       const stat = await file.stat()
-      if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) return null
+      if (!stat.isFile() || !stat.size || !Number.isSafeInteger(stat.size))
+        return null
+      // Reject non-images before allocating a file-sized buffer.
+      const header = Buffer.alloc(Math.min(4096, stat.size))
+      const head = await file.read(header, 0, header.length, 0)
+      const mime = imageMime(header.subarray(0, head.bytesRead))
+      if (!mime) return null
       const bytes = Buffer.alloc(stat.size + 1)
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0)
       if (bytesRead !== stat.size) return null
       const data = bytes.subarray(0, bytesRead)
-      const mime = imageMime(data)
-      return mime ? `data:${mime};base64,${data.toString('base64')}` : null
+      if (imageMime(data.subarray(0, 4096)) !== mime) return null
+      return `data:${mime};base64,${data.toString('base64')}`
     } finally {
       await file.close()
     }

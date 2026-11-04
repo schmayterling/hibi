@@ -145,7 +145,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Image documents and their demand-loaded viewer add 1,801 (#815).
   // Sending repeated Save commands to their coalescing handler adds 27 (#818).
   // Keeping the undo steps a save took as it took them, through redo, a save
-  // landing late and steps going, adds 68 (#810).
+  // landing late or writing a later version and steps going, adds 149 (#810).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -172,7 +172,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         61 +
         1801 +
         27 +
-        68,
+        149,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

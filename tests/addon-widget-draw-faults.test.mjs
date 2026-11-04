@@ -785,6 +785,7 @@ test('a core widget that fails is not blamed on a healthy addon', {
     .locator('.document-notice')
     .filter({ hasText: 'core widget boom' })
     .waitFor({ timeout: 10000 })
+  context.file = next
   await editorReady(context)
   // What goes wrong would be done by now: the features go back in a microtask.
   await context.page.evaluate(

@@ -13,7 +13,9 @@ permissions:
   contents: read
 concurrency:
   group: check-${{ github.ref }}
-  cancel-in-progress: true
+  # A pull request's newest push replaces its run. Main's runs verify what pull
+  # requests skip, so each finishes, and only the newest waiting push runs next.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   desktop:
     # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.

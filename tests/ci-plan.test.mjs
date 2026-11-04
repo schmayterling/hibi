@@ -199,6 +199,7 @@ test('a test file change selects that test alone even though the harness starts 
     'tests/spawns.test.mjs': "import 'node:child_process'",
     'tests/helper.mjs': "import './electron.mjs'",
     'tests/helped.test.mjs': "import './helper.mjs'",
+    'tests/formatted-engine-gaps.test.mjs': "import 'node:fs/promises'",
   }
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(root, file)), { recursive: true })
@@ -210,7 +211,11 @@ test('a test file change selects that test alone even though the harness starts 
     .filter((file) => file.endsWith('.test.mjs'))
     .sort()
   const plan = (changed) => planChecks(root, { changed, previousTests }).tests
-  assert.deepEqual(plan(['tests/desktop.test.mjs']), ['tests/desktop.test.mjs'])
+  // Except the test that reads every test file against its ledger.
+  assert.deepEqual(plan(['tests/desktop.test.mjs']), [
+    'tests/desktop.test.mjs',
+    'tests/formatted-engine-gaps.test.mjs',
+  ])
   // A helper can reach what a process-starting test runs; a change to it still selects that test.
   assert.deepEqual(plan(['tests/helper.mjs']), [
     'tests/helped.test.mjs',
@@ -218,6 +223,7 @@ test('a test file change selects that test alone even though the harness starts 
   ])
   assert.deepEqual(plan(['src/shared/one.ts']), [
     'tests/desktop.test.mjs',
+    'tests/formatted-engine-gaps.test.mjs',
     'tests/helped.test.mjs',
     'tests/other.test.mjs',
     'tests/spawns.test.mjs',

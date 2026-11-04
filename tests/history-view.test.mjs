@@ -362,6 +362,42 @@ test('the history view lists as a point a text no saved version holds: after Sav
   }
   const oldest = (labels) => labels.some((label) => /^oldest/i.test(label))
 
+  const undoReady = () =>
+    page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[aria-label="Editor toolbar"] button[aria-label="Undo"]',
+        )?.disabled === false,
+    )
+
+  // A save that keeps both texts lists the one it replaced as that version.
+  await open('saved.md', 'the text this note opened with, kept by the save')
+  await edit('the text of a save that keeps both, well past a few characters')
+  await save()
+  assert.ok(!oldest(await list()), 'after a save')
+
+  // So does a save at the prompt closing a tab, also once the note is reopened.
+  await open(
+    'prompted.md',
+    'the text this note opened with, kept at the prompt',
+  )
+  await edit('the text saved at the closing prompt, well past a few characters')
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 0 })
+  })
+  await pressShortcut(app, `${mod}+w`)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name !== 'prompted.md',
+  )
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  await open('prompted.md')
+  await undoReady()
+  await edit('typed after reopening the note, well past a few characters')
+  assert.ok(!oldest(await list()), 'after a save at the prompt')
+
   // Save As keeps no copy of the text before it at the new path, also once
   // the note is reopened.
   await open('moved.md', 'the text before it was saved under a new name')
@@ -374,12 +410,7 @@ test('the history view lists as a point a text no saved version holds: after Sav
     return document.name !== 'new-name.md'
   })
   await open('new-name.md')
-  await page.waitForFunction(
-    () =>
-      document.querySelector(
-        '[aria-label="Editor toolbar"] button[aria-label="Undo"]',
-      )?.disabled === false,
-  )
+  await undoReady()
   await edit('typed after reopening the note, well past a few characters')
   assert.ok(oldest(await list()), 'after reopening what Save As wrote')
 

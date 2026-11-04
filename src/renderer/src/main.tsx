@@ -2236,6 +2236,7 @@ function App() {
           editor && change
             ? editorPosition(editor, change.from + change.insert.length)
             : null
+        // A view that hasn't taken the new text yet has no such position.
         if (editor && at !== null && at <= editor.state.doc.length)
           editor.dispatch({ selection: { anchor: at }, scrollIntoView: true })
       } catch (error) {

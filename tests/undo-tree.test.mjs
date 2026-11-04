@@ -912,3 +912,47 @@ test('a save keeps no history once its text is the oldest and a composition went
   note.session.markSaved(taken)
   assert.equal(note.session.historyToSave(), null)
 })
+
+test('no composition goes on in a step redone, so kept history holds nothing composed after its save', () => {
+  const note = open('ab')
+  note.insert(1, 'x', 'one')
+  note.tick(1000)
+  note.session.edit([{ from: 2, to: 2, insert: 'y' }], 'composition', 'ime')
+  note.session.undo()
+  // A save takes 'axb', with the composed step to redo.
+  note.session.sealHistory()
+  const taken = note.session.snapshot()
+  note.session.redo()
+  note.session.edit([{ from: 3, to: 3, insert: 'later' }], 'composition', 'ime')
+  note.session.markSaved(taken)
+  const kept = texts(keptHistory(note.session), 'axb')
+  assert.ok(
+    kept.every((text) => !text.includes('later')),
+    JSON.stringify(kept),
+  )
+  assert.deepEqual(note.session.historyDepth(), { undo: 3, redo: 0 })
+})
+
+test('a step a save kept off the undo path stays as it was when a branch comes back and goes on', () => {
+  const note = open('')
+  note.insert(0, 'a', 'one')
+  note.session.sealHistory()
+  note.insert(1, 'x', 'typing')
+  note.session.undo()
+  note.insert(1, 'y', 'other')
+  // The save wrote 'ay', its turn coming after 'x' went to a branch.
+  const written = note.session.snapshot()
+  note.session.undo()
+  const x = note.session
+    .historyTree()
+    .steps.find(([group]) => group.id === 'typing')[0].step
+  assert.ok(note.session.followBranch(x))
+  note.session.redo()
+  note.insert(2, 'LATER', 'typing')
+  note.session.markSaved(written)
+  const kept = texts(keptHistory(note.session), 'ay')
+  assert.ok(
+    kept.every((text) => !text.includes('LATER')),
+    JSON.stringify(kept),
+  )
+})

@@ -808,7 +808,8 @@ export class DocumentSession {
       this.#operation(group.forward, 'redo', group.id),
       () => {
         this.#redo.pop()
-        this.#undo.push(group)
+        // A later save can have kept this step: no edit goes on in it.
+        this.#undo.push(Object.freeze({ ...group, id: crypto.randomUUID() }))
         this.#contentIdentity = group.afterIdentity
       },
       reconcile,

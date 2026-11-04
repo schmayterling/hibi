@@ -108,13 +108,18 @@ export function linkScroll(
     selection()
   }
   const observer = new ResizeObserver(schedule)
+  // Virtualized table rows can arrive without changing the content's height.
+  const drawn = new MutationObserver(schedule)
   for (const pane of [first, second]) {
     pane.addEventListener('wheel', intent, { passive: true })
     pane.addEventListener('pointerdown', intent)
   }
   if (markdown) {
     const richContent = first.querySelector('.cm-content')
-    if (richContent) observer.observe(richContent)
+    if (richContent) {
+      observer.observe(richContent)
+      drawn.observe(richContent, { childList: true, subtree: true })
+    }
     const sourceContent = second.querySelector('.cm-content')
     if (sourceContent) observer.observe(sourceContent)
     document.addEventListener('selectionchange', nativeSelection)
@@ -131,6 +136,7 @@ export function linkScroll(
   return () => {
     cancelAnimationFrame(frame)
     observer.disconnect()
+    drawn.disconnect()
     for (const pane of [first, second]) {
       pane.removeEventListener('wheel', intent)
       pane.removeEventListener('pointerdown', intent)

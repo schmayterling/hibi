@@ -271,8 +271,9 @@ test('confirming restart saves unsaved work before requesting relaunch', {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
+  const child = app.process()
   t.after(async () => {
-    if (app.process().exitCode === null) {
+    if (child.exitCode === null) {
       await app.evaluate(({ dialog }) => {
         dialog.showMessageBox = async () => ({ response: 1 })
       })
@@ -300,7 +301,7 @@ test('confirming restart saves unsaved work before requesting relaunch', {
   )
   const toggle = await appearance(app, page)
   await toggle.check()
-  const exited = once(app.process(), 'exit')
+  const exited = once(child, 'exit')
   await restartPrompt(page)
     .getByRole('button', { name: 'Restart Hibi', exact: true })
     .click()

@@ -519,9 +519,16 @@ async function parity(title, doc, formatted, name) {
     // Full phrase bounds, within a pixel of where they were recorded.
     check(`${name} text`, text, { tolerance: 1 })
     const drawn = await drawing(harness, title)
-    check(`${name} drawn`, drawn.drawn)
-    check(`${name} ${id} paint`, drawn.paint)
-    check(`${name} boxes`, drawn.boxes, { tolerance: 1 })
+    // The offscreen buffer can change without changing what the pane paints.
+    const visible = new Set(
+      drawn.boxes.flatMap(([, top, , height], index) =>
+        top < defaultPane.height && top + height > 0 ? [index] : [],
+      ),
+    )
+    const normalize = (items) => items.filter((_, index) => visible.has(index))
+    check(`${name} drawn`, drawn.drawn, { normalize })
+    check(`${name} ${id} paint`, drawn.paint, { normalize })
+    check(`${name} boxes`, drawn.boxes, { tolerance: 1, normalize })
   }
 }
 

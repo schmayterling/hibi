@@ -2264,6 +2264,22 @@ function App() {
     else selectTab(id)
   }
 
+  /** Restores a saved version History returned. */
+  async function restoreChosen(chosen: HistoryResult) {
+    if (!chosen.large) return chosen.restore(setError)
+    const intent = settingsIntent.current
+    startBusy()
+    try {
+      const next = await window.hibi.restoreVersion(chosen.version)
+      if (!next) return
+      await acceptOperationDocument(next, true)
+      showDocument(intent)
+    } catch (error) {
+      setError(String(error))
+    } finally {
+      endBusy()
+    }
+  }
   function runAction(command: AppCommand) {
     if (dialogs.isOpen()) return
     if (command === 'palette') {
@@ -2316,32 +2332,22 @@ function App() {
               </Suspense>
             ),
           })
-          .result.then(async (chosen) => {
-            if (!chosen || busyRef.current) return
-            if (!chosen.large) {
-              // The saved text comes back as an edit, which undo takes back.
-              try {
-                documentRuntime.replace(
-                  await window.hibi.previewVersion(chosen.version),
-                  'visual',
-                )
-              } catch (error) {
-                setError(String(error))
-              }
-              return
-            }
-            const intent = settingsIntent.current
-            startBusy()
-            try {
-              const next = await window.hibi.restoreVersion(chosen.version)
-              if (!next) return
-              await acceptOperationDocument(next, true)
-              showDocument(intent)
-            } catch (error) {
-              setError(String(error))
-            } finally {
-              endBusy()
-            }
+          .result.then((chosen) => {
+            if (!chosen) return
+            // Chosen while a file operation runs, it follows that, in the
+            // tab it was chosen in.
+            if (busyRef.current)
+              wait(
+                'history-restore',
+                (go) =>
+                  go
+                    ? restoreChosen(chosen)
+                    : setError(
+                        'The version wasn’t restored. Restore it again.',
+                      ),
+                true,
+              )
+            else void restoreChosen(chosen)
           })
         break
       case 'new':

@@ -2010,6 +2010,7 @@
   "fb7eeae135c4": "The update failed. Try again.",
   "00212361daf3": "The update feed is invalid. Try again later.",
   "b22c9541adab": "The update metadata changed. Check for updates again.",
+  "fbdb2fff1c81": "The version wasn’t restored. Restore it again.",
   "842b90180293": "The wikilink target was not found in this workspace.",
   "70ccfc9c9dd2": "The window stopped responding. Unsaved changes may be lost.",
   "671a56401be1": "The workspace changed during export. Export again.",

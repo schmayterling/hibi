@@ -6319,6 +6319,9 @@
   "b22c9541adab": [
     "src/main/updates.ts"
   ],
+  "fbdb2fff1c81": [
+    "src/renderer/src/main.tsx"
+  ],
   "842b90180293": [
     "src/main/links.ts"
   ],

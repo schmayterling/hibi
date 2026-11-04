@@ -156,6 +156,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Letting each media drop and each new note or open an addon asks for wait
   // for a file operation on its own adds 22 (#825).
   // Letting close split wait for a file operation adds 62 (#826).
+  // Restoring a saved version that History returns once a file operation is
+  // done, and showing its change in the editor, adds 24 (#828).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -188,7 +190,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         55 +
         461 +
         22 +
-        62,
+        62 +
+        24,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

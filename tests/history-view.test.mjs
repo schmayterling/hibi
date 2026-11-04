@@ -24,6 +24,42 @@ const texts = {
   third: 'third version, typed after undoing the second.',
 }
 
+// An addon that hands the test CodeMirror, to make the editor read-only.
+async function installReadonlyProbe(profile) {
+  const addon = join(profile, 'installed-addons', 'readonly-probe')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'readonly-probe',
+      name: 'Readonly probe',
+      description: 'Public CodeMirror readonly facets',
+      kind: 'extension',
+      apiVersion: 3,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      capabilities: ['source'],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['index.js', 'hibi-addon.json'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    'export default ({ codeMirror }) => ({ start() { window.readonlyCodeMirror = codeMirror } })',
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'readonly-probe': true }),
+  )
+}
+
 test('the history view restores a point as a step undo takes back, and goes to an undone branch', {
   timeout: 60000,
 }, async (t) => {
@@ -557,39 +593,7 @@ test('going to a step or restoring a point shows the change in the editor, and a
   timeout: 90000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-change-'))
-  // An addon that hands the test CodeMirror, to make the editor read-only.
-  const addon = join(profile, 'installed-addons', 'readonly-probe')
-  await mkdir(addon, { recursive: true })
-  await writeFile(
-    join(addon, 'hibi-addon.json'),
-    JSON.stringify({
-      id: 'readonly-probe',
-      name: 'Readonly probe',
-      description: 'Public CodeMirror readonly facets',
-      kind: 'extension',
-      apiVersion: 3,
-      version: '1.0.0',
-      authors: [{ displayName: 'Test' }],
-      capabilities: ['source'],
-      entry: 'index.js',
-    }),
-  )
-  await writeFile(
-    join(addon, '.hibi-install.json'),
-    JSON.stringify({
-      hash: 'a'.repeat(64),
-      files: ['index.js', 'hibi-addon.json'],
-      source: 'local',
-    }),
-  )
-  await writeFile(
-    join(addon, 'index.js'),
-    'export default ({ codeMirror }) => ({ start() { window.readonlyCodeMirror = codeMirror } })',
-  )
-  await writeFile(
-    join(profile, 'addons.json'),
-    JSON.stringify({ 'readonly-probe': true }),
-  )
+  await installReadonlyProbe(profile)
   // A note far longer than the window, with a paragraph added at its end:
   // long enough to be a point of its own once undone.
   const original = Array.from(
@@ -753,4 +757,419 @@ test('going to a step or restoring a point shows the change in the editor, and a
     .filter({ hasText: /read-only/i })
     .waitFor()
   assert.equal(await markdown(), `# ${edited}`)
+})
+
+test('restoring a saved version shows the change in the editor, one chosen while a save runs follows it in its tab, and a read-only editor stops it', {
+  timeout: 90000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-version-'))
+  await installReadonlyProbe(profile)
+  // A note far longer than the window, with a paragraph added at its end.
+  const original = Array.from(
+    { length: 80 },
+    (_, index) => `paragraph ${index}`,
+  ).join('\n\n')
+  const edited = `${original}\n\nthe last paragraph, added at the end`
+  const file = join(profile, 'note.md')
+  await writeFile(file, original)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      globalThis.release?.()
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const editor = page.getByRole('textbox', { name: /document editor/i })
+  const markdown = () =>
+    page.evaluate(async () => (await window.hibi.getDocument()).markdown)
+  const shows = (text) =>
+    waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  await pressShortcut(app, `${mod}+o`)
+  await shows(original)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  // The test edits through the formatted view, as typing does.
+  const edit = (spec) =>
+    page.evaluate((spec) => {
+      document
+        .querySelector('.rich-pane .cm-content')
+        .cmTile.root.view.dispatch(spec)
+    }, spec)
+  // The editor works with its caret and view at the note's top.
+  const top = async () => {
+    await edit({ selection: { anchor: 0 } })
+    await editor.focus()
+    await page.evaluate(() => {
+      document.querySelector('.rich-pane').scrollTop = 0
+    })
+  }
+  // Where the caret is and whether the view shows it, once it settles.
+  const caret = async () => {
+    let last = null
+    for (let read = 0; read < 20; read++) {
+      await page.waitForTimeout(100)
+      const now = await page.evaluate(() => {
+        const pane = document.querySelector('.rich-pane')
+        const { view } = pane.querySelector('.cm-content').cmTile.root
+        const bounds = pane.getBoundingClientRect()
+        const box = view.coordsAtPos(view.state.selection.main.head)
+        return {
+          at: view.state.selection.main.head,
+          shown:
+            !!box &&
+            box.top >= bounds.top - 1 &&
+            box.bottom <= bounds.bottom + 1,
+        }
+      })
+      if (now.shown && JSON.stringify(now) === JSON.stringify(last)) break
+      last = now
+    }
+    return last
+  }
+  // Restores a saved version of `text` from the History view.
+  const restore = async (text) => {
+    const [version] = (
+      await Promise.all(
+        (
+          await page.evaluate(() => window.hibi.listVersions())
+        ).map(async (version) => ({
+          version,
+          text: await page.evaluate(
+            (id) => window.hibi.previewVersion(id),
+            version.id,
+          ),
+        })),
+      )
+    ).filter((found) => found.text === text)
+    const history = page.getByRole('dialog', { name: /^history$/i })
+    await history.waitFor()
+    await history.locator(`#history-version-${version.version.id}`).click()
+    await history.getByRole('button', { name: /^restore$/i }).click()
+    await history.waitFor({ state: 'hidden' })
+  }
+  const openHistory = async () => {
+    await clickMenu(app, 'Command palette')
+    await page
+      .getByRole('combobox', { name: /search commands/i })
+      .fill('history')
+    await page
+      .getByRole('option')
+      .filter({ hasText: /^history/i })
+      .first()
+      .click()
+  }
+  await edit({ selection: { anchor: original.length } })
+  await edit({
+    changes: { from: original.length, insert: edited.slice(original.length) },
+    selection: { anchor: edited.length },
+    userEvent: 'input.type',
+  })
+  await shows(edited)
+  await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(
+    page,
+    async (text) => {
+      const document = await window.hibi.getDocument()
+      return document.savedMarkdown === text && !document.dirty
+    },
+    edited,
+  )
+
+  // Restoring the text the save replaced puts the caret where the paragraph
+  // was taken out, in view.
+  await top()
+  await openHistory()
+  await restore(original)
+  await shows(original)
+  assert.deepEqual(await caret(), { at: original.length, shown: true })
+
+  // A save held on its way to main keeps the app busy.
+  const holdSave = async () => {
+    await app.evaluate(({ ipcMain }) => {
+      const handlers = ipcMain._invokeHandlers
+      const save = handlers.get('document:save')
+      globalThis.held = new Promise((entered) => {
+        handlers.set('document:save', async (...args) => {
+          handlers.set('document:save', save)
+          await new Promise((release) => {
+            globalThis.release = release
+            entered()
+          })
+          return save(...args)
+        })
+      })
+    })
+    await clickMenu(app, 'Save')
+    await app.evaluate(() => globalThis.held)
+    await page.locator('.app[aria-busy="true"]').waitFor()
+  }
+  const historyDuringSave = () =>
+    app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send(
+        'app:command',
+        'history',
+      ),
+    )
+
+  // The version chosen while a save runs is restored once the save is done,
+  // not dropped, and the editor shows its change.
+  await edit({ changes: { from: 0, insert: '# ' } })
+  await shows(`# ${original}`)
+  await holdSave()
+  await historyDuringSave()
+  await restore(edited)
+  assert.equal(await markdown(), `# ${original}`)
+  await app.evaluate(() => globalThis.release())
+  await shows(edited)
+  assert.deepEqual(await caret(), { at: edited.length, shown: true })
+
+  // A tab chosen before it goes first: the version isn't restored in that one.
+  const other = join(profile, 'other.md')
+  await writeFile(other, 'the other note')
+  await app.evaluate(({ dialog }, other) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [other],
+    })
+  }, other)
+  await pressShortcut(app, `${mod}+o`)
+  await shows('the other note')
+  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+  await shows(edited)
+  await holdSave()
+  await page
+    .getByRole('tab', { name: 'other.md', exact: true })
+    .click({ force: true })
+  await historyDuringSave()
+  await restore(original)
+  await app.evaluate(() => globalThis.release())
+  await shows('the other note')
+  await page.getByText(/the version wasn.t restored/i).waitFor()
+  assert.equal(await markdown(), 'the other note')
+  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+  await shows(edited)
+
+  // A note with CRLF line ends: the editor's positions are not the text's, and
+  // the caret goes to the editor's.
+  const windows = join(profile, 'windows.md')
+  const lines = 'the first line\r\n\r\nthe second line'
+  const linesEdited = `${lines} and more words after it`
+  await writeFile(windows, lines)
+  await app.evaluate(({ dialog }, windows) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [windows],
+    })
+  }, windows)
+  await pressShortcut(app, `${mod}+o`)
+  await shows(lines)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  const inEditor = lines.replaceAll('\r\n', '\n').length
+  await edit({
+    changes: { from: inEditor, insert: linesEdited.slice(lines.length) },
+    userEvent: 'input.type',
+  })
+  await shows(linesEdited)
+  await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(
+    page,
+    async (text) => {
+      const document = await window.hibi.getDocument()
+      return document.savedMarkdown === text && !document.dirty
+    },
+    linesEdited,
+  )
+  await top()
+  await openHistory()
+  await restore(lines)
+  await shows(lines)
+  assert.deepEqual(await caret(), { at: inEditor, shown: true })
+  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+  await shows(edited)
+
+  // A read-only editor takes no edit, as with its own undo.
+  await page.waitForFunction(() => !!window.readonlyCodeMirror)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  await top()
+  await openHistory()
+  await page.evaluate(() => {
+    const { Compartment, EditorState, Prec, StateEffect } =
+      window.readonlyCodeMirror.state
+    const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+      .root
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        new Compartment().of(Prec.highest(EditorState.readOnly.of(true))),
+      ),
+    })
+  })
+  await restore(original)
+  await page.getByText(/the editor is read-only right now/i).waitFor()
+  assert.equal(await markdown(), edited)
+})
+
+test('a saved version stays out of a note gone to while its text is read, and one chosen while another tab closes is restored', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-reading-'))
+  const original = 'the first note, as written'
+  const edited = `${original} and edited`
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      globalThis.release?.()
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const shows = (text) =>
+    waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  const open = async (name, text) => {
+    const file = join(profile, name)
+    await writeFile(file, text)
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await pressShortcut(app, `${mod}+o`)
+    await shows(text)
+    await page.waitForFunction(
+      () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+    )
+  }
+  await open('other.md', 'the other note')
+  await open('note.md', original)
+  await page.evaluate((insert) => {
+    const { view } = document.querySelector('.rich-pane .cm-content').cmTile
+      .root
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert },
+      userEvent: 'input.type',
+    })
+  }, edited.slice(original.length))
+  await shows(edited)
+  await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(
+    page,
+    async (text) => {
+      const document = await window.hibi.getDocument()
+      return document.savedMarkdown === text && !document.dirty
+    },
+    edited,
+  )
+  // Chooses the version of the first text, with its preview shown.
+  const choose = async () => {
+    const history = page.getByRole('dialog', { name: /^history$/i })
+    await history.waitFor()
+    const id = await page.evaluate(async (text) => {
+      for (const { id } of await window.hibi.listVersions())
+        if ((await window.hibi.previewVersion(id)) === text) return id
+    }, original)
+    await history.locator(`#history-version-${id}`).click()
+    await history.locator('section pre').waitFor()
+    return history
+  }
+  const openHistory = async () => {
+    await clickMenu(app, 'Command palette')
+    await page
+      .getByRole('combobox', { name: /search commands/i })
+      .fill('history')
+    await page
+      .getByRole('option')
+      .filter({ hasText: /^history/i })
+      .first()
+      .click()
+  }
+  // Holds the next call on a channel; with `after`, its reply on the way back.
+  const hold = (channels, after) =>
+    app.evaluate(
+      ({ ipcMain }, { channels, after }) => {
+        const handlers = ipcMain._invokeHandlers
+        globalThis.held = new Promise((entered) => {
+          for (const channel of channels) {
+            const handler = handlers.get(channel)
+            handlers.set(channel, async (...args) => {
+              handlers.set(channel, handler)
+              const reply = after ? await handler(...args) : null
+              await new Promise((release) => {
+                globalThis.release = release
+                entered()
+              })
+              return after ? reply : handler(...args)
+            })
+          }
+        })
+      },
+      { channels, after },
+    )
+
+  // The text comes back after the user has gone to the other note: that note
+  // keeps its text, the first keeps its own, and the user hears why.
+  await openHistory()
+  const history = await choose()
+  await hold(['history:preview'], true)
+  await history.getByRole('button', { name: /^restore$/i }).click()
+  await history.waitFor({ state: 'hidden' })
+  await app.evaluate(() => globalThis.held)
+  await page.getByRole('tab', { name: 'other.md', exact: true }).click()
+  await shows('the other note')
+  await app.evaluate(() => globalThis.release())
+  await page.getByText(/the version wasn.t restored/i).waitFor()
+  assert.equal(
+    await page.evaluate(async () => (await window.hibi.getDocument()).markdown),
+    'the other note',
+  )
+  await page.getByRole('tab', { name: 'note.md', exact: true }).click()
+  await shows(edited)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+
+  // A file operation other than a save disables the editor until the app has
+  // rendered its end: that is no read-only editor to the waiting version.
+  await hold(['document:close-tab', 'document:close-tabs'], false)
+  await page
+    .getByRole('button', { name: 'Close other.md' })
+    .click({ force: true })
+  await page.locator('.app[aria-busy="true"]').waitFor()
+  await app.evaluate(() => globalThis.held)
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send('app:command', 'history'),
+  )
+  const during = await choose()
+  await during.getByRole('button', { name: /^restore$/i }).click()
+  await during.waitFor({ state: 'hidden' })
+  await app.evaluate(() => globalThis.release())
+  await shows(original)
 })

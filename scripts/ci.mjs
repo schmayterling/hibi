@@ -155,7 +155,10 @@ export function planChecks(
           [...graph.files].some((file) => changes.has(file)) ||
           ((build || dataChanged) && graph.files.has('tests/electron.mjs')) ||
           (dataChanged && graph.readsFiles) ||
-          (beyondTests && graph.dynamic)
+          (beyondTests && graph.dynamic) ||
+          // This test reads every test file against its ledger.
+          (test === 'tests/formatted-engine-gaps.test.mjs' &&
+            [...changes].some((file) => /^tests\/[^/]*\.test\.mjs$/.test(file)))
         )
       })
   const unitTests = selected.filter((test) =>

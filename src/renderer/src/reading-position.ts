@@ -11,6 +11,11 @@ export const placedSelection = Facet.define<boolean, boolean>({
 })
 
 const scrollRequests = new WeakMap<EditorView, number>()
+/**
+ * Views with a scroll command they have not run: a measure can end without
+ * running it while what the view draws keeps changing.
+ */
+const scrollsWaiting = new WeakSet<EditorView>()
 
 /** The reading position during one rendering or background parsing slice. */
 type Reading = {
@@ -351,6 +356,11 @@ function restore(view: EditorView, position: Reading) {
   // coordinates, without a scroll command for each correction.
   if (position.text && !drawnText(view, position.pos)) {
     if ((scrollRequests.get(view) ?? 0) !== position.scrollRequest) return false
+    // The view keeps only the last command, which this one would replace.
+    if (scrollsWaiting.has(view)) {
+      view.requestMeasure()
+      return false
+    }
     reveal(view, position)
     return true
   }
@@ -381,6 +391,7 @@ export const keepRead = [
         update.view,
         (scrollRequests.get(update.view) ?? 0) + 1,
       )
+      scrollsWaiting.add(update.view)
       revealing.delete(update.view)
     }
     // Scrolling away ends the place held: back at the same scroll, the
@@ -430,6 +441,7 @@ export const keepRead = [
       return true
     }
     scrollRequests.set(view, (scrollRequests.get(view) ?? 0) + 1)
+    scrollsWaiting.delete(view)
     reading.delete(view)
     kept.delete(view)
     return false

@@ -222,6 +222,15 @@ test('inactive addon target edits save exact source without changing active inpu
     await rich.locator('[role="heading"][aria-level="1"]').innerText(),
     'ONE',
   )
+  // The save kept the text it replaced and the text it wrote, though the tab
+  // wasn't the active one. An addon's save is one the user asked for, not an
+  // autosave, so History lists its versions whatever is saved beside them.
+  assert.deepEqual(
+    (await page.evaluate(() => window.hibi.listVersions())).map(
+      ({ automatic }) => automatic ?? false,
+    ),
+    [false, false],
+  )
 })
 
 test('active formatted addon target edits keep canonical source and native history', {

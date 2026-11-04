@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict'
-import fs, { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import fs, {
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -181,6 +188,34 @@ test('streams images larger than 8 MiB, supports ranges, and denies stale or abo
   scope.revision++
   assert.equal((await server.serve(new Request(media.url))).status, 404)
   assert.deepEqual(counts, before)
+})
+
+test('resolving a standalone image larger than 512 MiB reads only its header and releases its URL on unmount', async (t) => {
+  const { root, scope, server } = await fixture(t)
+  const name = 'large photo #1.gif'
+  scope.note = join(root, name)
+  await writeFile(scope.note, gif)
+  await truncate(scope.note, 513 * 1024 * 1024)
+  const counts = countIO(t)
+  const { media } = await server.resolve(encodeURIComponent(name), 7, 'viewer')
+  assert.equal(media.kind, 'image')
+  assert.equal(counts.bytes, 4096)
+  const response = await server.serve(
+    new Request(media.url, { headers: { range: 'bytes=0-15' } }),
+  )
+  assert.equal(response.status, 206)
+  assert.deepEqual(
+    Buffer.from(await response.arrayBuffer()),
+    gif.subarray(0, 16),
+  )
+  assert.equal(counts.bytes, 8192 + 16)
+  server.cancel('viewer')
+  const before = { ...counts }
+  assert.equal((await server.serve(new Request(media.url))).status, 404)
+  assert.deepEqual(counts, before)
+  t.diagnostic(
+    '513 MiB image: resolution reads 4 KiB; no image body crosses the renderer bridge.',
+  )
 })
 
 test('svg receives inert response headers, and missing media tracks only relevant fallback paths', async (t) => {

@@ -79,11 +79,16 @@ test('large local images stream; external changes refresh one image and svg rema
     const { revision } = await window.hibi.getDocument()
     return {
       small: await window.hibi.readDocumentImage('assets/stable.gif', revision),
-      large: await window.hibi.readDocumentImage('assets/large.gif', revision),
+      large: (await window.hibi.readDocumentImage('assets/large.gif', revision))
+        ?.length,
     }
   })
   assert.match(oldBridge.small, /^data:image\/gif;base64,/)
-  assert.equal(oldBridge.large, null)
+  assert.equal(
+    oldBridge.large,
+    'data:image/gif;base64,'.length +
+      4 * Math.ceil((9 * 1024 * 1024 + gif.length) / 3),
+  )
   const headers = await page.evaluate(async (url) => {
     const response = await fetch(url)
     return Object.fromEntries(response.headers)

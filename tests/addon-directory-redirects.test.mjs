@@ -4,7 +4,7 @@ import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 
 test('the addon directory follows a redirect on its own host without cookies', {
   timeout: 45000,
@@ -55,6 +55,7 @@ test('the addon directory follows a redirect on its own host without cookies', {
     await rm(folder, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
   await app.evaluate(({ session }) =>
     session.defaultSession.setCertificateVerifyProc((_request, done) =>
       done(0),

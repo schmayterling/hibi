@@ -90,7 +90,7 @@ The pinned compiler honors the local denying proxy that blocks automatic package
 
 `index.ts` registers the renderer command. `native.ts` snapshots the workspace, embeds escaped data in the site template, and uses the native save operation. Use the active syntax pipeline and per-file overrides, sanitize generated HTML with DOMPurify, and embed required styles and fonts.
 
-Resolve local Markdown images from each note's folder, including absolute paths and `file:` URLs. Embed PNG, JPEG, GIF, WebP, AVIF, and SVG images up to 8 MiB each, within a 20 MiB combined Markdown-and-image limit. Do not copy remote images or other attachments. Include the active document's in-memory edits without saving them to disk. Detect changes during rendering and ask the user to export again.
+Resolve local Markdown images from each note's folder, including absolute paths and `file:` URLs. PNG, JPEG, GIF, WebP, AVIF, and SVG images have no per-image byte cap. Disk exports stream local media; in-memory exports and previews retain their aggregate budgets. Do not copy remote images. Include the active document's in-memory edits without saving them to disk. Detect changes during rendering and ask the user to export again.
 
 Reuse the shared sidebar and command palette, MiniSearch, and bundled Geist. Export the nine bundled color schemes and their full notices. Host snapshot preferences set the initial appearance; readers can override it. Plugin palettes fall back to Hibi, and plugin code or CSS overrides must not enter exported sites.
 

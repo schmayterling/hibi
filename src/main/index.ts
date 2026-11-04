@@ -1293,6 +1293,8 @@ function createWindow(): void {
     )
       return
     console.error('failed to load app:', error)
+    // The failed document has no editor to answer journal or undo-history flushes.
+    journalReady = false
     void showStartupError(error, window)
   })
 }

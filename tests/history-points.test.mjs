@@ -21,7 +21,7 @@ const second = 1000,
   hour = 60 * minute,
   day = 24 * hour
 const start = Date.UTC(2026, 9, 1)
-function note(source = '', options = {}) {
+function note(source = 'the text the note opened with. ', options = {}) {
   let time = start
   const session = new DocumentSession(
     source,
@@ -399,6 +399,59 @@ test('a stored history marks the states saves kept, by step, past trimmed steps'
   const reopened = note(writer.text(), { historyGroups: 4 })
   reopened.session.restoreHistory(kept.units, restoredHistory(kept))
   assert.deepEqual(sorted(historyOf(reopened.session).versioned), expected)
+})
+
+test('an empty start is no point, and All steps and undo still reach it', () => {
+  const steps = (found) => found.map(({ step, reason }) => [step, reason])
+  const writer = note('')
+  writer.type('first sentence of the note. ')
+  writer.wait(6 * second)
+  writer.type('second sentence, after a pause. ')
+  const tree = historyOf(writer.session)
+  assert.deepEqual(steps(points(writer)), [[0, 'paused']])
+  // The same text with something in it at the start lists it.
+  const opened = note(' ')
+  opened.type('first sentence of the note. ')
+  opened.wait(6 * second)
+  opened.type('second sentence, after a pause. ')
+  assert.deepEqual(steps(points(opened)), [
+    [0, 'paused'],
+    [-1, 'oldest'],
+  ])
+  // All steps goes there along the tree.
+  assert.deepEqual(historySummary(tree, tree.current, -1), {
+    added: 0,
+    removed: 10,
+    line: '',
+  })
+  assert.equal(goToStep(writer.session, tree, -1), true)
+  assert.equal(writer.text(), '')
+  writer.session.redo()
+  writer.session.redo()
+  assert.equal(writer.text().length, 60)
+  // Undo goes there step by step.
+  writer.session.undo()
+  writer.session.undo()
+  assert.equal(writer.text(), '')
+  assert.equal(writer.session.undo(), null)
+})
+
+test('an undone change right after an empty start merges into it, with no point for either', () => {
+  const writer = note('')
+  // The walk from an undone tip stops at the oldest state, listed or not.
+  writer.type('teh')
+  writer.session.undo()
+  writer.type('the end of the note, typed after trying.')
+  assert.deepEqual(points(writer), [])
+  // One long enough to stand alone stays a point of its own.
+  const long = note('')
+  long.type('a first try long enough to stand alone.')
+  long.session.undo()
+  long.type('the end of the note, typed after trying.')
+  assert.deepEqual(
+    points(long).map(({ step, reason }) => [step, reason]),
+    [[0, 'stopped']],
+  )
 })
 
 test('an undone change of a few characters is not a point of its own', () => {

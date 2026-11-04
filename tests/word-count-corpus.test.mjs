@@ -619,7 +619,18 @@ test('canonical path keeps native word-count syntax choices', {
 test('native corpus: formatted counts equal the rich text counts in the app', {
   timeout: 1800000,
 }, async (t) => {
-  const results = corpusResults()
+  // Each state opens as its own note, so no edit runs here; the schema corpus
+  // checks every state. The first and last state of each note hold every
+  // syntax setting. Two middle states hold what no first or last state does:
+  // an empty heading, and a code block with no content lines, which reaches
+  // the app's check of the code extents the document worker sends.
+  const middle = new Set(['42:3', '52:14'])
+  const results = corpusResults().filter(
+    (result, index, all) =>
+      result.step === 'initial' ||
+      all[index + 1]?.doc !== result.doc ||
+      middle.has(`${result.doc}:${result.step}`),
+  )
   const quirks = new Map(
     richQuirks.flatMap((quirk) => quirk.states.map((state) => [state, quirk])),
   )

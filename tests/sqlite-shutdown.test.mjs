@@ -18,7 +18,7 @@ test('dictionary cleanup never abandons durable close at the generic deadline', 
     return 1
   })
   t.mock.method(globalThis, 'clearTimeout', () => {})
-  t.mock.method(console, 'error', () => {})
+  const errors = t.mock.method(console, 'error', () => {})
   let release
   let finished = false
   const close = new Promise((resolve) => {
@@ -45,6 +45,10 @@ test('dictionary cleanup never abandons durable close at the generic deadline', 
   release()
   await stopping
   assert.equal(abandoned, false)
+  assert.deepEqual(
+    errors.mock.calls.map(({ arguments: args }) => args),
+    [['native addon dictionary cleanup exceeded 2 seconds']],
+  )
 })
 
 test('a failed dictionary close is reported without holding quit or addon changes open', async (t) => {

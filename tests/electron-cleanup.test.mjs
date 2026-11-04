@@ -542,7 +542,7 @@ test('dialog and uncaught tracing preserve native results, errors and default ha
 
 test('cleanup stops Electron 15 s after quit, and still fails a quit that never comes at 20 s', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  t.mock.method(console, 'error', () => {})
+  const errors = t.mock.method(console, 'error', () => {})
   const start = async (killExits = true) => {
     const child = Object.assign(new EventEmitter(), {
       pid: 1,
@@ -614,6 +614,13 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
   assert.equal(transport.stopped, 1)
   t.mock.timers.tick(5000)
   await assert.rejects(transport.closing, /post-quit cleanup did not finish/)
+  // Each stop after a quit says why, for the two runs that reached it.
+  assert.equal(
+    errors.mock.calls.filter(({ arguments: [text] }) =>
+      String(text).startsWith('electron-shutdown-after-quit:'),
+    ).length,
+    2,
+  )
 })
 
 test('teardown waits for setup when a name filter skips every top-level test, and not past its timeout', async (t) => {

@@ -288,11 +288,10 @@ test('a widget that fails when scrolling draws it leaves the note working', {
   const source = `${far}Q far\n\nend\n\n`
   const context = await open(t, { source, addon: { widget: throwing } })
   await opened(context, source)
+  // The pane's own scroll: no update, so CodeMirror draws it while it measures.
   await context.page.evaluate((pane) => {
-    const view = document.querySelector(`${pane} .cm-content`).cmTile.root.view
-    view.dispatch({
-      effects: view.constructor.scrollIntoView(view.state.doc.length),
-    })
+    const scroller = document.querySelector(pane)
+    scroller.scrollTop = scroller.scrollHeight
   }, context.pane)
   await named(context, 'bad-ext.bad: widget boom')
   await type(context, 'x')
@@ -467,6 +466,8 @@ test('a note already holding what a decoration source throws on opens, names it 
   await opened(context, source)
   await named(context, 'bad-ext.bad: decorations boom')
   await editorReady(context)
+  // The view it failed in reports nothing more: no edit failed here.
+  assert.equal(await context.page.locator('.document-notice').count(), 0)
   await type(context, 'x')
   await typingAndSavingWork(context, source, 'x')
 })
@@ -510,11 +511,10 @@ test('a decoration source that throws only for what scrolls into view is named a
     ),
   })
   await opened(context, source)
+  // The pane's own scroll: no update, so CodeMirror draws it while it measures.
   await context.page.evaluate((pane) => {
-    const view = document.querySelector(`${pane} .cm-content`).cmTile.root.view
-    view.dispatch({
-      effects: view.constructor.scrollIntoView(view.state.doc.length),
-    })
+    const scroller = document.querySelector(pane)
+    scroller.scrollTop = scroller.scrollHeight
   }, context.pane)
   await named(context, 'bad-ext.bad: decorations boom')
   await editorReady(context)

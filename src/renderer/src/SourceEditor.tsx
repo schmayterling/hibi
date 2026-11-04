@@ -3020,13 +3020,7 @@ export function SourceEditor({
       unregisterProjection()
       removeAnnotations()
       detachSession()
-      try {
-        editor.destroy()
-      } catch (error) {
-        // A dead view has lost what destroying goes through.
-        if (!isViewDead(editor)) throw error
-        editor.dom.remove()
-      }
+      editor.destroy()
       view.current = null
       setMountedView(null)
     }

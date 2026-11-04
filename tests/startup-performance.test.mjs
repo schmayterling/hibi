@@ -138,6 +138,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Past the step limit, making old steps typed without a pause into one, so
   // undo still reaches the oldest text, adds 940 (#803).
   // Keeping the newest 32 undo steps as they were typed adds 20 (#807).
+  // Letting tab clicks, tab closes, links, file opens, media and addon
+  // commands wait for a file operation like keys do, and dropping what
+  // arrives behind a file dialog, adds 785 (#808).
+  // Finding History by "version" in the palette adds 61 (#814).
   // Keeping the undo steps a save took as it took them, through redo, a save
   // landing late and steps going, adds 68 (#810).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
@@ -162,6 +166,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         499 +
         940 +
         20 +
+        785 +
+        61 +
         68,
     `startup catalog grew to ${bytes} bytes`,
   )

@@ -176,6 +176,12 @@ function reasonsOf({ steps, children }: HistoryTree) {
   return reasons
 }
 
+/** A step's time, with its date when it isn't today's by the local calendar. */
+export const stepTime = (time: number, now: number) =>
+  new Date(time).toDateString() === new Date(now).toDateString()
+    ? new Date(time).toLocaleTimeString()
+    : new Date(time).toLocaleString()
+
 /**
  * Past a day, the newest an hour; past a week, the newest a day, in the
  * hours and days of the local clock and calendar. Ask newest first.
@@ -290,6 +296,40 @@ export function goToStep(
     if (!session.followBranch(tree.steps[step]!.group.step) || !session.redo())
       return false
   return true
+}
+
+/**
+ * Takes the session to state `to` as the history view does: a step along
+ * undo and redo, a point as one new edit undo takes back. `tree`, `text` and
+ * `version` are what the view read. Returns where the text changed, after
+ * its first change, or null when it didn't.
+ */
+export function returnTo(
+  session: Pick<
+    DocumentSession,
+    'snapshot' | 'edit' | 'undo' | 'redo' | 'followBranch'
+  >,
+  tree: HistoryTree,
+  text: string,
+  version: number,
+  to: number,
+  step: boolean,
+) {
+  // Offsets read before an edit made since would change other text.
+  if (session.snapshot().version !== version)
+    throw new Error('The note changed while History was open. Open it again.')
+  const changes = historyChanges(tree, tree.current, to).filter(
+    ({ from, to, insert }) => text.slice(from, to) !== insert,
+  )
+  if (step) {
+    if (!goToStep(session, tree, to))
+      throw new Error(
+        'History stopped partway to this step. Open it again to go on.',
+      )
+  } else if (changes.length)
+    session.edit(changes, 'visual', crypto.randomUUID())
+  const first = changes[0]
+  return first ? first.from + first.insert.length : null
 }
 
 const words = (text: string) => text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0

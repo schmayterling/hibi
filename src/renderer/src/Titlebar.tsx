@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { DocumentState } from '../../shared/desktop'
+import type { documentViews } from '../../shared/document-types'
 import { type Hotkeys, shortcutLabels } from '../../shared/hotkeys'
 import { IconButton } from '../../ui/Controls'
 import { useMenus } from '../../ui/MenuHost'
@@ -66,7 +67,8 @@ export function Titlebar({
   settingsOpen: boolean
   mode: ViewMode
   availableViews: readonly ViewMode[]
-  onMode: (mode: ViewMode) => void
+  /** Only the views the switch offers; the image view is not one. */
+  onMode: (mode: (typeof documentViews)[number]) => void
   hotkeys: Hotkeys
   platform: string
   sidebarOpen: boolean

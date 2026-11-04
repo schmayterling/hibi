@@ -357,11 +357,15 @@ export function useFormattingToolbar(
               ? 'rich'
               : focusedPane)) === 'source'
       if (!useSource && !rich.current) return
+      const editor = () => (useSource ? source.current : rich.current)
+      // Dropped where the pointer is now: the note may scroll while these wait.
+      const place = coords && editor()?.place(coords)
       try {
         await onAttach(files, () => {
           // Read when these files start, past any drop that waited ahead of them.
+          const at = place ? place() : coords
           const sourceSelection =
-            (useSource ? source.current : rich.current)?.capture(coords) ?? null
+            at === null ? null : (editor()?.capture(at) ?? null)
           return async (attachments) => {
             await new Promise(requestAnimationFrame)
             let inserted = false

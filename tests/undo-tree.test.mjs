@@ -385,6 +385,22 @@ test('trimming takes a branch with the branches inside it, counts each step once
   assert.equal(reopened.text(), 'ac')
 })
 
+test('a save flags only the texts its receipt says it kept', () => {
+  const flagged = (kept) => {
+    const note = open('first text ')
+    note.insert(11, 'typed before the save')
+    note.session.sealHistory()
+    note.session.markSaved(note.session.snapshot(), kept)
+    return keptHistory(note.session).versioned.map(([step]) => step)
+  }
+  assert.deepEqual(flagged('none'), [])
+  assert.deepEqual(flagged('written'), [0])
+  assert.deepEqual(
+    flagged('both').sort((a, b) => a - b),
+    [-1, 0],
+  )
+})
+
 test('stored history is checked before it is used', () => {
   const note = open('base')
   note.insert(4, ' one')

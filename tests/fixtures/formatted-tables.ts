@@ -96,24 +96,43 @@ class Space extends WidgetType {
     return this.height
   }
 }
-const grow = StateEffect.define<number>()
-/** Space at the note's start, standing in for text above whose height the view estimates again. */
+const grow = StateEffect.define<{ at: number; height: number }>()
+/**
+ * Spaces in the note, standing in for text whose height the view estimates
+ * again; each set again by its position, removed at a height of 0.
+ */
 const above = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(value, transaction) {
+    let set = value.map(transaction.changes)
     for (const effect of transaction.effects)
-      if (effect.is(grow))
-        return Decoration.set(
-          Decoration.widget({
-            widget: new Space(effect.value),
-            block: true,
-            side: -1,
-          }).range(0),
-        )
-    return value.map(transaction.changes)
+      if (effect.is(grow)) {
+        const { at, height } = effect.value
+        set = set.update({
+          filterFrom: at,
+          filterTo: at,
+          filter: (from) => from !== at,
+          add: height
+            ? [
+                Decoration.widget({
+                  widget: new Space(height),
+                  block: true,
+                  side: -1,
+                }).range(at),
+              ]
+            : [],
+        })
+      }
+    return set
   },
   provide: (field) => EditorView.decorations.from(field),
 })
+/** A space of `height` px at `at`, kept as a parsing slice keeps the reader. */
+function growAt(at: number, height: number) {
+  if (!view) return
+  keepReading(view)
+  view.dispatch({ effects: grow.of({ at, height }) })
+}
 const access = (on: boolean) => [
   EditorState.readOnly.of(!on),
   EditorView.editable.of(on),
@@ -247,11 +266,9 @@ Object.assign(window, {
      * Give the text above `height` px more, keeping the reader as a parsing
      * slice does, as when the view estimates text it has not drawn again.
      */
-    growAbove(height: number) {
-      if (!view) return
-      keepReading(view)
-      view.dispatch({ effects: grow.of(height) })
-    },
+    growAbove: (height: number) => growAt(0, height),
+    /** The same with the space at `at`, or without it at a height of 0. */
+    growAt,
     /** Make the mounted editor read-only and not editable, or editable again. */
     setEditable: (on: boolean) =>
       view?.dispatch({ effects: editable.reconfigure(access(on)) }),

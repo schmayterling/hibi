@@ -524,12 +524,11 @@ test('scrolled tab-indented, wide-character, and wrapped long lines keep visible
       '.rich-pane .hibi-lp-codescroll > .cm-line { padding-bottom: 9000px; }',
   })
   await show(wide, right)
-  assert.ok(
-    await page
-      .locator('.rich-pane .hibi-lp-codescroll')
-      .first()
-      .evaluate((box) => box.textContent.length > 20_000),
-    'the whole line is drawn',
+  // A tall line gets a gap again when drawn, until CodeMirror next measures.
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.rich-pane .hibi-lp-codescroll')?.textContent
+        .length > 20_000,
   )
   await tall.evaluate((style) => style.remove())
   // A short first line, then one long line that wraps.

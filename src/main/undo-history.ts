@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
   mkdir,
+  opendir,
   readdir,
   readFile,
   rename,
@@ -8,7 +9,7 @@ import {
   stat,
   unlink,
 } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { app, type BrowserWindow } from 'electron'
 import type { SourceSnapshot } from '../shared/source-buffer'
 import {
@@ -61,19 +62,27 @@ const tracked = <T>(task: Promise<T>) => {
   return task
 }
 
+let swept: Promise<void> | undefined
+/**
+ * A write a crash cut short leaves its temporary copy, with deleted text: the
+ * first read, write, move or removal of a launch removes them, in the queue,
+ * while nothing is writing.
+ */
+const sweep = () =>
+  (swept ??= (async () => {
+    for (const name of await readdir(folder()).catch(() => []))
+      if (name.endsWith('.tmp'))
+        await unlink(join(folder(), name)).catch(() => {})
+  })())
+
 /** Kept files by name, measured once, then followed as they change. */
 type Kept = { bytes: number; time: number; digest?: string }
 let sizes: Map<string, Kept> | undefined
 async function measure() {
   if (sizes) return sizes
+  await sweep()
   const measured = new Map<string, Kept>()
   for (const name of await readdir(folder()).catch(() => [])) {
-    // A write a crash cut short leaves its temporary copy, with deleted text.
-    // Nothing is writing while this runs in the queue.
-    if (name.endsWith('.tmp')) {
-      await unlink(join(folder(), name)).catch(() => {})
-      continue
-    }
     if (!/^[0-9a-f]{64}\.json$/.test(name)) continue
     const info = await stat(join(folder(), name)).catch(() => null)
     if (info?.isFile())
@@ -84,12 +93,14 @@ async function measure() {
 }
 /** The note each kept history belongs to, by file name, so moves inside Hibi can follow it. */
 let notes: Map<string, string> | undefined
+/** Removes a kept history; returns whether the index named it. */
 async function remove(name: string) {
   await unlink(join(folder(), name)).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== 'ENOENT') throw error
   })
   sizes?.delete(name)
-  notes?.delete(name)
+  // Loaded here too: a launch's first read can find a stale history.
+  return (await indexed()).delete(name)
 }
 const indexPath = () => join(app.getPath('userData'), 'undo-history-notes.json')
 /** A crash mid-write leaves the index's temporary copy beside it. */
@@ -133,7 +144,7 @@ export async function storeUndoHistory(
     const text = JSON.stringify({ format: 1, hash, bytes, history })
     const name = fileName(path)
     if (Buffer.byteLength(text) > FILE_BYTES) {
-      await remove(name)
+      if (await remove(name)) await writeIndex()
       return
     }
     const files = await measure()
@@ -153,16 +164,19 @@ export async function storeUndoHistory(
       known.set(name, path)
       await writeIndex()
     }
-    let total = 0
+    let total = 0,
+      evicted = false
     for (const file of files.values()) total += file.bytes
     for (const [other, file] of [...files].sort(
       ([, a], [, b]) => a.time - b.time,
     )) {
       if (total <= TOTAL_BYTES) break
       if (other === name) continue
-      await remove(other)
+      // An evicted history leaves the index too.
+      if (await remove(other)) evicted = true
       total -= file.bytes
     }
+    if (evicted) await writeIndex()
   })
   return tracked(task)
 }
@@ -179,6 +193,7 @@ export function readUndoHistory(
   // first, and no store lands between finding a stale file and removing it.
   return serial(async () => {
     if (!(await keepsUndoHistory())) return null
+    await sweep()
     const name = fileName(path)
     let text: string
     try {
@@ -202,9 +217,55 @@ export function readUndoHistory(
     } catch {
       // Unreadable history starts over.
     }
-    await remove(name)
+    if (await remove(name)) await writeIndex()
     return null
   })
+}
+
+/**
+ * Kept histories of notes deleted outside Hibi go: a note missing from a
+ * folder that is there, at two looks `wait` ms apart, so a note Hibi moved
+ * has its history moved before the second. A folder that is missing or
+ * empty, as on a drive that isn't mounted, keeps its notes' histories.
+ */
+export async function pruneUndoHistory(wait = 10_000) {
+  const absent = (path: string) =>
+    stat(path).then(
+      () => false,
+      (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
+    )
+  const holds = (path: string) =>
+    opendir(path)
+      .then(async (entries) => {
+        try {
+          return (await entries.read()) !== null
+        } finally {
+          await entries.close()
+        }
+      })
+      .catch(() => false)
+  const gone = async (path: string) =>
+    (await absent(path)) &&
+    // iCloud Drive before macOS 14 swaps a note it evicts for `.name.icloud`.
+    (await absent(join(dirname(path), `.${basename(path)}.icloud`))) &&
+    (await holds(dirname(path)))
+  const listed = await serial(async () => {
+    await sweep()
+    return [...(await indexed())]
+  })
+  const missing: [string, string][] = []
+  for (const [name, path] of listed)
+    if (await gone(path)) missing.push([name, path])
+  if (!missing.length) return
+  await new Promise((resolve) => setTimeout(resolve, wait))
+  await tracked(
+    serial(async () => {
+      let changed = false
+      for (const [name, path] of missing)
+        if ((await gone(path)) && (await remove(name))) changed = true
+      if (changed) await writeIndex()
+    }),
+  )
 }
 
 /**

@@ -201,8 +201,12 @@ export function useAutosave(
             // first, so each gets a turn however many are held. Settings may
             // have changed during the attempt.
             const pending = documentRuntime.documents()
-            const turn = pending.findIndex((tab) => tab.tabId === next.tabId) + 1
-            for (const tab of [...pending.slice(turn), ...pending.slice(0, turn)])
+            const turn =
+              pending.findIndex((tab) => tab.tabId === next.tabId) + 1
+            for (const tab of [
+              ...pending.slice(turn),
+              ...pending.slice(0, turn),
+            ])
               scheduleNow.current(tab)
           }
         }, wait),

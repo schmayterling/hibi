@@ -150,6 +150,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // landing late or writing a later version and steps going, adds 149 (#810).
   // Remembering which states saves kept as versions when a note reopens adds
   // 70 (#820).
+  // Flagging only the texts a save kept as versions adds 55 (#830).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -178,7 +179,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         27 +
         132 +
         149 +
-        70,
+        70 +
+        55,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { decodeHTML } from 'entities'
 import { marked } from 'marked'
@@ -11,6 +11,7 @@ import {
   waitForEditor,
 } from '../scripts/benchmark-flows.mjs'
 import {
+  after,
   electron,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -1244,6 +1245,40 @@ async function launchInputFixture(t, source, counted = false) {
   return { app, page, rich, file, close }
 }
 
+let sharedInputApp,
+  sharedInputCases = 0
+// A launch that fails still leaves an app, and the next case launches another.
+const closeSharedInputApps = []
+after(() => Promise.all(closeSharedInputApps.map((close) => close())), {
+  timeout: 30000,
+})
+
+/** The fixture in the one app these cases share, as a new tab of its own. */
+async function openInputFixture(source) {
+  sharedInputApp ??= await launchInputFixture(
+    { after: (close) => closeSharedInputApps.push(close) },
+    '',
+  )
+  const { app, page, rich, file } = sharedInputApp
+  const name = `case-${++sharedInputCases}.md`
+  const path = join(dirname(file), name)
+  await writeFile(path, source)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
+  }, path)
+  await clickMenu(app, 'Open…')
+  await waitForAsync(
+    page,
+    async (name) => (await window.hibi.getDocument()).name === name,
+    name,
+  )
+  await waitForDocumentEditor(app, page)
+  return { app, page, rich }
+}
+
 // Compare rendered Markdown meaning, not table padding or escape/entity spelling.
 // Empty paragraphs, block kinds, list starts/nesting/checks, marks and destinations remain observable.
 function inputOutcome(source) {
@@ -1614,7 +1649,7 @@ for (const [what, text, select] of multilineInputCases) {
     // The frozen record holds the removed native editor's user outcome.
     const oracle = inputFixture('multiline', what)
     const tableInput = ['cell', 'cells', 'into a table'].includes(what)
-    const { app, page, rich } = await launchInputFixture(t, oracle.source)
+    const { app, page, rich } = await openInputFixture(oracle.source)
     const { from, to } = oracle
     await rich.focus()
     if (tableInput) await selectNativeInputTable(t, page, rich, what, oracle)

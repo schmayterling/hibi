@@ -29,23 +29,16 @@ const containers = {
 }
 const ordered = (block) =>
   `plain\n\n1. item\n\n   ${block.replaceAll('\n', '\n   ')}\n`
-const actions = [
-  'image',
-  'quote',
-  'divider',
-  'bullet-list',
-  'numbered-list',
-  'checklist',
-  'outdent',
-  'table',
-  'bold',
-  'heading-1',
-  'paragraph',
-  'code-block',
-  'hard-break',
-  'unlink',
-  'indent',
-]
+// formatted-atom-matrix runs every action on every atom; these go through the
+// real toolbar, cell editor and image picker. The html rows change nothing, then
+// type over a block's own lines under a hidden prefix, which only real keys reach.
+const journeys = {
+  'document divider': ['bold', 'quote', 'divider', 'image'],
+  'list mermaid': ['numbered-list', 'table', 'image'],
+  'list html': ['bold'],
+  'quote html': ['bold'],
+  'quote math': ['table', 'quote', 'image'],
+}
 /**
  * What the removed rich view did, recorded before its removal: its toolbar
  * states and cell texts, and whether its parser read the formatted view's
@@ -225,7 +218,7 @@ test('toolbar actions on selected atoms preserve their containers', {
         await open(source)
         compare(`${name}: toolbar`, await page.evaluate(toolbar))
       })
-      for (const action of actions)
+      for (const action of journeys[name] ?? [])
         await t.test(`${name}: ${action}`, async () => {
           await open(source)
           if (action === 'image')
@@ -238,7 +231,8 @@ test('toolbar actions on selected atoms preserve their containers', {
           const button = page.locator(
             `.editor-toolbar [data-toolbar-id="format.${action}"]`,
           )
-          // Exercise command guards too. Restore React's last written disabled state.
+          // React ignores a click on a button it disabled, as for a person.
+          // Restore its last written disabled state.
           await button.evaluate((button) => {
             const disabled = button.disabled
             button.disabled = false

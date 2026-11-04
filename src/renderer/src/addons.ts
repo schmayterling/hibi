@@ -1822,6 +1822,21 @@ export function useAddons(
                     ...item,
                     id: key,
                     addonId: id,
+                    ...(item.slider
+                      ? {
+                          slider: {
+                            ...item.slider,
+                            onChange: async (value: number) => {
+                              if (!active || disposed) return
+                              try {
+                                await item.slider?.onChange(value)
+                              } catch (error) {
+                                latest.current.error(error)
+                              }
+                            },
+                          },
+                        }
+                      : {}),
                     ...(item.onClick
                       ? {
                           onClick: async () => {

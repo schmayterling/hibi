@@ -283,6 +283,12 @@
   "7e778f24c85b": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "e806d706a53c": [
+    "src/addons/editor-width/hibi-addon.json"
+  ],
+  "9ac0cbee1739": [
+    "src/addons/editor-width/index.ts"
+  ],
   "f003198c9d2c": [
     "src/addons/markdown/github-flavor-info.ts",
     "src/addons/markdown/index.tsx"
@@ -2156,6 +2162,10 @@
   ],
   "1d183389ad2b": [
     "src/renderer/src/Titlebar.tsx"
+  ],
+  "6eb4090c5159": [
+    "src/addons/editor-width/hibi-addon.json",
+    "src/addons/editor-width/index.ts"
   ],
   "f1056ff3b7e2": [
     "src/renderer/src/addons.ts"

@@ -1,5 +1,6 @@
 import type { StatusItem } from '../../addons/api'
 import { sentenceCase } from '../../shared/ui-case'
+import { Slider } from '../../ui/Controls'
 
 export type StatusBarVisibility = 'shown' | 'auto' | 'hidden'
 
@@ -15,7 +16,30 @@ export function StatusBar({
     <div className="statusbar-slot" data-visibility={visibility}>
       <section className="app-statusbar" aria-label="Editor status">
         {items.map((item) =>
-          item.onClick ? (
+          item.slider ? (
+            <label
+              key={item.id}
+              htmlFor={`status-slider-${item.id}`}
+              className="status-pill status-slider"
+              data-status-id={item.id}
+              data-tooltip={item.tooltip}
+            >
+              <span>
+                {item.verbatim ? item.label : sentenceCase(item.label)}
+              </span>
+              <Slider
+                id={`status-slider-${item.id}`}
+                min={item.slider.min}
+                max={item.slider.max}
+                step={item.slider.step}
+                value={item.slider.value}
+                aria-valuetext={item.slider.valueText}
+                onChange={(event) =>
+                  void item.slider?.onChange(event.currentTarget.valueAsNumber)
+                }
+              />
+            </label>
+          ) : item.onClick ? (
             <button
               key={item.id}
               type="button"

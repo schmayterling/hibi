@@ -1182,6 +1182,16 @@ button.ui-button.update-download-button:disabled {
   width: 220px;
   max-width: 100%;
 }
+.status-slider {
+  gap: var(--space-2);
+  flex-shrink: 0;
+  padding-block: 0;
+}
+:where(.status-slider) .ui-slider {
+  width: 96px;
+  min-width: 0;
+  margin: 0;
+}
 .padding-control {
   display: flex;
   align-items: center;

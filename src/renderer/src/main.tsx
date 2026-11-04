@@ -587,7 +587,7 @@ function App() {
   // Commands, clicks and requests that arrive during a file operation, the
   // latest of each kind, with the tab shown when they came; they run in order
   // when it finishes. One that arrives behind a file dialog or prompt drops,
-  // as main drops its commands then.
+  // as main drops its commands then, and so does one while editing is paused.
   // Each runs with true, or drops with false.
   type Waiting = (go: boolean) => unknown
   const waiting = useRef(
@@ -598,7 +598,7 @@ function App() {
   const shownTab = () =>
     addonViews.snapshot().activeTab ?? currentDocument.current?.tabId
   function wait(key: string | symbol, run: Waiting, forTab = false): void {
-    if (fileDialogOpen.current) {
+    if (fileDialogOpen.current || focusUnsafe.current) {
       run(false)
       return
     }
@@ -2182,6 +2182,16 @@ function App() {
       void applyDocumentOperation(() => window.hibi.selectDocumentTab(id))
   }
 
+  // Like a note's tab, latest click wins; it runs while the addon tab is open.
+  function selectAddonTab(id: string): void {
+    if (busyRef.current) wait('select', (go) => go && selectAddonTab(id))
+    else
+      addonViews
+        .snapshot()
+        .instances.find((entry) => entry.id === id)
+        ?.handle.show()
+  }
+
   // A waiting close runs only while all of its tabs are still open.
   function closeTabs(ids: string[], preferred?: string): void {
     if (busyRef.current) {
@@ -2191,6 +2201,31 @@ function App() {
     if (ids.concat(preferred ?? []).every(tabOpen))
       void applyDocumentOperation(
         () => window.hibi.closeDocumentTabs(ids, preferred),
+        false,
+      )
+  }
+
+  // A key's move is worked out when it runs, so each press moves one place.
+  function moveTab(id: string, before: string | null | 1 | -1): void {
+    if (busyRef.current) {
+      wait(Symbol(), (go) => go && moveTab(id, before))
+      return
+    }
+    const tabs = currentDocument.current?.tabs ?? []
+    const index = tabs.findIndex((tab) => tab.id === id)
+    const beforeId =
+      before === -1
+        ? tabs[index - 1]?.id
+        : before === 1
+          ? (tabs[index + 2]?.id ?? null)
+          : before
+    if (
+      index >= 0 &&
+      beforeId !== undefined &&
+      (!beforeId || tabOpen(beforeId))
+    )
+      void applyDocumentOperation(
+        () => window.hibi.moveDocumentTab(id, beforeId),
         false,
       )
   }
@@ -3143,17 +3178,10 @@ function App() {
         onSelectTab={selectTab}
         onCloseTab={(id) => closeTabs([id])}
         onCloseTabs={closeTabs}
-        onMoveTab={(id, beforeId) =>
-          void applyDocumentOperation(
-            () => window.hibi.moveDocumentTab(id, beforeId),
-            false,
-          )
-        }
+        onMoveTab={moveTab}
         addonTabs={addonTabs}
         activeAddonTab={activeAddonTab?.id ?? null}
-        onSelectAddonTab={(id) =>
-          addonTabs.find((tab) => tab.id === id)?.handle.show()
-        }
+        onSelectAddonTab={selectAddonTab}
         onCloseAddonTab={(id) =>
           addonTabs.find((tab) => tab.id === id)?.handle.close()
         }

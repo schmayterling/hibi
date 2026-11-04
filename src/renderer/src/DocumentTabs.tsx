@@ -32,7 +32,7 @@ export function DocumentTabs({
   onSelect: (id: string) => void
   onClose: (id: string) => void
   onCloseTabs: (ids: string[], preferredTab: string) => void
-  onMove: (id: string, beforeId: string | null) => void
+  onMove: (id: string, before: string | null | 1 | -1) => void
   menus: MenuApi
   addonTabs: ViewEntry[]
   activeAddonTab: string | null
@@ -50,6 +50,7 @@ export function DocumentTabs({
   const navigationFrame = useRef(0)
   // A newer key press or click supersedes focus still waiting for a frame.
   const cancelNavigationFocus = () => {
+    keyboardFocus.current = null
     navigationFocus.current = null
     cancelAnimationFrame(navigationFrame.current)
   }
@@ -150,7 +151,6 @@ export function DocumentTabs({
             `[data-tab-id="${CSS.escape(keyboardFocus.current)}"]`,
           )
           ?.focus({ preventScroll: true })
-      keyboardFocus.current = null
     }
     if (
       navigationFocus.current &&
@@ -182,6 +182,10 @@ export function DocumentTabs({
     addonTabs,
     activeAddonTab,
   ])
+  // Moves wait for the file operation, so a moved tab keeps focus until it ends.
+  useLayoutEffect(() => {
+    if (!busy) keyboardFocus.current = null
+  }, [busy])
   const openTabMenu = (
     id: string,
     anchor: HTMLElement | { x: number; y: number },
@@ -229,7 +233,6 @@ export function DocumentTabs({
       aria-description="Drag document tabs to reorder, or use Alt+Shift+Left or Right on a focused document tab."
       onKeyDown={(event) => {
         if (
-          busy ||
           !(event.target instanceof HTMLElement) ||
           event.target.getAttribute('role') !== 'tab'
         )
@@ -262,15 +265,11 @@ export function DocumentTabs({
           event.stopPropagation()
           const tab = ordered[index]
           if (!tab || tab.addon) return
-          if (event.key === 'ArrowLeft' && index > 0) {
+          const left = event.key === 'ArrowLeft'
+          // While busy the order may change before the move runs.
+          if (busy || (left ? index > 0 : index < document.tabs.length - 1)) {
             keyboardFocus.current = tab.id
-            onMove(tab.id, document.tabs[index - 1]!.id)
-          } else if (
-            event.key === 'ArrowRight' &&
-            index < document.tabs.length - 1
-          ) {
-            keyboardFocus.current = tab.id
-            onMove(tab.id, document.tabs[index + 2]?.id ?? null)
+            onMove(tab.id, left ? -1 : 1)
           }
           return
         }
@@ -316,7 +315,7 @@ export function DocumentTabs({
             data-tab-key={tab.id}
             data-drop-side={drop?.id === tab.id ? drop.side : undefined}
             ref={selected ? active : undefined}
-            draggable={!busy && !closing}
+            draggable={!closing}
             onDragStart={(event) => {
               dragged.current = tab.id
               event.dataTransfer.setData('application/x-hibi-tab', tab.id)
@@ -327,7 +326,7 @@ export function DocumentTabs({
               setDrop(null)
             }}
             onDragOver={(event) => {
-              if (!dragged.current || busy || closing) return
+              if (!dragged.current || closing) return
               event.preventDefault()
               event.dataTransfer.dropEffect = 'move'
               const bounds = event.currentTarget.getBoundingClientRect()
@@ -349,7 +348,7 @@ export function DocumentTabs({
             }}
             onDrop={(event) => {
               const id = dragged.current
-              if (!id || busy || closing) return
+              if (!id || closing) return
               event.preventDefault()
               const bounds = event.currentTarget.getBoundingClientRect()
               const index = document.tabs.findIndex(
@@ -385,7 +384,15 @@ export function DocumentTabs({
               data-tab-id={tab.id}
               aria-label={name}
               aria-selected={selected}
-              aria-description={dirty ? 'Unsaved changes' : undefined}
+              aria-description={
+                busy && !selected
+                  ? dirty
+                    ? 'Unsaved changes. Opens when the current file operation ends'
+                    : 'Opens when the current file operation ends'
+                  : dirty
+                    ? 'Unsaved changes'
+                    : undefined
+              }
               tabIndex={selected ? 0 : -1}
               data-tooltip={name}
               data-verbatim="true"
@@ -401,7 +408,8 @@ export function DocumentTabs({
               }}
               onClick={() => {
                 cancelNavigationFocus()
-                if (!selected) onSelect(tab.id)
+                // While busy, this click takes the place of one still waiting.
+                if (busy || !selected) onSelect(tab.id)
               }}
               onContextMenu={(event) => {
                 event.preventDefault()
@@ -457,12 +465,16 @@ export function DocumentTabs({
               data-tab-id={tab.id}
               aria-label={name}
               aria-selected={selected}
-              aria-disabled={busy}
+              aria-description={
+                busy && !selected
+                  ? 'Opens when the current file operation ends'
+                  : undefined
+              }
               tabIndex={selected ? 0 : -1}
               data-tooltip={name}
               onClick={() => {
                 cancelNavigationFocus()
-                if (!busy && !selected) onSelectAddon(tab.id)
+                if (busy || !selected) onSelectAddon(tab.id)
               }}
             >
               <span>{name}</span>

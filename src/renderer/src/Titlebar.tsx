@@ -86,7 +86,7 @@ export function Titlebar({
   onSelectTab: (id: string) => void
   onCloseTab: (id: string) => void
   onCloseTabs: (ids: string[], preferredTab: string) => void
-  onMoveTab: (id: string, beforeId: string | null) => void
+  onMoveTab: (id: string, before: string | null | 1 | -1) => void
   addonTabs: ViewEntry[]
   activeAddonTab: string | null
   onSelectAddonTab: (id: string) => void

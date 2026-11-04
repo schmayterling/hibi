@@ -146,6 +146,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Sending repeated Save commands to their coalescing handler adds 27 (#818).
   // Loading the stream resolver inside the image viewer's effect, without a
   // nested Suspense delay, adds 132 (#817).
+  // Remembering which states saves kept as versions when a note reopens adds
+  // 70 (#820).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -172,7 +174,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         61 +
         1801 +
         27 +
-        132,
+        132 +
+        70,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

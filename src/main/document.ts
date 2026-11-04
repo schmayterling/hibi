@@ -1071,6 +1071,8 @@ export async function autosaveDocument(
   const destination = draft.path
   const saving = draft.source.snapshot()
   const content = saving
+  // A kept tab's draft is the tab itself, whose saved text changes below.
+  const replaced = draft.saved
   const unchanged = await matchesMarkdown(destination, draft.saved).catch(
     missingFile,
   )
@@ -1096,7 +1098,7 @@ export async function autosaveDocument(
   }
   storeTab()
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, draft.saved, content, automatic)
+  await recordSaveHistory(window, destination, replaced, content, automatic)
   return { status: 'saved', document: getDocumentForTab(id) }
 }
 

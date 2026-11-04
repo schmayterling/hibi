@@ -100,6 +100,15 @@ test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
     (await page.evaluate(() => window.hibi.getDocument())).name,
     'b.md',
   )
+  // Saved in the background, it kept the text it replaced and the text it wrote.
+  await page.getByRole('tab', { name: 'a.md' }).click()
+  await waitForDocumentEditor(app, page)
+  assert.deepEqual(
+    (await page.evaluate(() => window.hibi.listVersions())).map(
+      ({ automatic }) => automatic ?? false,
+    ),
+    [true, false],
+  )
 })
 
 test('autosave preserves later edits, pauses on external changes, and never prompts for unnamed drafts', {

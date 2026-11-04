@@ -179,3 +179,40 @@ test('docs-only checks rebuild bundled help and retain documentation tests witho
     }).tests.includes('tests/desktop.test.mjs'),
   )
 })
+
+test('a test file change selects that test alone even though the harness starts processes', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-harness-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const files = {
+    'src/shared/one.ts': 'export const one = 1',
+    'tests/electron.mjs':
+      "import { _electron } from 'playwright'; import 'node:child_process'",
+    'tests/desktop.test.mjs': "import './electron.mjs'",
+    'tests/other.test.mjs': "import './electron.mjs'",
+    'tests/spawns.test.mjs': "import 'node:child_process'",
+    'tests/helper.mjs': "import './electron.mjs'",
+    'tests/helped.test.mjs': "import './helper.mjs'",
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, file)), { recursive: true })
+    writeFileSync(join(root, file), source)
+  }
+  execFileSync('git', ['init'], { cwd: root, stdio: 'pipe' })
+  execFileSync('git', ['add', '.'], { cwd: root, stdio: 'pipe' })
+  const previousTests = Object.keys(files)
+    .filter((file) => file.endsWith('.test.mjs'))
+    .sort()
+  const plan = (changed) => planChecks(root, { changed, previousTests }).tests
+  assert.deepEqual(plan(['tests/desktop.test.mjs']), ['tests/desktop.test.mjs'])
+  // A helper can reach what a process-starting test runs; a change to it still selects that test.
+  assert.deepEqual(plan(['tests/helper.mjs']), [
+    'tests/helped.test.mjs',
+    'tests/spawns.test.mjs',
+  ])
+  assert.deepEqual(plan(['src/shared/one.ts']), [
+    'tests/desktop.test.mjs',
+    'tests/helped.test.mjs',
+    'tests/other.test.mjs',
+    'tests/spawns.test.mjs',
+  ])
+})

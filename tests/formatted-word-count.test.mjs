@@ -242,8 +242,8 @@ for (const [language, name, text] of [
     await counts(native)
     const closing = text.lastIndexOf('```') + 3
     const tabbed = text.slice(0, closing) + '\t' + text.slice(closing)
-    const tabCount =
-      language === 'mermaid' ? label(countText('before\n')) : native
+    // Trailing whitespace still closes the fence, so the following text counts.
+    const tabCount = native
     await page.evaluate((from) => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root
         .view

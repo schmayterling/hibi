@@ -979,7 +979,7 @@ test('closing a tab checks the tab shown next for outside changes', {
   const { answer, prompts, state, type } = setupState
   const note = (await read()).tabId
   const close = async () => {
-    const done = await replied(app, 'document:close-tab')
+    const done = await replied(app, 'document:close-tabs')
     await page.getByRole('button', { name: /^close other\.md$/i }).click()
     await done()
     await idle()
@@ -1030,7 +1030,7 @@ test('closing a tab still shows the next tab when its file cannot be read', {
   // Another app puts a folder where the next tab's file was.
   await rm(file)
   await mkdir(file)
-  const done = await replied(app, 'document:close-tab')
+  const done = await replied(app, 'document:close-tabs')
   await page.getByRole('button', { name: /^close other\.md$/i }).click()
   await done()
   await idle()
@@ -1076,7 +1076,7 @@ test('a tab that changes while Hibi asks about the next tab stays open and says 
       cancel: answered.resolve,
     }
   })
-  const done = await replied(app, 'document:close-tab')
+  const done = await replied(app, 'document:close-tabs')
   await page.getByRole('button', { name: /^close other\.md$/i }).click()
   await app.evaluate(() => globalThis.closePrompt.asked)
   // The closing tab changes meanwhile, as a late keystroke or an addon can.

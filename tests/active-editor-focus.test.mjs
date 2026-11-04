@@ -394,7 +394,8 @@ test('settings opened while a restored version, file, tab or new note opens stay
   const root = await mkdtemp(join(tmpdir(), 'hibi-busy-settings-'))
   const folder = join(root, 'workspace')
   await mkdir(folder)
-  await writeFile(join(folder, 'one.md'), 'first note')
+  // A large saved version uses the asynchronous main-process restore path.
+  await writeFile(join(folder, 'one.md'), 'first note\n'.repeat(300000))
   await writeFile(join(folder, 'two.md'), 'second note')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
@@ -427,20 +428,11 @@ test('settings opened while a restored version, file, tab or new note opens stay
     async () => (await window.hibi.getDocument()).name === 'one.md',
   )
   // Settings opened while an open waits on the main process outlive it.
-  for (const [channel, start, name, dirty = null, prepare] of [
+  for (const [channel, start, name, dirty = null] of [
     [
-      'history:preview',
-      () =>
-        page
-          .getByRole('dialog', { name: /^history$/i })
-          .getByRole('button', { name: /^restore$/i })
-          .click(),
-      'one.md',
-      // The restored version is an unsaved change.
-      true,
+      'history:restore',
       async () => {
-        // Load the selected version's diff before holding the separate read
-        // that Restore uses to apply it as an undoable editor change.
+        // A saved change makes a version to restore from the history dialog.
         const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
         await page
           .locator('.rich-pane .cm-content, .source-pane .cm-content')
@@ -466,10 +458,11 @@ test('settings opened while a restored version, file, tab or new note opens stay
           .filter({ hasText: /saved version/i })
           .last()
           .click()
-        await history
-          .locator('[aria-label="Changes from the current text"] pre')
-          .waitFor()
+        await history.getByRole('button', { name: /^restore$/i }).click()
       },
+      'one.md',
+      // The restored version is an unsaved change.
+      true,
     ],
     [
       'workspace:open-file',
@@ -484,17 +477,13 @@ test('settings opened while a restored version, file, tab or new note opens stay
     ['document:new', () => clickMenu(app, 'New'), 'untitled.md'],
   ]) {
     await page.locator('.app[aria-busy="false"]').waitFor()
-    await prepare?.()
     await app.evaluate(({ ipcMain }, channel) => {
       const handler = ipcMain._invokeHandlers.get(channel)
       if (!handler) throw new Error(`${channel} is unavailable.`)
       const held = Promise.withResolvers()
-      const started = Promise.withResolvers()
       globalThis.releaseHeldOpen = held.resolve
-      globalThis.heldOpenStarted = started.promise
       ipcMain.removeHandler(channel)
       ipcMain.handle(channel, async (...args) => {
-        started.resolve()
         await held.promise
         ipcMain.removeHandler(channel)
         ipcMain.handle(channel, handler)
@@ -502,11 +491,7 @@ test('settings opened while a restored version, file, tab or new note opens stay
       })
     }, channel)
     await start()
-    await app.evaluate(() => globalThis.heldOpenStarted)
-    // Small saved versions now restore as undoable edits, without replacing
-    // the document or entering the file-operation busy state.
-    if (channel !== 'history:preview')
-      await page.locator('.app[aria-busy="true"]').waitFor()
+    await page.locator('.app[aria-busy="true"]').waitFor()
     await clickMenu(app, 'Settings')
     await app.evaluate(() => globalThis.releaseHeldOpen())
     await waitForAsync(

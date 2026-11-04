@@ -151,7 +151,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Remembering which states saves kept as versions when a note reopens adds
   // 70 (#820).
   // Restoring a saved version that History returns once a file operation is
-  // done, and showing its change in the editor, adds 380 (#828).
+  // done, and showing its change in the editor, adds 24 (#828).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -181,7 +181,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         132 +
         149 +
         70 +
-        380,
+        24,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

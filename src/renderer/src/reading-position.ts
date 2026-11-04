@@ -383,6 +383,11 @@ export const keepRead = [
       )
       revealing.delete(update.view)
     }
+    // Scrolling away ends the place held: back at the same scroll, the
+    // heights under it can be new.
+    const held = anchors.get(update.view)
+    if (held && Math.abs(held.position.pane.scrollTop - held.scroll) > 1)
+      held.scroll = Number.POSITIVE_INFINITY
     const keep = kept.get(update.view)
     if (!keep) return
     if (

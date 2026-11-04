@@ -458,7 +458,54 @@ test('a quit after the editor stopped still waits for kept undo history writes',
   )
 })
 
-test('a launch lets go of the kept history of a note deleted outside Hibi, and keeps one on a drive that is not mounted', {
+test('a note missing at one launch reopens with its history when it comes back', {
+  timeout: 120000,
+}, async (t) => {
+  const { file, profile, launch } = await note(t, 'original', 'notes')
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await waitForAsync(
+    hibi.app,
+    async (_electron, profile) => {
+      const { readdir } = process.getBuiltinModule('node:fs/promises')
+      const { join } = process.getBuiltinModule('node:path')
+      return (await readdir(join(profile, 'undo-history')).catch(() => []))
+        .length
+    },
+    profile,
+  )
+  await hibi.quit()
+  // As a switch to a Git branch without the note does.
+  await writeFile(join(dirname(file), 'other.md'), 'still here')
+  await rm(file)
+  const index = join(profile, 'undo-history-notes.json')
+  const records = async () =>
+    JSON.parse(await readFile(index, 'utf8')).filter((entry) => entry.path)
+  const away = await launch()
+  // The prune starts 15 s into the launch and looks again 10 s later.
+  const started = Date.now()
+  while (!(await records()).length && Date.now() - started < 60000)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.deepEqual(
+    (await records()).map(({ path }) => path),
+    [await realpath(dirname(file)).then((folder) => join(folder, 'note.md'))],
+  )
+  await away.quit()
+  await writeFile(file, 'first draft')
+  const back = await launch()
+  await back.open('first draft')
+  assert.equal(await back.restored(), false)
+  await back.undo('original')
+  // Open or not, this launch's look clears the record.
+  const seen = Date.now()
+  while ((await records()).length && Date.now() - seen < 60000)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.deepEqual(await records(), [])
+})
+
+test('a launch lets go of the kept history of a note missing for 30 days, and keeps one on a drive that is not mounted', {
   timeout: 120000,
 }, async (t) => {
   const { file, profile, launch } = await note(t, 'original', 'notes')
@@ -501,6 +548,16 @@ test('a launch lets go of the kept history of a note deleted outside Hibi, and k
   await writeFile(join(dirname(file), 'other.md'), 'still here')
   await rm(file)
   await rename(dirname(away), `${dirname(away)} unmounted`)
+  const index = join(profile, 'undo-history-notes.json')
+  await writeFile(
+    index,
+    JSON.stringify(
+      JSON.parse(await readFile(index, 'utf8')).map((path) => ({
+        path,
+        missingSince: Date.now() - 31 * 24 * 60 * 60 * 1000,
+      })),
+    ),
+  )
   const started = Date.now()
   await launch()
   // The prune starts 15 s into the launch and looks again 10 s later.

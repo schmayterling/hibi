@@ -3666,6 +3666,25 @@ test('cell editors take no input while the formatted view takes none', {
   await harness.evaluate(() => window.tables.setEditable(true))
 })
 
+test('keys typed in a cell of a read-only view throw nothing', {
+  timeout: 30000,
+}, async (t) => {
+  const errors = []
+  const listen = (error) => errors.push(error.message)
+  harness.on('pageerror', listen)
+  t.after(() => harness.off('pageerror', listen))
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td', { hasText: 'c' }).click()
+  await harness.keyboard.press('End')
+  await harness.evaluate(() => window.tables.setEditable(false))
+  await harness.keyboard.type('BLOCKED')
+  await harness.evaluate(() => window.tables.settle())
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(errors, [])
+  await harness.evaluate(() => window.tables.setEditable(true))
+})
+
 test('a cell editor that a change drops while the view takes no input is back once it does', {
   timeout: 60000,
 }, async (t) => {

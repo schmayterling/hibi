@@ -358,4 +358,29 @@ test('api 2 source edits preserve canonical source, history and projection guard
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     mathSource,
   )
+
+  // A request this view can't take runs when a view that can gets it again.
+  const refused = await page.evaluate(() => {
+    const api = window.sourceReview
+    const now = api.getDocument()
+    const at = now.markdown.indexOf('$$')
+    window.viewRequest = {
+      requestId: 'view',
+      tabId: now.tabId,
+      revision: now.revision,
+      contentVersion: now.contentVersion,
+      changes: [{ from: at, to: at + 2, insert: '', expectedText: '$$' }],
+    }
+    return api.applySourceEdits(window.viewRequest).status
+  })
+  assert.equal(refused, 'unsupported-view')
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await page.locator('.source-pane .cm-content').click()
+  assert.equal(
+    await page.evaluate(
+      () => window.sourceReview.applySourceEdits(window.viewRequest).status,
+    ),
+    'applied',
+  )
 })

@@ -1246,14 +1246,17 @@ async function launchInputFixture(t, source, counted = false) {
 }
 
 let sharedInputApp,
-  closeSharedInputApp,
   sharedInputCases = 0
-after(() => closeSharedInputApp?.(), { timeout: 30000 })
+// A launch that fails still leaves an app, and the next case launches another.
+const closeSharedInputApps = []
+after(() => Promise.all(closeSharedInputApps.map((close) => close())), {
+  timeout: 30000,
+})
 
 /** The fixture in the one app these cases share, as a new tab of its own. */
 async function openInputFixture(source) {
   sharedInputApp ??= await launchInputFixture(
-    { after: (close) => (closeSharedInputApp = close) },
+    { after: (close) => closeSharedInputApps.push(close) },
     '',
   )
   const { app, page, rich, file } = sharedInputApp

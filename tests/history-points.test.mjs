@@ -287,14 +287,16 @@ test('a saved state is listed once, as its saved version', () => {
 })
 
 test('a reopened note lists the text it opened with once, as its saved version', async () => {
-  const { keptHistory, restoredHistory } = await import(
+  const { keptHistory, parseUndoHistory, restoredHistory } = await import(
     '../src/shared/undo-history.ts'
   )
   const first = note()
   first.type('text saved before closing the note. ')
   first.session.sealHistory()
   first.session.markSaved(first.session.snapshot())
-  const kept = keptHistory(first.session)
+  const kept = parseUndoHistory(
+    JSON.parse(JSON.stringify(keptHistory(first.session))),
+  )
   const second = note(first.text())
   second.wait(minute)
   assert.equal(
@@ -303,12 +305,100 @@ test('a reopened note lists the text it opened with once, as its saved version',
   )
   second.wait(minute)
   second.type('typed after reopening, more than a few characters.')
+  const listed = (versionsSince) =>
+    historyPoints(historyOf(second.session), second.now(), versionsSince).map(
+      ({ step, reason }) => [step, reason],
+    )
+  // The first save kept the text it replaced too, so that is no point either.
+  assert.deepEqual(listed(start), [])
+  // With no version kept since, its states are points like any.
+  assert.deepEqual(listed(Number.POSITIVE_INFINITY), [
+    [0, 'paused'],
+    [-1, 'oldest'],
+  ])
+})
+
+test('a reopened note lists the text of an earlier save once, as its saved version', async () => {
+  const { keptHistory, parseUndoHistory, restoredHistory } = await import(
+    '../src/shared/undo-history.ts'
+  )
+  const first = note()
+  const save = () => {
+    first.session.sealHistory()
+    first.session.markSaved(first.session.snapshot())
+  }
+  first.type('the text of the earlier save, kept. ')
+  save()
+  first.wait(10 * second)
+  first.type('the text of the last save before closing. ')
+  save()
+  const kept = parseUndoHistory(
+    JSON.parse(JSON.stringify(keptHistory(first.session))),
+  )
+  assert.deepEqual(kept.versioned.map(([step]) => step).sort(), [-1, 0, 1])
+  const earlier = kept.versioned.find(([step]) => step === 0)[1]
+  const reopened = note(first.text())
+  reopened.wait(minute)
+  reopened.session.restoreHistory(kept.units, restoredHistory(kept))
+  reopened.type('typed after reopening, more than a few characters.')
+  const tree = historyOf(reopened.session)
+  assert.equal(tree.versioned.get(0), earlier)
+  assert.deepEqual(historyPoints(tree, reopened.now(), start), [])
+  // A history kept before saves were recorded in it still reads.
+  const { versioned: _, ...older } = kept
+  const old = note(first.text())
+  old.session.restoreHistory(
+    older.units,
+    restoredHistory(parseUndoHistory(older)),
+  )
+  old.type('typed after reopening, more than a few characters.')
   assert.deepEqual(
-    historyPoints(historyOf(second.session), second.now(), start).map(
+    historyPoints(historyOf(old.session), old.now(), start).map(
       ({ step, reason }) => [step, reason],
     ),
-    [[-1, 'oldest']],
+    [
+      [0, 'paused'],
+      [-1, 'oldest'],
+    ],
   )
+})
+
+test('a stored history marks the states saves kept, by step, past trimmed steps', async () => {
+  const { keptHistory, restoredHistory } = await import(
+    '../src/shared/undo-history.ts'
+  )
+  const writer = note('', { historyGroups: 4 })
+  const save = () => {
+    writer.session.sealHistory()
+    writer.session.markSaved(writer.session.snapshot())
+    return writer.now()
+  }
+  const step = (text) => {
+    writer.type(text)
+    writer.wait(10 * second)
+  }
+  step('a0 ')
+  const oldest = save()
+  step('b1 ')
+  step('c2 ')
+  const middle = save()
+  step('d3 ')
+  step('e4 ')
+  const last = save()
+  const kept = JSON.parse(JSON.stringify(keptHistory(writer.session)))
+  // The first step went, so the state of the first save is the oldest; the
+  // steps saves never wrote stay unmarked.
+  assert.equal(kept.steps.length, 4)
+  const expected = [
+    [-1, oldest],
+    [1, middle],
+    [3, last],
+  ]
+  const sorted = (marks) => [...marks].sort(([a], [b]) => a - b)
+  assert.deepEqual(sorted(kept.versioned), expected)
+  const reopened = note(writer.text(), { historyGroups: 4 })
+  reopened.session.restoreHistory(kept.units, restoredHistory(kept))
+  assert.deepEqual(sorted(historyOf(reopened.session).versioned), expected)
 })
 
 test('an undone change of a few characters is not a point of its own', () => {

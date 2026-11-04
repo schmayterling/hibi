@@ -607,7 +607,7 @@ function App() {
     waiting.current.set(key, [run, forTab ? shownTab() : undefined])
   }
   function waitFor<T>(
-    key: string,
+    key: string | symbol,
     run: () => Promise<T>,
     dropped: T,
     forTab?: boolean,
@@ -1558,7 +1558,13 @@ function App() {
         const forTab = waitsForOperation[command]
         return forTab === undefined
           ? Promise.resolve(false)
-          : waitFor(`run ${command}`, () => runCommand(command), false, forTab)
+          : // Each new note or open asked for waits; a tab's command waits once.
+            waitFor(
+              forTab ? `run ${command}` : Symbol(),
+              () => runCommand(command),
+              false,
+              forTab,
+            )
       }
       const operation = performCommand(command)
       if (command === 'save' || command === 'saveAs') {
@@ -1788,7 +1794,7 @@ function App() {
     side: PaneSide,
   ): Promise<MediaAttachment[] | null> {
     if (busyRef.current)
-      return waitFor('attach', () => attachMedia(files, tabId, side), null)
+      return waitFor(Symbol(), () => attachMedia(files, tabId, side), null)
     const target = currentDocument.current
     const split = splitTabsRef.current
     if (

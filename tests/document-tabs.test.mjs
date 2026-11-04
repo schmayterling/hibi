@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -2458,4 +2459,153 @@ test('a save pressed during a save goes before a file opened from outside meanwh
   )
   await idle()
   assert.equal(await readFile(paths['a.md'], 'utf8'), 'note a, more')
+})
+
+test('an addon asking for two new notes during a save gets both', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-addon-new-',
+    { 'a.md': 'note a' },
+    [],
+    runFixture,
+  )
+  await page.waitForFunction(() => window.fixtureRun)
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await page.evaluate(() => {
+    window.created = Promise.all([
+      window.fixtureRun('new'),
+      window.fixtureRun('new'),
+    ])
+  })
+  await app.evaluate(() => globalThis.release['document:save']())
+  assert.deepEqual(await page.evaluate(() => window.created), [true, true])
+  await idle()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    3,
+  )
+})
+
+test('an addon save asked while a waiting save as has its dialog open saves after it', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, paths, idle, commands } = await launchHolding(
+    t,
+    'hibi-tab-busy-addon-save-as-',
+    { 'a.md': 'note a' },
+    ['document:save'],
+    runFixture,
+  )
+  await page.waitForFunction(() => window.fixtureRun)
+  const copy = join(dirname(paths['a.md']), 'copy.md')
+  await app.evaluate(({ dialog }) => {
+    dialog.showSaveDialog = () =>
+      new Promise((answer) => {
+        globalThis.answerSaveAs = answer
+      })
+    globalThis.hold('document:save')
+  })
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await pressShortcut(app, `${mod}+Shift+s`)
+  await commands(2)
+  // The save ends; the waiting save as starts in its place and opens its dialog.
+  await heardPrompt(page, () =>
+    app.evaluate(() => globalThis.release['document:save']()),
+  )
+  await page.evaluate(() => {
+    window.saved = window.fixtureRun('save')
+  })
+  await app.evaluate(
+    (_, filePath) => globalThis.answerSaveAs({ canceled: false, filePath }),
+    copy,
+  )
+  assert.equal(await page.evaluate(() => window.saved), true)
+  await idle()
+  assert.equal(await readFile(copy, 'utf8'), 'note a')
+})
+
+test('a link followed during a save opens when it ends', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-link-',
+    { 'b.md': 'note b', 'a.md': 'see [the other](b.md)' },
+    [],
+  )
+  const link = page
+    .locator('.rich-pane')
+    .getByRole('link', { name: 'the other', exact: true })
+  await link.waitFor()
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await link.click({ modifiers: ['Shift'] })
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'b.md',
+  )
+  await idle()
+})
+
+test('two media drops during a save both attach, the later one with a notice', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, editor, paths, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-drops-',
+    { 'a.md': 'note a' },
+    [],
+  )
+  const gif = join(dirname(paths['a.md']), 'dot.gif')
+  await writeFile(
+    gif,
+    Buffer.from(
+      'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      'base64',
+    ),
+  )
+  await page.evaluate(() => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.id = 'fixture-file'
+    input.hidden = true
+    document.body.append(input)
+  })
+  const drop = async () => {
+    await page.locator('#fixture-file').setInputFiles(gif)
+    const transfer = await page
+      .locator('#fixture-file')
+      .evaluateHandle((input) => {
+        const data = new DataTransfer()
+        for (const file of input.files) data.items.add(file)
+        return data
+      })
+    await editor.dispatchEvent('drop', { dataTransfer: transfer })
+    await transfer.dispose()
+  }
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  // The saved tab stays writable, so drops into it wait for the save.
+  await drop()
+  await drop()
+  await app.evaluate(() => globalThis.release['document:save']())
+  // The first goes where it was dropped; the note changed before the second,
+  // whose files stay in the assets folder, as the notice says.
+  await page
+    .getByText(/The note changed before the files could be inserted/)
+    .waitFor()
+  await idle()
+  const assets = join(dirname(paths['a.md']), 'assets')
+  assert.deepEqual((await readdir(assets)).sort(), ['dot-2.gif', 'dot.gif'])
+  const markdown = (await page.evaluate(() => window.hibi.getDocument()))
+    .markdown
+  assert.equal(markdown.match(/assets\/dot/g)?.length, 1)
 })

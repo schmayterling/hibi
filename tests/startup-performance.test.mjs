@@ -146,6 +146,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Sending repeated Save commands to their coalescing handler adds 27 (#818).
   // Loading the stream resolver inside the image viewer's effect, without a
   // nested Suspense delay, adds 132 (#817).
+  // Keeping the undo steps a save took as it took them, through redo, a save
+  // landing late or writing a later version and steps going, adds 149 (#810).
   // Restoring a saved version that History returns once a file operation is
   // done, and showing its change in the editor, adds 380 (#816).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
@@ -175,6 +177,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         1801 +
         27 +
         132 +
+        149 +
         380,
     `startup catalog grew to ${bytes} bytes`,
   )

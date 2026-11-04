@@ -148,6 +148,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // nested Suspense delay, adds 132 (#817).
   // Keeping the undo steps a save took as it took them, through redo, a save
   // landing late or writing a later version and steps going, adds 149 (#810).
+  // Remembering which states saves kept as versions when a note reopens adds
+  // 70 (#820).
   // Letting each media drop and each new note or open an addon asks for wait
   // for a file operation on its own adds 11 (#825).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
@@ -178,6 +180,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         27 +
         132 +
         149 +
+        70 +
         11,
     `startup catalog grew to ${bytes} bytes`,
   )

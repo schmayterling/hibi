@@ -1823,8 +1823,8 @@ function App() {
       await acceptOperationDocument(result.document)
       refreshWorkspaceView()
       attachments = result.attachments
+      insertingMedia.current = true
     } finally {
-      insertingMedia.current = attachments !== null
       // Restore editor editability before inserting at the captured selection.
       flushSync(endBusy)
     }

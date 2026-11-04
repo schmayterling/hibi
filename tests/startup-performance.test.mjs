@@ -150,6 +150,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // landing late or writing a later version and steps going, adds 149 (#810).
   // Remembering which states saves kept as versions when a note reopens adds
   // 70 (#820).
+  // Flagging only the texts a save kept as versions adds 55 (#830).
   // Restoring a saved version that History returns once a file operation is
   // done, and showing its change in the editor, adds 24 (#828).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
@@ -181,6 +182,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         132 +
         149 +
         70 +
+        55 +
         24,
     `startup catalog grew to ${bytes} bytes`,
   )

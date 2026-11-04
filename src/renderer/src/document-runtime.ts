@@ -700,7 +700,7 @@ export class DocumentRuntime {
           throw new Error(
             'The saved document version is not owned by this request.',
           )
-        session.markSaved(saved)
+        session.markSaved(saved, document.versionsKept ?? 'none')
       } else if ('savedMarkdown' in document) {
         const prepared = loadedDocument(document)
         session.importSaved(prepared ? prepared.saved : document.savedMarkdown)

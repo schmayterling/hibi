@@ -934,12 +934,14 @@ async function recordSaveHistory(
       previous === null ? [content] : [previous, content],
       automatic,
     )
+    return true
   } catch (error) {
     console.error('local history failed:', error)
     window.webContents.send(
       HISTORY_CHANNELS.notice,
       'File saved, but Hibi could not add it to version history.',
     )
+    return false
   }
 }
 
@@ -1033,12 +1035,21 @@ export async function saveDocument(
     }
   }
   await writeMarkdown(destination, content, exclusive && !appeared)
+  // A new path, or a file another app changed, keeps no copy of the text last saved.
+  const replacedSaved = previous === saved
   path = destination
   pendingPath = null
   saved = saving
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, previous, content)
-  return getDocument()
+  const recorded = await recordSaveHistory(
+    window,
+    destination,
+    previous,
+    content,
+  )
+  return Object.assign(getDocument(), {
+    versionsKept: !recorded ? 'none' : replacedSaved ? 'both' : 'written',
+  } satisfies Pick<DocumentState, 'versionsKept'>)
 }
 
 export async function autosaveDocument(
@@ -1096,8 +1107,22 @@ export async function autosaveDocument(
   }
   storeTab()
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, draft.saved, content, automatic)
-  return { status: 'saved', document: getDocumentForTab(id) }
+  const recorded = await recordSaveHistory(
+    window,
+    destination,
+    draft.saved,
+    content,
+    automatic,
+  )
+  const state = getDocumentForTab(id)
+  return {
+    status: 'saved',
+    document:
+      state &&
+      Object.assign(state, {
+        versionsKept: recorded ? 'both' : 'none',
+      } satisfies Pick<DocumentState, 'versionsKept'>),
+  }
 }
 
 /** Saves one already-named tab without selecting it or opening a file dialog. */
@@ -1194,6 +1219,7 @@ async function saveRetained(window: BrowserWindow) {
       name: document.name,
       ephemeral: document.ephemeral,
       canAutosave: document.canAutosave,
+      versionsKept: document.versionsKept,
     } satisfies DocumentSaved)
   return document
 }

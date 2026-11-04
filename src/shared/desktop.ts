@@ -47,6 +47,8 @@ export const DOCUMENT_CHANNELS = {
   fileDialog: 'document:file-dialog',
 } as const
 
+/** Which texts a save kept as saved versions; the replaced one is the text last saved here. */
+export type VersionsKept = 'none' | 'written' | 'both'
 export type DocumentState = {
   /** Stable window-local tab identity, including across save and rename. */
   tabId: string
@@ -59,6 +61,8 @@ export type DocumentState = {
   ephemeral: boolean
   markdown: string
   savedMarkdown: string
+  /** Set on the state a save returns. */
+  versionsKept?: VersionsKept | undefined
   /** Main explicitly replaced this tab's source, rather than only its metadata. */
   replaced?: boolean
   /** Native source generation already transferred to this renderer. */
@@ -81,6 +85,7 @@ export type DocumentSaved = Pick<
   | 'name'
   | 'ephemeral'
   | 'canAutosave'
+  | 'versionsKept'
 >
 export type DocumentTab = { id: string; name: string; dirty: boolean }
 export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>

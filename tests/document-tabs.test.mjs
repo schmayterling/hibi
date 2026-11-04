@@ -2584,7 +2584,7 @@ test('tab moves by key during a save each run after it and the tab keeps focus',
   const moves = (count) =>
     waitForAsync(
       app,
-      (count) => globalThis.calls['document:move-tab'] === count,
+      (_, count) => globalThis.calls['document:move-tab'] === count,
       count,
     )
   const holdSave = async () => {

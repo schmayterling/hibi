@@ -2264,7 +2264,11 @@ function App() {
     }
     setPaletteOpen(false)
     const forTab = waitsForOperation[command]
-    if (busyRef.current && forTab !== undefined) {
+    if (
+      busyRef.current &&
+      forTab !== undefined &&
+      !(command === 'save' && savingCommand.current)
+    ) {
       // Each new note or open waits; a tab's command waits once.
       wait(
         forTab ? command : Symbol(),

@@ -3143,6 +3143,8 @@ export function SourceEditor({
       return
     }
     const query = new SearchQuery({ search: findQuery, literal: true })
+    // Clearing the drawn matches also releases the worker's cached highlights.
+    sourceFind.current?.cancelFind()
     editor.dispatch({
       effects: [
         setSearchQuery.of(query),

@@ -460,8 +460,7 @@ export default {
           ))
       if (result.canceled || !result.filePaths[0]) return null
       const image = await readDocumentImage(result.filePaths[0], null)
-      if (!image || image.length > 4 * 1024 * 1024)
-        throw new Error('Choose an image smaller than 3 MiB.')
+      if (!image) throw new Error('Choose a supported image file.')
       return image
     },
     async export(input, context) {

@@ -1,25 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import type { DocumentPreviewProps } from '../../addons/api'
-import { isMediaFile } from '../../shared/media'
 
 const MIN_ZOOM = 1
 const MAX_ZOOM = 8
-
-/** Reads the image beside the document; null when it can't be shown. */
-export async function readImage(
-  name: string,
-  revision: number,
-  read?: (source: string, revision: number) => Promise<string | null>,
-): Promise<string | null> {
-  if (!read || !isMediaFile({ name, type: '' })) return null
-  try {
-    // The read decodes the source, so the name is encoded to stay exact.
-    return await read(encodeURIComponent(name), revision)
-  } catch {
-    return null
-  }
-}
 
 /** The zoom after one wheel step, where 1 fits the image to the pane. */
 export function wheelZoom(zoom: number, deltaY: number) {
@@ -56,6 +40,7 @@ export function ImageContent({
       src={url}
       alt={name}
       draggable={false}
+      decoding="async"
       onError={onError}
       style={{
         objectFit: 'contain',
@@ -74,18 +59,29 @@ export function ImageViewer({ document }: DocumentPreviewProps) {
   const zoomRef = useRef(1)
   useEffect(() => {
     let current = true
+    let unsubscribe: (() => void) | undefined
     setUrl(undefined)
     zoomRef.current = 1
     setZoom(1)
-    void readImage(
-      document.name,
-      document.revision,
-      window.hibi?.readDocumentImage,
-    ).then((image) => {
-      if (current) setUrl(image)
-    })
+    // Use the note editor's shared, cancellable stream instead of copying
+    // the whole image through IPC as a base64 string.
+    // Import inside the effect so startup stays small without a second
+    // Suspense fallback delaying the first image request.
+    void import('./document-media')
+      .then(({ observeDocumentMedia }) => {
+        if (!current) return
+        unsubscribe = observeDocumentMedia(
+          encodeURIComponent(document.name),
+          document.revision,
+          (media) => setUrl(media?.kind === 'image' ? media.url : null),
+        )
+      })
+      .catch(() => {
+        if (current) setUrl(null)
+      })
     return () => {
       current = false
+      unsubscribe?.()
     }
   }, [document.name, document.revision])
   useEffect(() => {

@@ -29,7 +29,7 @@ export async function formatImage(value: unknown, context: NativeAddonContext) {
     paths: [name],
   })
   const file = project.files?.[0]
-  if (!file || file[1].byteLength > 8 * 1024 * 1024) return null
+  if (!file) return null
   const extension = extname(file[0]).slice(1).toLowerCase()
   return `data:image/${extension === 'svg' ? 'svg+xml' : extension === 'jpg' ? 'jpeg' : extension};base64,${Buffer.from(file[1]).toString('base64')}`
 }

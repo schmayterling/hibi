@@ -6,6 +6,7 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   writeFile,
 } from 'node:fs/promises'
@@ -403,7 +404,11 @@ test('a quit after the editor stopped still waits for kept undo history writes',
   await waitForAsync(app, () => globalThis.writes.held >= 1)
   await hibi.quit(({ BrowserWindow }) => {
     setTimeout(() => globalThis.writes.release(), 1000)
-    BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer()
+    // Stop the renderer without waiting for the operating system's crash dump.
+    process.kill(
+      BrowserWindow.getAllWindows()[0].webContents.getOSProcessId(),
+      'SIGKILL',
+    )
   })
   const name = `${createHash('sha256')
     .update(await realpath(file))
@@ -412,4 +417,59 @@ test('a quit after the editor stopped still waits for kept undo history writes',
     await readFile(join(profile, 'undo-history', name), 'utf8'),
     /first draft/,
   )
+})
+
+test('a launch lets go of the kept history of a note deleted outside Hibi, and keeps one on a drive that is not mounted', {
+  timeout: 120000,
+}, async (t) => {
+  const { file, profile, launch } = await note(t, 'original', 'notes')
+  const away = join(profile, 'drive', 'away.md')
+  await mkdir(dirname(away))
+  await writeFile(away, 'far away')
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('first draft')
+  await hibi.save('first draft')
+  await hibi.app.evaluate(({ dialog }, away) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [away],
+    })
+  }, away)
+  await hibi.open('far away')
+  await hibi.edit('further away')
+  await pressShortcut(hibi.app, `${mod}+s`)
+  await waitForAsync(
+    hibi.page,
+    async () => !(await window.hibi.getDocument()).dirty,
+  )
+  await hibi.page.locator('.app[aria-busy="false"]').waitFor()
+  const kept = (path) =>
+    `${createHash('sha256').update(path).digest('hex')}.json`
+  const deleted = kept(await realpath(file)),
+    unmounted = kept(await realpath(away))
+  const folder = join(profile, 'undo-history')
+  await waitForAsync(
+    hibi.app,
+    async (_electron, [folder, names]) => {
+      const { readdir } = process.getBuiltinModule('node:fs/promises')
+      const files = await readdir(folder).catch(() => [])
+      return names.every((name) => files.includes(name))
+    },
+    [folder, [deleted, unmounted]],
+  )
+  await hibi.quit()
+  await writeFile(join(dirname(file), 'other.md'), 'still here')
+  await rm(file)
+  await rename(dirname(away), `${dirname(away)} unmounted`)
+  const started = Date.now()
+  await launch()
+  // The prune starts 15 s into the launch and looks again 10 s later.
+  while (
+    (await readdir(folder)).includes(deleted) &&
+    Date.now() - started < 90000
+  )
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  assert.ok(Date.now() - started > 15000, 'let go too early')
+  assert.deepEqual(await readdir(folder), [unmounted])
 })

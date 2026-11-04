@@ -134,7 +134,14 @@ async function denseHighlights(rich, query = 'needle') {
       count: highlighted.count,
       units: highlighted.last + query.length - highlighted.first,
       highlighted,
-      expected: starts(matches.filter((start) => overlaps(start, window))),
+      // Decorations outside CodeMirror's rendered ranges have no DOM span.
+      expected: starts(
+        matches.filter(
+          (start) =>
+            overlaps(start, window) &&
+            view.visibleRanges.some((range) => overlaps(start, range)),
+        ),
+      ),
       selected: selected.length,
       // Every match on screen is highlighted.
       covered: matches

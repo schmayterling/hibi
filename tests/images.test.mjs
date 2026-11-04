@@ -325,7 +325,10 @@ unit(
  * Opens a note with a remote 1600×900 `<img>` sized only by its height above
  * 400 lines, from an https host that answers `delay` ms after each request.
  */
-async function openTallRemoteImage(t, delay) {
+async function openTallRemoteImage(t, hold = false) {
+  const started = Promise.withResolvers()
+  const release = Promise.withResolvers()
+  if (!hold) release.resolve()
   const image = blankPng(1600, 900)
   const requests = []
   let markServed
@@ -338,12 +341,12 @@ async function openTallRemoteImage(t, delay) {
       cert: await readFile('tests/fixtures/host-network-localhost-cert.pem'),
       key: await readFile('tests/fixtures/host-network-localhost-key.pem'),
     },
-    (request, response) => {
+    async (request, response) => {
       requests.push(request.url)
-      setTimeout(() => {
-        response.writeHead(200, { 'Content-Type': 'image/png' })
-        response.end(image, markServed)
-      }, delay)
+      started.resolve()
+      await release.promise
+      response.writeHead(200, { 'Content-Type': 'image/png' })
+      response.end(image, markServed)
     },
   )
   await new Promise((done) => server.listen(0, '127.0.0.1', done))
@@ -361,8 +364,10 @@ async function openTallRemoteImage(t, delay) {
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })
   t.after(async () => {
+    release.resolve()
     await app.close()
-    server.close()
+    server.closeAllConnections()
+    await new Promise((resolve) => server.close(resolve))
     await rm(folder, { recursive: true, force: true })
   })
   await app.evaluate(({ session }) =>
@@ -388,7 +393,9 @@ async function openTallRemoteImage(t, delay) {
       (line) => line.textContent === 'Line 8 below the image.',
     ),
   )
-  return { page, requests, served }
+  // Start the request before a test scrolls its widget out of the viewport.
+  await started.promise
+  return { page, requests, served, release: release.resolve }
 }
 
 unit(
@@ -397,7 +404,7 @@ unit(
     timeout: 60000,
   },
   async (t) => {
-    const { page } = await openTallRemoteImage(t, 0)
+    const { page } = await openTallRemoteImage(t)
     await page.waitForFunction(() => {
       const image = document.querySelector('.rich-pane img[alt="high"]')
       return !!image?.complete && image.getBoundingClientRect().height < 900
@@ -464,7 +471,10 @@ unit(
     timeout: 60000,
   },
   async (t) => {
-    const { page, requests, served } = await openTallRemoteImage(t, 1500)
+    const { page, requests, served, release } = await openTallRemoteImage(
+      t,
+      true,
+    )
     // Before the image arrives, "Line 8" goes to the top, the image above it.
     await page.evaluate(() => {
       const pane = document.querySelector('.rich-pane')
@@ -479,6 +489,7 @@ unit(
     // spend it before the image exists. The widget's own <img> can't be
     // watched: once shaped, the line's widget is redrawn and the loaded
     // image moves out of the page to the tab's held images.
+    release()
     await served
     const lineHeight = () =>
       page.evaluate(() => {

@@ -579,10 +579,34 @@ test('a quit waits for a clear, and for keeping turned off, asked for before it'
   }
 })
 
+const indexFile = (root) => join(root, 'undo-history-notes.json')
+const entries = async (root) =>
+  JSON.parse(await fs.readFile(indexFile(root), 'utf8'))
 const index = async (root) =>
-  JSON.parse(
-    await fs.readFile(join(root, 'undo-history-notes.json'), 'utf8'),
-  ).sort()
+  (await entries(root)).map((entry) => entry.path ?? entry).sort()
+/** When the index says each note was first found missing, by path. */
+const records = async (root) =>
+  Object.fromEntries(
+    (await entries(root))
+      .filter((entry) => entry.path)
+      .map((entry) => [entry.path, entry.missingSince]),
+  )
+/** An index recording each note as first found missing at `time`. */
+const recorded = (root, paths, time) =>
+  fs.writeFile(
+    indexFile(root),
+    JSON.stringify(paths.map((path) => ({ path, missingSince: time }))),
+  )
+const day = 24 * 60 * 60 * 1000
+const today = Date.UTC(2026, 11, 1)
+/** Stands in for the clock in this test; returns how to set it. */
+function clock(t) {
+  let time = today
+  t.mock.method(Date, 'now', () => time)
+  return (to) => {
+    time = to
+  }
+}
 
 test('a history let go past 64 MiB leaves the index too', async (t) => {
   const root = await profile(t)
@@ -619,8 +643,9 @@ test('a temporary copy a crash left behind is removed by the first read, too', a
   assert.equal(await exists(left), false)
 })
 
-test('notes deleted outside Hibi let go of their kept histories, and notes on a missing drive keep them', async (t) => {
+test('notes missing for 30 days let go of their kept histories, and notes on a missing drive keep them', async (t) => {
   const root = await profile(t)
+  const setClock = clock(t)
   const api = await main(root)
   const note = saved()
   const notes = join(root, 'notes')
@@ -636,19 +661,397 @@ test('notes deleted outside Hibi let go of their kept histories, and notes on a 
   const unmounted = join(root, 'drive', 'c.md')
   await api.storeUndoHistory(unmounted, note.file, note.history)
   await fs.rm(join(notes, 'b.md'))
+  // The first launch to find it missing records when, and takes nothing.
   await api.pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, join(notes, 'b.md'))), true)
+  assert.deepEqual(await records(root), { [join(notes, 'b.md')]: today })
+  assert.deepEqual(
+    await index(root),
+    [join(notes, 'a.md'), join(notes, 'b.md'), unmounted].sort(),
+  )
+  // A moment short of 30 days it still keeps it, and at 30 days it goes.
+  setClock(today + 30 * day - 1)
+  await (await main(root)).pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, join(notes, 'b.md'))), true)
+  setClock(today + 30 * day)
+  const later = await main(root)
+  await later.pruneUndoHistory(0)
   assert.equal(await exists(kept(root, join(notes, 'a.md'))), true)
   assert.equal(await exists(kept(root, join(notes, 'b.md'))), false)
   assert.equal(await exists(kept(root, unmounted)), true)
   assert.deepEqual(await index(root), [join(notes, 'a.md'), unmounted].sort())
+  assert.deepEqual(await records(root), {})
   // A note gone at the first look and back by the second, as a branch
   // switch puts it back, keeps its history.
   await fs.rm(join(notes, 'a.md'))
-  const pruning = api.pruneUndoHistory(1000)
+  const pruning = later.pruneUndoHistory(1000)
   await new Promise((resolve) => setTimeout(resolve, 300))
   await fs.writeFile(join(notes, 'a.md'), note.source)
   await pruning
   assert.equal(await exists(kept(root, join(notes, 'a.md'))), true)
+  assert.deepEqual(await records(root), {})
+})
+
+test('a note on another branch comes back within 30 days with its history, and its wait starts over', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const note = saved()
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  await fs.writeFile(path, note.source)
+  await (await main(root)).storeUndoHistory(path, note.file, note.history)
+  const launch = async (time) => {
+    setClock(time)
+    const api = await main(root)
+    await api.pruneUndoHistory(0)
+    return api
+  }
+  await fs.rm(path)
+  await launch(today)
+  await launch(today + 29 * day)
+  assert.deepEqual(await records(root), { [path]: today })
+  // The branch is back: the look clears the record, and the note reopens.
+  await fs.writeFile(path, note.source)
+  const back = await launch(today + 29 * day)
+  assert.deepEqual(await records(root), {})
+  assert.deepEqual(
+    await back.readUndoHistory(path, reopened(note.source)),
+    note.history,
+  )
+  // Gone again, it waits 30 days from then, not from the first time.
+  await fs.rm(path)
+  await launch(today + 30 * day)
+  assert.deepEqual(await records(root), { [path]: today + 30 * day })
+  await launch(today + 59 * day)
+  assert.equal(await exists(kept(root, path)), true)
+  await launch(today + 60 * day)
+  assert.equal(await exists(kept(root, path)), false)
+})
+
+test('a note waiting out its 30 days gets one look a launch and writes nothing, and one back needs no second look', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  let looks = 0,
+    writes = 0
+  const api = await main(root, {
+    ...fs,
+    stat: async (file, ...rest) => {
+      if (file === path) looks++
+      return fs.stat(file, ...rest)
+    },
+    open: async (file, ...rest) => {
+      writes++
+      return fs.open(file, ...rest)
+    },
+  })
+  await recorded(root, [path], today)
+  setClock(today + day)
+  // The wait between looks, seen as it starts and not waited out.
+  const wait = 12_345
+  let waited = false
+  const { setTimeout: timer } = globalThis
+  t.mock.method(globalThis, 'setTimeout', (run, ms, ...rest) => {
+    if (ms === wait) waited = true
+    return timer(run, ms === wait ? 0 : ms, ...rest)
+  })
+  await api.pruneUndoHistory(wait)
+  assert.equal(looks, 1)
+  assert.equal(writes, 0)
+  assert.equal(waited, false)
+  await fs.writeFile(path, '')
+  await api.pruneUndoHistory(wait)
+  assert.deepEqual(await records(root), {})
+  assert.equal(waited, false)
+})
+
+test('opening or saving a note clears its record', async (t) => {
+  const root = await profile(t)
+  clock(t)
+  const note = saved()
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  await fs.writeFile(path, note.source)
+  const api = await main(root)
+  await api.storeUndoHistory(path, note.file, note.history)
+  await fs.rm(path)
+  await api.pruneUndoHistory(0)
+  assert.deepEqual(await records(root), { [path]: today })
+  assert.deepEqual(
+    await api.readUndoHistory(path, reopened(note.source)),
+    note.history,
+  )
+  assert.deepEqual(await records(root), {})
+  await api.pruneUndoHistory(0)
+  assert.deepEqual(await records(root), { [path]: today })
+  await api.storeUndoHistory(path, note.file, note.history)
+  assert.deepEqual(await records(root), {})
+})
+
+test("a note opened before a launch's first look clears its record, and going again before that look starts the wait over", async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const note = saved()
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  await fs.writeFile(path, note.source)
+  await (await main(root)).storeUndoHistory(path, note.file, note.history)
+  await recorded(root, [path], today)
+  setClock(today + 31 * day)
+  const api = await main(root)
+  assert.deepEqual(
+    await api.readUndoHistory(path, reopened(note.source)),
+    note.history,
+  )
+  assert.deepEqual(await records(root), {})
+  // As a switch to a Git branch without the note, right after opening it.
+  await fs.rm(path)
+  await api.pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, path)), true)
+  assert.deepEqual(await records(root), { [path]: today + 31 * day })
+})
+
+test('a look that finds a note clears its record before the wait for other notes, so a quit during it keeps what the look saw', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const [back, gone] = [join(root, 'a.md'), join(root, 'b.md')]
+  await fs.writeFile(back, '')
+  await fs.writeFile(
+    indexFile(root),
+    JSON.stringify([{ path: back, missingSince: today }, gone]),
+  )
+  setClock(today + day)
+  const wait = 12_346
+  const { setTimeout: timer } = globalThis
+  let release
+  const waiting = new Promise((resolve) => {
+    t.mock.method(globalThis, 'setTimeout', (run, ms, ...rest) => {
+      if (ms !== wait) return timer(run, ms, ...rest)
+      release = run
+      resolve()
+    })
+  })
+  const pruning = (await main(root)).pruneUndoHistory(wait)
+  await waiting
+  const during = await records(root)
+  release()
+  await pruning
+  assert.deepEqual(during, {})
+  assert.deepEqual(await records(root), { [gone]: today + day })
+})
+
+test('a note opened still reads when its record cannot be cleared', async (t) => {
+  const root = await profile(t)
+  clock(t)
+  const note = saved()
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  let failing = false
+  const api = await main(root, {
+    ...fs,
+    open: async (file, ...rest) => {
+      if (failing && String(file).includes('undo-history-notes'))
+        throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' })
+      return fs.open(file, ...rest)
+    },
+  })
+  await api.storeUndoHistory(path, note.file, note.history)
+  await api.pruneUndoHistory(0)
+  failing = true
+  assert.deepEqual(
+    await api.readUndoHistory(path, reopened(note.source)),
+    note.history,
+  )
+  failing = false
+  assert.equal(await exists(kept(root, path)), true)
+})
+
+test('an index written before records reads, and only a missing note gets one', async (t) => {
+  const root = await profile(t)
+  clock(t)
+  const here = join(root, 'here.md'),
+    away = join(root, 'away.md')
+  await fs.writeFile(here, '')
+  await fs.writeFile(indexFile(root), JSON.stringify([here, away]))
+  await (await main(root)).pruneUndoHistory(0)
+  assert.deepEqual(await entries(root), [
+    here,
+    { path: away, missingSince: today },
+  ])
+})
+
+test('a time in the index that is corrupt or set by hand starts the wait over, and entries that are no note drop', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  const bad = [
+    'null',
+    '"soon"',
+    'true',
+    '[]',
+    '{}',
+    '0',
+    '-1',
+    '1',
+    '1e999',
+    '-1e999',
+    `${Date.UTC(2026, 0, 1) - 1}`,
+  ]
+  for (const value of bad) {
+    await fs.mkdir(folder(root), { recursive: true })
+    await fs.writeFile(kept(root, path), '{}')
+    await fs.writeFile(
+      indexFile(root),
+      `[null, 5, [], {}, {"path": 5, "missingSince": ${today - 365 * day}}, {"path": ${JSON.stringify(path)}, "missingSince": ${value}}]`,
+    )
+    setClock(today)
+    await (await main(root)).pruneUndoHistory(0)
+    assert.equal(await exists(kept(root, path)), true, value)
+    assert.deepEqual(
+      await entries(root),
+      [{ path, missingSince: today }],
+      value,
+    )
+  }
+})
+
+test('a clock set back keeps the wait, and a time ahead of the clock never lets go early', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  await fs.mkdir(folder(root), { recursive: true })
+  await fs.writeFile(kept(root, path), '{}')
+  const launch = async (time) => {
+    setClock(time)
+    await (await main(root)).pruneUndoHistory(0)
+  }
+  const other = join(root, 'b.md')
+  await fs.writeFile(
+    indexFile(root),
+    JSON.stringify([{ path, missingSince: today }, other]),
+  )
+  // Set back a year, then right again: the note waits from the same time,
+  // though the launch writes the index for another note it finds missing.
+  await launch(today - 365 * day)
+  assert.deepEqual(await records(root), {
+    [path]: today,
+    [other]: today - 365 * day,
+  })
+  await launch(today + day)
+  assert.equal(await exists(kept(root, path)), true)
+  assert.equal((await records(root))[path], today)
+  await launch(today + 30 * day)
+  assert.equal(await exists(kept(root, path)), false)
+  // A time far past the clock waits for the clock, whatever wrote it.
+  await fs.writeFile(kept(root, path), '{}')
+  await recorded(root, [path], today + 1000 * day)
+  await launch(today + 500 * day)
+  assert.equal(await exists(kept(root, path)), true)
+})
+
+test('a note with a record that Hibi moves or trashes takes it along, and a clear forgets it', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const note = saved()
+  const from = join(root, 'a.md'),
+    to = join(root, 'b.md'),
+    trashed = join(root, 't.md'),
+    cleared = join(root, 'c.md'),
+    overwritten = join(root, 'o.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  const api = await main(root)
+  for (const path of [from, trashed, cleared, overwritten])
+    await api.storeUndoHistory(path, note.file, note.history)
+  await api.pruneUndoHistory(0)
+  assert.equal(Object.keys(await records(root)).length, 4)
+  // Moved: the note was just seen under its new name, which may have waited too.
+  await fs.writeFile(to, note.source)
+  await api.relocateUndoHistory(from, to)
+  await fs.writeFile(overwritten, note.source)
+  await api.relocateUndoHistory(to, overwritten)
+  await api.removeUndoHistory(trashed)
+  assert.deepEqual(await records(root), { [cleared]: today })
+  assert.deepEqual(await index(root), [cleared, overwritten].sort())
+  await api.clearUndoHistory()
+  // A read after a clear finds no record to clear, so no index comes back.
+  assert.equal(await api.readUndoHistory(cleared, reopened(note.source)), null)
+  assert.equal(await exists(indexFile(root)), false)
+  // Moved between the looks of a launch that would have let go of it.
+  setClock(today + 40 * day)
+  await fs.rm(overwritten)
+  await recorded(root, [from], today)
+  const later = await main(root)
+  await fs.mkdir(folder(root), { recursive: true })
+  await fs.writeFile(kept(root, from), JSON.stringify({}))
+  const pruning = later.pruneUndoHistory(50)
+  await fs.writeFile(to, note.source)
+  await later.relocateUndoHistory(from, to)
+  await pruning
+  assert.equal(await exists(kept(root, to)), true)
+  assert.deepEqual(await entries(root), [to])
+})
+
+test('a note due to go stays unless both looks find it missing', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  await fs.mkdir(folder(root), { recursive: true })
+  await fs.writeFile(kept(root, path), '{}')
+  // What each lookup of the note does, in order.
+  let lookups = []
+  const api = await main(root, {
+    ...fs,
+    stat: async (file, ...rest) => {
+      if (file === path) {
+        const lookup = lookups.shift()
+        if (lookup === 'fails')
+          throw Object.assign(new Error('EIO'), { code: 'EIO' })
+        if (lookup === 'back') await fs.writeFile(path, '')
+      }
+      return fs.stat(file, ...rest)
+    },
+  })
+  await recorded(root, [path], today)
+  setClock(today + 31 * day)
+  lookups = ['missing', 'fails']
+  await api.pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, path)), true)
+  assert.deepEqual(await records(root), { [path]: today })
+  lookups = ['fails', 'missing']
+  await api.pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, path)), true)
+  assert.deepEqual(await records(root), { [path]: today })
+  lookups = ['missing', 'back']
+  await api.pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, path)), true)
+  assert.deepEqual(await records(root), {})
+})
+
+test('past 64 MiB, a note waiting out its 30 days goes as any other, and leaves its record', async (t) => {
+  const root = await profile(t)
+  clock(t)
+  await fs.mkdir(folder(root), { recursive: true })
+  const older = ['/old/1.md', '/old/2.md', '/old/3.md']
+  for (const [index, path] of older.entries()) {
+    await fs.writeFile(kept(root, path), '')
+    await fs.truncate(kept(root, path), 30 * mib)
+    const time = new Date(Date.UTC(2026, 0, 1 + index))
+    await fs.utimes(kept(root, path), time, time)
+  }
+  await recorded(root, older, today - day)
+  const api = await main(root)
+  const note = saved()
+  await api.storeUndoHistory('/notes/new.md', note.file, note.history)
+  assert.equal(await exists(kept(root, '/old/1.md')), false)
+  assert.deepEqual(await entries(root), [
+    { path: '/old/2.md', missingSince: today - day },
+    { path: '/old/3.md', missingSince: today - day },
+    '/notes/new.md',
+  ])
 })
 
 test('a note Hibi moves while missing notes are looked for keeps its history', async (t) => {
@@ -704,8 +1107,9 @@ test('missing notes are looked at again only after the moves Hibi queued, even a
   )
 })
 
-test('a note that cannot be looked at, iCloud evicted, or on an empty mount point keeps its history', async (t) => {
+test('a note that cannot be looked at, iCloud evicted, or on an empty mount point keeps its history, past 30 days too', async (t) => {
   const root = await profile(t)
+  const setClock = clock(t)
   const note = saved()
   const unreadable = join(root, 'locked', 'a.md'),
     evicted = join(root, 'Documents', 'b.md'),
@@ -733,6 +1137,33 @@ test('a note that cannot be looked at, iCloud evicted, or on an empty mount poin
   await api.pruneUndoHistory(0)
   for (const path of [unreadable, evicted, unmounted, unsure])
     assert.equal(await exists(kept(root, path)), true, path)
+  // None counts as found missing, so none has a wait to serve.
+  assert.deepEqual(await entries(root).catch(() => []), [
+    unreadable,
+    evicted,
+    unmounted,
+    unsure,
+  ])
+  // One recorded before and due now stays, and only a note there clears it.
+  const paths = [unreadable, evicted, unmounted, unsure]
+  await recorded(root, paths, today)
+  setClock(today + 31 * day)
+  const later = await main(root, {
+    ...fs,
+    stat: async (path, ...rest) => {
+      if (path === unreadable || path === join(root, 'flaky', '.d.md.icloud'))
+        throw Object.assign(new Error('EIO'), { code: 'EIO' })
+      return fs.stat(path, ...rest)
+    },
+  })
+  await later.pruneUndoHistory(0)
+  for (const path of paths)
+    assert.equal(await exists(kept(root, path)), true, path)
+  assert.deepEqual(await records(root), {
+    [unreadable]: today,
+    [unmounted]: today,
+    [unsure]: today,
+  })
 })
 
 test('a quit waits for the histories a prune removes, not for the wait between its looks', async (t) => {
@@ -754,16 +1185,31 @@ test('a quit waits for the histories a prune removes, not for the wait between i
   await fs.writeFile(path, note.source)
   await api.storeUndoHistory(path, note.file, note.history)
   await fs.rm(path)
-  const pruning = api.pruneUndoHistory(300)
+  await recorded(root, [path], today)
+  const later = await main(root, {
+    ...fs,
+    unlink: async (file, ...rest) => {
+      if (file === kept(root, path)) {
+        removing = true
+        await removed.promise
+      }
+      return fs.unlink(file, ...rest)
+    },
+  })
+  t.mock.method(Date, 'now', () => today + 31 * day)
+  const pruning = later.pruneUndoHistory(300)
   await new Promise((resolve) => setTimeout(resolve, 50))
   let quit = false
-  await api.undoHistoryWritten().then(() => {
+  await later.undoHistoryWritten().then(() => {
     quit = true
   })
   assert.equal(quit, true)
-  while (!removing) await new Promise((resolve) => setTimeout(resolve, 10))
+  for (let tries = 0; !removing; tries++) {
+    assert.ok(tries < 500, 'the history was never removed')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
   quit = false
-  const quitting = api.undoHistoryWritten().then(() => {
+  const quitting = later.undoHistoryWritten().then(() => {
     quit = true
   })
   await new Promise((resolve) => setTimeout(resolve, 100))
@@ -803,6 +1249,8 @@ test('a prune that is the first task of a launch leaves nothing of the note', as
     ),
   )
   await fs.rm(path)
+  await recorded(root, [path], today)
+  t.mock.method(Date, 'now', () => today + 31 * day)
   const later = await main(root)
   await later.pruneUndoHistory(0)
   assert.deepEqual(await fs.readdir(folder(root)), [])
@@ -831,7 +1279,10 @@ test('a note the index spells another way, or reached through a link, keeps its 
     )
   for (const path of paths)
     await api.storeUndoHistory(path, note.file, note.history)
-  await api.pruneUndoHistory(0)
+  // Due to go, if any look took one for missing.
+  await recorded(root, paths, today)
+  t.mock.method(Date, 'now', () => today + 31 * day)
+  await (await main(root)).pruneUndoHistory(0)
   for (const path of paths)
     assert.equal(await exists(kept(root, path)), true, path)
   assert.deepEqual(await index(root), [...paths].sort())

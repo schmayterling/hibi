@@ -2944,8 +2944,8 @@ if (!app.requestSingleInstanceLock()) {
       installMenu()
       await updatesReady
       startUpdateChecks()
-      // Once a launch, after it settles: notes deleted outside Hibi let go
-      // of their kept undo history.
+      // Once a launch, after it settles: notes missing for 30 days let go of
+      // their kept undo history.
       setTimeout(
         () =>
           void pruneUndoHistory().catch((error: unknown) =>

@@ -230,14 +230,16 @@ test('the history view lists every save asked for and thins autosaves, keeping o
   await replaceRichText(page, editor, replaced)
   await saved(replaced)
   const replacing = await newest()
-  // A few words typed on: that autosave holds no point, so it merges into the
-  // next one when that comes less than 5 s later.
+  // A few words typed on, then more without a pause, for longer than 5 s:
+  // that autosave holds no point, and the next comes less than 3 minutes
+  // later, so it isn't listed beside it.
   await editor.press('ControlOrMeta+End')
   await page.keyboard.type(' more')
   await saved(`${replaced} more`)
   const merging = await newest()
-  await page.keyboard.type(' words')
-  await saved(`${replaced} more words`)
+  const going = Date.now()
+  await page.keyboard.type(' and some words', { delay: 400 })
+  await saved(`${replaced} more and some words`)
   const after = await newest()
   await clickMenu(app, 'Command palette')
   await page.getByRole('combobox', { name: /search commands/i }).fill('history')
@@ -257,13 +259,298 @@ test('the history view lists every save asked for and thins autosaves, keeping o
   )
   const shows = (version) => listed.has(`history-version-${version.id}`)
   assert.ok(shows(holding))
-  assert.equal(
-    shows(merging),
-    after.savedAt - merging.savedAt >= 5000,
-    'an autosave holding no point merges into one less than 5 s later',
-  )
+  // More than the 5 s that once kept an autosave listed.
+  assert.ok(after.savedAt - merging.savedAt >= 5000)
+  // Unless a stall made a pause before typing went on, a point it would hold.
+  if (going - merging.savedAt < 2500)
+    assert.equal(
+      shows(merging),
+      false,
+      'an autosave holding no point is not listed within 3 minutes of another entry',
+    )
   assert.ok(shows(after))
   assert.ok(replacing.savedAt > holding.savedAt)
+})
+
+test('the history view leaves out an autosave within 3 minutes of a point it lists', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-beside-'))
+  const file = join(profile, 'note.md')
+  await writeFile(file, texts.original)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const editor = page.getByRole('textbox', { name: /document editor/i })
+  await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    texts.original,
+  )
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[aria-label="Document editor"]')
+        ?.isContentEditable,
+  )
+  // Nothing saved, so the only entry near the edit is the text it replaced, a
+  // point; main answers with an autosave beside that and one far from it, and
+  // a newest one, which always shows, far from them both.
+  await replaceRichText(page, editor, texts.first)
+  await app.evaluate(({ ipcMain }) => {
+    const autosave = (id, ago) => ({
+      id,
+      hash: id,
+      bytes: 1,
+      savedAt: Date.now() - ago,
+      automatic: true,
+    })
+    ipcMain.removeHandler('history:list')
+    ipcMain.handle('history:list', () => [
+      autosave('newest', -10 * 60 * 1000),
+      autosave('beside', 1000),
+      autosave('apart', 10 * 60 * 1000),
+    ])
+  })
+  await clickMenu(app, 'Command palette')
+  await page.getByRole('combobox', { name: /search commands/i }).fill('history')
+  await page
+    .getByRole('option')
+    .filter({ hasText: /^history/i })
+    .first()
+    .click()
+  const history = page.getByRole('dialog', { name: /^history$/i })
+  await history.waitFor()
+  const points = history.getByRole('listbox', { name: /points to return to/i })
+  await points.getByRole('option').first().waitFor()
+  const listed = await points
+    .getByRole('option')
+    .evaluateAll((options) => options.map((option) => option.id))
+  assert.ok(listed.some((id) => id.startsWith('history-point-')))
+  assert.ok(listed.includes('history-version-newest'))
+  assert.ok(listed.includes('history-version-apart'))
+  assert.ok(!listed.includes('history-version-beside'))
+})
+
+test('the history view lists as a point a text no saved version holds: after Save As, a first save, a Replace and a failed version', {
+  timeout: 120000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-history-view-kept-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  const editor = page.getByRole('textbox', { name: /document editor/i })
+  const shows = (text) =>
+    waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  const open = async (name, text) => {
+    const file = join(profile, name)
+    if (text !== undefined) await writeFile(file, text)
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Document editor"]')
+          ?.isContentEditable,
+    )
+  }
+  const edit = async (text) => {
+    await replaceRichText(page, editor, text)
+    await shows(text)
+  }
+  const save = async (keys = `${mod}+s`) => {
+    await pressShortcut(app, keys)
+    await waitForAsync(
+      page,
+      async () => !(await window.hibi.getDocument()).dirty,
+    )
+    await page.locator('.app[aria-busy="false"]').waitFor()
+  }
+  const saveAs = async (name) => {
+    await app.evaluate(
+      ({ dialog }, filePath) => {
+        dialog.showSaveDialog = async () => ({ canceled: false, filePath })
+      },
+      join(profile, name),
+    )
+    await save(`${mod}+Shift+s`)
+  }
+  // What the list says of each entry, past its time, once versions are in.
+  const list = async () => {
+    await editor.focus()
+    await clickMenu(app, 'Command palette')
+    await page
+      .getByRole('combobox', { name: /search commands/i })
+      .fill('history')
+    await page
+      .getByRole('option')
+      .filter({ hasText: /^history/i })
+      .first()
+      .click()
+    const history = page.getByRole('dialog', { name: /^history$/i })
+    await history.waitFor()
+    const entries = history
+      .getByRole('listbox', { name: /points to return to/i })
+      .getByRole('option')
+    await entries
+      .filter({ hasText: /saved version/i })
+      .first()
+      .waitFor()
+    const labels = (await entries.allTextContents()).map((text) =>
+      text.replace(/^[^·]*· /, ''),
+    )
+    await page.keyboard.press('Escape')
+    await history.waitFor({ state: 'hidden' })
+    return labels
+  }
+  const oldest = (labels) => labels.some((label) => /^oldest/i.test(label))
+
+  const undoReady = () =>
+    page.waitForFunction(
+      () =>
+        document.querySelector(
+          '[aria-label="Editor toolbar"] button[aria-label="Undo"]',
+        )?.disabled === false,
+    )
+
+  // A save that keeps both texts lists the one it replaced as that version.
+  await open('saved.md', 'the text this note opened with, kept by the save')
+  await edit('the text of a save that keeps both, well past a few characters')
+  await save()
+  assert.ok(!oldest(await list()), 'after a save')
+
+  // So does a save at the prompt closing a tab, also once the note is reopened.
+  await open(
+    'prompted.md',
+    'the text this note opened with, kept at the prompt',
+  )
+  await edit('the text saved at the closing prompt, well past a few characters')
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 0 })
+  })
+  await pressShortcut(app, `${mod}+w`)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name !== 'prompted.md',
+  )
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  await open('prompted.md')
+  await undoReady()
+  await edit('typed after reopening the note, well past a few characters')
+  assert.ok(!oldest(await list()), 'after a save at the prompt')
+
+  // Save As keeps no copy of the text before it at the new path, also once
+  // the note is reopened.
+  await open('moved.md', 'the text before it was saved under a new name')
+  await edit('the text written under the new name, well past a few characters')
+  await saveAs('new-name.md')
+  assert.ok(oldest(await list()), 'after Save As')
+  await pressShortcut(app, `${mod}+w`)
+  await waitForAsync(page, async () => {
+    const document = await window.hibi.getDocument()
+    return document.name !== 'new-name.md'
+  })
+  await open('new-name.md')
+  await undoReady()
+  await edit('typed after reopening the note, well past a few characters')
+  assert.ok(oldest(await list()), 'after reopening what Save As wrote')
+
+  // A note's first save has no earlier text to keep.
+  await pressShortcut(app, `${mod}+n`)
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[aria-label="Document editor"]')
+        ?.isContentEditable,
+  )
+  await edit('the first words of a new note, well past a few characters')
+  await saveAs('first-save.md')
+  assert.ok(oldest(await list()), 'after a first save')
+
+  // Replacing a file another app changed keeps that app's text, not the text
+  // this note opened with.
+  await open('outside.md', 'the text this note opened with, before the rest')
+  await edit('the text saved over the other app, well past a few characters')
+  await writeFile(join(profile, 'outside.md'), 'what another app wrote there')
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 0 })
+  })
+  await save()
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  assert.ok(oldest(await list()), 'after Replace')
+
+  // A save whose version couldn't be written holds no version: the state it
+  // wrote is a point before the large edit that follows it.
+  await open('failed.md', 'the text this note opened with, kept by the save')
+  await edit('the text of the save that keeps its versions, past a few')
+  await save()
+  await app.evaluate(
+    (_, history) => {
+      const fs = process.getBuiltinModule('node:fs/promises')
+      const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+      const open = fs.open
+      fs.open = async (...args) => {
+        if (args[1] === 'wx' && String(args[0]).startsWith(history))
+          throw Object.assign(new Error('ENOSPC: no space left on device'), {
+            code: 'ENOSPC',
+          })
+        return open(...args)
+      }
+      globalThis.restoreHistoryFailure = () => {
+        fs.open = open
+        syncBuiltinESMExports()
+      }
+      syncBuiltinESMExports()
+    },
+    join(profile, 'history'),
+  )
+  await edit('the text of the save that keeps no version, past a few')
+  await save()
+  await app.evaluate(() => globalThis.restoreHistoryFailure())
+  await edit(`pasted over it. ${'and a long paragraph after it. '.repeat(10)}`)
+  assert.ok(
+    (await list()).some((label) => /^before a large edit/i.test(label)),
+    'after a failed version',
+  )
 })
 
 test('going to a step or restoring a point shows the change in the editor, and an edit made meanwhile or a read-only editor stops them', {

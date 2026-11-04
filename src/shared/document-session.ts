@@ -1,3 +1,4 @@
+import type { VersionsKept } from './desktop.ts'
 import {
   type PreparedSourceOperation,
   type SourceBufferOptions,
@@ -817,8 +818,8 @@ export class DocumentSession {
       group.viewId,
     )
   }
-  /** `versioned`: the save kept the text it replaced and the text it wrote as saved versions. */
-  markSaved(snapshot: SourceSnapshot, versioned = true) {
+  /** `kept`: which of the text it replaced and the text it wrote the save kept as saved versions. */
+  markSaved(snapshot: SourceSnapshot, kept: VersionsKept = 'both') {
     const current = this.#store.ownsCurrentSnapshot(snapshot)
     const identity = current
       ? this.#contentIdentity
@@ -826,12 +827,10 @@ export class DocumentSession {
     if (!identity)
       throw new Error('Saved snapshot does not belong to this session.')
     const time = this.#options.now?.() ?? Date.now()
-    if (versioned) {
-      // The replaced text was kept already if an earlier save wrote it.
-      if (!this.#versioned.has(this.#savedIdentity))
-        this.#versioned.set(this.#savedIdentity, time)
-      this.#versioned.set(identity, time)
-    }
+    // The replaced text was kept already if an earlier save wrote it.
+    if (kept === 'both' && !this.#versioned.has(this.#savedIdentity))
+      this.#versioned.set(this.#savedIdentity, time)
+    if (kept !== 'none') this.#versioned.set(identity, time)
     this.#saved = current ? this.snapshot() : snapshot
     this.#savedIdentity = identity
     this.#savedAt = this.#steps.get(this.#saved) ?? null
@@ -952,7 +951,7 @@ export class DocumentSession {
     const current = this.snapshot()
     if (typeof source !== 'string') {
       if (current.sharesRoot(source)) {
-        this.markSaved(current, false)
+        this.markSaved(current, 'none')
         return
       }
       this.#saved = source
@@ -963,7 +962,7 @@ export class DocumentSession {
       return
     }
     if (current.materialize() === source) {
-      this.markSaved(current, false)
+      this.markSaved(current, 'none')
       return
     }
     this.#saved = new SourceStore(

@@ -2507,12 +2507,7 @@ test('a toolbar click before refresh formats the newly selected live source rang
   await rich.evaluate((element) =>
     element.cmTile.root.view.dispatch({ selection: { anchor: 1 } }),
   )
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector('.editor-toolbar [data-toolbar-id="format.bold"]')
-        ?.getAttribute('aria-pressed') === 'false',
-  )
+  await settledInputToolbar(page, 'bold', { pressed: 'false', disabled: false })
   const shown = await rich.evaluate((element) => {
     const view = element.cmTile.root.view
     const from = view.state.doc.toString().indexOf('bold')

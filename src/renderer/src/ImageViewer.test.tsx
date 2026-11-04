@@ -55,7 +55,6 @@ describe('ImageViewer', () => {
       ),
     ).toContain('width:250%')
   })
-
 })
 
 describe('fallback', () => {

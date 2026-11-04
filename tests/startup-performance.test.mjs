@@ -142,6 +142,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // commands wait for a file operation like keys do, and dropping what
   // arrives behind a file dialog, adds 785 (#808).
   // Finding History by "version" in the palette adds 61 (#814).
+  // Image documents and their demand-loaded viewer add 1,801 (#815).
+  // Sending repeated Save commands to their coalescing handler adds 27 (#818).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -165,7 +167,9 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         940 +
         20 +
         785 +
-        61,
+        61 +
+        1801 +
+        27,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

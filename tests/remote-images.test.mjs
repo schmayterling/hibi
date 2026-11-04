@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmod,
@@ -245,7 +246,14 @@ test("a workspace cache folder Hibi can't write to, such as in a shared folder, 
   const host = await setup(t)
   const images = join(host.workspace, '.hibi', 'cache', 'images')
   await mkdir(images, { recursive: true })
-  await chmod(images, 0o500)
+  if (process.platform === 'win32') {
+    // Deny writes to the folder and new files, while keeping directory reads.
+    execFileSync('icacls', [images, '/deny', '*S-1-1-0:(OI)(CI)(WD,AD)', '/Q'])
+  } else await chmod(images, 0o500)
+  await assert.rejects(
+    writeFile(join(images, 'write-probe'), 'unwritable'),
+    (error) => ['EACCES', 'EPERM'].includes(error.code),
+  )
   assert.deepEqual(await host.draw(), drawn('first'))
   assert.deepEqual(await host.draw(), drawn('first'))
   assert.equal(host.requests.length, 1)

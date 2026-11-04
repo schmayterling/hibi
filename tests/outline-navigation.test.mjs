@@ -301,9 +301,15 @@ test('source outline resolves references through its worker and preserves native
   const checkFormattedHeadings = async () => {
     await page
       .waitForFunction(() => {
+        // By name: a note opens with its caret in its last block, and a heading
+        // the caret is in shows its marker once the window has focus.
         const headings = [
           ...document.querySelectorAll('.rich-pane :is(h1, .hibi-lp-h1)'),
-        ].map((heading) => heading.textContent)
+        ].map(
+          (heading) =>
+            heading.closest('[role="heading"]')?.getAttribute('aria-label') ??
+            heading.textContent,
+        )
         return (
           JSON.stringify(headings) ===
           JSON.stringify(['**literal** label', 'real'])

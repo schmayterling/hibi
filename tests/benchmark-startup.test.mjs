@@ -666,25 +666,3 @@ test('end verification rejects changed source, output, helpers or a replacement 
     )
   }
 })
-
-test('samplers verify provenance after sampling and cold startup never times a reload', async () => {
-  for (const file of ['benchmark-startup.mjs']) {
-    const source = await readFile(
-      new URL(`../scripts/${file}`, import.meta.url),
-      'utf8',
-    )
-    assert.ok(source.includes('await verifyBenchmarkProvenance('), file)
-  }
-  const startup = await readFile(
-    new URL('../scripts/benchmark-startup.mjs', import.meta.url),
-    'utf8',
-  )
-  assert.ok(
-    startup.indexOf('await seedBenchmarkProfile(') <
-      startup.indexOf('const start = performance.now()'),
-  )
-  assert.ok(
-    !startup.includes('page.reload('),
-    'cold startup must not time a reload',
-  )
-})

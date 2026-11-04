@@ -370,10 +370,36 @@ for (const presentation of ['formatted', 'source'])
       })
       await opened(context, source, presentation)
       await type(context, 'before ')
+      await context.page.evaluate((pane) => {
+        window.firstContent = document.querySelector(`${pane} .cm-content`)
+        window.firstView = window.firstContent.cmTile.root.view
+      }, context.pane)
       await type(context, 'Q')
       await named(context, 'bad-ext.bad: decorations boom')
       await answers(context)
       await editorReady(context)
+      // The view that failed takes nothing more, from typing or from code.
+      assert.deepEqual(
+        await context.page.evaluate(
+          async ({ pane, source }) => {
+            window.firstView.dispatch({
+              changes: { from: 0, insert: 'late ' },
+            })
+            return {
+              replaced:
+                window.firstContent !==
+                document.querySelector(`${pane} .cm-content`),
+              editable: window.firstContent.contentEditable,
+              note: (await window.hibi.getDocument()).markdown.slice(
+                0,
+                source.length,
+              ),
+            }
+          },
+          { pane: context.pane, source },
+        ),
+        { replaced: true, editable: 'false', note: source },
+      )
       // The caret and focus came back: this types with neither set again.
       await context.page.keyboard.insertText('more')
       await typingAndSavingWork(context, source, 'before Qmore')
@@ -395,6 +421,32 @@ test('a note already holding what a decoration source throws on opens, names it 
   await editorReady(context)
   await type(context, 'x')
   await typingAndSavingWork(context, source, 'x')
+})
+
+test('a draw failure that going back one at a time does not bring out takes every feature out the next time, and ends', {
+  timeout: 60000,
+}, async (t) => {
+  // The features go back before focus does.
+  const context = await open(t, {
+    source: plain,
+    code: decorationsAddon(
+      'formatted',
+      `view.hasFocus && view.state.doc.toString().includes('Q')`,
+    ),
+  })
+  await opened(context, plain)
+  await type(context, 'before ')
+  await context.page.keyboard.insertText('Q')
+  await named(context, 'bad-ext.bad: decorations boom')
+  await named(context, 'good-ext.good: decorations boom')
+  await answers(context)
+  await editorReady(context)
+  await type(context, 'x')
+  await typingAndSavingWork(context, plain, 'before Qx')
+  assert.equal(
+    await context.page.locator(`${context.pane} .cm-editor[data-good]`).count(),
+    0,
+  )
 })
 
 test('a decoration source that throws only for what scrolls into view is named and the editor comes back', {

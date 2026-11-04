@@ -1909,7 +1909,6 @@ export function SourceEditor({
           }
         : {}),
       dispatchTransactions(transactions, editor) {
-        if (isViewDead(editor)) return
         // Input no Markdown can keep is refused unapplied, its features kept.
         for (const transaction of transactions) {
           const error = transaction.annotation(rejectedInput)
@@ -2454,7 +2453,6 @@ export function SourceEditor({
     ).observer
     const flush = observer.flush.bind(observer)
     observer.flush = (readSelection) => {
-      if (isViewDead(editor)) return true
       try {
         return flush(readSelection)
       } catch (error) {

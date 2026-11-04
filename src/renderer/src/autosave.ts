@@ -39,7 +39,7 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
   const [result, setResult] = useState<{
     id: string
     revision: number
-    status: 'saving' | 'saved' | 'waiting' | 'conflict' | 'error'
+    status: 'saving' | 'saved' | 'waiting' | 'conflict' | 'held' | 'error'
     error?: string
   } | null>(null)
   const currentResult =
@@ -102,7 +102,14 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
           if (!token) return
           inFlight.current = true
           const identity = { id: next.id, revision: next.revision }
-          setResult({ ...identity, status: 'saving' })
+          // Trying again doesn't flip the status back and forth.
+          setResult((last) =>
+            last?.status === 'held' &&
+            last.id === identity.id &&
+            last.revision === identity.revision
+              ? last
+              : { ...identity, status: 'saving' },
+          )
           try {
             const saved = await window.hibi.autosaveDocument(
               next.tabId,
@@ -160,20 +167,24 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
       ? 'Autosave · save first'
       : currentResult?.status === 'saving'
         ? 'Autosave · saving'
-        : currentResult?.status === 'conflict' ||
-            currentResult?.status === 'error'
-          ? 'Autosave · paused'
-          : document.dirty
-            ? 'Autosave · waiting'
-            : 'Autosave · saved'
+        : currentResult?.status === 'held'
+          ? 'Autosave · retrying'
+          : currentResult?.status === 'conflict' ||
+              currentResult?.status === 'error'
+            ? 'Autosave · paused'
+            : document.dirty
+              ? 'Autosave · waiting'
+              : 'Autosave · saved'
   const tooltip =
     currentResult?.status === 'conflict'
       ? 'Another app changed this file. Save manually to review the changes and resume autosave.'
-      : (currentResult?.error ??
-        (!settings.enabled
-          ? 'Autosave is off · click to configure'
-          : !document?.canAutosave
-            ? 'Save this draft once to choose its location.'
-            : `Save after ${settings.delay / 1000} seconds without typing · click to configure`))
+      : currentResult?.status === 'held'
+        ? 'Another program is using this file, or Windows does not allow changes to it. Autosave keeps trying.'
+        : (currentResult?.error ??
+          (!settings.enabled
+            ? 'Autosave is off · click to configure'
+            : !document?.canAutosave
+              ? 'Save this draft once to choose its location.'
+              : `Save after ${settings.delay / 1000} seconds without typing · click to configure`))
   return { label, tooltip }
 }

@@ -2529,6 +2529,8 @@ test('an addon tab clicked during a save shows when it ends', {
   await app.evaluate(() => globalThis.hold('document:save'))
   await clickMenu(app, 'Save')
   await app.evaluate(() => globalThis.held['document:save'])
+  // Main has the save before the window has drawn itself busy.
+  await page.locator('.app[aria-busy="true"]').waitFor()
   assert.equal(
     await addonTab.getAttribute('aria-description'),
     'Opens when the current file operation ends',

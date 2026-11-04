@@ -3,6 +3,7 @@ import { execFile, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
+import './file-limit.mjs'
 
 export { after, before } from './electron-hooks.mjs'
 
@@ -332,6 +333,21 @@ export const electron = {
         onQuit?.()
       },
     )
+    // A page that stopped answering never answers a detach either.
+    const context = application.context?.()
+    if (context?.newCDPSession) {
+      const open = context.newCDPSession.bind(context)
+      context.newCDPSession = async (...args) => {
+        const session = await open(...args)
+        const detach = session.detach.bind(session)
+        session.detach = () =>
+          Promise.race([
+            detach(),
+            new Promise((resolve) => setTimeout(resolve, 5000).unref()),
+          ])
+        return session
+      }
+    }
     const close = application.close.bind(application)
     const quitTrace = {
       notInstalled: true,

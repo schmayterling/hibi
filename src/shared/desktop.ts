@@ -98,6 +98,8 @@ export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
   document: DocumentSaveReply | null
 }
+/** Held: a program had the file open. Autosave tries again; the text is kept. */
+export type AutosaveReply = AutosaveResult | { status: 'held'; document: null }
 export type DocumentCommand =
   | 'new'
   | 'open'
@@ -658,7 +660,7 @@ export type DesktopApi = {
     revision: number,
     contentVersion: number,
   ) => Promise<import('./document-edits').DocumentSaveResult>
-  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveResult>
+  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveReply>
   renameDocument: (name: string) => Promise<DocumentState>
   readDocumentImage: (
     source: string,

@@ -297,10 +297,19 @@ function runCI() {
     npm('run', 'build:app')
   // TAP prints each failure's details immediately; spec defers them to the end.
   if (unitTests.length)
-    run(['--test', '--test-reporter=tap', '--test-concurrency=4', ...unitTests])
+    run([
+      '--import',
+      './tests/file-limit.mjs',
+      '--test',
+      '--test-reporter=tap',
+      '--test-concurrency=4',
+      ...unitTests,
+    ])
   const serialTests = selected.filter((test) => !unitTests.includes(test))
   if (serialTests.length)
     run([
+      '--import',
+      './tests/file-limit.mjs',
       '--test',
       '--test-reporter=tap',
       '--test-concurrency=1',

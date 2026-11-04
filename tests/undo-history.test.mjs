@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { UNDO_HISTORY_CHANNELS } from '../src/shared/undo-history.ts'
 import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, redoKey, replaceRichText } from './keyboard.mjs'
 import { renameDocument } from './rename.mjs'
@@ -244,6 +245,45 @@ test('a save waiting its turn keeps the version it wrote, with typing going on b
   await hibi.open('draftx')
   await hibi.restored()
   await hibi.undo('draft')
+  await hibi.undo('original')
+})
+
+test('kept undo steps that reach a reopened note late still enable Undo', {
+  timeout: 60000,
+}, async (t) => {
+  const { launch } = await note(t)
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('draft')
+  await hibi.save('draft')
+  await pressShortcut(hibi.app, `${mod}+w`)
+  await hibi.shows('')
+  // The read waits behind other notes' writes; the toolbar has looked by then.
+  await hibi.app.evaluate(({ ipcMain }, channel) => {
+    const read = ipcMain._invokeHandlers.get(channel)
+    const late = new Promise((resolve) => {
+      globalThis.releaseRead = resolve
+    })
+    ipcMain._invokeHandlers.set(channel, async (...args) => {
+      const result = await read(...args)
+      await late
+      return result
+    })
+  }, UNDO_HISTORY_CHANNELS.read)
+  await hibi.open('draft')
+  const undo = hibi.page.locator(
+    '[aria-label="Editor toolbar"] button[aria-label="Undo"]',
+  )
+  await undo.waitFor()
+  await hibi.page.evaluate(
+    () =>
+      new Promise((frame) =>
+        requestAnimationFrame(() => setTimeout(frame, 100)),
+      ),
+  )
+  assert.equal(await undo.isDisabled(), true)
+  await hibi.app.evaluate(() => globalThis.releaseRead())
+  await hibi.restored()
   await hibi.undo('original')
 })
 

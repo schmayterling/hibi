@@ -254,6 +254,53 @@ test('behind the switch, completions get prose context past the first 16 KiB', {
   assert.equal(call.prose?.before, 'last paragraph prose', JSON.stringify(call))
 })
 
+test('after Enter under frontmatter, a click still lands on its line', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-clicks-'))
+  const file = join(folder, 'note.md')
+  await writeFile(
+    file,
+    '---\ntags: [work]\n---\nFirst line.\n\nTarget line.\n\nLast line.\n',
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  await waitForFormattedEditor(app, page)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  const line = (text) => page.locator('.rich-pane .cm-line', { hasText: text })
+  await line('First line.').click()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Enter')
+  await waitForAsync(page, async () =>
+    /---\n\n+First line/.test((await window.hibi.getDocument()).markdown),
+  )
+  await line('Target line.').click({ position: { x: 40, y: 8 } })
+  await page.keyboard.type('X')
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.includes('X'),
+  )
+  const { markdown } = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(
+    markdown
+      .split('\n')
+      .find((text) => text.includes('X'))
+      .replace('X', ''),
+    'Target line.',
+  )
+})
+
 test('behind the switch, frontmatter properties above the formatted view edit the note', {
   timeout: 90000,
 }, async (t) => {

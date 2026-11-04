@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { DocumentState } from '../../shared/desktop'
-import { useToasts } from '../../ui/Sonner'
 import { stored } from '../../ui/stored-preference'
-import type { ToastHandle } from '../../ui/toasts'
+import type { ToastApi, ToastHandle } from '../../ui/toasts'
 import { documentRuntime } from './document-runtime'
 
 export const autosaveDelays = [1000, 2000, 5000, 10000, 30000] as const
@@ -61,8 +60,11 @@ function attemptDelay(tabId: string, delay: number) {
     : delay
 }
 
-export function useAutosave(document: DocumentState | null, busy: boolean) {
-  const toasts = useToasts()
+export function useAutosave(
+  document: DocumentState | null,
+  busy: boolean,
+  toasts: ToastApi,
+) {
   const settings = useSyncExternalStore(autosave.subscribe, autosave.snapshot)
   const [result, setResult] = useState<{
     id: string

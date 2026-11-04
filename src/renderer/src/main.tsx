@@ -647,7 +647,7 @@ function App() {
       return
     focusEditor({ preventScroll: true })
   }, [busy, DocumentEditor, splitTabs?.active])
-  const autosaveStatus = useAutosave(document, busy)
+  const autosaveStatus = useAutosave(document, busy, toasts)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('default-view')
     return saved && isDocumentView(saved) ? saved : 'normal'

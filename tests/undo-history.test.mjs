@@ -403,7 +403,11 @@ test('a quit after the editor stopped still waits for kept undo history writes',
   await waitForAsync(app, () => globalThis.writes.held >= 1)
   await hibi.quit(({ BrowserWindow }) => {
     setTimeout(() => globalThis.writes.release(), 1000)
-    BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer()
+    // Stop the renderer without waiting for the operating system's crash dump.
+    process.kill(
+      BrowserWindow.getAllWindows()[0].webContents.getOSProcessId(),
+      'SIGKILL',
+    )
   })
   const name = `${createHash('sha256')
     .update(await realpath(file))

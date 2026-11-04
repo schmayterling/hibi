@@ -638,6 +638,10 @@ test('autocomplete warns when exclusions cannot be saved and clears the warning 
   await page.reload()
   await waitForDocumentEditor(app, page)
   await openSettings()
+  await page.waitForFunction(() => {
+    const checkbox = document.querySelector('#autocomplete-exclude-document')
+    return checkbox && !checkbox.disabled
+  })
   assert.equal(
     await page.locator('#autocomplete-exclude-document').isChecked(),
     true,

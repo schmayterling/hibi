@@ -394,7 +394,8 @@ test('settings opened while a restored version, file, tab or new note opens stay
   const root = await mkdtemp(join(tmpdir(), 'hibi-busy-settings-'))
   const folder = join(root, 'workspace')
   await mkdir(folder)
-  await writeFile(join(folder, 'one.md'), 'first note')
+  // A large saved version uses the asynchronous main-process restore path.
+  await writeFile(join(folder, 'one.md'), 'first note\n'.repeat(300000))
   await writeFile(join(folder, 'two.md'), 'second note')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
@@ -450,15 +451,14 @@ test('settings opened while a restored version, file, tab or new note opens stay
           .fill('version history')
         await page.getByRole('option').first().waitFor()
         await page.keyboard.press('Enter')
-        const history = page.getByRole('dialog', { name: /^version history$/i })
+        const history = page.getByRole('dialog', { name: /^history$/i })
         await history
-          .getByRole('navigation', { name: /saved versions/i })
-          .getByRole('button')
+          .getByRole('listbox', { name: /points to return to/i })
+          .getByRole('option')
+          .filter({ hasText: /saved version/i })
           .last()
           .click()
-        await history
-          .getByRole('button', { name: /restore to editor/i })
-          .click()
+        await history.getByRole('button', { name: /^restore$/i }).click()
       },
       'one.md',
       // The restored version is an unsaved change.

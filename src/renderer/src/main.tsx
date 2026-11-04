@@ -2033,10 +2033,16 @@ function App() {
   }
 
   async function closeSplit() {
-    await focusQueue.current
+    // Not when settled: replayed, it starts before what waits behind it.
+    if (focusPending.current) await focusQueue.current
     const current = splitTabsRef.current
     if (!current) return
     if (focusUnsafe.current && !(await retryDocumentFocus())) return
+    // A file operation, or what waited for the retry, goes first.
+    if (busyRef.current) {
+      wait('close-split', (go) => go && closeSplit())
+      return
+    }
     const active =
       current.left !== current.right &&
       currentDocument.current?.tabId === current.right

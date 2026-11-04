@@ -153,6 +153,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Flagging only the texts a save kept as versions adds 55 (#830).
   // Letting tab keys, addon tab clicks and tab moves wait for a file operation,
   // telling screen readers so, and dropping what arrives while editing is paused, adds 461 (#822).
+  // Letting each media drop and each new note or open an addon asks for wait
+  // for a file operation on its own adds 22 (#825).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -183,7 +185,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         149 +
         70 +
         55 +
-        461,
+        461 +
+        22,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

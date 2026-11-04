@@ -197,6 +197,33 @@ const editorSelection = (
   )
 
 /**
+ * Views whose redraw failed: CodeMirror has dropped their plugins and content
+ * by then, so they can show nothing more, and each further redraw starts their
+ * plugins' work over. The session keeps what they accepted. It also takes the
+ * failure of an update made for its edit, so whoever dispatched never hears of
+ * it: a listener does.
+ */
+const deadViews = new WeakSet<object>()
+const deathListeners = new WeakMap<object, (error: unknown) => void>()
+export const onViewDeath = (view: object, listener: (error: unknown) => void) =>
+  deathListeners.set(view, listener)
+export const isViewDead = (view: object) => deadViews.has(view)
+export function viewDied(view: object, error: unknown) {
+  if (deadViews.has(view)) return
+  deadViews.add(view)
+  deathListeners.get(view)?.(error)
+}
+
+/** Draws a state anew. A view this fails on is dead. */
+export function redraw(view: Pick<EditorView, 'setState'>, state: EditorState) {
+  try {
+    view.setState(state)
+  } catch (error) {
+    viewDied(view, error)
+  }
+}
+
+/**
  * A view whose update throws, as when an extension fails while it draws, may
  * hold the new text while its DOM keeps the old, and would read the next
  * input from that DOM twice. It is redrawn at the state the update reached.
@@ -207,10 +234,11 @@ function update(
 ) {
   // A state an extension failed on never reaches the view.
   for (const transaction of transactions) reachedState(transaction)
+  if (deadViews.has(view)) throw new Error('The source editor stopped drawing.')
   try {
     view.update(transactions)
   } catch (error) {
-    view.setState(transactions.at(-1)?.state ?? view.state)
+    redraw(view, transactions.at(-1)?.state ?? view.state)
     throw error
   }
 }

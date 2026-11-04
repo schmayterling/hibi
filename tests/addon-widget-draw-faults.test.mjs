@@ -44,28 +44,24 @@ const widgetAddon = (
 const healthy = `toDOM() { const dom = document.createElement('span'); dom.className = 'bad-widget'; dom.style.cssText = 'display: inline-block; width: 20px; height: 10px'; return dom }`
 const throwing = `toDOM() { throw new Error('widget boom') }`
 
-async function open(t, { source, presentation = 'formatted', addon }) {
-  const folder = await mkdtemp(join(tmpdir(), 'hibi-widget-faults-'))
-  const profile = join(folder, 'profile')
-  const file = join(folder, 'note.md')
-  await writeFile(file, source)
-  const installed = join(profile, 'installed-addons', 'bad-ext')
+async function install(profile, id, capabilities, code) {
+  const installed = join(profile, 'installed-addons', id)
   await mkdir(installed, { recursive: true })
   await writeFile(
     join(installed, 'hibi-addon.json'),
     JSON.stringify({
-      id: 'bad-ext',
-      name: 'Bad ext',
+      id,
+      name: id,
       description: 'Widget fault fixture',
       apiVersion: 3,
-      capabilities: [presentation],
+      capabilities,
       version: '1.0.0',
       kind: 'extension',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',
     }),
   )
-  await writeFile(join(installed, 'index.js'), widgetAddon(presentation, addon))
+  await writeFile(join(installed, 'index.js'), code)
   await writeFile(
     join(installed, '.hibi-install.json'),
     JSON.stringify({
@@ -74,10 +70,51 @@ async function open(t, { source, presentation = 'formatted', addon }) {
       source: 'local',
     }),
   )
-  await writeFile(
-    join(profile, 'addons.json'),
-    JSON.stringify({ 'bad-ext': true }),
-  )
+}
+
+const registerIn = (presentation) =>
+  presentation === 'formatted' ? 'registerFormatted' : 'registerSource'
+
+/** A feature marking the editor, which stays when the one beside it fails. */
+const goodAddon = (presentation) => `export default (sdk) => ({ start(context) {
+  const { EditorView } = sdk.codeMirror.view
+  context.editor.${registerIn(presentation)}({ id: 'good', create: () => EditorView.editorAttributes.of({ 'data-good': 'yes' }) })
+} })`
+
+/** A feature whose decoration source throws once the note reaches `when`, not a widget. */
+const decorationsAddon = (
+  presentation,
+  when = `view.state.doc.toString().includes('Q')`,
+) => `export default (sdk) => ({ start(context) {
+  const { Decoration, EditorView } = sdk.codeMirror.view
+  context.editor.${registerIn(presentation)}({ id: 'bad', create: () => EditorView.decorations.of((view) => {
+    if (${when}) throw new Error('decorations boom')
+    return Decoration.none
+  }) })
+} })`
+
+async function open(
+  t,
+  {
+    source,
+    presentation = 'formatted',
+    addon,
+    code = addon && widgetAddon(presentation, addon),
+    noAddons = false,
+  },
+) {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-widget-faults-'))
+  const profile = join(folder, 'profile')
+  const file = join(folder, 'note.md')
+  await writeFile(file, source)
+  if (!noAddons) {
+    await install(profile, 'bad-ext', [presentation], code)
+    await install(profile, 'good-ext', [presentation], goodAddon(presentation))
+    await writeFile(
+      join(profile, 'addons.json'),
+      JSON.stringify({ 'bad-ext': true, 'good-ext': true }),
+    )
+  }
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -99,6 +136,15 @@ async function open(t, { source, presentation = 'formatted', addon }) {
   const page = await app.firstWindow()
   const context = { app, page, file, errors: [] }
   page.on('pageerror', (error) => context.errors.push(error.message))
+  // Opening the note clears what the startup note showed, and a toast closes.
+  await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+  await page.evaluate(() => {
+    window.shownToasts = new Set()
+    new MutationObserver(() => {
+      for (const toast of document.querySelectorAll('.toast'))
+        window.shownToasts.add(toast.textContent)
+    }).observe(document, { childList: true, subtree: true })
+  })
   await waitForDocumentEditor(app, page, { timeout: 20000 })
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
@@ -139,6 +185,20 @@ async function opened(context, source, presentation = 'formatted') {
     .waitFor({ timeout: 20000 })
 }
 
+const editorReady = ({ page, pane }) =>
+  page
+    .locator(
+      `.editor-panes[data-source-ready="true"] ${pane} .cm-content[contenteditable="true"]`,
+    )
+    .waitFor({ timeout: 20000 })
+
+const named = (context, text) =>
+  context.page.waitForFunction(
+    (text) => [...window.shownToasts].some((shown) => shown.includes(text)),
+    text,
+    { timeout: 10000 },
+  )
+
 /** Types `keys` one at a time at the end of the last line, as the DOM reads them. */
 async function type(context, keys) {
   await context.page.evaluate((pane) => {
@@ -172,14 +232,14 @@ const shownText = ({ page, pane }) =>
   )
 
 /** The note, the screen and the file all hold what was typed once it is saved. */
-async function typingAndSavingWork(context, source, typed, shown = typed) {
+async function typingAndSavingWork(context, source, typed) {
   const expected = `${source}${typed}`
   await waitForAsync(
     context.page,
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     expected,
   )
-  assert.equal(await shownText(context), shown)
+  assert.equal(await shownText(context), typed)
   await pressShortcut(context.app, `${mod}+s`)
   await waitForAsync(
     context.page,
@@ -208,10 +268,7 @@ for (const presentation of ['formatted', 'source'])
       await type(context, 'Q')
       await type(context, 'more')
       await typingAndSavingWork(context, source, 'before Qmore')
-      assert.match(
-        await context.page.locator('.document-notice').textContent(),
-        /widget boom/,
-      )
+      await named(context, 'bad-ext.bad: widget boom')
     })
 
 test('a note already holding a widget that fails opens, answers and saves', {
@@ -231,29 +288,15 @@ test('a widget that fails when scrolling draws it leaves the note working', {
   const source = `${far}Q far\n\nend\n\n`
   const context = await open(t, { source, addon: { widget: throwing } })
   await opened(context, source)
-  // Nothing has drawn it yet, so nothing has failed.
-  assert.equal(await context.page.locator('.document-notice').count(), 0)
   await context.page.evaluate((pane) => {
     const view = document.querySelector(`${pane} .cm-content`).cmTile.root.view
     view.dispatch({
       effects: view.constructor.scrollIntoView(view.state.doc.length),
     })
   }, context.pane)
-  await context.page.locator('.document-notice').waitFor({ timeout: 10000 })
+  await named(context, 'bad-ext.bad: widget boom')
   await type(context, 'x')
   await typingAndSavingWork(context, source, 'x')
-})
-
-test('a widget replacing text that fails to draw keeps that text in the note and in the file', {
-  timeout: 60000,
-}, async (t) => {
-  const context = await open(t, {
-    source: plain,
-    addon: { widget: throwing, deco: ', inclusive: false' },
-  })
-  await opened(context, plain)
-  await type(context, 'Qmore')
-  await typingAndSavingWork(context, plain, 'Qmore', 'more')
 })
 
 /** A widget drawn fine, one of whose other methods fails. */
@@ -310,4 +353,139 @@ for (const [method, widget] of Object.entries(otherMethods))
     await context.page.keyboard.press('Backspace')
     await type(context, 'e')
     await typingAndSavingWork(context, withTable, 'abcde')
+  })
+
+for (const presentation of ['formatted', 'source'])
+  for (const [name, source] of [
+    ['a plain note', plain],
+    ['a note with a table, a footnote and a reference', withTable],
+  ])
+    test(`a ${presentation} decoration source that throws in ${name} is named and removed, and the rebuilt editor keeps the text, the caret and focus`, {
+      timeout: 60000,
+    }, async (t) => {
+      const context = await open(t, {
+        source,
+        presentation,
+        code: decorationsAddon(presentation),
+      })
+      await opened(context, source, presentation)
+      await type(context, 'before ')
+      await type(context, 'Q')
+      await named(context, 'bad-ext.bad: decorations boom')
+      await answers(context)
+      await editorReady(context)
+      // The caret and focus came back: this types with neither set again.
+      await context.page.keyboard.insertText('more')
+      await typingAndSavingWork(context, source, 'before Qmore')
+      assert.equal(
+        await context.page
+          .locator(`${context.pane} .cm-editor[data-good]`)
+          .count(),
+        1,
+      )
+    })
+
+test('a note already holding what a decoration source throws on opens, names it and saves', {
+  timeout: 60000,
+}, async (t) => {
+  const source = `${withTable}Q held\n\n`
+  const context = await open(t, { source, code: decorationsAddon('formatted') })
+  await opened(context, source)
+  await named(context, 'bad-ext.bad: decorations boom')
+  await editorReady(context)
+  await type(context, 'x')
+  await typingAndSavingWork(context, source, 'x')
+})
+
+test('a decoration source that throws only for what scrolls into view is named and the editor comes back', {
+  timeout: 60000,
+}, async (t) => {
+  const far = Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')
+  const source = `${far}end\n\n`
+  const context = await open(t, {
+    source,
+    code: decorationsAddon(
+      'formatted',
+      'view.viewport.to === view.state.doc.length',
+    ),
+  })
+  await opened(context, source)
+  await context.page.evaluate((pane) => {
+    const view = document.querySelector(`${pane} .cm-content`).cmTile.root.view
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(view.state.doc.length),
+    })
+  }, context.pane)
+  await named(context, 'bad-ext.bad: decorations boom')
+  await editorReady(context)
+  await type(context, 'x')
+  await typingAndSavingWork(context, source, 'x')
+})
+
+test('a widget that fails to draw is named and removed without a new editor, and what it replaced shows again', {
+  timeout: 60000,
+}, async (t) => {
+  const context = await open(t, {
+    source: plain,
+    addon: { widget: throwing, deco: ', inclusive: false' },
+  })
+  await opened(context, plain)
+  await context.page.evaluate((pane) => {
+    window.firstContent = document.querySelector(`${pane} .cm-content`)
+  }, context.pane)
+  await type(context, 'Qmore')
+  await named(context, 'bad-ext.bad: widget boom')
+  await typingAndSavingWork(context, plain, 'Qmore')
+  assert.equal(
+    await context.page.evaluate(
+      (pane) =>
+        window.firstContent === document.querySelector(`${pane} .cm-content`),
+      context.pane,
+    ),
+    true,
+  )
+  assert.equal(
+    await context.page.locator(`${context.pane} .cm-editor[data-good]`).count(),
+    1,
+  )
+  assert.equal(await context.page.locator('.document-notice').count(), 0)
+})
+
+for (const [name, withAddons] of [
+  ['with no feature to take out', false],
+  ['that stays once the features are out', true],
+])
+  test(`a draw failure ${name} ends in recovery, and the note is saved from there`, {
+    timeout: 60000,
+  }, async (t) => {
+    const context = await open(t, {
+      source: plain,
+      ...(withAddons ? { addon: { widget: healthy } } : { noAddons: true }),
+    })
+    await opened(context, plain)
+    // What a bug of the editor's own does: nothing an addon brought can be blamed.
+    await context.page.evaluate((pane) => {
+      const { docView } = document.querySelector(`${pane} .cm-content`).cmTile
+        .root.view
+      const prototype = Object.getPrototypeOf(docView)
+      const { updateDeco } = prototype
+      prototype.updateDeco = function (...args) {
+        if (this.view.state.doc.toString().includes('Q'))
+          throw new Error('editor boom')
+        return updateDeco.apply(this, args)
+      }
+    }, context.pane)
+    await type(context, 'before ')
+    await context.page.keyboard.insertText('Q')
+    await context.page
+      .getByRole('button', { name: 'Save a copy' })
+      .waitFor({ timeout: 10000 })
+    await answers(context)
+    const copy = `${context.file}.copy.md`
+    await context.app.evaluate(({ dialog }, path) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
+    }, copy)
+    await context.page.getByRole('button', { name: 'Save a copy' }).click()
+    await context.page.getByText('Copy saved.').waitFor({ timeout: 10000 })
+    assert.equal(await readFile(copy, 'utf8'), `${plain}before Q`)
   })

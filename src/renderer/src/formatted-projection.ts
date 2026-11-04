@@ -148,9 +148,8 @@ export function formattedProjection(
         (state) => !state.readOnly,
       ),
     ),
-    // Ahead of the frontmatter's shorter hide, which it covers: of two that end
-    // apart, CodeMirror can draw one block where its height map keeps two, and
-    // each measured height then lands a block off, so clicks miss their lines.
+    // Ahead of the frontmatter's shorter hides, which it covers, for the reason
+    // that addon's hide goes ahead of the view's.
     Prec.high(
       EditorView.decorations.compute([body], (state) => {
         const { from, to } = state.field(body)

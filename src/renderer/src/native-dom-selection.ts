@@ -96,9 +96,9 @@ const samePoints = (a: Points | null, b: Points | null) =>
   a?.focusNode === b?.focusNode &&
   a?.focusOffset === b?.focusOffset
 
-/** A point read before an update can be past the end of a node it redrew. */
-const inNode = (node: Node, offset: number) =>
-  offset <= (node.nodeValue?.length ?? node.childNodes.length)
+/** What a point's offset counts in its node. */
+const contentOf = (node: Node | null | undefined) =>
+  node?.nodeValue ?? node?.childNodes.length
 
 const writable = (state: EditorState) =>
   !state.readOnly && state.facet(EditorView.editable)
@@ -157,13 +157,7 @@ export const nativeDOMSelection = ViewPlugin.fromClass(
       if (!this.armed || writable(view.state)) return
       const active = this.document.activeElement
       if (active !== this.document.body && !view.dom.contains(active)) return
-      if (
-        !selection?.anchorNode ||
-        !selection.focusNode ||
-        !inNode(selection.anchorNode, selection.anchorOffset) ||
-        !inNode(selection.focusNode, selection.focusOffset)
-      )
-        return
+      if (!selection?.anchorNode || !selection.focusNode) return
       const anchor = readDOMPosition(
         view,
         selection.anchorNode,
@@ -201,10 +195,20 @@ export const nativeDOMSelection = ViewPlugin.fromClass(
       // can also read that pick first, as a selection at the widget's edge.
       if (this.armed && !writable(update.state)) {
         const points = pointsOf(this.document.getSelection())
-        if (!update.selectionSet || !samePoints(points, this.taken))
+        if (!update.selectionSet || !samePoints(points, this.taken)) {
+          // A key the view does not take is in the DOM until a redraw takes
+          // it out: an offset read before that is not a place in the note.
+          const anchor = contentOf(points?.anchorNode)
+          const focus = contentOf(points?.focusNode)
           queueMicrotask(() => {
-            if (!this.destroyed) this.read(points)
+            if (
+              !this.destroyed &&
+              anchor === contentOf(points?.anchorNode) &&
+              focus === contentOf(points?.focusNode)
+            )
+              this.read(points)
           })
+        }
       }
       if (!this.armed || !writable(update.state) || writable(update.startState))
         return

@@ -88,7 +88,8 @@ export type MarkdownEditorProps = {
   flavors: readonly MarkdownFlavor[]
   onAttach: (
     files: File[] | null,
-  ) => Promise<import('../../shared/media').MediaAttachment[] | null>
+    prepare: import('./FormattingToolbar').PrepareMediaInsert,
+  ) => Promise<void>
   onLink: (href: string) => void
   onOutline: (headings: OutlineHeading[]) => void
   onOutlineUnavailable?: (reason: string | null) => void

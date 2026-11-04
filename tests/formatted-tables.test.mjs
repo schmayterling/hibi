@@ -3929,23 +3929,45 @@ test("a scroll to the start or end of a long table's edited row lands on it in i
 })
 
 test("a long table keeps its height and its rows' places while the edited row is out of its place", {
-  timeout: 120000,
+  timeout: 300000,
 }, async () => {
-  const rows = Array.from({ length: 3000 }, (_, i) => `| row ${i} | v${i} |`)
-  // As in the tests above: the note starts with the table, in a pane that
-  // fits the harness window.
-  const doc = `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  const note = (edited) => {
+    const rows = Array.from({ length: 3000 }, (_, i) =>
+      i === 1801 ? `| row ${i} | ${edited} |` : `| row ${i} | v${i} |`,
+    )
+    // As in the tests above: the note starts with the table, in a pane that
+    // fits the harness window.
+    return `| a | b |\n| --- | --- |\n${rows.join('\n')}\n\nAfter.\n`
+  }
   // The pane scrolled to the note's top leaves the edited row after the
   // window; to its end, before it; to a table line between, after or before
-  // it with rows on both sides of the window. Then the row goes back in its
-  // place. Rows the window hasn't drawn, on either side of it, estimate
-  // their places throughout.
-  for (const [to, ...far] of [
-    ['top', 2400],
-    ['bottom', 1200],
-    [1200, 600, 2400],
-    [2400, 1200, 2800],
+  // it with rows on both sides of the window. A scroll to a row 10 rows from
+  // it draws the window right beside it. Then the row goes back in its place.
+  // Rows the window hasn't drawn, on either side of it, estimate their places
+  // throughout, with the row's own height: it may be a tall one, or wrap as
+  // the pane narrows while it is away.
+  for (const { to, far, edited = 'v1801', near, narrow } of [
+    { to: 'top', far: [2400] },
+    { to: 'bottom', far: [1200] },
+    { to: 1200, far: [600, 2400] },
+    { to: 2400, far: [1200, 2800] },
+    { to: 'top', far: [2400], near: { row: 1791, beside: 'previous' } },
+    { to: 'top', far: [2400], near: { row: 1812, beside: 'next' } },
+    { to: 'top', far: [2400], edited: 'a<br>b<br>v1801' },
+    { to: 'bottom', far: [1200, 2400], edited: 'a<br>b<br>v1801' },
+    ...[
+      { to: 'top', far: [2400] },
+      { to: 'bottom', far: [1200, 2400] },
+      { to: 1200, far: [600, 2400] },
+      { to: 2400, far: [1200, 2800] },
+    ].map((pass) => ({
+      ...pass,
+      edited: `v1801 ${'wrapping words '.repeat(5)}end`,
+      narrow: true,
+    })),
   ]) {
+    const form = `${to}${near ? `, near ${near.row}` : ''}${narrow ? ', narrowed' : ''}, ${edited.slice(0, 8)}`
+    const doc = note(edited)
     await harness.evaluate(
       (doc) =>
         window.tables.mount(
@@ -3974,7 +3996,7 @@ test("a long table keeps its height and its rows' places while the edited row is
     await harness.keyboard.press('End')
     await harness.keyboard.type('Z')
     const result = await harness.evaluate(
-      async ({ to, far }) => {
+      async ({ to, far, near, narrow }) => {
         const preview = window.tables
         const view = preview.view()
         const pane = document.querySelector('.rich-pane')
@@ -4000,8 +4022,27 @@ test("a long table keeps its height and its rows' places while the edited row is
             (bounds.top + bounds.height / 2)
         } else pane.scrollTop = to === 'top' ? 0 : pane.scrollHeight
         for (let i = 0; i < 20 && placed(); i++) await preview.settle()
+        // A nearest scroll draws the 10 rows on each side of its row.
+        if (near) {
+          view.dispatch({
+            effects: view.constructor.scrollIntoView(
+              view.state.doc.line(near.row + 3).from + 3,
+            ),
+          })
+          for (let i = 0; i < 4; i++) await preview.settle()
+        }
+        const tall = row(1803).getBoundingClientRect().height
+        if (narrow) {
+          document.querySelector('.editor-panes').style.width = '420px'
+          for (let i = 0; i < 6; i++) await preview.settle()
+        }
         const away = {
           out: !placed(),
+          beside:
+            near &&
+            row(1803)[`${near.beside}ElementSibling`]?.dataset.line ===
+              (near.beside === 'next' ? '1804' : '1802'),
+          grew: row(1803).getBoundingClientRect().height - tall,
           height: Math.round(table.getBoundingClientRect().height),
           kept: shows(1803),
           far: far.map(shows),
@@ -4012,20 +4053,21 @@ test("a long table keeps its height and its rows' places while the edited row is
           ),
         })
         for (let i = 0; i < 4; i++) await preview.settle()
-        return {
-          away,
-          placed: {
-            in: placed(),
-            height: Math.round(table.getBoundingClientRect().height),
-            kept: top(row(1803).getBoundingClientRect()),
-            far: far.map(shows),
-          },
+        const inPlace = {
+          in: placed(),
+          height: Math.round(table.getBoundingClientRect().height),
+          kept: top(row(1803).getBoundingClientRect()),
+          far: far.map(shows),
         }
+        if (narrow) document.querySelector('.editor-panes').style.width = ''
+        return { away, placed: inPlace }
       },
-      { to, far },
+      { to, far, near, narrow },
     )
     const { away, placed } = result
-    assert.ok(away.out && placed.in, `${to}: ${JSON.stringify(result)}`)
+    assert.ok(away.out && placed.in, `${form}: ${JSON.stringify(result)}`)
+    if (near) assert.ok(away.beside, `${form}: ${JSON.stringify(result)}`)
+    if (narrow) assert.ok(away.grew > 30, `${form}: ${JSON.stringify(result)}`)
     // Out of its place, the table is as tall as with the row in it, and the
     // row and the far ones estimate where they show once drawn.
     for (const key of ['height', 'kept', 'far']) {
@@ -4033,7 +4075,7 @@ test("a long table keeps its height and its rows' places while the edited row is
       for (const [index, value] of [away[key]].flat().entries())
         assert.ok(
           Math.abs(value - then[index]) <= 1,
-          `${to}, ${key}: ${JSON.stringify(result)}`,
+          `${form}, ${key}: ${JSON.stringify(result)}`,
         )
     }
   }

@@ -197,6 +197,45 @@ test("Don't save leaves no trace of the discarded text in kept history", {
   await second.redo('kept draft')
 })
 
+test('a save waiting its turn keeps the version it wrote, with typing going on behind it', {
+  timeout: 90000,
+}, async (t) => {
+  const { launch, file } = await note(t)
+  const hibi = await launch()
+  await hibi.open('original')
+  await hibi.edit('draft')
+  // The save's handler waits, as it does behind another file operation.
+  await hibi.app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:save')
+    const turn = new Promise((resolve) => {
+      globalThis.saveTurn = resolve
+    })
+    ipcMain._invokeHandlers.set('document:save', async (...args) => {
+      await turn
+      ipcMain._invokeHandlers.set('document:save', save)
+      return save(...args)
+    })
+  })
+  await pressShortcut(hibi.app, `${mod}+s`)
+  await hibi.page.locator('.app[aria-busy="true"]').waitFor()
+  await hibi.page.keyboard.type('x')
+  await hibi.shows('draftx')
+  await hibi.app.evaluate(() => globalThis.saveTurn())
+  // The save wrote what there was when its turn came. More typing joins that
+  // typing's group while the reply is on its way.
+  for (;;) if ((await readFile(file, 'utf8')) === 'draftx') break
+  await hibi.page.keyboard.type('y')
+  await hibi.shows('draftxy')
+  await hibi.page.locator('.app[aria-busy="false"]').waitFor()
+  await hibi.undo('draftx')
+  await pressShortcut(hibi.app, `${mod}+w`)
+  await hibi.shows('')
+  await hibi.open('draftx')
+  await hibi.restored()
+  await hibi.undo('draft')
+  await hibi.undo('original')
+})
+
 test('clearing undo history forgets open and kept steps, and keeping it can be turned off', {
   timeout: 90000,
 }, async (t) => {

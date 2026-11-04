@@ -2399,6 +2399,15 @@ export function SourceEditor({
           'The source editor is synchronizing.',
       }),
     )
+    // Kept undo steps can reach the session after the toolbar looked, with no
+    // editor update to make it look again.
+    let undoable = session.state()
+    const removeUndoable = session.subscribe(() => {
+      const { canUndo, canRedo } = session.state()
+      if (canUndo === undoable.canUndo && canRedo === undoable.canRedo) return
+      undoable = session.state()
+      if (formatting.current) reportFormatting.current(formatting.current)
+    })
     const removeTypingHistory = session.subscribeOperations((prepared) => {
       if (
         !completionBroker.hasTypingListeners() ||
@@ -2871,6 +2880,7 @@ export function SourceEditor({
         endCompositionSignal,
       )
       removeTypingHistory()
+      removeUndoable()
       cancelCompletion()
       clearReferences('unavailable', false)
       sourceFind.current?.dispose()

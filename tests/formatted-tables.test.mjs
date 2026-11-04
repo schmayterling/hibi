@@ -166,6 +166,9 @@ before(
       { path: html, size },
     )
     harness = await next
+    // Hosted screens clamp the window, to 681 px on Windows and less on macOS,
+    // and the text in view decides where a long line's rows start.
+    await harness.setViewportSize({ width: 1000, height: 720 })
     harness.setDefaultTimeout(10000)
     await harness.waitForFunction(() => Boolean(window.tables))
     // Hidden windows have no focus; keys and markers need a focused editor.

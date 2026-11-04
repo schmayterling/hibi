@@ -2459,3 +2459,110 @@ test('a save pressed during a save goes before a file opened from outside meanwh
   await idle()
   assert.equal(await readFile(paths['a.md'], 'utf8'), 'note a, more')
 })
+
+test('close split clicked during a save closes it when the save ends', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-close-split-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    ['document:focus-tab'],
+  )
+  const { tabId: a, tabs } = await page.evaluate(() =>
+    window.hibi.getDocument(),
+  )
+  const b = tabs.find((tab) => tab.id !== a).id
+  await splitTab(app, page, b)
+  const closeSplit = page.getByRole('button', { name: 'Close split' })
+  await closeSplit.waitFor()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b,
+  )
+  await idle()
+  const focused = () =>
+    app.evaluate(() => globalThis.calls['document:focus-tab'] ?? 0)
+  const before = await focused()
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await closeSplit.click()
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => setTimeout(done))),
+  )
+  // Nothing moves to the left pane's note while the right one saves.
+  assert.equal(await focused(), before)
+  assert.equal(await closeSplit.isVisible(), true)
+  await app.evaluate(() => globalThis.release['document:save']())
+  await closeSplit.waitFor({ state: 'hidden' })
+  await idle()
+  assert.equal((await page.evaluate(() => window.hibi.getDocument())).tabId, a)
+})
+
+test('close split that retries focus lets a file opened from outside go first', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, paths, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-close-split-retry-',
+    { 'b.md': 'note b', 'a.md': 'note a' },
+    ['document:focus-tab'],
+  )
+  const outside = join(dirname(paths['a.md']), 'outside.md')
+  await writeFile(outside, 'note outside')
+  const { tabId: a, tabs } = await page.evaluate(() =>
+    window.hibi.getDocument(),
+  )
+  const b = tabs.find((tab) => tab.id !== a).id
+  await splitTab(app, page, b)
+  const closeSplit = page.getByRole('button', { name: 'Close split' })
+  await closeSplit.waitFor()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b,
+  )
+  await idle()
+  // Going to the left pane's note fails, and so does going back: editing pauses
+  // with the right pane's note shown.
+  await app.evaluate(
+    ({ ipcMain }, ids) => {
+      const handlers = ipcMain._invokeHandlers
+      const focus = handlers.get('document:focus-tab')
+      let phase = 0
+      handlers.set('document:focus-tab', async (...args) => {
+        if (phase === 0 && args[1] === ids.a) {
+          phase = 1
+          const metadata = await focus(...args)
+          return { ...metadata, contentVersion: metadata.contentVersion + 1 }
+        }
+        if (phase === 1 && args[1] === ids.b) {
+          phase = 2
+          throw new Error('Simulated focus rollback failure.')
+        }
+        globalThis.focusedAfter = (globalThis.focusedAfter ?? 0) + 1
+        return focus(...args)
+      })
+    },
+    { a, b },
+  )
+  await page.locator(`[data-tab-id="${a}"]`).click()
+  await page.getByRole('button', { name: 'Retry document focus' }).waitFor()
+  await openFromOutside(app, page, outside)
+  await app.evaluate(() => globalThis.hold('document:open-external'))
+  await closeSplit.click()
+  await app.evaluate(() => globalThis.held['document:open-external'])
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => setTimeout(done))),
+  )
+  // Only the retry moved focus; the split waits for the file.
+  assert.equal(await app.evaluate(() => globalThis.focusedAfter), 1)
+  assert.equal(await closeSplit.isVisible(), true)
+  await app.evaluate(() => globalThis.release['document:open-external']())
+  await closeSplit.waitFor({ state: 'hidden' })
+  await idle()
+  const final = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(final.tabs.length, 3)
+})

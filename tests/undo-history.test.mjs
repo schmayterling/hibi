@@ -205,16 +205,24 @@ test('a save waiting its turn keeps the version it wrote, with typing going on b
   const hibi = await launch()
   await hibi.open('original')
   await hibi.edit('draft')
-  // The save's handler waits, as it does behind another file operation.
+  // The save's handler waits, as it does behind another file operation, and
+  // its reply waits too, so nothing has to race it or read the file meanwhile.
   await hibi.app.evaluate(({ ipcMain }) => {
     const save = ipcMain._invokeHandlers.get('document:save')
     const turn = new Promise((resolve) => {
       globalThis.saveTurn = resolve
     })
-    ipcMain._invokeHandlers.set('document:save', async (...args) => {
-      await turn
-      ipcMain._invokeHandlers.set('document:save', save)
-      return save(...args)
+    const reply = new Promise((resolve) => {
+      globalThis.saveReply = resolve
+    })
+    globalThis.saveWrote = new Promise((resolve) => {
+      ipcMain._invokeHandlers.set('document:save', async (...args) => {
+        await turn
+        ipcMain._invokeHandlers.set('document:save', save)
+        const result = await save(...args).finally(resolve)
+        await reply
+        return result
+      })
     })
   })
   await pressShortcut(hibi.app, `${mod}+s`)
@@ -224,9 +232,11 @@ test('a save waiting its turn keeps the version it wrote, with typing going on b
   await hibi.app.evaluate(() => globalThis.saveTurn())
   // The save wrote what there was when its turn came. More typing joins that
   // typing's group while the reply is on its way.
-  for (;;) if ((await readFile(file, 'utf8')) === 'draftx') break
+  await hibi.app.evaluate(() => globalThis.saveWrote)
+  assert.equal(await readFile(file, 'utf8'), 'draftx')
   await hibi.page.keyboard.type('y')
   await hibi.shows('draftxy')
+  await hibi.app.evaluate(() => globalThis.saveReply())
   await hibi.page.locator('.app[aria-busy="false"]').waitFor()
   await hibi.undo('draftx')
   await pressShortcut(hibi.app, `${mod}+w`)

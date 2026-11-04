@@ -30,10 +30,13 @@ const containers = {
 const ordered = (block) =>
   `plain\n\n1. item\n\n   ${block.replaceAll('\n', '\n   ')}\n`
 // formatted-atom-matrix runs every action on every atom; these go through the
-// real toolbar, cell editor and image picker.
+// real toolbar, cell editor and image picker. The html rows change nothing, then
+// type over a block's own lines under a hidden prefix, which only real keys reach.
 const journeys = {
   'document divider': ['bold', 'quote', 'divider', 'image'],
   'list mermaid': ['numbered-list', 'table', 'image'],
+  'list html': ['bold'],
+  'quote html': ['bold'],
   'quote math': ['table', 'quote', 'image'],
 }
 /**

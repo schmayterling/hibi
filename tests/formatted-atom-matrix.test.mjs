@@ -121,8 +121,18 @@ for (const [container, wrap] of Object.entries(containers))
             selected: true,
           })
         else compare(key, snapshot(target))
-        // Typing in a new table goes through its cell editor, in the app.
-        if (action === 'table' && container !== 'document') continue
+        // Typing in a new table goes through its cell editor, in the app, which
+        // takes the caret from here: the first cell, whatever the atom was.
+        if (action === 'table' && container !== 'document') {
+          const { head } = target.state.selection.main
+          const line = target.state.doc.lineAt(head)
+          assert.equal(
+            line.text.slice(0, head - line.from),
+            container === 'list' ? '  | ' : '> | ',
+            key,
+          )
+          continue
+        }
         target.dispatch(target.state.replaceSelection('Z'))
         if (numbered)
           assert.equal(

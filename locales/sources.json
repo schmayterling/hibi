@@ -818,12 +818,6 @@
   "6ac54b5f1dce": [
     "src/main/licenses.ts"
   ],
-  "57cb9b1fb62d": [
-    "src/addons/documentation/options.ts"
-  ],
-  "d4dc94ba2837": [
-    "src/main/media.ts"
-  ],
   "45d0812782b3": [
     "src/renderer/src/History.tsx"
   ],
@@ -861,6 +855,12 @@
   "e3aa3bb043d1": [
     "src/main/document.ts"
   ],
+  "814f99a9364c": [
+    "src/addons/documentation/native.ts"
+  ],
+  "1b4a973c723a": [
+    "src/addons/documentation/options.ts"
+  ],
   "42e3ecb68937": [
     "src/main/document-media.ts"
   ],
@@ -883,6 +883,9 @@
   ],
   "471562a8660b": [
     "src/shared/updates.ts"
+  ],
+  "b24e887ece6e": [
+    "src/main/media.ts"
   ],
   "d1eb8cb18d78": [
     "src/main/links.ts"
@@ -925,12 +928,6 @@
   ],
   "8cec11b14767": [
     "src/main/document.ts"
-  ],
-  "8afb17585fb2": [
-    "src/main/media.ts"
-  ],
-  "c7c709c5d2bb": [
-    "src/addons/documentation/native.ts"
   ],
   "9b428a658996": [
     "src/addons/quick-note/native.ts"
@@ -6157,9 +6154,6 @@
   "2921bff36537": [
     "src/main/remote-images.ts"
   ],
-  "05a4f77d9d16": [
-    "src/main/remote-images.ts"
-  ],
   "34f17c8d67af": [
     "src/main/import-files.ts"
   ],
@@ -7796,9 +7790,6 @@
   ],
   "b2fe97e14407": [
     "src/renderer/src/addons.ts"
-  ],
-  "0f8954748d93": [
-    "src/main/document.ts"
   ],
   "7f659c8c45d8": [
     "src/addons/frontmatter/Properties.tsx"

@@ -100,7 +100,6 @@ async function fixture(t, absolute = isAbsolute) {
 }
 
 for (const [name, header, size, error] of [
-  ['large.gif', gif, 8 * mib + 1, /8 MiB/],
   ['large.mp4', video, 512 * mib + 1, /512 MiB/],
   ['empty.gif', gif, 0, /Choose a supported image or video file\./],
 ]) {
@@ -116,10 +115,10 @@ for (const [name, header, size, error] of [
 }
 
 for (const [name, header, size] of [
-  ['edge.gif', gif, 8 * mib],
+  ['large.gif', gif, 512 * mib + 1],
   ['edge.mp4', video, 512 * mib],
 ]) {
-  test(`attachment preflight accepts exact byte limit for ${name}`, async (t) => {
+  test(`attachment preflight accepts ${size} bytes for ${name}`, async (t) => {
     const f = await fixture(t)
     const path = await f.file(name, header, size)
     f.state.note = null
@@ -129,16 +128,16 @@ for (const [name, header, size] of [
   })
 }
 
-test('attachment copy rechecks byte limits after save and closes rejected handles', async (t) => {
+test('attachment copy rechecks the video limit after save and closes rejected handles', async (t) => {
   const f = await fixture(t)
-  const path = await f.file('growing.gif', gif)
+  const path = await f.file('growing.mp4', video)
   f.state.note = null
   f.state.save = async () => {
-    await fs.truncate(path, 8 * mib + 1)
+    await fs.truncate(path, 512 * mib + 1)
     f.state.note = join(f.root, 'note.md')
     return true
   }
-  await assert.rejects(f.attachMedia(null, [path], 7), /8 MiB/)
+  await assert.rejects(f.attachMedia(null, [path], 7), /512 MiB/)
   assert.equal(f.handles.length, 2)
   assert.deepEqual(await fs.readdir(join(f.root, 'assets')), [])
   f.closed()
@@ -147,7 +146,7 @@ test('attachment copy rechecks byte limits after save and closes rejected handle
 test('supported images and videos copy only their validated byte range', async (t) => {
   const f = await fixture(t)
   const paths = [
-    await f.file('image.gif', gif, 8 * mib),
+    await f.file('image.gif', gif, 9 * mib),
     await f.file('clip.mp4', video),
   ]
   let copies = 0
@@ -191,29 +190,29 @@ for (const [name, bytes, mime] of [
   })
 }
 
-for (const size of [8 * mib + 1, 14 * mib + 1]) {
-  test(`export omits image of ${size} bytes without failing whole export`, async (t) => {
+for (const [name, header] of [
+  ['large.gif', gif],
+  ['large.mp4', video],
+])
+  test(`export checks its total budget before allocating ${name}`, async (t) => {
     const f = await fixture(t)
-    const path = await f.file('large.gif', gif, size)
-    assert.equal(await f.exportDocumentMedia(path, f.state.note), null)
+    const path = await f.file(name, header, 14 * mib + 1)
+    f.state.opened = ({ file }) => {
+      file.read = () => {
+        throw new Error('Must refuse before reading the body.')
+      }
+    }
+    await assert.rejects(
+      f.exportDocumentMedia(path, f.state.note),
+      /Embedded media exceeds the 20 MiB export limit/,
+    )
     f.closed()
   })
-}
 
-test('export keeps explicit budget error for video above 14 mib', async (t) => {
-  const f = await fixture(t)
-  const path = await f.file('large.mp4', video, 14 * mib + 1)
-  await assert.rejects(
-    f.exportDocumentMedia(path, f.state.note),
-    /Embedded media exceeds the 20 MiB export limit/,
-  )
-  f.closed()
-})
-
-test('export accepts image at 8 mib and video at 14 mib', async (t) => {
+test('export accepts images and videos up to its embedding budget', async (t) => {
   const f = await fixture(t)
   for (const [name, header, size, mime] of [
-    ['edge.gif', gif, 8 * mib, 'image/gif'],
+    ['edge.gif', gif, 14 * mib, 'image/gif'],
     ['edge.mp4', video, 14 * mib, 'video/mp4'],
   ]) {
     const path = await f.file(name, header, size)
@@ -234,7 +233,7 @@ for (const size of [gif.length - 1, gif.length + 1]) {
   })
 }
 
-test('display opener remains uncapped while copy and export stay bounded', async (t) => {
+test('display opener remains uncapped for images and videos', async (t) => {
   const f = await fixture(t)
   for (const [name, header, size] of [
     ['display.gif', gif, 8 * mib + 1],

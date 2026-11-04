@@ -76,6 +76,18 @@ test('task checkboxes toggle their marker with one edit, undo, and the keyboard'
 }, async () => {
   const note = '- [ ] buy milk\n- [x] done\n- [ ]\n'
   await open('tasks.md', note, 'buy milk')
+  await waitForDocumentEditor(app, page)
+  // Put the caret in the empty task whose source the assertion checks.
+  await pane('.cm-content').evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.focus()
+    view.dispatch({ selection: { anchor: view.state.doc.line(3).to } })
+  })
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.rich-pane .cm-line')[2]?.textContent ===
+      '- [ ]',
+  )
   const boxes = pane('input.hibi-lp-task')
   await boxes.nth(2).waitFor()
   assert.deepEqual(

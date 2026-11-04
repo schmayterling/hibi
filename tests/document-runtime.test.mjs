@@ -3,6 +3,7 @@ import test from 'node:test'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import { acceptSaved } from '../src/renderer/src/document-saved.ts'
 import { StaleDocumentError } from '../src/renderer/src/document-transfer.ts'
+import { keptHistory } from '../src/shared/undo-history.ts'
 
 const document = (text, overrides = {}) => ({
   tabId: 'one',
@@ -692,4 +693,97 @@ test("a closed tab's states stop reaching its source while open tabs read theirs
   assert.deepEqual(errors, [])
   runtime.dispose()
   assert.throws(() => open.markdown, StaleDocumentError)
+})
+
+// Main takes the source when a save's turn comes, so a save waiting behind
+// another file operation writes a version made after it began.
+const keptTexts = (session, saved) => {
+  const history = keptHistory(session)
+  let root = saved
+  const apply = (text, edits) =>
+    edits.reduceRight(
+      (source, edit) =>
+        source.slice(0, edit.from) + edit.insert + source.slice(edit.to),
+      text,
+    )
+  for (let index = history.saved; index !== -1; ) {
+    root = apply(root, history.steps[index].inverse)
+    index = history.steps[index].parent
+  }
+  const texts = []
+  for (const step of history.steps)
+    texts.push(
+      apply(step.parent === -1 ? root : texts[step.parent], step.forward),
+    )
+  return { root, texts }
+}
+const receipt = (runtime, savedVersion) => ({
+  ...runtime.get(),
+  saveReceipt: true,
+  savedVersion,
+})
+const insert = (session, insert, group) => {
+  const at = session.snapshot().utf16Length
+  session.edit([{ from: at, to: at, insert }], 'source', group)
+}
+
+test('a save writing a version made after it began keeps that version as a step', () => {
+  const { runtime } = fixture()
+  runtime.activate(document(''))
+  const session = runtime.session()
+  insert(session, 'a', 'one')
+  const token = runtime.beginSave()
+  insert(session, 'b', 'two')
+  // Main wrote 'ab'. Typing goes on in the group of the step that leads there.
+  const written = session.snapshot().version
+  insert(session, 'c', 'two')
+  runtime.acknowledgeSave(receipt(runtime, written), token)
+  runtime.endSave(token)
+  assert.equal(session.savedSnapshot().materialize(), 'ab')
+  assert.deepEqual(keptTexts(session, 'ab'), { root: '', texts: ['a', 'ab'] })
+  // Undo stops at the saved text too.
+  session.undo()
+  assert.equal(session.snapshot().materialize(), 'ab')
+  runtime.dispose()
+})
+
+test('a late version keeps its history behind a newer save that began before it landed', () => {
+  const { runtime } = fixture()
+  runtime.activate(document(''))
+  const session = runtime.session()
+  insert(session, 'a', 'one')
+  const first = runtime.beginSave()
+  const written = session.snapshot().version
+  insert(session, 'b', 'two')
+  const second = runtime.beginSave()
+  insert(session, 'c', 'three')
+  const late = session.snapshot().version
+  runtime.acknowledgeSave(receipt(runtime, written), first)
+  runtime.endSave(first)
+  insert(session, 'd', 'three')
+  runtime.acknowledgeSave(receipt(runtime, late), second)
+  runtime.endSave(second)
+  assert.deepEqual(keptTexts(session, 'abc'), {
+    root: '',
+    texts: ['a', 'ab', 'abc'],
+  })
+  runtime.dispose()
+})
+
+test('typing joins as before once no save is in flight, whether it landed or failed', () => {
+  const { runtime } = fixture()
+  runtime.activate(document(''))
+  const session = runtime.session()
+  const landed = runtime.beginSave()
+  runtime.acknowledgeSave(receipt(runtime, session.snapshot().version), landed)
+  runtime.endSave(landed)
+  insert(session, 'a', 'one')
+  insert(session, 'b', 'one')
+  assert.equal(session.historyDepth().undo, 1)
+  const failed = runtime.beginSave()
+  runtime.endSave(failed)
+  insert(session, 'c', 'two')
+  insert(session, 'd', 'two')
+  assert.equal(session.historyDepth().undo, 2)
+  runtime.dispose()
 })

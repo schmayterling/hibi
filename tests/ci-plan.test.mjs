@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { planChecks, shardTests } from '../scripts/ci.mjs'
+import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
 
 test('incremental checks select dependencies and fall back safely for cold, clean, config, and missing builds', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-plan-'))
@@ -314,4 +314,53 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
   renameSync(join(repo, 'scripts/tool.mjs'), join(repo, 'tests/tool.test.mjs'))
   const moved = commit()
   assert.equal(check(git('rev-parse', 'HEAD~1'), moved), true)
+})
+
+test('test workers follow the machine and tests that share a machine resource run alone', (t) => {
+  const GiB = 2 ** 30
+  const workers = (cores, gib) =>
+    testWorkers({ cores, memory: gib * GiB, override: '' })
+  assert.deepEqual(workers(8, 24), { apps: 4, node: 4 })
+  assert.deepEqual(workers(4, 16), { apps: 1, node: 2 })
+  assert.deepEqual(workers(3, 7), { apps: 1, node: 1 })
+  assert.deepEqual(workers(16, 8), { apps: 2, node: 8 })
+  assert.deepEqual(workers(1, 2), { apps: 1, node: 1 })
+  assert.equal(testWorkers({ override: '3' }).apps, 3)
+
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-alone-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const files = {
+    'tests/electron.mjs': "import { _electron } from 'playwright'",
+    'tests/plain.test.mjs': "import './electron.mjs'",
+    'tests/reads.test.mjs':
+      "import './electron.mjs'; clipboard.readText(); const copied = 'clipboard.'",
+    'tests/keys.test.mjs': "import './electron.mjs'; press('ControlOrMeta+v')",
+    'tests/shortcut.test.mjs':
+      "import './electron.mjs'; globalShortcut.register",
+    'tests/marked.test.mjs':
+      "// ci: alone (asserts wall-clock time)\nimport './electron.mjs'",
+    'tests/helped.test.mjs': "import './clipboard-helper.mjs'",
+    'tests/clipboard-helper.mjs':
+      "import './electron.mjs'; navigator.clipboard.readText()",
+    'tests/stub.test.mjs': "import './electron.mjs'; const clipboardData = 1",
+    'tests/unit.test.mjs': 'const unit = 1',
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, file)), { recursive: true })
+    writeFileSync(join(root, file), source)
+  }
+  execFileSync('git', ['init'], { cwd: root, stdio: 'pipe' })
+  execFileSync('git', ['add', '.'], { cwd: root, stdio: 'pipe' })
+  const plan = planChecks(root, { force: true })
+  assert.deepEqual(plan.aloneTests, [
+    'tests/helped.test.mjs',
+    'tests/keys.test.mjs',
+    'tests/marked.test.mjs',
+    'tests/reads.test.mjs',
+    'tests/shortcut.test.mjs',
+  ])
+  assert.deepEqual(plan.appTests, [
+    'tests/plain.test.mjs',
+    'tests/stub.test.mjs',
+  ])
 })

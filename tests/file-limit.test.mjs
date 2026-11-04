@@ -1,3 +1,4 @@
+// ci: alone (starts apps with a process of its own, and waits on real time)
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'

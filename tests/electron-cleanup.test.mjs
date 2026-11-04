@@ -1,3 +1,4 @@
+// ci: alone (exact shutdown timing)
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter, once } from 'node:events'

@@ -7,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { availableParallelism, totalmem } from 'node:os'
 import { join, posix, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -28,6 +29,27 @@ const globalInput =
   /^(\.github\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|biome\.json$|\.gitattributes$|\.nvmrc$|\.npmrc$|scripts\/ci\.mjs$)/
 // Typechecked by the tsconfigs but never bundled into the app.
 const typedInput = /^tests\/fixtures\/local-diagnostics-off\//
+// Real use of what one machine has only one of: the system clipboard and global
+// shortcuts. `// ci: alone (why)` marks any other test that a neighbour can break.
+const alone =
+  /^\/\/ ci: alone\b|\bclipboard\.(?:read|write|clear|has)|\bnavigator\.clipboard\b|\bglobalShortcut\b|\bwebContents\.(?:paste|copy|cut)\(|['"`](?:Control|ControlOrMeta|Meta)\+[cvx]['"`]/m
+
+// Hosted runners with 4 cores have no room for a second app: at 2 workers tests ran
+// 1.5 times slower at the median, and reds went up. Node test files share better.
+export function testWorkers({
+  cores = availableParallelism(),
+  memory = totalmem(),
+  override = process.env.CI_WORKERS,
+} = {}) {
+  const apps = Math.max(
+    1,
+    Math.min(cores - 4, Math.floor(memory / 2 ** 30 / 3)),
+  )
+  return {
+    apps: override ? Number(override) : apps,
+    node: Math.max(1, Math.floor(cores / 2)),
+  }
+}
 
 export function planChecks(
   root,
@@ -129,7 +151,14 @@ export function planChecks(
           if (!resolved) dynamic = true
           return resolved ? [resolved] : []
         })
-      modules.set(file, { local, dynamic, readsFiles, serial })
+      modules.set(file, {
+        local,
+        dynamic,
+        readsFiles,
+        serial,
+        alone: file !== 'tests/electron.mjs' && alone.test(source),
+        app: imports.some((name) => /electron|playwright/.test(name)),
+      })
     }
     const module = modules.get(file)
     let { dynamic, readsFiles } = module
@@ -167,7 +196,27 @@ export function planChecks(
       return module && !module.dynamic && !module.serial
     }),
   )
-  return { full, build, typecheck, tests: selected, unitTests, allTests: tests }
+  const aloneTests = selected.filter(
+    (test) =>
+      !unitTests.includes(test) &&
+      [...dependencies(test).files].some((file) => modules.get(file)?.alone),
+  )
+  const appTests = selected.filter(
+    (test) =>
+      !unitTests.includes(test) &&
+      !aloneTests.includes(test) &&
+      [...dependencies(test).files].some((file) => modules.get(file)?.app),
+  )
+  return {
+    full,
+    build,
+    typecheck,
+    tests: selected,
+    unitTests,
+    aloneTests,
+    appTests,
+    allTests: tests,
+  }
 }
 
 export function shardTests(selected, all, index, total) {
@@ -246,6 +295,8 @@ function runCI() {
   })
   const selected = shardTests(plan.tests, plan.allTests, index, total)
   const unitTests = shardTests(plan.unitTests, plan.allTests, index, total)
+  const aloneTests = shardTests(plan.aloneTests, plan.allTests, index, total)
+  const appTests = shardTests(plan.appTests, plan.allTests, index, total)
   if (clean) {
     rmSync(join(root, 'out'), { recursive: true, force: true })
     rmSync(directory, { recursive: true, force: true })
@@ -296,25 +347,30 @@ function runCI() {
   if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
     npm('run', 'build:app')
   // TAP prints each failure's details immediately; spec defers them to the end.
-  if (unitTests.length)
-    run([
-      '--import',
-      './tests/file-limit.mjs',
-      '--test',
-      '--test-reporter=tap',
-      '--test-concurrency=4',
-      ...unitTests,
-    ])
-  const serialTests = selected.filter((test) => !unitTests.includes(test))
-  if (serialTests.length)
-    run([
-      '--import',
-      './tests/file-limit.mjs',
-      '--test',
-      '--test-reporter=tap',
-      '--test-concurrency=1',
-      ...serialTests,
-    ])
+  const runTests = (tests, concurrency) => {
+    if (tests.length)
+      run([
+        '--import',
+        './tests/file-limit.mjs',
+        '--test',
+        '--test-reporter=tap',
+        `--test-concurrency=${concurrency}`,
+        ...tests,
+      ])
+  }
+  const workers = testWorkers()
+  runTests(unitTests, availableParallelism())
+  runTests(
+    selected.filter(
+      (test) =>
+        !unitTests.includes(test) &&
+        !aloneTests.includes(test) &&
+        !appTests.includes(test),
+    ),
+    workers.node,
+  )
+  runTests(appTests, workers.apps)
+  runTests(aloneTests, 1)
   const sha = git(root, 'rev-parse', 'HEAD')
   // Never certify a dirty checkout as the committed revision.
   if (

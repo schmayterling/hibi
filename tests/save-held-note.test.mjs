@@ -207,14 +207,14 @@ async function open(t, { autosave = false, notes = ['note.md'] } = {}) {
       })
     })
   const attempts = () => app.evaluate(() => globalThis.attempts)
-  const moreAttempts = (seen) =>
+  const moreAttempts = (seen, timeout = 20000) =>
     waitForAsync(
       app,
       (_electron, seen) => globalThis.attempts.length > seen,
       seen,
       {
         label: `more than ${seen} autosave attempts`,
-        timeout: 20000,
+        timeout,
       },
     )
   return {
@@ -281,6 +281,9 @@ test(
     const release = await hold()
     await pressShortcut(app, `${command}+s`)
     await notice().waitFor()
+    // Past how long a notice usually stays: the wait is 10 s.
+    await delay(6000)
+    assert.equal(await notice().count(), 1)
     await page.getByText(/could not save because another program/i).waitFor()
     await notice().waitFor({ state: 'detached' })
     assert.equal(await page.getByText(/EPERM|\.tmp/).count(), 0)
@@ -370,12 +373,14 @@ test(
     // No attempt in what used to be two delays, typing or not.
     const seen = (await attempts()).length
     await delay(2500)
+    assert.equal((await attempts()).length, seen)
+    await page.clock.fastForward(20000)
     await edit('held and typing')
     await delay(2500)
     assert.equal((await attempts()).length, seen)
-    // Counted from the last attempt, not from the typing, 5 s ago at least.
-    await page.clock.fastForward(26000)
-    await moreAttempts(seen)
+    // 30 s from the last attempt, well short of 30 s from the typing.
+    await page.clock.fastForward(12000)
+    await moreAttempts(seen, 10000)
     await delay(500)
     assert.equal(await page.locator('.toast').count(), 1)
     assert.deepEqual([...new Set(await attempts())], ['held'])

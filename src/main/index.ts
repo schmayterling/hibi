@@ -42,6 +42,7 @@ import {
   ACCESSIBILITY_CHANNELS,
   APP_INFO_CHANNEL,
   type AppInfo,
+  type AutosaveResult,
   BOOTSTRAP_CHANNELS,
   DOCUMENT_CHANNELS,
 } from '../shared/desktop'
@@ -133,6 +134,7 @@ import {
   saveAppearance,
   titleBarColors,
 } from './appearance'
+import { fileHeldOpen } from './atomic-rename'
 import { BackgroundMode } from './background'
 import {
   autosaveDocument,
@@ -2898,7 +2900,13 @@ if (!app.requestSingleInstanceLock()) {
           return runFileOperation(event, async (window) => {
             const target =
               typeof tabId === 'string' ? getDocumentPathForTab(tabId) : null
-            const result = await autosaveDocument(window, tabId, revision)
+            let result: AutosaveResult
+            try {
+              result = await autosaveDocument(window, tabId, revision)
+            } catch (error) {
+              if (!fileHeldOpen(error)) throw error
+              return { status: 'held', document: null }
+            }
             if (result.status === 'saved')
               await documentFileChanged(target, target, false)
             return result

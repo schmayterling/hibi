@@ -860,8 +860,9 @@ test('the reading place deep inside a huge line holds through second changes, sh
   // on a frame later instead of once the text holds, `scroll` for the
   // reader's scrolling before the view draws again, `aim` to put the text at
   // the pane's top again, `top` to measure the text at the pane's top instead,
-  // `read` for the reader's scrolling once the text holds, `cut` to delete the
-  // text and all after it, `shift` to move the pane down the page.
+  // `read` for the reader's scrolling once the text holds, `join` for that to a
+  // row that starts at a join of lines, `cut` to delete the text and all after
+  // it, `shift` to move the pane down the page.
   const runs = [
     [
       'a second change a frame after the first',
@@ -886,7 +887,7 @@ test('the reading place deep inside a huge line holds through second changes, sh
     [
       'a scroll from a row at a join before the view draws again',
       paragraph,
-      [{ read: 20 }, { grow: 5000, scroll: 300 }],
+      [{ join: true }, { grow: 5000, scroll: 300 }],
     ],
     // Any of the reader's input counts as scrolling, not only the wheel.
     ...['keydown', 'pointerdown', 'touchmove'].map((input) => [
@@ -910,6 +911,18 @@ test('the reading place deep inside a huge line holds through second changes, sh
       paragraph,
       [{ grow: 5000 }, { read: 300 }, { grow: 5000, top: true }],
     ],
+    // Back at the same scroll, the heights under it are new: the text there
+    // is other text.
+    [
+      'a change after scrolling away and back',
+      line,
+      [
+        { grow: 5000 },
+        { read: -1000 },
+        { read: 1000 },
+        { grow: 5000, top: true },
+      ],
+    ],
     [
       'a change after the text is cut',
       paragraph,
@@ -927,7 +940,8 @@ test('the reading place deep inside a huge line holds through second changes, sh
   // where the misses were.
   const slowed = runs.filter(
     ([, doc, steps]) =>
-      doc === paragraph && !steps.some((step) => step.top || step.read),
+      doc === paragraph &&
+      !steps.some((step) => step.top || step.read || step.join),
   )
   const cpu = await harness.context().newCDPSession(harness)
   // The harness is shared: the tests after this one run at full speed.
@@ -943,7 +957,7 @@ test('the reading place deep inside a huge line holds through second changes, sh
   for (const [rate, [name, [doc, target, slack], steps]] of sequences) {
     await cpu.send('Emulation.setCPUThrottlingRate', { rate })
     const result = await harness.evaluate(
-      async ({ doc, target, steps }) => {
+      async ({ doc, target, steps, macOS }) => {
         const preview = window.tables
         await preview.mount(
           doc,
@@ -983,13 +997,37 @@ test('the reading place deep inside a huge line holds through second changes, sh
           }
           return still()
         }
+        // The position at the start of the content's row at `y` in the pane.
+        const rowAt = (y) => {
+          const content = view.contentDOM.getBoundingClientRect()
+          const caret = document.caretPositionFromPoint(
+            content.left +
+              Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
+              1,
+            pane.getBoundingClientRect().top + y,
+          )
+          return view.posAtDOM(caret.offsetNode, caret.offset)
+        }
+        // How far to scroll, past a px, to have the first row on screen that
+        // starts at a join of lines at the pane's top: wrapping decides where
+        // one is.
+        const toJoin = () => {
+          for (let y = 20; y < 700; y += view.defaultLineHeight)
+            if (view.domAtPos(rowAt(y + 1), 1).node.nodeType !== Node.TEXT_NODE)
+              return y
+          return null
+        }
         const tops = [await aim()]
         for (const step of steps) {
           if (step.aim) tops.push(await aim())
-          else if (step.read || step.cut || step.shift) {
-            if (step.read) {
+          else if (step.read || step.join || step.cut || step.shift) {
+            const read = step.join ? toJoin() : step.read
+            // ponytail: other platforms' scrollbars and shaping wrap otherwise,
+            // with maybe no such row: the step pins it where the gate runs.
+            if (step.join && read === null && macOS) tops.push(null)
+            if (read) {
               pane.dispatchEvent(new Event('wheel'))
-              pane.scrollTop += step.read
+              pane.scrollTop += read
             }
             if (step.cut)
               view.dispatch({
@@ -1003,16 +1041,7 @@ test('the reading place deep inside a huge line holds through second changes, sh
             let mark = at
             let expect = 0
             if (step.scroll || step.top) {
-              const content = view.contentDOM.getBoundingClientRect()
-              const caret = document.caretPositionFromPoint(
-                content.left +
-                  Number.parseFloat(
-                    getComputedStyle(view.contentDOM).paddingLeft,
-                  ) +
-                  1,
-                pane.getBoundingClientRect().top + (step.scroll ?? 0) + 1,
-              )
-              mark = view.posAtDOM(caret.offsetNode, caret.offset)
+              mark = rowAt((step.scroll ?? 0) + 1)
               expect =
                 where(mark) -
                 (step.scroll && step.input !== null ? step.scroll : 0)
@@ -1035,7 +1064,7 @@ test('the reading place deep inside a huge line holds through second changes, sh
         pane.style.marginTop = ''
         return tops
       },
-      { doc, target, steps },
+      { doc, target, steps, macOS: process.platform === 'darwin' },
     )
     results.push({ name, rate, target, slack, tops: result })
   }

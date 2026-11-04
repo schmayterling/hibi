@@ -877,11 +877,16 @@ test('the reading place deep inside a huge line holds through second changes, sh
       line,
       [{ grow: 5000, scroll: 300 }],
     ],
-    // Each of the paragraph's lines starts after a join, between elements.
     [
       'a scroll before the view draws again',
       paragraph,
       [{ grow: 5000, scroll: 300 }],
+    ],
+    // A row there that starts at a join of lines, between elements.
+    [
+      'a scroll from a row at a join before the view draws again',
+      paragraph,
+      [{ read: 20 }, { grow: 5000, scroll: 300 }],
     ],
     // Any of the reader's input counts as scrolling, not only the wheel.
     ...['keydown', 'pointerdown', 'touchmove'].map((input) => [
@@ -921,7 +926,8 @@ test('the reading place deep inside a huge line holds through second changes, sh
   // place read again per slice would lose a row in each: in the paragraph,
   // where the misses were.
   const slowed = runs.filter(
-    ([, doc, steps]) => doc === paragraph && !steps.some((step) => step.top),
+    ([, doc, steps]) =>
+      doc === paragraph && !steps.some((step) => step.top || step.read),
   )
   const cpu = await harness.context().newCDPSession(harness)
   // The harness is shared: the tests after this one run at full speed.

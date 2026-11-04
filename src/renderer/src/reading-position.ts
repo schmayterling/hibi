@@ -218,8 +218,8 @@ function drawnText(view: EditorView, pos: number) {
  */
 function drawnTop(view: EditorView, pos: number) {
   let { node, offset } = view.domAtPos(pos, 1)
-  // Between elements, as after a widget's buffer at a joined line's start:
-  // the line's next text.
+  // Between elements, as before a widget's buffer at a row that starts at a
+  // join of lines: the line's next text.
   if (node.nodeType !== Node.TEXT_NODE) {
     const next = node.childNodes[offset]
     const line = next && (node as Element).closest('.cm-line')

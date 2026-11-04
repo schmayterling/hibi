@@ -1,52 +1,67 @@
 import { defineAddon } from '../api'
 import manifest from './manifest'
+import {
+  getPreferences,
+  onPreferencesChange,
+  setPreferences,
+} from './preferences'
 
-const preference = 'editor-width.pixels'
-const minimum = 320
-const maximum = 1600
-const step = 10
-const defaultWidth = 800
-
-function readWidth() {
-  const saved = Number(localStorage.getItem(preference) ?? defaultWidth)
-  return Number.isFinite(saved)
-    ? Math.max(minimum, Math.min(maximum, Math.round(saved / step) * step))
-    : defaultWidth
-}
-
-function styles(width: number) {
-  return `.editor-panes :is(.source-editor, .rich-editor-host) {
-    width: min(100%, ${width}px);
-    margin-inline: auto;
-  }`
-}
+let stop: (() => void) | undefined
 
 export default defineAddon({
   manifest,
   start(context) {
-    const width = readWidth()
-    const style = context.styles.register('width', styles(width))
-    const slider = (value: number) => ({
-      min: minimum,
-      max: maximum,
-      step,
-      value,
-      valueText: `${value} pixels`,
-      onChange(value: number) {
-        const width = Math.max(
-          minimum,
-          Math.min(maximum, Math.round(value / step) * step),
-        )
-        style.update(styles(width))
-        status.update({ slider: slider(width) })
-        localStorage.setItem(preference, String(width))
+    const slider = () => {
+      const preferences = getPreferences()
+      return {
+        min: preferences.minimum,
+        max: preferences.maximum,
+        step: 'any' as const,
+        value: preferences.width,
+        valueText: `${preferences.width}${preferences.unit}`,
+        disabled: !preferences.capped,
+        onChange: (width: number) => {
+          setPreferences({ width })
+        },
+      }
+    }
+    const toggle = () => ({
+      checked: getPreferences().capped,
+      onChange: (capped: boolean) => {
+        setPreferences({ capped })
       },
     })
-    const status = context.statusBar.register({
+    const style = context.styles.register('width', '')
+    const width = context.statusBar.register({
       id: 'width',
       label: 'Editor width',
       tooltip: 'Adjust the width of the editing panes.',
-      slider: slider(width),
+      slider: slider(),
     })
+    const cap = context.statusBar.register({
+      id: 'cap',
+      label: 'Width cap',
+      tooltip: 'Limit the editor to your chosen width.',
+      toggle: toggle(),
+    })
+    const refresh = () => {
+      const preferences = getPreferences()
+      style.update(
+        preferences.capped
+          ? `.editor-panes :is(.source-editor, .rich-editor-host) {
+              width: min(100%, ${preferences.width}${preferences.unit});
+              margin-inline: auto;
+            }`
+          : '',
+      )
+      width.update({ slider: slider() })
+      cap.update({ toggle: toggle() })
+    }
+    stop = onPreferencesChange(refresh)
+    refresh()
+  },
+  stop() {
+    stop?.()
+    stop = undefined
   },
 })

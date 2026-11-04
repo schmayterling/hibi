@@ -1182,16 +1182,6 @@ button.ui-button.update-download-button:disabled {
   width: 220px;
   max-width: 100%;
 }
-.status-slider {
-  gap: var(--space-2);
-  flex-shrink: 0;
-  padding-block: 0;
-}
-:where(.status-slider) .ui-slider {
-  width: 96px;
-  min-width: 0;
-  margin: 0;
-}
 .padding-control {
   display: flex;
   align-items: center;
@@ -1291,6 +1281,31 @@ button.ui-button.update-download-button:disabled {
 .setting-toggle:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: default;
+}
+.status-slider,
+.status-toggle {
+  gap: var(--space-2);
+  flex-shrink: 0;
+  padding-block: 0;
+}
+:where(.status-slider) .ui-slider {
+  width: 96px;
+  height: 20px;
+  min-width: 0;
+  margin: 0;
+}
+:where(.status-toggle) .setting-toggle {
+  width: 26px;
+  height: 16px;
+}
+:where(.status-toggle) .setting-toggle::after {
+  left: 2px;
+  top: 2px;
+  width: 12px;
+  height: 12px;
+}
+:where(.status-toggle) .setting-toggle:checked::after {
+  transform: translateX(10px);
 }
 .app-details {
   margin: 0;

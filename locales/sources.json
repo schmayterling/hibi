@@ -2290,6 +2290,9 @@
   "60a7eb27b26a": [
     "src/renderer/src/workspace-menu.ts"
   ],
+  "283fab389c04": [
+    "src/addons/editor-width/Settings.tsx"
+  ],
   "33c4e36cc1fd": [
     "src/addons/quick-note/native.ts"
   ],
@@ -2301,6 +2304,9 @@
   ],
   "7b23c1fa88c7": [
     "src/addons/mcp-server/types.ts"
+  ],
+  "37139d427e24": [
+    "src/addons/editor-width/Settings.tsx"
   ],
   "245811b9dc75": [
     "src/addons/discord-presence/types.ts"
@@ -3405,6 +3411,9 @@
   "9a9bb3ad8cbc": [
     "src/renderer/src/addon-views.ts"
   ],
+  "c3ffe90b3fec": [
+    "src/addons/editor-width/Settings.tsx"
+  ],
   "3f7e8edecd18": [
     "src/main/window-controls.ts"
   ],
@@ -3498,6 +3507,9 @@
   "dbcd5e7bb7a0": [
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
+  ],
+  "98d72e5c64cd": [
+    "src/addons/editor-width/index.ts"
   ],
   "d7852cd0d245": [
     "src/addons/vim/Settings.tsx"
@@ -7368,6 +7380,9 @@
   ],
   "147170e793c6": [
     "src/addons/documentation/ExportDialog.tsx"
+  ],
+  "4f25222813cc": [
+    "src/addons/editor-width/index.ts"
   ],
   "39965152019f": [
     "src/addons/markdown/flavor-info.ts"

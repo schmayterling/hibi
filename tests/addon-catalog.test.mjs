@@ -223,6 +223,7 @@ test('settings, flavors, and analysis retain their existing discovery rules', ()
       'diagnostics',
       'dictionary',
       'discord-presence',
+      'editor-width',
       'frontmatter',
       'graph',
       'keybeats',

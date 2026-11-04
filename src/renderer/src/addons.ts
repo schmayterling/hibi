@@ -1849,6 +1849,21 @@ export function useAddons(
                           },
                         }
                       : {}),
+                    ...(item.toggle
+                      ? {
+                          toggle: {
+                            ...item.toggle,
+                            onChange: async (checked: boolean) => {
+                              if (!active || disposed) return
+                              try {
+                                await item.toggle?.onChange(checked)
+                              } catch (error) {
+                                latest.current.error(error)
+                              }
+                            },
+                          },
+                        }
+                      : {}),
                   })
                   if (mounted.current) setStatusItems([...status.values()])
                 }

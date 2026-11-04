@@ -33,8 +33,8 @@ test('editor width slider changes both panes, persists, and cleans up when disab
   await slider.press('Home')
   assert.equal(await slider.inputValue(), '320')
   await slider.press('ArrowRight')
-  assert.equal(await slider.inputValue(), '330')
-  assert.equal(await slider.getAttribute('aria-valuetext'), '330 pixels')
+  assert.equal(await slider.inputValue(), '321')
+  assert.equal(await slider.getAttribute('aria-valuetext'), '321px')
   await slider.press('End')
   // Pointer input applies continuously before the drag is released.
   const track = await slider.boundingBox()

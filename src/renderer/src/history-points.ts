@@ -136,8 +136,13 @@ export function historyPoints(
     walk(step, 0)
     if (after.length !== 1 || distance >= TINY) kept.add(step)
   }
+  // An empty start holds no text to go back to; All steps still reaches it.
+  const empty = steps[0]!.group.beforeLength === 0
   const points = [...kept]
-    .filter((step) => step !== tree.current && !saved.has(step))
+    .filter(
+      (step) =>
+        step !== tree.current && !saved.has(step) && !(step === -1 && empty),
+    )
     .map((step) => ({ step, time: time(step), reason: reasons.get(step)! }))
     .sort((a, b) => b.time - a.time || b.step - a.step)
   // Past a day, the newest point an hour; past a week, the newest a day.

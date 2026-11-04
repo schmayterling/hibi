@@ -538,7 +538,25 @@ test('the history view lists as a point a text no saved version holds: after Sav
   )
   await edit('the first words of a new note, well past a few characters')
   await saveAs('first-save.md')
-  assert.ok(oldest(await list()), 'after a first save')
+  assert.ok(!oldest(await list()), 'after a first save')
+  // All steps still goes back to its empty start.
+  await editor.focus()
+  await clickMenu(app, 'Command palette')
+  await page.getByRole('combobox', { name: /search commands/i }).fill('history')
+  await page
+    .getByRole('option')
+    .filter({ hasText: /^history/i })
+    .first()
+    .click()
+  const history = page.getByRole('dialog', { name: /^history$/i })
+  await history.getByRole('button', { name: /^all steps$/i }).click()
+  await history
+    .getByRole('treeitem')
+    .filter({ hasText: /oldest kept text/i })
+    .click()
+  await history.getByRole('button', { name: /^go to step$/i }).click()
+  await history.waitFor({ state: 'hidden' })
+  await shows('')
 
   // Replacing a file another app changed keeps that app's text, not the text
   // this note opened with.

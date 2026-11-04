@@ -50,7 +50,6 @@ export function DocumentTabs({
   const navigationFrame = useRef(0)
   // A newer key press or click supersedes focus still waiting for a frame.
   const cancelNavigationFocus = () => {
-    keyboardFocus.current = null
     navigationFocus.current = null
     cancelAnimationFrame(navigationFrame.current)
   }
@@ -151,6 +150,7 @@ export function DocumentTabs({
             `[data-tab-id="${CSS.escape(keyboardFocus.current)}"]`,
           )
           ?.focus({ preventScroll: true })
+      keyboardFocus.current = null
     }
     if (
       navigationFocus.current &&
@@ -182,10 +182,6 @@ export function DocumentTabs({
     addonTabs,
     activeAddonTab,
   ])
-  // Moves wait for the file operation, so a moved tab keeps focus until it ends.
-  useLayoutEffect(() => {
-    if (!busy) keyboardFocus.current = null
-  }, [busy])
   const openTabMenu = (
     id: string,
     anchor: HTMLElement | { x: number; y: number },
@@ -266,8 +262,10 @@ export function DocumentTabs({
           const tab = ordered[index]
           if (!tab || tab.addon) return
           const left = event.key === 'ArrowLeft'
-          // While busy the order may change before the move runs.
-          if (busy || (left ? index > 0 : index < document.tabs.length - 1)) {
+          // While busy the order may change before the move runs, and focus
+          // may have gone elsewhere.
+          if (busy) onMove(tab.id, left ? -1 : 1)
+          else if (left ? index > 0 : index < document.tabs.length - 1) {
             keyboardFocus.current = tab.id
             onMove(tab.id, left ? -1 : 1)
           }

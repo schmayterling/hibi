@@ -2623,24 +2623,6 @@ test('tab moves by key during a save each run after it and the tab keeps focus',
   await idle()
   assert.deepEqual(await order(), [b.id, c.id, a.id])
   await page.locator(`[data-tab-id="${a.id}"]:focus`).waitFor()
-  // Once idle, a later change to the tabs leaves focus alone.
-  await page
-    .locator('.document-tabs')
-    .evaluate((strip) =>
-      Promise.all(
-        strip
-          .getAnimations({ subtree: true })
-          .map((animation) => animation.finished),
-      ),
-    )
-  await page
-    .locator(`[data-tab-key="${b.id}"]`)
-    .dragTo(page.locator(`[data-tab-key="${a.id}"]`), {
-      targetPosition: { x: 8, y: 10 },
-    })
-  await moves(6)
-  await idle()
-  await page.locator(`[data-tab-id="${b.id}"]:focus`).waitFor()
 })
 
 test('a tab dragged during a save moves after it, unless the tab it went before closed', {

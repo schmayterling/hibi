@@ -2609,3 +2609,36 @@ test('two media drops during a save both attach, the later one with a notice', {
     .markdown
   assert.equal(markdown.match(/assets\/dot/g)?.length, 1)
 })
+
+test('the image button pressed twice during a save opens one picker', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-picker-',
+    { 'a.md': 'note a' },
+    [],
+  )
+  await app.evaluate(({ dialog }) => {
+    globalThis.pickers = 0
+    dialog.showOpenDialog = async () => {
+      globalThis.pickers++
+      return { canceled: true, filePaths: [] }
+    }
+  })
+  const image = page.getByRole('button', { name: 'Image', exact: true })
+  await image.waitFor()
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await image.click()
+  await image.click()
+  await app.evaluate(() => globalThis.release['document:save']())
+  await waitForAsync(app, () => globalThis.pickers >= 1)
+  await idle()
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => setTimeout(done))),
+  )
+  await idle()
+  assert.equal(await app.evaluate(() => globalThis.pickers), 1)
+})

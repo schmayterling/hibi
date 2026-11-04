@@ -151,7 +151,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Remembering which states saves kept as versions when a note reopens adds
   // 70 (#820).
   // Letting each media drop and each new note or open an addon asks for wait
-  // for a file operation on its own adds 11 (#825).
+  // for a file operation on its own adds 22 (#825).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -181,7 +181,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         132 +
         149 +
         70 +
-        11,
+        22,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

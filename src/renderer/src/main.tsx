@@ -1794,7 +1794,12 @@ function App() {
     side: PaneSide,
   ): Promise<MediaAttachment[] | null> {
     if (busyRef.current)
-      return waitFor(Symbol(), () => attachMedia(files, tabId, side), null)
+      return waitFor(
+        // Each drop waits; a press of the picker waits once.
+        files ? Symbol() : 'attach',
+        () => attachMedia(files, tabId, side),
+        null,
+      )
     const target = currentDocument.current
     const split = splitTabsRef.current
     if (

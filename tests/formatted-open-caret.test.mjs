@@ -357,9 +357,14 @@ test(`a note opens with the caret at the end of its last text`, {
   ]
   for (const name of atoms) {
     const kept = notes[name].trimEnd()
-    for (const action of actions) {
+    // formatted-atom-actions runs the toolbar on these notes, but for a `***`
+    // rule and an image that is missing.
+    const taken = actions.filter(
+      (action) => name === 'rule' || name === 'image' || action.includes('+'),
+    )
+    for (const action of taken) {
       await open(`${name}-${action.replace(/\W/g, '')}`, notes[name])
-      if (action === actions[0]) {
+      if (action === taken[0]) {
         // The enabled or pressed actions, or whether they are `want`.
         const shown = (want) => {
           const ids = [

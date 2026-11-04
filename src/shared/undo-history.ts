@@ -35,6 +35,8 @@ export type UndoHistory = Readonly<{
   /** The saved state's content version. */
   version: number
   steps: readonly UndoHistoryStep[]
+  /** The states saves kept as versions, by step, and when; histories kept before this have none. */
+  versioned?: readonly (readonly [step: number, time: number])[]
 }>
 
 const origins = ['source', 'visual', 'composition', 'addon'] as const
@@ -145,6 +147,20 @@ export function parseUndoHistory(value: unknown): UndoHistory {
   }
   const saved = history.saved === -1 ? root : lengths[history.saved as number]
   if (saved !== undefined && saved !== history.units) throw invalid()
+  if (
+    history.versioned !== undefined &&
+    (!Array.isArray(history.versioned) ||
+      history.versioned.length > lengths.length + 1 ||
+      history.versioned.some(
+        (mark: unknown) =>
+          !Array.isArray(mark) ||
+          !Number.isSafeInteger(mark[0]) ||
+          mark[0] < -1 ||
+          mark[0] >= lengths.length ||
+          !Number.isFinite(mark[1]),
+      ))
+  )
+    throw invalid()
   return history as UndoHistory
 }
 
@@ -158,6 +174,15 @@ export function keptHistory(
   const steps = [...kept.steps].sort(([a], [b]) => a.order - b.order)
   const index = new Map(steps.map(([group], at) => [group.step, at]))
   const at = (step: object) => (step === kept.root ? -1 : index.get(step)!)
+  const versioned = new Map<number, number>()
+  const mark = (step: number, identity: object) => {
+    const time = kept.versioned.get(identity)
+    if (time !== undefined) versioned.set(step, time)
+  }
+  for (const [group, from] of steps) {
+    mark(at(group.step), group.afterIdentity)
+    if (from === kept.root) mark(-1, group.beforeIdentity)
+  }
   return {
     saved: at(kept.saved),
     units: kept.snapshot.utf16Length,
@@ -174,6 +199,7 @@ export function keptHistory(
       started: group.started,
       time: group.time,
     })),
+    versioned: [...versioned],
   }
 }
 
@@ -184,7 +210,7 @@ export function keptHistory(
  * other step starts a branch.
  */
 export const restoredHistory =
-  ({ steps, saved }: UndoHistory, viewId = 'default') =>
+  ({ steps, saved, versioned = [] }: UndoHistory, viewId = 'default') =>
   (opening: Readonly<{ step: object; identity: object }>) => {
     const keys = steps.map((_, index) => (index === saved ? opening.step : {}))
     const identities = steps.map((_, index) =>
@@ -249,5 +275,9 @@ export const restoredHistory =
       undo: path.map((index) => groups[index]!),
       redo: chain(next[saved + 1]),
       branches,
+      versioned: versioned.map(
+        ([step, time]) =>
+          [step === -1 ? rootIdentity : identities[step]!, time] as const,
+      ),
     }
   }

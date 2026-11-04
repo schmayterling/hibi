@@ -427,6 +427,22 @@ test('stored history is checked before it is used', () => {
     }),
   ])
     assert.throws(() => parseUndoHistory(value), /invalid/)
+  for (const versioned of [
+    {},
+    [0],
+    [{ 0: 0, 1: 1 }],
+    [[history.steps.length, 1]],
+    [[-2, 1]],
+    [[0.5, 1]],
+    [[0, 'soon']],
+    [[0, null]],
+    Array.from({ length: history.steps.length + 2 }, () => [0, 1]),
+  ])
+    assert.throws(
+      () => parseUndoHistory({ ...history, versioned }),
+      /invalid/,
+      JSON.stringify(versioned).slice(0, 60),
+    )
   assert.deepEqual(parseUndoHistory(history), history)
   const most = broken((copy) => {
     copy.steps = Array.from({ length: 1024 }, () => copy.steps[0])

@@ -287,14 +287,16 @@ test('a saved state is listed once, as its saved version', () => {
 })
 
 test('a reopened note lists the text it opened with once, as its saved version', async () => {
-  const { keptHistory, restoredHistory } = await import(
+  const { keptHistory, parseUndoHistory, restoredHistory } = await import(
     '../src/shared/undo-history.ts'
   )
   const first = note()
   first.type('text saved before closing the note. ')
   first.session.sealHistory()
   first.session.markSaved(first.session.snapshot())
-  const kept = keptHistory(first.session)
+  const kept = parseUndoHistory(
+    JSON.parse(JSON.stringify(keptHistory(first.session))),
+  )
   const second = note(first.text())
   second.wait(minute)
   assert.equal(
@@ -303,11 +305,61 @@ test('a reopened note lists the text it opened with once, as its saved version',
   )
   second.wait(minute)
   second.type('typed after reopening, more than a few characters.')
+  const listed = (versionsSince) =>
+    historyPoints(historyOf(second.session), second.now(), versionsSince).map(
+      ({ step, reason }) => [step, reason],
+    )
+  // The first save kept the text it replaced too, so that is no point either.
+  assert.deepEqual(listed(start), [])
+  // With no version kept since, its states are points like any.
+  assert.deepEqual(listed(Number.POSITIVE_INFINITY), [
+    [0, 'paused'],
+    [-1, 'oldest'],
+  ])
+})
+
+test('a reopened note lists the text of an earlier save once, as its saved version', async () => {
+  const { keptHistory, parseUndoHistory, restoredHistory } = await import(
+    '../src/shared/undo-history.ts'
+  )
+  const first = note()
+  const save = () => {
+    first.session.sealHistory()
+    first.session.markSaved(first.session.snapshot())
+  }
+  first.type('the text of the earlier save, kept. ')
+  save()
+  first.wait(10 * second)
+  first.type('the text of the last save before closing. ')
+  save()
+  const kept = parseUndoHistory(
+    JSON.parse(JSON.stringify(keptHistory(first.session))),
+  )
+  assert.deepEqual(kept.versioned.map(([step]) => step).sort(), [-1, 0, 1])
+  const earlier = kept.versioned.find(([step]) => step === 0)[1]
+  const reopened = note(first.text())
+  reopened.wait(minute)
+  reopened.session.restoreHistory(kept.units, restoredHistory(kept))
+  reopened.type('typed after reopening, more than a few characters.')
+  const tree = historyOf(reopened.session)
+  assert.equal(tree.versioned.get(0), earlier)
+  assert.deepEqual(historyPoints(tree, reopened.now(), start), [])
+  // A history kept before saves were recorded in it still reads.
+  const { versioned: _, ...older } = kept
+  const old = note(first.text())
+  old.session.restoreHistory(
+    older.units,
+    restoredHistory(parseUndoHistory(older)),
+  )
+  old.type('typed after reopening, more than a few characters.')
   assert.deepEqual(
-    historyPoints(historyOf(second.session), second.now(), start).map(
+    historyPoints(historyOf(old.session), old.now(), start).map(
       ({ step, reason }) => [step, reason],
     ),
-    [[-1, 'oldest']],
+    [
+      [0, 'paused'],
+      [-1, 'oldest'],
+    ],
   )
 })
 

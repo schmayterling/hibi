@@ -150,7 +150,12 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // landing late or writing a later version and steps going, adds 149 (#810).
   // Remembering which states saves kept as versions when a note reopens adds
   // 70 (#820).
-  // Letting close split wait for a file operation adds 61 (#826).
+  // Flagging only the texts a save kept as versions adds 55 (#830).
+  // Letting tab keys, addon tab clicks and tab moves wait for a file operation,
+  // telling screen readers so, and dropping what arrives while editing is paused, adds 461 (#822).
+  // Letting each media drop and each new note or open an addon asks for wait
+  // for a file operation on its own adds 22 (#825).
+  // Letting close split wait for a file operation adds 62 (#826).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -180,7 +185,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         132 +
         149 +
         70 +
-        61,
+        55 +
+        461 +
+        22 +
+        62,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

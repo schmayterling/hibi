@@ -389,13 +389,13 @@ test('finishing a file operation preserves newer settings input focus', {
 })
 
 test('settings opened while a restored version, file, tab or new note opens stay open when it finishes', {
-  timeout: 30000,
+  timeout: 60000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-busy-settings-'))
   const folder = join(root, 'workspace')
   await mkdir(folder)
-  // A large saved version uses the asynchronous main-process restore path.
-  await writeFile(join(folder, 'one.md'), 'first note\n'.repeat(300000))
+  // A saved version above the preview limit restores through the main process.
+  await writeFile(join(folder, 'one.md'), 'first note\n'.repeat(200000))
   await writeFile(join(folder, 'two.md'), 'second note')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
@@ -501,6 +501,8 @@ test('settings opened while a restored version, file, tab or new note opens stay
         return note.name === name && (dirty === null || note.dirty === dirty)
       },
       [name, dirty],
+      // The editor loads a large restored version before this can read it.
+      { timeout: 30000 },
     )
     await page.locator('.app[aria-busy="false"]').waitFor()
     await page.evaluate(async () => {

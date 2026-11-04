@@ -236,12 +236,20 @@ test('split panes align corresponding carets in both directions without feedback
     true,
   )
   const samples = await page.evaluate(async () => {
+    const top = () =>
+      document.querySelector('.source-pane .cm-scroller').scrollTop
+    // The caret's last correction can land after that wait, within its 3 px.
+    // Feedback never stops moving the pane, so this runs out and samples it.
+    let last = top()
+    for (let frame = 0, still = 0; frame < 120 && still < 4; frame++) {
+      await new Promise(requestAnimationFrame)
+      still = top() === last ? still + 1 : 0
+      last = top()
+    }
     const samples = []
     for (let index = 0; index < 8; index++) {
       await new Promise(requestAnimationFrame)
-      samples.push(
-        document.querySelector('.source-pane .cm-scroller').scrollTop,
-      )
+      samples.push(top())
     }
     return samples
   })

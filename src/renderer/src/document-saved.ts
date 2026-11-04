@@ -74,6 +74,7 @@ export function acceptSaved(runtime: DocumentRuntime, value: unknown) {
             ...metadata,
             saveReceipt: true,
             savedVersion: saved.contentVersion,
+            versionsKept: saved.versionsKept,
           }
         : metadata,
       token,

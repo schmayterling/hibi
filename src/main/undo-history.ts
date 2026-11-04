@@ -223,8 +223,8 @@ export function readUndoHistory(
     await sweep()
     const name = fileName(path)
     // A note opened is a note seen, and a failed write doesn't stop the read.
-    // Before a launch's first look the index isn't loaded, and that look sees
-    // the note itself.
+    // Loaded here too: the note can be gone again by a launch's first look.
+    await indexed()
     if (missingSince.delete(name)) await writeIndex().catch(() => {})
     let text: string
     try {
@@ -309,12 +309,20 @@ export async function pruneUndoHistory(wait = 10_000) {
     )
       missing.push([name, path])
   }
-  if (!back.length && !missing.length) return
-  if (missing.length) await new Promise((resolve) => setTimeout(resolve, wait))
+  // Before the wait: a quit during it doesn't lose what this look saw.
+  if (back.length)
+    await tracked(
+      serial(async () => {
+        let changed = false
+        for (const name of back) if (missingSince.delete(name)) changed = true
+        if (changed) await writeIndex()
+      }),
+    )
+  if (!missing.length) return
+  await new Promise((resolve) => setTimeout(resolve, wait))
   await tracked(
     serial(async () => {
       let changed = false
-      for (const name of back) if (missingSince.delete(name)) changed = true
       const known = await indexed()
       for (const [name, path] of missing) {
         // Moved, trashed or cleared since the first look.

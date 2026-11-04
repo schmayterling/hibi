@@ -789,6 +789,58 @@ test('opening or saving a note clears its record', async (t) => {
   assert.deepEqual(await records(root), {})
 })
 
+test("a note opened before a launch's first look clears its record, and going again before that look starts the wait over", async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const note = saved()
+  const path = join(root, 'a.md')
+  await fs.writeFile(join(root, 'other.md'), '')
+  await fs.writeFile(path, note.source)
+  await (await main(root)).storeUndoHistory(path, note.file, note.history)
+  await recorded(root, [path], today)
+  setClock(today + 31 * day)
+  const api = await main(root)
+  assert.deepEqual(
+    await api.readUndoHistory(path, reopened(note.source)),
+    note.history,
+  )
+  assert.deepEqual(await records(root), {})
+  // As a switch to a Git branch without the note, right after opening it.
+  await fs.rm(path)
+  await api.pruneUndoHistory(0)
+  assert.equal(await exists(kept(root, path)), true)
+  assert.deepEqual(await records(root), { [path]: today + 31 * day })
+})
+
+test('a look that finds a note clears its record before the wait for other notes, so a quit during it keeps what the look saw', async (t) => {
+  const root = await profile(t)
+  const setClock = clock(t)
+  const [back, gone] = [join(root, 'a.md'), join(root, 'b.md')]
+  await fs.writeFile(back, '')
+  await fs.writeFile(
+    indexFile(root),
+    JSON.stringify([{ path: back, missingSince: today }, gone]),
+  )
+  setClock(today + day)
+  const wait = 12_346
+  const { setTimeout: timer } = globalThis
+  let release
+  const waiting = new Promise((resolve) => {
+    t.mock.method(globalThis, 'setTimeout', (run, ms, ...rest) => {
+      if (ms !== wait) return timer(run, ms, ...rest)
+      release = run
+      resolve()
+    })
+  })
+  const pruning = (await main(root)).pruneUndoHistory(wait)
+  await waiting
+  const during = await records(root)
+  release()
+  await pruning
+  assert.deepEqual(during, {})
+  assert.deepEqual(await records(root), { [gone]: today + day })
+})
+
 test('a note opened still reads when its record cannot be cleared', async (t) => {
   const root = await profile(t)
   clock(t)

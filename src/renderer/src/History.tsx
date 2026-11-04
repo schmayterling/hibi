@@ -25,9 +25,13 @@ import './version-history.css'
 /**
  * A saved version to restore; points and steps are taken in the dialog. One
  * too large to preview or to undo replaces the editor's text instead of
- * editing it.
+ * editing it. `restore` edits it, here so the app's first load doesn't carry it.
  */
-export type HistoryResult = { version: string; large: boolean }
+export type HistoryResult = {
+  version: string
+  large: boolean
+  restore: (report: (problem: string) => void) => Promise<void>
+}
 type Entry = { id: string; label: string; time: number } & (
   | { kind: 'point' | 'step'; step: number; level: number }
   | { kind: 'version'; version: DocumentVersion }
@@ -52,6 +56,45 @@ const copy = {
   changed: (line: string) => ({ label: `Changed “${line}”` }),
   spacing: { label: 'Spacing or punctuation' },
   current: { label: 'Current' },
+}
+/** The editor the user works in, as undo from the palette finds it. */
+function activeEditor() {
+  const view = documentRuntime.captureActiveView()
+  const surface =
+    view && view.documentId === documentRuntime.captureDocument()?.documentId
+      ? editorViewRegistry.surface(view)
+      : null
+  return surface && sourceView(surface)
+}
+/** The editor shows a change, with its caret after it. */
+function showChange(editor: ReturnType<typeof activeEditor>, at: number) {
+  if (!editor || !sourceCurrent(editor)) return
+  const position = editorPosition(editor, at)
+  if (position !== null)
+    editor.dispatch({ selection: { anchor: position }, scrollIntoView: true })
+}
+/** The saved text comes back as an edit, which undo takes back. */
+async function restoreText(id: string, report: (problem: string) => void) {
+  const tab = documentRuntime.get()?.tabId
+  try {
+    const text = await window.hibi.previewVersion(id)
+    // Its reading leaves the app free, and it belongs to the note it was
+    // chosen in, not one gone to meanwhile.
+    if (documentRuntime.get()?.tabId !== tab) {
+      report('The version wasn’t restored. Restore it again.')
+      return
+    }
+    const editor = activeEditor()
+    // As with its own undo, a read-only editor takes no edit.
+    if (editor?.state.readOnly) {
+      report('The editor is read-only right now.')
+      return
+    }
+    const change = documentRuntime.replace(text, 'visual')?.operation.changes[0]
+    if (change) showChange(editor, change.from + change.insert.length)
+  } catch (error) {
+    report(String(error))
+  }
 }
 /** An entry's depth in the steps tree; points and versions are all at the top. */
 const level = (item?: Entry) => (item && 'level' in item ? item.level : 1)
@@ -229,16 +272,15 @@ export function History({
   function act() {
     if (!entry || !session || !tree || current) return
     if (entry.kind === 'version') {
-      close({ version: entry.version.id, large: replaces })
+      const { id } = entry.version
+      close({
+        version: id,
+        large: replaces,
+        restore: (report) => restoreText(id, report),
+      })
       return
     }
-    // The editor the user works in, as undo from the palette finds it.
-    const view = documentRuntime.captureActiveView()
-    const surface =
-      view && view.documentId === documentRuntime.captureDocument()?.documentId
-        ? editorViewRegistry.surface(view)
-        : null
-    const editor = surface && sourceView(surface)
+    const editor = activeEditor()
     // As with its own undo, a read-only editor takes no step.
     if (editor?.state.readOnly) {
       setError('The editor is read-only right now.')
@@ -253,15 +295,7 @@ export function History({
         entry.step,
         entry.kind === 'step',
       )
-      // The editor shows the change, with its caret after it.
-      if (editor && at !== null && sourceCurrent(editor)) {
-        const position = editorPosition(editor, at)
-        if (position !== null)
-          editor.dispatch({
-            selection: { anchor: position },
-            scrollIntoView: true,
-          })
-      }
+      if (at !== null) showChange(editor, at)
       close(null)
     } catch (error) {
       setError(errorMessage(error))

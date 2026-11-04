@@ -114,7 +114,7 @@ import { StartupPlaceholder } from './StartupPlaceholder'
 import { StatusBar, type StatusBarVisibility } from './StatusBar'
 import { settingsCategories } from './settings-categories'
 import { settingsPages } from './settings-pages'
-import { editorPosition, sourceView } from './source-view'
+import { sourceView } from './source-view'
 import { Titlebar } from './Titlebar'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
@@ -154,16 +154,6 @@ const BacklinksSidebar = lazy(() =>
     default: module.BacklinksSidebar,
   })),
 )
-/** The editor the user works in, as its keys reach it. */
-function activeEditor() {
-  const active = documentRuntime.captureDocument()
-  const view = documentRuntime.captureActiveView()
-  const surface =
-    view && view.documentId === active?.documentId
-      ? editorViewRegistry.surface(view)
-      : null
-  return surface && sourceView(surface)
-}
 // Commands a file operation would drop wait for it instead; true marks those
 // that act on the shown tab. Undo and redo act on the text as it is when they
 // run, so they drop.
@@ -1473,7 +1463,13 @@ function App() {
       if (command === 'undo' || command === 'redo') {
         // The view the user works in takes the step, as its keys do, and
         // scrolls to what it restores.
-        const editor = activeEditor()
+        const active = documentRuntime.captureDocument()
+        const view = documentRuntime.captureActiveView()
+        const surface =
+          view && view.documentId === active?.documentId
+            ? editorViewRegistry.surface(view)
+            : null
+        const editor = surface && sourceView(surface)
         return Boolean(
           editor
             ? runSourceHistory(editor, command)
@@ -2218,32 +2214,7 @@ function App() {
 
   /** Restores a saved version History returned. */
   async function restoreChosen(chosen: HistoryResult) {
-    if (!chosen.large) {
-      const editor = activeEditor()
-      // As with its own undo, a read-only editor takes no edit.
-      if (editor?.state.readOnly) {
-        setError('The editor is read-only right now.')
-        return
-      }
-      // The saved text comes back as an edit, which undo takes back, and the
-      // editor shows it, with its caret after the change.
-      try {
-        const change = documentRuntime.replace(
-          await window.hibi.previewVersion(chosen.version),
-          'visual',
-        )?.operation.changes[0]
-        const at =
-          editor && change
-            ? editorPosition(editor, change.from + change.insert.length)
-            : null
-        // A view that hasn't taken the new text yet has no such position.
-        if (editor && at !== null && at <= editor.state.doc.length)
-          editor.dispatch({ selection: { anchor: at }, scrollIntoView: true })
-      } catch (error) {
-        setError(String(error))
-      }
-      return
-    }
+    if (!chosen.large) return chosen.restore(setError)
     const intent = settingsIntent.current
     startBusy()
     try {

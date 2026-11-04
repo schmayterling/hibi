@@ -577,7 +577,12 @@ export class DocumentRuntime {
         this.#detach.set(id, [
           session.subscribeOperations((prepared) => {
             this.#changes.set(id, prepared.operation.changes)
-            for (const versions of this.#saves.get(id)?.pending.values() ?? [])
+            const pending = this.#saves.get(id)?.pending
+            if (!pending?.size) return
+            // A save waiting behind another file operation writes the version
+            // there is when its turn comes, so it may take any of these.
+            retained.sealHistory()
+            for (const versions of pending.values())
               versions.set(prepared.after.version, prepared.after)
           }),
           session.subscribe(() => this.#publish(id)),

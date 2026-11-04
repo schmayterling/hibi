@@ -1,5 +1,5 @@
 import { Annotation, Facet, type Transaction } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorView, ViewPlugin } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
 
 /**
@@ -383,6 +383,11 @@ const kept = new WeakMap<
   Reading & { scroll: number; left: number }
 >()
 export const keepRead = [
+  // A view given a new state, as after a failed edit, drops its scroll command.
+  ViewPlugin.define((view) => {
+    scrollsWaiting.delete(view)
+    return {}
+  }),
   EditorView.updateListener.of((update) => {
     // A scroll command takes precedence from when it is sent: the view keeps
     // only the last one, which a reading position's would replace.

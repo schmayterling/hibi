@@ -868,6 +868,83 @@ test('a scroll sent just before a parsing slice still goes where it was sent', {
   assert.ok(result.shown, JSON.stringify(result))
 })
 
+test('a scroll waiting after a slice that left no measure asks for one', {
+  timeout: 60000,
+}, async () => {
+  const code = Array.from({ length: 1024 }, () => 'word '.repeat(51)).join('\n')
+  const doc = `\`\`\`\n  x\n${code}\ny\n\`\`\`\n`
+  const asked = await harness.evaluate(async (doc) => {
+    const preview = window.tables
+    await preview.mount(doc, { width: 1000, height: 606 }, { editable: true })
+    const view = preview.view()
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    await frames(10)
+    document.querySelector('.rich-pane').scrollTop = 9
+    await frames(4)
+    preview.growAbove(1)
+    await frames(10)
+    view.dispatch({
+      selection: { anchor: doc.lastIndexOf('y') },
+      scrollIntoView: true,
+    })
+    const unschedule = () => {
+      cancelAnimationFrame(view.measureScheduled)
+      view.measureScheduled = -1
+    }
+    unschedule()
+    preview.growAbove(2)
+    // A view asks for a measure on any update while a command waits, but not
+    // at the end of a measure, where a place kept through it is restored too.
+    unschedule()
+    await Promise.resolve()
+    return view.measureScheduled > -1
+  }, doc)
+  assert.ok(asked)
+})
+
+test('a scroll the view dropped with its state leaves the reading place held', {
+  timeout: 60000,
+}, async () => {
+  const paragraphs = Array.from(
+    { length: 300 },
+    (_, i) => `Paragraph ${i} of the text above.`,
+  ).join('\n\n')
+  const words = Array.from({ length: 30000 }, (_, i) => `word${i}`).join(' ')
+  const doc = `${paragraphs}\n\n${words}\n\nAfter.\n`
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.tables
+    await preview.mount(doc, { width: 1000, height: 606 }, { editable: true })
+    const view = preview.view()
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    await frames(10)
+    const at = doc.indexOf('word25000 ')
+    const aim = view.constructor.scrollIntoView(at, {
+      y: 'start',
+      yMargin: 30,
+    })
+    view.dispatch({ effects: aim })
+    await frames(10)
+    preview.growAbove(1)
+    await frames(10)
+    // As after a failed edit: the command never runs.
+    view.dispatch({ effects: aim })
+    view.setState(view.state)
+    await frames(10)
+    const before = view.coordsAtPos(at, 1)?.top
+    preview.growAbove(5000)
+    await frames(20)
+    return { before, after: view.coordsAtPos(at, 1)?.top }
+  }, doc)
+  assert.ok(
+    Math.abs(result.after - result.before) <= 30,
+    JSON.stringify(result),
+  )
+})
+
 test('the reading place deep inside a huge line holds through second changes, shrinks and splits', {
   timeout: 300000,
 }, async (t) => {

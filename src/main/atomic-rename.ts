@@ -10,6 +10,10 @@ export const fileHeldOpen = (error: unknown) =>
     (error as NodeJS.ErrnoException)?.code ?? '',
   )
 
+/** Windows refuses a rename over a read-only file until that mark is cleared. */
+export const fileReadOnly = (error: unknown) =>
+  (error as NodeJS.ErrnoException)?.code === 'EREADONLY'
+
 /**
  * For a save someone is waiting on: often enough to find the gaps of a program
  * that keeps reopening the file. Other file commands wait meanwhile.

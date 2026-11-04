@@ -281,9 +281,15 @@ function App() {
     [toasts],
   )
   const openUpdates = useRef(() => {})
+  const heldNotice = useRef<ToastHandle | null>(null)
   const setNotice = useCallback(
-    (message: string, target?: 'updates') => {
-      if (message)
+    (message: string, target?: 'updates' | 'held') => {
+      if (target === 'held') {
+        heldNotice.current?.dismiss()
+        heldNotice.current = message
+          ? toasts.show({ message, duration: 0 })
+          : null
+      } else if (message)
         toasts.show({
           message,
           ...(target === 'updates' && {

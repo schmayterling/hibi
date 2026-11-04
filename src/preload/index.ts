@@ -481,8 +481,8 @@ if (process.isMainFrame) {
       const listener = (
         _event: Electron.IpcRendererEvent,
         message: string,
-        target?: 'updates',
-      ) => callback(message, target === 'updates' ? target : undefined)
+        target?: 'updates' | 'held',
+      ) => callback(message, target)
       ipcRenderer.on(HISTORY_CHANNELS.notice, listener)
       return () => {
         ipcRenderer.removeListener(HISTORY_CHANNELS.notice, listener)

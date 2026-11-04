@@ -43,11 +43,16 @@ test('enabled math rechecks notes containing only mid-line display math', {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   await clickMenu(app, 'Open…')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'midline.md',
+  )
   await waitForDocumentEditor(app, page)
   const status = page
     .locator('[data-status-id="flavor"]')
     .filter({ hasText: /math/i })
-  assert.equal(await status.count(), 0)
+  // Flavor detection also describes syntax whose addon is disabled.
+  assert.equal(await page.locator('.rich-pane .katex-display').count(), 0)
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+k' : 'Control+k',
@@ -71,7 +76,7 @@ test('enabled math rechecks notes containing only mid-line display math', {
     process.platform === 'darwin' ? 'Meta+Shift+]' : 'Control+Shift+]',
   )
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-  for (const literal of ['`$$x$$`', '\\$$x$$', '```tex\n$$x$$\n```']) {
+  for (const literal of ['`$$x$$`', '\\$x$', '```tex\n$$x$$\n```']) {
     await replaceSourceText(page, source, `# Sample\n\n${literal}\n`)
     await page
       .locator('[data-status-id="flavor"]')
@@ -473,9 +478,17 @@ test('math source bytes survive source and visual view round trips and saving', 
       ).length === displays,
     displays,
   )
+  // Escaping the first dollar leaves $x$ as inline math between literal dollars.
   assert.equal(
-    await rich.getByText('$$x$$', { exact: true }).textContent(),
-    '$$x$$',
+    await rich
+      .locator('[data-type="inline-math"][data-latex="x"]')
+      .evaluate((math) =>
+        [...math.parentElement.childNodes]
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => node.textContent)
+          .join(''),
+      ),
+    '$$',
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -520,9 +533,17 @@ test('math source bytes survive source and visual view round trips and saving', 
       ).length === displays,
     displays,
   )
+  // Escaping the first dollar leaves $x$ as inline math between literal dollars.
   assert.equal(
-    await rich.getByText('$$x$$', { exact: true }).textContent(),
-    '$$x$$',
+    await rich
+      .locator('[data-type="inline-math"][data-latex="x"]')
+      .evaluate((math) =>
+        [...math.parentElement.childNodes]
+          .filter((node) => node.nodeType === Node.TEXT_NODE)
+          .map((node) => node.textContent)
+          .join(''),
+      ),
+    '$$',
   )
 })
 

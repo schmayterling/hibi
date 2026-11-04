@@ -41,6 +41,8 @@ const snapshot = {
 
 test('export options validate URLs, images and portable paths; protected files contain ciphertext only', async () => {
   assert.equal(exportOptions().singleFile, true)
+  const logo = `data:image/png;base64,${'A'.repeat(4 * 1024 * 1024 + 4)}`
+  assert.equal(validateExportOptions({ logo }).logo, logo)
   for (const value of [
     { url: 'javascript:alert(1)' },
     { socialImage: 'https://user:secret@example.com/a.png' },

@@ -19,7 +19,7 @@ export const documentExtension = (name: string) =>
   name.split('.').at(-1)?.toLowerCase() ?? ''
 export const isImageDocument = (name: string) =>
   imageExtensions.some((extension) => extension === documentExtension(name))
-export const isMarkdownDocument =(name: string) =>
+export const isMarkdownDocument = (name: string) =>
   markdownExtensions.includes(documentExtension(name))
 export function validDocumentExtensions(value: unknown): value is string[] {
   return (

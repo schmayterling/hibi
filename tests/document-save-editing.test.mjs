@@ -504,7 +504,8 @@ for (const canceled of [true, false]) {
     await waitForAsync(app, () => globalThis.saveDialog.dialogs === 1)
     await clickMenu(app, 'Save')
     await clickMenu(app, 'Save')
-    await waitForAsync(page, () => window.saveCommands === 3)
+    // Main drops commands sent behind the file dialog.
+    assert.equal(await page.evaluate(() => window.saveCommands), 1)
     await app.evaluate(() => globalThis.saveDialog.release())
     await waitForAsync(app, () => globalThis.saveDialog.settled >= 1)
     await page.waitForFunction(

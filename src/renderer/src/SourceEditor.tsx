@@ -1929,6 +1929,10 @@ export function SourceEditor({
           }
         : {}),
       dispatchTransactions(transactions, editor) {
+        // CodeMirror refuses this too, but only after the session took the edit,
+        // and whoever dispatched would go on without hearing. Internal; 0 is idle.
+        if ((editor as unknown as { updateState: number }).updateState)
+          throw new Error('An editor update cannot start during another.')
         // Input no Markdown can keep is refused unapplied, its features kept.
         for (const transaction of transactions) {
           const error = transaction.annotation(rejectedInput)
@@ -3123,9 +3127,9 @@ export function SourceEditor({
         return failure.failed ? failure : null
       }
       // What fails with no feature in, or stays once one is out, is not theirs.
-      if (failureWith(kept)) {
+      // That says nothing of what killed a view: they still go back one at a time.
+      if (failureWith(kept) && !featuresSuspect.current) {
         if (!isViewDead(editor)) set(parts)
-        featuresSuspect.current = false
         return
       }
       for (const part of parts) {

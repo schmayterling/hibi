@@ -428,6 +428,121 @@ test('keys typed right after a view fails are in the note and on screen, or in n
   await typingAndSavingWork(context, plain, note.slice(plain.length))
 })
 
+test('keys pressed while a failed view is replaced leave focus to come back', {
+  timeout: 60000,
+}, async (t) => {
+  const context = await open(t, {
+    source: plain,
+    code: decorationsAddon('formatted'),
+  })
+  await opened(context, plain)
+  await type(context, 'before ')
+  // The key lands in the gap, whenever that is: focus is on the page by then.
+  await context.page.evaluate((pane) => {
+    const content = document.querySelector(`${pane} .cm-content`)
+    new MutationObserver((_, observer) => {
+      observer.disconnect()
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'x', bubbles: true }),
+      )
+    }).observe(content, {
+      attributes: true,
+      attributeFilter: ['contenteditable'],
+    })
+  }, context.pane)
+  await context.page.keyboard.insertText('Q')
+  await named(context, 'bad-ext.bad: decorations boom')
+  await editorReady(context)
+  await context.page.waitForFunction(
+    (pane) => document.activeElement?.closest(pane),
+    context.pane,
+    { timeout: 10000 },
+  )
+  await context.page.keyboard.insertText('more')
+  await typingAndSavingWork(context, plain, 'before Qmore')
+})
+
+test('a feature that dispatches while its decorations draw is the one named, and adds nothing', {
+  timeout: 60000,
+}, async (t) => {
+  const context = await open(t, {
+    source: plain,
+    code: `export default (sdk) => ({ start(context) {
+      const { Decoration, EditorView } = sdk.codeMirror.view
+      context.editor.registerFormatted({ id: 'bad', create: () => EditorView.decorations.of((view) => {
+        if (view.state.doc.toString().includes('Q')) view.dispatch({ changes: { from: 0, insert: 'Z' } })
+        return Decoration.none
+      }) })
+    } })`,
+  })
+  await opened(context, plain)
+  await type(context, 'before ')
+  await context.page.keyboard.insertText('Q')
+  await named(context, 'bad-ext.bad:')
+  await answers(context)
+  await editorReady(context)
+  await context.page.keyboard.insertText('more')
+  await typingAndSavingWork(context, plain, 'before Qmore')
+  assert.deepEqual(
+    await context.page.evaluate(() =>
+      [...window.shownToasts].filter((toast) =>
+        /^(good-ext|slash-commands)/.test(toast),
+      ),
+    ),
+    [],
+  )
+  assert.equal(
+    await context.page.locator(`${context.pane} .cm-editor[data-good]`).count(),
+    1,
+  )
+})
+
+test('a core widget that keeps failing does not stop a draw failure from ending', {
+  timeout: 60000,
+}, async (t) => {
+  const source = '# Title\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nend\n\n'
+  const context = await open(t, {
+    source,
+    code: decorationsAddon('formatted'),
+  })
+  await opened(context, source)
+  // Taking features in or out rebuilds a table's widget, so this fails each time.
+  await context.page.evaluate((pane) => {
+    const content = document.querySelector(`${pane} .cm-content`)
+    const { widget } = [...content.querySelectorAll('*')].find(
+      (node) => node.cmTile?.widget && 'rows' in node.cmTile.widget,
+    ).cmTile
+    const prototype = Object.getPrototypeOf(widget)
+    const { toDOM, updateDOM } = prototype
+    const held = (view) => view.state.doc.toString().includes('Q')
+    prototype.toDOM = function (view) {
+      if (held(view)) throw new Error('core widget boom')
+      return toDOM.call(this, view)
+    }
+    prototype.updateDOM = function (dom, view) {
+      return !held(view) && updateDOM.call(this, dom, view)
+    }
+    window.views = new Set()
+    new MutationObserver(() => {
+      for (const editor of document.querySelectorAll(`${pane} .cm-content`))
+        window.views.add(editor)
+    }).observe(document, { childList: true, subtree: true })
+  }, context.pane)
+  await type(context, 'before ')
+  await context.page.keyboard.insertText('Q')
+  await named(context, 'bad-ext.bad: decorations boom')
+  await answers(context)
+  await editorReady(context)
+  await context.page.keyboard.insertText('more')
+  // Once for the failure, once to name the feature: without it nothing kills a
+  // view, and only the table stays out.
+  assert.ok(
+    (await context.page.evaluate(() => window.views.size)) <= 4,
+    'the editor kept being rebuilt',
+  )
+  await typingAndSavingWork(context, source, 'before Qmore')
+})
+
 test('an addon plugin that dispatches while the view updates costs its own plugin, not the editor', {
   timeout: 60000,
 }, async (t) => {

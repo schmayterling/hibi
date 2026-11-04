@@ -484,7 +484,10 @@ test(
         characterData: true,
       })
     })
-    await moreAttempts((await attempts()).length + 2)
+    const before = (await attempts()).length
+    await moreAttempts(before + 2)
+    // One at a time: a tab's attempt doesn't run into the other's and get skipped.
+    assert.deepEqual([...new Set((await attempts()).slice(before))], ['held'])
     assert.deepEqual(
       await page.evaluate(() =>
         [...window.labels].filter((text) => text !== 'Autosave · retrying'),

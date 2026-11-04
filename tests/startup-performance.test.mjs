@@ -158,7 +158,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Letting close split wait for a file operation adds 62 (#826).
   // Restoring a saved version that History returns once a file operation is
   // done, and showing its change in the editor, adds 24 (#828).
-  // Letting an addon send an edit again after a busy answer adds 85 (#836).
+  // Letting an addon send an edit again after a busy answer adds 41 (#836).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -193,7 +193,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         22 +
         62 +
         24 +
-        85,
+        41,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

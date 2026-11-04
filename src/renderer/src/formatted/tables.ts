@@ -818,12 +818,11 @@ class TableView {
     spacer?.classList.toggle('hibi-lp-table-empty', height < 0.5)
   }
 
-  /** Layout reads: rendered row heights and where the visible band falls in the body. */
+  /** Layout reads: rendered row heights, the edited row's beside the window too, and where the visible band falls in the body. */
   private read() {
     const heights: [number, number][] = []
     for (const [index, row] of this.rendered)
-      if (index >= this.start && index < this.end)
-        heights.push([index, row.element.getBoundingClientRect().height])
+      heights.push([index, row.element.getBoundingClientRect().height])
     const band = visibleBand(this.dom)
     const top = this.head.getBoundingClientRect().bottom
     const bottom = this.dom.getBoundingClientRect().bottom

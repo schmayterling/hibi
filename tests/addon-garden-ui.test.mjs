@@ -163,6 +163,49 @@ test('hibi garden tab, installs, and addon links', {
     },
   )
 
+  await t.test(
+    'filtering keeps controls aligned with the sidebar',
+    async () => {
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0].setContentSize(1440, 900)
+      })
+      const filter = addons.getByRole('searchbox', { name: /filter addons/i })
+      const geometry = () =>
+        page.evaluate(() => {
+          const content = document.querySelector('.settings-content')
+          const sidebar = document
+            .querySelector('.settings-sidebar')
+            .getBoundingClientRect()
+          const controls = [
+            ...document.querySelectorAll(
+              '#settings-addons h1, #settings-addons [role="tablist"], #settings-addons input[type="search"]',
+            ),
+          ].map((element) => {
+            const rect = element.getBoundingClientRect()
+            return { gap: rect.left - sidebar.right, width: rect.width }
+          })
+          return {
+            scrolls: content.scrollHeight > content.clientHeight,
+            controls,
+          }
+        })
+      const all = await geometry()
+      assert.equal(all.scrolls, true, 'the full list needs a scrollbar')
+      await filter.fill('no-matching-addon')
+      await addons.getByText('No matching addons', { exact: true }).waitFor()
+      const filtered = await geometry()
+      assert.equal(
+        filtered.scrolls,
+        false,
+        'the empty results fit without scrolling',
+      )
+      assert.deepEqual(filtered.controls, all.controls)
+      await filter.fill('')
+      await addons.locator('[data-setting-id="garden-garden-hello"]').waitFor()
+      assert.deepEqual(await geometry(), all)
+    },
+  )
+
   await t.test('rows show metadata and the right action', async () => {
     const row = (id) => addons.locator(`[data-setting-id="garden-${id}"]`)
     assert.match(await row('garden-hello').innerText(), /MIT/)

@@ -43,7 +43,6 @@ import {
   writeText,
 } from './files'
 import { recordVersions } from './history'
-import { MAX_IMAGE_BYTES } from './images'
 import {
   flushUndoHistory,
   relocateUndoHistory,
@@ -103,11 +102,6 @@ async function readSource(file: string, tabId = activeTab, version = 0) {
     const info = await stat(file)
     if (!info.isFile())
       throw new Error('Choose an image file, not a folder or device.')
-    // The viewer would read nothing past the limit, so refuse before a tab opens.
-    if (info.size > MAX_IMAGE_BYTES)
-      throw new Error(
-        `${basename(file)} is larger than 8 MiB, so Hibi can’t display it.`,
-      )
     return SourceStore.load(noText(), { tabId, revision }, version)
   }
   try {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import {
+import fs, {
   chmod,
   mkdir,
   mkdtemp,
@@ -13,8 +13,9 @@ import {
   utimes,
   writeFile,
 } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Worker } from 'node:worker_threads'
@@ -481,7 +482,7 @@ test('a host body full of comments is sniffed at once', async (t) => {
   assert.equal(type, null)
 })
 
-test('a redirect to http is never requested, and an image past 64 MiB is refused before or while it downloads', async (t) => {
+test('a redirect to http is never requested', async (t) => {
   const host = await setup(t)
   host.answer = (url) =>
     url.startsWith('http:')
@@ -498,36 +499,144 @@ test('a redirect to http is never requested, and an image past 64 MiB is refused
     host.requests.map(({ url }) => url),
     ['https://images.test/insecure.png'],
   )
-  let pulled = 0
-  const large = (headers) => () => {
-    pulled = 0
-    return new Response(
-      new ReadableStream({
-        pull(controller) {
-          pulled++
-          if (pulled === 1) controller.enqueue(png(''))
-          else if (pulled > 66) controller.close()
-          else controller.enqueue(new Uint8Array(1024 * 1024))
+})
+
+for (const declared of [true, false])
+  test(`remote images above 64 MiB stream to disk with ${declared ? 'a declared' : 'no declared'} length`, async (t) => {
+    const host = await setup(t)
+    const header = png('')
+    const chunk = new Uint8Array(64 * 1024)
+    const chunks = 65 * 16
+    const size = header.length + chunks * chunk.length
+    let sent = 0
+    host.answer = () =>
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (sent === 0) controller.enqueue(header)
+            else if (sent <= chunks) controller.enqueue(chunk)
+            else controller.close()
+            sent++
+          },
+        }),
+        {
+          headers: {
+            'Content-Type': 'image/png',
+            ...(declared ? { 'Content-Length': String(size) } : {}),
+          },
         },
-      }),
-      { headers: { 'Content-Type': 'image/png', ...headers } },
+      )
+    const response = await remoteImageResponse(SOURCE, host.place, host.fetch)
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-length'), String(size))
+    let received = 0
+    for await (const bytes of response.body) {
+      assert.ok(bytes.length <= 64 * 1024)
+      if (!received)
+        assert.deepEqual(Buffer.from(bytes.subarray(0, header.length)), header)
+      received += bytes.length
+    }
+    assert.equal(received, size)
+    assert.equal(
+      JSON.parse(await readFile(`${host.kept}.json`, 'utf8')).size,
+      size,
     )
+    assert.equal(host.requests.length, 1)
+    const cached = await remoteImageResponse(SOURCE, host.place, host.fetch)
+    assert.equal(cached.status, 200)
+    await cached.body.cancel()
+    assert.equal(host.requests.length, 1)
+  })
+
+test('the newest image can exceed the cache target and is evicted when a newer image needs the space', async (t) => {
+  const host = await setup(t)
+  await mkdir(join(host.workspace, '.hibi', 'cache', 'images'), {
+    recursive: true,
+  })
+  await writeFile(host.kept, png(''))
+  const size = 513 * 1024 * 1024
+  await truncate(host.kept, size)
+  await writeFile(
+    `${host.kept}.json`,
+    JSON.stringify({
+      url: SOURCE,
+      type: 'image/png',
+      size,
+      checked: Date.now() - 25 * 60 * 60 * 1000,
+    }),
+  )
+  const old = join(dirname(host.kept), 'a'.repeat(64))
+  await writeFile(old, '')
+  await writeFile(`${old}.json`, '{}')
+  await utimes(`${old}.json`, new Date(0), new Date(0))
+  host.answer = () => new Response(null, { status: 304 })
+  const response = await remoteImageResponse(SOURCE, host.place, host.fetch)
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-length'), String(size))
+  await response.body.cancel()
+  await waitFor(
+    async () => !(await readdir(dirname(host.kept))).includes('a'.repeat(64)),
+  )
+  assert.ok((await readdir(dirname(host.kept))).includes(NAME))
+  const cached = await remoteImageResponse(SOURCE, host.place, host.fetch)
+  assert.equal(cached.status, 200)
+  await cached.body.cancel()
+  assert.equal(host.requests.length, 1)
+  // A subsequent download still evicts the old oversized copy.
+  host.answer = () =>
+    new Response(png('new'), { headers: { 'Content-Type': 'image/png' } })
+  assert.deepEqual(await host.draw('https://images.test/new.png'), drawn('new'))
+  await waitFor(async () => !(await readdir(dirname(host.kept))).includes(NAME))
+})
+
+test('a paused remote image consumer keeps disk reads bounded and cancellation closes the file', async (t) => {
+  const host = await setup(t)
+  await mkdir(dirname(host.kept), { recursive: true })
+  await writeFile(host.kept, png(''))
+  const size = 513 * 1024 * 1024
+  await truncate(host.kept, size)
+  await writeFile(
+    `${host.kept}.json`,
+    JSON.stringify({
+      url: SOURCE,
+      type: 'image/png',
+      size,
+      checked: Date.now(),
+    }),
+  )
+  const open = fs.open
+  let file
+  let readBytes = 0
+  t.mock.method(fs, 'open', async (...args) => {
+    const opened = await open(...args)
+    if (args[0] === host.kept) {
+      file = opened
+      const read = opened.read.bind(opened)
+      t.mock.method(opened, 'read', async (...args) => {
+        const result = await read(...args)
+        readBytes += result.bytesRead
+        return result
+      })
+    }
+    return opened
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const response = await remoteImageResponse(SOURCE, host.place, host.fetch)
+  try {
+    await waitFor(() => readBytes > 0)
+    // Give a missing backpressure strategy time to read ahead.
+    await delay(50)
+    assert.ok(
+      readBytes <= 3 * 64 * 1024,
+      `Read ${readBytes} bytes without a consumer.`,
+    )
+    assert.equal(host.requests.length, 0)
+  } finally {
+    await response.body.cancel()
   }
-  // A declared length past the limit is refused before the body is read.
-  host.answer = large({ 'Content-Length': String(65 * 1024 * 1024 + 8) })
-  assert.equal(
-    (await host.draw('https://images.test/declared.png')).status,
-    404,
-  )
-  assert.ok(pulled <= 1, `read ${pulled} chunks`)
-  // Without one, the download stops at the limit and nothing is kept.
-  host.answer = large({})
-  assert.equal(
-    (await host.draw('https://images.test/streamed.png')).status,
-    404,
-  )
-  assert.deepEqual(
-    await readdir(join(host.workspace, '.hibi', 'cache', 'images')),
-    [],
-  )
+  await waitFor(() => file.fd === -1)
 })

@@ -59,7 +59,7 @@ test('production entry keeps editor implementations behind demand imports', asyn
     .join('\n')
   assert.doesNotMatch(
     initial,
-    /src\/renderer\/src\/(?:Editor|SourceEditor|FormatEditor)\.tsx/,
+    /src\/renderer\/src\/(?:Editor|SourceEditor|FormatEditor)\.tsx|src\/renderer\/src\/document-media\.ts/,
   )
   assert.doesNotMatch(initial, /node_modules\/@tiptap\//)
   assert.doesNotMatch(
@@ -144,6 +144,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Finding History by "version" in the palette adds 61 (#814).
   // Image documents and their demand-loaded viewer add 1,801 (#815).
   // Sending repeated Save commands to their coalescing handler adds 27 (#818).
+  // Loading the stream resolver inside the image viewer's effect, without a
+  // nested Suspense delay, adds 132 (#817).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -169,7 +171,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         785 +
         61 +
         1801 +
-        27,
+        27 +
+        132,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

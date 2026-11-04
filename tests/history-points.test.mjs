@@ -363,6 +363,44 @@ test('a reopened note lists the text of an earlier save once, as its saved versi
   )
 })
 
+test('a stored history marks the states saves kept, by step, past trimmed steps', async () => {
+  const { keptHistory, restoredHistory } = await import(
+    '../src/shared/undo-history.ts'
+  )
+  const writer = note('', { historyGroups: 4 })
+  const save = () => {
+    writer.session.sealHistory()
+    writer.session.markSaved(writer.session.snapshot())
+    return writer.now()
+  }
+  const step = (text) => {
+    writer.type(text)
+    writer.wait(10 * second)
+  }
+  step('a0 ')
+  const oldest = save()
+  step('b1 ')
+  step('c2 ')
+  const middle = save()
+  step('d3 ')
+  step('e4 ')
+  const last = save()
+  const kept = JSON.parse(JSON.stringify(keptHistory(writer.session)))
+  // The first step went, so the state of the first save is the oldest; the
+  // steps saves never wrote stay unmarked.
+  assert.equal(kept.steps.length, 4)
+  const expected = [
+    [-1, oldest],
+    [1, middle],
+    [3, last],
+  ]
+  const sorted = (marks) => [...marks].sort(([a], [b]) => a - b)
+  assert.deepEqual(sorted(kept.versioned), expected)
+  const reopened = note(writer.text(), { historyGroups: 4 })
+  reopened.session.restoreHistory(kept.units, restoredHistory(kept))
+  assert.deepEqual(sorted(historyOf(reopened.session).versioned), expected)
+})
+
 test('an undone change of a few characters is not a point of its own', () => {
   const writer = note()
   writer.type('a sentence long enough to stand alone. ')

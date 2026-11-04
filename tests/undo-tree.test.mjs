@@ -436,6 +436,7 @@ test('stored history is checked before it is used', () => {
     [[0.5, 1]],
     [[0, 'soon']],
     [[0, null]],
+    JSON.parse('[[0, 1e999]]'),
     Array.from({ length: history.steps.length + 2 }, () => [0, 1]),
   ])
     assert.throws(

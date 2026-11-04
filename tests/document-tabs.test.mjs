@@ -2566,3 +2566,43 @@ test('close split that retries focus lets a file opened from outside go first', 
   const final = await page.evaluate(() => window.hibi.getDocument())
   assert.equal(final.tabs.length, 3)
 })
+
+test('a tab clicked after close split during a save shows when both have run', {
+  timeout: 30000,
+}, async (t) => {
+  const { app, page, idle } = await launchHolding(
+    t,
+    'hibi-tab-busy-close-split-click-',
+    { 'c.md': 'note c', 'b.md': 'note b', 'a.md': 'note a' },
+    [],
+  )
+  const { tabs } = await page.evaluate(() => window.hibi.getDocument())
+  const b = tabs.find((tab) => tab.name === 'b.md').id
+  const c = tabs.find((tab) => tab.name === 'c.md').id
+  await splitTab(app, page, b)
+  const closeSplit = page.getByRole('button', { name: 'Close split' })
+  await closeSplit.waitFor()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b,
+  )
+  await idle()
+  await app.evaluate(() => globalThis.hold('document:save'))
+  await clickMenu(app, 'Save')
+  await app.evaluate(() => globalThis.held['document:save'])
+  await closeSplit.click()
+  await page.locator(`[data-tab-id="${c}"]`).click()
+  await app.evaluate(() => globalThis.release['document:save']())
+  await closeSplit.waitFor({ state: 'hidden' })
+  await waitForAsync(
+    page,
+    async () => !document.querySelector('.app[aria-busy="true"]'),
+  )
+  await idle()
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => setTimeout(done))),
+  )
+  await idle()
+  assert.equal((await page.evaluate(() => window.hibi.getDocument())).tabId, c)
+})

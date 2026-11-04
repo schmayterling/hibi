@@ -2022,7 +2022,8 @@ function App() {
   }
 
   async function closeSplit() {
-    await focusQueue.current
+    // Not when settled: replayed, it starts before what waits behind it.
+    if (focusPending.current) await focusQueue.current
     const current = splitTabsRef.current
     if (!current) return
     if (focusUnsafe.current && !(await retryDocumentFocus())) return

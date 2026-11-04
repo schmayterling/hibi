@@ -3781,6 +3781,100 @@ test('cell editors take no input while the formatted view takes none', {
   await harness.evaluate(() => window.tables.setEditable(true))
 })
 
+test('keys typed in a cell of a read-only view change nothing', {
+  timeout: 60000,
+}, async (t) => {
+  const errors = []
+  const listen = (error) => errors.push(error.message)
+  harness.on('pageerror', listen)
+  // The keys' offsets once sent the view and the cell's editor between two
+  // selections for good, in microtasks. Past this many the loop stops, so
+  // that the test fails instead of hanging.
+  const limit = 2000
+  await harness.evaluate((limit) => {
+    const queue = window.queueMicrotask
+    window.microtasks = { queue, count: 0 }
+    window.queueMicrotask = (task) => {
+      if (window.microtasks.count++ < limit) queue(task)
+    }
+  }, limit)
+  t.after(async () => {
+    harness.off('pageerror', listen)
+    await harness.evaluate(() => {
+      window.queueMicrotask = window.microtasks.queue
+    })
+  })
+  const doc = 'before\n\n| a | stuvwx |\n| - | - |\n| mnopqr | d |\n\nafter'
+  const left = ['ArrowLeft', 'ArrowLeft', 'ArrowLeft']
+  const type = async (name) => {
+    await harness.evaluate(() => {
+      window.microtasks.count = 0
+    })
+    await harness.keyboard.type('BLOCKED')
+    await harness.evaluate(() => window.tables.settle())
+    assert.ok(
+      (await harness.evaluate(() => window.microtasks.count)) < limit,
+      name,
+    )
+    assert.deepEqual(errors, [], name)
+  }
+  const open = async (keys) => {
+    await mount(doc)
+    await harness.locator('.hibi-lp-table td', { hasText: 'mnopqr' }).click()
+    for (const key of keys) await harness.keyboard.press(key)
+    await harness.evaluate(() => window.tables.settle())
+    await harness.evaluate(() => window.tables.setEditable(false))
+  }
+  for (const [name, keys, typed] of [
+    ['caret at the end', ['End'], 'mnopqrW'],
+    ['caret inside', ['End', ...left], 'mnoWpqr'],
+    ['range to the end', ['End', ...left, 'Shift+End'], 'mnoW'],
+    [
+      'range from the end',
+      ['End', 'Shift+ArrowLeft', 'Shift+ArrowLeft', 'Shift+ArrowLeft'],
+      'mnoW',
+    ],
+  ]) {
+    await open(keys)
+    const held = await state()
+    await type(name)
+    assert.deepEqual(await state(), held, name)
+    await harness.evaluate(() => window.tables.setEditable(true))
+    await harness.keyboard.type('W')
+    assert.equal((await state()).editor, typed, name)
+  }
+  // A change from elsewhere shortens the open cell's text under one of a
+  // pick's points, before the pick's selection change arrives.
+  for (const [name, points] of [
+    ['anchor in the cell', ['mnopqr', 6, 'stuvwx', 2]],
+    ['focus in the cell', ['stuvwx', 2, 'mnopqr', 6]],
+  ]) {
+    await open(['End'])
+    await harness.keyboard.press('Shift')
+    await harness.evaluate(([anchor, anchorOffset, focus, focusOffset]) => {
+      const text = (value) => {
+        const walker = document.createTreeWalker(
+          document.querySelector('.hibi-lp-table'),
+          NodeFilter.SHOW_TEXT,
+        )
+        while (walker.nextNode())
+          if (walker.currentNode.nodeValue === value) return walker.currentNode
+        throw new Error(value)
+      }
+      document
+        .getSelection()
+        .setBaseAndExtent(text(anchor), anchorOffset, text(focus), focusOffset)
+      const view = window.tables.view()
+      const from = view.state.doc.toString().indexOf('pqr')
+      view.dispatch({ changes: { from, to: from + 3 } })
+    }, points)
+    await harness.evaluate(() => window.tables.settle())
+    assert.deepEqual(errors, [], name)
+    assert.match((await state()).doc, /^\| mno \| d \|$/m, name)
+    await harness.evaluate(() => window.tables.setEditable(true))
+  }
+})
+
 test('a cell editor that a change drops while the view takes no input is back once it does', {
   timeout: 60000,
 }, async (t) => {

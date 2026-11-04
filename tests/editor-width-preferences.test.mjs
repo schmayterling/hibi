@@ -90,6 +90,7 @@ test('width controls update live, restore the cap, and stop observing preference
     },
   })
   assert.equal(items.get('cap').toggle.checked, true)
+  assert.equal(commands.get('toggle').menu.location, 'app')
   items.get('width').slider.onChange(720)
   const capped = css
   items.get('cap').toggle.onChange(false)

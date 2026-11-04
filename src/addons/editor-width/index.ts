@@ -14,6 +14,7 @@ export default defineAddon({
     context.commands.register({
       id: 'toggle',
       label: 'Toggle editor width',
+      menu: { location: 'app' },
       run: () => {
         setPreferences({ capped: !getPreferences().capped })
       },

@@ -31,11 +31,11 @@ const ordered = (block) =>
   `plain\n\n1. item\n\n   ${block.replaceAll('\n', '\n   ')}\n`
 // formatted-atom-matrix runs every action on every atom; these go through the
 // real toolbar, cell editor and image picker.
-const journeys = [
-  ['document', 'divider', ['bold', 'quote', 'divider', 'image']],
-  ['list', 'mermaid', ['numbered-list', 'table', 'image']],
-  ['quote', 'math', ['table', 'quote', 'image']],
-]
+const journeys = {
+  'document divider': ['bold', 'quote', 'divider', 'image'],
+  'list mermaid': ['numbered-list', 'table', 'image'],
+  'quote math': ['table', 'quote', 'image'],
+}
 /**
  * What the removed rich view did, recorded before its removal: its toolbar
  * states and cell texts, and whether its parser read the formatted view's
@@ -207,78 +207,78 @@ test('toolbar actions on selected atoms preserve their containers', {
       assert.deepEqual(result, expected, name)
       compare(`tab: ${name}`, result)
     })
-  for (const [container, kind, actions] of journeys) {
-    const block = atoms[kind]
-    const source = containers[container](block)
-    const name = `${container} ${kind}`
-    await t.test(`${name}: toolbar`, async () => {
-      await open(source)
-      compare(`${name}: toolbar`, await page.evaluate(toolbar))
-    })
-    for (const action of actions)
-      await t.test(`${name}: ${action}`, async () => {
+  for (const [container, wrap] of Object.entries(containers))
+    for (const [kind, block] of Object.entries(atoms)) {
+      const source = wrap(block)
+      const name = `${container} ${kind}`
+      await t.test(`${name}: toolbar`, async () => {
         await open(source)
-        if (action === 'image')
-          await app.evaluate(({ dialog }, png) => {
-            dialog.showOpenDialog = async () => ({
-              canceled: false,
-              filePaths: [png],
-            })
-          }, png)
-        const button = page.locator(
-          `.editor-toolbar [data-toolbar-id="format.${action}"]`,
-        )
-        // React ignores a click on a button it disabled, as for a person.
-        // Restore its last written disabled state.
-        await button.evaluate((button) => {
-          const disabled = button.disabled
-          button.disabled = false
-          button.click()
-          button.disabled = disabled
-        })
-        if (action === 'image')
-          await waitForAsync(page, async () =>
-            (await window.hibi.getDocument()).markdown.includes('assets/pic'),
-          )
-        await page.evaluate(async () => {
-          for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame)
-        })
-        const after = await snapshot(page)
-        // atom-list-001: the rich view's numbered-list edit refused the change
-        // or kept two-space continuation, so this result is the formatted view's own.
-        const numbered = container === 'list' && action === 'numbered-list'
-        if (numbered) {
-          const expected = ordered(block)
-          assert.equal(after.source, expected, `${name}: ${action} source`)
-          assert.equal(after.selected, true)
-        } else compare(`${name}: ${action}`, after)
-        if (action === 'image') {
-          assert.equal(
-            after.selected,
-            true,
-            'the replacement image stays selected',
-          )
-          assert.match(after.source, /!\[pic\]\(assets\/pic\.png\)/)
-          await page.keyboard.press(`${mod}+z`)
-          assert.equal((await snapshot(page)).source, source)
-          await page.keyboard.press(`${mod}+Shift+z`)
-          assert.deepEqual(await snapshot(page), after)
-        }
-        await page.keyboard.type('Z')
-        const typed = await snapshot(page)
-        if (numbered) {
-          // As the rich view reads the ordered item holding the typed text.
-          assert.equal(
-            rich({
-              kind: 'literal',
-              key: `${name}: ${action} then type`,
-              source: typed.source,
-            }),
-            true,
-            typed.source,
-          )
-          assert.equal(typed.selected, false)
-        } else compare(`${name}: ${action} then type`, typed)
+        compare(`${name}: toolbar`, await page.evaluate(toolbar))
       })
-  }
+      for (const action of journeys[name] ?? [])
+        await t.test(`${name}: ${action}`, async () => {
+          await open(source)
+          if (action === 'image')
+            await app.evaluate(({ dialog }, png) => {
+              dialog.showOpenDialog = async () => ({
+                canceled: false,
+                filePaths: [png],
+              })
+            }, png)
+          const button = page.locator(
+            `.editor-toolbar [data-toolbar-id="format.${action}"]`,
+          )
+          // React ignores a click on a button it disabled, as for a person.
+          // Restore its last written disabled state.
+          await button.evaluate((button) => {
+            const disabled = button.disabled
+            button.disabled = false
+            button.click()
+            button.disabled = disabled
+          })
+          if (action === 'image')
+            await waitForAsync(page, async () =>
+              (await window.hibi.getDocument()).markdown.includes('assets/pic'),
+            )
+          await page.evaluate(async () => {
+            for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame)
+          })
+          const after = await snapshot(page)
+          // atom-list-001: the rich view's numbered-list edit refused the change
+          // or kept two-space continuation, so this result is the formatted view's own.
+          const numbered = container === 'list' && action === 'numbered-list'
+          if (numbered) {
+            const expected = ordered(block)
+            assert.equal(after.source, expected, `${name}: ${action} source`)
+            assert.equal(after.selected, true)
+          } else compare(`${name}: ${action}`, after)
+          if (action === 'image') {
+            assert.equal(
+              after.selected,
+              true,
+              'the replacement image stays selected',
+            )
+            assert.match(after.source, /!\[pic\]\(assets\/pic\.png\)/)
+            await page.keyboard.press(`${mod}+z`)
+            assert.equal((await snapshot(page)).source, source)
+            await page.keyboard.press(`${mod}+Shift+z`)
+            assert.deepEqual(await snapshot(page), after)
+          }
+          await page.keyboard.type('Z')
+          const typed = await snapshot(page)
+          if (numbered) {
+            // As the rich view reads the ordered item holding the typed text.
+            assert.equal(
+              rich({
+                kind: 'literal',
+                key: `${name}: ${action} then type`,
+                source: typed.source,
+              }),
+              true,
+              typed.source,
+            )
+            assert.equal(typed.selected, false)
+          } else compare(`${name}: ${action} then type`, typed)
+        })
+    }
 })

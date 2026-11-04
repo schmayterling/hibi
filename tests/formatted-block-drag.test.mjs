@@ -91,6 +91,11 @@ async function open(name) {
     join(folder, 'notes', name),
   )
   await pressShortcut(app, `${mod}+o`)
+  // The block drag addon adds its handle after a note's text shows; a pointer
+  // already resting there gets no handle until it moves again.
+  await page
+    .locator('.rich-pane .block-drag-handle')
+    .waitFor({ state: 'attached' })
 }
 
 const markdown = async () =>

@@ -33,6 +33,7 @@ import { imageExtensions, isImageDocument } from '../shared/document-types'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
+import { fileHeldOpen, PATIENT_RENAME } from './atomic-rename'
 import { documentExtensions, isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
 import {
@@ -1034,7 +1035,18 @@ export async function saveDocument(
           : previous !== null && (await sameSource(shown, previous))
     }
   }
-  await writeMarkdown(destination, content, exclusive && !appeared)
+  await writeMarkdown(
+    destination,
+    content,
+    exclusive && !appeared,
+    undefined,
+    PATIENT_RENAME,
+  ).catch((error: unknown) => {
+    if (!fileHeldOpen(error)) throw error
+    throw new Error(
+      'Could not save because another program is using this file, or Windows does not allow changes to it. Your text is still here and the file is unchanged. Close the other program and save again.',
+    )
+  })
   // A new path, or a file another app changed, keeps no copy of the text last saved.
   const replacedSaved = previous === saved
   path = destination

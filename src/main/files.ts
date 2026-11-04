@@ -129,6 +129,7 @@ export async function writeMarkdown(
   markdown: string | SourceSnapshot,
   exclusive = false,
   canCommit?: () => boolean,
+  renameDelays?: readonly number[],
 ): Promise<void> {
   if (typeof markdown === 'string') validateMarkdown(markdown)
   return writeText(
@@ -136,6 +137,7 @@ export async function writeMarkdown(
     typeof markdown === 'string' ? markdown : markdown.encodedChunks(),
     exclusive,
     canCommit,
+    renameDelays,
   )
 }
 
@@ -165,6 +167,7 @@ export async function writeText(
   text: string | Uint8Array | Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
   exclusive = false,
   canCommit?: () => boolean,
+  renameDelays?: readonly number[],
 ): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
   const existing = await stat(path).catch((error: NodeJS.ErrnoException) => {
@@ -205,10 +208,15 @@ export async function writeText(
         await copyFile(temp, path, constants.COPYFILE_EXCL)
       }
     } else
-      await retryRename(() => {
-        checkCommit()
-        return rename(temp, path)
-      })
+      await retryRename(
+        () => {
+          checkCommit()
+          return rename(temp, path)
+        },
+        undefined,
+        undefined,
+        renameDelays,
+      )
   } finally {
     try {
       await unlink(temp).catch((error: NodeJS.ErrnoException) => {

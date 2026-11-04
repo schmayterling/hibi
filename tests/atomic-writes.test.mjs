@@ -19,7 +19,7 @@ async function runtime({
       build({
         stdin: {
           contents:
-            "export { loadAppearance, saveAppearance } from './src/main/appearance.ts'; export { rememberWorkspace, setKnownWorkspace, observeKnownWorkspaces } from './src/main/recent-workspaces.ts'; export { saveUiCase, getUiCase } from './src/main/ui-case.ts'; export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
+            "export { loadAppearance, saveAppearance } from './src/main/appearance.ts'; export { rememberWorkspace, setKnownWorkspace, observeKnownWorkspaces } from './src/main/recent-workspaces.ts'; export { saveUiCase, getUiCase } from './src/main/ui-case.ts'; export { PATIENT_RENAME } from './src/main/atomic-rename.ts'; export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
           resolveDir: resolve('.'),
         },
         bundle: true,
@@ -221,6 +221,26 @@ async function writer(t, kind, options) {
       assert.deepEqual(await fs.readdir(dirname(file)), [basename(file)]),
   }
 }
+
+test('a save someone is waiting on keeps trying about 10 s for a program to let go', async (t) => {
+  const { module, state, original } = await runtime({ failures: Infinity })
+  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-patient-rename-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const file = join(root, 'note.md')
+  await fs.writeFile(file, 'original')
+  const { PATIENT_RENAME, writeText } = module.exports
+  await assert.rejects(
+    writeText(file, 'replacement', false, undefined, PATIENT_RENAME),
+    (error) => error === original,
+  )
+  assert.equal(
+    state.delays.reduce((sum, ms) => sum + ms, 0),
+    10000,
+  )
+  assert.ok(state.delays.every((ms) => ms <= 100))
+  assert.equal(await fs.readFile(file, 'utf8'), 'original')
+  assert.deepEqual(await fs.readdir(root), ['note.md'])
+})
 
 for (const kind of ['document', 'storage', 'workspace']) {
   for (const [code, failures] of [

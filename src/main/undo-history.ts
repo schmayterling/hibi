@@ -31,6 +31,10 @@ const fileName = (path: string) =>
 const FILE_BYTES = 32 * 1024 * 1024
 /** Notes saved longest ago lose their kept history first past this. */
 const TOTAL_BYTES = 64 * 1024 * 1024
+/** A note missing this long lets go of its kept history. */
+const MISSING_MS = 30 * 24 * 60 * 60 * 1000
+/** No Hibi wrote an earlier time: it is a corrupt value or a clock that reset. */
+const EARLIEST_MISSING = Date.UTC(2026, 0, 1)
 
 let keeping: Promise<boolean> | undefined
 /** Whether notes keep their undo history after closing; on unless turned off. */
@@ -93,6 +97,8 @@ async function measure() {
 }
 /** The note each kept history belongs to, by file name, so moves inside Hibi can follow it. */
 let notes: Map<string, string> | undefined
+/** When a look first found a note missing, by file name; read for indexed notes. */
+const missingSince = new Map<string, number>()
 /** Removes a kept history; returns whether the index named it. */
 async function remove(name: string) {
   await unlink(join(folder(), name)).catch((error: NodeJS.ErrnoException) => {
@@ -115,15 +121,35 @@ async function indexed() {
   const listed = await readFile(indexPath(), 'utf8')
     .then((text): unknown => JSON.parse(text))
     .catch(() => null)
-  notes = new Map(
-    (Array.isArray(listed) ? listed : [])
-      .filter((path): path is string => typeof path === 'string')
-      .map((path) => [fileName(path), path]),
-  )
+  const found = new Map<string, string>()
+  // An entry is a note's path, or that and when it was first found missing.
+  for (const entry of Array.isArray(listed) ? listed : []) {
+    const { path, missingSince: since } = (
+      typeof entry === 'string' ? { path: entry } : (entry ?? {})
+    ) as { path?: unknown; missingSince?: unknown }
+    if (typeof path !== 'string') continue
+    found.set(fileName(path), path)
+    // Any other time starts the note's wait over, so it can't shorten it.
+    if (
+      typeof since === 'number' &&
+      Number.isFinite(since) &&
+      since >= EARLIEST_MISSING
+    )
+      missingSince.set(fileName(path), since)
+  }
+  notes = found
   return notes
 }
 const writeIndex = () =>
-  writeText(indexPath(), JSON.stringify([...(notes?.values() ?? [])]))
+  writeText(
+    indexPath(),
+    JSON.stringify(
+      [...(notes ?? [])].map(([name, path]) => {
+        const since = missingSince.get(name)
+        return since === undefined ? path : { path, missingSince: since }
+      }),
+    ),
+  )
 
 /**
  * Keeps a note's undo history, anchored at the text last saved to its file.
@@ -160,7 +186,8 @@ export async function storeUndoHistory(
       digest,
     })
     const known = await indexed()
-    if (known.get(name) !== path) {
+    // A note saved is a note seen.
+    if (missingSince.delete(name) || known.get(name) !== path) {
       known.set(name, path)
       await writeIndex()
     }
@@ -195,6 +222,10 @@ export function readUndoHistory(
     if (!(await keepsUndoHistory())) return null
     await sweep()
     const name = fileName(path)
+    // A note opened is a note seen, and a failed write doesn't stop the read.
+    // Before a launch's first look the index isn't loaded, and that look sees
+    // the note itself.
+    if (missingSince.delete(name)) await writeIndex().catch(() => {})
     let text: string
     try {
       if ((await stat(join(folder(), name))).size > FILE_BYTES)
@@ -223,16 +254,22 @@ export function readUndoHistory(
 }
 
 /**
- * Kept histories of notes deleted outside Hibi go: a note missing from a
- * folder that is there, at two looks `wait` ms apart, so a note Hibi moved
- * has its history moved before the second. A folder that is missing or
- * empty, as on a drive that isn't mounted, keeps its notes' histories.
+ * Kept histories of notes missing for 30 days go, as a note on another Git
+ * branch comes back with its history. A note is missing when it isn't in a
+ * folder that holds something, at two looks `wait` ms apart, so a note Hibi
+ * moved has its history moved before the second. The first launch to find it
+ * so records the time, and seeing the note again clears that. A folder that is
+ * missing or empty, as on a drive that isn't mounted, and any lookup that fails
+ * leave a note's history and record as they are. A time ahead of the clock
+ * waits for the clock, so a clock set back and restored doesn't shorten a wait.
  */
 export async function pruneUndoHistory(wait = 10_000) {
-  const absent = (path: string) =>
+  /** Whether a path is there, or null when the lookup can't tell. */
+  const there = (path: string) =>
     stat(path).then(
-      () => false,
-      (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
+      () => true,
+      (error: NodeJS.ErrnoException) =>
+        error.code === 'ENOENT' ? false : null,
     )
   const holds = (path: string) =>
     opendir(path)
@@ -244,25 +281,53 @@ export async function pruneUndoHistory(wait = 10_000) {
         }
       })
       .catch(() => false)
-  const gone = async (path: string) =>
-    (await absent(path)) &&
+  /** Whether a note is there, not there, or null when a look can't tell. */
+  const look = async (path: string) => {
+    const note = await there(path)
+    if (note !== false) return note
     // iCloud Drive before macOS 14 swaps a note it evicts for `.name.icloud`.
-    (await absent(join(dirname(path), `.${basename(path)}.icloud`))) &&
-    (await holds(dirname(path)))
+    const evicted = await there(
+      join(dirname(path), `.${basename(path)}.icloud`),
+    )
+    if (evicted !== false) return evicted
+    return (await holds(dirname(path))) ? false : null
+  }
   const listed = await serial(async () => {
     await sweep()
     return [...(await indexed())]
   })
+  const back: string[] = []
   const missing: [string, string][] = []
-  for (const [name, path] of listed)
-    if (await gone(path)) missing.push([name, path])
-  if (!missing.length) return
-  await new Promise((resolve) => setTimeout(resolve, wait))
+  for (const [name, path] of listed) {
+    const found = await look(path)
+    const since = missingSince.get(name)
+    if (found && since !== undefined) back.push(name)
+    // A note still waiting out its time needs no second look.
+    else if (
+      found === false &&
+      (since === undefined || Date.now() - since >= MISSING_MS)
+    )
+      missing.push([name, path])
+  }
+  if (!back.length && !missing.length) return
+  if (missing.length) await new Promise((resolve) => setTimeout(resolve, wait))
   await tracked(
     serial(async () => {
       let changed = false
-      for (const [name, path] of missing)
-        if ((await gone(path)) && (await remove(name))) changed = true
+      for (const name of back) if (missingSince.delete(name)) changed = true
+      const known = await indexed()
+      for (const [name, path] of missing) {
+        // Moved, trashed or cleared since the first look.
+        if (!known.has(name)) continue
+        const found = await look(path)
+        if (found) {
+          if (missingSince.delete(name)) changed = true
+        } else if (found === false) {
+          if (missingSince.has(name)) await remove(name)
+          else missingSince.set(name, Date.now())
+          changed = true
+        }
+      }
       if (changed) await writeIndex()
     }),
   )
@@ -293,6 +358,7 @@ export function relocateUndoHistory(from: string, to: string) {
         files.delete(before)
         files.set(after, file)
         known.set(after, moved)
+        missingSince.delete(after)
       }
       if (changed) await writeIndex()
     }),
@@ -343,6 +409,7 @@ export function clearUndoHistory() {
       await removeIndexCopies()
       sizes = new Map()
       notes = new Map()
+      missingSince.clear()
     }),
   )
 }

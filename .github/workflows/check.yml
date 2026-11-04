@@ -38,7 +38,8 @@ jobs:
         id: ci
         with:
           clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          base: ${{ github.event.pull_request.base.sha || '' }}
+          full: ${{ github.event_name != 'pull_request' }}
           shard: ${{ matrix.shard }}
       - run: npx electron-builder --dir --config.mac.identity=-
         shell: bash

@@ -17,6 +17,11 @@ const git = (root, ...args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trimEnd()
 const paths = (text) => text.split('\0').filter(Boolean)
+// Without --no-renames, a moved file lists only its new path.
+const changedFiles = (root, ...revisions) =>
+  paths(
+    git(root, 'diff', '--name-only', '--no-renames', '-z', ...revisions, '--'),
+  )
 const appInput =
   /^(src\/|build\/|scripts\/|docs\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|\.nvmrc$|\.npmrc$)/
 const globalInput =
@@ -69,6 +74,10 @@ export function planChecks(
       file.startsWith('tests/fixtures/') ||
       !/\.[cm]?[jt]sx?$/.test(file),
   )
+  // Nothing imports a test file, so changing one can't reach another test.
+  const beyondTests = [...changes].some(
+    (file) => !/^tests\/[^/]*\.test\.mjs$/.test(file),
+  )
   const modules = new Map()
   function dependencies(file, seen = new Set()) {
     if (seen.has(file))
@@ -92,8 +101,10 @@ export function planChecks(
             source,
           ))
       const readsFiles = /['"](?:node:)?fs(?:\/promises)?['"]/.test(source)
+      // The harness starts the app, and `build` already covers what the app reads.
       let dynamic =
-        /['"](?:node:)?child_process['"]/.test(source) ||
+        (file !== 'tests/electron.mjs' &&
+          /['"](?:node:)?child_process['"]/.test(source)) ||
         /\b(?:import|require)\s*\(\s*[^'"\s]/.test(source)
       const local = imports
         .filter((name) => name.startsWith('.'))
@@ -144,7 +155,7 @@ export function planChecks(
           [...graph.files].some((file) => changes.has(file)) ||
           ((build || dataChanged) && graph.files.has('tests/electron.mjs')) ||
           (dataChanged && graph.readsFiles) ||
-          (changes.size > 0 && graph.dynamic)
+          (beyondTests && graph.dynamic)
         )
       })
   const unitTests = selected.filter((test) =>
@@ -179,6 +190,7 @@ function runCI() {
     throw new Error(`Invalid CI shard: ${shard}`)
   const runtime = `${process.platform}/${process.arch}/${process.version}/${process.env.ImageVersion ?? 'local'}/${shard}`
   const clean = ['true', '1'].includes(process.env.CI_CLEAN ?? '')
+  const force = clean || process.env.CI_FULL === 'true'
   let previous
   try {
     previous = JSON.parse(readFileSync(stateFile, 'utf8'))
@@ -191,39 +203,43 @@ function runCI() {
   } catch {
     /* A cold or invalid cache always runs the full suite. */
   }
-  const baseline = process.env.CI_BASE || previous?.sha
+  // A pull request answers for its own diff; main's full runs answer for its base.
+  const pullRequestBase = /^[a-f0-9]{40}$/.test(process.env.CI_BASE ?? '')
+    ? process.env.CI_BASE
+    : undefined
+  const baseline =
+    pullRequestBase ??
+    (/^[a-f0-9]{40}$/.test(previous?.sha ?? '') ? previous.sha : undefined)
   let changed
-  if (
-    previous &&
-    /^[a-f0-9]{40}$/.test(previous.sha) &&
-    /^[a-f0-9]{40}$/.test(baseline ?? '')
-  ) {
+  let previousTests = previous?.tests
+  if (baseline) {
     try {
       changed = [
         ...new Set([
-          ...paths(
-            git(root, 'diff', '--name-only', '-z', baseline, 'HEAD', '--'),
-          ),
-          ...paths(
-            git(root, 'diff', '--name-only', '-z', previous.sha, 'HEAD', '--'),
-          ),
-          ...paths(git(root, 'diff', '--name-only', '-z', 'HEAD', '--')),
+          ...changedFiles(root, baseline, 'HEAD'),
+          ...changedFiles(root, 'HEAD'),
         ]),
       ]
+      if (pullRequestBase)
+        previousTests = paths(
+          git(root, 'ls-tree', '-r', '-z', '--name-only', baseline, 'tests/'),
+        )
     } catch {
       /* Unavailable history after a force-push requires full checks. */
     }
   }
+  const outputAvailable = [
+    'out/main/index.js',
+    'out/preload/index.cjs',
+    'out/renderer/index.html',
+    'out/site/template.html',
+  ].every((file) => existsSync(join(root, file)))
   const plan = planChecks(root, {
     changed,
-    previousTests: previous?.tests,
-    force: clean,
-    outputAvailable: [
-      'out/main/index.js',
-      'out/preload/index.cjs',
-      'out/renderer/index.html',
-      'out/site/template.html',
-    ].every((file) => existsSync(join(root, file))),
+    previousTests,
+    force,
+    // A pull request's diff picks its tests even when it has to build first.
+    outputAvailable: outputAvailable || !!pullRequestBase,
   })
   const selected = shardTests(plan.tests, plan.allTests, index, total)
   const unitTests = shardTests(plan.unitTests, plan.allTests, index, total)
@@ -263,7 +279,19 @@ function runCI() {
         '--tsBuildInfoFile',
         `.cache/ci/${target}.tsbuildinfo`,
       )
-  if (plan.build) npm('run', 'build:app')
+  // The cache can hold another revision's app, and a pull request's diff can't say.
+  const outputStale = () => {
+    if (!/^[a-f0-9]{40}$/.test(previous?.sha ?? '')) return true
+    try {
+      return changedFiles(root, previous.sha, 'HEAD').some((file) =>
+        appInput.test(file),
+      )
+    } catch {
+      return true
+    }
+  }
+  if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
+    npm('run', 'build:app')
   // TAP prints each failure's details immediately; spec defers them to the end.
   if (unitTests.length)
     run(['--test', '--test-reporter=tap', '--test-concurrency=4', ...unitTests])

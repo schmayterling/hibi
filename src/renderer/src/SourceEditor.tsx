@@ -175,10 +175,15 @@ import {
   failedEditGuard,
   failingParts,
   firstStateRead,
+  isViewDead,
+  onRedraw,
+  onViewDeath,
   reconfiguration,
+  redraw,
   sourceEditorTextCooperatively,
   sourceEditTransaction,
   transactionState,
+  viewDied,
 } from './source-session'
 import {
   registerSourceView,
@@ -200,6 +205,24 @@ export const sourceCurrent = (view: EditorView) =>
   bridges.get(view)?.isCurrent() ?? false
 
 /** The line at a view's top, and where its block starts relative to the top. */
+/**
+ * The place of a view whose drawing failed. A redraw forgets its measured
+ * heights, and asking CodeMirror measures, which draws. Internal.
+ */
+function placeWithoutDrawing(view: EditorView) {
+  const { viewState } = view as unknown as {
+    viewState: { paddingTop: number } & Pick<EditorView, 'lineBlockAtHeight'>
+  }
+  // The formatted view scrolls with its pane.
+  const scroller = view.scrollDOM.closest('.rich-pane') ?? view.scrollDOM
+  const height =
+    scroller.getBoundingClientRect().top -
+    view.contentDOM.getBoundingClientRect().top -
+    viewState.paddingTop
+  const line = viewState.lineBlockAtHeight(height)
+  return { top: line.from, margin: line.top - height }
+}
+
 function placeOf(view: EditorView) {
   const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
   const line = view.lineBlockAtHeight(height)
@@ -460,6 +483,15 @@ const featureExtensions = (
   return [extensions, formatted ? formattedRenderInputs.of(extensions) : []]
 }
 
+/** CodeMirror internal: lays out and draws what the viewport now shows. */
+type MeasuredView = { measure: (flush?: boolean) => void }
+
+/** Names a failing feature, which then leaves every editor. */
+const reportFailure = ({ feature }: InstalledFeature, error: unknown) =>
+  feature.fail?.(
+    new Error(`${feature.id}: ${errorMessage(error)}`, { cause: error }),
+  )
+
 /**
  * Reports the features an edit fails with, which then leave every editor,
  * and returns the others. A feature input waits for stays; the edit fails.
@@ -483,10 +515,7 @@ function isolateFeatures(
         ),
       ),
   )
-  for (const { part, error } of failing)
-    part.feature.fail?.(
-      new Error(`${part.feature.id}: ${errorMessage(error)}`, { cause: error }),
-    )
+  for (const { part, error } of failing) reportFailure(part, error)
   return installed.filter(
     (part) => !failing.some((failure) => failure.part === part),
   )
@@ -690,6 +719,18 @@ export function SourceEditor({
     typeof createSourceSession
   > | null>(null)
   const failedFeatures = useRef(new WeakSet<EditorFeature>())
+  // A draw failure names no feature, so the features go back one at a time:
+  // the one being tried is the one a failure comes with.
+  const tryingFeature = useRef<InstalledFeature | null>(null)
+  const tryingFailure = useRef<{ error: unknown; failed: boolean } | null>(null)
+  const tryFeatures = useRef<(() => void) | null>(null)
+  const triedForWidget = useRef(false)
+  const noticedFeatures = useRef(sourceExtensions)
+  const featuresSuspect = useRef(false)
+  const blameFeatures = useRef(false)
+  // The note has all it accepted and nothing here can draw it: recovery can save it.
+  const [unrecoverable, setUnrecoverable] = useState<unknown>(null)
+  if (unrecoverable) throw unrecoverable
   const inputReady =
     preparedText?.bridge === bridge &&
     installedExtensions?.bridge === bridge &&
@@ -1787,7 +1828,13 @@ export function SourceEditor({
       edit?: readonly Transaction[] | readonly TransactionSpec[],
       start = view.state,
     ) => {
-      setInputError(error instanceof Error ? error.message : String(error))
+      if (isViewDead(view)) return
+      // While features go back one at a time, the failure is the one tried.
+      if (tryingFeature.current) {
+        viewDied(view, error)
+        return
+      }
+      setInputError(errorMessage(error))
       const kept = edit
         ? isolateFeatures(
             start,
@@ -1833,8 +1880,43 @@ export function SourceEditor({
       // IME does not compose on over text the note does not have.
       const focused = view.hasFocus
       if (view.compositionStarted) view.contentDOM.blur()
-      view.setState(view.state)
-      if (focused) view.focus()
+      redraw(view, view.state)
+      if (focused && !isViewDead(view)) view.focus()
+    }
+    /**
+     * Takes a view that cannot draw out of use and asks for a new one from the
+     * note's text. Each new view takes out a feature or names the rest, so this
+     * ends: with none left to take out, recovery takes over.
+     */
+    let placeBeforeRedraw: ReturnType<typeof placeOf> | null = null
+    const rebuild = (view: EditorView, error: unknown) => {
+      restoreFocus.current ??= captureEditorFocus(view.contentDOM)
+      // What is typed from here shows nowhere and is not in the note.
+      view.contentDOM.contentEditable = 'false'
+      const suspects = installed.current.filter(({ feature }) => feature.fail)
+      if (!suspects.length) {
+        setUnrecoverable(
+          error instanceof Error ? error : new Error(errorMessage(error)),
+        )
+        return
+      }
+      const blamed = tryingFeature.current
+        ? [tryingFeature.current]
+        : blameFeatures.current
+          ? suspects
+          : []
+      for (const part of blamed) {
+        failedFeatures.current.add(part.feature)
+        reportFailure(part, error)
+      }
+      tryingFeature.current = null
+      featuresSuspect.current = true
+      // The session takes no selection until the edit that got here returns.
+      queueMicrotask(() => {
+        const place = placeBeforeRedraw ?? shownPlace.current
+        if (place) bridge.keepPlace(view, place.top, place.margin)
+        retryBridge((retry) => retry + 1)
+      })
     }
     const editor = new EditorView({
       parent: host.current,
@@ -1847,6 +1929,10 @@ export function SourceEditor({
           }
         : {}),
       dispatchTransactions(transactions, editor) {
+        // CodeMirror refuses this too, but only after the session took the edit,
+        // and whoever dispatched would go on without hearing. Internal; 0 is idle.
+        if ((editor as unknown as { updateState: number }).updateState)
+          throw new Error('An editor update cannot start during another.')
         // Input no Markdown can keep is refused unapplied, its features kept.
         for (const transaction of transactions) {
           const error = transaction.annotation(rejectedInput)
@@ -1857,6 +1943,7 @@ export function SourceEditor({
         }
         try {
           bridge.dispatch(transactions, editor, exactChanges.current)
+          if (isViewDead(editor)) return
           // Only the user's next action clears a failure, not the view's own.
           if (
             transactions.some((transaction) =>
@@ -1883,7 +1970,15 @@ export function SourceEditor({
           EditorView.exceptionSink.of((error: unknown, context?: string) => {
             if (context) console.error(`${context}:`, error)
             else console.error(error)
-            if (context === 'widget') setWidgetError(errorMessage(error))
+            if (context !== 'widget') return
+            setWidgetError(errorMessage(error))
+            if (tryingFailure.current)
+              tryingFailure.current = { error, failed: true }
+            else if (!triedForWidget.current) {
+              // CodeMirror is drawing. The features go back once it is done.
+              triedForWidget.current = true
+              queueMicrotask(() => tryFeatures.current?.())
+            }
           }),
           restore ? restore.extension : [],
           ViewPlugin.define((view) => ({
@@ -2360,6 +2455,7 @@ export function SourceEditor({
       ...input: unknown[]
     ) => void
     editor.dispatch = ((...input: unknown[]) => {
+      if (isViewDead(editor)) return
       if (
         input.some(
           (value) => value instanceof Transaction || Array.isArray(value),
@@ -2389,16 +2485,32 @@ export function SourceEditor({
         return true
       }
     }
+    // Drawing what scrolled into view fails outside any update. A redraw would
+    // only scroll there and fail again, so this view is done.
+    const measured = editor as unknown as MeasuredView
+    const drawMeasured = measured.measure.bind(editor)
+    measured.measure = (flush) => {
+      if (isViewDead(editor)) return
+      try {
+        drawMeasured(flush)
+      } catch (error) {
+        placeBeforeRedraw = placeWithoutDrawing(editor)
+        viewDied(editor, error)
+      }
+    }
+    onRedraw(editor, () => {
+      placeBeforeRedraw = placeWithoutDrawing(editor)
+    })
+    onViewDeath(editor, (error) => rebuild(editor, error))
     view.current = editor
     setMountedView(editor)
-    const detachSession = bridge.attach(editor, (error) =>
+    const detachSession = bridge.attach(editor, (error) => {
+      if (isViewDead(editor)) return
       setFailedEcho({
         bridge,
-        message:
-          (error instanceof Error ? error.message : String(error)) ||
-          'The source editor is synchronizing.',
-      }),
-    )
+        message: errorMessage(error) || 'The source editor is synchronizing.',
+      })
+    })
     // Kept undo steps can reach the session after the toolbar looked, with no
     // editor update to make it look again.
     let undoable = session.state()
@@ -2952,7 +3064,7 @@ export function SourceEditor({
   useLayoutEffect(
     () => () => {
       const editor = view.current
-      if (!keepingPlace.current || !editor) return
+      if (!keepingPlace.current || !editor || isViewDead(editor)) return
       const { top, margin } = shownPlace.current ?? placeOf(editor)
       bridge.keepPlace(editor, top, margin)
     },
@@ -2962,7 +3074,13 @@ export function SourceEditor({
   useEffect(() => {
     const editor = view.current
     setExtensionError('')
-    setWidgetError('')
+    // A widget's failure may have left with a feature. One from the first draw,
+    // moments ago in this same commit, has not.
+    if (noticedFeatures.current.some((f) => !sourceExtensions.includes(f)))
+      setWidgetError('')
+    noticedFeatures.current = sourceExtensions
+    triedForWidget.current = false
+    tryFeatures.current = null
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
@@ -2981,6 +3099,58 @@ export function SourceEditor({
         },
       )
     })
+    /**
+     * Draws with the features added one at a time. One a draw failure comes
+     * with is named and stays out. If none is, the next failure takes them all.
+     */
+    const oneAtATime = (parts: readonly InstalledFeature[]) => {
+      triedForWidget.current = true
+      const kept = parts.filter(({ feature }) => !feature.fail)
+      const set = (shown: readonly InstalledFeature[]) => {
+        installed.current = [...shown]
+        editor.dispatch(
+          reconfiguration(
+            editor.state,
+            addons.current.reconfigure(
+              featureExtensions([...shown], formatted),
+            ),
+          ),
+        )
+        ;(editor as unknown as MeasuredView).measure()
+      }
+      /** Draws these and says what failed in it, from CodeMirror's widgets. */
+      const failureWith = (shown: readonly InstalledFeature[]) => {
+        tryingFailure.current = { error: null, failed: false }
+        set(shown)
+        const failure = tryingFailure.current
+        tryingFailure.current = null
+        return failure.failed ? failure : null
+      }
+      // What fails with no feature in, or stays once one is out, is not theirs.
+      // That says nothing of what killed a view: they still go back one at a time.
+      if (failureWith(kept) && !featuresSuspect.current) {
+        if (!isViewDead(editor)) set(parts)
+        return
+      }
+      for (const part of parts) {
+        if (isViewDead(editor)) return
+        if (!part.feature.fail || failedFeatures.current.has(part.feature))
+          continue
+        tryingFeature.current = part
+        const failure = failureWith([...kept, part])
+        if (isViewDead(editor)) return
+        tryingFeature.current = null
+        if (failure && !failureWith(kept)) {
+          failedFeatures.current.add(part.feature)
+          reportFailure(part, failure.error)
+        } else kept.push(part)
+      }
+      if (isViewDead(editor)) return
+      // After a dead view, none named: the next death is theirs.
+      if (featuresSuspect.current) blameFeatures.current = kept.length > 0
+      featuresSuspect.current = false
+      set(kept)
+    }
     const install = () => {
       if (canceled) return
       const errors: unknown[] = []
@@ -3013,8 +3183,13 @@ export function SourceEditor({
         )
         transaction = reconfigure()
       }
-      installed.current = parts
-      editor.dispatch(transaction)
+      if (featuresSuspect.current) oneAtATime(parts)
+      else {
+        installed.current = parts
+        editor.dispatch(transaction)
+      }
+      if (isViewDead(editor)) return
+      tryFeatures.current = () => oneAtATime(installed.current)
       if (errors.length) setExtensionError(String(errors[0]))
       else setInstalledExtensions({ bridge, extensions: sourceExtensions })
     }

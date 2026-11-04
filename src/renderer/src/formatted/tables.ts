@@ -818,12 +818,11 @@ class TableView {
     spacer?.classList.toggle('hibi-lp-table-empty', height < 0.5)
   }
 
-  /** Layout reads: rendered row heights and where the visible band falls in the body. */
+  /** Layout reads: rendered row heights, the edited row's beside the window too, and where the visible band falls in the body. */
   private read() {
     const heights: [number, number][] = []
     for (const [index, row] of this.rendered)
-      if (index >= this.start && index < this.end)
-        heights.push([index, row.element.getBoundingClientRect().height])
+      heights.push([index, row.element.getBoundingClientRect().height])
     const band = visibleBand(this.dom)
     const top = this.head.getBoundingClientRect().bottom
     const bottom = this.dom.getBoundingClientRect().bottom
@@ -1073,8 +1072,14 @@ class TableView {
 
   /** The row a position of a windowed table is in, when the window has not drawn it in its place. */
   private undrawn(pos: number) {
-    const line = this.heights && this.locate(pos)?.line
-    return line && line > 1 && this.outside(line - 2) ? line - 2 : null
+    if (!this.heights) return null
+    // The row's line in the document now, also before a changed table's
+    // layout comes.
+    const { doc } = this.view.state
+    const line = doc.lineAt(pos).number - doc.lineAt(this.range().from).number
+    return line > 1 && line < this.lines && this.outside(line - 2)
+      ? line - 2
+      : null
   }
 
   /**
@@ -1143,13 +1148,18 @@ class TableView {
    * is then in the edited cell's editor, which has the text now, or near
    * enough in the row drawn for its line: the table's edges would move a
    * pane that lines the position up, as linked scrolling and the reading
-   * place do while text is typed.
+   * place do while text is typed. A row the window has not drawn in its
+   * place is where its place would be, as once the layout came: a scroll to
+   * the edited row kept beside the window would follow the row as the
+   * window draws again and moves it.
    */
   private near(pos: number) {
     const { doc } = this.view.state
     const { from } = this.range()
     const index = doc.lineAt(pos).number - doc.lineAt(from).number
     if (pos <= from || index >= this.lines) return null
+    const estimate = this.estimate(pos)
+    if (estimate) return estimate
     const editing = this.editing
     if (editing && pos >= editing.from && pos <= editing.to) {
       const text = doc.sliceString(editing.from, editing.to)

@@ -56,6 +56,7 @@ export function Titlebar({
   onCloseTab,
   onCloseTabs,
   onMoveTab,
+  paused,
   addonTabs,
   activeAddonTab,
   onSelectAddonTab,
@@ -86,7 +87,8 @@ export function Titlebar({
   onSelectTab: (id: string) => void
   onCloseTab: (id: string) => void
   onCloseTabs: (ids: string[], preferredTab: string) => void
-  onMoveTab: (id: string, beforeId: string | null) => void
+  onMoveTab: (id: string, before: string | null | 1 | -1) => void
+  paused: boolean
   addonTabs: ViewEntry[]
   activeAddonTab: string | null
   onSelectAddonTab: (id: string) => void
@@ -261,6 +263,7 @@ export function Titlebar({
             <DocumentTabs
               document={document}
               busy={busy}
+              paused={paused}
               onSelect={onSelectTab}
               onClose={onCloseTab}
               onCloseTabs={onCloseTabs}

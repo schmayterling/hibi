@@ -5,6 +5,7 @@ import {
   type Extension,
   Facet,
   findClusterBreak,
+  MapMode,
   Prec,
   type Range,
   RangeSet,
@@ -2059,6 +2060,14 @@ export function livePreview(
       readonly scrolls = new Map<number, number>()
       /** The block each drawn box showed when its scroll was last set. */
       boxes = new WeakMap<Element, number | null>()
+      /**
+       * Where a saved scroll's block starts after an edit, unless the edit
+       * removed that start: a later block there is another block.
+       */
+      keptScroll(update: ViewUpdate, at: number, left: number) {
+        const kept = update.changes.mapPos(at, -1, MapMode.TrackDel)
+        if (kept !== null) this.scrolls.set(kept, left)
+      }
       /** The drawn block's content start, even while its syntax is reparsed. */
       blockAt(pos: number): number | null {
         let start: number | null = null
@@ -2095,8 +2104,7 @@ export function livePreview(
         )) {
           if (!box.scrollLeft) continue
           const at = this.blockAt(update.view.posAtDOM(box))
-          if (at !== null)
-            this.scrolls.set(update.changes.mapPos(at, -1), box.scrollLeft)
+          if (at !== null) this.keptScroll(update, at, box.scrollLeft)
         }
       }
       constructor(readonly view: EditorView) {
@@ -2187,8 +2195,7 @@ export function livePreview(
         if (update.docChanged && this.scrolls.size) {
           const scrolls = [...this.scrolls]
           this.scrolls.clear()
-          for (const [at, left] of scrolls)
-            this.scrolls.set(update.changes.mapPos(at, -1), left)
+          for (const [at, left] of scrolls) this.keptScroll(update, at, left)
         }
         if (update.viewportChanged) this.keepScrolls(update)
         if (update.docChanged && this.columns.size)

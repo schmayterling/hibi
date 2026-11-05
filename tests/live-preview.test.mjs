@@ -2179,17 +2179,19 @@ test('code keeps sideways scrolling through a pending reparse and an offscreen e
     '\x60\x60\x60\n\n' +
     'After the code.\n\n'.repeat(100)
   const box = '.hibi-lp-codescroll'
-  const drawn = (text) =>
+  // A redraw may take the box away for a moment, so each check finds it anew.
+  const scrolledTo = (text, left) =>
     harness.waitForFunction(
-      ({ selector, text }) => {
+      ({ selector, text, left }) => {
         const block = document.querySelector(selector)
         return (
           !window.livePreview.settling() &&
           block?.textContent.includes(text) &&
-          block.scrollWidth > block.clientWidth
+          block.scrollWidth > block.clientWidth &&
+          Math.abs(block.scrollLeft - left) <= 1
         )
       },
-      { selector: box, text },
+      { selector: box, text, left },
       { timeout: 8000 },
     )
   await harness.evaluate(async (doc) => {
@@ -2238,17 +2240,7 @@ test('code keeps sideways scrolling through a pending reparse and an offscreen e
   const pending = await ready.jsonValue()
   assert.ok(pending.settling && !pending.parsed, JSON.stringify(pending))
   assert.ok(pending.requested > 0, JSON.stringify(pending))
-  const retained = async (message) => {
-    const left = await harness
-      .locator(box)
-      .evaluate((block) => block.scrollLeft)
-    assert.ok(
-      Math.abs(left - pending.requested) <= 1,
-      `${message}: ${left}/${pending.requested}`,
-    )
-  }
-  await drawn('horizontal')
-  await retained('the pending reparse retains sideways scrolling')
+  await scrolledTo('horizontal', pending.requested)
 
   // Visit another block so returning restores the first block's saved position.
   await harness.evaluate(() => {
@@ -2262,11 +2254,7 @@ test('code keeps sideways scrolling through a pending reparse and an offscreen e
     })
     preview.scrollTo(view.state.doc.length)
   })
-  await drawn('second block')
-  assert.equal(
-    await harness.locator(box).evaluate((block) => block.scrollLeft),
-    0,
-  )
+  await scrolledTo('second block', 0)
   await harness.evaluate(() => {
     const preview = window.livePreview
     const view = preview.view()
@@ -2279,10 +2267,52 @@ test('code keeps sideways scrolling through a pending reparse and an offscreen e
     // Returning to a code caret would also ask to reveal its column.
     preview.scrollTo(0)
   })
-  await drawn('horizontal')
-  await retained(
-    'editing the first row offscreen retains the same block scroll',
-  )
+  await scrolledTo('horizontal', pending.requested)
+})
+
+test('a removed code block leaves its sideways scroll to no later block', async () => {
+  const wide = `${'const horizontal = 42; '.repeat(50)}\n`
+  const lefts = await harness.evaluate(async (wide) => {
+    const preview = window.livePreview
+    const scrollFirst = async () => {
+      const block = document.querySelector('.hibi-lp-codescroll')
+      const scrolled = new Promise((done) =>
+        block.addEventListener('scroll', done, { once: true }),
+      )
+      block.scrollLeft = 400
+      await scrolled
+    }
+    const leftsNow = () =>
+      [...document.querySelectorAll('.hibi-lp-codescroll')].map(
+        (block) => block.scrollLeft,
+      )
+    const code = `\x60\x60\x60js\n${wide.repeat(3)}\x60\x60\x60\n\n`
+
+    await preview.mount(`# Title\n\n${code}After the code.\n\n${code}`, {
+      width: 800,
+      height: 600,
+    })
+    await preview.settle()
+    await scrollFirst()
+    let view = preview.view()
+    view.dispatch({ changes: { from: 9, to: 9 + code.length } })
+    await preview.settle()
+    // The blank line above opens a fence, so the text after the block is code.
+    view.dispatch({ changes: { from: 8, insert: '\x60\x60\x60' } })
+    await preview.settle()
+    const fenceAbove = leftsNow()
+
+    await preview.mount(`# Title\n\n${code}`, { width: 800, height: 600 })
+    await preview.settle()
+    await scrollFirst()
+    view = preview.view()
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: `    ${wide}` },
+    })
+    await preview.settle()
+    return { fenceAbove, replaced: leftsNow() }
+  }, wide)
+  assert.deepEqual(lefts, { fenceAbove: [0], replaced: [0] })
 })
 
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {

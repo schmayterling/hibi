@@ -34,6 +34,7 @@ import { HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import type {
@@ -477,6 +478,15 @@ if (process.isMainFrame) {
     setKeepUndoHistory: (keep) =>
       ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.setKeep, keep),
     clearUndoHistory: () => ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.clear),
+    waitingRecovery: () => ipcRenderer.invoke(RECOVERY_CHANNELS.list),
+    restoreRecovery: (id) => ipcRenderer.invoke(RECOVERY_CHANNELS.restore, id),
+    discardRecovery: (id) => ipcRenderer.invoke(RECOVERY_CHANNELS.discard, id),
+    dismissRecovery: () => ipcRenderer.invoke(RECOVERY_CHANNELS.later),
+    getRecoverySettings: () => ipcRenderer.invoke(RECOVERY_CHANNELS.settings),
+    previewRecoverySettings: (next) =>
+      ipcRenderer.invoke(RECOVERY_CHANNELS.preview, next),
+    setRecoverySettings: (next) =>
+      ipcRenderer.invoke(RECOVERY_CHANNELS.setSettings, next),
     onNotice: (callback) => {
       const listener = (
         _event: Electron.IpcRendererEvent,

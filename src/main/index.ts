@@ -71,6 +71,7 @@ import {
 } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
@@ -152,6 +153,7 @@ import {
   getDocumentSourceFor,
   getOpenDocumentVersions,
   getSavedDocument,
+  getUnsavedNotes,
   hasOpenDocumentPath,
   hasUnsavedDocuments,
   loadDocument,
@@ -160,6 +162,7 @@ import {
   navigateDocument,
   newDocument,
   openDocument,
+  openRecovered,
   renameDocument,
   restoreDocument,
   saveDocument,
@@ -213,6 +216,21 @@ import {
   observeKnownWorkspaces,
   setKnownWorkspace,
 } from './recent-workspaces'
+import {
+  discardRecovery,
+  dismissRecovery,
+  previewRecoverySettings,
+  recoveryChanged,
+  recoveryOpened,
+  recoverySettings,
+  recoverySettled,
+  recoveryText,
+  recoveryWritten,
+  setRecoverySettings,
+  startRecoveryJournal,
+  waitingCopy,
+  waitingRecovery,
+} from './recovery-journal'
 import { refreshRemoteImage, remoteImageResponse } from './remote-images'
 import {
   CONTENT_SECURITY_POLICY,
@@ -878,6 +896,7 @@ async function lockFileOperation<T>(
   } finally {
     pendingFileOperations.delete(completed)
     settle()
+    recoverySettled()
   }
 }
 
@@ -1198,6 +1217,9 @@ function createWindow(): void {
           return
         }
         discardChanges()
+        // Every note is saved or discarded now, and leaves no copy behind.
+        recoverySettled()
+        await recoveryWritten()
         allowClose = true
         if (quitting || installed) releaseAddonWindows()
         if (!installed) {
@@ -2309,6 +2331,46 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.tabsEnabled, (event, enabled: unknown) =>
         runFileOperation(event, (window) => setTabsEnabled(window, enabled)),
       )
+      startRecoveryJournal(getUnsavedNotes, (message) =>
+        mainWindow?.webContents.send(HISTORY_CHANNELS.notice, message),
+      )
+      handle(RECOVERY_CHANNELS.list, () => waitingRecovery())
+      handle(RECOVERY_CHANNELS.later, () => dismissRecovery())
+      handle(RECOVERY_CHANNELS.discard, (_event, id: unknown) =>
+        discardRecovery(id),
+      )
+      handle(RECOVERY_CHANNELS.restore, (event, id: unknown) =>
+        runFileOperation(event, async (window) => {
+          const copy = await waitingCopy(id)
+          if (!copy) throw new Error('This recovery copy is no longer here.')
+          let opened: Awaited<ReturnType<typeof openRecovered>>
+          try {
+            opened = await openRecovered(window, copy, () => recoveryText(copy))
+          } catch (error) {
+            // A note's tab or a new one may be showing by now: the window follows.
+            console.error('Could not open a recovery copy:', error)
+            window.webContents.send(
+              HISTORY_CHANNELS.notice,
+              'Hibi could not read this recovery copy. It stays waiting.',
+            )
+            return getDocument()
+          }
+          // The text is open now. A copy that can't be written says so at its next try.
+          if (opened)
+            await recoveryOpened(copy.id, opened.tabId).catch(
+              (error: unknown) =>
+                console.error('Could not write a recovery copy:', error),
+            )
+          return opened
+        }),
+      )
+      handle(RECOVERY_CHANNELS.settings, () => recoverySettings())
+      handle(RECOVERY_CHANNELS.preview, (_event, next: unknown) =>
+        previewRecoverySettings(next),
+      )
+      handle(RECOVERY_CHANNELS.setSettings, (_event, next: unknown) =>
+        setRecoverySettings(next),
+      )
       handle(HISTORY_CHANNELS.list, (event) =>
         readAfterFileOperation(event, () => listVersions(getDocumentPath())),
       )
@@ -2750,11 +2812,13 @@ if (!app.requestSingleInstanceLock()) {
           throw new Error('Invalid document change.')
         updateDocument(value)
         updateDocumentEdited(window)
+        recoveryChanged()
       })
       handle(DOCUMENT_CHANNELS.append, (event, change: unknown) => {
         const window = trustedWindow(event)
         const ack = appendDocumentChange(change)
         updateDocumentEdited(window)
+        recoveryChanged()
         return ack
       })
       handle(DOCUMENT_CHANNELS.recoveryHead, (event, tabId: unknown) => {

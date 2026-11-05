@@ -76,6 +76,7 @@ function harness() {
     MEDIA_CHANNELS: { scopeChanged: 'media:scope-changed' },
     getDocumentPath: () => state.documentPath,
     pendingFileOperations: new Set(),
+    recoverySettled: () => {},
     fileOperationHasDialog: () => state.dialog,
     fileOperationDialogOpened: noop,
     withinFileOperation: async (operation) => operation(),

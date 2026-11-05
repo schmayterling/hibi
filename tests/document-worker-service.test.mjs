@@ -308,6 +308,37 @@ test('obsolete single payload loads are rejected even with valid bounded source'
   assert.equal(f.messages.at(-1).type, 'ack')
 })
 
+test('turning display math off restores references after an unclosed block', async (t) => {
+  const f = fixture(t, '$$\nx\n\n[ref]: /visible\n')
+  const request = async (id, mathBlocks) => {
+    f.worker.receive({
+      type: 'metadata',
+      epoch: 'first',
+      id,
+      version: 0,
+      dialect: 'gfm',
+      from: 0,
+      to: 0,
+      limit: 1,
+      reference: {
+        label: 'ref',
+        gfm: true,
+        alerts: false,
+        textExtras: false,
+        math: true,
+        mathBlocks,
+      },
+    })
+    return f.next(
+      (reply) => reply.id === id && ['metadata', 'error'].includes(reply.type),
+    )
+  }
+  assert.equal((await request(1, true)).reference, null)
+  assert.equal((await request(2, false)).reference.href, '/visible')
+  assert.equal((await request(3, true)).reference, null)
+  assert.equal((await request(4, 'off')).type, 'error')
+})
+
 test('math reference grammar invalidates cached definitions and hides opaque math contents', async (t) => {
   const source = '$$\n\n[ref]: /hidden\n\n$$\n\n[ref]: /real\n',
     f = fixture(t, source)

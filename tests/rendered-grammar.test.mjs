@@ -74,7 +74,9 @@ test('rendered projection follows the formatted grammar including active flavors
     ['    a\n    b', 'a\nb'],
     ['-     a\n      b', 'a\nb'],
     ['```mermaid\nvisible code', 'visible code'],
-    ['$$\nvisible formula', '$$ visible formula'],
+    // As in Obsidian, an unclosed block runs to the end of the note.
+    ['$$\nvisible formula', ''],
+    ['$$', '$$'],
     ['ref [^1]\n\n[^1]: footnote\n    continued', 'ref 1\nfootnote continued'],
     ['| a | b |\n|---|---|\n| **c** | d |', 'a\tb\nc\td'],
     ['| a\\|b | `c\\|d` |\n|---|---|\n| x | y |', 'a|b\tc|d\nx\ty'],

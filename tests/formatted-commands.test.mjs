@@ -6,6 +6,10 @@ import { Decoration, WidgetType } from '@codemirror/view'
 import { NodeType, Tree } from '@lezer/common'
 import { GFM, MarkdownParser, parser } from '@lezer/markdown'
 import {
+  blockMathSyntax,
+  inlineMathSyntax,
+} from '../src/addons/math/formatted-syntax.ts'
+import {
   ChunkedMarkdownParser,
   uncovered,
 } from '../src/renderer/src/chunked-markdown.ts'
@@ -143,6 +147,25 @@ test('a triple-click selects the source of a block the rich editor draws as one 
   assert.equal(tag(html.indexOf('<img') + 3, false), null)
   assert.equal(tag(html.indexOf('<img'), true), '<img src="b.png" alt="b">')
   assert.equal(tag(html.indexOf(' after'), true), '<img src="b.png" alt="b">')
+})
+
+test('triple click takes only a closed display formula whole', () => {
+  const math = parser.configure([GFM, blockMathSyntax, inlineMathSyntax])
+  const atom = (doc, at) => {
+    const found = blockAtom(
+      EditorState.create({ doc }),
+      math.parse(doc),
+      doc.indexOf(at),
+      false,
+    )
+    return found && doc.slice(found.from, found.to)
+  }
+  assert.equal(atom('a\n\n$$\nx\n$$\n\nb\n', 'x'), '$$\nx\n$$')
+  // Lines of an unclosed block or one over the formula limit read as text
+  // while its source shows; their press takes the line, not all of them.
+  assert.equal(atom('a\n\n$$\nfirst\n\nsecond\n', 'first'), null)
+  const over = `$$\n${'word '.repeat(2100)}\n$$\n`
+  assert.equal(atom(over, 'word'), null)
 })
 
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {

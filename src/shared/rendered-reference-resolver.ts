@@ -13,6 +13,7 @@ export function renderedReferenceSyntax(config: BoundaryConfig) {
     alerts: config.flavors.includes('markdown.github'),
     textExtras: config.flavors.includes('text-extras.text-extras'),
     math: config.flavors.includes('math.latex'),
+    mathBlocks: config.textFeatures?.includes('math.block') ?? true,
   }
 }
 

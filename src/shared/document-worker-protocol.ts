@@ -67,6 +67,7 @@ export type MarkdownReferenceSyntax = Readonly<{
   alerts: boolean
   textExtras: boolean
   math?: boolean
+  mathBlocks?: boolean
 }>
 export type MarkdownReferenceRequest = MarkdownReferenceSyntax & {
   label: string

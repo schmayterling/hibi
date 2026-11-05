@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -11,7 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { planChecks, shardTests } from '../scripts/ci.mjs'
+import { planChecks, shardTests, testWorkers } from '../scripts/ci.mjs'
 
 test('incremental checks select dependencies and fall back safely for cold, clean, config, and missing builds', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-plan-'))
@@ -429,4 +430,131 @@ test('a pull request rebuilds an app the cache kept from another revision, and s
   renameSync(join(repo, 'scripts/tool.mjs'), join(repo, 'tests/tool.test.mjs'))
   const moved = commit()
   assert.equal(check(git('rev-parse', 'HEAD~1'), moved), true)
+})
+
+test('test workers follow the machine and tests that share a machine resource run alone', (t) => {
+  const GiB = 2 ** 30
+  const workers = (cores, gib) =>
+    testWorkers({ cores, memory: gib * GiB, override: '' })
+  assert.deepEqual(workers(8, 24), { apps: 4, node: 4 })
+  assert.deepEqual(workers(4, 16), { apps: 1, node: 2 })
+  assert.deepEqual(workers(3, 7), { apps: 1, node: 1 })
+  assert.deepEqual(workers(16, 8), { apps: 2, node: 8 })
+  assert.deepEqual(workers(1, 2), { apps: 1, node: 1 })
+  assert.equal(testWorkers({ override: '3' }).apps, 3)
+  // Node reads 0 or a word as no limit, and would start an app per core.
+  for (const override of ['0', 'two', '-1', '1.5'])
+    assert.throws(() => testWorkers({ override }), /Invalid CI_WORKERS/)
+
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-alone-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const files = {
+    'tests/electron.mjs': "import { _electron } from 'playwright'",
+    'tests/plain.test.mjs': "import './electron.mjs'",
+    'tests/reads.test.mjs':
+      "import './electron.mjs'; clipboard.readText(); const copied = 'clipboard.'",
+    'tests/keys.test.mjs': "import './electron.mjs'; press('ControlOrMeta+v')",
+    'tests/shortcut.test.mjs':
+      "import './electron.mjs'; globalShortcut.register",
+    'tests/marked.test.mjs':
+      "// ci: alone (asserts wall-clock time)\nimport './electron.mjs'",
+    'tests/helped.test.mjs': "import './clipboard-helper.mjs'",
+    'tests/clipboard-helper.mjs':
+      "import './electron.mjs'; navigator.clipboard.readText()",
+    'tests/stub.test.mjs': "import './electron.mjs'; const clipboardData = 1",
+    'tests/unit.test.mjs': 'const unit = 1',
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, file)), { recursive: true })
+    writeFileSync(join(root, file), source)
+  }
+  execFileSync('git', ['init'], { cwd: root, stdio: 'pipe' })
+  execFileSync('git', ['add', '.'], { cwd: root, stdio: 'pipe' })
+  const plan = planChecks(root, { force: true })
+  assert.deepEqual(plan.aloneTests, [
+    'tests/helped.test.mjs',
+    'tests/keys.test.mjs',
+    'tests/marked.test.mjs',
+    'tests/reads.test.mjs',
+    'tests/shortcut.test.mjs',
+  ])
+  assert.deepEqual(plan.appTests, [
+    'tests/plain.test.mjs',
+    'tests/stub.test.mjs',
+  ])
+})
+
+test('a red past the unit files leaves the others to run, and fails the check', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-red-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const repo = join(root, 'repo')
+  const ran = join(root, 'ran')
+  const stub = join(root, 'npm.cjs')
+  writeFileSync(stub, '')
+  const testFile = (name, first = '') =>
+    `${first}\nimport { appendFileSync } from 'node:fs'\nimport test from 'node:test'\ntest('${name}', () => {\n  appendFileSync(process.env.RAN, '${name} ')\n  if (process.env.RED === '${name}') throw new Error('red')\n})\n`
+  const files = {
+    '.gitignore': 'out/\n.cache/\n',
+    'tests/file-limit.mjs': '',
+    // Marks its importers as app tests without needing playwright to run.
+    'tests/electron.mjs': "export const later = () => import('playwright')",
+    'tests/unit.test.mjs': testFile('unit'),
+    'tests/other.test.mjs': testFile('other', "import 'node:child_process'"),
+    'tests/app.test.mjs': testFile('app', "import './electron.mjs'"),
+    'tests/alone.test.mjs': testFile(
+      'alone',
+      "// ci: alone (why)\nimport './electron.mjs'",
+    ),
+  }
+  for (const [file, source] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, file)), { recursive: true })
+    writeFileSync(join(repo, file), source)
+  }
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
+  git('init', '-q')
+  git('config', 'user.name', 'ci')
+  git('config', 'user.email', 'ci@example.com')
+  git('add', '.')
+  git('commit', '-qm', 'first')
+  const { NODE_TEST_CONTEXT: _, ...env } = process.env
+  const record = join(repo, '.cache/ci/success.json')
+  const check = (red) => {
+    writeFileSync(ran, '')
+    rmSync(record, { force: true })
+    const { status } = spawnSync(
+      process.execPath,
+      [resolve('scripts/ci.mjs')],
+      {
+        cwd: repo,
+        stdio: 'pipe',
+        env: {
+          ...env,
+          RED: red,
+          RAN: ran,
+          CI_BASE: '',
+          CI_CLEAN: '',
+          CI_FULL: 'true',
+          CI_SHARD: '0/1',
+          CI_WORKERS: '1',
+          npm_execpath: stub,
+        },
+      },
+    )
+    return {
+      status,
+      ran: readFileSync(ran, 'utf8').trim().split(' ').sort(),
+      recorded: existsSync(record),
+    }
+  }
+  const all = ['alone', 'app', 'other', 'unit']
+  assert.deepEqual(check(''), { status: 0, ran: all, recorded: true })
+  for (const red of ['other', 'app', 'alone'])
+    assert.deepEqual(check(red), { status: 1, ran: all, recorded: false }, red)
+  // Unit files still stop the run before anything slow starts.
+  assert.deepEqual(check('unit'), {
+    status: 1,
+    ran: ['unit'],
+    recorded: false,
+  })
 })

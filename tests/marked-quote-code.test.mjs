@@ -286,11 +286,12 @@ test('identical normalized sibling bodies retain tab provenance in both orders',
 })
 
 test('lazy frame transitions preserve quote text, nested siblings and parser reuse', () => {
-  // Native list re-reads insert raw newlines. Compare the remaining token
-  // fields here; exact physical source accounting is checked below.
+  // Native re-reads corrupt quote raw and body text. Compare their grammar
+  // here; source accounting and the outer body are checked independently.
   const comparable = (token) =>
     JSON.parse(
       JSON.stringify(token, function (key, value) {
+        if (key === 'text' && this.type === 'blockquote') return undefined
         return key === 'raw' && this.type === 'blockquote'
           ? value.replaceAll('\n', '')
           : value
@@ -328,6 +329,15 @@ test('lazy frame transitions preserve quote text, nested siblings and parser reu
           native.lexer(source)
         const normalized = source.replaceAll('\r\n', '\n')
         assert.equal(raw, normalized.slice(0, raw.length), source)
+        const { other } = new Lexer().tokenizer.rules
+        assert.equal(
+          quote.text,
+          raw
+            .replace(/\n$/, '')
+            .replace(other.blockquoteSetextReplace, '\n    $1')
+            .replace(other.blockquoteSetextReplace2, ''),
+          source,
+        )
         assert.equal(
           raw + tail.map(({ raw }) => raw).join(''),
           normalized,

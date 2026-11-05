@@ -75,7 +75,13 @@ type Waiting = Header & {
   state: RecoveryCopy['state']
 }
 /** A copy only a newer build can read, or one damaged past reading. */
-type Unreadable = { file: string; size: number; time: number; newer: boolean }
+type Unreadable = {
+  file: string
+  size: number
+  time: number
+  offered: number | undefined
+  newer: boolean
+}
 
 let unsavedNotes: (() => UnsavedNote[]) | undefined
 let notify: (message: string) => void = () => {}
@@ -273,11 +279,11 @@ const load = () =>
           await drop(file)
           continue
         }
+        const offered = FILE_NAME.exec(basename(file))?.[3]
+        const time = offered === undefined ? undefined : Number(offered)
         const copy = await inspect(file)
         if (copy && copy !== 'newer') {
           found = true
-          const offered = FILE_NAME.exec(basename(file))?.[3]
-          const time = offered === undefined ? undefined : Number(offered)
           if (expired(time, settings.days)) {
             await drop(file)
             continue
@@ -317,6 +323,7 @@ const load = () =>
           file,
           size: info?.size ?? 0,
           time: info?.mtimeMs ?? Date.now(),
+          offered: time,
           newer: copy === 'newer',
         })
       }
@@ -330,7 +337,7 @@ const load = () =>
       }
     }
     for (const item of [...unreadable])
-      if (!item.newer && expired(item.time, settings.days)) {
+      if (!item.newer && expired(item.offered, settings.days)) {
         unreadable = unreadable.filter((other) => other !== item)
         await drop(item.file)
       }
@@ -360,7 +367,7 @@ const unclaimed = () =>
       name: null as string | null,
       size: item.size,
       time: item.time,
-      offered: undefined as number | undefined,
+      offered: item.newer ? undefined : item.offered,
       go: async () => {
         unreadable = unreadable.filter((other) => other !== item)
         await drop(item.file)

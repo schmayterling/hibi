@@ -460,7 +460,7 @@ function content(
       return `<${tag}${attrs} id="${escapeHtml(anchor)}">${alias}${body}</${tag}>`
     },
   )
-  return `<div class="documentation-site" data-width="${site.options.contentWidth}"><header class="site-header">${escapeHtml(site.name)}</header><div class="site-layout"><main class="site-content"><div class="site-document-layout"><article class="tiptap">${html}</article><nav aria-label="Pages">${[...new Set(navigation)].map((entry) => `<a href="${escapeHtml(site.routing === 'hash' ? `#${new URLSearchParams({ page: entry.path })}` : `${prefix}${pageRoute(entry.path)}`)}">${escapeHtml(entry.title)}</a>`).join(' ')}</nav>${site.options.footer ? `<footer class="site-footer">${escapeHtml(site.options.footer)}</footer>` : ''}</div></main></div></div>`
+  return `<div class="documentation-site" data-width="${site.options.contentWidth}"><header class="site-header">${escapeHtml(site.name)}</header><div class="site-layout"><main class="site-content"><div class="site-document-layout"><article class="site-article">${html}</article><nav aria-label="Pages">${[...new Set(navigation)].map((entry) => `<a href="${escapeHtml(site.routing === 'hash' ? `#${new URLSearchParams({ page: entry.path })}` : `${prefix}${pageRoute(entry.path)}`)}">${escapeHtml(entry.title)}</a>`).join(' ')}</nav>${site.options.footer ? `<footer class="site-footer">${escapeHtml(site.options.footer)}</footer>` : ''}</div></main></div></div>`
 }
 
 function themeCss(site: SiteData) {

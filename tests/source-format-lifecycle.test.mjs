@@ -2,16 +2,14 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   startupDiagnostics,
   stopElectronTree,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 
 async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
@@ -103,7 +101,7 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
       })
       await editor.waitFor({ timeout: 5000 })
       mark('editorReady')
-      await selectFormattedEngine(app, page, t.formattedEngine)
+      await waitForFormattedEditor(app, page)
       await page.waitForFunction(
         () =>
           document
@@ -185,7 +183,7 @@ test('standalone source skips rich attachment and hidden previews while preservi
       name: 'Source format fixture',
       description: 'Editor lifecycle fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       capabilities: ['source', 'ui'],
       fileExtensions: ['probe'],
       version: '1.0.0',
@@ -204,8 +202,7 @@ test('standalone source skips rich attachment and hidden previews while preservi
   await writeFile(
     join(addon, 'index.js'),
     `export default sdk => ({ start(context) {
-    const state = window.sourceFormatFixture = { sdk, context, rich: 0, previews: 0, renders: 0, projections: 0, loads: 0 };
-    context.editor.registerRich({ id: 'observe', attach() { state.rich++; return () => state.rich--; } });
+    const state = window.sourceFormatFixture = { sdk, context, previews: 0, renders: 0, projections: 0, loads: 0 };
     context.editor.registerMarkdown({ id: 'observe', parse() { state.projections++; return null; } });
     context.editor.registerDocumentFormat({ id: 'probe', name: 'Probe', extensions: ['probe'], views: ['side-by-side', 'markdown'],
       Preview: sdk.React.lazy(() => { state.loads++; return new Promise(resolve => { state.resolvePreview = () => resolve({ default: function Preview({ value }) { state.renders++; sdk.React.useEffect(() => { state.previews++; return () => state.previews--; }, []); return sdk.React.createElement('pre', { 'data-fixture-preview': true }, value); } }); }); }),
@@ -244,16 +241,10 @@ test('standalone source skips rich attachment and hidden previews while preservi
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
-  await selectFormattedEngine(app, page, t.formattedEngine)
-  if (t.formattedEngine === 'tiptap')
-    await page.waitForFunction(() => window.sourceFormatFixture?.rich === 1)
-  else {
-    // Legacy rich attachments stay inert on the formatted engine, once the
-    // addon has started after the engine's reload.
-    await page.waitForFunction(() => window.sourceFormatFixture)
-    assert.equal(await page.evaluate(() => window.sourceFormatFixture.rich), 0)
-    assert.equal(await page.locator('.tiptap').count(), 0)
-  }
+  await waitForFormattedEditor(app, page)
+
+  await page.waitForFunction(() => window.sourceFormatFixture)
+
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   // A stalled font load must not leave the source editor inert.
   await page.evaluate(() => {
@@ -284,7 +275,6 @@ test('standalone source skips rich attachment and hidden previews while preservi
           contentEditable: content?.getAttribute('contenteditable'),
           contentLabel: content?.getAttribute('aria-label'),
           fontStatus: document.fonts.status,
-          fixtureRich: window.sourceFormatFixture?.rich,
           documentName:
             window.sourceFormatFixture?.context.editor.getDocument()?.name,
           alerts: Array.from(document.querySelectorAll('[role="alert"]'))
@@ -312,8 +302,6 @@ test('standalone source skips rich attachment and hidden previews while preservi
     }
     throw error
   }
-  await page.waitForFunction(() => window.sourceFormatFixture.rich === 0)
-  assert.equal(await page.locator('.tiptap').count(), 0)
   const initial = await page.evaluate(() => {
     const f = window.sourceFormatFixture
     f.view = f.sdk.codeMirror.view.EditorView.findFromDOM(
@@ -353,7 +341,6 @@ test('standalone source skips rich attachment and hidden previews while preservi
   assert.deepEqual(loading, { sameView: true, connected: true, loads: 1 })
   await page.locator('[data-fixture-preview]').waitFor()
   await page.waitForFunction(() => window.sourceFormatFixture.previews === 1)
-  assert.equal(await page.locator('.tiptap').count(), 0)
   assert.equal(
     await page.locator('[data-fixture-preview]').textContent(),
     '!' + original,
@@ -390,7 +377,6 @@ test('standalone source skips rich attachment and hidden previews while preservi
       changed: undone !== text,
       renders: f.renders,
       projections: f.projections,
-      rich: f.rich,
     }
   })
   assert.deepEqual(after, {
@@ -398,7 +384,6 @@ test('standalone source skips rich attachment and hidden previews while preservi
     changed: true,
     renders: before.renders,
     projections: 0,
-    rich: 0,
   })
   await page.evaluate(() => window.hibi.saveDocument(false))
   assert.equal(await readFile(file, 'utf8'), '!?' + original)
@@ -416,5 +401,4 @@ test('standalone source skips rich attachment and hidden previews while preservi
     await page.evaluate(() => window.sourceFormatFixture.view.hasFocus),
     true,
   )
-  assert.equal(await page.locator('.tiptap').count(), 0)
 })

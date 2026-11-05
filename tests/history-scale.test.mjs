@@ -31,9 +31,14 @@ test('history above its retention budget keeps a distinct version restorable thr
     })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  // A large note opens in the formatted view, as any other does.
+  await waitForDocumentEditor(app, page)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'large.md',
+  )
   await page.evaluate(() => {
-    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
       .view
     view.dispatch({
       changes: { from: 1, to: 2, insert: 'Z' },
@@ -70,10 +75,11 @@ test('history above its retention budget keeps a distinct version restorable thr
     .fill('version history')
   await page.getByRole('option').first().waitFor()
   await page.keyboard.press('Enter')
-  const dialog = page.getByRole('dialog', { name: /^version history$/i })
+  const dialog = page.getByRole('dialog', { name: /^history$/i })
   await dialog
-    .getByRole('navigation', { name: /saved versions/i })
-    .getByRole('button')
+    .getByRole('listbox', { name: /points to return to/i })
+    .getByRole('option')
+    .filter({ hasText: /saved version/i })
     .last()
     .click()
   assert.equal(
@@ -81,7 +87,7 @@ test('history above its retention budget keeps a distinct version restorable thr
     0,
   )
   await dialog
-    .getByRole('region', { name: 'Version preview' })
+    .getByRole('region', { name: 'Changes from the current text' })
     .getByRole('status')
     .filter({ hasText: /too large to preview.*still restore/i })
     .waitFor()
@@ -90,7 +96,7 @@ test('history above its retention budget keeps a distinct version restorable thr
     await dialog.getByText('Loading preview…', { exact: true }).count(),
     0,
   )
-  const restore = dialog.getByRole('button', { name: /restore to editor/i })
+  const restore = dialog.getByRole('button', { name: /^restore$/i })
   assert.equal(await restore.isEnabled(), true)
   await restore.click()
   await dialog.waitFor({ state: 'hidden' })
@@ -100,7 +106,7 @@ test('history above its retention budget keeps a distinct version restorable thr
       (await window.hibi.getDocument()).contentVersion > version,
     before,
   )
-  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  await waitForDocumentEditor(app, page)
   const restored = await page.evaluate(async () => {
     const current = await window.hibi.getDocument()
     return { markdown: current.markdown, dirty: current.dirty }

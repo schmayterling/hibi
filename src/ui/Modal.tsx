@@ -5,6 +5,7 @@ import {
   useRef,
 } from 'react'
 import './modal.css'
+import { composing } from './composing'
 
 export type ModalProps = Omit<
   ComponentPropsWithRef<'dialog'>,
@@ -41,10 +42,11 @@ export function Modal({
       closedby={closeOnOutsideClick ? 'any' : 'closerequest'}
       onKeyDown={(event) => {
         onKeyDown?.(event)
-        if (!event.defaultPrevented && event.key === 'Escape') {
-          event.preventDefault()
-          onDismiss()
-        }
+        if (event.key !== 'Escape' || event.defaultPrevented) return
+        event.preventDefault()
+        // Escape that ends an input method's composition isn't the dialog's;
+        // its default would still ask the dialog to close.
+        if (!composing(event)) onDismiss()
       }}
       onCancel={(event) => {
         event.preventDefault()

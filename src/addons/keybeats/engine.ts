@@ -171,7 +171,7 @@ export function startKeybeats(context: AddonContext) {
   }
   // Leaving the editor may swallow a keyup (for example Tab into a dialog).
   const focus = () => {
-    if (!document.activeElement?.closest('.tiptap, .cm-content')) pause()
+    if (!document.activeElement?.closest('.cm-content')) pause()
   }
   window.addEventListener(settingsEvent, configure)
   window.addEventListener('blur', leave)

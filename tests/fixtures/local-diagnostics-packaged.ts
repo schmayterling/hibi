@@ -1,24 +1,29 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, type BrowserWindow, dialog, Menu } from 'electron'
+import './local-diagnostics-packaged-dialogs'
 import '../../src/main/index'
 
 // This entrypoint is never referenced by the production build. It runs in a
 // separately signed test package with the production fuses left unchanged.
-dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false })
-dialog.showErrorBox = () => {}
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+// The external runner launches a second instance once the result is written.
+const secondLaunch = new Promise((resolve) =>
+  app.once('second-instance', resolve),
+)
 async function run(window: BrowserWindow) {
   const root = app.getPath('userData')
+  let passed = false
   try {
     const editing =
       await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
       const deadline = Date.now() + 10000;
       const ready = async () => {
-        const element = document.querySelector('.tiptap[contenteditable="true"]');
-        if (!element?.editor || !window.hibiDiagnostics) { if(Date.now() > deadline) reject(new Error('test readiness')); else setTimeout(ready, 20); return; }
+        const element = document.querySelector('.rich-pane .hibi-formatted .cm-content[contenteditable="true"]');
+        const view = element?.cmTile?.root.view;
+        if (!view || !window.hibiDiagnostics) { if(Date.now() > deadline) reject(new Error('test readiness')); else setTimeout(ready, 20); return; }
         const config = JSON.parse(await window.hibiDiagnostics.configuration());
-        element.editor.commands.insertContent('PRIVATE PACKAGED DOCUMENT 雪');
+        view.dispatch(view.state.replaceSelection('PRIVATE PACKAGED DOCUMENT 雪'));
         await window.hibi.flushDocumentChanges();
         const doc = await window.hibi.getDocument();
         window.hibiDiagnostics.record(JSON.stringify({code:'RENDERER_ERROR',stackStatus:'captured',frames:[[config.artifacts[0][1],1,2]]}));
@@ -84,6 +89,7 @@ async function run(window: BrowserWindow) {
         })),
       }),
     )
+    passed = true
   } catch {
     await writeFile(
       join(root, 'test-result.json'),
@@ -91,7 +97,9 @@ async function run(window: BrowserWindow) {
     )
     process.exitCode = 1
   }
-  await wait(2000) // Allow the external runner to verify secondary-instance ownership.
+  // Hold the single-instance lock until that launch reaches it, however slowly
+  // it starts, so it cannot take over the profile and run the check again.
+  if (passed) await Promise.race([secondLaunch, wait(60000)])
   app.quit()
 }
 app.once('browser-window-created', (_event, window) => {

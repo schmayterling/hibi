@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
-import { pathToFileURL } from 'node:url'
 import { GFM, parser } from '@lezer/markdown'
 import { build } from 'esbuild'
 import { Lexer, Marked, Tokenizer } from 'marked'
@@ -724,12 +723,8 @@ test('giant multiline setext and paragraphs retain full raw text without running
   }
 })
 
-test('setext scanner preserves independent rules and the nested parser grammar', async () => {
-  const require = createRequire(import.meta.url)
-  const nestedPath = createRequire(require.resolve('@tiptap/markdown')).resolve(
-    'marked',
-  )
-  const nested = await import(pathToFileURL(nestedPath).href)
+test('setext scanner preserves independent rules and the parser grammar', async () => {
+  const nested = await import('marked')
   for (const gfm of [false, true]) {
     const tokenizer = new BlockTokenizer()
     new Lexer({ gfm, tokenizer })

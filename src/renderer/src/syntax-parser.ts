@@ -14,7 +14,7 @@ export function preserveDisabled(token: Token) {
   return []
 }
 
-/** Shared by Tiptap's lexer and Marked's exported HTML path. */
+/** Disabled syntax exports as written, on Marked's exported HTML path. */
 export function installSyntaxPreferences(parser: Marked) {
   const BaseLexer = parser.Lexer
   class SyntaxLexer<

@@ -1,4 +1,6 @@
 import { type DocumentMedia, mediaPathsChanged } from '../../shared/media.ts'
+import { menus } from '../../ui/menu-store.ts'
+import type { MenuItem } from '../../ui/menus'
 
 type Entry = {
   source: string
@@ -12,6 +14,132 @@ type Entry = {
 const entries = new Map<string, Entry>()
 let unsubscribe: (() => void) | undefined
 let unsubscribeScope: (() => void) | undefined
+
+// Another origin than the app's: the page shows these images but, as with
+// images from any other site, its scripts can't read them.
+const REMOTE_IMAGE = 'app://remote-image/?'
+/** Refreshed remote images, which take a new address so the page draws the new copy. */
+const refreshes = new Map<string, number>()
+
+/**
+ * The address the main process serves a remote image at, from the image cache
+ * of the note open in tab `tab`.
+ */
+export const remoteImageUrl = (source: string, tab: string | null) =>
+  `${REMOTE_IMAGE}src=${encodeURIComponent(source)}${tab ? `&tab=${encodeURIComponent(tab)}` : ''}${refreshes.has(source) ? `&refresh=${refreshes.get(source)}` : ''}`
+
+/** The remote source an image shows, or null for any other image. */
+export const remoteImageSource = (image: HTMLImageElement) =>
+  image.src.startsWith(REMOTE_IMAGE)
+    ? new URL(image.src).searchParams.get('src')
+    : null
+
+const remoteImageTab = (image: HTMLImageElement) =>
+  new URL(image.src).searchParams.get('tab')
+
+/** Fetches a remote image again now, then draws the new copy wherever it shows. */
+async function refreshRemoteImage(source: string, tab: string | null) {
+  await window.hibi.refreshRemoteImage(source, tab)
+  refreshes.set(source, (refreshes.get(source) ?? 0) + 1)
+  for (const image of document.images)
+    if (remoteImageSource(image) === source)
+      image.src = remoteImageUrl(source, remoteImageTab(image))
+}
+
+/** Sanitized HTML ready to show in tab `tab`, its remote images drawn from the image cache. */
+export function withCachedImages(html: string, tab: string) {
+  const template = document.createElement('template')
+  template.innerHTML = html
+  for (const image of template.content.querySelectorAll('img')) {
+    const source = image.getAttribute('src') ?? ''
+    if (!/^https:\/\//i.test(source)) continue
+    image.src = remoteImageUrl(source, tab)
+    // The cache refuses loads that ask for CORS; a plain load draws the same.
+    image.removeAttribute('crossorigin')
+    // Focus lets the keyboard open the image's menu; a focused image needs a
+    // name, so one without a description takes its file's.
+    image.tabIndex = 0
+    if (!image.alt) image.setAttribute('aria-label', imageName(source))
+  }
+  return template.content
+}
+
+function imageName(source: string) {
+  try {
+    const file = new URL(source).pathname.split('/').filter(Boolean).at(-1)
+    return decodeURIComponent(file ?? '') || 'Image'
+  } catch {
+    return 'Image'
+  }
+}
+
+const imageMenu = menus.scope(() => {})
+
+/** A remote image's actions, or null for any other image. */
+export function remoteImageMenu(
+  image: HTMLImageElement,
+  anchor: { x: number; y: number },
+) {
+  const source = remoteImageSource(image)
+  if (!source) return null
+  const tab = remoteImageTab(image)
+  const items: MenuItem[] = [
+    {
+      id: 'refresh-image',
+      label: 'Refresh image',
+      onSelect: () => refreshRemoteImage(source, tab),
+    },
+  ]
+  return {
+    items,
+    /** Shows the actions in a menu of their own at `anchor`. */
+    open: () => imageMenu.api.open({ label: 'Image actions', anchor, items }),
+  }
+}
+
+/**
+ * The image a right-click or the keyboard's menu key is on, or null for any
+ * other target. Control-Command-click follows links instead.
+ */
+export const menuImage = (event: MouseEvent) =>
+  event.target instanceof HTMLImageElement && !(event.ctrlKey && event.metaKey)
+    ? event.target
+    : null
+
+/** Shift+F10, which opens a context menu from the keyboard, as the menu key does. */
+export const isMenuKey = (event: KeyboardEvent) =>
+  event.key === 'F10' &&
+  event.shiftKey &&
+  !event.altKey &&
+  !event.metaKey &&
+  !event.ctrlKey &&
+  !event.isComposing
+
+/**
+ * Right-clicking a remote image in a preview, or Shift+F10 or the menu key
+ * on one with focus, offers to fetch it again.
+ */
+export function openRemoteImageMenu(event: MouseEvent | KeyboardEvent) {
+  const image =
+    event instanceof KeyboardEvent
+      ? isMenuKey(event) && event.target instanceof HTMLImageElement
+        ? event.target
+        : null
+      : menuImage(event)
+  if (!image) return
+  const box = image.getBoundingClientRect()
+  // From the keyboard, whose menu key's event comes from no button, the menu
+  // opens below the image.
+  const menu = remoteImageMenu(
+    image,
+    event instanceof KeyboardEvent || event.button < 0
+      ? { x: box.left, y: box.bottom }
+      : { x: event.clientX, y: event.clientY },
+  )
+  if (!menu) return
+  event.preventDefault()
+  menu.open()
+}
 
 function resolve(entry: Entry) {
   const generation = ++entry.generation
@@ -44,18 +172,24 @@ function resolve(entry: Entry) {
   })
 }
 
-/** Share display resolution and one path-filtered workspace subscription across media views. */
+/**
+ * Share display resolution and one path-filtered workspace subscription across
+ * media views. Remote images come from the image cache of the note in `tab`.
+ */
 export function observeDocumentMedia(
   source: string,
   revision: number,
   listener: (media: DocumentMedia | null) => void,
+  tab: string | null = null,
 ) {
-  // Remote images load directly; only local media needs the main process.
   if (
     /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(source) ||
     /^https:\/\//i.test(source)
   ) {
-    listener({ kind: 'image', url: source })
+    listener({
+      kind: 'image',
+      url: /^https:/i.test(source) ? remoteImageUrl(source, tab) : source,
+    })
     return () => {}
   }
   const key = JSON.stringify([source, revision])

@@ -44,8 +44,11 @@ export const DOCUMENT_CHANNELS = {
   remote: 'document:remote',
   requestRemote: 'document:request-remote',
   saved: 'document:saved',
+  fileDialog: 'document:file-dialog',
 } as const
 
+/** Which texts a save kept as saved versions; the replaced one is the text last saved here. */
+export type VersionsKept = 'none' | 'written' | 'both'
 export type DocumentState = {
   /** Stable window-local tab identity, including across save and rename. */
   tabId: string
@@ -58,6 +61,8 @@ export type DocumentState = {
   ephemeral: boolean
   markdown: string
   savedMarkdown: string
+  /** Set on the state a save returns. */
+  versionsKept?: VersionsKept | undefined
   /** Main explicitly replaced this tab's source, rather than only its metadata. */
   replaced?: boolean
   /** Native source generation already transferred to this renderer. */
@@ -80,6 +85,7 @@ export type DocumentSaved = Pick<
   | 'name'
   | 'ephemeral'
   | 'canAutosave'
+  | 'versionsKept'
 >
 export type DocumentTab = { id: string; name: string; dirty: boolean }
 export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
@@ -92,6 +98,10 @@ export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
   document: DocumentSaveReply | null
 }
+/** Held: a program had the file open. Autosave tries again; the text is kept. */
+export type AutosaveReply =
+  | AutosaveResult
+  | { status: 'held'; document: null; message?: string }
 export type DocumentCommand =
   | 'new'
   | 'open'
@@ -104,9 +114,14 @@ export type AppInfo = {
   version: string
   electron: string
   platform: string
+  /** Applied at launch; a saved window-controls preference may still await restart. */
+  windowControlsHidden: boolean
 }
 
 export type DesktopApi = {
+  getHideWindowControls: () => Promise<boolean>
+  setHideWindowControls: (hidden: boolean) => Promise<void>
+  restartForWindowControls: () => Promise<void>
   getBackgroundMode: () => Promise<boolean>
   setBackgroundMode: (enabled: boolean) => Promise<boolean>
   onOpenSettings: (callback: () => void) => () => void
@@ -213,6 +228,7 @@ export type DesktopApi = {
     addons: () => Promise<{
       states: AddonState[]
       packages: import('./sideload').InstalledAddon[]
+      outdated: import('./sideload').OutdatedAddon[]
       notices: string[]
     }>
     recentWorkspaces: () => Promise<import('./workspace').RecentWorkspace[]>
@@ -256,6 +272,11 @@ export type DesktopApi = {
     request: string,
   ) => Promise<import('./media').DocumentMediaResolution | null>
   cancelDocumentMedia: (request: string) => Promise<void>
+  /**
+   * Fetches a remote image again now into the image cache of the note in
+   * `tab`, keeping the cached copy if that fails.
+   */
+  refreshRemoteImage: (source: string, tab: string | null) => Promise<void>
   onDocumentMediaScopeChanged: (
     callback: (revision: number) => void,
   ) => () => void
@@ -267,6 +288,7 @@ export type DesktopApi = {
     workspace?: WorkspaceState | null
   } | null>
   getInstalledAddons: () => Promise<import('./sideload').InstalledAddon[]>
+  getOutdatedAddons: () => Promise<import('./sideload').OutdatedAddon[]>
   getAddonTrustSettings: () => Promise<
     import('./addon-trust').AddonTrustSettings
   >
@@ -306,9 +328,27 @@ export type DesktopApi = {
   listVersions: () => Promise<import('./history').DocumentVersion[]>
   previewVersion: (id: string) => Promise<string>
   restoreVersion: (id: string) => Promise<DocumentState | null>
-  /** `updates` notices lead to the update settings. */
+  /** Keeps a named tab's undo history up to its last save, if that save is still its file's. */
+  storeUndoHistory: (
+    tabId: string,
+    history: import('./undo-history').UndoHistory,
+  ) => Promise<void>
+  /** The undo history kept for a tab's file, if the tab still holds the text saved at `version`. */
+  readUndoHistory: (
+    tabId: string,
+    version: number,
+  ) => Promise<import('./undo-history').UndoHistory | null>
+  /** Before tabs or the window close, sends the histories of saves not sent yet. */
+  onUndoHistoryFlush: (callback: () => Promise<void>) => () => void
+  getKeepUndoHistory: () => Promise<boolean>
+  setKeepUndoHistory: (keep: boolean) => Promise<void>
+  clearUndoHistory: () => Promise<void>
+  /**
+   * `updates` notices lead to the update settings. A `held` notice stays until
+   * the next one replaces it; an empty one only removes it.
+   */
   onNotice: (
-    callback: (message: string, target?: 'updates') => void,
+    callback: (message: string, target?: 'updates' | 'held') => void,
   ) => () => void
   getLicenses: () => Promise<import('./about').LicenseInfo[]>
   getLicense: (id: string) => Promise<string>
@@ -615,6 +655,8 @@ export type DesktopApi = {
   onExternalDocuments: (callback: () => void) => () => void
   /** Saves from close, quit and delete prompts, including ones a later prompt cancels. */
   onDocumentSaved: (callback: (saved: DocumentSaved) => void) => () => void
+  /** A file operation's first dialog or prompt opened (true) or its last closed. */
+  onFileDialog: (callback: (open: boolean) => void) => () => void
   newDocument: () => Promise<DocumentState | null>
   saveDocument: (saveAs: boolean) => Promise<DocumentSaveReply | null>
   saveTargetDocument: (
@@ -623,7 +665,7 @@ export type DesktopApi = {
     revision: number,
     contentVersion: number,
   ) => Promise<import('./document-edits').DocumentSaveResult>
-  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveResult>
+  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveReply>
   renameDocument: (name: string) => Promise<DocumentState>
   readDocumentImage: (
     source: string,

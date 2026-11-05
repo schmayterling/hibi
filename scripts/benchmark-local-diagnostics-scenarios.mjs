@@ -35,7 +35,15 @@ try {
           if (handler) {
             ipcMain.removeHandler(channel)
             ipcMain.handle(channel, (...args) => {
-              if (args[1] === 'batch') globalThis.diagnosticCalls++
+              // The preload's startup marker is sent once its session starts,
+              // which can be after the editor already takes input.
+              if (
+                args[1] === 'batch' &&
+                JSON.parse(args[3]).some(
+                  (record) => JSON.parse(record).code !== 'RENDERER_PRE_ENTRY',
+                )
+              )
+                globalThis.diagnosticCalls++
               return handler(...args)
             })
           }
@@ -62,7 +70,7 @@ try {
           )
           const selector =
             mode === 'rich'
-              ? '.tiptap[contenteditable="true"]'
+              ? '.rich-pane .cm-content[contenteditable="true"]'
               : '.source-pane .cm-content[contenteditable="true"]'
           await page.locator(selector).waitFor()
           await page.evaluate((selector) => {
@@ -95,31 +103,15 @@ try {
               },
               { capture: true },
             )
-            if (element.editor) {
-              const editor = element.editor,
-                dispatch = editor.view.props.dispatchTransaction
-              editor.view.setProps({
-                dispatchTransaction(transaction) {
-                  const start = performance.now()
-                  try {
-                    dispatch.call(this, transaction)
-                  } finally {
-                    if (transaction.docChanged)
-                      measured.cpu.push(performance.now() - start)
-                  }
-                },
-              })
-            } else {
-              const view = element.cmTile.root.view,
-                dispatch = view.dispatchTransactions
-              view.dispatchTransactions = function (transactions, editor) {
-                const start = performance.now()
-                try {
-                  dispatch.call(this, transactions, editor)
-                } finally {
-                  if (transactions.some((t) => t.docChanged))
-                    measured.cpu.push(performance.now() - start)
-                }
+            const view = element.cmTile.root.view,
+              dispatch = view.dispatchTransactions
+            view.dispatchTransactions = function (transactions, editor) {
+              const start = performance.now()
+              try {
+                dispatch.call(this, transactions, editor)
+              } finally {
+                if (transactions.some((t) => t.docChanged))
+                  measured.cpu.push(performance.now() - start)
               }
             }
           }, selector)
@@ -162,7 +154,11 @@ try {
         const saveStart = performance.now()
         const saved = await page.evaluate(() => window.hibi.saveDocument(true))
         const saveMs = performance.now() - saveStart
-        assert.equal(await readFile(savedPath, 'utf8'), saved.markdown)
+        // A large note saves with a receipt instead of its text.
+        const markdown = saved?.saveReceipt
+          ? (await page.evaluate(() => window.hibi.getDocument())).markdown
+          : saved?.markdown
+        assert.equal(await readFile(savedPath, 'utf8'), markdown)
         await page.evaluate(() => window.hibi.setAddonEnabled('typst', true))
         const compilation = []
         for (let i = 0; i < 3; i++) {

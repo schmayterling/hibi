@@ -29,11 +29,29 @@ Desktop checks run once per pull request and on pushes to `main`. Feature-branch
 
 Caches hold npm downloads, Electron/builder downloads, compiled `out` files, TypeScript incremental state, and successful revisions/test lists. Keys separate OS, architecture, and dependencies; checkpoints also check Node and runner-image versions. Failed jobs never publish a passing checkpoint.
 
-`npm run check:ci` compares the previous push or PR base with the checkout, plus changes since the cached successful revision. It follows static local imports to select tests. App changes rerun every desktop test; filesystem and dynamic dependencies are handled conservatively. It reuses unchanged builds and skips packaging validation when the app is unchanged. Lint and generated-document checks always run. `npm run check` remains the complete local suite.
+`npm run check:ci` compares the previous push or PR base with the checkout, plus changes since the cached successful revision. It follows static local imports to select tests. App changes rerun every desktop test; filesystem and dynamic dependencies are handled conservatively. It reuses unchanged builds and skips packaging validation when the app is unchanged. Lint and generated-document checks always run. `npm run check` remains the complete local suite, apart from `tests/dev/`.
 
 Missing caches/history, configuration changes, and unknown inputs trigger full checks. Select `clean` under Actions → check → Run workflow, or run `CI_CLEAN=true npm run check:ci`, to ignore caches, remove generated build/typecheck state, and run every test. Summaries record the base revision, build decision, and test count. Nightly and stable release jobs always compile and run the full suite; their `clean` option only changes download caching.
 
 Local incremental checks include uncommitted and untracked files. Dirty checkouts never save a successful revision checkpoint. Superseded CI runs are cancelled; platform jobs have a 20-minute limit.
+
+## Which check to run
+
+Run `npm run check:dev` before pushing: it runs what `npm run check:ci` runs, plus `tests/dev/`. GitHub Actions runs `check:ci`, and `npm test` also leaves out `tests/dev/`.
+
+`tests/dev/` holds tests of developer tooling that never reaches a user or addon author, such as scripts, benchmarks and the test harness. A test that keeps a check honest stays in `tests/`, since a broken check passes silently on GitHub Actions too.
+
+## Writing tests
+
+Ask of every test: would a person or an addon author notice if this broke, and would another test fail?
+
+- Test behavior, with real dependencies where you can. Don't assert source text or code shape. Don't assert only that a stub was called, unless that call is the contract, such as a saved file or an IPC reply an addon sees.
+- Put logic in Node tests and keep one real-app journey per feature. Don't prove the same thing again in Electron.
+- Never silence the console. If a test provokes a log, assert it. If the log is noise, fix the source.
+- Wait on the condition, never a fixed sleep. Budgets measure work or CPU time, not wall clock, unless wall clock is the claim.
+- Reach private internals only where no public path can force the state, and say why in a comment.
+- To delete a test of behavior, show a mutant on the path that test's fixture takes that a test you keep still catches. Tests over the same inputs can still take different paths.
+- Data safety, security and trust boundaries, accessibility, platform-only behavior and real performance budgets keep their tests unless an equal test remains.
 
 ## Native tests
 

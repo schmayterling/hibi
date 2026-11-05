@@ -133,7 +133,7 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
       name: 'Review colors',
       description: 'Selection fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',
@@ -181,7 +181,7 @@ test('vim visual selections and the fat cursor stay readable in every bundled th
   await clickMenu(app, 'Open…')
   await page.waitForFunction(() =>
     document
-      .querySelector('.rich-pane :is(.tiptap, .cm-content)')
+      .querySelector('.rich-pane .cm-content')
       ?.textContent.includes('premise'),
   )
   await page

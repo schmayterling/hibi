@@ -24,7 +24,7 @@ test('explorer command keeps clicked file through lazy startup and rejects a sta
       name: 'Explorer probe',
       description: 'Explorer command fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',

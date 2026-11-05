@@ -1,19 +1,5 @@
-export async function replaceRichText(page, target, text) {
-  if (await target.evaluate((element) => element.matches('.cm-content')))
-    return replaceSourceText(page, target, text)
-  await target.evaluate((element) => {
-    const editor = element.closest('.tiptap').editor
-    // DOM-only fill ranges race ProseMirror's deferred focus reconciliation.
-    if (element === editor.view.dom) editor.commands.selectAll()
-    else
-      editor.commands.setTextSelection({
-        from: editor.view.posAtDOM(element, 0),
-        to: editor.view.posAtDOM(element, element.childNodes.length),
-      })
-    editor.view.focus()
-  })
-  await page.keyboard.insertText(text)
-}
+/** The formatted view is a CodeMirror editor, so its text is replaced like source. */
+export const replaceRichText = replaceSourceText
 
 export async function replaceSourceText(page, target, text) {
   // CodeMirror owns selection; DOM-only fill can lose its range on focus/measure.

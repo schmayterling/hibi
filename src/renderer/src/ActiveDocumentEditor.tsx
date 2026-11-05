@@ -1,17 +1,14 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { AddonManifest, MarkdownFlavor } from '../../addons/api'
-import { builtInFlavors } from '../../shared/built-in-grammar'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
-import { addonRegistry } from './addon-registry'
 import { documentRuntime } from './document-runtime'
 import {
   afterDocumentQuiet,
   editorDocumentUpdates,
   largeOpening,
-  preferSourceOpening,
 } from './document-shell'
-import type { MarkdownEditor } from './Editor'
+import type { MarkdownEditor } from './FormattedEditor'
 import { type FlavorChoice, flavorMatches } from './flavors'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
@@ -70,15 +67,6 @@ export function ActiveDocumentEditor({
       ),
     [knownFlavors, chosenFlavors],
   )
-  // The strict proof permits only letters/digits/spaces in the changed paragraph.
-  // Built-in grammar detectors require punctuation; arbitrary addon markers do not.
-  const certifiedVisual =
-    !manifests.some((manifest) => manifest.syntax?.length) &&
-    protectionFlavors.every(
-      (flavor) =>
-        addonRegistry.origin(flavor.addonId) === 'built-in' &&
-        builtInFlavors.get(flavor.id)?.owner === flavor.addonId,
-    )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
     markdownSyntax.version,
@@ -91,7 +79,6 @@ export function ActiveDocumentEditor({
       editorDocumentUpdates(
         documentRuntime,
         props.mode === 'markdown',
-        certifiedVisual,
         props.document.tabId,
       ),
     [
@@ -100,14 +87,12 @@ export function ActiveDocumentEditor({
       props.document.revision,
       props.document.id,
       props.document.name,
-      certifiedVisual,
       knownFlavors,
       chosenFlavors,
       manifests,
       enabledAddons,
       props.markdownExtensions,
       props.flavors,
-      props.richExtensions,
       props.sourceExtensions,
       syntaxVersion,
     ],
@@ -120,7 +105,6 @@ export function ActiveDocumentEditor({
       : props.document
   // Checks that read the whole source wait for notes that open in parts.
   const deferredSource = markdown && largeOpening(documentRuntime, document)
-  const sourceFirst = markdown && preferSourceOpening(documentRuntime, document)
   const source = markdown && !deferredSource ? document.markdown : ''
   useEffect(() => {
     if (!markdown || deferredSource) return
@@ -169,29 +153,6 @@ export function ActiveDocumentEditor({
       {...(viewId ? { viewId } : {})}
       document={document}
       value={source}
-      mode={sourceFirst ? 'markdown' : props.mode}
-      largePreview={sourceFirst && props.mode !== 'markdown'}
-      previewSupported={
-        certifiedVisual &&
-        chosenFlavors.every(
-          (flavor) =>
-            [
-              'markdown.github',
-              'markdown.obsidian',
-              'github-markdown.github',
-              'text-extras.text-extras',
-              'math.latex',
-            ].includes(flavor.id) &&
-            knownFlavors.some(
-              (known) =>
-                known.id === flavor.id &&
-                addonRegistry.origin(known.addonId) === 'built-in',
-            ),
-        ) &&
-        props.markdownExtensions.every(
-          ({ id }) => id === 'frontmatter.metadata',
-        )
-      }
     />
   )
 }

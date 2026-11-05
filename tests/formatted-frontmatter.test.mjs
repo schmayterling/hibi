@@ -4,8 +4,10 @@ import {
   Compartment,
   EditorSelection,
   EditorState,
+  RangeSet,
   Text,
 } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import {
   contribution,
   frontmatterField,
@@ -72,6 +74,38 @@ test('frontmatter is a closed YAML mapping at the start, hidden with one blank l
     ' ---\na: 1\n---',
   ])
     assert.equal(end(doc), 0, JSON.stringify(doc))
+})
+
+test('frontmatter hidden by the view and the addon is one block, also after typing', () => {
+  const blocks = (state) => {
+    const found = []
+    RangeSet.spans(state.facet(EditorView.decorations), 0, state.doc.length, {
+      point: (from, to, decoration) =>
+        decoration.spec.block && found.push([from, to]),
+      span() {},
+    })
+    return found
+  }
+  const yaml = '---\naliases: [Home]\ntags:\n  - work\n---\n'
+  // The app installs the view's first. Two blocks would leave the height map a
+  // block apart from what's drawn, with every click on the note a line off.
+  for (const extensions of [
+    [core.formattedFrontmatter, contribution.extension],
+    [contribution.extension, core.formattedFrontmatter],
+  ]) {
+    const state = (doc) => EditorState.create({ doc, extensions })
+    const closer = yaml.length - 1
+    assert.deepEqual(blocks(state(`${yaml}# Title`)), [[0, closer]])
+    assert.deepEqual(blocks(state(`${yaml}\n# Title`)), [[0, closer + 1]])
+    assert.deepEqual(blocks(state(`${yaml}\n\n# Title`)), [[0, closer + 1]])
+    assert.deepEqual(blocks(state(`${yaml}  \n# Title`)), [[0, closer + 3]])
+    // Enter on the first line makes the blank line the addon hides.
+    const typed = state(`${yaml}# Title`).update({
+      changes: { from: yaml.length, insert: '\n' },
+      userEvent: 'input.type',
+    }).state
+    assert.deepEqual(blocks(typed), [[0, closer + 1]])
+  }
 })
 
 test('the shared frontmatter reader decides, for anchors, tags, directives and comments too', () => {

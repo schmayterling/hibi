@@ -1,6 +1,7 @@
 import {
   EditorSelection,
   EditorState,
+  Prec,
   StateField,
   type Text,
 } from '@codemirror/state'
@@ -87,7 +88,10 @@ const hidden = StateField.define<DecorationSet>({
       ? value
       : hide(transaction.state),
   provide: (field) => [
-    EditorView.decorations.from(field),
+    // Ahead of the formatted view's shorter hide, which it covers: of two that
+    // end apart, CodeMirror can draw one block where its height map keeps two,
+    // and each measured height then lands a block off, so clicks miss their lines.
+    Prec.high(EditorView.decorations.from(field)),
     EditorView.atomicRanges.of((view) => view.state.field(field)),
   ],
 })

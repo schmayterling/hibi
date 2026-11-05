@@ -9,11 +9,8 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
@@ -34,14 +31,12 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
     if (!seeded) {
-      await selectFormattedEngine(app, page, t.formattedEngine)
+      await waitForFormattedEditor(app, page)
       seeded = true
     } else {
       await page
         .locator(
-          t.formattedEngine === 'tiptap'
-            ? '.rich-pane .tiptap[contenteditable="true"]'
-            : '.rich-pane .hibi-formatted .cm-content[contenteditable="true"]',
+          '.rich-pane .hibi-formatted .cm-content[contenteditable="true"]',
         )
         .waitFor()
     }
@@ -64,6 +59,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     await page.evaluate(async () => ({
       states: await window.hibi.getAddonStates(),
       packages: await window.hibi.getInstalledAddons(),
+      outdated: await window.hibi.getOutdatedAddons(),
       notices: [],
     })),
   )
@@ -168,13 +164,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     .getByRole('treeitem', { name: /^empty\.md$/i, exact: true })
     .click()
   await welcome().waitFor({ state: 'hidden' })
-  if (t.formattedEngine === 'tiptap') {
-    await page.locator('.tiptap p[data-placeholder="Start typing"]').waitFor()
-    assert.equal(
-      await page.locator('.tiptap p').getAttribute('data-placeholder'),
-      'Start typing',
-    )
-  } else {
+  {
     const placeholder = page.locator('.rich-pane .cm-placeholder')
     await placeholder.waitFor()
     assert.equal(await placeholder.textContent(), 'Start typing')

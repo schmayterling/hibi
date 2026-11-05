@@ -519,6 +519,7 @@ const atomBlocks = new Set([
 /** Nodes drawn as one node only where a widget replaces them. */
 const atomWidgets = new Set([
   'Image',
+  'HTMLImage',
   'InlineMath',
   'InlineMathLines',
   'FencedCode',
@@ -1625,10 +1626,14 @@ function contentStart(line: Line, hidden: Hidden) {
   return start
 }
 
+/** The syntax a key reads, or how to read it once a case needs it. */
+const syntaxOf = (tree: Tree | (() => Tree)) =>
+  typeof tree === 'function' ? tree() : tree
+
 /** Backspace in formatted text. Null leaves the key to the default command. */
 export function deleteBackward(
   state: EditorState,
-  tree: Tree,
+  read: Tree | (() => Tree),
   hidden: Hidden,
 ): TransactionSpec | null {
   const range = state.selection.main
@@ -1651,6 +1656,7 @@ export function deleteBackward(
     return remove(previous.to, line.from, previous.to)
   }
   if (pos === start) {
+    const tree = syntaxOf(read)
     const heading = around(tree, pos, [
       'ATXHeading1',
       'ATXHeading2',
@@ -1739,7 +1745,7 @@ export function deleteBackward(
 /** Delete at the end of a text block joins the next block, the mirror of Backspace. */
 export function deleteForward(
   state: EditorState,
-  tree: Tree,
+  read: Tree | (() => Tree),
   hidden: Hidden,
 ): TransactionSpec | null {
   const range = state.selection.main
@@ -1752,7 +1758,7 @@ export function deleteForward(
   if (
     pos === line.to &&
     line.number < state.doc.lines &&
-    delimiterLine(state, tree, state.doc.line(line.number + 1))
+    delimiterLine(state, syntaxOf(read), state.doc.line(line.number + 1))
   )
     return { selection: range }
   if (pos !== line.to || line.number === state.doc.lines) {
@@ -1791,7 +1797,7 @@ export function deleteForward(
     next = state.doc.line(next.number + 1)
   if (blank(next.text) || blank(line.text)) return null
   if (
-    around(tree, next.from, [
+    around(syntaxOf(read), next.from, [
       'FencedCode',
       'CodeBlock',
       'HorizontalRule',

@@ -36,7 +36,7 @@ th,td{padding:4px 8px;border:1px solid var(--border);text-align:left;vertical-al
 th{background:var(--surface)}
 li>input[type=checkbox]{margin:0 .4em 0 0;vertical-align:middle}
 li:has(>input[type=checkbox]){list-style:none}
-.katex-display,.tiptap-mathematics-render[data-type=block-math]{overflow:visible}
+.katex-display,.hibi-lp-math[data-type=block-math]{overflow:visible}
 pre,tr,img,svg,figure,blockquote,.katex-display,.github-alert{break-inside:avoid;page-break-inside:avoid}`
 
 /**

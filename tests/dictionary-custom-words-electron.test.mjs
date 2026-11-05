@@ -9,11 +9,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressPastCompletionDelay } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
@@ -45,7 +46,7 @@ test('legacy words migrate in the native worker and remain available to older bu
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   const words = await page.evaluate(async () => {
     const words = []
@@ -102,7 +103,7 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
       }
     }, file)
     const page = await app.firstWindow()
-    await selectFormattedEngine(app, page, t.formattedEngine)
+    await waitForFormattedEditor(app, page)
     page.setDefaultTimeout(APP_STATE_TIMEOUT)
     await waitForDocumentEditor(app, page)
     await app.evaluate(({ ipcMain }) => {
@@ -141,16 +142,11 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
     exact: true,
   })
   await rich.click()
-  if (t.formattedEngine === 'tiptap')
-    await rich.evaluate((element) =>
-      element.editor.commands.setTextSelection(6),
-    )
-  else
-    await rich.evaluate((element) => {
-      const view = element.cmTile.root.view
-      view.dispatch({ selection: { anchor: 5 } })
-      view.focus()
-    })
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({ selection: { anchor: 5 } })
+    view.focus()
+  })
 
   // A word with no entry is added from the side view and then shown as yours.
   await clickMenu(app, 'Command palette')
@@ -204,27 +200,21 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
   await closeSettings()
 
   // Suggestions put custom words first and never go online.
-  if (t.formattedEngine === 'tiptap')
-    await rich.evaluate((element) => element.editor.commands.focus('end'))
-  else {
-    await rich.focus()
-    await rich.press(
-      process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
-    )
-  }
+
+  await rich.focus()
+  await rich.press(
+    process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+  )
+
   await page.keyboard.type(' Hib')
   const menu = page.getByRole('listbox', { name: 'Completions' })
   await menu
     .getByRole('option', { name: /^Hibiland/ })
     .filter({ hasText: 'Your word' })
     .waitFor()
-  if (t.formattedEngine === 'codemirror')
-    await pressPastCompletionDelay(page, 'ArrowDown')
-  else await page.keyboard.press('ArrowDown')
+  await pressPastCompletionDelay(page, 'ArrowDown')
   await menu.getByRole('option', { selected: true }).waitFor()
-  if (t.formattedEngine === 'codemirror')
-    await pressPastCompletionDelay(page, 'Enter')
-  else await page.keyboard.press('Enter')
+  await pressPastCompletionDelay(page, 'Enter')
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.endsWith(' Hibiland'),
   )
@@ -632,7 +622,7 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(APP_STATE_TIMEOUT)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ ipcMain }) => {

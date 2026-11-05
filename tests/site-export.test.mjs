@@ -41,6 +41,8 @@ const snapshot = {
 
 test('export options validate URLs, images and portable paths; protected files contain ciphertext only', async () => {
   assert.equal(exportOptions().singleFile, true)
+  const logo = `data:image/png;base64,${'A'.repeat(4 * 1024 * 1024 + 4)}`
+  assert.equal(validateExportOptions({ logo }).logo, logo)
   for (const value of [
     { url: 'javascript:alert(1)' },
     { socialImage: 'https://user:secret@example.com/a.png' },
@@ -244,7 +246,7 @@ test('site export keeps supported static content and omits addon runtime state',
     assert.ok(output.includes(attachment))
     const article = (
       singleFile ? files.get('index.html') : files.get('README.md/index.html')
-    ).match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1]
+    ).match(/<article class="site-article">([\s\S]*?)<\/article>/)?.[1]
     assert.match(article, /<strong>Supported flavor<\/strong>/)
     assert.match(article, /class="katex"/)
     assert.doesNotMatch(article, /<script|onerror|window\.exportAttack/i)
@@ -276,7 +278,7 @@ test('static heading anchors preserve canonical fragments and unique legacy alia
     for (const [path, html] of files) {
       if (!path.endsWith('.html')) continue
       const article = html.match(
-        /<article class="tiptap">([\s\S]*?)<\/article>/,
+        /<article class="site-article">([\s\S]*?)<\/article>/,
       )?.[1]
       assert.ok(article, path)
       assert.deepEqual(
@@ -603,7 +605,7 @@ test('command-palette export opens options and writes a configured static folder
       name: 'Site probe',
       description: 'Static export integration.',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       capabilities: ['ui'],
       startup: 'background',
@@ -865,7 +867,9 @@ test('command-palette export opens options and writes a configured static folder
     /Review and save export options/,
   )
   assert.match(
-    exportedHtml.match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1],
+    exportedHtml.match(
+      /<article class="site-article">([\s\S]*?)<\/article>/,
+    )?.[1],
     /data:image\/svg\+xml,%3Csvg/,
   )
   const nextViewer = app.waitForEvent('window')

@@ -9,11 +9,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -34,7 +35,8 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
     id: 'fixture-addon',
     name: 'fixture addon',
     description: 'sideload test',
-    apiVersion: 2,
+    apiVersion: 3,
+    capabilities: ['ui', 'source'],
     kind: 'extension',
     version: '1.0.0',
     authors: [{ displayName: 'fixture author' }],
@@ -71,7 +73,8 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
     JSON.stringify({
       ...metadata,
       id: 'fixture-theme',
-      apiVersion: 1,
+      apiVersion: 3,
+      capabilities: undefined,
       name: 'fixture theme',
       kind: 'theme',
       entry: undefined,
@@ -125,7 +128,7 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
     }
   }, extension)
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() =>
     window.hibi.setAddonTrustSettings({
       allowUnsigned: true,

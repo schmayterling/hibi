@@ -9,9 +9,10 @@ import {
 } from '@codemirror/state'
 import { type EditorView, keymap, ViewPlugin } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
-import { parseRow } from '../../shared/markdown-table-source.ts'
+import { cellSpan, parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
 import { prefixOf } from './formatted-commands.ts'
+import { placedSelection } from './reading-position.ts'
 import { sourceHistoryEffects } from './source-session.ts'
 
 /** Blocks the rich editor reads; it drops link reference definitions. */
@@ -43,8 +44,15 @@ function tableEnd(doc: Text, table: SyntaxNode) {
     row = row.prevSibling
   if (!header || !row) return trimmed(doc, table.to)
   const columns = parseRow(doc.sliceString(header.from, header.to)).cells.length
-  const { cells } = parseRow(doc.sliceString(row.from, row.to), row.from)
-  return (cells[columns - 1] ?? cells.at(-1))?.to ?? trimmed(doc, row.to)
+  const parsed = parseRow(doc.sliceString(row.from, row.to), row.from)
+  const index = parsed.cells[columns - 1]
+    ? columns - 1
+    : parsed.cells.length - 1
+  const cell = parsed.cells[index]
+  if (!cell) return trimmed(doc, row.to)
+  // An empty cell's editor puts the caret in the middle of its padding.
+  const span = cell.from === cell.to && cellSpan(parsed, index, row.to)
+  return span ? span.from + Math.ceil((span.to - span.from) / 2) : cell.to
 }
 
 /** Blocks the rich editor draws as one node, which its Selection.atEnd selects whole. */
@@ -72,7 +80,8 @@ function atomRange(
   return atoms.has(node.name) ||
     (node.name === 'FencedCode' && replaced(node)) ||
     (node.name === 'Paragraph' &&
-      image?.name === 'Image' &&
+      (image?.name === 'Image' ||
+        (image?.name === 'HTMLImage' && replaced(image))) &&
       image.from === node.from &&
       image.to === to)
     ? { from: node.from, to }
@@ -86,9 +95,9 @@ function atomRange(
  * editor takes; in code, the code's end before its closing fence. Blank
  * lines after the last block that show an empty paragraph hold it instead.
  * A last block the rich editor draws as one node, such as a divider, a
- * block image or a fence `replaced` says a renderer draws in place of its
- * text, is selected whole, so typing replaces it. Null while the syntax tree
- * does not reach the note's end.
+ * block image, or a fence or lone `<img>` tag that `replaced` says a
+ * renderer draws in place of its text, is selected whole, so typing
+ * replaces it. Null while the syntax tree does not reach the note's end.
  */
 export function formattedOpenSelection(
   doc: Text,
@@ -156,9 +165,10 @@ const select = StateEffect.define<Selected | null>()
 
 /**
  * The selection a note opened with, or a block a press on its drawing
- * selected whole, until the user moves the selection or edits.
+ * selected whole, until the user moves the selection or edits. `placed`
+ * while the view put it there, not undo bringing it back.
  */
-type Selected = Opening & { opened?: boolean }
+type Selected = Opening & { opened?: boolean; placed?: boolean }
 const selected = StateField.define<Selected | null>({
   create: () => null,
   update(value, transaction) {
@@ -336,14 +346,25 @@ export function openAtEnd(view: EditorView, later = false) {
   const at = selection ?? { anchor: end, head: end }
   view.dispatch({
     selection: at,
-    effects: select.of({ ...at, opened: true }),
+    effects: select.of({ ...at, opened: true, placed: true }),
   })
 }
 
 export const openSelection = (syntax: OpenSyntax) => [
   openSyntax.of(syntax),
   selected,
-  sourceHistoryEffects.of((state) => [select.of(state.field(selected))]),
+  // A note opens at its top: blocks that render above the caret it opened
+  // with keep the top in place, not the caret.
+  placedSelection.compute(
+    [selected],
+    (state) => state.field(selected)?.placed === true,
+  ),
+  // Undo brings back the selection a note opened with, which still moves
+  // later, but the reader has been there since.
+  sourceHistoryEffects.of((state) => {
+    const value = state.field(selected)
+    return [select.of(value && { ...value, placed: false })]
+  }),
   ViewPlugin.define((view) => ({
     update(update) {
       const value = update.state.field(selected, false)

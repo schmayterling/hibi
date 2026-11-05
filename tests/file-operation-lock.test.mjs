@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 async function setup(t, keepAlive = false) {
@@ -28,7 +25,7 @@ async function setup(t, keepAlive = false) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   // The editor reports its initial value and schedules an empty draft write.
   // Drain that real writer before injecting draft requests from the test.
   await app.evaluate(({ ipcMain }) => {
@@ -59,10 +56,7 @@ async function setup(t, keepAlive = false) {
   await capture
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
-  const engineEditor =
-    t.formattedEngine === 'tiptap'
-      ? '.tiptap[contenteditable="true"]'
-      : '.hibi-formatted .cm-content[contenteditable="true"]'
+  const engineEditor = '.hibi-formatted .cm-content[contenteditable="true"]'
   // A hosted runner saw no editable editor right after one appeared; one must settle.
   await capture
     .waitForFunction(
@@ -588,7 +582,7 @@ test('opening and quitting an untouched capture preserves the previous draft', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ ipcMain }) => {
     const channel = 'addon-windows:invoke'
     const invoke = ipcMain._invokeHandlers.get(channel)
@@ -617,9 +611,7 @@ test('opening and quitting an untouched capture preserves the previous draft', {
     exact: true,
   })
   const engineEditor = capture.locator(
-    t.formattedEngine === 'tiptap'
-      ? '.tiptap[contenteditable="true"]'
-      : '.hibi-formatted .cm-content[contenteditable="true"]',
+    '.hibi-formatted .cm-content[contenteditable="true"]',
   )
   await editor.and(engineEditor).waitFor()
   assert.equal(

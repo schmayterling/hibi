@@ -47,7 +47,7 @@ test('stopping an installed addon releases its Settings closure but keeps flavor
         name: 'Owner retention probe',
         description: 'Tests addon lifecycle retention',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         capabilities: [],
         authors: [{ displayName: 'Test' }],

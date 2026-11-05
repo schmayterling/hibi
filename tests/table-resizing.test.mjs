@@ -2,17 +2,14 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const markdown =
   '# Sizes\n\n| Name | Notes |\n| --- | --- |\n| one | first row |\n| two | second row |\n'
 
-async function openNote(root, profile, apps, engine) {
+async function openNote(root, profile, apps) {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -22,7 +19,7 @@ async function openNote(root, profile, apps, engine) {
   }, root)
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() => window.hibi.openWorkspace())
   await page.getByRole('button', { name: 'Toggle workspace sidebar' }).click()
   await page.getByRole('treeitem', { name: 'note.md' }).click()
@@ -79,12 +76,7 @@ test('table columns and rows resize outside the Markdown file', {
     for (const app of apps) await app.close()
     await rm(folder, { recursive: true, force: true })
   })
-  let { page, table } = await openNote(
-    root,
-    join(folder, 'profile'),
-    apps,
-    t.formattedEngine,
-  )
+  let { page, table } = await openNote(root, join(folder, 'profile'), apps)
 
   const before = await sizes(table)
   await drag(page, table.locator('th').first(), 'column', 80)
@@ -125,12 +117,7 @@ test('table columns and rows resize outside the Markdown file', {
   )
 
   await apps.pop().close()
-  ;({ page, table } = await openNote(
-    root,
-    join(folder, 'profile'),
-    apps,
-    t.formattedEngine,
-  ))
+  ;({ page, table } = await openNote(root, join(folder, 'profile'), apps))
   await waitForAsync(
     page,
     (expected) => {

@@ -77,9 +77,6 @@ before(
     page.setDefaultTimeout(5000)
     page.on('pageerror', (error) => errors.push(error.message))
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     await editor().waitFor()

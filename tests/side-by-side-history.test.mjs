@@ -3,8 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -84,7 +87,7 @@ test('side-by-side panes keep their own undo steps and selections', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const markdown = () =>

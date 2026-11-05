@@ -561,7 +561,7 @@ test('a queued old activation cannot restore a cleared session after re-enable',
 
 test('deactivation waits for pending session writes and renderer subscriptions stop', async (t) => {
   const { storage } = await temporaryStorage(t)
-  t.mock.method(console, 'error', () => {})
+  const errors = t.mock.method(console, 'error', () => {})
   const callbacks = new Set()
   const scope = createAddonStorageScope('documentation', () => true, {
     readAddonStorage: (request) => storage.read(request),
@@ -604,4 +604,15 @@ test('deactivation waits for pending session writes and renderer subscriptions s
   assert.equal(callbacks.size, 0)
   await assert.rejects(handle.set('late'), /Enable this addon/)
   assert.equal(notifications, 2)
+  // The subscriber that throws is reported at each change, and the next still runs.
+  assert.deepEqual(
+    errors.mock.calls.map(({ arguments: [text, error] }) => [
+      text,
+      error.message,
+    ]),
+    Array(2).fill([
+      'Could not notify addon storage subscriber:',
+      'bad subscriber',
+    ]),
+  )
 })

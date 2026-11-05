@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, posix } from 'node:path'
 import test from 'node:test'
-import { writeInputProfile } from '../scripts/benchmark-flows.mjs'
+import { writeInputProfile } from '../../scripts/benchmark-flows.mjs'
 
 test('comparison samplers carry every local helper they import', async () => {
   const workflow = await readFile('.github/workflows/benchmarks.yml', 'utf8')

@@ -10,8 +10,8 @@ import {
   repositoryCorpus,
   repositoryProse,
   textItems,
-} from '../scripts/autocomplete-replay.mjs'
-import { createPersonalModel } from '../src/addons/autocomplete/model.ts'
+} from '../../scripts/autocomplete-replay.mjs'
+import { createPersonalModel } from '../../src/addons/autocomplete/model.ts'
 
 let reportPromise
 let repositoryModel

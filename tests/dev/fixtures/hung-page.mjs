@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from '../electron.mjs'
+import { electron } from '../../electron.mjs'
 
 test('a page that never answers', { timeout: 3000 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-hung-page-'))

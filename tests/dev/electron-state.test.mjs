@@ -5,10 +5,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  expectPageError,
   waitForAppState,
   waitForAsync,
   waitForDocumentEditor,
-} from './electron.mjs'
+} from '../electron.mjs'
 
 test('app state waits for resolved ipc result within its ten-second default', async (t) => {
   let reads = 0
@@ -188,7 +189,8 @@ test('editor readiness requires settled app, addons and editable active pane', {
   page.setDefaultTimeout(7000)
   await t.test(
     'renderer failures print before cleanup with timeout context',
-    async () => {
+    async (subtest) => {
+      expectPageError(subtest, /renderer diagnostic probe/)
       const uncaught = page.waitForEvent('pageerror')
       await page.evaluate(() => {
         setTimeout(() => {

@@ -235,7 +235,7 @@ for (const [before, after] of patches)
   if (!source.includes(after)) {
     if (source.split(before).length !== 2)
       throw new Error(
-        'CodeMirror view changed. Review the wrapper height and line gap patches before updating it.',
+        'CodeMirror view changed. Review the patches in this script before updating it.',
       )
     source = source.replace(before, after)
   }

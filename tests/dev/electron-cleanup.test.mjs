@@ -15,7 +15,7 @@ import {
   snapshotElectronProcesses,
   stopElectronTree,
   waitForDocumentEditor,
-} from './electron.mjs'
+} from '../electron.mjs'
 
 test('electron cleanup stops descendants after the process group leader exits', {
   skip: process.platform === 'win32',
@@ -186,7 +186,7 @@ test('hosted visibility policy lets a worker-only fixture launch and close', asy
     () => new EventEmitter(),
     showElectronTestWindows,
     (_child, pending) => pending,
-    new URL('./electron.mjs', import.meta.url).href,
+    new URL('../electron.mjs', import.meta.url).href,
   )
   assert.equal(
     await launch({ args: ['worker-only'], diagnostics: false }),
@@ -214,7 +214,7 @@ test('delayed ready-to-show does not reveal a real window during its close', {
   await waitForDocumentEditor(app, await app.firstWindow())
   assert.equal(
     await app.evaluate(() => process.env.HIBI_TEST_ADDON_REVOCATIONS_URL),
-    new URL('./fixtures/no-addon-revocations.json', import.meta.url).href,
+    new URL('../fixtures/no-addon-revocations.json', import.meta.url).href,
   )
   await assert.rejects(
     app.evaluate(async ({ net }) =>
@@ -582,7 +582,7 @@ test('cleanup stops Electron 15 s after quit, and still fails a quit that never 
       },
       () => {},
       async () => {},
-      new URL('./electron.mjs', import.meta.url).href,
+      new URL('../electron.mjs', import.meta.url).href,
     )
     await launch({ args: [], diagnostics: false })
     result.closing = application.close()
@@ -632,7 +632,7 @@ test('teardown waits for setup when a name filter skips every top-level test, an
     await writeFile(
       file,
       `import test from 'node:test'
-import { after, before } from ${JSON.stringify(new URL('./electron-hooks.mjs', import.meta.url).href)}
+import { after, before } from ${JSON.stringify(new URL('../electron-hooks.mjs', import.meta.url).href)}
 let open
 before(async () => {
   open = setInterval(() => {}, 1000)

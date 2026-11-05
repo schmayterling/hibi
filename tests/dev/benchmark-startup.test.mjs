@@ -6,8 +6,8 @@ import { join, posix, resolve } from 'node:path'
 import test from 'node:test'
 import { parseArgs } from 'node:util'
 import vm from 'node:vm'
-import * as flows from '../scripts/benchmark-flows.mjs'
-import { electron } from './electron.mjs'
+import * as flows from '../../scripts/benchmark-flows.mjs'
+import { electron } from '../electron.mjs'
 
 const hash = (value) => createHash('sha256').update(value).digest('hex')
 
@@ -224,7 +224,7 @@ test('document opening recognizes formatted headings', async () => {
 
 test('timed startup and later document samples never enable the debugger', async () => {
   const source = await readFile(
-    new URL('../scripts/benchmark-startup.mjs', import.meta.url),
+    new URL('../../scripts/benchmark-startup.mjs', import.meta.url),
     'utf8',
   )
   const measure = source.slice(
@@ -378,7 +378,7 @@ test('focus emulation persists per renderer and settles before every input inter
 
 test('all startup conditions seed identically before launch including minimal control', async () => {
   const source = await readFile(
-    new URL('../scripts/benchmark-startup.mjs', import.meta.url),
+    new URL('../../scripts/benchmark-startup.mjs', import.meta.url),
     'utf8',
   )
   const loop = source.slice(
@@ -502,7 +502,7 @@ for (const [file, start, end] of [
 ]) {
   test(`${file} accepts hosted windows by default and requires hidden windows for verified runs`, async () => {
     const source = await readFile(
-      new URL(`../scripts/${file}`, import.meta.url),
+      new URL(`../../scripts/${file}`, import.meta.url),
       'utf8',
     )
     const setup = source
@@ -571,7 +571,7 @@ test('verified provenance refuses missing or stale build manifests including ign
     /build manifest/,
   )
   const { recordBenchmarkBuild } = await import(
-    '../scripts/build-provenance.mjs'
+    '../../scripts/build-provenance.mjs'
   )
   const build = () => recordBenchmarkBuild(async () => {}, root)
   await build()
@@ -614,7 +614,7 @@ test('verified provenance refuses missing or stale build manifests including ign
 test('build manifest invalidates prior output before building and rejects source edits during build', async (t) => {
   const root = await provenanceFixture(t)
   const { recordBenchmarkBuild } = await import(
-    '../scripts/build-provenance.mjs'
+    '../../scripts/build-provenance.mjs'
   )
   const sampler = new URL(import.meta.url)
   await recordBenchmarkBuild(async () => {}, root)
@@ -646,7 +646,7 @@ test('build manifest invalidates prior output before building and rejects source
 test('end verification rejects changed source, output, helpers or a replacement build', async (t) => {
   const root = await provenanceFixture(t)
   const { recordBenchmarkBuild } = await import(
-    '../scripts/build-provenance.mjs'
+    '../../scripts/build-provenance.mjs'
   )
   const sampler = new URL(import.meta.url)
   for (const path of [

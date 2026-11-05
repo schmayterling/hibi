@@ -4,7 +4,7 @@ import { mkdtemp, open, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { createTraceFinalizer } from '../scripts/trace-stream.mjs'
+import { createTraceFinalizer } from '../../scripts/trace-stream.mjs'
 
 async function fixture(t, handlers = {}, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-trace-stream-'))

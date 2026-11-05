@@ -52,7 +52,7 @@ test('never', () => new Promise(() => setInterval(() => {}, 1000)))`,
 test('a page that never answers can neither hold its close nor outlive its file', {
   timeout: 120000,
 }, () => {
-  const closes = runFile(resolve('tests/fixtures/hung-page.mjs'), {
+  const closes = runFile(resolve('tests/dev/fixtures/hung-page.mjs'), {
     CI_FILE_LIMIT_MS: '90000',
     HUNG_PAGE_CLOSE: '1',
   })
@@ -60,7 +60,7 @@ test('a page that never answers can neither hold its close nor outlive its file'
   assert.match(closed, /hung-page-detached/)
   assert.doesNotMatch(closed, /did not finish within/)
   assert.equal(alive(Number(/hung-page-app (\d+)/.exec(closed)[1])), false)
-  const limited = runFile(resolve('tests/fixtures/hung-page.mjs'), {
+  const limited = runFile(resolve('tests/dev/fixtures/hung-page.mjs'), {
     CI_FILE_LIMIT_MS: '4000',
   })
   const output = limited.stdout + limited.stderr

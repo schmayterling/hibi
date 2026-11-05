@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { installDependencies } from '../.github/actions/ci/install.mjs'
+import { installDependencies } from '../../.github/actions/ci/install.mjs'
 
 function fixture(t, body) {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-install-'))

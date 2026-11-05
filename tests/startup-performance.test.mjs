@@ -164,6 +164,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Showing any error an addon can throw, however long or unreadable, adds 92 (#854).
   // Saying when a program holds a note, and a held autosave's turns and notice,
   // adds 958 (#866).
+  // Keeping one likely-addon list across different errors adds 924 (#872).
   // Reading display blocks as Obsidian reads fenced math, including their
   // closed state and syntax preferences, adds 746 (#731).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
@@ -205,6 +206,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         139 +
         92 +
         958 +
+        924 +
         746,
     `startup catalog grew to ${bytes} bytes`,
   )

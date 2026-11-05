@@ -93,6 +93,7 @@ function harness(t) {
     pendingFileOperations: new Set(),
     fileOperationHasDialog: () => false,
     fileOperationDialogOpened: () => null,
+    recoverySettled: () => {},
     withinFileOperation: async (operation) => operation(),
     rendererUrl: frame.url,
     isTrustedRendererUrl: (url, expected) => url === expected,

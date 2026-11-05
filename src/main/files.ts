@@ -133,7 +133,7 @@ export async function writeMarkdown(
   onRefused?: () => void,
 ): Promise<void> {
   if (typeof markdown === 'string') validateMarkdown(markdown)
-  return writeText(
+  await writeText(
     path,
     typeof markdown === 'string' ? markdown : markdown.encodedChunks(),
     exclusive,
@@ -141,9 +141,24 @@ export async function writeMarkdown(
     renameDelays,
     onRefused,
   )
+  // A recovery copy goes after a save: the rename has to last a power cut first.
+  await syncFolder(dirname(path))
 }
 
-async function* writeChunks(
+/** Makes new names in a folder last a power cut. Windows has no such call. */
+export async function syncFolder(path: string) {
+  if (process.platform === 'win32') return
+  const folder = await open(path, 'r').catch(() => null)
+  try {
+    await folder?.sync()
+  } catch {
+    // A file system that can't sync a folder still holds the note.
+  } finally {
+    await folder?.close().catch(() => {})
+  }
+}
+
+export async function* writeChunks(
   source: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
 ) {
   let buffer = Buffer.allocUnsafe(1024 * 1024),

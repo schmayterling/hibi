@@ -343,6 +343,18 @@ export type DesktopApi = {
   getKeepUndoHistory: () => Promise<boolean>
   setKeepUndoHistory: (keep: boolean) => Promise<void>
   clearUndoHistory: () => Promise<void>
+  waitingRecovery: () => Promise<import('./recovery').RecoveryWaiting>
+  restoreRecovery: (id: string) => Promise<DocumentState | null>
+  discardRecovery: (id: string) => Promise<void>
+  dismissRecovery: () => Promise<void>
+  getRecoverySettings: () => Promise<import('./recovery').RecoverySettings>
+  /** The names of the copies these settings would remove; null for one that can't be read. */
+  previewRecoverySettings: (
+    next: import('./recovery').RecoverySettings,
+  ) => Promise<(string | null)[]>
+  setRecoverySettings: (
+    next: import('./recovery').RecoverySettings,
+  ) => Promise<void>
   /**
    * `updates` notices lead to the update settings. A `held` notice stays until
    * the next one replaces it; an empty one only removes it.

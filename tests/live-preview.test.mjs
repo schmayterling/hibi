@@ -836,7 +836,7 @@ test('a reader at the top of a note stays there when the note grows below', {
     { length: 60 },
     (_, i) => `Paragraph ${i} of the note.`,
   ).join('\n\n')
-  const top = await harness.evaluate(async (doc) => {
+  const result = await harness.evaluate(async (doc) => {
     const preview = window.livePreview
     const pane = document.querySelector('.rich-pane')
     const frames = async (count) => {
@@ -846,18 +846,23 @@ test('a reader at the top of a note stays there when the note grows below', {
     await preview.settle()
     // Sized so the note overflows by less than the distance that counts as
     // the bottom.
-    const { height } = pane.parentElement.getBoundingClientRect()
-    pane.parentElement.style.height = `${height + pane.scrollHeight - pane.clientHeight - 2}px`
+    await preview.mount(doc, {
+      width: 800,
+      height: 600 + pane.scrollHeight - pane.clientHeight - 2,
+    })
+    await preview.settle()
     await frames(4)
     pane.scrollTop = 0
+    const overflow = pane.scrollHeight - pane.clientHeight
     const view = preview.view()
     view.dispatch({
       changes: { from: view.state.doc.length, insert: `\n\n${doc}` },
     })
     await frames(8)
-    return pane.scrollTop
+    return { overflow, top: pane.scrollTop }
   }, doc)
-  assert.equal(top, 0)
+  assert.ok(result.overflow > 0 && result.overflow <= 4, JSON.stringify(result))
+  assert.equal(result.top, 0)
 })
 
 test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {

@@ -220,6 +220,7 @@ export function MarkdownEditor({
         (flavor) => flavor.id === 'text-extras.text-extras',
       ),
       math: flavors.some((flavor) => flavor.id === 'math.latex'),
+      mathBlocks: markdownSyntax.enabled('math.block'),
       frontmatter: markdownExtensions.some(
         (extension) => extension.id === 'frontmatter.metadata',
       ),

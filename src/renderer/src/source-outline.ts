@@ -230,11 +230,14 @@ export class SourceOutlineModel {
       alerts: options.alerts ?? false,
       textExtras: options.textExtras ?? false,
       math: options.math ?? false,
+      mathBlocks: !this.#disabled.has('math.block'),
     })
     this.#renderLabel = options.renderLabel ?? ((tokens) => plainText(tokens))
     const markdown = parser.configure([
       ...(options.gfm ? GFM : []),
-      ...(options.math ? [blockMathSyntax, { wrap: trackReadAhead }] : []),
+      ...(options.math && !options.disabled?.includes('math.block')
+        ? [blockMathSyntax, { wrap: trackReadAhead }]
+        : []),
       {
         defineNodes: [{ name: 'Frontmatter', block: true }],
         // Only block boundaries feed the outline. Labels have their own bounded

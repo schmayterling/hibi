@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   electron,
+  expectPageError,
   startupDiagnostics,
   stopElectronTree,
   waitForDocumentEditor,
@@ -109,6 +110,7 @@ for (const [entry, kind, navigate = false] of [
     const session = await page.context().newCDPSession(page)
     await session.send('Network.setCacheDisabled', { cacheDisabled: true })
     await page.clearPageErrors()
+    expectPageError(t, /PRIVATE_PRE_ENTRY/)
     const originalError = page.waitForEvent('pageerror', {
       predicate: (error) => error.message.includes('PRIVATE_PRE_ENTRY'),
     })

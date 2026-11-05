@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
-import { electron, startupDiagnostics } from './electron.mjs'
+import { electron, expectPageError, startupDiagnostics } from './electron.mjs'
 
 test('both renderer profiles preserve native error propagation, safe original locations, recovery actions and listener disposal', {
   timeout: 30000,
@@ -97,6 +97,7 @@ test('both renderer profiles preserve native error propagation, safe original lo
     })
     assert.deepEqual((await read()).records, [])
     const observed = page.waitForEvent('pageerror')
+    expectPageError(t, /PRIVATE_RENDERER_MESSAGE/)
     await page.evaluate(() => window.diagnosticHarness.exception())
     assert.match((await observed).message, /PRIVATE_RENDERER_MESSAGE/)
     await page.waitForFunction(() =>
@@ -123,6 +124,8 @@ test('both renderer profiles preserve native error propagation, safe original lo
     assert.equal(workerFailure.frames[0][0], 101)
     assert.doesNotMatch(JSON.stringify(state.records), /PRIVATE_|worker\.js/)
     const rejected = page.waitForEvent('pageerror')
+    // Playwright reports a rejection with a plain object as just its class.
+    expectPageError(t, /^Object$/)
     await page.evaluate(() => window.diagnosticHarness.rejection())
     await rejected
     await page.waitForFunction(() =>

@@ -1393,7 +1393,7 @@
   "5ff9f7742d6d": "Open workspace…",
   "656d97eb82c8": "Open {label} settings",
   "f5cc17a5ad18": "Open {value1}",
-  "03a40242321c": "Opens recovered notes without asking. Your files stay as they are until you save.",
+  "751a21eee1eb": "Opens recovered notes without asking. Autosave can save them if their files have not changed.",
   "21eb8b7d06ba": "Opens the note with this text as unsaved changes.",
   "7d0e85133759": "Opens when the current file operation ends",
   "1f1d592bdd1a": "Open…",

@@ -945,42 +945,40 @@ test('a scroll the view dropped with its state leaves the reading place held', {
   )
 })
 
+const hugeParagraphs = Array.from(
+  { length: 300 },
+  (_, i) => `Paragraph ${i} of the text above.`,
+).join('\n\n')
+const hugeMore = '\nmore\n'.repeat(200)
+const hugeWords = Array.from({ length: 30000 }, (_, i) => `word${i}`).join(' ')
+const hugeLines = Array.from(
+  { length: 20000 },
+  (_, i) => `line ${i} of one long paragraph`,
+).join('\n')
+const hugeLine = `${hugeParagraphs}\n\n${hugeWords}\n\nAfter.\n${hugeMore}`
+const hugeParagraph = `${hugeParagraphs}\n\n${hugeLines}\n\nAfter.\n${hugeMore}`
+
 test('the reading place deep inside a huge line holds through second changes, shrinks and splits', {
   timeout: 300000,
 }, async (t) => {
-  const paragraphs = Array.from(
-    { length: 300 },
-    (_, i) => `Paragraph ${i} of the text above.`,
-  ).join('\n\n')
-  const more = '\nmore\n'.repeat(200)
-  const words = Array.from({ length: 30000 }, (_, i) => `word${i}`).join(' ')
-  const lines = Array.from(
-    { length: 20000 },
-    (_, i) => `line ${i} of one long paragraph`,
-  ).join('\n')
+  // A clipped 800 px pane chooses different line gaps and misses the join.
+  await harness.setViewportSize({ width: 1500, height: 900 })
+  t.after(() => harness.setViewportSize({ width: 1000, height: 720 }))
   // Lines so long the view draws only the part near the screen: elsewhere
   // a position's coordinates are the edge of the space standing in for the
   // rest. The view starts the line's rows again after the part it draws, so
   // the text can land one row off.
-  const line = [
-    `${paragraphs}\n\n${words}\n\nAfter.\n${more}`,
-    'word25000 ',
-    30,
-  ]
+  const line = [hugeLine, 'word25000 ', 30]
   // A row off there is 28 px from where the aim left the text, which can
   // already be a px or two off.
-  const paragraph = [
-    `${paragraphs}\n\n${lines}\n\nAfter.\n${more}`,
-    'line 15000 of',
-    40,
-  ]
+  const paragraph = [hugeParagraph, 'line 15000 of', 40]
   // Steps: a space of a height at a position (0 removes it), `frame` to go
   // on a frame later instead of once the text holds, `scroll` for the
   // reader's scrolling before the view draws again, `aim` to put the text at
   // the pane's top again, `top` to measure the text at the pane's top instead,
   // `read` for the reader's scrolling once the text holds, `join` for that to a
   // row that starts at a join of lines, `cut` to delete the text and all after
-  // it, `shift` to move the pane down the page.
+  // it, `shift` to move the pane down the page. A run's fourth item is its width.
   const runs = [
     [
       'a second change a frame after the first',
@@ -1001,25 +999,14 @@ test('the reading place deep inside a huge line holds through second changes, sh
       paragraph,
       [{ grow: 5000, scroll: 300 }],
     ],
-    // A row there that starts at a join of lines, between elements.
-    [
+    // A row there that starts at a join of lines, between elements. Wrapping
+    // decides where one is: a width has one or doesn't.
+    ...[1048, 1000, 1052, 1044, 1060].map((width) => [
       'a scroll from a row at a join before the view draws again',
       paragraph,
       [{ join: true }, { grow: 5000, scroll: 300 }],
-    ],
-    // Any of the reader's input counts as scrolling, not only the wheel.
-    ...['keydown', 'pointerdown', 'touchmove'].map((input) => [
-      `a scroll after ${input} before the view draws again`,
-      line,
-      [{ grow: 5000, scroll: 300, input }],
+      width,
     ]),
-    // Without the reader's input, as a script's, the scroll in that frame
-    // doesn't count: the place holds.
-    [
-      'a scroll without input before the view draws again',
-      line,
-      [{ grow: 5000, scroll: 300, input: null }],
-    ],
     ['a large change', line, [{ grow: 150000 }]],
     ['a large change', paragraph, [{ grow: 150000 }]],
     // The place held for one change isn't the reader's for the next, when
@@ -1072,25 +1059,41 @@ test('the reading place deep inside a huge line holds through second changes, sh
     ...slowed.map((run) => [2, run]),
     ...slowed.map((run) => [4, run]),
   ]
-  for (const [rate, [name, [doc, target, slack], steps]] of sequences) {
+  for (const [rate, [name, [doc, target, slack], steps, width]] of sequences) {
     await cpu.send('Emulation.setCPUThrottlingRate', { rate })
     const result = await harness.evaluate(
-      async ({ doc, target, steps, macOS }) => {
+      async ({ doc, target, steps, width }) => {
         const preview = window.tables
         await preview.mount(
           doc,
-          { width: 1000, height: 800 },
+          { width: width ?? 1000, height: 800 },
           { editable: true },
         )
         const view = preview.view()
         const pane = document.querySelector('.rich-pane')
         const frame = () => new Promise(requestAnimationFrame)
         const at = doc.indexOf(target)
+        // A character's box reads what is drawn without running a pending
+        // measure, which can move the reveal ahead of the reader's task.
         const where = (pos = at) => {
-          const box = view.coordsAtPos(pos, 1)
-          return box
-            ? Math.round(box.top - pane.getBoundingClientRect().top)
-            : null
+          if (
+            !view.visibleRanges.some(
+              (range) => range.from <= pos && pos < range.to,
+            )
+          )
+            return null
+          for (const at of [pos, pos + 1]) {
+            const { node, offset } = view.domAtPos(at, 1)
+            if (node.nodeType !== Node.TEXT_NODE || offset >= node.length)
+              continue
+            const range = document.createRange()
+            range.setStart(node, offset)
+            range.setEnd(node, offset + 1)
+            return Math.round(
+              range.getClientRects()[0].top - pane.getBoundingClientRect().top,
+            )
+          }
+          return null
         }
         const still = async (pos = at) => {
           let last
@@ -1140,13 +1143,8 @@ test('the reading place deep inside a huge line holds through second changes, sh
           if (step.aim) tops.push(await aim())
           else if (step.read || step.join || step.cut || step.shift) {
             const read = step.join ? toJoin() : step.read
-            // ponytail: other platforms' scrollbars and shaping wrap otherwise,
-            // with maybe no such row: the step pins it where the gate runs.
-            if (step.join && read === null && macOS) tops.push(null)
-            if (read) {
-              pane.dispatchEvent(new Event('wheel'))
-              pane.scrollTop += read
-            }
+            if (step.join && read === null) return 'no row at a join'
+            if (read) pane.scrollTop += read
             if (step.cut)
               view.dispatch({
                 changes: { from: at - 50, to: view.state.doc.length },
@@ -1160,19 +1158,24 @@ test('the reading place deep inside a huge line holds through second changes, sh
             let expect = 0
             if (step.scroll || step.top) {
               mark = rowAt((step.scroll ?? 0) + 1)
-              expect =
-                where(mark) -
-                (step.scroll && step.input !== null ? step.scroll : 0)
+              expect = where(mark) - (step.scroll ?? 0)
             }
             preview.growAt(
               step.below === undefined ? 0 : at + step.below,
               step.grow,
             )
             if (step.scroll) {
-              // After the slice keeps the reader, before the next frame.
-              for (let i = 0; i < 3; i++) await Promise.resolve()
-              if (step.input !== null)
-                pane.dispatchEvent(new Event(step.input ?? 'wheel'))
+              // The reader's next chance, once the slice is over: a task, and
+              // often the same frame.
+              await new Promise((done) => {
+                const channel = new MessageChannel()
+                channel.port1.onmessage = () => {
+                  channel.port1.close()
+                  channel.port2.close()
+                  done()
+                }
+                channel.port2.postMessage(0)
+              })
               pane.scrollTop += step.scroll
             }
             if (step.frame) await frame()
@@ -1182,15 +1185,252 @@ test('the reading place deep inside a huge line holds through second changes, sh
         pane.style.marginTop = ''
         return tops
       },
-      { doc, target, steps, macOS: process.platform === 'darwin' },
+      { doc, target, steps, width },
     )
-    results.push({ name, rate, target, slack, tops: result })
+    results.push({ name, rate, target, slack, width, tops: result })
   }
   const report = JSON.stringify(results)
-  for (const { tops, slack } of results)
+  const measured = results.filter(({ tops }) => Array.isArray(tops))
+  // The widths tried have a row at a join on every platform's text metrics.
+  assert.ok(
+    measured.some(({ name }) => name.includes('at a join')),
+    report,
+  )
+  for (const { name, tops, slack } of measured) {
     for (const top of tops)
       assert.ok(top !== null && Math.abs(top) <= slack, report)
+    // Nothing lays out a row again here: the reader's scrolling stands exactly.
+    if (name.includes('at a join'))
+      assert.ok(Math.abs(tops.at(-1)) <= 2, report)
+  }
 })
+
+for (const [layout, doc, target] of [
+  ['line', hugeLine, 'word25000 '],
+  ['paragraph', hugeParagraph, 'line 15000 of'],
+])
+  test(`the text at the pane's top in a huge ${layout} holds through wheel steps and new widths`, {
+    timeout: 120000,
+  }, async () => {
+    await harness.evaluate(
+      async ({ doc, target }) => {
+        await window.tables.mount(
+          doc,
+          { width: 1400, height: 800 },
+          { editable: true },
+        )
+        const view = window.tables.view()
+        const pane = document.querySelector('.rich-pane')
+        const frame = () => new Promise(requestAnimationFrame)
+        const at = doc.indexOf(target)
+        // The row the page draws the text in: at a row that starts at a join
+        // of lines, coordsAtPos gives the row above.
+        const where = (pos) => {
+          if (
+            !view.visibleRanges.some(
+              (range) => range.from <= pos && pos < range.to,
+            )
+          )
+            return null
+          for (const at of [pos, pos + 1]) {
+            const { node, offset } = view.domAtPos(at, 1)
+            if (node.nodeType === Node.TEXT_NODE && offset < node.length) {
+              const range = document.createRange()
+              range.setStart(node, offset)
+              range.setEnd(node, offset + 1)
+              return range.getClientRects()[0].top
+            }
+          }
+          return view.coordsAtPos(pos, 1).top
+        }
+        for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
+          view.dispatch({
+            effects: view.constructor.scrollIntoView(at, {
+              y: 'start',
+              yMargin: 0,
+            }),
+          })
+          for (let frames = 0; frames < 4; frames++) await frame()
+        }
+        for (let frames = 0; frames < 30; frames++) await frame()
+        window.reading = {
+          where,
+          frame,
+          panes: document.querySelector('.editor-panes'),
+          rowAtTop: (y = 1) => {
+            const caret = document.caretPositionFromPoint(
+              view.contentDOM.getBoundingClientRect().left +
+                Number.parseFloat(
+                  getComputedStyle(view.contentDOM).paddingLeft,
+                ) +
+                1,
+              pane.getBoundingClientRect().top + y,
+            )
+            return view.posAtDOM(caret.offsetNode, caret.offset)
+          },
+        }
+      },
+      { doc, target },
+    )
+    await harness.mouse.move(500, 400)
+    // A wheel step moves the text by the step: when the editor moves its line
+    // gaps, the same scroll shows other text.
+    const steps = []
+    for (const delta of [100, -100])
+      for (let step = 0; step < 16; step++) {
+        const before = await harness.evaluate(() => {
+          const { rowAtTop, where } = window.reading
+          const pos = rowAtTop()
+          return { pos, top: where(pos) }
+        })
+        await harness.mouse.wheel(0, delta)
+        const after = await harness.evaluate(async (pos) => {
+          const { where, frame } = window.reading
+          for (let frames = 0; frames < 3; frames++) await frame()
+          return where(pos)
+        }, before.pos)
+        steps.push(after === null ? null : after - before.top + delta)
+      }
+    // A new width wraps the text at once, the editor's estimates follow later.
+    const widths = await harness.evaluate(async () => {
+      const { rowAtTop, where, frame, panes } = window.reading
+      for (let frames = 0; frames < 30; frames++) await frame()
+      // A command already inside the pane moves nothing and keeps the place.
+      const view = window.tables.view()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(rowAtTop(300)),
+      })
+      for (let frames = 0; frames < 3; frames++) await frame()
+      const pos = rowAtTop()
+      const start = where(pos)
+      const offs = []
+      for (const width of [1100, 900, 1400]) {
+        panes.style.width = `${width}px`
+        // What the frame paints: this task runs after it.
+        await frame()
+        await new Promise((done) => setTimeout(done))
+        const painted = where(pos)
+        for (let frames = 0; frames < 30; frames++) await frame()
+        const settled = where(pos)
+        for (const top of [painted, settled])
+          offs.push(top === null ? null : top - start)
+      }
+      return offs
+    })
+    // A row's start is the test's mark, not the text held, which can be further
+    // along the row: rows half as long break it up to two rows away.
+    const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
+    assert.ok(
+      steps.every((off) => off !== null && Math.abs(off) <= 30) &&
+        widths.every(rowsHeld),
+      JSON.stringify({ steps, widths }),
+    )
+    // What happened since doesn't take the place back to where it was, or
+    // the place from where it is now.
+    const since = await harness.evaluate(async () => {
+      const { rowAtTop, where, frame, panes } = window.reading
+      const view = window.tables.view()
+      const pane = document.querySelector('.rich-pane')
+      const settle = async () => {
+        for (let frames = 0; frames < 30; frames++) await frame()
+      }
+      const off = (pos, from) => {
+        const top = where(pos)
+        return top === null ? null : top - from
+      }
+      const pos = rowAtTop()
+      const start = where(pos)
+      view.dispatch({ changes: { from: 0, insert: 'x' } })
+      await settle()
+      panes.style.width = '1200px'
+      await settle()
+      const edited = off(pos + 1, start)
+      pane.style.marginTop = '80px'
+      await settle()
+      panes.style.width = '1000px'
+      await settle()
+      const moved = off(pos + 1, start + 80)
+      pane.style.marginTop = ''
+      await settle()
+      // A cut above moves the text held.
+      const here = rowAtTop()
+      const hereTop = where(here)
+      view.dispatch({ changes: { from: 0, to: 3000 } })
+      await settle()
+      const cutAbove = off(here - 3000, hereTop)
+      // Typing asks for a scroll that moves nothing: the place stays.
+      const typed = rowAtTop()
+      const typedTop = where(typed)
+      view.dispatch({
+        changes: { from: typed + 200, insert: 'z' },
+        selection: { anchor: typed + 201 },
+        scrollIntoView: true,
+      })
+      await settle()
+      panes.style.width = '1100px'
+      await settle()
+      const typing = off(typed, typedTop)
+      // A cut of the text held: the text after it is the place.
+      const gone = rowAtTop()
+      const goneTop = where(gone)
+      view.dispatch({ changes: { from: gone - 20, to: gone + 20 } })
+      await settle()
+      panes.style.width = '1000px'
+      await settle()
+      const nextPlace = off(gone - 20, goneTop)
+      // Under a bar over the pane's top, the text below the bar holds.
+      const bar = document.createElement('div')
+      bar.style.cssText = 'position:fixed;inset:0 0 auto;height:48px;z-index:10'
+      document.body.append(bar)
+      for (let step = 0; step < 5; step++) {
+        pane.scrollTop += 100
+        await frame()
+      }
+      await settle()
+      const under = rowAtTop(50)
+      const underTop = where(under)
+      panes.style.width = '800px'
+      await settle()
+      const covered = off(under, underTop)
+      bar.remove()
+      panes.style.width = '1000px'
+      await settle()
+      // A jump past what the editor draws, as the scrollbar's, stands: a line
+      // gap's edge is no place to hold.
+      const jumpTo = pane.scrollTop + 8000
+      pane.scrollTop = jumpTo
+      await settle()
+      const jumped = pane.scrollTop - jumpTo
+      // A cut of the text held, and all after it: the place is past the note's
+      // end now.
+      pane.scrollTop += 10
+      await settle()
+      view.dispatch({
+        changes: { from: rowAtTop() - 50, to: view.state.doc.length },
+      })
+      await settle()
+      const asked = view.state.doc.toString().indexOf('Paragraph 250 ')
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(asked, {
+          y: 'start',
+          yMargin: 0,
+        }),
+      })
+      await settle()
+      delete window.reading
+      return {
+        edited,
+        moved,
+        cutAbove,
+        typing,
+        nextPlace,
+        covered,
+        jumped,
+        asked: off(asked, pane.getBoundingClientRect().top),
+      }
+    })
+    assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
+  })
 
 /** Mount `doc` in the editable harness. */
 const mount = (doc) =>

@@ -13,7 +13,12 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
+import {
+  autosaveOff,
+  electron,
+  waitForAsync,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -155,6 +160,7 @@ test('after a killed process the prompt gets the text back, the file untouched, 
 }, async (t) => {
   const { file, copies, launch } = await note(t)
   const first = await launch()
+  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('typed and never saved')
   await first.kept('typed and never saved')
@@ -205,6 +211,7 @@ test('typing nonstop loses about the last second to a kill', {
   for (let round = 0; round < 3; round++) {
     const { launch } = await note(t, 'start ')
     const first = await launch()
+    await autosaveOff(first.app, first.page)
     await first.open('start ')
     await first.edit('typing ')
     const typed = []
@@ -248,6 +255,7 @@ test('a copy cut off by the crash falls back to the whole one before it', {
 }, async (t) => {
   const { profile, launch } = await note(t)
   const first = await launch()
+  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('the whole copy')
   const name = await first.kept('the whole copy')
@@ -268,6 +276,7 @@ test('over a file changed outside, a copy opens apart and autosave cannot replac
 }, async (t) => {
   const { file, launch } = await note(t)
   const first = await launch()
+  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('my unsaved words')
   await first.kept('my unsaved words')
@@ -304,6 +313,7 @@ test('a note deleted outside and a note never saved both come back as new notes'
 }, async (t) => {
   const { file, launch } = await note(t)
   const first = await launch()
+  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('gone but kept')
   await first.kept('gone but kept')
@@ -336,6 +346,7 @@ test('don’t save leaves no copy, at tab close and at quit', {
 }, async (t) => {
   const { copies, launch } = await note(t)
   const first = await launch()
+  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('thrown away in a tab')
   await first.kept('thrown away in a tab')
@@ -360,6 +371,7 @@ test('discarding from the prompt deletes the copy; deciding later asks again', {
 }, async (t) => {
   const { copies, launch } = await note(t)
   const first = await launch()
+  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('still undecided')
   await first.kept('still undecided')
@@ -390,6 +402,7 @@ test('with the setting on, a killed note opens without a prompt and stays protec
     }),
   )
   const first = await launch()
+  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('opened by itself')
   await first.kept('opened by itself')
@@ -518,6 +531,7 @@ test('lowering the size limit says what goes and removes the oldest, not an open
   })
   const app = await launch(1)
   await later(app.page)
+  await autosaveOff(app.app, app.page)
   await app.open('original')
   await app.edit('open and unsaved')
   const open = await app.kept('open and unsaved')

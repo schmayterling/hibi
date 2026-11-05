@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  expectPageError,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -259,6 +263,7 @@ test('layout output beyond its node is reported with its owner and later blocks 
 test('a view update that throws while drawing resynchronizes the formatted view with the accepted text', {
   timeout: 120000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: transient draw failure/)
   const source = '# Title\n\n**strong** text\n\nend\n'
   const { app, page, errors } = await open(
     t,

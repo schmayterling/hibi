@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
-import { after, before, electron } from './electron.mjs'
+import { after, before, electron, expectPageError } from './electron.mjs'
 import { checkTooltips } from './tooltips.mjs'
 
 let app, folder, page
@@ -75,7 +75,7 @@ test(
 
 test('shared dialogs validate input, trap focus, queue, and clean up by addon owner', {
   timeout: 45000,
-}, async () => {
+}, async (t) => {
   const prompt = page.getByRole('button', { name: /open built-in prompt/i })
   const target = page.getByRole('button', { name: /tooltip target/i })
   await prompt.focus()
@@ -485,6 +485,7 @@ test('shared dialogs validate input, trap focus, queue, and clean up by addon ow
   await addonToast.waitFor({ state: 'detached' })
   assert.equal(await page.evaluate(() => window.toastRuns), 2)
   // A throwing action still reports, dismisses, and returns focus.
+  expectPageError(t, /toast action failed/)
   const toastError = page.waitForEvent('pageerror')
   await page.evaluate(() =>
     window.dialogTest.otherToasts.api.show({

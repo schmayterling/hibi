@@ -581,6 +581,44 @@ test('display math across lines, blank or holding dollars draws as display math,
   assert.equal(await documentText(), note)
 })
 
+test('display blocks read to their closing line and end with their list item, as in Obsidian', {
+  timeout: 90000,
+}, async () => {
+  // Obsidian 1.13.7 reads block math like a fence: an unclosed block is still
+  // a formula, and a list item keeps an under-indented line, so the closing
+  // line there opens nothing and the next item stays a list item.
+  await writeFile(
+    join(folder, 'notes', 'fence-blocks.md'),
+    '1. Compute:\n   $$\n   a^2\n$$\n2. Next step\n\n- Unclosed:\n  $$\n  b^2\n\nAfter the list\n\n$$\nc^2 $$ d\ne^2$$\n\nlast\n',
+  )
+  await open('fence-blocks.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
+  const formulas = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane [data-type="block-math"]')].map(
+        (formula) => formula.dataset.latex.replace(/\s+/g, ' '),
+      ),
+    )
+  await page
+    .waitForFunction(
+      () =>
+        document.querySelectorAll('.rich-pane [data-type="block-math"] .katex')
+          .length === 3,
+    )
+    .catch(async (cause) => {
+      throw new Error(JSON.stringify(await formulas()), { cause })
+    })
+  assert.deepEqual(await formulas(), ['a^2', 'b^2', 'c^2 $$ d e^2'])
+  assert.deepEqual(
+    await page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .cm-line')]
+        .map((line) => line.textContent.trim())
+        .filter(Boolean),
+    ),
+    ['Compute:', 'Next step', 'Unclosed:', 'After the list', 'last'],
+  )
+})
+
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {
   timeout: 90000,
 }, async () => {

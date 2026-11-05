@@ -146,6 +146,7 @@ import { formattedSelectionPreview } from './formatted-selection-text'
 import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
+import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { mappedPositionAt } from './native-dom-selection'
@@ -486,17 +487,9 @@ const featureExtensions = (
 /** CodeMirror internal: lays out and draws what the viewport now shows. */
 type MeasuredView = { measure: (flush?: boolean) => void }
 
-/**
- * Names a failing feature, which then leaves every editor. A healthy one can be
- * named, as when a failure depends on focus: the user reads that it is likely.
- */
+/** Names a failing feature, which then leaves every editor. */
 const reportFailure = ({ feature }: InstalledFeature, error: unknown) =>
-  feature.fail?.(
-    new Error(
-      `Likely addon behind this error: ${feature.id}: ${errorMessage(error)}`,
-      { cause: error },
-    ),
-  )
+  feature.fail?.(new LikelyAddonError(feature.id, errorMessage(error), error))
 
 /**
  * Reports the features an edit fails with, which then leave every editor,

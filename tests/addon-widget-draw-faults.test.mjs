@@ -610,8 +610,14 @@ test('a draw failure that going back one at a time does not bring out takes ever
   await opened(context, plain)
   await type(context, 'before ')
   await context.page.keyboard.insertText('Q')
-  await named(context, 'bad-ext.bad: decorations boom')
-  await named(context, 'good-ext.good: decorations boom')
+  // Everyone named reads at the same time, in one toast.
+  const alerts = context.page.getByRole('alert')
+  await alerts
+    .getByText(
+      /^Likely addons behind this error: (?=.*bad-ext\.bad)(?=.*good-ext\.good).*: decorations boom$/,
+    )
+    .waitFor({ timeout: 10000 })
+  assert.equal(await alerts.getByText(/^Likely addon/).count(), 1)
   await answers(context)
   await editorReady(context)
   await type(context, 'x')

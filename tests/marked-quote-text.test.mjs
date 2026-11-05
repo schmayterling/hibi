@@ -11,6 +11,8 @@ const samples = [
   '> [!NOTE]\n> > - a\n> > - b\n> c\nlazy',
   '> [!NOTE]\n> > b\nlazy',
   '> [!NOTE]\n> > w1w\n> > w2w\nw3w',
+  '> >[!TIP]-\n>  > >+ w1w\n>> w2w\nw3w w4w w5w',
+  '> > [!CAUTION]\n  w1w w2w w3w\n>\t> >  > \tw4w w5w w6w \n  w7w w8w w9w w10w   ',
   '> [!NOTE]\n> > - w1w\n> > - w2w\n> w3w\nw4w',
   ' >  > [!IMPORTANT]\n > > > - [ ] w1w w2w\n>> w3w w4w w5w\n>  >  > [ref4]: /x  \nw6w w7w w8w w9w',
 ]
@@ -86,6 +88,15 @@ test('equal-sized alert siblings and later notes retain their own words', () => 
     '> [!NOTE]\n> > [!TIP]\n> > w1w\n\n> [!NOTE]\n> > [!TIP]\n> > w2w'
   for (const input of [source, source.replace('w1w', 'w3w'), source])
     assert.deepEqual(words(parser.parse(input)), words(input), input)
+})
+
+test('cached alert boundaries cannot inherit a known reference definition', () => {
+  const source =
+    '> [!NOTE]\n>\n> [r]: /x\n> > [!TIP]\n> >\n> >      - w1w\n> > [r]: /x  \n> w2w\n> w3w'
+  const html = new Marked(blockMarkdown, alertMarkdown).parse(source)
+  const innerEnd = html.indexOf('</div></blockquote>')
+  assert.deepEqual(words(html.slice(0, innerEnd)), ['w1w', 'w2w', 'w3w'])
+  assert.deepEqual(words(html), words(source))
 })
 
 test('a nested quote body retains its physical tab columns', () => {

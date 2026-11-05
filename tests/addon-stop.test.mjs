@@ -81,6 +81,7 @@ test('a failed native stop is reported and cannot cancel the quit', async (t) =>
   const pending = new Function(
     'app',
     'stopNativeAddons',
+    'flushAppIcon',
     'globalShortcuts',
     'background',
     stripTypeScriptTypes(source) + '; return () => nativeStopping;',
@@ -90,6 +91,7 @@ test('a failed native stop is reported and cannot cancel the quit', async (t) =>
       attempts++
       throw failure
     },
+    async () => {},
     { clear() {} },
     { dispose() {} },
   )
@@ -143,12 +145,14 @@ test('quit resumes after a never-resolving native stop reaches its deadline', as
   const pending = new Function(
     'app',
     'stopNativeAddons',
+    'flushAppIcon',
     'globalShortcuts',
     'background',
     stripTypeScriptTypes(source) + '; return () => nativeStopping;',
   )(
     app,
     stopNativeAddons,
+    async () => {},
     {
       clear() {
         cleaned++

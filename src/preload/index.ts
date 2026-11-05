@@ -6,6 +6,7 @@ import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
+import { APP_ICON_CHANNELS } from '../shared/app-icon'
 import { BACKGROUND_CHANNELS } from '../shared/background'
 import { CLIPBOARD_CHANNELS } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
@@ -499,6 +500,8 @@ if (process.isMainFrame) {
         paths,
         options,
       ),
+    getAppIconMode: () => ipcRenderer.invoke(APP_ICON_CHANNELS.get),
+    setAppIconMode: (mode) => ipcRenderer.invoke(APP_ICON_CHANNELS.set, mode),
     setAppearance: (appearance) =>
       ipcRenderer.invoke(APPEARANCE_CHANNEL, appearance),
     getHideWindowControls: () =>

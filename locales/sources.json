@@ -317,6 +317,12 @@
   "c91da2e0203b": [
     "src/shared/hotkeys.ts"
   ],
+  "ab2b4bb23be7": [
+    "src/renderer/src/AppIconSettings.tsx"
+  ],
+  "ad18650ac813": [
+    "src/renderer/src/AppIconSettings.tsx"
+  ],
   "9e3db30bfe7c": [
     "src/renderer/src/editor-view-api.ts"
   ],
@@ -407,6 +413,15 @@
   ],
   "fb3b2acda004": [
     "src/addons/dictionary/CustomWords.tsx"
+  ],
+  "56244b12a992": [
+    "src/renderer/src/AppIconSettings.tsx"
+  ],
+  "61420a880aa5": [
+    "src/renderer/src/AppIconSettings.tsx"
+  ],
+  "b0c79927f6bd": [
+    "src/renderer/src/AppIconSettings.tsx"
   ],
   "3907fa7f8072": [
     "src/addons/documentation/ExportDialog.tsx",
@@ -989,6 +1004,9 @@
   ],
   "79bce0799896": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "fa926ae81074": [
+    "src/renderer/src/AppIconSettings.tsx"
   ],
   "58ff373bd894": [
     "src/addons/quick-note/Settings.tsx"
@@ -2614,6 +2632,12 @@
   "82eee8d973ac": [
     "src/renderer/src/AddonInstallChooser.tsx"
   ],
+  "d06a1b24afc9": [
+    "src/renderer/src/AppIconSettings.tsx"
+  ],
+  "48b4e3ed58c7": [
+    "src/renderer/src/AppIconSettings.tsx"
+  ],
   "17c397893668": [
     "src/addons/dictionary/SideView.tsx"
   ],
@@ -3204,6 +3228,9 @@
   ],
   "3a36f3990be4": [
     "src/main/analysis.ts"
+  ],
+  "d1b7a212d05a": [
+    "src/main/app-icon.ts"
   ],
   "440c06b497b1": [
     "src/main/file-associations.ts"
@@ -7532,6 +7559,9 @@
   ],
   "a2b8baaa846d": [
     "src/renderer/src/Introduction.tsx"
+  ],
+  "21f4c02862c6": [
+    "src/main/app-icon.ts"
   ],
   "6e3f417d897c": [
     "src/addons/dictionary/custom-words.ts"

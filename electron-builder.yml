@@ -38,7 +38,7 @@ electronFuses:
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
 mac:
-  icon: build/icon.icns
+  icon: build/hibi.icon
   target: [dmg, zip]
   forceCodeSigning: true
   hardenedRuntime: true

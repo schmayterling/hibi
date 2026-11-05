@@ -41,6 +41,7 @@ import {
   AddonSettings,
   useAddonReadme,
 } from './AddonSettings'
+import { AppIconSettings } from './AppIconSettings'
 import { AutosaveSettings } from './AutosaveSettings'
 import { addonRegistry } from './addon-registry'
 import { addons } from './addons'
@@ -630,6 +631,7 @@ export function SettingsScreen({
             </div>
             <h2>Colors</h2>
             <ColorschemeSettings store={colorschemes} showLicense={false} />
+            {info?.platform === 'darwin' && <AppIconSettings />}
             <h2>Cursor</h2>
             <div className="settings-group">
               {(

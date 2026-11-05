@@ -1,0 +1,21 @@
+{
+  "fill": { "solid": "srgb:0,0,0,0" },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "light.png",
+          "image-name-specializations": [
+            { "appearance": "dark", "value": "dark.png" }
+          ],
+          "name": "Butterfly on paper",
+          "glass": false
+        }
+      ],
+      "shadow": { "kind": "neutral", "opacity": 0 },
+      "specular": false,
+      "translucency": { "enabled": false, "value": 0 }
+    }
+  ],
+  "supported-platforms": { "squares": ["macOS"] }
+}

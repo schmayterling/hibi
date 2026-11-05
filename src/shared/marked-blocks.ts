@@ -5,9 +5,11 @@ import {
   Tokenizer,
   type Tokens,
 } from 'marked'
+import { blockStartLines, lazyItemEnd } from '../addons/_shared/block-start.ts'
 import { withFenceRules } from './marked-fences.ts'
 import {
   extendQuote,
+  isLeafBlock,
   leafListEnd,
   quoteReader,
   withLeafBlocks,
@@ -24,6 +26,14 @@ const containerColumns = new WeakMap<Tokenizer, number>()
 // Candidate calls and source spans, including title interruption windows, and
 // the quote lines scanned for the native quote rule's extent.
 export const blockScanCounters = { calls: 0, units: 0, quoteLines: 0 }
+
+// Lines where the lexer's block extensions start. They interrupt paragraphs
+// there, so, as in lezer, they also end lazy quote lines and setext text.
+function extensionLines(tokenizer: Tokenizer) {
+  return (tokenizer.lexer.options.extensions?.startBlock ?? []).flatMap(
+    (start) => blockStartLines.get(start) ?? [],
+  )
+}
 
 // The paragraph interruptions inside the native quote rule, or null when a
 // custom rule replaced it.
@@ -68,6 +78,9 @@ function quoteScan(
   const { blockquoteStart } = tokenizer.rules.other
   if (!blockquoteStart.test(source)) return
   const interrupt = quoteInterrupt(tokenizer)
+  // A line's newline tells that the quote's container goes on after it, but
+  // not in a nested re-read, whose lines can run past the enclosing quote.
+  const blocks = feed ? [] : extensionLines(tokenizer)
   // Line starts of the extent in the source, or the fed lines; text is sliced
   // on demand.
   const starts: number[] = []
@@ -105,7 +118,13 @@ function quoteScan(
     if (blockquoteStart.test(line)) {
       const marker = line.indexOf('>')
       lazy = marker + (line[marker + 1] === ' ' ? 2 : 1) < line.length
-    } else if (!lazy || !line || interrupt!.test(raw)) return false
+    } else if (
+      !lazy ||
+      !line ||
+      interrupt!.test(raw) ||
+      blocks.some((block) => block.test(raw))
+    )
+      return false
     if (!scan.tabs && line.includes('\t')) scan.tabs = true
     return true
   }
@@ -344,10 +363,10 @@ function readQuote(
   let chunkLines: string[] = []
   // The chunk that produced the last token, for its row if tab state arrives later.
   let produced: { row: number; body: string; offset: number } | undefined
-  // Tab columns need the quote state from the first line with a tab onward;
-  // the lines before it parse the same way natively. An enclosing quote's
-  // state is adopted at entry, or as soon as the enclosing reader installs it
-  // while feeding this one; a top-level quote installs its own.
+  // Tabs and custom leaf blocks need physical quote rows: a lazy line can
+  // continue paragraph text, but cannot open a new block. An enclosing quote's
+  // state is adopted at entry, or when its reader installs it while feeding
+  // this one; a top-level quote installs its own.
   const lastToken = () => {
     const token = tokens.at(-1)
     return {
@@ -389,15 +408,24 @@ function readQuote(
     }
   }
   if (state) adopt(state)
-  const tabs = () => {
+  const tabs = (leaves = false) => {
     if (state) {
       if (!adopted && !release) adopt(state)
+      if (scan.tabs) {
+        scope!.columns = true
+        if (state.scope.native) state.scope.columns = true
+      }
       return
     }
     const found = quoteFrames.get(this)
     if (found) adopt(found)
-    else if (scan.tabs && !untabbedQuotes.has(this)) {
-      release = installQuoteState(this, rows() - chunkLines.length, lastToken())
+    else if ((scan.tabs || leaves) && !untabbedQuotes.has(this)) {
+      release = installQuoteState(
+        this,
+        rows() - chunkLines.length,
+        lastToken(),
+        scan.tabs,
+      )
       state = quoteFrames.get(this)!
       scope = state.scope
       strip = this.rules.other.blockquoteSetextReplace2
@@ -410,6 +438,19 @@ function readQuote(
   const lineAt = (index = 0) => {
     const line = peek(index)
     if (!adopted && !release) tabs()
+    const physical = scan.line(rows() + index)
+    if (
+      state &&
+      scope &&
+      physical !== undefined &&
+      !this.rules.other.blockquoteStart.test(physical)
+    ) {
+      const row = (origin ?? 0) + rows() + index
+      state.lazy.set(
+        row,
+        Math.min(state.lazy.get(row) ?? scope.depth, scope.depth),
+      )
+    }
     return line
   }
   // Line `index` as the native re-read input spells it: with a newline unless
@@ -606,7 +647,19 @@ function readQuote(
         break
       }
       if (last?.type === 'list') {
-        const input = quoteListInput(this, last.raw, lineAt)
+        const starts = extensionLines(this).filter((start) => start.lazyItem)
+        const input = quoteListInput(this, last.raw, (index) => {
+          const line = lineAt(index)
+          if (
+            !state &&
+            line !== undefined &&
+            starts.some((start) => start.test(line.trimStart() + '\n'))
+          ) {
+            tabs(true)
+            return lineAt(index)
+          }
+          return line
+        })
         const list = this.list(input)!
         tokens[tokens.length - 1] = list
         replaceQuoteTail(text, last.raw.length, list.raw)
@@ -863,6 +916,8 @@ type QuoteState = {
     | undefined
   origins: WeakMap<object, number>
   prefixes: Map<number, string>
+  /** First quote level absent on a physical row: only paragraph text can continue there. */
+  lazy: Map<number, number>
   extension?: { source: string; line: number } | undefined
 }
 const quoteFrames = new WeakMap<Tokenizer, QuoteState>()
@@ -1106,6 +1161,7 @@ function installQuoteState(
   tokenizer: Tokenizer,
   next: number,
   last: { tokens: Token[]; token: Token | undefined; row: number | undefined },
+  columns: boolean,
 ) {
   const scope: QuoteScope = {
     kind: 'quote',
@@ -1113,7 +1169,7 @@ function installQuoteState(
     indent: 0,
     next,
     native: true,
-    columns: true,
+    columns,
   }
   if (last.tokens.length) scope.last = last.tokens
   const state: QuoteState = {
@@ -1121,6 +1177,7 @@ function installQuoteState(
     scope,
     origins: new WeakMap(),
     prefixes: new Map(),
+    lazy: new Map(),
   }
   if (last.token && last.row !== undefined)
     state.origins.set(last.token, last.row)
@@ -1165,6 +1222,12 @@ function installQuoteState(
             )
             try {
               const token = read.call(this, input.text, tokens)
+              if (
+                token &&
+                isLeafBlock(token) &&
+                (state.lazy.get(line) ?? Infinity) <= state.scope.depth
+              )
+                return
               if (token && input.raw) token.raw = input.raw(token.raw.length)
               return token
             } finally {
@@ -1277,6 +1340,7 @@ export class BlockTokenizer extends Tokenizer {
         },
       },
     }
+    const listRules = this.rules
     const lexer = this.lexer,
       blockTokens = lexer.blockTokens
     let item = 0
@@ -1301,8 +1365,125 @@ export class BlockTokenizer extends Tokenizer {
     let cutoff = source.length
     let token: ReturnType<Tokenizer['list']>
     try {
-      token = read.call(this, source)
-      if (token) cutoff = leafListEnd(token, source, columns, base)
+      // Native lists end before a lazy custom opener after an empty item,
+      // heading or fence. Retain opted opening lines in that item's forward
+      // extent, even when their body later decides they are literal text.
+      const starts = extensionLines(this).filter((start) => start.lazyItem)
+      const firstMarker = rules.block.list.exec(source)![1]!.trim()
+      const markerKind = (marker: string) =>
+        /[.)]$/.test(marker) ? marker.at(-1) : marker
+      const sameItem = (at: number) => {
+        const text = source.slice(at)
+        const marker = rules.block.list.exec(text)?.[1]?.trim()
+        return (
+          marker &&
+          !rules.block.hr.test(text) &&
+          markerKind(marker) === markerKind(firstMarker)
+        )
+      }
+      let from = 0
+      for (;;) {
+        this.rules = listRules
+        lexer.blockTokens = nested
+        const firstColumn = columns.length
+        const group = read.call(this, source.slice(from))
+        if (!group) break
+        const bound = leafListEnd(
+          group,
+          source.slice(from),
+          columns.slice(firstColumn),
+          base,
+        )
+        if (bound < source.length - from) {
+          cutoff = from + bound
+          break
+        }
+        let end = from + group.raw.length
+        let recovered = false
+        const newline = /^[ \t]*\n/.exec(source.slice(end))
+        let at = newline ? end + newline[0].length : -1
+        const lineEnd = at < 0 ? -1 : source.indexOf('\n', at)
+        const line =
+          at < 0 ? '' : source.slice(at, lineEnd < 0 ? undefined : lineEnd)
+        if (at >= 0 && starts.some((start) => start.test(line + '\n'))) {
+          const tailAt = at
+          const last = group.items.at(-1)!
+          const column = columns.at(-1)!
+          const width = column - base
+          const added: string[] = []
+          let blank = false
+          for (; at < source.length; ) {
+            const lf = source.indexOf('\n', at)
+            const stop = lf < 0 ? source.length : lf
+            const raw = source.slice(at, stop)
+            let skip = 0,
+              col = base
+            while (col < column && (raw[skip] === ' ' || raw[skip] === '\t'))
+              col += raw[skip++] === '\t' ? 4 - (col % 4) : 1
+            const indented = col >= column
+            if (!indented && raw.trim() && (blank || lazyItemEnd.test(raw)))
+              break
+            added.push(indented ? raw.slice(skip) : raw)
+            blank = !raw.trim()
+            end = stop
+            at = lf < 0 ? source.length : lf + 1
+          }
+          const follows = at < source.length && sameItem(at)
+          const addition =
+            added.join('\n').trimEnd() + (blank && follows ? '\n' : '')
+          let itemFrom = from
+          for (const entry of group.items) {
+            itemFrom = source.indexOf(entry.raw, itemFrom)
+            if (entry !== last) itemFrom += entry.raw.length
+          }
+          last.raw = source.slice(itemFrom, follows ? at : end)
+          if (!follows) last.raw = last.raw.trimEnd()
+          last.text += '\n' + addition
+          const next = scope?.next,
+            indent = scope?.indent,
+            top = lexer.state.top
+          this.rules = rules
+          lexer.blockTokens = blockTokens
+          containerColumns.set(this, column)
+          if (scope) {
+            scope.next = rows.at(-1)! + quoteLines(source, itemFrom, tailAt)
+            scope.indent = parent!.indent + width
+          }
+          lexer.state.top = false
+          try {
+            last.tokens.push(
+              ...Reflect.apply(blockTokens, lexer, [addition, []]),
+            )
+          } finally {
+            lexer.state.top = top
+            containerColumns.set(this, base)
+            lexer.blockTokens = nested
+            if (scope) {
+              scope.next = next!
+              scope.indent = indent!
+            }
+          }
+          group.raw = source.slice(from, follows ? at : end)
+          if (!follows) group.raw = group.raw.trimEnd()
+          if (follows && blank) group.loose = true
+          recovered = true
+          end = follows ? at : from + group.raw.length
+        }
+        if (!token) token = group
+        else {
+          token.items.push(...group.items)
+          token.loose ||= group.loose
+        }
+        token.raw = source.slice(0, end).trimEnd()
+        if (!recovered || end >= source.length || !sameItem(end)) break
+        from = end
+      }
+      if (token?.loose)
+        for (const entry of token.items) {
+          entry.loose = true
+          for (const child of entry.tokens)
+            if (child.type === 'text') child.type = 'paragraph'
+        }
       if (token && state) {
         state.origins.set(token, origin!)
         if (restart) parent!.next = origin! + quoteLines(token.raw)
@@ -1488,6 +1669,8 @@ export class BlockTokenizer extends Tokenizer {
     }
     const index = candidate ? candidate.index - from : 0
     if (!candidate?.[1] || !index) return
+    const text = source.slice(source.indexOf('\n'), index + 1)
+    if (extensionLines(this).some((line) => line.test(text))) return
     if (frame) {
       if (frame.invalid === undefined || frame.invalid < from) {
         invalidSetext.lastIndex = from

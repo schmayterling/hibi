@@ -62,6 +62,9 @@ export function extendQuote(
   return token
 }
 
+/** Whether a custom block ends paragraph continuation. */
+export const isLeafBlock = (token: Token) => !!(token as Custom)[leaf]
+
 /** A complete custom block cannot take lazy paragraph continuation. */
 export function leafBlock<T extends BlockToken>(token: T): T {
   return Object.assign(token, { [leaf]: true as const })

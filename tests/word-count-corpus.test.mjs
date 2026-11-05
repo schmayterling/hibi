@@ -70,6 +70,19 @@ const read = (counter) => {
 const bodyOf = (source, syntax) =>
   syntax.frontmatter ? (readFrontmatter(source)?.content ?? source) : source
 
+/**
+ * States whose rich text was recorded under the old `$$` block rule. Their
+ * math is Obsidian 1.13.7's reading, checked when this list was made, so the
+ * recorded text is no oracle for them; math-formatted holds that reading.
+ */
+const obsidianBlockStates = new Set(
+  (
+    '6:13 6:14 6:15 6:16 6:17 6:18 6:19 6:20 6:21 6:22 6:23 6:24 16:2 ' +
+    '16:3 16:4 16:5 16:6 16:8 16:9 16:10 26:7 26:8 26:9 26:10 26:11 ' +
+    '26:12 26:13'
+  ).split(' '),
+)
+
 /** Every corpus state with its counts, rich text and product classification. */
 function corpusResults() {
   const results = []
@@ -383,10 +396,27 @@ test('schema corpus: formatted counts match the rich parser and schema in every 
   const quirks = new Map(
     richQuirks.flatMap((quirk) => quirk.states.map((state) => [state, quirk])),
   )
+  // The list only holds what the new rule changed, with display math on: a
+  // state that matches its recorded text again, or has it off, is compared.
+  assert.deepEqual(
+    results
+      .filter(
+        (result) =>
+          obsidianBlockStates.has(`${result.doc}:${result.step}`) &&
+          (!differs(result.formatted, result.rich) ||
+            corpus.configs[result.config].disabledFeatures.includes(
+              'math.block',
+            )),
+      )
+      .map(summary),
+    [],
+  )
   assert.deepEqual(
     results
       .filter((result) => {
-        const quirk = quirks.get(`${result.doc}:${result.step}`)
+        const state = `${result.doc}:${result.step}`
+        if (obsidianBlockStates.has(state)) return false
+        const quirk = quirks.get(state)
         return quirk
           ? result.rich.words - result.formatted.words !==
               quirk.difference.words ||
@@ -685,7 +715,9 @@ test('native corpus: formatted counts equal the rich text counts in the app', {
           },
           { ...syntax, disabledFeatures: syntax.disabledFeatures.toSorted() },
         )
-        const quirk = quirks.get(`${result.doc}:${result.step}`)
+        const state = `${result.doc}:${result.step}`
+        if (obsidianBlockStates.has(state)) continue
+        const quirk = quirks.get(state)
         const want = quirk
           ? {
               words: native.want.words - quirk.difference.words,

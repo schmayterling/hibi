@@ -10,7 +10,7 @@ import {
 } from '../../shared/note-syntax.ts'
 import type { ReferenceDefinitions } from '../../shared/source-references.ts'
 import { alertMarkdown } from '../markdown/alerts.ts'
-import { mathTokens } from '../math/syntax.ts'
+import { mathTokens, mathTokensWith } from '../math/syntax.ts'
 import { textExtrasMarkdown } from '../text-extras/syntax.ts'
 import { typstBlock } from '../typst/syntax.ts'
 
@@ -35,6 +35,7 @@ export function countParser(syntax: CountSyntax) {
     syntax.textExtras,
     syntax.math,
     syntax.typst,
+    syntax.disabledFeatures.includes('math.block'),
   ])
   let parser = parsers.get(key)
   if (!parser) {
@@ -42,7 +43,12 @@ export function countParser(syntax: CountSyntax) {
     if (syntax.gfm) countFootnotes(parser)
     if (syntax.alerts) parser.use(alertMarkdown)
     if (syntax.textExtras) parser.use(textExtrasMarkdown)
-    if (syntax.math) parser.use(mathTokens)
+    if (syntax.math)
+      parser.use(
+        syntax.disabledFeatures.includes('math.block')
+          ? mathTokensWith(() => false)
+          : mathTokens,
+      )
     // Custom tokenizers own child traversal; body masking below keeps the view's scope.
     const children = parser.defaults.extensions?.childTokens
     if (children) {
@@ -260,7 +266,7 @@ function taskItem(raw: string, syntax: ProjectionSyntax, out: string[]) {
     .map((line) => (line.trim() ? line.slice(indent) : ''))
     .join('\n')
     .trim()
-  if (nested) children(lex(`${nested}\n`, syntax), syntax, out, false)
+  if (nested) children(lex(nested, syntax), syntax, out, false)
 }
 
 /** A list item's blocks; an item holds a paragraph even when it is empty. */

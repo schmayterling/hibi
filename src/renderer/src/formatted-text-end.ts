@@ -9,6 +9,7 @@ import {
 } from '@codemirror/state'
 import { type EditorView, keymap, ViewPlugin } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import { formattedMathAtom } from '../../shared/formatted-text-rules.ts'
 import { cellSpan, parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
 import { prefixOf } from './formatted-commands.ts'
@@ -60,7 +61,6 @@ const atoms = new Set([
   'HTMLBlock',
   'CommentBlock',
   'ProcessingInstructionBlock',
-  'BlockMath',
   'HorizontalRule',
 ])
 
@@ -78,6 +78,7 @@ function atomRange(
   const to = trimmed(doc, node.to, node.from)
   const image = node.firstChild
   return atoms.has(node.name) ||
+    (node.name === 'BlockMath' && formattedMathAtom(node)) ||
     (node.name === 'FencedCode' && replaced(node)) ||
     (node.name === 'Paragraph' &&
       (image?.name === 'Image' ||

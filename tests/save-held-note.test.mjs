@@ -348,11 +348,14 @@ test(
     const { page, file, edit, saved, hold, status } = await open(t, {
       autosave: true,
     })
+    await page.clock.install()
     const release = await hold()
     await edit('held')
     await status.getByText('Autosave · retrying').waitFor()
     assert.equal(await readFile(file, 'utf8'), 'note.md')
     await release()
+    // A refused save also rests for ten times the attempt's duration.
+    await page.clock.fastForward(30000)
     await saved('held')
     await status.getByText('Autosave · saved').waitFor()
     assert.equal(await page.locator('.toast').count(), 0)
@@ -492,7 +495,12 @@ test(
       })
     })
     const before = (await attempts()).length
-    await moreAttempts(before + 2)
+    let seen = before
+    for (let turn = 0; turn < 3; turn++) {
+      await page.clock.fastForward(30000)
+      await moreAttempts(seen)
+      seen = (await attempts()).length
+    }
     // One at a time: a tab's attempt doesn't run into the other's and get skipped.
     assert.deepEqual([...new Set((await attempts()).slice(before))], ['held'])
     assert.deepEqual(
@@ -609,6 +617,7 @@ test(
         return handler(...args)
       })
     })
+    await page.clock.fastForward(30000)
     await waitForAsync(app, () => !!globalThis.attemptGate.go, undefined, {
       label: 'an attempt under way',
     })
@@ -636,9 +645,10 @@ test(
   'autosave firing behind a close prompt is not paused by it',
   limits,
   async (t) => {
-    const { app, edit, saved, hold, status, watchAttempts, attempts } =
+    const { app, page, edit, saved, hold, status, watchAttempts, attempts } =
       await open(t, { autosave: true })
     await watchAttempts()
+    await page.clock.install()
     const release = await hold()
     await edit('held')
     await status.getByText('Autosave · retrying').waitFor()
@@ -653,6 +663,7 @@ test(
       label: 'the close prompt',
     })
     // The first answer that isn't a refusal comes from behind the prompt.
+    await page.clock.fastForward(30000)
     await waitForAsync(
       app,
       () => globalThis.attempts.at(-1) !== 'held',

@@ -57,13 +57,14 @@ test('names of one error join one toast, across passes, and past the bound are c
   ])
 })
 
-test('another error is not called this one', (t) => {
+test('different errors share one list without calling them this error', (t) => {
   const { show, items } = setup(t)
   show(named('a.x'))
   show(named('b.x', 'other'))
+  show(named('c.x', 'other'))
+  show(named('d.x', 'third'))
   assert.deepEqual(items(), [
-    'Likely addon behind this error: a.x: boom',
-    'Likely addon behind this error: b.x: other',
+    'Likely addons behind these errors: a.x, b.x, c.x, d.x: boom and 2 more',
   ])
 })
 
@@ -73,9 +74,9 @@ test('a new name gets the full time, and one named again changes nothing, so rep
   tick(4000)
   show(named('b.x'))
   tick(4000)
-  show(named('a.x'))
+  show(named('a.x', 'changed position'))
   show(named('b.x'))
-  assert.equal(items().length, 1)
+  assert.deepEqual(items(), ['Likely addons behind this error: a.x, b.x: boom'])
   tick(1000)
   assert.deepEqual(items(), [])
   assert.equal(service.snapshot().items.length, 1)
@@ -84,6 +85,7 @@ test('a new name gets the full time, and one named again changes nothing, so rep
 test('after its toast closes, a name starts a new list', (t) => {
   const { service, show, items, tick } = setup(t)
   show(named('a.x'))
+  show(named('b.x', 'other'))
   service.dismiss(service.snapshot().items[0].id)
   show(named('b.x'))
   assert.deepEqual(items(), ['Likely addon behind this error: b.x: boom'])

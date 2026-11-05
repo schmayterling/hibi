@@ -488,8 +488,10 @@ const featureExtensions = (
 type MeasuredView = { measure: (flush?: boolean) => void }
 
 /** Names a failing feature, which then leaves every editor. */
-const reportFailure = ({ feature }: InstalledFeature, error: unknown) =>
+const reportFailure = ({ feature }: InstalledFeature, error: unknown) => {
+  console.error(`Editor feature ${feature.id}:`, error)
   feature.fail?.(new LikelyAddonError(feature.id, errorMessage(error), error))
+}
 
 /**
  * Reports the features an edit fails with, which then leave every editor,

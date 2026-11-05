@@ -641,6 +641,58 @@ test('a draw failure that going back one at a time does not bring out takes ever
   )
 })
 
+test('many different edit failures leave one readable list and keep every error in the console', {
+  timeout: 60000,
+}, async (t) => {
+  const context = await open(t, {
+    source: plain,
+    code: `export default sdk => ({ start(context) {
+      const { StateField } = sdk.codeMirror.state
+      for (let i = 0; i < 40; i++) context.editor.registerFormatted({
+        id: 'feature-' + i,
+        create: () => StateField.define({
+          create: () => 0,
+          update(value, transaction) {
+            if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('position ' + i + ' boom')
+            return value
+          },
+        }),
+      })
+    } })`,
+  })
+  await opened(context, plain)
+  const logged = new Set()
+  context.page.on('console', (message) => {
+    const position = message.text().match(/position (\d+) boom/)
+    if (message.type() === 'error' && position) logged.add(Number(position[1]))
+  })
+  await type(context, 'Q')
+  const alerts = context.page.locator(
+    '.toast:not([data-closing="true"]) [role="alert"]',
+  )
+  assert.equal(await alerts.count(), 1)
+  await alerts
+    .getByText(
+      /^Likely addons behind these errors: .* and 35 more: position 0 boom and 39 more$/,
+    )
+    .waitFor()
+  const bounds = await alerts.evaluate((alert) => {
+    const rect = alert.getBoundingClientRect()
+    return { top: rect.top, bottom: rect.bottom, height: innerHeight }
+  })
+  assert.ok(
+    bounds.top >= 0 && bounds.bottom <= bounds.height,
+    JSON.stringify(bounds),
+  )
+  assert.deepEqual(
+    [...logged].sort((a, b) => a - b),
+    Array.from({ length: 40 }, (_, i) => i),
+  )
+  await editorReady(context)
+  await type(context, 'x')
+  await typingAndSavingWork(context, plain, 'x')
+})
+
 test('a decoration source that throws only for what scrolls into view is named and the editor comes back', {
   timeout: 60000,
 }, async (t) => {

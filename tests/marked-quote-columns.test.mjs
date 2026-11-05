@@ -146,6 +146,10 @@ test('an alert reads the quote Marked reads, short or long', () => {
   ]) {
     const { raw, text } = tokenizer.blockquote(source)
     const quote = readNativeQuote(source)
-    assert.deepEqual({ raw: quote.raw, text: quote.text }, { raw, text }, source)
+    assert.deepEqual(
+      { raw: quote.raw, text: quote.text },
+      { raw, text },
+      source,
+    )
   }
 })

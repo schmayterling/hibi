@@ -7,6 +7,8 @@ import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 // Downloads real packages from GitHub. Run with HIBI_NETWORK_TESTS=1.
+const CATALOG =
+  'https://raw.githubusercontent.com/hibigarden/addons-repository/main/catalog.json'
 const github = (repository, commit) =>
   `https://github.com/hibigarden/${repository}/tree/${commit}`
 const ADDON_STARTER = github(
@@ -125,23 +127,35 @@ test('hibi garden installs real packages through the addon manager', {
     'the live directory shows compatible catalog metadata',
     async () => {
       await gardenTab.click()
-      await garden('typing-speed').waitFor()
       const directory = await page.evaluate(() =>
         window.hibi.getAddonDirectory(),
       )
       assert.equal(directory.error, undefined)
-      for (const entry of directory.entries) {
-        assert.equal(entry.apiVersion, 3)
-        const metadata = await garden(entry.id).textContent()
-        assert.ok(metadata.includes(`v${entry.version}`), metadata)
-        assert.ok(metadata.includes(entry.license), metadata)
-      }
+      // The catalog as published, read apart from the app's parser.
+      const published = await fetch(`${CATALOG}?t=${Date.now()}`).then(
+        (response) => response.json(),
+      )
+      const listed = ({ id, name, version, license }) => ({
+        id,
+        name,
+        version,
+        license,
+      })
+      assert.deepEqual(
+        directory.entries.map(listed),
+        published.filter(({ apiVersion }) => apiVersion === 3).map(listed),
+      )
       typing = directory.entries.find(({ id }) => id === 'typing-speed')
       catalogTheme = directory.entries.find(({ kind }) => kind === 'theme')
       assert.ok(
         typing && catalogTheme,
         'The live catalog needs typing speed and a compatible theme.',
       )
+      for (const entry of directory.entries) {
+        const metadata = await garden(entry.id).textContent()
+        assert.ok(metadata.includes(`v${entry.version}`), metadata)
+        assert.ok(metadata.includes(entry.license), metadata)
+      }
     },
   )
 
@@ -152,6 +166,10 @@ test('hibi garden installs real packages through the addon manager', {
       .click()
     await addons.locator('#garden-typing-speed-install:enabled').waitFor()
     const [box] = await confirmations()
+    assert.ok(
+      box,
+      `No install confirmation: ${await page.getByRole('alert').allInnerTexts()}`,
+    )
     assert.equal(box.message, `Install ${typing.name} ${typing.version}?`)
     assert.match(box.detail, /Signed by Hibi\./)
     assert.ok(!(await installed()).includes('typing-speed'))

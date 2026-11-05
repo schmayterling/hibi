@@ -2315,6 +2315,27 @@ test('a removed code block leaves its sideways scroll to no later block', async 
   assert.deepEqual(lefts, { fenceAbove: [0], replaced: [0] })
 })
 
+test('an edit above keeps a sideways scroll whose event has not fired', async () => {
+  const wide = `${'const horizontal = 42; '.repeat(50)}\n`
+  const left = await harness.evaluate(async (wide) => {
+    const preview = window.livePreview
+    await preview.mount(
+      `# Title\n\n\x60\x60\x60js\n${wide.repeat(3)}\x60\x60\x60\n`,
+      { width: 800, height: 600 },
+    )
+    await preview.settle()
+    const view = preview.view()
+    // The edit takes the box off screen in this task, before its scroll event.
+    document.querySelector('.hibi-lp-codescroll').scrollLeft = 400
+    view.dispatch({ changes: { from: 0, insert: 'Above.\n\n'.repeat(2000) } })
+    await preview.settle()
+    preview.scrollTo(view.state.doc.length)
+    await preview.settle()
+    return document.querySelector('.hibi-lp-codescroll')?.scrollLeft
+  }, wide)
+  assert.equal(left, 400)
+})
+
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {
   timeout: 180000,
 }, async () => {

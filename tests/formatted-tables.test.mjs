@@ -1281,8 +1281,12 @@ for (const [layout, doc, target] of [
       }
       return offs
     })
+    // A row's start is the test's mark, not the text held, which can be further
+    // along the row: rows half as long break it up to two rows away.
+    const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
     assert.ok(
-      [...steps, ...widths].every((off) => off !== null && Math.abs(off) <= 30),
+      steps.every((off) => off !== null && Math.abs(off) <= 30) &&
+        widths.every(rowsHeld),
       JSON.stringify({ steps, widths }),
     )
     // What happened since doesn't take the place back to where it was, or
@@ -1389,10 +1393,7 @@ for (const [layout, doc, target] of [
         asked: off(asked, pane.getBoundingClientRect().top),
       }
     })
-    assert.ok(
-      Object.values(since).every((off) => off !== null && Math.abs(off) <= 30),
-      JSON.stringify(since),
-    )
+    assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
   })
 
 /** Mount `doc` in the editable harness. */

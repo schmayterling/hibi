@@ -281,9 +281,15 @@ function App() {
     [toasts],
   )
   const openUpdates = useRef(() => {})
+  const heldNotice = useRef<ToastHandle | null>(null)
   const setNotice = useCallback(
-    (message: string, target?: 'updates') => {
-      if (message)
+    (message: string, target?: 'updates' | 'held') => {
+      if (target === 'held') {
+        heldNotice.current?.dismiss()
+        heldNotice.current = message
+          ? toasts.show({ message, duration: 0 })
+          : null
+      } else if (message)
         toasts.show({
           message,
           ...(target === 'updates' && {
@@ -641,7 +647,7 @@ function App() {
       return
     focusEditor({ preventScroll: true })
   }, [busy, DocumentEditor, splitTabs?.active])
-  const autosaveStatus = useAutosave(document, busy)
+  const autosaveStatus = useAutosave(document, busy, toasts)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('default-view')
     return saved && isDocumentView(saved) ? saved : 'normal'

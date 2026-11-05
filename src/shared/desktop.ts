@@ -99,7 +99,9 @@ export type AutosaveResult = {
   document: DocumentSaveReply | null
 }
 /** Held: a program had the file open. Autosave tries again; the text is kept. */
-export type AutosaveReply = AutosaveResult | { status: 'held'; document: null }
+export type AutosaveReply =
+  | AutosaveResult
+  | { status: 'held'; document: null; message?: string }
 export type DocumentCommand =
   | 'new'
   | 'open'
@@ -341,9 +343,12 @@ export type DesktopApi = {
   getKeepUndoHistory: () => Promise<boolean>
   setKeepUndoHistory: (keep: boolean) => Promise<void>
   clearUndoHistory: () => Promise<void>
-  /** `updates` notices lead to the update settings. */
+  /**
+   * `updates` notices lead to the update settings. A `held` notice stays until
+   * the next one replaces it; an empty one only removes it.
+   */
   onNotice: (
-    callback: (message: string, target?: 'updates') => void,
+    callback: (message: string, target?: 'updates' | 'held') => void,
   ) => () => void
   getLicenses: () => Promise<import('./about').LicenseInfo[]>
   getLicense: (id: string) => Promise<string>

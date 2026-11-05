@@ -398,6 +398,9 @@
     "src/main/index.ts",
     "src/renderer/src/main.tsx"
   ],
+  "bc146f507a25": [
+    "src/main/document.ts"
+  ],
   "b3f05ba1d906": [
     "src/addons/dictionary/SideView.tsx",
     "src/addons/dictionary/index.tsx"
@@ -1576,6 +1579,9 @@
   ],
   "5a0e41fb509b": [
     "src/main/window-controls.ts"
+  ],
+  "08bb59a064d8": [
+    "src/main/files.ts"
   ],
   "93a0e14c0592": [
     "src/site/search-worker-client.ts"

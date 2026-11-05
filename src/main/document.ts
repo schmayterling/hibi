@@ -946,9 +946,41 @@ async function recordSaveHistory(
   }
 }
 
+/** Says what a step of a save waits for once a program has refused it for 1.5 s. */
+async function sayingWhenHeld<T>(
+  window: BrowserWindow,
+  path: string,
+  step: (refused: () => void) => Promise<T>,
+) {
+  const name = basename(path)
+  let since = 0,
+    said = false
+  try {
+    return await step(() => {
+      since ||= Date.now()
+      // The first of these comes one retry delay after the first refusal.
+      if (said || Date.now() - since < 1400) return
+      said = true
+      window.webContents.send(
+        HISTORY_CHANNELS.notice,
+        `Another program is using ${name}. Hibi keeps trying to save it.`,
+        'held',
+      )
+    })
+  } finally {
+    if (said && !window.isDestroyed())
+      window.webContents.send(HISTORY_CHANNELS.notice, '', 'held')
+  }
+}
 /** A program holding a note shut refuses reads as well as the rename. */
-const patiently = <T>(read: () => Promise<T>) =>
-  retryRename(read, undefined, undefined, PATIENT_RENAME)
+const patiently = <T>(
+  window: BrowserWindow,
+  path: string,
+  read: () => Promise<T>,
+) =>
+  sayingWhenHeld(window, path, (refused) =>
+    retryRename(read, refused, undefined, PATIENT_RENAME),
+  )
 const heldNote = (error: unknown): never => {
   if (!fileHeldOpen(error)) throw error
   throw new Error(
@@ -1017,13 +1049,15 @@ export async function saveDocument(
   if (destination === path || appeared) {
     let unchanged =
       !appeared &&
-      (await patiently(() => matchesMarkdown(destination, saved))
+      (await patiently(window, destination, () =>
+        matchesMarkdown(destination, saved),
+      )
         .catch(missingFile)
         .catch(heldNote))
     previous = unchanged
       ? saved
       : ((
-          await patiently(() => readSource(destination))
+          await patiently(window, destination, () => readSource(destination))
             .catch(missingFile)
             .catch(heldNote)
         )?.snapshot() ?? null)
@@ -1045,7 +1079,7 @@ export async function saveDocument(
       const shown = previous
       previous =
         (
-          await patiently(() => readSource(destination))
+          await patiently(window, destination, () => readSource(destination))
             .catch(missingFile)
             .catch(heldNote)
         )?.snapshot() ?? null
@@ -1055,12 +1089,15 @@ export async function saveDocument(
           : previous !== null && (await sameSource(shown, previous))
     }
   }
-  await writeMarkdown(
-    destination,
-    content,
-    exclusive && !appeared,
-    undefined,
-    PATIENT_RENAME,
+  await sayingWhenHeld(window, destination, (refused) =>
+    writeMarkdown(
+      destination,
+      content,
+      exclusive && !appeared,
+      undefined,
+      PATIENT_RENAME,
+      refused,
+    ),
   ).catch(heldNote)
   // A new path, or a file another app changed, keeps no copy of the text last saved.
   const replacedSaved = previous === saved

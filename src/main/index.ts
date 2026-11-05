@@ -134,7 +134,7 @@ import {
   saveAppearance,
   titleBarColors,
 } from './appearance'
-import { fileHeldOpen } from './atomic-rename'
+import { fileHeldOpen, fileReadOnly } from './atomic-rename'
 import { BackgroundMode } from './background'
 import {
   autosaveDocument,
@@ -2896,7 +2896,9 @@ if (!app.requestSingleInstanceLock()) {
         DOCUMENT_CHANNELS.autosave,
         (event, tabId: unknown, revision: unknown) => {
           trustedWindow(event)
-          if (fileOperation) return { status: 'skipped', document: null }
+          // Closing refuses file operations until its prompts are answered.
+          if (fileOperation || closing)
+            return { status: 'skipped', document: null }
           return runFileOperation(event, async (window) => {
             const target =
               typeof tabId === 'string' ? getDocumentPathForTab(tabId) : null
@@ -2904,6 +2906,12 @@ if (!app.requestSingleInstanceLock()) {
             try {
               result = await autosaveDocument(window, tabId, revision)
             } catch (error) {
+              if (fileReadOnly(error))
+                return {
+                  status: 'held',
+                  document: null,
+                  message: (error as Error).message,
+                }
               if (!fileHeldOpen(error)) throw error
               return { status: 'held', document: null }
             }

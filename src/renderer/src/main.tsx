@@ -1467,6 +1467,35 @@ function App() {
     }
   }, [documentLoaded, dialogs, setError])
 
+  // Text an earlier run left unsaved. Its dialog isn't part of the first load.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opening reads live refs.
+  useEffect(() => {
+    if (!documentLoaded) return
+    void window.hibi
+      .waitingRecovery()
+      .then(async (waiting) => {
+        if (!waiting.copies.length && !waiting.newer) return
+        const { offerRecovery } = await import('./recovery-offer')
+        await offerRecovery(waiting, {
+          dialogs,
+          toasts,
+          tabsEnabled: currentDocument.current?.tabsEnabled ?? true,
+          open: async (id) => {
+            while (busyRef.current || dialogs.isOpen())
+              await new Promise((resolve) => setTimeout(resolve, 100))
+            await applyDocumentOperation(
+              () => window.hibi.restoreRecovery(id),
+              true,
+              true,
+            )
+            return currentDocument.current?.tabId
+          },
+          show: selectTab,
+        })
+      })
+      .catch(setError)
+  }, [documentLoaded])
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: recovery reads live refs while this command handler must stay stable across renders.
   const performCommand = useCallback(
     async (command: DocumentCommand) => {

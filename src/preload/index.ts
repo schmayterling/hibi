@@ -42,6 +42,7 @@ import type {
 } from '../shared/source-transfer'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
+import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WINDOW_CONTROLS_CHANNELS } from '../shared/window-controls'
@@ -477,6 +478,15 @@ if (process.isMainFrame) {
     setKeepUndoHistory: (keep) =>
       ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.setKeep, keep),
     clearUndoHistory: () => ipcRenderer.invoke(UNDO_HISTORY_CHANNELS.clear),
+    waitingRecovery: () => ipcRenderer.invoke(RECOVERY_CHANNELS.list),
+    restoreRecovery: (id) => ipcRenderer.invoke(RECOVERY_CHANNELS.restore, id),
+    discardRecovery: (id) => ipcRenderer.invoke(RECOVERY_CHANNELS.discard, id),
+    dismissRecovery: () => ipcRenderer.invoke(RECOVERY_CHANNELS.later),
+    getRecoverySettings: () => ipcRenderer.invoke(RECOVERY_CHANNELS.settings),
+    previewRecoverySettings: (next) =>
+      ipcRenderer.invoke(RECOVERY_CHANNELS.preview, next),
+    setRecoverySettings: (next) =>
+      ipcRenderer.invoke(RECOVERY_CHANNELS.setSettings, next),
     onNotice: (callback) => {
       const listener = (
         _event: Electron.IpcRendererEvent,

@@ -43,7 +43,8 @@ import {
   writeMarkdown,
   writeText,
 } from './files'
-import { recordVersions } from './history'
+import { recordVersions, sourceHash } from './history'
+import type { UnsavedNote } from './recovery-journal'
 import {
   flushUndoHistory,
   relocateUndoHistory,
@@ -417,6 +418,29 @@ export function getDocumentTabs(): DocumentTab[] {
         : draft.untitledName,
     dirty: updateTabDirty(id, draft),
   }))
+}
+/** Tabs with text the recovery journal keeps; an empty new note has none. */
+export function getUnsavedNotes(): UnsavedNote[] {
+  storeTab()
+  return [...tabs].flatMap(([tabId, draft]) => {
+    const text = draft.source.snapshot()
+    return dirty(draft.source, draft.saved) &&
+      (text.utf16Length || draft.saved.utf16Length)
+      ? [
+          {
+            tabId,
+            path: draft.path ?? draft.pendingPath,
+            named: !!draft.path,
+            name:
+              draft.path || draft.pendingPath
+                ? basename((draft.path ?? draft.pendingPath)!)
+                : draft.untitledName,
+            text,
+            saved: draft.saved,
+          },
+        ]
+      : []
+  })
 }
 export function hasUnsavedDocuments() {
   storeTab()
@@ -1249,6 +1273,40 @@ export async function restoreDocument(
   advanceRevision()
   refreshDirtyIndicator(window)
   return getDocument()
+}
+
+/**
+ * Opens text a crash left unsaved, never touching the note's file. Over the
+ * text it began from, the note opens with it as unsaved edits. Otherwise it
+ * opens as a separate new note, so autosave can't replace what's there now.
+ */
+export async function openRecovered(
+  window: BrowserWindow,
+  copy: Readonly<{
+    path: string | null
+    named: boolean
+    name: string
+    savedHash: string
+  }>,
+  text: () => AsyncIterable<string>,
+): Promise<DocumentState | null> {
+  if (copy.named && copy.path) {
+    const opened = await loadDocument(window, copy.path).catch(() => null)
+    if (
+      opened &&
+      !dirty(source, saved) &&
+      (await sourceHash(saved)).hash === copy.savedHash
+    )
+      return restoreDocument(window, text())
+  }
+  if (!isEmptyTab()) rememberLocation()
+  if (!(await startTab(window, true))) return null
+  clearDocument(window, false)
+  const extension = extname(copy.name)
+  untitledName = copy.named
+    ? `${basename(copy.name, extension)} (recovered)${extension}`
+    : copy.name
+  return restoreDocument(window, text())
 }
 
 export async function confirmDiscard(window: BrowserWindow): Promise<boolean> {

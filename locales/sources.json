@@ -101,6 +101,12 @@
   "6a03f5d4708e": [
     "src/main/workspace-settings.ts"
   ],
+  "071fbd0fbce3": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
+  "5a897082f8b6": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
   "eab4b9331e40": [
     "src/shared/markdown-source-model.ts"
   ],
@@ -1607,6 +1613,9 @@
   "7bab60b7ad0a": [
     "src/renderer/src/AddonGarden.tsx"
   ],
+  "3b1ba9efa803": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
   "a491f369baa5": [
     "src/addons/mcp-server/tools.ts"
   ],
@@ -1675,6 +1684,9 @@
   "d0b43f84af18": [
     "src/addons/dictionary/online.ts"
   ],
+  "892c45a22edb": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
   "a2e7d5bd8495": [
     "src/shared/addon-manifest.ts"
   ],
@@ -1707,6 +1719,12 @@
   "9813fafb098c": [
     "src/addons/dictionary/SideView.tsx"
   ],
+  "e2d0a54968ea": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
+  "0fab96ef3d3e": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
   "837dbb2c66b1": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
@@ -1716,8 +1734,14 @@
   "c34051351939": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
+  "0cdc5decc1ab": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
   "f36eec8ad2bf": [
     "src/renderer/src/WorkspacesSidebar.tsx"
+  ],
+  "8e903f2f1de8": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "2e41b118eb20": [
     "src/renderer/src/DependencySettings.tsx",
@@ -1810,6 +1834,12 @@
   ],
   "5696c78780e7": [
     "src/renderer/src/addons.ts"
+  ],
+  "eb1a70e39274": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
+  "47464cfad9ba": [
+    "src/renderer/src/recovery-offer.tsx"
   ],
   "855e169eae01": [
     "src/addons/discord-presence/hibi-addon.json"
@@ -2676,6 +2706,9 @@
   "6ae55e8dbbc1": [
     "src/addons/dictionary/hibi-addon.json"
   ],
+  "00a1b073cd35": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
   "b949c922b6ef": [
     "src/addons/git/hibi-addon.json",
     "src/addons/git/index.tsx"
@@ -2768,6 +2801,9 @@
   "617987c5b12e": [
     "src/main/document.ts"
   ],
+  "d90d7d2a3c69": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
   "e43664c0638d": [
     "src/main/workspace-actions.ts"
   ],
@@ -2809,6 +2845,12 @@
   ],
   "afea9e504cf0": [
     "src/main/index.ts"
+  ],
+  "c7713db0285d": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
+  "3efddb2ffbcb": [
+    "src/renderer/src/recovery-offer.tsx"
   ],
   "3901114f50bd": [
     "src/renderer/src/main.tsx"
@@ -2891,6 +2933,9 @@
   ],
   "4810765ffe37": [
     "src/renderer/src/ToolbarSettings.tsx"
+  ],
+  "82c689ea77f4": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "bcc843c0a7f9": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -3323,6 +3368,9 @@
   "bcf712e5ce93": [
     "src/shared/source-parser.ts"
   ],
+  "99630a13ddb8": [
+    "src/main/recovery-journal.ts"
+  ],
   "e0d30e96afde": [
     "src/shared/source-references.ts"
   ],
@@ -3432,6 +3480,9 @@
   ],
   "eae999dbe379": [
     "src/renderer/src/UndoHistorySettings.tsx"
+  ],
+  "2a168fdaeb3c": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "2316810a5de3": [
     "src/addons/keybeats/Settings.tsx"
@@ -3824,7 +3875,8 @@
     "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "6300ef800bb8": [
-    "src/renderer/src/NotificationSettings.tsx"
+    "src/renderer/src/NotificationSettings.tsx",
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "18fdd549b2ed": [
     "src/main/index.ts"
@@ -4307,6 +4359,9 @@
   "b54029154628": [
     "src/site/bootstrap.tsx"
   ],
+  "50f9f5351a9f": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
   "dafff0444fbc": [
     "src/renderer/src/main.tsx"
   ],
@@ -4327,6 +4382,12 @@
   ],
   "f5cc17a5ad18": [
     "src/addons/graph/Canvas.tsx"
+  ],
+  "03a40242321c": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
+  "21eb8b7d06ba": [
+    "src/renderer/src/recovery-offer.tsx"
   ],
   "7d0e85133759": [
     "src/renderer/src/DocumentTabs.tsx"
@@ -4447,6 +4508,9 @@
   ],
   "497dfa20d4ad": [
     "src/addons/documentation/ExportDialog.tsx"
+  ],
+  "a60049212757": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "da06be9ad96a": [
     "src/renderer/src/main.tsx"
@@ -4729,6 +4793,9 @@
   "80e8dd1a5a05": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "0b560c1448ae": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
   "1d0c2df3ffa4": [
     "src/renderer/src/HibiSettings.tsx"
   ],
@@ -4737,6 +4804,9 @@
   ],
   "aaefaf4f5953": [
     "src/renderer/src/RecoveryScreen.tsx"
+  ],
+  "b085fa4cf93d": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "74273989b096": [
     "src/main/index.ts",
@@ -4992,7 +5062,11 @@
     "src/main/addon-development.ts"
   ],
   "a76e13b98392": [
-    "src/renderer/src/History.tsx"
+    "src/renderer/src/History.tsx",
+    "src/renderer/src/recovery-offer.tsx"
+  ],
+  "916f3fd156c3": [
+    "src/renderer/src/recovery-offer.tsx"
   ],
   "94edd7a89755": [
     "src/renderer/src/History.tsx"
@@ -5391,6 +5465,9 @@
     "src/renderer/src/Introduction.tsx",
     "src/renderer/src/ToolbarSettings.tsx",
     "src/renderer/src/main.tsx"
+  ],
+  "98b385b2b377": [
+    "src/renderer/src/recovery-offer.tsx"
   ],
   "86e811695eda": [
     "src/addons/discord-presence/hibi-addon.json"
@@ -6151,6 +6228,9 @@
   "eab0ba025b4c": [
     "src/shared/addon-manifest.ts"
   ],
+  "001f6029cf84": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
   "a22ad77d6876": [
     "src/renderer/src/document-target-edits.ts"
   ],
@@ -6162,6 +6242,9 @@
   ],
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
+  ],
+  "a4ca39fe0c58": [
+    "src/renderer/src/recovery-offer.tsx"
   ],
   "a012994d9241": [
     "src/main/document.ts"
@@ -6236,6 +6319,9 @@
   ],
   "cbfa05cbaf75": [
     "src/renderer/src/main.tsx"
+  ],
+  "3d98bbef1b29": [
+    "src/main/recovery-journal.ts"
   ],
   "511ec6df64c2": [
     "src/main/addon-repository.ts"
@@ -6759,6 +6845,9 @@
   "2baa271ed84a": [
     "src/renderer/src/History.tsx"
   ],
+  "f25351b3d4a1": [
+    "src/renderer/src/recovery-offer.tsx"
+  ],
   "726915b074e5": [
     "src/main/addon-trust-crypto.ts"
   ],
@@ -6782,6 +6871,12 @@
   ],
   "5089081cf601": [
     "src/renderer/src/document-edits.ts"
+  ],
+  "a45e4ec1016d": [
+    "src/main/index.ts"
+  ],
+  "efd510c34d07": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "73003d179a64": [
     "src/main/addon-repository.ts"
@@ -7761,8 +7856,14 @@
   "351b656f4564": [
     "src/renderer/src/History.tsx"
   ],
+  "a2246fbc2542": [
+    "src/renderer/src/RecoverySettings.tsx"
+  ],
   "bb174a00dfce": [
     "src/renderer/src/SourceEditor.tsx"
+  ],
+  "ddee4717dc1f": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "a59669afac8c": [
     "src/main/document.ts"
@@ -7781,6 +7882,9 @@
   ],
   "507e6dce93ec": [
     "src/renderer/src/main.tsx"
+  ],
+  "93b74ca2930b": [
+    "src/renderer/src/RecoverySettings.tsx"
   ],
   "229213386c16": [
     "src/renderer/src/main.tsx"

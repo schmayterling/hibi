@@ -2343,10 +2343,24 @@ if (!app.requestSingleInstanceLock()) {
         runFileOperation(event, async (window) => {
           const copy = await waitingCopy(id)
           if (!copy) throw new Error('This recovery copy is no longer here.')
-          const opened = await openRecovered(window, copy, () =>
-            recoveryText(copy),
-          )
-          if (opened) await recoveryOpened(copy.id, opened.tabId)
+          let opened: Awaited<ReturnType<typeof openRecovered>>
+          try {
+            opened = await openRecovered(window, copy, () => recoveryText(copy))
+          } catch (error) {
+            // A note's tab or a new one may be showing by now: the window follows.
+            console.error('Could not open a recovery copy:', error)
+            window.webContents.send(
+              HISTORY_CHANNELS.notice,
+              'Hibi could not read this recovery copy. It stays waiting.',
+            )
+            return getDocument()
+          }
+          // The text is open now. A copy that can't be written says so at its next try.
+          if (opened)
+            await recoveryOpened(copy.id, opened.tabId).catch(
+              (error: unknown) =>
+                console.error('Could not write a recovery copy:', error),
+            )
           return opened
         }),
       )

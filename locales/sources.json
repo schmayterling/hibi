@@ -2816,6 +2816,9 @@
   "c2dd1f633965": [
     "src/main/workspace-actions.ts"
   ],
+  "e0d2d160711f": [
+    "src/main/index.ts"
+  ],
   "4e0319875c9d": [
     "src/addons/quick-note/CaptureWindow.tsx"
   ],
@@ -2934,7 +2937,7 @@
   "4810765ffe37": [
     "src/renderer/src/ToolbarSettings.tsx"
   ],
-  "82c689ea77f4": [
+  "0f2e144ac36b": [
     "src/renderer/src/RecoverySettings.tsx"
   ],
   "bcc843c0a7f9": [

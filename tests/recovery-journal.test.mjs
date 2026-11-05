@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -353,6 +354,83 @@ test('don’t save leaves no copy, at tab close and at quit', {
   await first.kept('thrown away at quit')
   await first.quit()
   assert.deepEqual(await copies(), [])
+})
+
+test('a restore whose own copy cannot be written still opens the note, and the app stays usable', {
+  skip: process.platform === 'win32',
+  timeout: 90000,
+}, async (t) => {
+  const { profile, file, launch } = await note(t)
+  const first = await launch()
+  await first.open('original')
+  await first.edit('words kept')
+  await first.kept('words kept')
+  await first.kill()
+  const folder = join(profile, 'recovery')
+  await chmod(folder, 0o500)
+  const second = await launch()
+  await second.page.getByRole('button', { name: 'Restore note.md' }).click()
+  await second.page.waitForFunction(
+    () =>
+      document.querySelector('[aria-label="Document editor"]')?.textContent ===
+      'words kept',
+  )
+  // Its text is open, so the prompt doesn't come back this launch.
+  await second.page
+    .getByText(/could not keep a recovery copy/i)
+    .first()
+    .waitFor()
+  assert.equal(await second.page.locator('[data-recovery-copy]').count(), 0)
+  await second.editor.click()
+  await second.page.keyboard.press(`${mod}+a`)
+  await second.page.keyboard.type('still editing')
+  await second.shows('still editing')
+  assert.equal(await readFile(file, 'utf8'), 'original')
+  await second.kill()
+  await chmod(folder, 0o700)
+  // The copy it came from survives a second stop: nothing is lost on the way.
+  const third = await launch()
+  await third.page.getByRole('button', { name: 'Restore note.md' }).waitFor()
+  assert.equal(await third.page.locator('[data-recovery-copy]').count(), 1)
+  assert.match(
+    await third.page.locator('[data-recovery-copy] blockquote').textContent(),
+    /words kept/,
+  )
+})
+
+test('a copy that cannot be read leaves the window on what main shows, and it stays offered', {
+  skip: process.platform === 'win32',
+  timeout: 90000,
+}, async (t) => {
+  const { profile, launch, copies } = await note(t)
+  await forge(profile, { name: 'draft.md', text: 'draft words' })
+  const first = await launch()
+  const [name] = await copies()
+  await chmod(join(profile, 'recovery', name), 0o000)
+  await first.page.getByRole('button', { name: 'Restore draft.md' }).click()
+  await first.page
+    .getByText(/could not read this recovery copy/i)
+    .first()
+    .waitFor()
+  await first.page.getByRole('button', { name: 'Restore draft.md' }).waitFor()
+  await first.page.getByRole('button', { name: /^decide later$/i }).click()
+  await first.page.waitForFunction(() => !document.querySelector('dialog'))
+  await first.editor.click()
+  await first.page.keyboard.type('typed after')
+  await first.shows('typed after')
+})
+
+test('a tampered name stays a name, not a path', {
+  timeout: 60000,
+}, async (t) => {
+  const { profile, launch } = await note(t)
+  await forge(profile, { name: '../../outside.md', text: 'draft words' })
+  const first = await launch()
+  await first.page
+    .getByRole('button', { name: 'Restore ../../outside.md' })
+    .click()
+  await first.shows('draft words')
+  assert.equal((await first.document()).name, 'outside.md')
 })
 
 test('discarding from the prompt deletes the copy; deciding later asks again', {

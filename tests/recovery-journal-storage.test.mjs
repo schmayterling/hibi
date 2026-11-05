@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -163,7 +164,29 @@ test('damage is never offered and the damaged file stays for a rescue by hand', 
   })
   const next = await main(root)
   assert.deepEqual((await next.waitingRecovery()).copies, [])
-  assert.deepEqual(await files(root), [name])
+  const [kept, ...rest] = await files(root)
+  assert.deepEqual(rest, [])
+  assert.ok(kept.startsWith(`${tab(1)}.1.`))
+  assert.equal(
+    (await fs.readFile(join(folder(root), kept))).length,
+    bytes.length,
+  )
+})
+
+test('a damaged copy is never offered, so its time limit starts when a launch first finds it', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'cut off')
+  const [name] = await files(root)
+  await fs.truncate(join(folder(root), name), 40)
+  const found = Date.now()
+  t.mock.timers.enable({ apis: ['Date'], now: found })
+  await (await main(root)).waitingRecovery()
+  t.mock.timers.setTime(found + 29 * day)
+  await (await main(root)).waitingRecovery()
+  assert.equal((await files(root)).length, 1)
+  t.mock.timers.setTime(found + 31 * day)
+  await (await main(root)).waitingRecovery()
+  assert.deepEqual(await files(root), [])
 })
 
 test('lowering the time limit counts a damaged copy from its first offer', async (t) => {
@@ -527,7 +550,7 @@ test('never delete by age keeps a copy past any time, and the size limit still b
   assert.deepEqual(await files(root), [])
 })
 
-test('a setting outside its choices is its default and deletes nothing early', async (t) => {
+test('settings that cannot be read delete nothing, whatever limits were chosen', async (t) => {
   for (const stored of [
     'not json',
     '[]',
@@ -538,17 +561,38 @@ test('a setting outside its choices is its default and deletes nothing early', a
   ]) {
     const root = await profile(t)
     await leftBehind(root, 'text')
-    await firstOffered(root, tab(1), 29 * day)
+    await firstOffered(root, tab(1), 400 * day)
     await fs.writeFile(join(root, 'recovery-settings.json'), stored)
     const next = await main(root)
     assert.deepEqual(await next.recoverySettings(), {
       keep: true,
-      days: 30,
-      megabytes: 512,
+      days: 0,
+      megabytes: 4096,
       openAtLaunch: false,
     })
     assert.equal((await next.waitingRecovery()).copies.length, 1, stored)
   }
+  // No settings yet is not damage: the defaults hold.
+  const root = await profile(t)
+  assert.deepEqual(await (await main(root)).recoverySettings(), {
+    keep: true,
+    days: 30,
+    megabytes: 512,
+    openAtLaunch: false,
+  })
+  // Nor is a file only a read refuses.
+  const held = await profile(t)
+  await leftBehind(held, 'text')
+  await firstOffered(held, tab(1), 400 * day)
+  const refused = await main(held, {
+    io: {
+      ...fs,
+      readFile: async () => {
+        throw Object.assign(new Error('held'), { code: 'EBUSY' })
+      },
+    },
+  })
+  assert.equal((await refused.waitingRecovery()).copies.length, 1)
 })
 
 test('settings reject what the choices do not offer', async (t) => {
@@ -749,7 +793,189 @@ test('a failed replacement when restoring keeps the waiting copy at the size lim
   const before = await files(root)
   await assert.rejects(journal.recoveryOpened(tab(1), tab(5)), /disk full/)
   assert.deepEqual(await files(root), before)
-  assert.equal((await journal.waitingRecovery()).copies.length, 1)
+  // Its text is open now, so this launch doesn't ask again; the next one does.
+  assert.equal((await journal.waitingRecovery()).copies.length, 0)
+  assert.equal((await (await main(root)).waitingRecovery()).copies.length, 1)
+})
+
+test('a failed write removes no waiting copy to make room', async (t) => {
+  const root = await profile(t)
+  await fs.writeFile(
+    join(root, 'recovery-settings.json'),
+    JSON.stringify({
+      keep: true,
+      days: 30,
+      megabytes: 128,
+      openAtLaunch: false,
+    }),
+  )
+  await leftBehind(root, 'w'.repeat(100 * mib))
+  const io = {
+    ...fs,
+    open: async (...args) => {
+      if (args[1] === 'wx')
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+      return fs.open(...args)
+    },
+  }
+  const errors = t.mock.method(console, 'error', () => {})
+  const journal = await main(root, {
+    io,
+    notes: [note(2, 'n'.repeat(60 * mib))],
+  })
+  await journal.waitingRecovery()
+  await turn(journal)
+  assert.equal(errors.mock.callCount(), 1)
+  assert.equal((await files(root)).length, 1)
+  assert.equal((await (await main(root)).waitingRecovery()).copies.length, 1)
+})
+
+test('a note that cannot be written costs the notes after it nothing', async (t) => {
+  const root = await profile(t)
+  const notes = [note(1, 'too much for this disk'), note(2, 'small note')]
+  const io = {
+    ...fs,
+    open: async (path, ...rest) => {
+      if (rest[0] === 'wx' && String(path).includes(tab(1)))
+        throw Object.assign(new Error('full'), { code: 'ENOSPC' })
+      return fs.open(path, ...rest)
+    },
+  }
+  const errors = t.mock.method(console, 'error', () => {})
+  const journal = await main(root, { io, notes })
+  await turn(journal)
+  assert.equal(errors.mock.callCount(), 1)
+  assert.equal(journal.said.length, 1)
+  const names = await files(root)
+  assert.equal(names.length, 1)
+  assert.ok(names[0].startsWith(tab(2)))
+})
+
+test('a copy given up while a program holds it is not offered again', async (t) => {
+  const held = new Set()
+  const io = {
+    ...fs,
+    unlink: async (path) => {
+      if ([...held].some((part) => String(path).includes(part)))
+        throw Object.assign(new Error('held'), { code: 'EBUSY' })
+      return fs.unlink(path)
+    },
+  }
+  const scenarios = {
+    async 'discarded in the prompt'(root) {
+      await leftBehind(root, 'gone words')
+      held.add(tab(1))
+      const journal = await main(root, { io })
+      await journal.waitingRecovery()
+      await journal.discardRecovery(tab(1))
+    },
+    async 'closed with don’t save'(root) {
+      const notes = [note(1, 'gone words')]
+      const journal = await main(root, { io, notes })
+      await turn(journal)
+      held.add(tab(1))
+      notes.length = 0
+      journal.recoverySettled()
+      await journal.recoveryWritten()
+    },
+    async 'closed with an older generation still held'(root) {
+      const notes = [note(1, 'gone words')]
+      const journal = await main(root, { io, notes })
+      await turn(journal)
+      held.add((await files(root))[0])
+      notes[0] = note(1, 'newer words')
+      await turn(journal)
+      notes.length = 0
+      journal.recoverySettled()
+      await journal.recoveryWritten()
+    },
+  }
+  for (const [name, leave] of Object.entries(scenarios)) {
+    const root = await profile(t)
+    await leave(root)
+    assert.ok((await files(root)).length > 1, name)
+    // Still held: not offered, and its text stays out of reach of the prompt.
+    assert.deepEqual(
+      (await (await main(root, { io })).waitingRecovery()).copies,
+      [],
+      name,
+    )
+    held.clear()
+    assert.deepEqual(
+      (await (await main(root)).waitingRecovery()).copies,
+      [],
+      name,
+    )
+    assert.deepEqual(await files(root), [], name)
+  }
+})
+
+test('with copies off, a program holding one does not stop the app or the setting', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'text')
+  const settings = {
+    keep: false,
+    days: 30,
+    megabytes: 512,
+    openAtLaunch: false,
+  }
+  await fs.writeFile(
+    join(root, 'recovery-settings.json'),
+    JSON.stringify(settings),
+  )
+  const journal = await main(root, {
+    io: {
+      ...fs,
+      rm: async () => {
+        throw Object.assign(new Error('held'), { code: 'EBUSY' })
+      },
+    },
+  })
+  assert.deepEqual((await journal.waitingRecovery()).copies, [])
+  await journal.setRecoverySettings({ ...settings, keep: true })
+  assert.equal((await journal.recoverySettings()).keep, true)
+})
+
+test('a note path that is a pipe or device cannot stall the journal', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const root = await profile(t)
+  const pipe = join(root, 'pipe.md')
+  execFileSync('mkfifo', [pipe])
+  for (const path of [pipe, '/dev/zero']) {
+    const copy = await profile(t)
+    await leftBehind(copy, 'text', { path })
+    const journal = await main(copy, { notes: [note(2, 'typed')] })
+    const { copies } = await Promise.race([
+      journal.waitingRecovery(),
+      new Promise((_, reject) =>
+        setTimeout(reject, 5000, new Error(`stalled on ${path}`)).unref(),
+      ),
+    ])
+    assert.equal(copies[0].state, 'changed')
+  }
+  // A pipe in the folder itself is damage, not a wait.
+  const copy = await profile(t)
+  await fs.mkdir(folder(copy))
+  execFileSync('mkfifo', [join(folder(copy), `${tab(1)}.1.recovery`)])
+  const journal = await main(copy)
+  const { copies } = await Promise.race([
+    journal.waitingRecovery(),
+    new Promise((_, reject) =>
+      setTimeout(reject, 5000, new Error('stalled on a pipe')).unref(),
+    ),
+  ])
+  assert.deepEqual(copies, [])
+})
+
+test('a path that names no note here opens apart, and a tampered one reads nothing', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'text', { path: 'relative/note.md' })
+  const next = await main(root)
+  const { copies } = await next.waitingRecovery()
+  assert.equal(copies[0].state, 'missing')
+  assert.equal(copies[0].folder, null)
+  assert.equal((await next.waitingCopy(tab(1))).path, null)
 })
 
 test('an open tab opened from a copy replaces it only once it has its own', async (t) => {

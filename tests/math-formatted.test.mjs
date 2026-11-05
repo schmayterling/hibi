@@ -568,6 +568,10 @@ test('display blocks read on like fenced code, as in Obsidian', () => {
     // A `$$` line a list item keeps as its last line stays its text.
     ['- a\n$$', []],
     ['- a\n$$\n\nafter $y$', [['inline', 'y']]],
+    ['- a\n  $$\n# $y$', [['inline', 'y']]],
+    // A closing line holds no other dollar sign; a carriage return ends a line.
+    ['$$\nx$ y$$\nz\n$$', [['block', 'x$ y$$\nz']]],
+    ['$$\r\nx\r\n$$\r\n\r\nafter $y$', [['block', 'x'], ['inline', 'y']]],
   ]) {
     assert.deepEqual(lezerMath(source), expected, JSON.stringify(source))
     assert.deepEqual(markedMath(source), expected, JSON.stringify(source))
@@ -916,6 +920,21 @@ test('a display block over a giant note continues in windows like fenced code', 
       assert.ok(probe.parsedUnits < 64_000, JSON.stringify(probe))
     }
   }
+  // Typing on the opening line keeps the windows found so far.
+  let text = `intro\n\n$$ a\n${lines}`
+  const demand = { from: text.length / 2, to: text.length / 2 + 3000 }
+  const { tree } = chunkedParse(text, demand)
+  const at = text.indexOf(' a\n') + 2
+  text = `${text.slice(0, at)}b${text.slice(at)}`
+  const { probe } = chunkedParse(
+    text,
+    demand,
+    {},
+    TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+      { fromA: at, toA: at, fromB: at, toB: at + 1 },
+    ]),
+  )
+  assert.ok(probe.scannedUnits < 64_000, JSON.stringify(probe))
 })
 
 test('giant paragraphs in quotes and list items pair math across window seams too', () => {

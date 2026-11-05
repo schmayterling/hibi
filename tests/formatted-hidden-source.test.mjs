@@ -125,6 +125,7 @@ const place = (page) =>
   page.evaluate(() => {
     const view = document.querySelector('.source-pane .cm-content').cmTile.root
       .view
+    view.lineBlockAtHeight(0)
     const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
     const { anchor, head } = view.state.selection.main
     return { anchor, head, top: view.lineBlockAtHeight(height).from }
@@ -218,6 +219,7 @@ const scrolled = (page) =>
   page.evaluate(() => {
     const view = document.querySelector('.source-pane .cm-content').cmTile.root
       .view
+    view.lineBlockAtHeight(0)
     const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
     const line = view.lineBlockAtHeight(height)
     return { top: line.from, offset: height - line.top }
@@ -343,6 +345,52 @@ test("with reduced motion, a large note's source view returns to the same line a
   const before = await scrolled(page)
   const places = await returns(page, view, 256 * 1024, 4)
   samePlace(places, before)
+})
+
+test('a source view left during a pending scroll keeps the place being shown', {
+  timeout: 120000,
+}, async (t) => {
+  const { page, view } = await open(t, 360, '', {
+    unit: `${'ordinary words in a wrapped paragraph '.repeat(3)}\n`,
+    stay: true,
+    before: async (_app, page) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+    },
+  })
+  await sourceShown(page, 256 * 1024)
+  const before = await page.evaluate(async () => {
+    const editor = document.querySelector('.source-pane .cm-content').cmTile
+      .root.view
+    const left = new Promise((resolve) => {
+      editor.scrollDOM.addEventListener(
+        'scroll',
+        () => {
+          // The editor's scroll handler runs first. Capture what it now shows.
+          editor.lineBlockAtHeight(0)
+          const height =
+            editor.scrollDOM.getBoundingClientRect().top - editor.documentTop
+          const line = editor.lineBlockAtHeight(height)
+          document
+            .querySelector('.view-switch button[aria-label="normal"]')
+            .click()
+          resolve({ top: line.from, offset: height - line.top })
+        },
+        { once: true },
+      )
+    })
+    editor.dispatch({ selection: { anchor: 20000 }, scrollIntoView: true })
+    editor.scrollDOM.scrollTop = editor.lineBlockAt(20000).top + 13
+    // Deliver the scroll before its pending layout frame, then leave at once.
+    editor.scrollDOM.dispatchEvent(new Event('scroll'))
+    return left
+  })
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  )
+  await view('Source view')
+  await sourceShown(page, 256 * 1024)
+  samePlace([await scrolled(page)], before)
 })
 
 test("an unrelated paused transition does not hold a returning source view's place", {

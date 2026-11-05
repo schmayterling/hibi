@@ -14,7 +14,12 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  stopElectronTree,
+  waitForAsync,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -131,12 +136,12 @@ async function note(t, text = 'original') {
           )
         }
       },
-      /** The real thing: main can do nothing about this signal. */
+      /** Kill the tree: on Windows the launcher is not Electron's main. */
       async kill() {
         const child = app.process()
         running.delete(app)
         const gone = once(child, 'exit')
-        child.kill('SIGKILL')
+        stopElectronTree(child)
         await gone
       },
       async quit() {

@@ -225,6 +225,8 @@ function placeWithoutDrawing(view: EditorView) {
 }
 
 function placeOf(view: EditorView) {
+  // Pending layout can move the scroller; measure before reading its offset.
+  view.lineBlockAtHeight(0)
   const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
   const line = view.lineBlockAtHeight(height)
   return { top: line.from, margin: line.top - height }

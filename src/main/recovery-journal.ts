@@ -661,11 +661,20 @@ export async function* recoveryText(copy: Waiting): AsyncGenerator<string> {
 export function recoveryOpened(id: string, tabId: string) {
   return tracked(
     serial(async () => {
-      await writeDue(tabId)
+      await load()
       const copy = waiting.get(id)
-      if (!copy || !written.has(tabId)) return
+      if (!copy) return
+      // Its replacement may need the room, but the claimed copy must stay
+      // on disk until that replacement is whole.
       waiting.delete(id)
-      await drop(copy.file)
+      let kept = false
+      try {
+        await writeDue(tabId)
+        kept = written.has(tabId)
+        if (kept) await drop(copy.file)
+      } finally {
+        if (!kept) waiting.set(id, copy)
+      }
     }),
   )
 }

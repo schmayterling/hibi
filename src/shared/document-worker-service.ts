@@ -25,6 +25,14 @@ type FindRequest = Extract<DocumentWorkerRequest, { type: 'find' }>
 type MetadataRequest = Extract<DocumentWorkerRequest, { type: 'metadata' }>
 const semanticBytes = 512 * 1024
 const semanticRows = 32
+const referenceSyntaxKey = (syntax: MarkdownReferenceSyntax) =>
+  JSON.stringify([
+    syntax.gfm,
+    syntax.alerts,
+    syntax.textExtras,
+    !!syntax.math,
+    !syntax.math || syntax.mathBlocks !== false,
+  ])
 const validSyntax = (
   syntax: MarkdownReferenceSyntax,
   dialect: MetadataRequest['dialect'],
@@ -675,13 +683,7 @@ export class DocumentWorkerService {
       return found
     }
     const syntax = module.renderedReferenceSyntax(config)
-    const key = JSON.stringify([
-      syntax.gfm,
-      syntax.alerts,
-      syntax.textExtras,
-      syntax.math,
-      syntax.mathBlocks !== false,
-    ])
+    const key = referenceSyntaxKey(syntax)
     const state = this.#model?.state()
     const owners = state?.owners
     const first = owners?.get(0)
@@ -822,32 +824,13 @@ export class DocumentWorkerService {
           }
           const requestedSyntax = request.semantic ?? request.reference
           if (requestedSyntax) {
-            const {
-              gfm,
-              alerts,
-              textExtras,
-              math = false,
-              mathBlocks = true,
-            } = requestedSyntax
-            const syntax = JSON.stringify([
-              gfm,
-              alerts,
-              textExtras,
-              math,
-              mathBlocks,
-            ])
+            const syntax = referenceSyntaxKey(requestedSyntax)
             if (!this.#references || syntax !== this.#referenceSyntax) {
               this.#semantics?.clear()
               this.#semantics = null
               this.#references?.dispose()
               this.#referenceOwners = null
-              this.#references = new MarkdownSourceReferences!({
-                gfm,
-                alerts,
-                textExtras,
-                math,
-                mathBlocks,
-              })
+              this.#references = new MarkdownSourceReferences!(requestedSyntax)
               this.#referenceSyntax = syntax
             }
             if (request.semantic && !this.#semantics)

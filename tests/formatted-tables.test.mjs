@@ -1196,12 +1196,23 @@ for (const [layout, doc, target] of [
         const pane = document.querySelector('.rich-pane')
         const frame = () => new Promise(requestAnimationFrame)
         const at = doc.indexOf(target)
-        const where = (pos) =>
-          view.visibleRanges.some(
-            (range) => range.from <= pos && pos < range.to,
+        // The row the page draws the text in: at a row that starts at a join
+        // of lines, coordsAtPos gives the row above.
+        const where = (pos) => {
+          if (
+            !view.visibleRanges.some(
+              (range) => range.from <= pos && pos < range.to,
+            )
           )
-            ? view.coordsAtPos(pos, 1).top
-            : null
+            return null
+          const from = view.domAtPos(pos, 1)
+          const to = view.domAtPos(pos + 2, -1)
+          const range = document.createRange()
+          range.setStart(from.node, from.offset)
+          range.setEnd(to.node, to.offset)
+          const box = [...range.getClientRects()].at(-1)
+          return box ? box.top : view.coordsAtPos(pos, 1).top
+        }
         for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
           view.dispatch({
             effects: view.constructor.scrollIntoView(at, {

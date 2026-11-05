@@ -1968,8 +1968,7 @@ export function SourceEditor({
           // A widget that fails shows empty and the editor goes on: the user
           // sees why it is empty, and every failure still reaches the console.
           EditorView.exceptionSink.of((error: unknown, context?: string) => {
-            if (context) console.error(`${context}:`, error)
-            else console.error(error)
+            console.error(`${context ?? 'editor exception'}:`, error)
             if (context !== 'widget') return
             setWidgetError(errorMessage(error))
             if (tryingFailure.current)

@@ -166,9 +166,16 @@ test('hibi garden tab, installs, and addon links', {
   await t.test(
     'filtering keeps controls aligned with the sidebar',
     async () => {
-      const size = await app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0].getContentSize(),
-      )
+      // macOS keeps a shown window inside the screen's work area, which is
+      // shorter than 1000 px on hosted runners, so resize it hidden as local
+      // runs do.
+      const [size, shown] = await app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        const shown = process.platform === 'darwin' && window.isVisible()
+        const focused = window.isFocused()
+        if (shown) window.hide()
+        return [window.getContentSize(), shown && { focused }]
+      })
       // Overlay scrollbars (macOS with a trackpad) take no space, so give
       // the page the classic scrollbar Windows, Linux and mouse users see.
       await page.evaluate(() => {
@@ -206,6 +213,11 @@ test('hibi garden tab, installs, and addon links', {
             (width) => window.innerWidth === width,
             width,
           )
+          assert.equal(
+            await page.evaluate(() => window.innerHeight),
+            1000,
+            'the window is as tall as asked',
+          )
           const all = await geometry()
           assert.equal(all.scrolls, true, 'the full list needs a scrollbar')
           assert.ok(
@@ -237,9 +249,15 @@ test('hibi garden tab, installs, and addon links', {
         await page.evaluate(() =>
           document.getElementById('classic-scrollbar').remove(),
         )
-        await app.evaluate(({ BrowserWindow }, [width, height]) => {
-          BrowserWindow.getAllWindows()[0].setContentSize(width, height)
-        }, size)
+        await app.evaluate(
+          ({ BrowserWindow }, [[width, height], shown]) => {
+            const window = BrowserWindow.getAllWindows()[0]
+            window.setContentSize(width, height)
+            if (shown?.focused) window.show()
+            else if (shown) window.showInactive()
+          },
+          [size, shown],
+        )
       }
     },
   )

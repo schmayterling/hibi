@@ -5,6 +5,7 @@ import {
   type Extension,
   Facet,
   findClusterBreak,
+  MapMode,
   Prec,
   type Range,
   RangeSet,
@@ -2089,18 +2090,24 @@ export function livePreview(
       readonly scrolls = new Map<number, number>()
       /** The block each drawn box showed when its scroll was last set. */
       boxes = new WeakMap<Element, number | null>()
-      /** The start of the code block around `pos`. */
-      blockAt(pos: number) {
-        for (
-          let node: SyntaxNode | null = syntax
-            .tree(this.view.state)
-            .resolve(pos, 1);
-          node;
-          node = node.parent
-        )
-          if (node.name === 'FencedCode' || node.name === 'CodeBlock')
-            return node.from
-        return null
+      /**
+       * Where a saved scroll's block starts after an edit, unless the edit
+       * removed that start: a later block there is another block.
+       */
+      keptScroll(update: ViewUpdate, at: number, left: number) {
+        const kept = update.changes.mapPos(at, -1, MapMode.TrackDel)
+        if (kept !== null) this.scrolls.set(kept, left)
+      }
+      /** The drawn block's content start, even while its syntax is reparsed. */
+      blockAt(pos: number): number | null {
+        let start: number | null = null
+        this.wrappers.between(pos, pos, (from, to, wrapper) => {
+          if (wrapper === codeScroll && from <= pos && pos < to) {
+            start = from
+            return false
+          }
+        })
+        return start
       }
       /** Code blocks scrolled sideways show other columns. */
       readonly scrolled = (event: Event) => {
@@ -2126,10 +2133,8 @@ export function livePreview(
           '.hibi-lp-codescroll',
         )) {
           if (!box.scrollLeft) continue
-          const at = this.blockAt(
-            update.changes.mapPos(update.view.posAtDOM(box)),
-          )
-          if (at !== null) this.scrolls.set(at, box.scrollLeft)
+          const at = this.blockAt(update.view.posAtDOM(box))
+          if (at !== null) this.keptScroll(update, at, box.scrollLeft)
         }
       }
       constructor(readonly view: EditorView) {
@@ -2220,8 +2225,7 @@ export function livePreview(
         if (update.docChanged && this.scrolls.size) {
           const scrolls = [...this.scrolls]
           this.scrolls.clear()
-          for (const [at, left] of scrolls)
-            this.scrolls.set(update.changes.mapPos(at), left)
+          for (const [at, left] of scrolls) this.keptScroll(update, at, left)
         }
         if (update.viewportChanged) this.keepScrolls(update)
         if (update.docChanged && this.columns.size)

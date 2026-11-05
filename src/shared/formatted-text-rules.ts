@@ -245,6 +245,14 @@ export function formattedClosedFence(node: SyntaxNode) {
 export function formattedMathBlock(node: SyntaxNode) {
   return !!node.getChild('MathText')
 }
+/**
+ * Display math that selects and takes keys as one node: drawn as a formula
+ * and closed. Without a closing line a block can hold the rest of the note,
+ * which a selection meant for one formula must not take.
+ */
+export function formattedMathAtom(node: SyntaxNode) {
+  return formattedMathBlock(node) && node.getChildren('MathMark').length >= 2
+}
 
 /** Feature-selected atomic widgets never contribute their source to formatted find. */
 export function formattedAtomic(

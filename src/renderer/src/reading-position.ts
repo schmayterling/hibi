@@ -368,7 +368,7 @@ function holdTop(view: EditorView) {
   // Not at a line gap's edge, where nothing is drawn to hold.
   if (position?.text) {
     hold(view, { ...position, isTop: true })
-    widths.get(view)?.observe(pane)
+    paneSizes.get(view)?.observe(pane)
   }
 }
 
@@ -396,7 +396,7 @@ function restore(view: EditorView, position: Reading) {
 }
 
 /** Each view's watch on its pane's size, which a view's own updates don't change. */
-const widths = new WeakMap<EditorView, ResizeObserver>()
+const paneSizes = new WeakMap<EditorView, ResizeObserver>()
 
 /** Puts the text held at the pane's top back, after its layout changed. */
 function holdHeld(view: EditorView) {
@@ -430,14 +430,9 @@ export const keepRead = [
   // A view given a new state, as after a failed edit, drops its scroll command.
   ViewPlugin.define((view) => {
     scrollsWaiting.delete(view)
-    // Before the page paints a new width: the editor measures it later.
-    let width = view.contentDOM.clientWidth
-    const resize = new ResizeObserver(() => {
-      if (view.contentDOM.clientWidth === width) return
-      width = view.contentDOM.clientWidth
-      holdHeld(view)
-    })
-    widths.set(view, resize)
+    // Before the page paints a new size: the editor measures it later.
+    const resize = new ResizeObserver(() => holdHeld(view))
+    paneSizes.set(view, resize)
     return { destroy: () => resize.disconnect() }
   }),
   EditorView.domEventObservers({ scroll: (_, view) => holdTop(view) }),
@@ -461,11 +456,7 @@ export const keepRead = [
     // Scrolling away ends the place held: back at the same scroll, the
     // heights under it can be new.
     const held = anchors.get(update.view)
-    if (
-      held &&
-      !held.position.isTop &&
-      Math.abs(held.position.pane.scrollTop - held.scroll) > 1
-    )
+    if (held && Math.abs(held.position.pane.scrollTop - held.scroll) > 1)
       held.scroll = Number.POSITIVE_INFINITY
     const keep = kept.get(update.view)
     if (

@@ -1169,9 +1169,13 @@ test('the reading place deep inside a huge line holds through second changes, sh
     measured.some(({ name }) => name.includes('at a join')),
     report,
   )
-  for (const { tops, slack } of measured)
+  for (const { name, tops, slack } of measured) {
     for (const top of tops)
       assert.ok(top !== null && Math.abs(top) <= slack, report)
+    // Nothing lays out a row again here: the reader's scrolling stands exactly.
+    if (name.includes('at a join'))
+      assert.ok(Math.abs(tops.at(-1)) <= 2, report)
+  }
 })
 
 for (const [layout, doc, target] of [
@@ -1270,9 +1274,48 @@ for (const [layout, doc, target] of [
       [...steps, ...widths].every((off) => off !== null && Math.abs(off) <= 30),
       JSON.stringify({ steps, widths }),
     )
-    await harness.evaluate(() => {
+    // What happened since doesn't take the place back to where it was, or
+    // the place from where it is now.
+    const since = await harness.evaluate(async () => {
+      const { rowAtTop, where, frame, panes } = window.reading
+      const view = window.tables.view()
+      const pane = document.querySelector('.rich-pane')
+      const settle = async () => {
+        for (let frames = 0; frames < 30; frames++) await frame()
+      }
+      const pos = rowAtTop()
+      const start = where(pos)
+      view.dispatch({ changes: { from: 0, insert: 'x' } })
+      await settle()
+      panes.style.width = '1200px'
+      await settle()
+      const edited = where(pos + 1) - start
+      pane.style.marginTop = '80px'
+      await settle()
+      panes.style.width = '1000px'
+      await settle()
+      const moved = where(pos + 1) - start - 80
+      pane.style.marginTop = ''
+      await settle()
+      const asked = view.state.doc.toString().indexOf('Paragraph 5 ')
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(asked, {
+          y: 'start',
+          yMargin: 0,
+        }),
+      })
+      await settle()
       delete window.reading
+      return {
+        edited,
+        moved,
+        asked: where(asked) - pane.getBoundingClientRect().top,
+      }
     })
+    assert.ok(
+      Object.values(since).every((off) => Math.abs(off) <= 30),
+      JSON.stringify(since),
+    )
   })
 
 /** Mount `doc` in the editable harness. */

@@ -122,3 +122,41 @@ test('a repeated reference definition after code cannot swallow a quote row', ()
     )
   }
 })
+
+test('an alert in a list item keeps its body blocks apart like a quote', () => {
+  const parser = new Marked(blockMarkdown, alertMarkdown)
+  const body = (html) =>
+    html.includes('github-alert-body')
+      ? html.slice(
+          html.indexOf('github-alert-body') + 19,
+          html.indexOf('</div></blockquote>'),
+        )
+      : html.slice(
+          html.indexOf('<blockquote>\n') + 13,
+          html.indexOf('</blockquote>'),
+        )
+  for (const lines of [
+    ['w1w', '', 'w2w'],
+    ['# w1w', 'w2w'],
+    ['- w1w', '', 'w2w'],
+  ]) {
+    const item = (head) =>
+      `- ${[...head, ...lines].map((line) => `> ${line}`.trimEnd()).join('\n  ')}`
+    const source = item(['[!NOTE]'])
+    assert.equal(
+      body(parser.parse(source)),
+      body(parser.parse(item([]))),
+      source,
+    )
+    assert.deepEqual(words(parser.parse(source)), ['w1w', 'w2w'], source)
+    assert.deepEqual(
+      words(richText(source, { ...defaultNoteSyntax, alerts: true })),
+      ['w1w', 'w2w'],
+      source,
+    )
+  }
+  // The list item's own text after the alert stays tight.
+  const tail = (head) =>
+    parser.parse(`- > ${head}w1w\n  ---\n  w2w`).split('</blockquote>').at(-1)
+  assert.equal(tail('[!NOTE]\n  > '), tail(''))
+})

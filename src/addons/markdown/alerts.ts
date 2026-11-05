@@ -48,7 +48,12 @@ export const alertMarkdown: MarkedExtension = {
         const token = alertToken(source, this.lexer)
         if (token) {
           const { text } = token
-          const quote = { ...token, tokens: this.lexer.blockTokens(text) }
+          // Like a quote, its blocks stay whole inside a tight list item.
+          const { top } = this.lexer.state
+          this.lexer.state.top = true
+          const tokens = this.lexer.blockTokens(text)
+          this.lexer.state.top = top
+          const quote = { ...token, tokens }
           return quoteBlock(quote, token)
         }
       }),

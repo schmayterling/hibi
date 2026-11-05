@@ -7,6 +7,7 @@ import type { SourceSnapshot } from '../shared/source-buffer'
 import { readMarkdown, readMarkdownChunks, writeText } from './files'
 
 type Version = DocumentVersion & { hash: string }
+const AUTOSAVE_GAP = 3 * 60 * 1000
 const hashes = new WeakMap<SourceSnapshot, { hash: string; bytes: number }>()
 const directory = (path: string) =>
   join(
@@ -113,10 +114,20 @@ export async function recordVersions(
   const folder = directory(path)
   const next = [...current]
   let copyFailure: { error: unknown } | undefined
+  let reflagged = false
   try {
     for (const markdown of markdowns) {
       const { hash, bytes } = await sourceHash(markdown)
-      if (next.at(-1)?.hash === hash) continue
+      const last = next.at(-1)
+      if (last?.hash === hash) {
+        // Asked for now, whoever wrote this text first.
+        if (!automatic && last.automatic && markdown === markdowns.at(-1)) {
+          const { automatic: _written, ...asked } = last
+          next[next.length - 1] = asked
+          reflagged = true
+        }
+        continue
+      }
       if (next.length === current.length)
         await mkdir(folder, { recursive: true, mode: 0o700 })
       const id = randomUUID()
@@ -138,13 +149,23 @@ export async function recordVersions(
     if (next.length === current.length) throw error
     copyFailure = { error }
   }
-  if (next.length === current.length) return
+  if (next.length === current.length && !reflagged) return
   const added = next.slice(current.length)
   let bytes = next.reduce((sum, version) => sum + version.bytes, 0)
   const expired: Version[] = []
   while (next.length > 2 && (next.length > 100 || bytes > 20 * 1024 * 1024)) {
-    // Autosaves come far more often: they make room before saves asked for.
-    const autosave = next.slice(0, -2).findIndex((version) => version.automatic)
+    // Autosaves come far more often: they make room before saves asked for,
+    // first those it leaves no gap to miss, as the list shows them minutes
+    // apart. The text a save asked for replaced goes last of all.
+    const spare = next.slice(0, next.at(-1)?.automatic ? -1 : -2)
+    const crowded = spare.findIndex(
+      (version, index) =>
+        version.automatic &&
+        index > 0 &&
+        next[index + 1]!.savedAt - next[index - 1]!.savedAt < AUTOSAVE_GAP,
+    )
+    const autosave =
+      crowded >= 0 ? crowded : spare.findIndex((version) => version.automatic)
     const [version] = next.splice(Math.max(autosave, 0), 1)
     if (version) {
       expired.push(version)

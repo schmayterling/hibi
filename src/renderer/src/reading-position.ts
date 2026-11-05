@@ -405,6 +405,15 @@ function restore(view: EditorView, position: Reading) {
   return true
 }
 
+/**
+ * A scroll a view's widget makes itself, as a table showing the cell it
+ * edits: it takes precedence as a scroll command does, over a place read
+ * before it and not restored yet.
+ */
+export function scrolledItself(view: EditorView) {
+  scrollRequests.set(view, (scrollRequests.get(view) ?? 0) + 1)
+}
+
 /** Each view's watch on its pane's size, which a view's own updates don't change. */
 const paneSizes = new WeakMap<EditorView, ResizeObserver>()
 

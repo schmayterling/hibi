@@ -20,6 +20,47 @@ const escapable = new Set(
   ),
 )
 
+/**
+ * How later lines of a block continue its containers: quote markers, and list
+ * items' content columns past the base of the containers around them, as
+ * lezer measures them on each line.
+ */
+export type Level = { quote: true } | { quote: false; value: number }
+
+export const space = (code: number) => code === 32 || code === 9
+export const nextColumn = (column: number, code: number) =>
+  code === 9 ? column + 4 - (column % 4) : column + 1
+
+/** Where a later line's content starts inside the containers, or -1 when they end before it. */
+export function contentStart(levels: readonly Level[], text: string) {
+  let pos = 0,
+    column = 0,
+    base = 0
+  for (const level of levels) {
+    if (level.quote) {
+      while (space(text.charCodeAt(pos)))
+        column = nextColumn(column, text.charCodeAt(pos++))
+      if (text[pos] !== '>') return -1
+      pos++
+      column++
+      if (space(text.charCodeAt(pos)))
+        column = nextColumn(column, text.charCodeAt(pos++))
+      base = column
+    } else {
+      // A blank line continues an item, but not a quote inside it.
+      if (/^[ \t]*$/.test(text.slice(pos))) {
+        pos = text.length
+        continue
+      }
+      base += level.value
+      while (column < base && space(text.charCodeAt(pos)))
+        column = nextColumn(column, text.charCodeAt(pos++))
+      if (column < base) return -1
+    }
+  }
+  return pos
+}
+
 /** Units read, for complexity tests. */
 export const seamWork = { units: 0 }
 
@@ -30,13 +71,17 @@ export const seamWork = { units: 0 }
  * first. `text` is the paragraph from document position `offset` on, through
  * `pairLimit` past `to` or the paragraph's end; closers are looked for there.
  * `read.reach` grows to the furthest position a decision read, so an edit
- * after it keeps the result.
+ * after it keeps the result. In a quote or list item, `levels` are its
+ * containers: a `$` can close math at a line's content start, as the
+ * formatted view reads the line without their markers.
  *
  * ponytail: other inline syntax that hides a dollar or backtick, such as an
  * HTML tag or a link destination, reads as text here, and so does emphasis
- * or a link that opened before a formula and wins over it, so a window after
- * one in a giant paragraph can pair otherwise; reading it means replaying
- * every inline parser.
+ * or a link that opened before a formula and wins over it: one such formula
+ * near a giant paragraph's top pairs every window after it otherwise.
+ * Reading it means carrying emphasis and link delimiters in each checkpoint
+ * as lezer pairs them, and giving a window that cuts an open one its
+ * delimiters too.
  */
 export function readSeams(
   text: string,
@@ -45,6 +90,7 @@ export function readSeams(
   to: number,
   open: SeamPair | null,
   read: { reach: number },
+  levels: readonly Level[] = [],
 ): SeamPair | null {
   let pos = from
   if (open) {
@@ -81,6 +127,23 @@ export function readSeams(
     return at
   }
   const closers: Closers = { from: -1, at: -1 }
+  // The text starts a line; the last line's content start, by line start.
+  let line = -1,
+    content = -1
+  const lineStart = levels.length
+    ? (at: number) => {
+        const start = text.lastIndexOf('\n', at - 1) + 1
+        if (start !== line) {
+          const end = text.indexOf('\n', start)
+          line = start
+          content = contentStart(
+            levels,
+            text.slice(start, end < 0 ? undefined : end),
+          )
+        }
+        return at - start === content
+      }
+    : undefined
   const stops = /[\\`$]/g
   while (pos < to) {
     stops.lastIndex = pos - offset
@@ -106,7 +169,7 @@ export function readSeams(
       size = display ? 2 : 1
       const found = display
         ? inlineDisplayMathEnd(text, at - offset)
-        : inlineMathEnd(text, at - offset, closers)
+        : inlineMathEnd(text, at - offset, closers, lineStart)
       close = found < 0 ? -1 : offset + found
       // An opener without a closer read up to the pair limit, unless its
       // first unit already ruled it out.

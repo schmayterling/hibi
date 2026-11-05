@@ -11,10 +11,11 @@ import type { MathHost } from './formatted'
 import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
-import { mathFlavor, mathTokens } from './syntax'
+import { mathFlavor, mathTokensWith } from './syntax'
 
 const options = {
   throwOnError: false,
+  strict: false,
   trust: false,
   maxExpand: 500,
   maxSize: 20,
@@ -166,7 +167,10 @@ export function startMath(context: AddonContext) {
   context.editor.registerFlavor({
     ...mathFlavor,
     export: {
-      extensions: [mathTokens, renderers],
+      extensions: [
+        mathTokensWith(() => context.editor.isSyntaxEnabled('block')),
+        renderers,
+      ],
       css: mathStyles,
     },
   })

@@ -2172,6 +2172,170 @@ test('reference labels follow definition changes after an edit and ask only abou
   assert.equal(multiline.undrawn, 0, JSON.stringify(multiline))
 })
 
+test('code keeps sideways scrolling through a pending reparse and an offscreen edit', async () => {
+  const doc =
+    '# Wide code\n\n\x60\x60\x60js\n' +
+    `${'const horizontal = 42; '.repeat(50)}\n`.repeat(80) +
+    '\x60\x60\x60\n\n' +
+    'After the code.\n\n'.repeat(100)
+  const box = '.hibi-lp-codescroll'
+  // A redraw may take the box away for a moment, so each check finds it anew.
+  const scrolledTo = (text, left) =>
+    harness.waitForFunction(
+      ({ selector, text, left }) => {
+        const block = document.querySelector(selector)
+        return (
+          !window.livePreview.settling() &&
+          block?.textContent.includes(text) &&
+          block.scrollWidth > block.clientWidth &&
+          Math.abs(block.scrollLeft - left) <= 1
+        )
+      },
+      { selector: box, text, left },
+      { timeout: 8000 },
+    )
+  await harness.evaluate(async (doc) => {
+    document.querySelector('.rich-pane').scrollTop = 0
+    await window.livePreview.mount(
+      doc,
+      { width: 800, height: 600 },
+      { slice: 0 },
+    )
+  }, doc)
+  const ready = await harness.waitForFunction(
+    (selector) => {
+      const preview = window.livePreview
+      const initial = document.querySelector(selector)
+      // Check readiness and edit in one task: an idle redraw may replace the box.
+      if (
+        preview.settling() ||
+        !initial?.textContent.includes('horizontal') ||
+        initial.scrollWidth <= initial.clientWidth
+      )
+        return false
+      const view = preview.view()
+      // One bounded parse step leaves the changed block out of the new tree;
+      // its existing wrapper remains on screen until the reparse finishes.
+      view.dispatch({
+        changes: { from: view.state.doc.line(4).from, insert: '// pending\n' },
+      })
+      const block = document.querySelector(selector)
+      let parsed = false
+      for (
+        let node = preview.tree().resolve(view.posAtDOM(block), 1);
+        node;
+        node = node.parent
+      )
+        parsed ||= node.name === 'FencedCode' || node.name === 'CodeBlock'
+      block.scrollLeft = (block.scrollWidth - block.clientWidth) / 2
+      const requested = block.scrollLeft
+      block.scrollIntoView({ block: 'end' })
+      // Run the pending viewport draw before the queued native scroll event.
+      view.measure()
+      return { settling: preview.settling(), parsed, requested }
+    },
+    box,
+    { timeout: 8000 },
+  )
+  const pending = await ready.jsonValue()
+  assert.ok(pending.settling && !pending.parsed, JSON.stringify(pending))
+  assert.ok(pending.requested > 0, JSON.stringify(pending))
+  await scrolledTo('horizontal', pending.requested)
+
+  // Visit another block so returning restores the first block's saved position.
+  await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    view.dispatch({
+      changes: {
+        from: view.state.doc.length,
+        insert: `\n\`\`\`js\n${'const second = "second block"; '.repeat(40)}\n\`\`\`\n`,
+      },
+    })
+    preview.scrollTo(view.state.doc.length)
+  })
+  await scrolledTo('second block', 0)
+  await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    view.dispatch({
+      changes: [
+        { from: 0, insert: 'Before the code.\n\n' },
+        { from: view.state.doc.line(4).from, insert: '// first\n' },
+      ],
+    })
+    // Returning to a code caret would also ask to reveal its column.
+    preview.scrollTo(0)
+  })
+  await scrolledTo('horizontal', pending.requested)
+})
+
+test('a removed code block leaves its sideways scroll to no later block', async () => {
+  const wide = `${'const horizontal = 42; '.repeat(50)}\n`
+  const lefts = await harness.evaluate(async (wide) => {
+    const preview = window.livePreview
+    const scrollFirst = async () => {
+      const block = document.querySelector('.hibi-lp-codescroll')
+      const scrolled = new Promise((done) =>
+        block.addEventListener('scroll', done, { once: true }),
+      )
+      block.scrollLeft = 400
+      await scrolled
+    }
+    const leftsNow = () =>
+      [...document.querySelectorAll('.hibi-lp-codescroll')].map(
+        (block) => block.scrollLeft,
+      )
+    const code = `\x60\x60\x60js\n${wide.repeat(3)}\x60\x60\x60\n\n`
+
+    await preview.mount(`# Title\n\n${code}After the code.\n\n${code}`, {
+      width: 800,
+      height: 600,
+    })
+    await preview.settle()
+    await scrollFirst()
+    let view = preview.view()
+    view.dispatch({ changes: { from: 9, to: 9 + code.length } })
+    await preview.settle()
+    // The blank line above opens a fence, so the text after the block is code.
+    view.dispatch({ changes: { from: 8, insert: '\x60\x60\x60' } })
+    await preview.settle()
+    const fenceAbove = leftsNow()
+
+    await preview.mount(`# Title\n\n${code}`, { width: 800, height: 600 })
+    await preview.settle()
+    await scrollFirst()
+    view = preview.view()
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: `    ${wide}` },
+    })
+    await preview.settle()
+    return { fenceAbove, replaced: leftsNow() }
+  }, wide)
+  assert.deepEqual(lefts, { fenceAbove: [0], replaced: [0] })
+})
+
+test('an edit above keeps a sideways scroll whose event has not fired', async () => {
+  const wide = `${'const horizontal = 42; '.repeat(50)}\n`
+  const left = await harness.evaluate(async (wide) => {
+    const preview = window.livePreview
+    await preview.mount(
+      `# Title\n\n\x60\x60\x60js\n${wide.repeat(3)}\x60\x60\x60\n`,
+      { width: 800, height: 600 },
+    )
+    await preview.settle()
+    const view = preview.view()
+    // The edit takes the box off screen in this task, before its scroll event.
+    document.querySelector('.hibi-lp-codescroll').scrollLeft = 400
+    view.dispatch({ changes: { from: 0, insert: 'Above.\n\n'.repeat(2000) } })
+    await preview.settle()
+    preview.scrollTo(view.state.doc.length)
+    await preview.settle()
+    return document.querySelector('.hibi-lp-codescroll')?.scrollLeft
+  }, wide)
+  assert.equal(left, 400)
+})
+
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {
   timeout: 180000,
 }, async () => {

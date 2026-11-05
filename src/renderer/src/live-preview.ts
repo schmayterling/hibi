@@ -5,6 +5,7 @@ import {
   type Extension,
   Facet,
   findClusterBreak,
+  MapMode,
   Prec,
   type Range,
   RangeSet,
@@ -38,6 +39,7 @@ import {
   formattedDefinitionRange,
   formattedListStart,
   formattedMarkerRanges,
+  formattedMathAtom,
 } from '../../shared/formatted-text-rules.ts'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
@@ -1588,12 +1590,14 @@ function chunkLayout(
   const literal = new Set(state.facet(formattedLiteral))
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
-  let sensitive = false
+  let sensitive = false,
+    atomic = true
   const sink: FormattedLayout = {
     replace(rangeFrom, rangeTo, widget, options) {
       if (rangeTo < rangeFrom) return
       out.push(
         Decoration.replace({
+          atomic,
           ...(widget ? { widget } : {}),
           ...(options?.block ? { block: true } : {}),
         }).range(rangeFrom - from, rangeTo - from),
@@ -1640,6 +1644,7 @@ function chunkLayout(
             ),
             visible: null,
           }
+          atomic = ref.name !== 'BlockMath' || formattedMathAtom(ref.node)
           let skip = false
           for (const view of contributed)
             if (view.layout?.(ref, sink, context) === false) skip = true
@@ -1812,6 +1817,9 @@ function cacheFor(state: EditorState) {
 }
 const intersects = (reveal: readonly Revealed[], from: number, to: number) =>
   reveal.some((range) => range.from <= to && range.to >= from)
+// Unclosed math still draws, but the rest of the note must not become one edit atom.
+const layoutAtoms = new WeakMap<DecorationSet, DecorationSet>()
+
 function layoutDecorations(
   state: EditorState,
   tree: Tree,
@@ -1819,6 +1827,8 @@ function layoutDecorations(
 ): DecorationSet {
   const cache = cacheFor(state)
   const out: Range<Decoration>[] = []
+  let nonAtomicFrom = Number.POSITIVE_INFINITY,
+    nonAtomicTo = -1
   for (const { from, chunk, covered } of parsedChunks(tree)) {
     let layout = cache.get(chunk)
     if (!layout || (layout.sensitive && layout.doc !== state.doc)) {
@@ -1827,10 +1837,27 @@ function layoutDecorations(
     }
     if (layout.sensitive && intersects(reveal, from, from + chunk.length))
       layout = chunkLayout(state, tree, from, covered, reveal)
-    for (const range of layout.ranges)
-      out.push(range.value.range(range.from + from, range.to + from))
+    for (const range of layout.ranges) {
+      const start = range.from + from,
+        end = range.to + from
+      out.push(range.value.range(start, end))
+      if (range.value.spec.atomic === false) {
+        nonAtomicFrom = Math.min(nonAtomicFrom, start)
+        nonAtomicTo = Math.max(nonAtomicTo, end)
+      }
+    }
   }
-  return Decoration.set(out, true)
+  const set = Decoration.set(out, true)
+  if (nonAtomicTo > nonAtomicFrom)
+    layoutAtoms.set(
+      set,
+      set.update({
+        filterFrom: nonAtomicFrom,
+        filterTo: nonAtomicTo,
+        filter: (_, __, value) => value.spec.atomic !== false,
+      }),
+    )
+  return set
 }
 
 /** Whether moving the reveal ranges can change a contributed layout. */
@@ -2011,8 +2038,12 @@ export function livePreview(
           (sameRanges(reveal, revealedIn(startState, tree)) ||
             (!revealMatters(state, tree, reveal) &&
               !revealMatters(state, tree, revealedIn(startState, tree)))))
-      )
-        return value.map(transaction.changes)
+      ) {
+        const mapped = value.map(transaction.changes)
+        const atoms = layoutAtoms.get(value)
+        if (atoms) layoutAtoms.set(mapped, atoms.map(transaction.changes))
+        return mapped
+      }
       return layoutDecorations(state, tree, reveal)
     },
   })
@@ -2059,18 +2090,24 @@ export function livePreview(
       readonly scrolls = new Map<number, number>()
       /** The block each drawn box showed when its scroll was last set. */
       boxes = new WeakMap<Element, number | null>()
-      /** The start of the code block around `pos`. */
-      blockAt(pos: number) {
-        for (
-          let node: SyntaxNode | null = syntax
-            .tree(this.view.state)
-            .resolve(pos, 1);
-          node;
-          node = node.parent
-        )
-          if (node.name === 'FencedCode' || node.name === 'CodeBlock')
-            return node.from
-        return null
+      /**
+       * Where a saved scroll's block starts after an edit, unless the edit
+       * removed that start: a later block there is another block.
+       */
+      keptScroll(update: ViewUpdate, at: number, left: number) {
+        const kept = update.changes.mapPos(at, -1, MapMode.TrackDel)
+        if (kept !== null) this.scrolls.set(kept, left)
+      }
+      /** The drawn block's content start, even while its syntax is reparsed. */
+      blockAt(pos: number): number | null {
+        let start: number | null = null
+        this.wrappers.between(pos, pos, (from, to, wrapper) => {
+          if (wrapper === codeScroll && from <= pos && pos < to) {
+            start = from
+            return false
+          }
+        })
+        return start
       }
       /** Code blocks scrolled sideways show other columns. */
       readonly scrolled = (event: Event) => {
@@ -2096,10 +2133,8 @@ export function livePreview(
           '.hibi-lp-codescroll',
         )) {
           if (!box.scrollLeft) continue
-          const at = this.blockAt(
-            update.changes.mapPos(update.view.posAtDOM(box)),
-          )
-          if (at !== null) this.scrolls.set(at, box.scrollLeft)
+          const at = this.blockAt(update.view.posAtDOM(box))
+          if (at !== null) this.keptScroll(update, at, box.scrollLeft)
         }
       }
       constructor(readonly view: EditorView) {
@@ -2190,8 +2225,7 @@ export function livePreview(
         if (update.docChanged && this.scrolls.size) {
           const scrolls = [...this.scrolls]
           this.scrolls.clear()
-          for (const [at, left] of scrolls)
-            this.scrolls.set(update.changes.mapPos(at), left)
+          for (const [at, left] of scrolls) this.keptScroll(update, at, left)
         }
         if (update.viewportChanged) this.keepScrolls(update)
         if (update.docChanged && this.columns.size)
@@ -2442,9 +2476,10 @@ export function livePreview(
       revealDestinations(state.field(layout), state),
     ),
     // Hidden layout syntax is atomic too.
-    EditorView.atomicRanges.of((view) =>
-      revealDestinations(view.state.field(layout), view.state),
-    ),
+    EditorView.atomicRanges.of((view) => {
+      const set = view.state.field(layout)
+      return revealDestinations(layoutAtoms.get(set) ?? set, view.state)
+    }),
     // A source of higher precedence than the preview's own: the editor
     // draws its marks inside the preview's.
     EditorView.decorations.of(

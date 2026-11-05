@@ -146,6 +146,26 @@ test('an alert reads its quote without building rules per call', () => {
   }
 })
 
+test('a new lexer reuses the tabbed definition rule', () => {
+  // The semantic reader makes a lexer per region, each with its own rules.
+  const markdown = new Marked(blockMarkdown)
+  markdown.lexer('[a]: /u\n')
+  const Native = globalThis.RegExp
+  let built = 0
+  globalThis.RegExp = new Proxy(Native, {
+    construct(target, args, newTarget) {
+      if (String(args[0]).includes(String.raw`\]:[ \t]*`)) built++
+      return Reflect.construct(target, args, newTarget)
+    },
+  })
+  try {
+    for (let index = 0; index < 20; index++) markdown.lexer('[a]: /u\n\ntext\n')
+  } finally {
+    globalThis.RegExp = Native
+  }
+  assert.equal(built, 0)
+})
+
 test('empty quote markers retain native lazy-line boundaries', () => {
   for (const first of ['>', '> ', '>  ', ' >', '  > ', '> p']) {
     for (const next of [

@@ -651,7 +651,7 @@ function paragraphRule(pattern: RegExp) {
   return interrupt
 }
 
-const definitionRules = new WeakMap<Tokenizer['rules'], Tokenizer['rules']>()
+const definitionPatterns = new WeakMap<RegExp, RegExp>()
 // CommonMark separates a definition's label, destination and title, and ends
 // it, with spaces or tabs; Marked's rule accepts spaces only.
 const definitionGaps = [
@@ -662,30 +662,31 @@ const definitionGaps = [
   ],
   [String.raw`)? *(?:\n+|$)`, String.raw`)?[ \t]*(?:\n+|$)`],
 ] as const
-function withDefinitionRules<T>(tokenizer: Tokenizer, read: () => T): T {
+const definitionStart = /^ *\[/
+function withDefinitionRules<T>(
+  tokenizer: Tokenizer,
+  source: string,
+  read: () => T,
+): T {
+  // Every paragraph comes here first, and each lexer has its own rules object.
+  if (!definitionStart.test(source)) return read()
   const rules = tokenizer.rules
-  let fixed = definitionRules.get(rules)
+  const { def } = rules.block
+  let fixed = definitionPatterns.get(def)
   if (!fixed) {
-    const { def } = rules.block
     // Only Marked's CommonMark rule; pedantic mode keeps its own.
     fixed = definitionGaps.every(([gap]) => def.source.includes(gap))
-      ? {
-          ...rules,
-          block: {
-            ...rules.block,
-            def: new RegExp(
-              definitionGaps.reduce(
-                (source, [gap, wide]) => source.replace(gap, () => wide),
-                def.source,
-              ),
-              def.flags,
-            ),
-          },
-        }
-      : rules
-    definitionRules.set(rules, fixed).set(fixed, fixed)
+      ? new RegExp(
+          definitionGaps.reduce(
+            (text, [gap, wide]) => text.replace(gap, () => wide),
+            def.source,
+          ),
+          def.flags,
+        )
+      : def
+    definitionPatterns.set(def, fixed)
   }
-  tokenizer.rules = fixed
+  tokenizer.rules = { ...rules, block: { ...rules.block, def: fixed } }
   try {
     return read()
   } finally {
@@ -1358,7 +1359,7 @@ export class BlockTokenizer extends Tokenizer {
   }
 
   override def(source: string, read = Tokenizer.prototype.def) {
-    return withDefinitionRules(this, () =>
+    return withDefinitionRules(this, source, () =>
       BlockTokenizer.prototype.readDefinition.call(this, source, read),
     )
   }

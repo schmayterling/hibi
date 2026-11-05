@@ -1034,17 +1034,25 @@ test('a source view that fails drawing what its own scroll brings in is named an
   await typingAndSavingWork(context, source, 'x')
 })
 
-for (const presentation of ['formatted', 'source'])
-  test(`the rebuilt ${presentation} editor keeps the place being read`, {
+for (const [presentation, headings] of [
+  ['formatted', false],
+  ['source', false],
+  ['formatted', true],
+])
+  test(`the rebuilt ${presentation} editor keeps the place being read${headings ? ' in a note with headings' : ''}`, {
     timeout: 60000,
   }, async (t) => {
-    const far = Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')
+    const far = Array.from(
+      { length: 400 },
+      (_, i) => `${headings && i % 4 === 0 ? '## ' : ''}line ${i}\n\n`,
+    ).join('')
     const source = `${far}end\n\n`
     const context = await open(t, {
       source,
       presentation,
       code: decorationsAddon(presentation),
     })
+    await context.page.setViewportSize({ width: 1000, height: 720 })
     await opened(context, source, presentation)
     const at = source.indexOf('line 300')
     const lineTop = () =>
@@ -1096,5 +1104,6 @@ for (const presentation of ['formatted', 'source'])
       { timeout: 5000 },
     )
     const after = await lineTop()
+    t.diagnostic(`line moved ${before} to ${after}`)
     assert.ok(Math.abs(after - before) < 60, `line moved ${before} to ${after}`)
   })

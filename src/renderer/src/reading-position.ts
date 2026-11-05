@@ -1,7 +1,7 @@
 import { Annotation, Facet, type Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
-import { isViewDead } from './source-session.ts'
+import { isViewDead } from './view-death.ts'
 
 /**
  * Whether the view placed the selection itself, as a note opens with its
@@ -356,6 +356,7 @@ function hold(view: EditorView, position: Reading) {
  * read.
  */
 function holdTop(view: EditorView) {
+  if (isViewDead(view)) return
   const pane = scrollingPane(view)
   if (!pane) return
   const held = anchors.get(view)
@@ -410,6 +411,7 @@ const paneSizes = new WeakMap<EditorView, ResizeObserver>()
 
 /** Puts the text held at the pane's top back, after its layout changed. */
 function holdHeld(view: EditorView) {
+  if (isViewDead(view)) return
   const held = anchors.get(view)
   if (
     !held?.position.isTop ||

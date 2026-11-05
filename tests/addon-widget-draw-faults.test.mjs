@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  expectPageError,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -258,6 +262,7 @@ for (const presentation of ['formatted', 'source'])
     test(`a ${presentation} widget that fails to draw in ${name} shows empty: the page answers, typing reaches the note and the file, and the user is told`, {
       timeout: 60000,
     }, async (t) => {
+      expectPageError(t, /^widget: Error: widget boom/)
       const context = await open(t, {
         source,
         presentation,
@@ -274,6 +279,7 @@ for (const presentation of ['formatted', 'source'])
 test('a note already holding a widget that fails opens, answers and saves', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: widget boom/)
   const source = `${withTable}Q held\n\n`
   const context = await open(t, { source, addon: { widget: throwing } })
   await opened(context, source)
@@ -284,6 +290,7 @@ test('a note already holding a widget that fails opens, answers and saves', {
 test('a widget that fails when scrolling draws it leaves the note working', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: widget boom/)
   const far = Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')
   const source = `${far}Q far\n\nend\n\n`
   const context = await open(t, { source, addon: { widget: throwing } })
@@ -321,6 +328,7 @@ for (const [method, widget] of Object.entries(otherMethods))
   test(`a widget whose ${method} fails leaves typing, saving and the page working`, {
     timeout: 60000,
   }, async (t) => {
+    expectPageError(t, /^widget: .*(widget boom|must draw an element)/)
     const context = await open(t, { source: withTable, addon: { widget } })
     await opened(context, withTable)
     await type(context, 'Qab')
@@ -500,6 +508,7 @@ test('a feature that dispatches while its decorations draw is the one named, and
 test('a core widget that keeps failing does not stop a draw failure from ending', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: core widget boom/)
   const source = '# Title\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nend\n\n'
   const context = await open(t, {
     source,
@@ -546,6 +555,10 @@ test('a core widget that keeps failing does not stop a draw failure from ending'
 test('an addon plugin that dispatches while the view updates costs its own plugin, not the editor', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(
+    t,
+    /^CodeMirror plugin crashed: .*cannot start during another/,
+  )
   const context = await open(t, {
     source: plain,
     code: `export default (sdk) => ({ start(context) {
@@ -655,6 +668,7 @@ test('a decoration source that throws only for what scrolls into view is named a
 test('a widget that fails to draw is named and removed without a new editor, and what it replaced shows again', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: widget boom/)
   const context = await open(t, {
     source: plain,
     addon: { widget: throwing, deco: ', inclusive: false' },
@@ -688,6 +702,8 @@ for (const [name, withAddons] of [
   test(`a draw failure ${name} ends in recovery, and the note is saved from there`, {
     timeout: 60000,
   }, async (t) => {
+    // A view the injected bug left dead still gets a dispatch or a measure before it goes.
+    expectPageError(t, /cannot start during another|measureVisibleLineHeights/)
     const context = await open(t, {
       source: plain,
       ...(withAddons ? { addon: { widget: healthy } } : { noAddons: true }),
@@ -815,6 +831,7 @@ for (const [name, thrown] of Object.entries(unreadable))
     test(`${where} throwing ${name} is still named, and the note keeps working`, {
       timeout: 60000,
     }, async (t) => {
+      if (where === 'a widget') expectPageError(t, /^widget: /)
       const context = await open(t, {
         source: withTable,
         code: featureAddon('formatted', body),
@@ -832,6 +849,7 @@ for (const [name, thrown] of Object.entries(unreadable))
 test('a very long error leaves the editor on screen', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: long long/)
   const context = await open(t, {
     source: plain,
     code: featureAddon(
@@ -863,6 +881,7 @@ test('a very long error leaves the editor on screen', {
 test('a core widget that fails at the first draw of a note shows the notice', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: core widget boom/)
   const source = '# Title\n\n- [ ] task\n\nend\n\n'
   const context = await open(t, { source: plain, noAddons: true })
   await opened(context, plain)
@@ -891,6 +910,7 @@ test('a core widget that fails at the first draw of a note shows the notice', {
 test('a core widget that fails is not blamed on a healthy addon', {
   timeout: 60000,
 }, async (t) => {
+  expectPageError(t, /^widget: Error: core widget boom/)
   const source = '# Title\n\n- [ ] task\n\nend\n\n'
   const context = await open(t, {
     source: plain,

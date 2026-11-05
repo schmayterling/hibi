@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import test from 'node:test'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
 import './file-limit.mjs'
@@ -8,6 +9,48 @@ import './file-limit.mjs'
 export { after, before } from './electron-hooks.mjs'
 
 const execute = promisify(execFile)
+
+const pageErrors = []
+const expectedPageErrors = new Set()
+/** Lets this test's renderer throw errors matching `pattern`, and fails it if none is thrown. */
+export function expectPageError(t, pattern) {
+  const entry = { pattern, seen: false }
+  expectedPageErrors.add(entry)
+  // Reported later: a throw here would skip the hooks that close the test's app.
+  t.after(() => {
+    expectedPageErrors.delete(entry)
+    // A test that failed first has already said what went wrong.
+    if (!entry.seen && t.passed)
+      pageErrors.push(`no renderer error matched ${pattern} in ${t.name}`)
+  })
+}
+const pageError = (message, text) => {
+  const expected = [...expectedPageErrors].filter(({ pattern }) =>
+    pattern.test(message),
+  )
+  for (const entry of expected) entry.seen = true
+  if (!expected.length) pageErrors.push(text)
+}
+const failOnPageErrors = () => {
+  const errors = pageErrors.splice(0)
+  if (errors.length)
+    throw new Error(`unexpected renderer errors:\n${errors.join('\n')}`)
+}
+// Benchmarks and probes import this file too, and a hook would start a test run in them.
+if (/\.test\.m?js$/.test(process.argv[1] ?? '')) {
+  test.afterEach(failOnPageErrors)
+  // A throw in a root hook would skip the later ones, which close a file's app.
+  const reportLeftover = () => {
+    if (!pageErrors.length) return
+    console.error(
+      `unexpected renderer errors:\n${pageErrors.splice(0).join('\n')}`,
+    )
+    process.exitCode = 1
+  }
+  test.after(reportLeftover)
+  // A file's own after hooks run later still, and can bring a throw of their own.
+  process.on('exit', reportLeftover)
+}
 
 export async function snapshotElectronProcesses(pid) {
   if (process.platform === 'win32') return
@@ -463,16 +506,28 @@ export const electron = {
         clearTimeout(diagnosticTimer)
       }
     }
-    if (diagnostics) {
-      const report = (page) =>
-        page.on('pageerror', (error) =>
-          console.error(
-            'electron-renderer-uncaught',
-            error.stack ?? String(error),
-          ),
+    const report = (page) => {
+      page.on('pageerror', (error) => {
+        const text = error.stack ?? String(error)
+        console.error('electron-renderer-uncaught', text)
+        pageError(error.message, text)
+      })
+      // CodeMirror carries on after a throw in a widget, a plugin or a
+      // listener, and logging it under these names is all it does.
+      page.on('console', (message) => {
+        const text = message.text()
+        if (
+          message.type() === 'error' &&
+          /^(widget|editor exception|CodeMirror plugin crashed|update listener|doc view update listener|scroll handler|hover tooltip|completion info):/.test(
+            text,
+          )
         )
-      application.context().on('page', report)
-      for (const page of application.windows()) report(page)
+          pageError(text, text)
+      })
+    }
+    application.context?.().on('page', report)
+    for (const page of application.windows?.() ?? []) report(page)
+    if (diagnostics) {
       await application.evaluate(installElectronDiagnostics)
       await application.evaluate(refuseEarlyIpcReplacements)
       await application.evaluate(({ app }) =>

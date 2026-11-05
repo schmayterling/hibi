@@ -193,7 +193,13 @@ let quoteFeed: QuoteHandoff | undefined
 // A quote's raw text that its extensions re-read, and the source it was read
 // from: the raw is no suffix of the frame, so its row comes from the source.
 let quoteSource:
-  | { raw: string; source: string; quote: Tokens.Blockquote; lexer: Lexer }
+  | {
+      raw: string
+      source: string
+      quote: Tokens.Blockquote
+      lexer: Lexer
+      input?: string
+    }
   | undefined
 
 type SetextFrame = {
@@ -241,6 +247,8 @@ export function readNativeQuote(source: string, lexer?: Lexer) {
   // An extension of this quote must keep the boundary already consumed.
   if (quoteSource?.raw === source && quoteSource.lexer === lexer)
     return quoteSource.quote
+  if (quoteSource?.input === source && quoteSource.lexer === lexer)
+    return { ...quoteSource.quote, raw: source }
   let cache = lexer && nativeQuoteReads.get(lexer)
   const cached = cache?.get(source.length)
   if (cached?.source === source) return cached.quote
@@ -1285,6 +1293,9 @@ function installQuoteState(
               line,
               tokens,
             )
+            const previousQuote = quoteSource
+            if (quoteSource?.raw === source && quoteSource.lexer === lexer)
+              quoteSource = { ...quoteSource, input: input.text }
             try {
               const token = read.call(this, input.text, tokens)
               if (
@@ -1296,6 +1307,7 @@ function installQuoteState(
               if (token && input.raw) token.raw = input.raw(token.raw.length)
               return token
             } finally {
+              quoteSource = previousQuote
               state.extension = previous
             }
           }, read),

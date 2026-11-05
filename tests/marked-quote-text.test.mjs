@@ -12,6 +12,7 @@ const samples = [
   '> [!NOTE]\n> > b\nlazy',
   '> [!NOTE]\n> > w1w\n> > w2w\nw3w',
   '> >[!TIP]-\n>  > >+ w1w\n>> w2w\nw3w w4w w5w',
+  ' > > [!IMPORTANT]\n    w1w w2w   \n> >\t\nw3w w4w w5w w6w ',
   '> > [!CAUTION]\n  w1w w2w w3w\n>\t> >  > \tw4w w5w w6w \n  w7w w8w w9w w10w   ',
   '> [!NOTE]\n> > - w1w\n> > - w2w\n> w3w\nw4w',
   ' >  > [!IMPORTANT]\n > > > - [ ] w1w w2w\n>> w3w w4w w5w\n>  >  > [ref4]: /x  \nw6w w7w w8w w9w',

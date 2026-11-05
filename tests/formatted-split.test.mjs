@@ -479,7 +479,41 @@ for (const pipes of [true, false])
       .nth(pipes ? 1 : 0)
       .click()
     await page.keyboard.press('End')
+    // Hold the new snapshot until scrolling has used the pending row bounds.
+    await page.evaluate(() => {
+      const table = document.querySelector('.rich-pane .hibi-lp-table')
+      const prototype = Object.getPrototypeOf(table.cmTile.widget)
+      const update = prototype.updateDOM
+      let pending
+      window.tableLayoutEvents = 0
+      table.addEventListener(
+        'hibi:source-layout',
+        () => window.tableLayoutEvents++,
+      )
+      prototype.updateDOM = function (dom, view) {
+        if (dom !== table) return update.call(this, dom, view)
+        pending = () => update.call(this, dom, view)
+        return true
+      }
+      window.tableLayoutPending = () => !!pending
+      window.releaseTableLayout = () => {
+        prototype.updateDOM = update
+        const height = table.getBoundingClientRect().height
+        const observer = new MutationObserver(() => {})
+        observer.observe(table, { childList: true, subtree: true })
+        pending()
+        // Reusing the same ready snapshot needs no second notification.
+        pending()
+        const mutations = observer.takeRecords().length
+        observer.disconnect()
+        return {
+          mutations,
+          height: table.getBoundingClientRect().height - height,
+        }
+      }
+    })
     await page.keyboard.type('Z')
+    await waitForAsync(page, () => window.tableLayoutPending())
     // Led to the table's top rows, the window draws them and keeps the edited
     // row mounted after them, out of its place.
     await page.evaluate(near, start(20) + 3)
@@ -494,7 +528,29 @@ for (const pipes of [true, false])
     // The source pane leads straight back to the row's line, as a drag of its
     // scrollbar does, while the cell editor keeps the focus.
     await page.evaluate(lead, start(600))
+    await waitForAsync(page, () => {
+      const row = document.querySelector('.rich-pane tr[data-line="602"]')
+      return row?.previousElementSibling?.dataset.line === '601'
+    })
+    await frames(page)
+    const sourceTop = await page
+      .locator('.source-pane .cm-scroller')
+      .evaluate((node) => node.scrollTop)
+    assert.deepEqual(
+      await page.evaluate(() => window.releaseTableLayout()),
+      { mutations: 0, height: 0 },
+      'the current snapshot arrives without changing the table DOM or height',
+    )
     await staysLinedUp(page, linedUp)
+    assert.ok(
+      Math.abs(
+        (await page
+          .locator('.source-pane .cm-scroller')
+          .evaluate((node) => node.scrollTop)) - sourceTop,
+      ) < 1,
+      'the source pane keeps control while the table snapshot becomes current',
+    )
+    assert.equal(await page.evaluate(() => window.tableLayoutEvents), 1)
     assert.ok(
       await page.evaluate(() => {
         const row = document.querySelector('.rich-pane tr[data-line="602"]')

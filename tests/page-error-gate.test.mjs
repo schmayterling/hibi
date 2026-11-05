@@ -25,6 +25,10 @@ for (const [scenario, message] of [
   ['never thrown', /no renderer error matched \/never thrown\//],
   ['widget', /unexpected renderer errors:[\s\S]*widget:.*gate boom/],
   ['plugin', /unexpected renderer errors:[\s\S]*plugin crashed:.*gate boom/],
+  [
+    'completion info',
+    /unexpected renderer errors:[\s\S]*completion info:.*gate boom/,
+  ],
   ['measure', /unexpected renderer errors:[\s\S]*editor exception:.*gate boom/],
 ])
   test(`a test fails on a renderer error: ${scenario}`, {
@@ -43,6 +47,24 @@ test('an error left for the last root hook fails the file and skips no later hoo
   assert.doesNotMatch(stdout, /^not ok 1 - a renderer throw/m)
   assert.match(stdout, /unexpected renderer errors:[\s\S]*gate boom/)
   assert.match(stdout, /later hook ran/)
+})
+
+test("a throw in a file's own after hook fails the file", {
+  timeout: 60000,
+}, () => {
+  const { status, stdout } = run('in a later hook')
+  assert.equal(status, 1, stdout)
+  assert.doesNotMatch(stdout, /^not ok 1 - a renderer throw/m)
+  assert.match(stdout, /gate boom/)
+})
+
+test('an allow a failed test never reached does not add a second failure', {
+  timeout: 60000,
+}, () => {
+  const { status, stdout } = run('failed first')
+  assert.equal(status, 1, stdout)
+  assert.match(stdout, /a real failure/)
+  assert.doesNotMatch(stdout, /no renderer error matched/)
 })
 
 for (const scenario of ['allowed', 'widget allowed'])

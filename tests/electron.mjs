@@ -19,7 +19,8 @@ export function expectPageError(t, pattern) {
   // Reported later: a throw here would skip the hooks that close the test's app.
   t.after(() => {
     expectedPageErrors.delete(entry)
-    if (!entry.seen)
+    // A test that failed first has already said what went wrong.
+    if (!entry.seen && t.passed)
       pageErrors.push(`no renderer error matched ${pattern} in ${t.name}`)
   })
 }
@@ -39,13 +40,16 @@ const failOnPageErrors = () => {
 if (/\.test\.m?js$/.test(process.argv[1] ?? '')) {
   test.afterEach(failOnPageErrors)
   // A throw in a root hook would skip the later ones, which close a file's app.
-  test.after(() => {
+  const reportLeftover = () => {
     if (!pageErrors.length) return
     console.error(
       `unexpected renderer errors:\n${pageErrors.splice(0).join('\n')}`,
     )
     process.exitCode = 1
-  })
+  }
+  test.after(reportLeftover)
+  // A file's own after hooks run later still, and can bring a throw of their own.
+  process.on('exit', reportLeftover)
 }
 
 export async function snapshotElectronProcesses(pid) {
@@ -514,7 +518,7 @@ export const electron = {
         const text = message.text()
         if (
           message.type() === 'error' &&
-          /^(widget|editor exception|CodeMirror plugin crashed|update listener|doc view update listener|scroll handler|hover tooltip):/.test(
+          /^(widget|editor exception|CodeMirror plugin crashed|update listener|doc view update listener|scroll handler|hover tooltip|completion info):/.test(
             text,
           )
         )

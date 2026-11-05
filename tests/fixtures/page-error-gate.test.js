@@ -10,10 +10,20 @@ import {
 } from '../electron.mjs'
 
 const scenario = process.env.PAGE_ERROR_CASE
-let close
+let close, page
+const throwInPage = async () => {
+  const thrown = page.waitForEvent('pageerror')
+  await page.evaluate(() => {
+    setTimeout(() => {
+      throw new Error('gate boom')
+    })
+  })
+  await thrown
+}
 // Runs after the harness's root hook, as a file's shared app closes.
 test.after(async () => {
   console.log('later hook ran')
+  if (scenario === 'in a later hook') await throwInPage()
   await close?.()
 })
 
@@ -27,25 +37,22 @@ test('a renderer throw', { timeout: 30000 }, async (t) => {
     await app.close()
     await rm(profile, { recursive: true, force: true })
   }
-  const page = await app.firstWindow()
+  page = await app.firstWindow()
   if (scenario === 'after the last test') {
     // The test's own after hooks run once its afterEach has checked.
-    t.after(async () => {
-      const thrown = page.waitForEvent('pageerror')
-      await page.evaluate(() => {
-        setTimeout(() => {
-          throw new Error('gate boom')
-        })
-      })
-      await thrown
-    })
+    t.after(throwInPage)
     return
   }
+  if (scenario === 'in a later hook') return
   t.after(() => close())
   if (scenario === 'allowed' || scenario === 'widget allowed')
     expectPageError(t, /gate boom/)
   if (scenario === 'never thrown') expectPageError(t, /never thrown/)
   if (scenario === 'other allowed') expectPageError(t, /something else/)
+  if (scenario === 'failed first') {
+    expectPageError(t, /never thrown/)
+    throw new Error('a real failure')
+  }
   if (scenario === 'measure') {
     // A throw CodeMirror catches with no label; no public path reaches one.
     await waitForDocumentEditor(app, page)
@@ -60,23 +67,16 @@ test('a renderer throw', { timeout: 30000 }, async (t) => {
       }),
     )
     await logged
-  } else if (scenario === 'plugin') {
+  } else if (scenario === 'plugin' || scenario === 'completion info') {
     const logged = page.waitForEvent('console')
-    await page.evaluate(() =>
-      console.error('CodeMirror plugin crashed:', new Error('gate boom')),
+    await page.evaluate(
+      (label) => console.error(label, new Error('gate boom')),
+      scenario === 'plugin' ? 'CodeMirror plugin crashed:' : 'completion info:',
     )
     await logged
   } else if (scenario === 'widget' || scenario === 'widget allowed') {
     const logged = page.waitForEvent('console')
     await page.evaluate(() => console.error('widget:', new Error('gate boom')))
     await logged
-  } else if (scenario !== 'never thrown') {
-    const thrown = page.waitForEvent('pageerror')
-    await page.evaluate(() => {
-      setTimeout(() => {
-        throw new Error('gate boom')
-      })
-    })
-    await thrown
-  }
+  } else if (scenario !== 'never thrown') await throwInPage()
 })

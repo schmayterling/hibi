@@ -1205,13 +1205,16 @@ for (const [layout, doc, target] of [
             )
           )
             return null
-          const from = view.domAtPos(pos, 1)
-          const to = view.domAtPos(pos + 2, -1)
-          const range = document.createRange()
-          range.setStart(from.node, from.offset)
-          range.setEnd(to.node, to.offset)
-          const box = [...range.getClientRects()].at(-1)
-          return box ? box.top : view.coordsAtPos(pos, 1).top
+          for (const at of [pos, pos + 1]) {
+            const { node, offset } = view.domAtPos(at, 1)
+            if (node.nodeType === Node.TEXT_NODE && offset < node.length) {
+              const range = document.createRange()
+              range.setStart(node, offset)
+              range.setEnd(node, offset + 1)
+              return range.getClientRects()[0].top
+            }
+          }
+          return view.coordsAtPos(pos, 1).top
         }
         for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
           view.dispatch({

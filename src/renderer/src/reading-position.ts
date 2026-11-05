@@ -324,11 +324,9 @@ function reveal(view: EditorView, position: Reading) {
  * editor draws, as when it estimates a long paragraph's lines again.
  */
 function screenTop(view: EditorView, position: Reading) {
-  // Asking runs a pending measure first: its own correction for new heights
-  // above would come on top of this one.
-  const box = view.coordsAtPos(position.pos, 1)
   const drawn =
-    (position.text ? drawnTop(view, position.pos) : null) ?? box?.top
+    (position.text ? drawnTop(view, position.pos) : null) ??
+    view.coordsAtPos(position.pos, 1)?.top
   if (drawn !== undefined) return drawn
   return view.documentTop + view.lineBlockAt(position.pos).top + position.offset
 }
@@ -374,6 +372,9 @@ function holdTop(view: EditorView) {
 
 /** Scrolls the reading position back to where it was on screen. */
 function restore(view: EditorView, position: Reading) {
+  // Asking runs a pending measure first: its own correction for new heights
+  // above would come on top of this one, and it can move the line gaps.
+  view.coordsAtPos(position.pos, 1)
   // Text the editor doesn't draw now: a widget's position keeps its own
   // coordinates, without a scroll command for each correction.
   if (position.text && !drawnText(view, position.pos)) {

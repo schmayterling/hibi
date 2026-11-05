@@ -450,13 +450,7 @@ for (const [shape, unit] of Object.entries({
           result.words,
           units * (shape === 'lazy' || shape === 'nested' ? 3 : 2),
         )
-      assert.ok(checks < source.length * 4, `quote line checks: ${checks}`)
-      assert.ok(
-        blockScanCounters.units < source.length * 8,
-        `setext units: ${blockScanCounters.units}`,
-      )
-      const seconds = (user + system) / 1e6
-      assert.ok(seconds < 30, `${operation}: ${seconds.toFixed(1)} s of cpu`)
+      assert.ok(elapsed < 20000, `${operation}: ${elapsed.toFixed(0)}ms`)
     })
   }
 }

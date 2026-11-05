@@ -1088,6 +1088,75 @@ test('scrolling up through known code blocks keeps the scroll position and full 
   await session.detach()
 })
 
+test('clicks on drawn lines below partly drawn code boxes land on those lines', {
+  timeout: 60000,
+}, async () => {
+  const long = 'const value = ' + '"x" + '.repeat(163) + '"end";'
+  let doc = ''
+  for (let box = 0; box < 12; box++) {
+    const lines = Array.from(
+      { length: 40 },
+      (_, i) => 'const value' + i + ' = ' + i,
+    )
+    lines.splice([0, 20, 40][box % 3], 0, long)
+    doc +=
+      'Paragraph ' +
+      box +
+      ' before code.\n\n~~~js\n' +
+      lines.join('\n') +
+      '\n~~~\n\n'
+  }
+  const style = await harness.addStyleTag({
+    content:
+      '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 10px !important; height: 10px !important; }',
+  })
+  try {
+    const result = await harness.evaluate(async (doc) => {
+      const pane = document.querySelector('.rich-pane')
+      pane.scrollTop = 0
+      await window.livePreview.mount(doc, { width: 1000, height: 606 })
+      await window.livePreview.settle()
+      const view = window.livePreview.view()
+      let points = 0
+      for (
+        let top = 0;
+        top < pane.scrollHeight - pane.clientHeight;
+        top += 200
+      ) {
+        pane.scrollTop = top
+        for (let frame = 0; frame < 3; frame++)
+          await new Promise(requestAnimationFrame)
+        const bounds = pane.getBoundingClientRect()
+        for (const line of view.contentDOM.querySelectorAll('.cm-line')) {
+          const box = line.getBoundingClientRect()
+          if (
+            !line.textContent.trim() ||
+            box.height < 4 ||
+            box.top < bounds.top ||
+            box.bottom > bounds.bottom
+          )
+            continue
+          const block = view.lineBlockAt(view.posAtDOM(line, 0))
+          for (const y of [box.top + 2, box.bottom - 2]) {
+            points++
+            const hit = view.posAtCoords({ x: box.left + 2, y })
+            if (hit === null || hit < block.from || hit > block.to)
+              return {
+                points,
+                missed: { top, y, from: block.from, to: block.to, hit },
+              }
+          }
+        }
+      }
+      return { points, missed: null }
+    }, doc)
+    assert.equal(result.missed, null, JSON.stringify(result))
+    assert.ok(result.points > 500, JSON.stringify(result))
+  } finally {
+    await style.evaluate((node) => node.remove())
+  }
+})
+
 test('a viewport starting just below a code box keeps its scrollbar in the height', {
   timeout: 60000,
 }, async () => {

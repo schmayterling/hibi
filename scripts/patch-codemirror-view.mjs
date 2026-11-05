@@ -46,29 +46,6 @@ const patches = [
         // as much as is drawn, 2 as last measured.
         let keep = 0;
         let scan = (tile, pos, measureBounds) => {`,
-    `        let spaceAbove = 0;
-        // Whether the range of a wrapper's last block starts above the blocks
-        // the wrapper draws from \`pos\`: before it, or in a gap inside it,
-        // which also joins the ranges of equal wrappers around it.
-        let cutWrapper = (tile, pos) => {
-            let drawn = pos, last = pos;
-            DocTile.prototype.blockTiles.call(tile, (block, offset) => {
-                last = pos + offset;
-                if (block.isWidget() && block.widget instanceof BlockGapWidget)
-                    drawn = last + block.length + block.breakAfter;
-            });
-            return this.blockWrappers.some(set => {
-                let found = false;
-                set.between(last, last, (start, _end, value) => {
-                    if (start < drawn && value.eq(tile.wrapper)) {
-                        found = true;
-                        return false;
-                    }
-                });
-                return found;
-            });
-        };
-        let scan = (tile, pos, measureBounds) => {`,
   ],
   [
     `                if (child instanceof BlockWrapperTile) {
@@ -100,22 +77,6 @@ const patches = [
                     result.push(height + (keep ? 0 : spaceAbove));
                     spaceAbove = 0;
                     keep = 0;`,
-    `                if (child instanceof BlockWrapperTile) {
-                    if (end > from) {
-                        scan(child, pos, childRect);
-                        // Its range's blocks above are not drawn, nor is the space they need below it.
-                        if (cutWrapper(child, pos))
-                            spaceAbove = -Infinity;
-                    }
-                }
-                else if (pos >= from) {
-                    if (spaceAbove > 0)
-                        result.push(-spaceAbove);
-                    // What precedes the block is not drawn: its space above is not known.
-                    else if (spaceAbove < 0 || !measureBounds && pos == from && !result.length)
-                        result.push(-Infinity);
-                    result.push(height + Math.max(spaceAbove, 0));
-                    spaceAbove = 0;`,
     `                if (child instanceof BlockWrapperTile) {
                     if (end > from)
                         scan(child, pos, childRect);

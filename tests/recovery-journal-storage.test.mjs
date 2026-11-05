@@ -458,6 +458,20 @@ test('the time limit counts from the first offer: an unread copy waits however o
   assert.deepEqual(await files(root), [])
 })
 
+test('an offer repeated in one launch does not restart the time limit', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'text')
+  const first = Date.now()
+  t.mock.timers.enable({ apis: ['Date'], now: first })
+  const open = await main(root)
+  await open.waitingRecovery()
+  t.mock.timers.setTime(first + day)
+  await open.waitingRecovery()
+  t.mock.timers.setTime(first + 30 * day)
+  const next = await main(root)
+  assert.deepEqual((await next.waitingRecovery()).copies, [])
+})
+
 test('a first offer ahead of the clock waits', async (t) => {
   const root = await profile(t)
   await leftBehind(root, 'text')
@@ -582,6 +596,30 @@ test('the size limit takes the oldest waiting copy first and never an open tab',
   assert.ok(names.some((name) => name.startsWith(tab(2))))
   assert.equal(next.said.length, 1)
   assert.match(next.said[0], /older recovery cop/)
+})
+
+test('the size limit takes a waiting copy before another open note', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'w'.repeat(60 * mib))
+  await fs.writeFile(
+    join(root, 'recovery-settings.json'),
+    JSON.stringify({
+      keep: true,
+      days: 30,
+      megabytes: 128,
+      openAtLaunch: false,
+    }),
+  )
+  const next = await main(root, {
+    notes: [note(2, 'a'.repeat(40 * mib)), note(3, 'b'.repeat(40 * mib))],
+  })
+  await next.waitingRecovery()
+  await turn(next)
+  const names = await files(root)
+  assert.equal(names.length, 2)
+  assert.ok(names.some((name) => name.startsWith(tab(2))))
+  assert.ok(names.some((name) => name.startsWith(tab(3))))
+  assert.equal((await next.waitingRecovery()).copies.length, 0)
 })
 
 test('a note over the size limit gets no copy, is told once, and an earlier copy stays', async (t) => {

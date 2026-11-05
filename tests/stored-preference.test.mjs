@@ -46,7 +46,38 @@ function stores(storage) {
   }
 }
 
-for (const [name, key, changed, defaults] of [
+test('autosave is on unless turned off, and a damaged value stays off', () => {
+  const read = (stored) => {
+    const values = new Map(stored === null ? [] : [['hibi:autosave', stored]])
+    const preferences = stores({
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value),
+    })
+    return { ...preferences.autosave.snapshot() }
+  }
+  assert.deepEqual(read(null), { enabled: true, delay: 2000 })
+  assert.deepEqual(read('{}'), { enabled: true, delay: 2000 })
+  assert.deepEqual(read('{"delay":5000}'), { enabled: true, delay: 5000 })
+  assert.deepEqual(read('{"enabled":true,"delay":1000}'), {
+    enabled: true,
+    delay: 1000,
+  })
+  assert.deepEqual(read('{"enabled":false,"delay":5000}'), {
+    enabled: false,
+    delay: 5000,
+  })
+  for (const damaged of [
+    'not json',
+    'null',
+    '3',
+    '[]',
+    '{"enabled":"yes"}',
+    '{"enabled":1}',
+  ])
+    assert.equal(read(damaged).enabled, false, damaged)
+})
+
+for (const [name, key, changed, defaults, damaged = defaults] of [
   [
     'tabIndent',
     'hibi:tab-indent',
@@ -56,7 +87,8 @@ for (const [name, key, changed, defaults] of [
   [
     'autosave',
     'hibi:autosave',
-    { enabled: true, delay: 5000 },
+    { enabled: false, delay: 5000 },
+    { enabled: true, delay: 2000 },
     { enabled: false, delay: 2000 },
   ],
 ]) {
@@ -90,7 +122,7 @@ for (const [name, key, changed, defaults] of [
     )
     values.set(key, 'invalid json')
     second.storageEvent(key)
-    assert.deepEqual({ ...second[name].snapshot() }, defaults)
+    assert.deepEqual({ ...second[name].snapshot() }, damaged)
     first[name].set(changed)
     first.editorPreferences.lineNumbers.set(true)
     second.storageEvent(key)

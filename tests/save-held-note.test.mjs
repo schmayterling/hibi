@@ -121,6 +121,16 @@ async function open(t, { autosave = false, notes = ['note.md'] } = {}) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(20000)
   await waitForFormattedEditor(app, page)
+  // These tests hold manual saves; only the ones about autosave leave it on.
+  await page.evaluate(
+    (enabled) =>
+      localStorage.setItem(
+        'hibi:autosave',
+        JSON.stringify({ enabled, delay: 2000 }),
+      ),
+    autosave,
+  )
+  if (!autosave) await page.reload()
   if (autosave) {
     await page.locator('[data-status-id="autosave"]').click()
     await page.getByRole('checkbox', { name: /^autosave$/i }).check()

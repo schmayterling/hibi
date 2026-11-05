@@ -295,6 +295,37 @@ test('both saved reads reject malformed ids even when indexed with an existing f
   assert.equal(state.reads, 0)
 })
 
+test('autosaves make room before saves asked for, oldest first', async (t) => {
+  const { api, file } = await runtime(t)
+  await api.recordVersions(file, ['asked for first'])
+  await api.recordVersions(file, ['asked for second'])
+  for (let n = 0; n < 150; n++)
+    await api.recordVersions(file, [`autosave ${n}`], true)
+  const versions = await api.listVersions(file)
+  assert.equal(versions.length, 100)
+  const oldest = versions.slice(-2)
+  assert.equal(await api.previewVersion(file, oldest[1].id), 'asked for first')
+  assert.equal(await api.previewVersion(file, oldest[0].id), 'asked for second')
+  assert.equal(await api.previewVersion(file, versions[0].id), 'autosave 149')
+  assert.equal(await api.previewVersion(file, versions[97].id), 'autosave 52')
+})
+
+test('saves asked for go only once no autosave is left, and the newest two always stay', async (t) => {
+  const { api, file } = await runtime(t)
+  for (let n = 0; n < 99; n++) await api.recordVersions(file, [`asked ${n}`])
+  await api.recordVersions(file, ['autosave'], true)
+  await api.recordVersions(file, ['asked last'])
+  await api.recordVersions(file, ['autosave newest'], true)
+  const versions = await api.listVersions(file)
+  assert.equal(versions.length, 100)
+  assert.equal(
+    await api.previewVersion(file, versions[0].id),
+    'autosave newest',
+  )
+  assert.equal(await api.previewVersion(file, versions[1].id), 'asked last')
+  assert.equal(await api.previewVersion(file, versions.at(-1).id), 'asked 1')
+})
+
 test('a version autosave wrote is flagged; the text it replaced and saves asked for are not', async (t) => {
   const { api, file } = await runtime(t)
   await api.recordVersions(file, ['opened', 'autosaved'], true)

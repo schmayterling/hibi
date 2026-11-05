@@ -145,7 +145,7 @@ test('autosave preserves later edits, pauses on external changes, and never prom
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   const pill = page.locator('[data-status-id="autosave"]')
-  assert.equal(await pill.innerText(), 'Autosave off')
+  assert.equal(await pill.innerText(), 'Autosave · save first')
   await pill.click()
   await page.getByRole('checkbox', { name: /^autosave$/i, exact: true }).check()
   await page.getByLabel(/^save after$/i, { exact: true }).selectOption('1000')
@@ -366,4 +366,119 @@ test('autosave waits while an input method composes, then saves the committed te
   await shows('xにy火')
   await page.waitForTimeout(1200)
   assert.equal(await readFile(file, 'utf8'), 'xにy')
+})
+
+async function openNote(t, text = 'original') {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-autosave-default-'))
+  const file = join(profile, 'note.md')
+  await writeFile(file, text)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForFormattedEditor(app, page)
+  await clickMenu(app, 'Open…')
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    text,
+  )
+  await waitForDocumentEditor(app, page)
+  const rich = page.getByRole('textbox', { name: /document editor/i })
+  const pill = page.locator('[data-status-id="autosave"]')
+  return { app, page, rich, pill, file, profile }
+}
+
+test('a note nobody set autosave for saves itself, and never over another program’s text', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, rich, pill, file } = await openNote(t)
+  await pill.getByText('Autosave · saved').waitFor()
+  await replaceRichText(page, rich, 'saved by itself')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), 'saved by itself')
+  await pill.getByText('Autosave · saved').waitFor()
+
+  await writeFile(file, 'another program wrote this')
+  await replaceRichText(page, rich, 'my next words')
+  await pill.getByText('Autosave · paused').waitFor()
+  assert.equal(await readFile(file, 'utf8'), 'another program wrote this')
+
+  // A note never saved waits for a name, and asks nothing.
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+n' : 'Control+n',
+  )
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'untitled.md',
+  )
+  await replaceRichText(page, rich, 'a draft')
+  await pill.getByText('Autosave · save first').waitFor()
+})
+
+test('autosave turned off stays off across a launch', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, rich, pill, file } = await openNote(t)
+  await pill.click()
+  const box = page.getByRole('checkbox', { name: /^autosave$/i })
+  assert.equal(await box.isChecked(), true)
+  await box.uncheck()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await page.reload()
+  await waitForFormattedEditor(app, page)
+  await pill.getByText('Autosave off').waitFor()
+  await replaceRichText(page, rich, 'typed and left')
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 3000)))
+  assert.equal(await readFile(file, 'utf8'), 'original')
+  assert.equal(
+    await page.evaluate(async () => (await window.hibi.getDocument()).dirty),
+    true,
+  )
+})
+
+test('a note whose save took long rests ten times as long before the next', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, rich, file } = await openNote(t)
+  // The time a large note takes, without a large note's other costs.
+  await app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:autosave')
+    ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      return save(...args)
+    })
+  })
+  await page.clock.install()
+  await replaceRichText(page, rich, 'first')
+  await page.clock.fastForward(2500)
+  const saved = async (text) => {
+    const deadline = performance.now() + 5000
+    while (performance.now() < deadline) {
+      if ((await readFile(file, 'utf8')) === text) return true
+      await delay(50)
+    }
+    return false
+  }
+  assert.equal(await saved('first'), true)
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  await replaceRichText(page, rich, 'second')
+  await page.clock.fastForward(5000)
+  // A 2 s rest would have saved by now.
+  await delay(2000)
+  assert.equal(await readFile(file, 'utf8'), 'first')
+  await page.clock.fastForward(6000)
+  assert.equal(await saved('second'), true)
 })

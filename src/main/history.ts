@@ -143,7 +143,9 @@ export async function recordVersions(
   let bytes = next.reduce((sum, version) => sum + version.bytes, 0)
   const expired: Version[] = []
   while (next.length > 2 && (next.length > 100 || bytes > 20 * 1024 * 1024)) {
-    const version = next.shift()
+    // Autosaves come far more often: they make room before saves asked for.
+    const autosave = next.slice(0, -2).findIndex((version) => version.automatic)
+    const [version] = next.splice(Math.max(autosave, 0), 1)
     if (version) {
       expired.push(version)
       bytes -= version.bytes

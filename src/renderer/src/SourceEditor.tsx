@@ -529,7 +529,10 @@ const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
   const widget =
     event.target instanceof Element &&
     event.target.closest('[contenteditable="false"]')
-  if (!opensContextMenu(event) || (widget && view.contentDOM.contains(widget)))
+  if (
+    !opensContextMenu(event) ||
+    (widget && widget !== view.contentDOM && view.contentDOM.contains(widget))
+  )
     return null
   const pressed = view.posAtCoords({
     x: event.clientX,
@@ -541,6 +544,8 @@ const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
   if (from < to && pressed >= from && pressed <= to) {
     // A right press keeps it by itself; a macOS Control+click does not.
     if (event.button === 2) return null
+    // Shift can extend the native selection before the context menu opens.
+    event.preventDefault()
     // A click collapses it on release; this keeps it. Focused now,
     // the editor does not select it again on release either, as it
     // does after taking focus.

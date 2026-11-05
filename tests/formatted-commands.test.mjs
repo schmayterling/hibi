@@ -168,30 +168,6 @@ test('triple click takes only a closed display formula whole', () => {
   assert.equal(atom(over, 'word'), null)
 })
 
-test('delete keys remove one character from an unclosed formula widget', () => {
-  const math = parser.configure([GFM, blockMathSyntax, inlineMathSyntax])
-  const doc = 'before\n\n$$\nfirst\n\nlast🙂\n'
-  const tree = math.parse(doc)
-  const block = tree.topNode.lastChild
-  const end = doc.length - 1
-  const hidden = Decoration.set([glyph.range(block.from, end)])
-  for (const [command, forward] of [
-    [deleteBackward, false],
-    [deleteForward, true],
-  ]) {
-    const state = EditorState.create({
-      doc,
-      selection: { anchor: forward ? block.from : end },
-    })
-    const spec = command(state, tree, hidden)
-    assert.ok(spec)
-    const after = state.update(spec).state.doc.toString()
-    const from = forward ? block.from : end - 2
-    const to = forward ? block.from + 1 : end
-    assert.equal(after, doc.slice(0, from) + doc.slice(to))
-  }
-})
-
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {
   assert.equal(run('hello| world', blockBreak), 'hello\n\n| world')
   assert.equal(run('- one|', blockBreak), '- one\n- |')

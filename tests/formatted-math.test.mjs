@@ -638,6 +638,61 @@ test('display blocks read to their closing line and end with their list item, as
     0,
     'an unclosed formula shows its source while edited, without rendering it per key',
   )
+  await markers(false)
+  const source = 'Intro\n\n$$\nfirst words\n\n# second\n\nlast🙂\n'
+  await writeFile(join(folder, 'notes', 'unclosed-edit.md'), source)
+  await open('unclosed-edit.md')
+  await page.waitForFunction(
+    (source) =>
+      document
+        .querySelector('.rich-pane .cm-content')
+        ?.cmTile?.root?.view?.state.doc.toString() === source,
+    source,
+  )
+  await page.locator('.rich-pane [data-type="block-math"]').waitFor()
+  const start = source.indexOf('$$'),
+    end = source.length - 1
+  for (const [key, from, to, expected] of [
+    ['Backspace', end, end, source.slice(0, end - 2) + source.slice(end)],
+    ['Delete', start, start, source.slice(0, start) + source.slice(start + 1)],
+    [
+      'Backspace',
+      start - 2,
+      start + 3,
+      source.slice(0, start - 2) + source.slice(start + 3),
+    ],
+    ['Cut', end, end, source.slice(0, source.lastIndexOf('\n', end - 1) + 1)],
+  ]) {
+    // Hidden source has no text caret target: place exact source positions,
+    // then exercise the real key or native clipboard command.
+    await page.evaluate(
+      ({ from, to }) => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile
+          .root.view
+        view.dispatch({ selection: { anchor: from, head: to } })
+        view.focus()
+      },
+      { from, to },
+    )
+    if (key === 'Cut')
+      await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].webContents.cut(),
+      )
+    else await page.keyboard.press(key)
+    await waitForAsync(
+      page,
+      async (before) => (await window.hibi.getDocument()).markdown !== before,
+      source,
+    )
+    assert.equal(await documentText(), expected, key)
+    await pressShortcut(app, `${mod}+z`)
+    await waitForAsync(
+      page,
+      async (before) => (await window.hibi.getDocument()).markdown === before,
+      source,
+    )
+  }
+  await markers(true)
 })
 
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
+  access,
   copyFile,
   link,
   lstat,
@@ -33,10 +34,16 @@ import { imageExtensions, isImageDocument } from '../shared/document-types'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
-import { fileHeldOpen, PATIENT_RENAME, retryRename } from './atomic-rename'
+import {
+  BRIEF_RENAME,
+  fileHeldOpen,
+  PATIENT_RENAME,
+  retryRename,
+} from './atomic-rename'
 import { documentExtensions, isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
 import {
+  markedReadOnly,
   matchesMarkdown,
   readMarkdownChunks,
   validateMarkdown,
@@ -1189,7 +1196,20 @@ export async function autosaveDocument(
     !canContinue()
   )
     return { status: 'skipped', document: null }
-  await writeMarkdown(destination, content, false, canContinue)
+  // A rename replaces a file whatever its mode: only Windows would refuse it.
+  const refused = await access(destination, constants.W_OK).then(
+    () => false,
+    (error: NodeJS.ErrnoException) =>
+      ['EACCES', 'EPERM', 'EROFS'].includes(error.code ?? ''),
+  )
+  if (automatic && refused) throw markedReadOnly(destination)
+  try {
+    await writeMarkdown(destination, content, false, canContinue, BRIEF_RENAME)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ECHANGED')
+      return { status: 'conflict', document: null }
+    throw error
+  }
   if (id === activeTab) saved = saving
   else {
     const retained = tabs.get(id)

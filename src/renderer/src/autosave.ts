@@ -60,12 +60,14 @@ function release(tabId: string) {
   holds.get(tabId)?.notice?.dismiss()
   holds.delete(tabId)
 }
-/** How long a tab's last attempt took: a large note rests between them, its text kept for recovery meanwhile. */
-const attempts = new Map<string, number>()
+/** When a tab's rest after its last attempt ends: a large note rests between them, its text kept for recovery meanwhile. */
+const rests = new Map<string, number>()
 const ATTEMPT_REST = 10
+// An attempt that outlasts a lost share or a sleeping computer says little about the next.
+const LONGEST_REST = 300000
 function attemptDelay(tabId: string, delay: number) {
   const hold = holds.get(tabId)
-  const wait = Math.max(delay, (attempts.get(tabId) ?? 0) * ATTEMPT_REST)
+  const wait = Math.max(delay, (rests.get(tabId) ?? 0) - performance.now())
   return hold?.notice
     ? Math.max(wait, hold.last + HELD_ATTEMPT_GAP - Date.now())
     : wait
@@ -209,7 +211,11 @@ export function useAutosave(
           } finally {
             documentRuntime.endSave(token)
             inFlight.current = false
-            attempts.set(next.tabId, performance.now() - started)
+            const now = performance.now()
+            rests.set(
+              next.tabId,
+              now + Math.min((now - started) * ATTEMPT_REST, LONGEST_REST),
+            )
             // Timers of one length run in order: the tabs after this one go
             // first, so each gets a turn however many are held. Settings may
             // have changed during the attempt.

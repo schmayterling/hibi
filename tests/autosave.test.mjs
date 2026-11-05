@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -534,4 +534,161 @@ test('one key over a whole note reaches the file by itself, and the text it repl
     async (text) => (await window.hibi.getDocument()).markdown === text,
     original,
   )
+})
+
+test('a read-only note is left alone and says so, until it can be written', {
+  timeout: 60000,
+}, async (t) => {
+  const { page, rich, pill, file } = await openNote(t)
+  await chmod(file, 0o444)
+  await page.clock.install()
+  await replaceRichText(page, rich, 'typed by accident')
+  await page.locator('.toast', { hasText: /marked read-only/ }).waitFor()
+  await pill.getByText('Autosave · retrying').waitFor()
+  assert.equal(await readFile(file, 'utf8'), 'original')
+  await chmod(file, 0o644)
+  await page.clock.fastForward(30000)
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), 'typed by accident')
+  await page.locator('.toast').waitFor({ state: 'detached' })
+})
+
+test('text a program writes while autosave fills its copy stays, and autosave pauses', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, rich, pill, file } = await openNote(t)
+  await app.evaluate((_, file) => {
+    const promises = process.getBuiltinModule('node:fs/promises')
+    const { writeFileSync } = process.getBuiltinModule('node:fs')
+    const { open } = promises
+    promises.open = async (...args) => {
+      const handle = await open(...args)
+      if (/\.note\.md\..*\.tmp$/.test(String(args[0])) && !globalThis.wrote) {
+        globalThis.wrote = true
+        writeFileSync(file, 'another program wrote this')
+      }
+      return handle
+    }
+    process.getBuiltinModule('node:module').syncBuiltinESMExports()
+  }, file)
+  await replaceRichText(page, rich, 'my words')
+  await pill.getByText('Autosave · paused').waitFor()
+  assert.equal(await app.evaluate(() => globalThis.wrote), true)
+  assert.equal(await readFile(file, 'utf8'), 'another program wrote this')
+})
+
+test('a resting note gets its turn while another note is typed in', {
+  timeout: 90000,
+}, async (t) => {
+  const { app, page, rich, file, profile } = await openNote(t, 'slow')
+  const quick = join(profile, 'quick.md')
+  await writeFile(quick, 'quick')
+  const saved = async (path, text) => {
+    const deadline = performance.now() + 8000
+    while (performance.now() < deadline) {
+      if ((await readFile(path, 'utf8')) === text) return true
+      await delay(50)
+    }
+    return false
+  }
+  await app.evaluate(({ ipcMain, dialog }, quick) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [quick],
+    })
+    const save = ipcMain._invokeHandlers.get('document:autosave')
+    let first = true
+    ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
+      if (first) {
+        first = false
+        await new Promise((release) => {
+          globalThis.releaseSlow = release
+        })
+      }
+      return save(...args)
+    })
+  }, quick)
+  await clickMenu(app, 'Open…')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'quick.md',
+  )
+  await waitForDocumentEditor(app, page)
+  await page.getByRole('tab', { name: 'note.md' }).click()
+  await waitForDocumentEditor(app, page)
+  await page.clock.install()
+  await page.clock.pauseAt(Date.now() + 60000)
+  await replaceRichText(page, rich, 'slow one')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'slow one',
+  )
+  await page.clock.runFor(2000)
+  await waitForAsync(app, () => !!globalThis.releaseSlow)
+  await page.clock.runFor(1000)
+  await app.evaluate(() => globalThis.releaseSlow())
+  assert.equal(await saved(file, 'slow one'), true)
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  // Ten seconds of rest from here; the other note keeps saving meanwhile.
+  await replaceRichText(page, rich, 'slow two')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'slow two',
+  )
+  await page.getByRole('tab', { name: 'quick.md' }).click()
+  await page.clock.runFor(100)
+  await waitForDocumentEditor(app, page)
+  for (let turn = 1; turn <= 6; turn++) {
+    await replaceRichText(page, rich, `quick ${turn}`)
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      `quick ${turn}`,
+    )
+    await page.clock.runFor(2500)
+    await delay(100)
+    await page.clock.runFor(2500)
+    assert.equal(await saved(quick, `quick ${turn}`), true)
+    if ((await readFile(file, 'utf8')) === 'slow two') return
+  }
+  assert.fail(`after 30 s: ${await readFile(file, 'utf8')}`)
+})
+
+test('an attempt that hung for an hour does not stop autosave for ten', {
+  timeout: 60000,
+}, async (t) => {
+  const { app, page, rich, file } = await openNote(t)
+  await app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:autosave')
+    let first = true
+    ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
+      if (first) {
+        first = false
+        await new Promise((release) => {
+          globalThis.releaseHung = release
+        })
+      }
+      return save(...args)
+    })
+  })
+  await page.clock.install()
+  await page.clock.pauseAt(Date.now() + 60000)
+  const typed = async (text) => {
+    await replaceRichText(page, rich, text)
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  }
+  await typed('during the hang')
+  await page.clock.runFor(2000)
+  await waitForAsync(app, () => !!globalThis.releaseHung)
+  await page.clock.runFor(60 * 60 * 1000)
+  await app.evaluate(() => globalThis.releaseHung())
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  await typed('after the hang')
+  await page.clock.runFor(5 * 60 * 1000)
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), 'after the hang')
 })

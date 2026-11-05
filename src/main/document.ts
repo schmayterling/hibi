@@ -29,9 +29,11 @@ import {
   type DocumentTab,
 } from '../shared/desktop'
 import type { DocumentSaveResult } from '../shared/document-edits'
+import { imageExtensions, isImageDocument } from '../shared/document-types'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
+import { fileHeldOpen, PATIENT_RENAME, retryRename } from './atomic-rename'
 import { documentExtensions, isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
 import {
@@ -42,6 +44,11 @@ import {
   writeText,
 } from './files'
 import { recordVersions } from './history'
+import {
+  flushUndoHistory,
+  relocateUndoHistory,
+  removeUndoHistory,
+} from './undo-history'
 import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
@@ -89,12 +96,31 @@ function makeSource(text: string, tabId = activeTab, version = 0) {
   materialized.set(store.snapshot(), text)
   return store
 }
+async function* noText(): AsyncGenerator<string> {}
 async function readSource(file: string, tabId = activeTab, version = 0) {
-  return SourceStore.load(
-    readMarkdownChunks(file),
-    { tabId, revision },
-    version,
-  )
+  // An image has no text; the viewer reads its bytes on its own.
+  if (isImageDocument(file)) {
+    const info = await stat(file)
+    if (!info.isFile())
+      throw new Error('Choose an image file, not a folder or device.')
+    return SourceStore.load(noText(), { tabId, revision }, version)
+  }
+  try {
+    return await SourceStore.load(
+      readMarkdownChunks(file),
+      { tabId, revision },
+      version,
+    )
+  } catch (error) {
+    if (
+      (error as NodeJS.ErrnoException).code ===
+      'ERR_ENCODING_INVALID_ENCODED_DATA'
+    )
+      throw new Error(
+        `Hibi can’t open ${basename(file)}. Choose a UTF-8 text file or a PNG, JPEG, WebP, GIF, or SVG image.`,
+      )
+    throw error
+  }
 }
 async function sameSource(a: SourceSnapshot, b: SourceSnapshot) {
   const comparison = a.compare(b)
@@ -448,7 +474,11 @@ export async function selectDocumentTab(
     const reload = discard && (modified || !draft.path)
     let content: SourceStore | null = null
     try {
-      if (reload || !(await matchesMarkdown(file, target)))
+      // Images have no text to compare; the viewer rereads them on a new revision.
+      if (
+        !isImageDocument(file) &&
+        (reload || !(await matchesMarkdown(file, target)))
+      )
         content = await readSource(file, id, target.version + 1)
     } catch (error) {
       // A file moved or deleted outside Hibi leaves the tab's text as it is.
@@ -515,13 +545,15 @@ export async function focusDocumentTab(
     expected.revision !== version.document.revision
   )
     throw new Error('This pane has edits pending synchronization. Try again.')
-  // Focusing a pane over an outside change asks once, as a tab switch does;
-  // only the prompt holds the file-operation lock.
-  if (await changedOutside(id, true)) {
-    await locked((window) => confirmTabDiscard(window, id, saveRetained))
-    if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
-      throw new Error('This pane has edits pending synchronization. Try again.')
-  }
+  // Focusing a pane over an outside change asks once, as a tab switch does.
+  // The check and its prompt hold the file-operation lock, so no other file
+  // operation runs between them; the focus itself does not.
+  await locked(async (window) => {
+    if (await changedOutside(id, true))
+      await confirmTabDiscard(window, id, saveRetained)
+  })
+  if (!getDocumentSourceFor(id).ownsCurrentSnapshot(version))
+    throw new Error('This pane has edits pending synchronization. Try again.')
   if (id !== activeTab) {
     activateTab(id)
     refreshDirtyIndicator(window)
@@ -577,14 +609,40 @@ function containsPath(parent: string, file: string | null) {
   if (!file) return false
   return isPathInside(parent, file)
 }
-function removeTabs(
+async function removeTabs(
   window: BrowserWindow,
   ids: Set<string>,
   preferredTab?: string,
 ) {
+  // Saves made in the prompts reach the closing tabs' undo histories first.
+  await flushUndoHistory(window)
   storeTab()
-  const order = [...tabs.keys()]
-  const currentIndex = order.indexOf(activeTab)
+  if (ids.has(activeTab)) {
+    const order = [...tabs.keys()]
+    const next =
+      (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
+      order.slice(order.indexOf(activeTab) + 1).find((id) => !ids.has(id)) ??
+      order.findLast((id) => !ids.has(id))
+    const closing = source.snapshot()
+    // The tab shown next is checked for outside changes, as a tab switch does.
+    if (next)
+      await selectDocumentTab(window, next, false).catch((error: unknown) => {
+        // Edits made meanwhile keep the closing tab open.
+        if (!source.ownsCurrentSnapshot(closing))
+          throw new Error(
+            `The tab for ${basename(path ?? pendingPath ?? untitledName)} stayed open because it changed while Hibi was closing it.`,
+          )
+        // A next tab whose file cannot be checked still shows its text, and
+        // the close says why.
+        if (!tabs.has(next)) throw error
+        activateTab(next)
+        advanceRevision()
+        window.webContents.send(
+          HISTORY_CHANNELS.notice,
+          error instanceof Error ? error.message : String(error),
+        )
+      })
+  }
   for (const id of ids) {
     tabs.delete(id)
     dirtyTabs.delete(id)
@@ -592,18 +650,9 @@ function removeTabs(
   back = back.filter((id) => !ids.has(id))
   forward = forward.filter((id) => !ids.has(id))
   if (ids.has(activeTab)) {
-    const next =
-      (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
-      order.slice(currentIndex + 1).find((id) => tabs.has(id)) ??
-      [...tabs.keys()].at(-1)
-    if (next) {
-      activateTab(next)
-      advanceRevision()
-    } else {
-      activeTab = randomUUID()
-      activeTabOpen = false
-      clearDocument(window, false)
-    }
+    activeTab = randomUUID()
+    activeTabOpen = false
+    clearDocument(window, false)
   }
   refreshDirtyIndicator(window)
   return getDocument()
@@ -658,15 +707,26 @@ export function moveDocumentTab(id: unknown, beforeId: unknown) {
   for (const [key, value] of entries) tabs.set(key, value)
   return getDocument()
 }
-export function closeDeletedDocuments(window: BrowserWindow, parent: string) {
-  return removeTabs(
-    window,
-    new Set(
-      getOpenDocuments()
-        .filter((draft) => containsPath(parent, draft.file))
-        .map((draft) => draft.tabId),
-    ),
-  )
+export async function closeDeletedDocuments(
+  window: BrowserWindow,
+  parent: string,
+) {
+  try {
+    return await removeTabs(
+      window,
+      new Set(
+        getOpenDocuments()
+          .filter((draft) => containsPath(parent, draft.file))
+          .map((draft) => draft.tabId),
+      ),
+    )
+  } finally {
+    // Deleted notes' kept undo history goes too, once their closing tabs
+    // have sent the steps their last saves left.
+    void removeUndoHistory(parent).catch((error: unknown) =>
+      console.error('Could not remove undo history:', error),
+    )
+  }
 }
 
 function rememberLocation() {
@@ -713,6 +773,14 @@ export function getDocumentPath(): string | null {
 }
 export function getDocumentPathForTab(id: string): string | null {
   return id === activeTab ? path : (tabs.get(id)?.path ?? null)
+}
+/** A named tab's file and the text last saved to it, which its undo history ends at. */
+export function getSavedDocument(id: unknown) {
+  if (typeof id !== 'string') return null
+  const draft = id === activeTab ? snapshot() : tabs.get(id)
+  return draft?.path && !draft.pendingPath
+    ? { path: draft.path, saved: draft.saved }
+    : null
 }
 
 export function getDocument(): DocumentState {
@@ -859,19 +927,65 @@ async function recordSaveHistory(
   destination: string,
   previous: SourceSnapshot | null,
   content: SourceSnapshot,
+  automatic = false,
 ) {
   try {
     await recordVersions(
       destination,
       previous === null ? [content] : [previous, content],
+      automatic,
     )
+    return true
   } catch (error) {
     console.error('local history failed:', error)
     window.webContents.send(
       HISTORY_CHANNELS.notice,
       'File saved, but Hibi could not add it to version history.',
     )
+    return false
   }
+}
+
+/** Says what a step of a save waits for once a program has refused it for 1.5 s. */
+async function sayingWhenHeld<T>(
+  window: BrowserWindow,
+  path: string,
+  step: (refused: () => void) => Promise<T>,
+) {
+  const name = basename(path)
+  let since = 0,
+    said = false
+  try {
+    return await step(() => {
+      since ||= Date.now()
+      // The first of these comes one retry delay after the first refusal.
+      if (said || Date.now() - since < 1400) return
+      said = true
+      window.webContents.send(
+        HISTORY_CHANNELS.notice,
+        `Another program is using ${name}. Hibi keeps trying to save it.`,
+        'held',
+      )
+    })
+  } finally {
+    if (said && !window.isDestroyed())
+      window.webContents.send(HISTORY_CHANNELS.notice, '', 'held')
+  }
+}
+/** A program holding a note shut refuses reads as well as the rename. */
+const patiently = <T>(
+  window: BrowserWindow,
+  path: string,
+  read: () => Promise<T>,
+) =>
+  sayingWhenHeld(window, path, (refused) =>
+    retryRename(read, refused, undefined, PATIENT_RENAME),
+  )
+const heldNote = (error: unknown): never => {
+  if (!fileHeldOpen(error)) throw error
+  throw new Error(
+    'Could not save because another program is using this file, or Windows does not allow changes to it. Your text is still here and the file is unchanged. Close the other program and save again.',
+  )
 }
 
 export async function saveDocument(
@@ -880,6 +994,14 @@ export async function saveDocument(
   defaultPath?: string,
   automatic = false,
 ): Promise<DocumentState | null> {
+  // Images are viewed, never written.
+  if (path && isImageDocument(path)) {
+    if (saveAs && !automatic)
+      throw new Error(
+        'Images open read-only in Hibi. Copy the file in your file manager to save it under another name.',
+      )
+    return null
+  }
   let destination = path ?? pendingPath
   const exclusive = !!pendingPath && !saveAs
   const saving = source.snapshot(),
@@ -909,7 +1031,12 @@ export async function saveDocument(
   destination = await realpath(chosen).catch(
     async (error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error
-      return join(await realpath(dirname(chosen)), basename(chosen))
+      const folder = await realpath(dirname(chosen)).catch(missingFile)
+      if (!folder)
+        throw new Error(
+          `The folder for ${basename(chosen)} was moved or deleted outside Hibi. Use Save as to keep this text.`,
+        )
+      return join(folder, basename(chosen))
     },
   )
   if (isOpenInOtherTab(destination))
@@ -922,10 +1049,18 @@ export async function saveDocument(
   if (destination === path || appeared) {
     let unchanged =
       !appeared &&
-      (await matchesMarkdown(destination, saved).catch(missingFile))
+      (await patiently(window, destination, () =>
+        matchesMarkdown(destination, saved),
+      )
+        .catch(missingFile)
+        .catch(heldNote))
     previous = unchanged
       ? saved
-      : ((await readSource(destination).catch(missingFile))?.snapshot() ?? null)
+      : ((
+          await patiently(window, destination, () => readSource(destination))
+            .catch(missingFile)
+            .catch(heldNote)
+        )?.snapshot() ?? null)
     while (!unchanged) {
       if (automatic) return null
       const choice = await runFileDialog(() =>
@@ -943,20 +1078,42 @@ export async function saveDocument(
       // Another app can write again while the prompt is open; ask about that text too.
       const shown = previous
       previous =
-        (await readSource(destination).catch(missingFile))?.snapshot() ?? null
+        (
+          await patiently(window, destination, () => readSource(destination))
+            .catch(missingFile)
+            .catch(heldNote)
+        )?.snapshot() ?? null
       unchanged =
         shown === null
           ? previous === null
           : previous !== null && (await sameSource(shown, previous))
     }
   }
-  await writeMarkdown(destination, content, exclusive && !appeared)
+  await sayingWhenHeld(window, destination, (refused) =>
+    writeMarkdown(
+      destination,
+      content,
+      exclusive && !appeared,
+      undefined,
+      PATIENT_RENAME,
+      refused,
+    ),
+  ).catch(heldNote)
+  // A new path, or a file another app changed, keeps no copy of the text last saved.
+  const replacedSaved = previous === saved
   path = destination
   pendingPath = null
   saved = saving
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, previous, content)
-  return getDocument()
+  const recorded = await recordSaveHistory(
+    window,
+    destination,
+    previous,
+    content,
+  )
+  return Object.assign(getDocument(), {
+    versionsKept: !recorded ? 'none' : replacedSaved ? 'both' : 'written',
+  } satisfies Pick<DocumentState, 'versionsKept'>)
 }
 
 export async function autosaveDocument(
@@ -965,6 +1122,7 @@ export async function autosaveDocument(
   expectedRevision: unknown,
   expectedContentVersion?: number,
   canContinue: () => boolean = () => true,
+  automatic = true,
 ): Promise<AutosaveResult> {
   if (
     typeof target !== 'string' ||
@@ -988,6 +1146,8 @@ export async function autosaveDocument(
   const destination = draft.path
   const saving = draft.source.snapshot()
   const content = saving
+  // A kept tab's draft is the tab itself, whose saved text changes below.
+  const replaced = draft.saved
   const unchanged = await matchesMarkdown(destination, draft.saved).catch(
     missingFile,
   )
@@ -1013,8 +1173,22 @@ export async function autosaveDocument(
   }
   storeTab()
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, draft.saved, content)
-  return { status: 'saved', document: getDocumentForTab(id) }
+  const recorded = await recordSaveHistory(
+    window,
+    destination,
+    replaced,
+    content,
+    automatic,
+  )
+  const state = getDocumentForTab(id)
+  return {
+    status: 'saved',
+    document:
+      state &&
+      Object.assign(state, {
+        versionsKept: recorded ? 'both' : 'none',
+      } satisfies Pick<DocumentState, 'versionsKept'>),
+  }
 }
 
 /** Saves one already-named tab without selecting it or opening a file dialog. */
@@ -1053,6 +1227,7 @@ export async function saveTargetDocument(
     expectedRevision,
     expectedContentVersion as number,
     canContinue,
+    false,
   )
   if (result.status === 'skipped') return { status: 'stale', document: null }
   return { status: result.status, document: result.document }
@@ -1110,6 +1285,7 @@ async function saveRetained(window: BrowserWindow) {
       name: document.name,
       ephemeral: document.ephemeral,
       canAutosave: document.canAutosave,
+      versionsKept: document.versionsKept,
     } satisfies DocumentSaved)
   return document
 }
@@ -1159,6 +1335,10 @@ export function relocateDocument(from: string, to: string): void {
         : current
   }
   storeTab()
+  // Notes keep their undo history under their new paths.
+  void relocateUndoHistory(from, to).catch((error: unknown) =>
+    console.error('Could not move undo history:', error),
+  )
   if (!activeTabOpen) return
   for (const draft of tabs.values()) {
     draft.path = relocate(draft.path)
@@ -1250,7 +1430,12 @@ export async function openDocument(
   const result = await runFileDialog(() =>
     dialog.showOpenDialog(window, {
       properties: ['openFile'],
-      filters: [{ name: 'Documents', extensions: documentExtensions() }],
+      filters: [
+        {
+          name: 'Documents and images',
+          extensions: [...documentExtensions(), ...imageExtensions],
+        },
+      ],
     }),
   )
   const selected = result.filePaths[0]

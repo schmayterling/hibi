@@ -1,0 +1,20 @@
+{
+  "{\"scheme\":\"hibi-dark\",\"key\":\"afterEntity\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"alertBody\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"alertTitle\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"600","fontStyle":"normal","color":"rgb(180, 230, 164)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"closing\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"done\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"entities\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"html\"}": {"fontFamily":"\"Geist Mono\", monospace","fontSize":"13.6px","fontWeight":"400","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"task\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-dark\",\"key\":\"title\"}": {"fontFamily":"Geist, sans-serif","fontSize":"30px","fontWeight":"600","fontStyle":"normal","color":"rgb(228, 233, 233)","letterSpacing":"-0.6px"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"afterEntity\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"alertBody\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"alertTitle\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"600","fontStyle":"normal","color":"rgb(35, 96, 50)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"closing\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"done\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"entities\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"html\"}": {"fontFamily":"\"Geist Mono\", monospace","fontSize":"13.6px","fontWeight":"400","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"task\"}": {"fontFamily":"Geist, sans-serif","fontSize":"16px","fontWeight":"400","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"normal"},
+  "{\"scheme\":\"hibi-light\",\"key\":\"title\"}": {"fontFamily":"Geist, sans-serif","fontSize":"30px","fontWeight":"600","fontStyle":"normal","color":"rgb(27, 32, 33)","letterSpacing":"-0.6px"}
+}

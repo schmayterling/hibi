@@ -21,7 +21,7 @@ const metadata = {
   name: 'Sample',
   description: 'Export fixture',
   kind: 'extension',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   defaultEnabled: false,
   authors: [{ displayName: 'Example' }],

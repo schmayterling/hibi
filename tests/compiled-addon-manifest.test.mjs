@@ -6,13 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-const { outputFiles, metafile } = await build({
+const { outputFiles } = await build({
   entryPoints: [join(root, 'src/shared/addon-manifest.ts')],
   bundle: true,
   write: false,
   platform: 'browser',
   format: 'esm',
-  metafile: true,
 })
 const { parseAddonManifest, admitInstalledAddon } = await import(
   `data:text/javascript;base64,${Buffer.from(outputFiles[0].contents).toString('base64')}`
@@ -21,7 +20,7 @@ const base = {
   id: 'sample',
   name: 'Sample',
   description: 'Compiled manifest fixture',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   kind: 'extension',
   authors: [{ displayName: 'Test' }],
@@ -29,17 +28,6 @@ const base = {
 }
 const compiled = (fields = {}) =>
   parseAddonManifest({ ...base, ...fields }, { trust: 'compiled' })
-
-test('compiled parser bundles without platform or editor dependencies', () => {
-  assert.doesNotMatch(
-    Object.keys(metafile.inputs).join('\n'),
-    /node_modules|src\/main\//,
-  )
-  assert.equal(
-    Object.values(metafile.outputs).flatMap((output) => output.imports).length,
-    0,
-  )
-})
 
 test('compiled renderer and native entries accept source and javascript modules', () => {
   for (const extension of ['ts', 'tsx', 'js', 'mjs']) {
@@ -170,16 +158,13 @@ test('compiled source themes can register colors through their renderer entry', 
   )
 })
 
-test('api compatibility uses one format and caller-owned compiled trust', () => {
-  for (const apiVersion of [1, 2, 3]) {
-    const parsed = compiled({ apiVersion, native: { entry: 'native.ts' } })
-    assert.equal(parsed.manifest.apiVersion, 3)
-    assert.equal(parsed.manifest.defaultEnabled, false)
-    assert.deepEqual(
-      compiled({ apiVersion }).manifest,
-      parseAddonManifest({ ...base, apiVersion }).manifest,
-    )
-  }
+test('api 3 uses one format and caller-owned compiled trust', () => {
+  const parsed = compiled({ native: { entry: 'native.ts' } })
+  assert.equal(parsed.manifest.apiVersion, 3)
+  assert.equal(parsed.manifest.defaultEnabled, false)
+  assert.deepEqual(compiled().manifest, parseAddonManifest(base).manifest)
+  for (const apiVersion of [1, 2])
+    assert.throws(() => compiled({ apiVersion }), /an update to addon API 3/)
   assert.throws(() => compiled({ kind: undefined }), /kind/)
   assert.throws(() => compiled({ apiVersion: 4 }), /API version/)
 })

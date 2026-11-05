@@ -10,7 +10,7 @@ const manifest = (id, name) => ({
   id,
   name,
   description: `${name} fixture.`,
-  apiVersion: 2,
+  apiVersion: 3,
   kind: 'extension',
   version: '1.0.0',
   authors: [{ displayName: 'Fixture author' }],

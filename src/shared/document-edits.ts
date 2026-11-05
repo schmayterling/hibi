@@ -83,6 +83,10 @@ export type TargetSourceEditResult =
   | SourceEditResult
   | { status: 'conflict'; message: string }
 
+/** Answers an addon can send the same request again after, once the editor can take it. */
+export const retriesSourceEdit = ({ status }: TargetSourceEditResult) =>
+  status === 'busy' || status === 'composing' || status === 'unsupported-view'
+
 export function parseSourceEditRequest(value: unknown): SourceEditRequest {
   if (!value || typeof value !== 'object')
     throw new Error('Invalid edit request.')

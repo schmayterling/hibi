@@ -404,3 +404,40 @@ test('edit batches compose in pairs to the same edits as one after another', () 
     globalThis.structuredClone = clone
   }
 })
+
+test('a view keeps its selections and history steps when its id changes', () => {
+  const { session, errors } = fixture('ab')
+  const caret = (at) => ({
+    ranges: [{ anchor: at, head: at, association: 1 }],
+    mainIndex: 0,
+  })
+  const head = (viewId) => session.selection(viewId)?.ranges[0].head
+  session.select(caret(1), 0, 'pane')
+  session.select(caret(2), 0, 'pane:source')
+  session.edit(
+    [{ from: 1, to: 1, insert: 'x' }],
+    'source',
+    'typing',
+    undefined,
+    () => caret(2),
+    'pane',
+  )
+  session.renameView('pane', 'left')
+  assert.equal(session.historyView('undo'), 'left')
+  assert.equal(session.selection('pane'), null)
+  assert.equal(head('left'), 2)
+  // What the view hosts follows it, mapped through the edit.
+  assert.equal(session.selection('pane:source'), null)
+  assert.equal(head('left:source'), 3)
+  // Undo restores the selection the step started from, under the new id.
+  session.undo()
+  assert.equal(session.snapshot().materialize(), 'ab')
+  assert.equal(head('left'), 1)
+  assert.equal(session.historyView('redo'), 'left')
+  // A step waiting to be redone follows too.
+  session.renameView('left', 'pane')
+  assert.equal(session.historyView('redo'), 'pane')
+  session.redo()
+  assert.equal(head('pane'), 2)
+  assert.deepEqual(errors, [])
+})

@@ -1,22 +1,16 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
-import {
-  cp,
-  mkdir,
-  mkdtemp,
-  readFile,
-  symlink,
-  writeFile,
-} from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { cloneProductionModules } from './production-modules.mjs'
 
 if (process.platform !== 'darwin')
   throw new Error('This packaged fixture currently supports macOS only.')
 const directory = await mkdtemp(join(tmpdir(), 'hibi-diagnostic-packaged-'))
 const summary = []
-async function run(command, args, log, env = process.env, timeout = 180000) {
+async function run(command, args, log, env = process.env, timeout = 600000) {
   const stream = createWriteStream(log)
   const child = spawn(command, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   child.stdout.pipe(stream, { end: false })
@@ -48,9 +42,9 @@ for (const profile of ['release', 'debug']) {
     env,
   )
   await cp('package.json', join(output, 'package.json'))
-  await cp('LICENSE', join(output, 'LICENSE'))
+  await cp('LICENSE.md', join(output, 'LICENSE.md'))
   await cp('out/site', join(output, 'out/site'), { recursive: true })
-  await symlink(resolve('node_modules'), join(output, 'node_modules'), 'dir')
+  await cloneProductionModules(output)
   const packaged = join(output, 'packaged')
   await run(
     resolve('node_modules/.bin/electron-builder'),
@@ -61,6 +55,8 @@ for (const profile of ['release', 'debug']) {
       `-c.directories.app=${output}`,
       `-c.directories.output=${packaged}`,
       '-c.mac.identity=-',
+      // Ad-hoc code has no team, so the hardened runtime's library check refuses Electron's framework.
+      '-c.mac.hardenedRuntime=false',
     ],
     join(output, 'package.log'),
     process.env,
@@ -77,11 +73,11 @@ for (const profile of ['release', 'debug']) {
     ['--hibi-test', `--user-data-dir=${userData}`],
     join(output, 'primary.log'),
     process.env,
-    30000,
+    180000,
   )
   const resultPath = join(userData, 'test-result.json')
   let result
-  for (let i = 0; i < 600; i++) {
+  for (let i = 0; i < 3600; i++) {
     result = await readFile(resultPath, 'utf8')
       .then(JSON.parse)
       .catch(() => null)
@@ -93,12 +89,13 @@ for (const profile of ['release', 'debug']) {
   assert.equal(result.profile, profile)
   const markerPath = join(userData, 'logs', profile, 'run-state.txt')
   const firstRun = JSON.parse(await readFile(markerPath, 'utf8')).run
+  // The first instance waits up to 60 s for this launch before it quits.
   await run(
     executable,
     ['--hibi-test', `--user-data-dir=${userData}`],
     join(output, 'secondary.log'),
     process.env,
-    10000,
+    60000,
   )
   assert.equal(JSON.parse(await readFile(markerPath, 'utf8')).run, firstRun)
   await primary

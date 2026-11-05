@@ -15,6 +15,7 @@
     "src/useraddons/*/index.tsx",
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",
-    "src/shared/**/*.ts"
+    "src/shared/**/*.ts",
+    "tests/fixtures/local-diagnostics-off/renderer.ts"
   ]
 }

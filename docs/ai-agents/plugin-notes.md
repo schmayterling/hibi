@@ -14,9 +14,9 @@ Body edits preserve metadata verbatim. Field edits use the [YAML document API](h
 
 ### Slash commands
 
-`commands.ts` owns the block commands. `rich.ts` attaches a ProseMirror plugin through `registerRich`; `source.ts` uses `registerSource`. Both use `menu.ts` and the shared command-list styles.
+`commands.ts` owns the block commands. `source.ts` installs the menu through `registerSource` and `registerFormatted`. Both use `menu.ts` and the shared command-list styles.
 
-Read other plugins' slash actions through `context.commands.getSlashCommands()` and hide unavailable actions. Apply whole-note transforms and slash-query removal together. Source transforms retain Undo; rich whole-note actions rebuild the editor as `context.editor.updateMarkdown` does. Keep the menu out of code, frontmatter, URLs, and paths. Vim normal-mode `/` must remain search. Never execute workspace content as plugin code.
+Read other plugins' slash actions through `context.commands.getSlashCommands()` and hide unavailable actions. Apply whole-note transforms and slash-query removal together. Either view applies the result as one isolated undo step. Keep the menu out of code, frontmatter, URLs, and paths. Vim normal-mode `/` must remain search. Never execute workspace content as plugin code.
 
 ### Vim
 
@@ -28,11 +28,11 @@ The status display retains the last completed command. For example, `22k` progre
 
 ### Block dragging
 
-Use the existing `registerRich`, shared menu, and scoped style APIs. Moves must preserve formatting, use the editor's Undo history, and obey the document schema. Disable moves for read-only editors. Removing the plugin must remove its handle, menu, listeners, and editor plugin without rebuilding document history.
+Use the formatted view's contribution registry, shared menu, and scoped style APIs. Moves must preserve formatting, use the editor's Undo history, and obey the document schema. Disable moves for read-only editors. Removing the plugin must remove its handle, menu, listeners, and editor plugin without rebuilding document history.
 
 ### Word count and typing speed
 
-Word count uses the rich editor's document text for Markdown and source text for other formats. Count in a local worker and retain only the latest pending edit. Stop the worker and remove status items and listeners when disabled. Do not persist or upload document text.
+For Markdown, word count leaves out formatting characters and properties while the formatted pane is open, and counts the current source text in source view. Other formats count their source text. Count in a local worker and retain only the latest pending edit. Stop the worker and remove status items and listeners when disabled. Do not persist or upload document text.
 
 Use language-aware word segmentation and Unicode grapheme segmentation. Combining accents and joined emoji count as one character. Character totals include spaces and line breaks; Markdown totals exclude frontmatter and formatting markers.
 
@@ -90,7 +90,7 @@ The pinned compiler honors the local denying proxy that blocks automatic package
 
 `index.ts` registers the renderer command. `native.ts` snapshots the workspace, embeds escaped data in the site template, and uses the native save operation. Use the active syntax pipeline and per-file overrides, sanitize generated HTML with DOMPurify, and embed required styles and fonts.
 
-Resolve local Markdown images from each note's folder, including absolute paths and `file:` URLs. Embed PNG, JPEG, GIF, WebP, AVIF, and SVG images up to 8 MiB each, within a 20 MiB combined Markdown-and-image limit. Do not copy remote images or other attachments. Include the active document's in-memory edits without saving them to disk. Detect changes during rendering and ask the user to export again.
+Resolve local Markdown images from each note's folder, including absolute paths and `file:` URLs. PNG, JPEG, GIF, WebP, AVIF, and SVG images have no per-image byte cap. Disk exports stream local media; in-memory exports and previews retain their aggregate budgets. Do not copy remote images. Include the active document's in-memory edits without saving them to disk. Detect changes during rendering and ask the user to export again.
 
 Reuse the shared sidebar and command palette, MiniSearch, and bundled Geist. Export the nine bundled color schemes and their full notices. Host snapshot preferences set the initial appearance; readers can override it. Plugin palettes fall back to Hibi, and plugin code or CSS overrides must not enter exported sites.
 

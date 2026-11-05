@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, net } from 'electron'
+import { app } from 'electron'
 import {
   ADDON_DIRECTORY_URL,
   type AddonDirectory,
@@ -12,6 +12,7 @@ import { validId } from '../shared/addon-manifest'
 import { MAX_ADDON_FILE_BYTES } from '../shared/addon-package'
 import { download } from './download'
 import { writeText } from './files'
+import { manualFetch } from './manual-fetch'
 
 const HOUR = 60 * 60 * 1000
 let cached: AddonDirectory | undefined
@@ -64,7 +65,12 @@ async function loadDirectory(refresh: boolean): Promise<AddonDirectory> {
   return refreshDirectory()
 }
 
-/** Directory files come only from the catalog's own location, without credentials or redirects elsewhere. */
+/**
+ * Directory files come without credentials from the catalog's origin, which
+ * redirects may not leave. On raw.githubusercontent.com that origin serves
+ * every repository, so it limits where a redirect goes, not which repository
+ * answers; installing still needs each addon's detached Hibi signature.
+ */
 async function fetchDirectoryFile(
   maxBytes: number,
   path?: string,
@@ -87,18 +93,10 @@ async function fetchDirectoryFile(
     stallTimeoutMs: 5000,
     accept: 'application/json',
     allowedOrigins: [new URL(source).origin],
-    ...(override
-      ? {
-          parseUrl: (value: string) => {
-            const url = new URL(value)
-            if (url.href !== source)
-              throw new Error('The test directory redirected.')
-            return url
-          },
-        }
-      : {}),
-    fetch: (input, init) =>
-      net.fetch(input instanceof URL ? input.href : input, init),
+    // A test catalog may be served over http; it too redirects only on its
+    // own origin.
+    ...(override ? { parseUrl: (value: string) => new URL(value) } : {}),
+    fetch: manualFetch,
     write: (chunk) => {
       parts.push(chunk)
     },

@@ -122,7 +122,7 @@ test('quit resumes after a never-resolving native stop reaches its deadline', as
     return 1
   })
   t.mock.method(globalThis, 'clearTimeout', () => {})
-  t.mock.method(console, 'error', () => {})
+  const errors = t.mock.method(console, 'error', () => {})
   const event = {
     preventDefault() {
       prevented++
@@ -169,4 +169,8 @@ test('quit resumes after a never-resolving native stop reaches its deadline', as
   await new Promise(setImmediate)
   assert.equal(quit, 1)
   assert.equal(cleaned, 2)
+  assert.deepEqual(
+    errors.mock.calls.map(({ arguments: args }) => args),
+    [['native addon stalled cleanup exceeded 2 seconds']],
+  )
 })

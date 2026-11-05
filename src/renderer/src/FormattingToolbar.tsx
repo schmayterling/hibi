@@ -1,4 +1,3 @@
-import type { ChainedCommands, Editor } from '@tiptap/core'
 import {
   ArrowDownToLine,
   ArrowLeftToLine,
@@ -48,8 +47,7 @@ import { attachmentMarkdown, type MediaAttachment } from '../../shared/media'
 import { Button, SettingRow, TextInput } from '../../ui/Controls'
 import { useDialogs } from '../../ui/DialogProvider'
 import { useToasts } from '../../ui/Sonner'
-import type { ViewMode } from './Editor'
-import { flushRich } from './rich-sync'
+import type { ViewMode } from './FormattedEditor'
 import type { InsertValues, SourceFormatting } from './source-formatting'
 import { toolbar } from './toolbar'
 
@@ -57,62 +55,54 @@ type Action = {
   id: string
   label: string
   icon: typeof Bold
-  rich: (chain: ChainedCommands, editor: Editor) => ChainedCommands
-  active?: string
-  attrs?: Record<string, unknown>
+  /** The toolbar shows whether the selection already has it. */
+  active?: boolean
   table?: boolean
 }
 const actions: Action[] = [
-  { id: 'undo', label: 'Undo', icon: Undo2, rich: (c) => c.undo() },
-  { id: 'redo', label: 'Redo', icon: Redo2, rich: (c) => c.redo() },
+  { id: 'undo', label: 'Undo', icon: Undo2 },
+  { id: 'redo', label: 'Redo', icon: Redo2 },
   {
     id: 'bold',
     label: 'Bold',
     icon: Bold,
-    rich: (c) => c.toggleBold(),
-    active: 'bold',
+    active: true,
   },
   {
     id: 'italic',
     label: 'Italic',
     icon: Italic,
-    rich: (c) => c.toggleItalic(),
-    active: 'italic',
+    active: true,
   },
   {
     id: 'strike',
     label: 'Strikethrough',
     icon: Strikethrough,
-    rich: (c) => c.toggleStrike(),
-    active: 'strike',
+    active: true,
   },
   {
     id: 'inline-code',
     label: 'Inline code',
     icon: Code,
-    rich: (c) => c.toggleCode(),
-    active: 'code',
+    active: true,
   },
   {
     id: 'subscript',
     label: 'Subscript',
     icon: Subscript,
-    rich: (c) => c.toggleMark('subscript'),
-    active: 'subscript',
+    active: true,
   },
   {
     id: 'subtext',
     label: 'Small text',
     icon: Type,
-    rich: (c) => c.setNode('subtext'),
-    active: 'subtext',
+    active: true,
   },
   {
     id: 'paragraph',
     label: 'Paragraph',
     icon: Pilcrow,
-    rich: (c) => c.setParagraph(),
-    active: 'paragraph',
+    active: true,
   },
   ...([1, 2, 3, 4, 5, 6] as const).map((level) => ({
     id: `heading-${level}`,
@@ -120,143 +110,119 @@ const actions: Action[] = [
     icon:
       [Heading1, Heading2, Heading3, Heading4, Heading5, Heading6][level - 1] ??
       Heading1,
-    rich: (c: ChainedCommands) => c.toggleHeading({ level }),
-    active: 'heading',
-    attrs: { level },
+    active: true,
   })),
   {
     id: 'bullet-list',
     label: 'Bullet list',
     icon: List,
-    rich: (c) => c.toggleBulletList(),
-    active: 'bulletList',
+    active: true,
   },
   {
     id: 'numbered-list',
     label: 'Numbered list',
     icon: ListOrdered,
-    rich: (c) => c.toggleOrderedList(),
-    active: 'orderedList',
+    active: true,
   },
   {
     id: 'checklist',
     label: 'Checklist',
     icon: ListChecks,
-    rich: (c) => c.toggleTaskList(),
-    active: 'taskList',
+    active: true,
   },
   {
     id: 'indent',
     label: 'Indent',
     icon: ListIndentIncrease,
-    rich: (c, editor) =>
-      c.sinkListItem(editor.isActive('taskList') ? 'taskItem' : 'listItem'),
   },
   {
     id: 'outdent',
     label: 'Outdent',
     icon: ListIndentDecrease,
-    rich: (c, editor) =>
-      c.liftListItem(editor.isActive('taskList') ? 'taskItem' : 'listItem'),
   },
   {
     id: 'quote',
     label: 'Quote',
     icon: Quote,
-    rich: (c) => c.toggleBlockquote(),
-    active: 'blockquote',
+    active: true,
   },
   {
     id: 'code-block',
     label: 'Code block',
     icon: CodeXml,
-    rich: (c) => c.toggleCodeBlock(),
-    active: 'codeBlock',
+    active: true,
   },
   {
     id: 'divider',
     label: 'Divider',
     icon: Minus,
-    rich: (c) => c.setHorizontalRule(),
   },
   {
     id: 'hard-break',
     label: 'Line break',
     icon: WrapText,
-    rich: (c) => c.setHardBreak(),
   },
   {
     id: 'link',
     label: 'Link',
     icon: Link,
-    rich: (c) => c.setLink({ href: 'https://example.com' }),
-    active: 'link',
+    active: true,
   },
   {
     id: 'unlink',
     label: 'Remove link',
     icon: Unlink,
-    rich: (c) => c.unsetLink(),
   },
   {
     id: 'image',
     label: 'Image',
     icon: Image,
-    rich: (c) => c.setImage({ src: 'image.png' }),
   },
   {
     id: 'table',
     label: 'Table',
     icon: Table,
-    rich: (c) => c.insertTable({ rows: 3, cols: 2, withHeaderRow: true }),
   },
   {
     id: 'row-before',
     label: 'Row above',
     icon: ArrowUpToLine,
-    rich: (c) => c.addRowBefore(),
     table: true,
   },
   {
     id: 'row-after',
     label: 'Row below',
     icon: ArrowDownToLine,
-    rich: (c) => c.addRowAfter(),
     table: true,
   },
   {
     id: 'row-delete',
     label: 'Delete row',
     icon: Rows2,
-    rich: (c) => c.deleteRow(),
     table: true,
   },
   {
     id: 'column-before',
     label: 'Column before',
     icon: ArrowLeftToLine,
-    rich: (c) => c.addColumnBefore(),
     table: true,
   },
   {
     id: 'column-after',
     label: 'Column after',
     icon: ArrowRightToLine,
-    rich: (c) => c.addColumnAfter(),
     table: true,
   },
   {
     id: 'column-delete',
     label: 'Delete column',
     icon: Columns2,
-    rich: (c) => c.deleteColumn(),
     table: true,
   },
   {
     id: 'table-delete',
     label: 'Delete table',
     icon: Trash2,
-    rich: (c) => c.deleteTable(),
     table: true,
   },
 ]
@@ -321,12 +287,24 @@ function InsertForm({
   )
 }
 
+const mediaNotInserted = () =>
+  new Error(
+    'The note changed before the files could be inserted. They are saved in the assets folder. Drop them again to add them to the note.',
+  )
+
+/** Takes the place to insert at; its result puts the saved files there. */
+export type PrepareMediaInsert = () => (
+  attachments: MediaAttachment[],
+) => Promise<void>
+
 export function useFormattingToolbar(
-  editor: Editor | null,
   mode: ViewMode,
   focusedPane: 'rich' | 'source',
   disabled: boolean,
-  onAttach: (files: File[] | null) => Promise<MediaAttachment[] | null>,
+  onAttach: (
+    files: File[] | null,
+    prepare: PrepareMediaInsert,
+  ) => Promise<void>,
   focusOwnedByEditor: () => boolean,
   markdownMode = true,
   format?: DocumentFormat,
@@ -338,7 +316,6 @@ export function useFormattingToolbar(
   // A CodeMirror formatted pane formats its Markdown source like a source pane.
   const rich = useRef<SourceFormatting | null>(null)
   const latest = useRef({
-    editor,
     mode,
     focusedPane,
     disabled,
@@ -348,7 +325,6 @@ export function useFormattingToolbar(
     format,
   })
   latest.current = {
-    editor,
     mode,
     focusedPane,
     disabled,
@@ -363,8 +339,9 @@ export function useFormattingToolbar(
       pane?: 'rich' | 'source',
       coords?: { x: number; y: number },
     ) => {
-      const { editor, mode, focusedPane, disabled, onAttach } = latest.current
-      if (disabled) return
+      const { mode, focusedPane, disabled, onAttach } = latest.current
+      // Dropped files wait their turn: a pane busy with other files can't lose them.
+      if (disabled && !files) return
       if (
         !latest.current.markdownMode &&
         !latest.current.format?.insertMedia &&
@@ -379,75 +356,43 @@ export function useFormattingToolbar(
             : mode === 'normal'
               ? 'rich'
               : focusedPane)) === 'source'
-      const codeMirror = useSource ? source.current : rich.current
-      const viaCodeMirror = useSource || !!rich.current
-      if (!viaCodeMirror && !editor?.isEditable) return
-      if (!viaCodeMirror && editor && !flushRich(editor)) return
-      const sourceSelection = viaCodeMirror
-        ? (codeMirror?.capture(coords) ?? null)
-        : null
-      const document = editor?.state.doc
-      const selection = editor?.state.selection
-      const position =
-        !useSource && coords
-          ? editor?.view.posAtCoords({ left: coords.x, top: coords.y })?.pos
-          : null
+      if (!useSource && !rich.current) return
+      const editor = () => (useSource ? source.current : rich.current)
+      // Dropped where the pointer is now: the note may scroll while these wait.
+      const place = coords && editor()?.place(coords)
       try {
-        const attachments = await onAttach(files)
-        if (!attachments) return
-        await new Promise(requestAnimationFrame)
-        let inserted = false
-        if (
-          useSource &&
-          latest.current.format?.formatting &&
-          latest.current.format.formatting !== 'markdown'
-        )
-          inserted = sourceSelection?.insertMedia(attachments) ?? false
-        else if (useSource || rich.current)
-          inserted =
-            sourceSelection?.insertMarkdown(
-              latest.current.format?.insertMedia?.(attachments) ??
-                attachmentMarkdown(attachments),
-            ) ?? false
-        else if (
-          editor &&
-          !editor.isDestroyed &&
-          editor.isEditable &&
-          flushRich(editor) &&
-          editor.state.doc === document &&
-          selection
-        ) {
-          inserted = editor
-            .chain()
-            .focus()
-            .command(({ tr }) => {
-              if (position == null) tr.setSelection(selection)
-              return true
-            })
-            .insertContentAt(
-              position ?? { from: selection.from, to: selection.to },
-              editor.schema.nodes.image
-                ? attachments.map(({ url, alt }) => ({
-                    type: 'image',
-                    attrs: { src: url, alt },
-                  }))
-                : {
-                    type: 'hibiLiteralBlock',
-                    content: [
-                      { type: 'text', text: attachmentMarkdown(attachments) },
-                    ],
-                  },
+        await onAttach(files, () => {
+          // Read when these files start, past any drop that waited ahead of them.
+          const at = place ? place() : coords
+          const sourceSelection =
+            at === null ? null : (editor()?.capture(at) ?? null)
+          return async (attachments) => {
+            await new Promise(requestAnimationFrame)
+            let inserted = false
+            if (
+              useSource &&
+              latest.current.format?.formatting &&
+              latest.current.format.formatting !== 'markdown'
             )
-            .run()
-        }
-        if (!inserted)
-          throw new Error(
-            'The note changed before the files could be inserted. They are saved in the assets folder. Drop them again to add them to the note.',
-          )
+              inserted = sourceSelection?.insertMedia(attachments) ?? false
+            else if (useSource || rich.current)
+              inserted =
+                sourceSelection?.insertMarkdown(
+                  latest.current.format?.insertMedia?.(attachments) ??
+                    attachmentMarkdown(attachments),
+                ) ?? false
+            if (!inserted) throw mediaNotInserted()
+          }
+        })
       } catch (error) {
+        // Edits made while the files were saved, as another drop's, keep this
+        // note's text in place of the one the files came back with.
+        const shown = /local edits waiting/.test(String(error))
+          ? mediaNotInserted()
+          : error
         toasts.show({
           message:
-            error instanceof Error ? error.message : 'Could not attach media.',
+            shown instanceof Error ? shown.message : 'Could not attach media.',
           variant: 'error',
         })
       }
@@ -503,61 +448,13 @@ export function useFormattingToolbar(
       (latest.current.mode === 'side-by-side' &&
         latest.current.focusedPane === 'source')
     async function run(action: Action) {
-      const { editor, disabled } = latest.current
-      if (disabled) return
+      if (latest.current.disabled) return
       const codeMirror = inSource() ? source.current : rich.current
-      const useSource = inSource() || !!codeMirror
-      if (!useSource && editor && !flushRich(editor)) return
-      if (action.id === 'image') {
-        await attachFiles(null)
-      } else if (action.id === 'link') {
-        if (useSource) {
-          const captured = codeMirror?.capture()
-          if (captured) await editLink(captured)
-          return
-        }
-        const document = editor?.state.doc
-        const selection = editor?.state.selection
-        const href = editor?.isActive('link')
-          ? (editor.getAttributes('link').href ?? '')
-          : null
-        const result = await linkDialog(
-          href,
-          editor && selection
-            ? editor.state.doc.textBetween(selection.from, selection.to)
-            : '',
-        )
-        if (!result) return
-        if (
-          !editor ||
-          editor.isDestroyed ||
-          !editor.isEditable ||
-          !flushRich(editor) ||
-          editor.state.doc !== document ||
-          !selection
-        )
-          return
-        const chain = editor
-          .chain()
-          .focus()
-          .command(({ tr }) => {
-            tr.setSelection(selection)
-            return true
-          })
-        if (result.remove) chain.extendMarkRange('link').unsetLink().run()
-        else if (selection.empty && !editor.isActive('link'))
-          chain
-            .insertContent({
-              type: 'text',
-              text: result.url,
-              marks: [{ type: 'link', attrs: { href: result.url } }],
-            })
-            .run()
-        else chain.extendMarkRange('link').setLink({ href: result.url }).run()
-      } else if (useSource) codeMirror?.run(action.id)
-      else if (editor?.isEditable) {
-        action.rich(editor.chain().focus(), editor).run()
-      }
+      if (action.id === 'image') await attachFiles(null)
+      else if (action.id === 'link') {
+        const captured = codeMirror?.capture()
+        if (captured) await editLink(captured)
+      } else codeMirror?.run(action.id)
     }
     const handles = actions.map((action) =>
       scope.api.register({
@@ -569,35 +466,15 @@ export function useFormattingToolbar(
     )
     refresh.current = () =>
       toolbar.batch(() => {
-        const { editor, disabled } = latest.current
+        const { disabled } = latest.current
         const codeMirror = inSource() ? source.current : rich.current
-        const useSource = inSource() || !!codeMirror
-        const sourceState = useSource ? codeMirror?.inspect() : null
-        const inTable = useSource
-          ? !!sourceState?.table
-          : !!editor && !editor.isDestroyed && editor.isActive('table')
-        const canFormat = (action: Action, editor: Editor) => {
-          try {
-            return action.rich(editor.can().chain(), editor).run()
-          } catch {
-            return false /* This flavor does not provide the requested node or mark. */
-          }
-        }
+        const sourceState = codeMirror?.inspect()
+        const inTable = !!sourceState?.table
         actions.forEach((action, index) => {
           const hiddenTable = !!action.table && !inTable
           const state = hiddenTable
             ? null
-            : useSource
-              ? sourceState?.state(action.id, !!action.active)
-              : editor && !editor.isDestroyed
-                ? {
-                    supported: true,
-                    pressed:
-                      !!action.active &&
-                      editor.isActive(action.active, action.attrs),
-                    disabled: !editor.isEditable || !canFormat(action, editor),
-                  }
-                : null
+            : sourceState?.state(action.id, !!action.active)
           handles[index]?.update({
             ...(action.active ? { pressed: state?.pressed ?? false } : {}),
             ...(action.id === 'link'
@@ -615,7 +492,7 @@ export function useFormattingToolbar(
       refresh.current = () => {}
       scope.dispose()
     }
-  }, [attachFiles, active, editLink, linkDialog])
+  }, [attachFiles, active, editLink])
   useLayoutEffect(() => {
     let frame = 0
     // Capability checks run after the frame paints, so typed text is not delayed by them.
@@ -629,15 +506,13 @@ export function useFormattingToolbar(
       frame = requestAnimationFrame(() => afterPaint.port2.postMessage(null))
     }
     scheduleRefresh.current = update
-    editor?.on('transaction', update)
     update()
     return () => {
       scheduleRefresh.current = () => {}
       cancelAnimationFrame(frame)
       afterPaint.port1.close()
-      editor?.off('transaction', update)
     }
-  }, [editor])
+  }, [])
   // biome-ignore lint/correctness/useExhaustiveDependencies: the refresh function reads the current editor context from a ref.
   useLayoutEffect(() => {
     refresh.current()
@@ -653,9 +528,7 @@ export function useFormattingToolbar(
       (mode === 'side-by-side' && focusedPane === 'source')
     )
       source.current?.focus()
-    else if (rich.current) rich.current.focus()
-    // Tiptap's focus command defers to a frame and can override a newer click into source.
-    else if (editor && !editor.isDestroyed) editor.view.focus()
-  }, [mode, focusedPane, editor, markdownMode, focusOwnedByEditor])
+    else rich.current?.focus()
+  }, [mode, focusedPane, markdownMode, focusOwnedByEditor])
   return { attachSource, attachRich, attachFiles, editLink }
 }

@@ -17,10 +17,21 @@ const git = (root, ...args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trimEnd()
 const paths = (text) => text.split('\0').filter(Boolean)
+// GitHub Actions runs every test under tests/ except tests/dev/, which holds
+// tests of developer tooling and which only check:dev selects.
+const hostedTest = /^tests\/(?!dev\/).*\.test\.mjs$/
+const devTest = /^tests\/dev\/.*\.test\.mjs$/
+// Without --no-renames, a moved file lists only its new path.
+const changedFiles = (root, ...revisions) =>
+  paths(
+    git(root, 'diff', '--name-only', '--no-renames', '-z', ...revisions, '--'),
+  )
 const appInput =
   /^(src\/|build\/|scripts\/|docs\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|\.nvmrc$|\.npmrc$)/
 const globalInput =
   /^(\.github\/|package(?:-lock)?\.json$|tsconfig.*\.json$|electron[^/]*\.(?:ts|yml)$|biome\.json$|\.gitattributes$|\.nvmrc$|\.npmrc$|scripts\/ci\.mjs$)/
+// Typechecked by the tsconfigs but never bundled into the app.
+const typedInput = /^tests\/fixtures\/local-diagnostics-off\//
 
 export function planChecks(
   root,
@@ -29,7 +40,7 @@ export function planChecks(
     previousTests,
     force = false,
     outputAvailable = true,
-    platform = process.platform,
+    dev = false,
   },
 ) {
   const untracked = paths(
@@ -42,7 +53,7 @@ export function planChecks(
     ),
   )
   const tests = [...files]
-    .filter((file) => /^tests\/.*\.test\.mjs$/.test(file))
+    .filter((file) => hostedTest.test(file) || (dev && devTest.test(file)))
     .sort()
   const full =
     force ||
@@ -59,6 +70,7 @@ export function planChecks(
   const changes = new Set(changed ?? [])
   const build =
     full || !outputAvailable || [...changes].some((file) => appInput.test(file))
+  const typecheck = build || [...changes].some((file) => typedInput.test(file))
   const documentationOnly =
     changes.size > 0 &&
     [...changes].every(
@@ -66,11 +78,19 @@ export function planChecks(
         /^docs\/.*\.(md|png|jpe?g|gif|webp|avif|svg)$/.test(file) &&
         !file.startsWith('docs/licenses/'),
     )
-  const dataChanged = [...changes].some(
+  // Nothing in tests/dev/ can reach what check:ci runs.
+  const reaching = [...changes].filter(
+    (file) => dev || !file.startsWith('tests/dev/'),
+  )
+  const dataChanged = reaching.some(
     (file) =>
       !file.startsWith('tests/') ||
       file.startsWith('tests/fixtures/') ||
       !/\.[cm]?[jt]sx?$/.test(file),
+  )
+  // Nothing imports a test file, so changing one can't reach another test.
+  const beyondTests = reaching.some(
+    (file) => !hostedTest.test(file) && !devTest.test(file),
   )
   const modules = new Map()
   function dependencies(file, seen = new Set()) {
@@ -95,8 +115,10 @@ export function planChecks(
             source,
           ))
       const readsFiles = /['"](?:node:)?fs(?:\/promises)?['"]/.test(source)
+      // The harness starts the app, and `build` already covers what the app reads.
       let dynamic =
-        /['"](?:node:)?child_process['"]/.test(source) ||
+        (file !== 'tests/electron.mjs' &&
+          /['"](?:node:)?child_process['"]/.test(source)) ||
         /\b(?:import|require)\s*\(\s*[^'"\s]/.test(source)
       const local = imports
         .filter((name) => name.startsWith('.'))
@@ -135,30 +157,6 @@ export function planChecks(
   const selected = full
     ? tests
     : tests.filter((test) => {
-        if (test === 'tests/dev-reload.test.mjs')
-          return (
-            platform !== 'win32' &&
-            changed.some(
-              (file) =>
-                /^(scripts\/dev[^/]*\.mjs$|electron\.vite\.config\.[^/]+$|package(?:-lock)?\.json$|scripts\/ci\.mjs$|\.github\/actions\/ci(?:\/|$))/.test(
-                  file,
-                ) ||
-                [
-                  'scripts/addon-development.ts',
-                  'scripts/addon-packages.ts',
-                  'scripts/patch-electron-vite.mjs',
-                  'scripts/electron-runtime.mjs',
-                  'scripts/build-site.mjs',
-                  'scripts/docs.mjs',
-                  'scripts/addon-reference.mjs',
-                  'src/main/addon-development.ts',
-                  'src/renderer/src/addon-development.ts',
-                  'src/renderer/src/addon-reload.ts',
-                  'src/shared/addon-development.ts',
-                  'tests/dev-reload.test.mjs',
-                ].includes(file),
-            )
-          )
         if (!previousTests.includes(test)) return true
         if (documentationOnly)
           return [
@@ -171,7 +169,10 @@ export function planChecks(
           [...graph.files].some((file) => changes.has(file)) ||
           ((build || dataChanged) && graph.files.has('tests/electron.mjs')) ||
           (dataChanged && graph.readsFiles) ||
-          (changes.size > 0 && graph.dynamic)
+          (beyondTests && graph.dynamic) ||
+          // This test reads every test file against its ledger.
+          (test === 'tests/formatted-engine-gaps.test.mjs' &&
+            [...changes].some((file) => /^tests\/[^/]*\.test\.mjs$/.test(file)))
         )
       })
   const unitTests = selected.filter((test) =>
@@ -180,7 +181,7 @@ export function planChecks(
       return module && !module.dynamic && !module.serial
     }),
   )
-  return { full, build, tests: selected, unitTests, allTests: tests }
+  return { full, build, typecheck, tests: selected, unitTests, allTests: tests }
 }
 
 export function shardTests(selected, all, index, total) {
@@ -190,10 +191,11 @@ export function shardTests(selected, all, index, total) {
   return selected.filter((test) => assigned.has(test))
 }
 
-function runCI() {
+export function runCI({ dev = false } = {}) {
   const root = process.cwd()
   const directory = join(root, '.cache/ci')
-  const stateFile = join(directory, 'success.json')
+  // Each answers for different tests, so neither can stand in for the other.
+  const stateFile = join(directory, dev ? 'success-dev.json' : 'success.json')
   const shard = process.env.CI_SHARD ?? '0/1'
   const [index, total] = shard.split('/').map(Number)
   if (
@@ -206,6 +208,7 @@ function runCI() {
     throw new Error(`Invalid CI shard: ${shard}`)
   const runtime = `${process.platform}/${process.arch}/${process.version}/${process.env.ImageVersion ?? 'local'}/${shard}`
   const clean = ['true', '1'].includes(process.env.CI_CLEAN ?? '')
+  const force = clean || process.env.CI_FULL === 'true'
   let previous
   try {
     previous = JSON.parse(readFileSync(stateFile, 'utf8'))
@@ -218,39 +221,44 @@ function runCI() {
   } catch {
     /* A cold or invalid cache always runs the full suite. */
   }
-  const baseline = process.env.CI_BASE || previous?.sha
+  // A pull request answers for its own diff; main's full runs answer for its base.
+  const pullRequestBase = /^[a-f0-9]{40}$/.test(process.env.CI_BASE ?? '')
+    ? process.env.CI_BASE
+    : undefined
+  const baseline =
+    pullRequestBase ??
+    (/^[a-f0-9]{40}$/.test(previous?.sha ?? '') ? previous.sha : undefined)
   let changed
-  if (
-    previous &&
-    /^[a-f0-9]{40}$/.test(previous.sha) &&
-    /^[a-f0-9]{40}$/.test(baseline ?? '')
-  ) {
+  let previousTests = previous?.tests
+  if (baseline) {
     try {
       changed = [
         ...new Set([
-          ...paths(
-            git(root, 'diff', '--name-only', '-z', baseline, 'HEAD', '--'),
-          ),
-          ...paths(
-            git(root, 'diff', '--name-only', '-z', previous.sha, 'HEAD', '--'),
-          ),
-          ...paths(git(root, 'diff', '--name-only', '-z', 'HEAD', '--')),
+          ...changedFiles(root, baseline, 'HEAD'),
+          ...changedFiles(root, 'HEAD'),
         ]),
       ]
+      if (pullRequestBase)
+        previousTests = paths(
+          git(root, 'ls-tree', '-r', '-z', '--name-only', baseline, 'tests/'),
+        )
     } catch {
       /* Unavailable history after a force-push requires full checks. */
     }
   }
+  const outputAvailable = [
+    'out/main/index.js',
+    'out/preload/index.cjs',
+    'out/renderer/index.html',
+    'out/site/template.html',
+  ].every((file) => existsSync(join(root, file)))
   const plan = planChecks(root, {
     changed,
-    previousTests: previous?.tests,
-    force: clean,
-    outputAvailable: [
-      'out/main/index.js',
-      'out/preload/index.cjs',
-      'out/renderer/index.html',
-      'out/site/template.html',
-    ].every((file) => existsSync(join(root, file))),
+    previousTests,
+    force,
+    dev,
+    // A pull request's diff picks its tests even when it has to build first.
+    outputAvailable: outputAvailable || !!pullRequestBase,
   })
   const selected = shardTests(plan.tests, plan.allTests, index, total)
   const unitTests = shardTests(plan.unitTests, plan.allTests, index, total)
@@ -277,7 +285,7 @@ function runCI() {
   npm('run', 'lint')
   npm('run', 'docs:check')
   npm('run', 'copy:check')
-  if (plan.build) {
+  if (plan.typecheck)
     for (const target of ['node', 'web'])
       npm(
         'exec',
@@ -290,14 +298,34 @@ function runCI() {
         '--tsBuildInfoFile',
         `.cache/ci/${target}.tsbuildinfo`,
       )
-    npm('run', 'build:app')
+  // The cache can hold another revision's app, and a pull request's diff can't say.
+  const outputStale = () => {
+    if (!/^[a-f0-9]{40}$/.test(previous?.sha ?? '')) return true
+    try {
+      return changedFiles(root, previous.sha, 'HEAD').some((file) =>
+        appInput.test(file),
+      )
+    } catch {
+      return true
+    }
   }
+  if (plan.build || !outputAvailable || (pullRequestBase && outputStale()))
+    npm('run', 'build:app')
   // TAP prints each failure's details immediately; spec defers them to the end.
   if (unitTests.length)
-    run(['--test', '--test-reporter=tap', '--test-concurrency=4', ...unitTests])
+    run([
+      '--import',
+      './tests/file-limit.mjs',
+      '--test',
+      '--test-reporter=tap',
+      '--test-concurrency=4',
+      ...unitTests,
+    ])
   const serialTests = selected.filter((test) => !unitTests.includes(test))
   if (serialTests.length)
     run([
+      '--import',
+      './tests/file-limit.mjs',
       '--test',
       '--test-reporter=tap',
       '--test-concurrency=1',

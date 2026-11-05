@@ -11,16 +11,14 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   crashAndReload,
   electron,
   stopElectronTree,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -92,7 +90,7 @@ async function launchProfile(t, profile) {
     await app.close().catch(() => stopElectronTree(child))
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   await waitForRecord(app, 'RUN_STARTED')
   return app
@@ -262,7 +260,7 @@ test('an unavailable unsafe log directory leaves editing, saving and user files 
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   await waitForDocumentEditor(app, page)
   await replaceRichText(
@@ -301,7 +299,7 @@ test('default diagnostics preserve editing, use the raw bridge and export only s
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(6000)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   await waitForDocumentEditor(app, page)
@@ -407,7 +405,7 @@ test('lost diagnostic credit cannot delay save, canceled close or acknowledged r
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   const editor = page.getByRole('textbox', {
     name: 'Document editor',

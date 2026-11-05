@@ -10,6 +10,9 @@ export type SourceSelection = Readonly<{
   }>[]
   mainIndex: number
 }>
+/** The memory undo history counts for a step's carets, as `editBytes` does for its edits. */
+export const selectionBytes = (selection: SourceSelection | null) =>
+  (selection?.ranges.length ?? 0) * 48
 
 export function sourceSelection(
   snapshot: SourceSnapshot,

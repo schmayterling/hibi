@@ -41,6 +41,7 @@ import {
   installPackage,
   installPackageSelection,
   loadInstalledAddons,
+  outdatedAddons,
   removePackage,
 } from './sideload'
 import { testPause } from './test-pauses'
@@ -659,7 +660,8 @@ export function installedAddonResources(id: unknown) {
 export async function removeAddon(id: unknown): Promise<void> {
   if (
     typeof id !== 'string' ||
-    !installedAddons().some((addon) => addon.manifest.id === id)
+    (!installedAddons().some((addon) => addon.manifest.id === id) &&
+      !outdatedAddons().some((addon) => addon.id === id))
   )
     throw new Error(
       'Only addons you installed can be removed. Disable built-in addons instead.',

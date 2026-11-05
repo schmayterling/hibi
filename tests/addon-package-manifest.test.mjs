@@ -30,7 +30,7 @@ const base = {
   id: 'sample',
   name: 'Sample',
   description: 'Manifest fixture',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   kind: 'extension',
   authors: [{ displayName: 'Test' }],
@@ -53,29 +53,19 @@ for (const trust of ['installed', 'compiled']) {
     assert.equal(parsed.manifest.activation, 'formatted')
   })
 
-  for (const apiVersion of [1, 2]) {
-    test(`${trust} api ${apiVersion} rejects the formatted capability`, () => {
+  for (const earlier of [
+    { apiVersion: 1 },
+    { apiVersion: 2 },
+    { capabilities: ['rich'] },
+    { capabilities: ['ui', 'rich', 'source'] },
+    { capabilities: [], activation: 'rich' },
+  ])
+    test(`${trust} ${JSON.stringify(earlier)} asks for an update to api 3`, () => {
       assert.throws(
-        () =>
-          parseAddonManifest(
-            { ...base, apiVersion, capabilities: ['formatted'] },
-            { trust },
-          ),
-        /invalid SDK capabilities/,
+        () => parseAddonManifest({ ...base, ...earlier }, { trust }),
+        /an update to addon API 3/,
       )
     })
-
-    test(`${trust} api ${apiVersion} rejects formatted activation`, () => {
-      assert.throws(
-        () =>
-          parseAddonManifest(
-            { ...base, apiVersion, capabilities: [], activation: 'formatted' },
-            { trust },
-          ),
-        /activation mode is invalid/,
-      )
-    })
-  }
 }
 
 test('package parser bundles without main, platform, or editor dependencies', () => {
@@ -138,7 +128,7 @@ test('parsing retains defaults and modality while installation applies host poli
   const input = {
     ...base,
     defaultEnabled: true,
-    capabilities: ['ui', 'rich', 'source', 'markdown', 'modalEditing'],
+    capabilities: ['ui', 'source', 'markdown', 'modalEditing'],
   }
   const parsed = parseAddonManifest(input)
   assert.equal(parsed.manifest.defaultEnabled, true)
@@ -164,6 +154,50 @@ test('installed admission rejects compiled ids and privileged declarations regar
         /cannot declare native handlers, importers, or windows/,
       )
     }
+  }
+})
+
+test('command shortcuts must bind on every platform, and loading drops ones installed before that check', () => {
+  const commands = (defaultShortcut) => [
+    { id: 'run', label: 'Run', defaultShortcut },
+    { id: 'other', label: 'Other' },
+  ]
+  for (const shortcut of ['shift+f7', 'f2', 'mod+alt+shift+g', 'ctrl+alt+k'])
+    assert.deepEqual(
+      admitInstalledAddon({ ...base, commands: commands(shortcut) }, [])
+        .manifest.commands,
+      commands(shortcut),
+    )
+  for (const shortcut of [
+    '',
+    'k',
+    'shift+a',
+    'Mod+K',
+    'alt+ctrl+k',
+    'hyper+k',
+    'mod+c',
+    'mod+w',
+    'meta+c',
+    'ctrl+v',
+    'alt+f4',
+    `ctrl+${'f'.repeat(60)}`,
+    7,
+    null,
+  ]) {
+    const input = { ...base, commands: commands(shortcut) }
+    for (const parse of [
+      () => parseAddonManifest(input, { trust: 'compiled' }),
+      () => admitInstalledAddon(input, []),
+    ])
+      assert.throws(
+        parse,
+        /default shortcut for the run command is not available on every platform/,
+        String(shortcut),
+      )
+    assert.deepEqual(admitInstalledAddon(input, [], 'load').manifest.commands, [
+      { id: 'run', label: 'Run' },
+      { id: 'other', label: 'Other' },
+    ])
   }
 })
 
@@ -363,26 +397,26 @@ test('theme resolution composes with caller-owned trust and cannot admit install
   )
 })
 
-test('inline data themes retain api compatibility, color defaults, and license credits', () => {
-  for (const apiVersion of [1, 2, 3]) {
-    const { manifest, entry, themes } = admitInstalledAddon(
-      { ...themePackage, apiVersion },
-      [],
+test('inline data themes retain color defaults and license credits', () => {
+  for (const apiVersion of [1, 2])
+    assert.throws(
+      () => admitInstalledAddon({ ...themePackage, apiVersion }, []),
+      /an update to addon API 3/,
     )
-    assert.equal(manifest.apiVersion, 3)
-    assert.equal(manifest.defaultEnabled, false)
-    assert.equal(entry, '')
-    assert.equal(themes.length, 1)
-    assert.equal(themes[0].colors.sidebar, scheme.colors.surface)
-    assert.deepEqual(manifest.licenses, [
-      {
-        id: 'theme-night',
-        name: 'Night',
-        license: 'MIT',
-        text: 'Permission notice',
-      },
-    ])
-  }
+  const { manifest, entry, themes } = admitInstalledAddon(themePackage, [])
+  assert.equal(manifest.apiVersion, 3)
+  assert.equal(manifest.defaultEnabled, false)
+  assert.equal(entry, '')
+  assert.equal(themes.length, 1)
+  assert.equal(themes[0].colors.sidebar, scheme.colors.surface)
+  assert.deepEqual(manifest.licenses, [
+    {
+      id: 'theme-night',
+      name: 'Night',
+      license: 'MIT',
+      text: 'Permission notice',
+    },
+  ])
   for (const extra of [
     { styles: [] },
     { entry: 'index.js' },
@@ -404,22 +438,19 @@ test('full typst notice fits the shared license cap and existing manifest byte l
     'utf8',
   )
   assert.equal(Buffer.byteLength(text), 53546)
-  for (const apiVersion of [1, 2, 3]) {
-    const input = {
-      ...base,
-      apiVersion,
-      licenses: [
-        {
-          id: 'typst-assets',
-          name: 'Typst assets',
-          license: 'see notices',
-          text,
-        },
-      ],
-    }
-    assert.ok(Buffer.byteLength(JSON.stringify(input)) < 64 * 1024)
-    assert.equal(admitInstalledAddon(input, []).manifest.licenses[0].text, text)
+  const input = {
+    ...base,
+    licenses: [
+      {
+        id: 'typst-assets',
+        name: 'Typst assets',
+        license: 'see notices',
+        text,
+      },
+    ],
   }
+  assert.ok(Buffer.byteLength(JSON.stringify(input)) < 64 * 1024)
+  assert.equal(admitInstalledAddon(input, []).manifest.licenses[0].text, text)
 })
 
 test('license notice limit counts utf-8 bytes without truncating text', () => {

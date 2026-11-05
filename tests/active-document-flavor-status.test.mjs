@@ -195,64 +195,59 @@ function fixture(t, origin, source = mixed) {
   }
 }
 
-for (const [engine, origin] of [
-  ['tiptap', 'visual'],
-  ['codemirror', 'source'],
-]) {
-  test(`${engine} typing does no synchronous flavor lexing or source projection`, (t) => {
-    const f = fixture(t, origin)
-    f.render()
-    f.quiet()
-    assert.deepEqual(f.status.at(-1), {
-      label: 'markdown + Math',
-      unsupported: true,
-    })
-    f.reads.lex.length = f.reads.project.length = f.reads.owned.length = 0
-    const keys = []
-    for (let key = 0; key < 8; key++) {
-      const before = f.reads.lex.length
-      f.edit()
-      const units = f.reads.lex.slice(before)
-      keys.push({
-        calls: units.length,
-        units: units.reduce((sum, value) => sum + value, 0),
-      })
-    }
-    t.diagnostic(JSON.stringify({ engine, keys }))
-    assert.deepEqual(
-      keys,
-      Array.from({ length: 8 }, () => ({ calls: 0, units: 0 })),
-    )
-    assert.equal(f.reads.project.length, 0)
-    assert.equal(f.reads.owned.length, 0)
-    assert.equal(f.reads.stores, 1, 'source edits retain the subscription memo')
-    assert.equal(f.timers.size, 1, 'only the latest quiet callback remains')
-    f.quiet()
-    assert.deepEqual(f.reads.lex, [mixed.length + 8])
-    assert.equal(f.reads.project.length, 1)
-    assert.equal(f.reads.owned.length, 1)
-    assert.deepEqual(f.status.at(-1), {
-      label: 'markdown + Math',
-      unsupported: true,
-    })
-    f.props.chosenFlavors = [math]
-    f.render()
-    f.quiet()
-    assert.deepEqual(f.status.at(-1), {
-      label: 'markdown + Math',
-      unsupported: false,
-    })
-    f.reads.lex.length = f.reads.project.length = f.reads.owned.length = 0
-    f.edit()
-    assert.deepEqual(f.reads.lex, [])
-    f.quiet()
-    assert.deepEqual(
-      f.reads.lex,
-      [mixed.length + 9],
-      'a quiet key reuses the existing label scan',
-    )
+test('typing does no synchronous flavor lexing or source projection', (t) => {
+  const f = fixture(t, 'source')
+  f.render()
+  f.quiet()
+  assert.deepEqual(f.status.at(-1), {
+    label: 'markdown + Math',
+    unsupported: true,
   })
-}
+  f.reads.lex.length = f.reads.project.length = f.reads.owned.length = 0
+  const keys = []
+  for (let key = 0; key < 8; key++) {
+    const before = f.reads.lex.length
+    f.edit()
+    const units = f.reads.lex.slice(before)
+    keys.push({
+      calls: units.length,
+      units: units.reduce((sum, value) => sum + value, 0),
+    })
+  }
+  t.diagnostic(JSON.stringify({ keys }))
+  assert.deepEqual(
+    keys,
+    Array.from({ length: 8 }, () => ({ calls: 0, units: 0 })),
+  )
+  assert.equal(f.reads.project.length, 0)
+  assert.equal(f.reads.owned.length, 0)
+  assert.equal(f.reads.stores, 1, 'source edits retain the subscription memo')
+  assert.equal(f.timers.size, 1, 'only the latest quiet callback remains')
+  f.quiet()
+  assert.deepEqual(f.reads.lex, [mixed.length + 8])
+  assert.equal(f.reads.project.length, 1)
+  assert.equal(f.reads.owned.length, 1)
+  assert.deepEqual(f.status.at(-1), {
+    label: 'markdown + Math',
+    unsupported: true,
+  })
+  f.props.chosenFlavors = [math]
+  f.render()
+  f.quiet()
+  assert.deepEqual(f.status.at(-1), {
+    label: 'markdown + Math',
+    unsupported: false,
+  })
+  f.reads.lex.length = f.reads.project.length = f.reads.owned.length = 0
+  f.edit()
+  assert.deepEqual(f.reads.lex, [])
+  f.quiet()
+  assert.deepEqual(
+    f.reads.lex,
+    [mixed.length + 9],
+    'a quiet key reuses the existing label scan',
+  )
+})
 
 test('quiet status keeps projection and ownership semantics and cancels on unmount', (t) => {
   const prefix = '@@owned\n$metadata$\n'

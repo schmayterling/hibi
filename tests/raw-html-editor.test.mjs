@@ -4,14 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { marked } from 'marked'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
 import {
-  clickMenu,
-  pressShortcut,
-  replaceRichText,
-  replaceSourceText,
-} from './keyboard.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
+import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const windowsClipboard = (html) =>
@@ -27,806 +25,6 @@ const cmRawHtmlSource =
     'break a<BR />b',
     'last paragraph',
   ].join('\n\n') + '\n'
-
-test('raw HTML stays inert and exact through rich edits, atom deletion, undo, and source edits', {
-  timeout: 30000,
-}, async (t) => {
-  const { clipboardHtml } = await import('../src/renderer/src/RawHtml.ts')
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-raw-html-'))
-  const file = join(profile, 'raw.md')
-  const kbd = '<kbd>x</kbd>'
-  const span = `<span id='raw-html-span' data-note="a  &amp; b" onclick="window.__rawHtmlExecuted = true">x &lt;y&gt;</span>`
-  const div = [
-    `<div id="raw-html-div" data-note='keep  &amp; quotes'>`,
-    '  <script id="raw-html-script">window.__rawHtmlExecuted = true</script>',
-    '  <img id="raw-html-img" src="data:image/png;base64,broken" onerror="window.__rawHtmlExecuted = true">',
-    '  <svg id="raw-html-svg" onload="window.__rawHtmlExecuted = true"></svg>',
-    '  <img src=x onerror=alert(1)>',
-    '  <iframe id="raw-html-iframe" srcdoc="<script>parent.__rawHtmlExecuted = true</script>"></iframe>',
-    '  <style id="raw-html-style">.tiptap { display: none !important }</style>',
-    '</div>',
-  ].join('\n')
-  const comment = '<!--  keep <b>literal</b> &amp;  -->'
-  const details = [
-    '<details id="raw-html-details">',
-    '<summary id="raw-html-summary">show</summary>',
-    '',
-    '<p id="raw-html-first">first</p>',
-    '',
-    '<p id="raw-html-second">second</p>',
-    '</details>',
-  ].join('\n')
-  const original = [
-    'editable paragraph',
-    `inline ${kbd} and ${span}.`,
-    div,
-    comment,
-    details,
-    'break a<BR />b',
-    'last paragraph',
-  ].join('\n\n')
-  await writeFile(file, original)
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
-    })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, 'tiptap')
-  // Install probes before opening workspace markup, including detached DOM parsing.
-  await page.evaluate(() => {
-    window.__rawHtmlExecuted = false
-    window.alert = () => {
-      window.__rawHtmlExecuted = true
-    }
-    window.__rawHtmlCreated = []
-    const record = (root) => {
-      if (root.matches?.('[id^="raw-html-"]'))
-        window.__rawHtmlCreated.push(root.id)
-      for (const node of root.querySelectorAll?.('[id^="raw-html-"]') ?? [])
-        window.__rawHtmlCreated.push(node.id)
-    }
-    new MutationObserver((records) => {
-      for (const mutation of records)
-        for (const node of mutation.addedNodes) record(node)
-    }).observe(document, { childList: true, subtree: true })
-    const parse = DOMParser.prototype.parseFromString
-    DOMParser.prototype.parseFromString = function (...args) {
-      const result = parse.apply(this, args)
-      record(result)
-      return result
-    }
-  })
-  await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-  }, file)
-  await clickMenu(app, 'Open…')
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'raw.md',
-  )
-  await waitForDocumentEditor(app, page)
-  const rich = page.getByRole('textbox', {
-    name: 'Document editor',
-    exact: true,
-  })
-  const serialize = () =>
-    rich.evaluate((element) => element.editor.getMarkdown())
-  const copy = () =>
-    rich.evaluate((element) => {
-      const clipboardData = new DataTransfer()
-      element.dispatchEvent(
-        new ClipboardEvent('copy', {
-          bubbles: true,
-          cancelable: true,
-          clipboardData,
-        }),
-      )
-      return {
-        html: clipboardData.getData('text/html'),
-        text: clipboardData.getData('text/plain'),
-      }
-    })
-  const paste = (data) =>
-    rich.evaluate((element, { html, text }) => {
-      const clipboardData = new DataTransfer()
-      clipboardData.setData('text/html', html)
-      clipboardData.setData('text/plain', text)
-      element.dispatchEvent(
-        new ClipboardEvent('paste', {
-          bubbles: true,
-          cancelable: true,
-          clipboardData,
-        }),
-      )
-    }, data)
-  const inert = async () => {
-    assert.deepEqual(
-      await rich
-        .locator(
-          'kbd, details, summary, script, style, img:not(.ProseMirror-separator[alt=""]:not([src])), svg, iframe, object, embed, input, [id^="raw-html-"]',
-        )
-        .evaluateAll((nodes) => nodes.map((node) => node.outerHTML)),
-      [],
-      'workspace HTML must never become live editor elements',
-    )
-    assert.deepEqual(
-      await page.evaluate(() => ({
-        executed: window.__rawHtmlExecuted,
-        created: window.__rawHtmlCreated,
-      })),
-      { executed: false, created: [] },
-    )
-  }
-  assert.equal(
-    await serialize(),
-    original,
-    'full serializer must retain every HTML byte',
-  )
-  const atoms = await rich.evaluate((element) => {
-    const result = []
-    element.editor.state.doc.descendants((node, pos) => {
-      if (!['rawHtmlInline', 'rawHtmlBlock'].includes(node.type.name)) return
-      const dom = element.editor.view.nodeDOM(pos)
-      result.push({
-        type: node.type.name,
-        atom: node.isAtom,
-        size: node.nodeSize,
-        source: node.attrs.source,
-        level: dom.getAttribute('data-raw-html'),
-        editable: dom.getAttribute('contenteditable'),
-        text: dom.querySelector('code')?.textContent,
-      })
-    })
-    return result
-  })
-  for (const [source, level] of [
-    [kbd, 'inline'],
-    [span, 'inline'],
-    [div, 'block'],
-    [comment, 'block'],
-    ...details.split('\n\n').map((source) => [source, 'block']),
-  ]) {
-    const atom = atoms.find((node) => node.source === source)
-    assert.ok(atom, `missing ${level} atom: ${source}`)
-    assert.equal(
-      atom.type,
-      level === 'inline' ? 'rawHtmlInline' : 'rawHtmlBlock',
-    )
-    assert.equal(atom.atom, true)
-    assert.equal(atom.size, 1)
-    assert.equal(atom.level, level)
-    assert.equal(atom.editable, 'false')
-    assert.equal(
-      atom.text,
-      atom.source,
-      'chip must show literal source in code text',
-    )
-  }
-  await inert()
-
-  const edited = original.replace('editable paragraph', 'edited paragraph')
-  await replaceRichText(page, rich.locator('p').first(), 'edited paragraph')
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    edited,
-  )
-  assert.equal(await serialize(), edited)
-  await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(
-    await readFile(file, 'utf8'),
-    edited,
-    'unrelated edits must save original HTML bytes',
-  )
-
-  for (const [source, level, removed] of [
-    [kbd, 'inline', edited.replace(kbd, '')],
-    [div, 'block', edited.replace(`\n\n${div}`, '')],
-  ]) {
-    const before = await rich.evaluate((element) => element.editor.getJSON())
-    await rich
-      .locator(`[data-raw-html="${level}"]`)
-      .filter({ hasText: source })
-      .click()
-    const selection = await rich.evaluate((element) => {
-      const { selection } = element.editor.state
-      return {
-        source: selection.node?.attrs.source,
-        atom: selection.node?.isAtom,
-        size: selection.to - selection.from,
-      }
-    })
-    assert.equal(selection.source, source)
-    assert.equal(selection.atom, true)
-    assert.equal(selection.size, 1, 'native click must select whole atom')
-    assert.equal(await page.getByRole('dialog').count(), 0)
-    await rich.press('Delete')
-    await waitForAsync(
-      page,
-      async (expected) =>
-        (await window.hibi.getDocument()).markdown === expected,
-      removed,
-    )
-    assert.equal(
-      await serialize(),
-      removed,
-      'delete must remove only selected HTML atom',
-    )
-    await rich.press('ControlOrMeta+z')
-    await waitForAsync(
-      page,
-      async (expected) =>
-        (await window.hibi.getDocument()).markdown === expected,
-      edited,
-    )
-    assert.deepEqual(
-      await rich.evaluate((element) => element.editor.getJSON()),
-      before,
-    )
-    assert.equal(
-      await serialize(),
-      edited,
-      'undo must restore exact HTML source',
-    )
-  }
-
-  await page
-    .getByRole('button', { name: /^source view$/i, exact: true })
-    .click()
-  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-  const sourceEdited = edited.replace(kbd, '<kbd>y</kbd>')
-  await replaceSourceText(
-    page,
-    page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
-    sourceEdited,
-  )
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    sourceEdited,
-  )
-  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  await waitForDocumentEditor(app, page)
-  assert.equal(await serialize(), sourceEdited)
-  assert.equal(
-    await rich.locator('[data-raw-html="inline"] code').first().textContent(),
-    '<kbd>y</kbd>',
-  )
-  await inert()
-  await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(await readFile(file, 'utf8'), sourceEdited)
-
-  const clipboardDocument = await rich.evaluate((element) =>
-    element.editor.getJSON(),
-  )
-  t.beforeEach(async () => {
-    await rich.evaluate((element, doc) => {
-      element.editor.view.dragging = null
-      element.editor.commands.setContent(doc)
-      element.editor.commands.setTextSelection(1)
-    }, clipboardDocument)
-    // An empty selection records an empty payload, clearing clipboard trust.
-    assert.equal((await copy()).html, '')
-    await app.evaluate(({ clipboard }) => clipboard.clear())
-    await waitForAsync(
-      page,
-      async (markdown) =>
-        (await window.hibi.getDocument()).markdown === markdown,
-      sourceEdited,
-    )
-  })
-
-  await t.test('internal copy/paste restores chips', async () => {
-    for (const [level, source] of [
-      ['inline', '<kbd>y</kbd>'],
-      ['block', div],
-    ]) {
-      await rich
-        .locator(`[data-raw-html="${level}"]`)
-        .filter({ hasText: source })
-        .click()
-      const before = await rich.evaluate((element) => element.editor.getJSON())
-      const copied = await copy()
-      assert.equal(copied.text, source)
-      assert.doesNotMatch(copied.html, /data-raw-html-session/)
-      assert.equal(await rich.locator('[data-raw-html-session]').count(), 0)
-      await paste(copied)
-      assert.deepEqual(
-        await rich.evaluate((element) => element.editor.getJSON()),
-        before,
-      )
-      assert.equal(await serialize(), sourceEdited)
-      await inert()
-    }
-  })
-
-  await t.test('native clipboard round-trip restores chips', async () => {
-    for (const [level, source] of [
-      ['inline', '<kbd>y</kbd>'],
-      ['block', div],
-    ]) {
-      await rich
-        .locator(`[data-raw-html="${level}"]`)
-        .filter({ hasText: source })
-        .click()
-      const before = await rich.evaluate((element) => element.editor.getJSON())
-      const copied = await copy()
-      await page.evaluate(() => {
-        window.__nativeCopy = null
-        window.__nativePaste = null
-        document.addEventListener(
-          'copy',
-          (event) => {
-            window.__nativeCopy = event.clipboardData.getData('text/html')
-          },
-          { once: true },
-        )
-        document.addEventListener(
-          'paste',
-          (event) => {
-            window.__nativePaste = event.clipboardData.getData('text/html')
-          },
-          { once: true },
-        )
-      })
-      await app.evaluate(({ clipboard }) => clipboard.clear())
-      await app.evaluate(({ BrowserWindow }) => {
-        BrowserWindow.getAllWindows()[0].webContents.copy()
-      })
-      await waitForAsync(page, () => window.__nativeCopy !== null)
-      assert.equal(await page.evaluate(() => window.__nativeCopy), copied.html)
-      await writeRawClipboard(app, copied)
-      await app.evaluate(({ BrowserWindow }) => {
-        BrowserWindow.getAllWindows()[0].webContents.paste()
-      })
-      await waitForAsync(page, () => window.__nativePaste !== null)
-      const pastedHtml = await page.evaluate(() => window.__nativePaste)
-      assert.equal(clipboardHtml(pastedHtml), copied.html)
-      t.diagnostic(
-        `native ${level} clipboard prefix: ${JSON.stringify(pastedHtml.slice(0, pastedHtml.indexOf(copied.html)))}`,
-      )
-      assert.deepEqual(
-        await rich.evaluate((element) => element.editor.getJSON()),
-        before,
-      )
-      await inert()
-    }
-  })
-
-  await t.test('Windows fragments restore only the copied chips', async () => {
-    for (const level of ['inline', 'block']) {
-      await rich.locator(`[data-raw-html="${level}"]`).first().click()
-      const before = await rich.evaluate((element) => element.editor.getJSON())
-      const copied = await copy()
-      const outside = copied.html.replace('</code>', 'outside</code>')
-      await paste({
-        ...copied,
-        html: windowsClipboard(copied.html)
-          .replace(
-            '<body>',
-            `<head><meta charset="utf-8"></head><body>${outside}`,
-          )
-          .replace('</body>', `${outside}</body>`),
-      })
-      assert.deepEqual(
-        await rich.evaluate((element) => element.editor.getJSON()),
-        before,
-      )
-      assert.equal(await serialize(), sourceEdited)
-      await inert()
-    }
-  })
-
-  await t.test('drag data restores chips on paste and drop', async () => {
-    for (const level of ['inline', 'block']) {
-      const chip = rich.locator(`[data-raw-html="${level}"]`).first()
-      await chip.click()
-      const before = await rich.evaluate((element) => element.editor.getJSON())
-      const source = await chip.textContent()
-      const dragged = await chip.evaluate((element) => {
-        const dataTransfer = new DataTransfer()
-        const rect = element.getBoundingClientRect()
-        element.dispatchEvent(
-          new DragEvent('dragstart', {
-            bubbles: true,
-            cancelable: true,
-            dataTransfer,
-            clientX: rect.x + rect.width / 2,
-            clientY: rect.y + rect.height / 2,
-          }),
-        )
-        return {
-          html: dataTransfer.getData('text/html'),
-          text: dataTransfer.getData('text/plain'),
-        }
-      })
-      assert.equal(dragged.text, source)
-      assert.doesNotMatch(dragged.html, /data-raw-html-session/)
-      await paste(dragged)
-      assert.deepEqual(
-        await rich.evaluate((element) => element.editor.getJSON()),
-        before,
-      )
-      await rich.evaluate((element, data) => {
-        const { view } = element.editor
-        view.dragging = null
-        const dataTransfer = new DataTransfer()
-        dataTransfer.setData('text/html', data.html)
-        dataTransfer.setData('text/plain', data.text)
-        const rect = element.lastElementChild.getBoundingClientRect()
-        element.dispatchEvent(
-          new DragEvent('drop', {
-            bubbles: true,
-            cancelable: true,
-            dataTransfer,
-            clientX: rect.x + 5,
-            clientY: rect.y + rect.height / 2,
-          }),
-        )
-      }, dragged)
-      assert.equal(
-        await rich.locator(`[data-raw-html="${level}"]`).count(),
-        before.content
-          .flatMap((node) =>
-            node.type === 'rawHtmlBlock' ? [node] : (node.content ?? []),
-          )
-          .filter(
-            (node) =>
-              node.type ===
-              (level === 'block' ? 'rawHtmlBlock' : 'rawHtmlInline'),
-          ).length + 1,
-      )
-      await rich.evaluate(
-        (element, doc) => element.editor.commands.setContent(doc),
-        before,
-      )
-      await waitForAsync(
-        page,
-        async (markdown) =>
-          (await window.hibi.getDocument()).markdown === markdown,
-        sourceEdited,
-      )
-      await inert()
-    }
-  })
-
-  await t.test('internal copy/paste keeps html break spelling', async () => {
-    const before = await rich.evaluate((element) => {
-      const { editor } = element
-      editor.state.doc.descendants((node, pos) => {
-        if (node.type.name === 'hardBreak')
-          editor.commands.setTextSelection({ from: pos - 1, to: pos + 2 })
-      })
-      return editor.getJSON()
-    })
-    const copied = await copy()
-    await paste({ ...copied, html: windowsClipboard(copied.html) })
-    assert.deepEqual(
-      await rich.evaluate((element) => element.editor.getJSON()),
-      before,
-    )
-    assert.equal(await serialize(), sourceEdited)
-  })
-
-  await t.test(
-    'modified and superseded copies cannot restore chips',
-    async () => {
-      // ProseMirror reads repeated clicks on one chip within 500 ms as double
-      // or triple clicks, which select differently, so select it directly.
-      const selectChip = (level) =>
-        rich.evaluate(
-          (element, type) => {
-            const { editor } = element
-            let chip = -1
-            editor.state.doc.descendants((node, pos) => {
-              if (chip < 0 && node.type.name === type) chip = pos
-              return chip < 0
-            })
-            editor.commands.setNodeSelection(chip)
-          },
-          `rawHtml${level === 'block' ? 'Block' : 'Inline'}`,
-        )
-      for (const level of ['inline', 'block']) {
-        await selectChip(level)
-        const before = await rich.evaluate((element) =>
-          element.editor.getJSON(),
-        )
-        const copied = await copy()
-        const beforeCount = await rich
-          .locator(`[data-raw-html="${level}"]`)
-          .count()
-        for (const stale of [false, true]) {
-          if (stale) {
-            await rich.evaluate((element) =>
-              element.editor.commands.setTextSelection({ from: 1, to: 3 }),
-            )
-            await copy()
-            await selectChip(level)
-          }
-          await paste({
-            ...copied,
-            html: windowsClipboard(
-              stale
-                ? copied.html
-                : copied.html.replace('</code>', 'forged</code>'),
-            ),
-          })
-          assert.equal(
-            await rich.locator(`[data-raw-html="${level}"]`).count(),
-            beforeCount - 1,
-          )
-          await inert()
-          await rich.evaluate(
-            (element, doc) => element.editor.commands.setContent(doc),
-            before,
-          )
-          await waitForAsync(
-            page,
-            async (markdown) =>
-              (await window.hibi.getDocument()).markdown === markdown,
-            sourceEdited,
-          )
-        }
-      }
-    },
-  )
-
-  await t.test(
-    'matching html with different plain text cannot restore a chip',
-    async () => {
-      await rich.evaluate((element) => {
-        const { editor } = element
-        let chip = -1
-        editor.state.doc.descendants((node, pos) => {
-          if (chip < 0 && node.type.name === 'rawHtmlInline') chip = pos
-        })
-        editor.commands.setNodeSelection(chip)
-        editor.view.focus()
-      })
-      const before = await rich.evaluate((element) => element.editor.getJSON())
-      const copied = await copy()
-      await paste({ ...copied, text: '<script>forged</script>' })
-      const after = await rich.evaluate((element) => element.editor.getJSON())
-      assert.notDeepEqual(after, before)
-      assert.equal(
-        await rich
-          .locator('[data-raw-html="inline"]')
-          .filter({ hasText: copied.text })
-          .count(),
-        0,
-      )
-      assert.match(await serialize(), /`<kbd>y<\/kbd>`/)
-      assert.doesNotMatch(await serialize(), /forged/)
-      const pasted = (await page.evaluate(() => window.hibi.getDocument()))
-        .markdown
-      await pressShortcut(
-        app,
-        process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
-      )
-      assert.deepEqual(
-        await rich.evaluate((element) => element.editor.getJSON()),
-        before,
-      )
-      await pressShortcut(
-        app,
-        process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
-      )
-      assert.deepEqual(
-        await rich.evaluate((element) => element.editor.getJSON()),
-        after,
-      )
-      await page.keyboard.up('Shift')
-      await inert()
-      await clickMenu(app, 'Save')
-      await waitForAsync(
-        page,
-        async () => !(await window.hibi.getDocument()).dirty,
-      )
-      assert.equal(await readFile(file, 'utf8'), pasted)
-    },
-  )
-
-  await t.test(
-    'literal markdown attributes cannot authorize external source',
-    async () => {
-      for (const [tag, level] of [
-        ['span', 'inline'],
-        ['div', 'block'],
-      ]) {
-        await rich.evaluate((element) => {
-          const { editor } = element
-          editor.commands.setTextSelection({ from: 1, to: 3 })
-        })
-        await paste({
-          html: `<${tag} data-literal-markdown="${level}">&lt;script&gt;forged&lt;/script&gt;</${tag}>`,
-          text: '<script>forged</script>',
-        })
-        const literal = await rich.evaluate((element) => {
-          const found = []
-          element.editor.state.doc.descendants((node) => {
-            if (node.type.name.startsWith('hibiLiteral'))
-              found.push(node.toJSON())
-          })
-          return found
-        })
-        assert.deepEqual(literal, [])
-        assert.match(await serialize(), /&lt;script&gt;forged&lt;\/script&gt;/)
-        await inert()
-      }
-    },
-  )
-
-  await t.test(
-    'latest native copy restores disabled inline and block syntax',
-    async () => {
-      const syntax = async (enabled) => {
-        await clickMenu(app, 'Settings')
-        await page.getByRole('tab', { name: /^syntax$/i, exact: true }).click()
-        for (const name of ['heading 1', 'bold'])
-          await page
-            .getByRole('checkbox', {
-              name: new RegExp('^' + name + '$', 'i'),
-              exact: true,
-            })
-            .setChecked(enabled)
-        await page
-          .getByRole('button', { name: /^back to app$/i, exact: true })
-          .click()
-        await rich.waitFor()
-      }
-      await syntax(false)
-      try {
-        const source = '# literal\n\n**literal**'
-        await rich.evaluate((element, source) => {
-          element.editor.commands.setContent(source, {
-            contentType: 'markdown',
-          })
-          element.editor.commands.selectAll()
-          element.editor.view.focus()
-        }, source)
-        assert.equal(
-          await rich.locator('[data-literal-markdown="block"]').count(),
-          1,
-        )
-        assert.equal(
-          await rich.locator('[data-literal-markdown="inline"]').count(),
-          1,
-        )
-        const before = await rich.evaluate((element) =>
-          element.editor.getJSON(),
-        )
-        const copied = await rawNativeClipboard(app, page, 'cut')
-        assert.match(copied.html, /data-literal-markdown="block"/)
-        assert.match(copied.html, /data-literal-markdown="inline"/)
-        await waitForAsync(
-          page,
-          async () => (await window.hibi.getDocument()).markdown === '',
-        )
-        await writeRawClipboard(app, copied)
-        await page.evaluate(() => {
-          document.addEventListener(
-            'paste',
-            (event) => {
-              window.literalNativePaste = {
-                text: event.clipboardData.getData('text/plain'),
-                html: event.clipboardData.getData('text/html'),
-              }
-            },
-            { once: true, capture: true },
-          )
-        })
-        await app.evaluate(({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows()[0].webContents.paste(),
-        )
-        try {
-          await waitForAsync(
-            page,
-            async (source) =>
-              (await window.hibi.getDocument()).markdown === source,
-            source,
-          )
-        } catch (error) {
-          await clickMenu(app, 'Save')
-          await waitForAsync(
-            page,
-            async () => !(await window.hibi.getDocument()).dirty,
-          )
-          const savedSource = await readFile(file, 'utf8')
-          t.diagnostic(
-            JSON.stringify({
-              copied,
-              savedSource,
-              actual: await page.evaluate(async () => ({
-                markdown: (await window.hibi.getDocument()).markdown,
-                model: document.querySelector('.tiptap').editor.getJSON(),
-                pasted: window.literalNativePaste,
-              })),
-            }),
-          )
-          throw error
-        }
-        assert.deepEqual(
-          await rich.evaluate((element) => element.editor.getJSON()),
-          before,
-        )
-        await inert()
-        await clickMenu(app, 'Save')
-        await waitForAsync(
-          page,
-          async () => !(await window.hibi.getDocument()).dirty,
-        )
-        assert.equal(await readFile(file, 'utf8'), source)
-      } finally {
-        await syntax(true)
-      }
-    },
-  )
-
-  await t.test('external html falls back to escaped text or code', async () => {
-    const text = '<script>alert(1)</script>'
-    const escaped = '&lt;script&gt;alert(1)&lt;/script&gt;'
-    for (const [tag, level, code, markdown] of [
-      ['span', 'inline', false, escaped],
-      ['div', 'block', false, escaped],
-      ['span', 'inline', true, `\`${text}\``],
-      ['pre', 'block', true, `\`\`\`\n${text}\n\`\`\``],
-    ]) {
-      const expected = sourceEdited.replace('last paragraph', markdown)
-      for (const session of ['', ' data-raw-html-session="external"']) {
-        await rich.evaluate((element) => {
-          const { editor } = element
-          const { doc } = editor.state
-          const from = doc.content.size - doc.lastChild.nodeSize
-          editor.commands.insertContentAt(
-            { from, to: doc.content.size },
-            { type: 'paragraph' },
-          )
-          editor.commands.setTextSelection(from + 1)
-        })
-        await paste({
-          html: `<${tag} data-raw-html="${level}"${session}>${code ? `<code>${escaped}</code>` : escaped}</${tag}>`,
-          text,
-        })
-        assert.deepEqual(
-          await rich.evaluate((element) =>
-            element.editor.state.doc.lastChild.toJSON(),
-          ),
-          tag === 'pre'
-            ? {
-                type: 'codeBlock',
-                attrs: { language: null },
-                content: [{ type: 'text', text }],
-              }
-            : {
-                type: 'paragraph',
-                content: [
-                  {
-                    type: 'text',
-                    ...(code ? { marks: [{ type: 'code' }] } : {}),
-                    text,
-                  },
-                ],
-              },
-        )
-        await waitForAsync(
-          page,
-          async (markdown) =>
-            (await window.hibi.getDocument()).markdown === markdown,
-          expected,
-        )
-        await page.evaluate(() => window.hibi.saveDocument(false))
-        assert.equal(await readFile(file, 'utf8'), expected)
-        await inert()
-      }
-    }
-  })
-})
 
 async function probeRawDocumentParsing(page) {
   await page.evaluate(() => {
@@ -850,7 +48,7 @@ async function probeRawDocumentParsing(page) {
   })
 }
 
-test('codemirror: literal html stays inert through native body edits, source switches and clipboard history', {
+test('literal html stays inert through native body edits, source switches and clipboard history', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-raw-html-'))
@@ -869,7 +67,7 @@ test('codemirror: literal html stays inert through native body edits, source swi
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await waitForFormattedEditor(app, page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await app.evaluate(({ clipboard }) => clipboard.clear())
@@ -1050,7 +248,7 @@ async function rawCMFixture(t) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await waitForFormattedEditor(app, page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await app.evaluate(({ clipboard }) => clipboard.clear())
@@ -1193,7 +391,7 @@ for (const [label, find, replacement] of [
   ['inline', 'x</kbd>', 'y'],
   ['block', 'raw block body', 'changed block body'],
 ]) {
-  test('codemirror: literal ' +
+  test('literal ' +
     label +
     ' html body accepts native edits and exact undo without executing markup', {
     timeout: 45000,
@@ -1219,7 +417,7 @@ for (const [label, find, replacement] of [
 }
 
 for (const level of ['inline', 'block']) {
-  test('codemirror: deleting a selected ' +
+  test('deleting a selected ' +
     level +
     ' html source range preserves surrounding bytes and undo', {
     timeout: 45000,
@@ -1250,7 +448,7 @@ for (const level of ['inline', 'block']) {
   })
 }
 
-test('codemirror: partial native html-break clipboard keeps original spelling through cut, paste and history', {
+test('partial native html-break clipboard keeps original spelling through cut, paste and history', {
   timeout: 45000,
 }, async (t) => {
   const { app, page, rich, original, saved, inert } = await rawCMFixture(t)
@@ -1305,7 +503,7 @@ test('codemirror: partial native html-break clipboard keeps original spelling th
   await inert()
 })
 
-test('codemirror: Windows html fragment wrappers exclude outside markup and retain literal selected source', {
+test('Windows html fragment wrappers exclude outside markup and retain literal selected source', {
   timeout: 45000,
 }, async (t) => {
   const { page, rich, original, saved, inert } = await rawCMFixture(t)
@@ -1357,7 +555,7 @@ test('codemirror: Windows html fragment wrappers exclude outside markup and reta
 })
 
 for (const route of ['paste', 'drop']) {
-  test('codemirror: literal html drag data survives ' +
+  test('literal html drag data survives ' +
     route +
     ' without becoming live markup', {
     timeout: 45000,
@@ -1429,7 +627,7 @@ for (const route of ['paste', 'drop']) {
   })
 }
 
-test('codemirror: native copied source requires both formats and source copies supersede formatted copies', {
+test('native copied source requires both formats and source copies supersede formatted copies', {
   timeout: 45000,
 }, async (t) => {
   const { app, page, rich, file, original, saved, inert } =
@@ -1502,7 +700,7 @@ test('codemirror: native copied source requires both formats and source copies s
 })
 
 for (const trusted of [true, false]) {
-  test('codemirror: cold html paste ' +
+  test('cold html paste ' +
     (trusted
       ? 'keeps accepted source after another copy'
       : 'cannot gain trust from a later matching copy'), {
@@ -1658,7 +856,7 @@ for (const trusted of [true, false]) {
 }
 
 for (const level of ['inline', 'block']) {
-  test('codemirror: modified and superseded ' +
+  test('modified and superseded ' +
     level +
     ' html copies cannot restore literal markup', {
     timeout: 45000,
@@ -1779,7 +977,7 @@ for (const level of ['inline', 'block']) {
   })
 }
 
-test('codemirror: external html falls back to escaped text or code without trusting raw-html attributes', {
+test('external html falls back to escaped text or code without trusting raw-html attributes', {
   timeout: 45000,
 }, async (t) => {
   const { app, page, rich, file, original, saved, inert } =

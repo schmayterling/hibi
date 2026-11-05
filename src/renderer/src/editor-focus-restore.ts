@@ -9,14 +9,13 @@ for (const event of ['pointerdown', 'focusin', 'keydown'])
     event,
     (event) => {
       const target = event.target
-      // A loading editor becoming read-only can move focus without user input.
+      // A loading editor becoming read-only can move focus without user input,
+      // and a key typed meanwhile only reaches the page: focus can still return.
       if (
-        event.type === 'focusin' &&
+        event.type !== 'pointerdown' &&
         (target === document.body ||
           (target instanceof HTMLElement &&
-            target.matches(
-              '.tiptap[contenteditable="false"], .cm-content[contenteditable="false"]',
-            )))
+            target.matches('.cm-content[contenteditable="false"]')))
       )
         return
       focusIntent++
@@ -42,7 +41,7 @@ export function focusEditor(options?: FocusOptions) {
     const selection = view && editorViewRegistry.getSelection(view)
     const find = (kind: 'rich' | 'source') => {
       const target = root?.querySelector<HTMLElement>(
-        `.${kind}-pane :is(.tiptap,.cm-content)[contenteditable="true"]:not([inert] *)`,
+        `.${kind}-pane .cm-content[contenteditable="true"]:not([inert] *)`,
       )
       return target?.checkVisibility({ visibilityProperty: true })
         ? target

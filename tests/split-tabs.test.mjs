@@ -2,12 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   replaceRichText,
@@ -19,7 +20,6 @@ import { waitForAsync } from './poll.mjs'
 test('split panes keep both editors mounted, edit both files, and share one document session', {
   timeout: 90000,
 }, async (t) => {
-  const engine = t.formattedEngine
   const root = await mkdtemp(join(tmpdir(), 'hibi-split-tabs-'))
   const a = join(root, 'a.md')
   const b = join(root, 'b.md')
@@ -41,7 +41,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7500)
-  await selectFormattedEngine(app, page, engine)
+  await waitForFormattedEditor(app, page)
   await page.locator('[data-status-id="autosave"]').click()
   await page.getByRole('checkbox', { name: /^autosave$/i }).check()
   await page.getByLabel(/^save after$/i).selectOption('1000')

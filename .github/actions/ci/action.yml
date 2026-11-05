@@ -7,6 +7,9 @@ inputs:
   base:
     description: Previous push or pull request base revision.
     default: ''
+  full:
+    description: Run every test whatever changed, reusing caches.
+    default: 'false'
   shard:
     description: Zero-based test shard and total shard count.
     default: '0/1'
@@ -54,6 +57,7 @@ runs:
       env:
         CI_BASE: ${{ inputs.base }}
         CI_CLEAN: ${{ inputs.clean }}
+        CI_FULL: ${{ inputs.full }}
         CI_SHARD: ${{ inputs.shard }}
       run: |
         if [ "$RUNNER_OS" = Linux ]; then

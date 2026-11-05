@@ -62,44 +62,51 @@ test('workspace stream snapshot handoff and ordered generation changes', () => {
   assert.equal(seen.length, 4)
 })
 
-test('workspace stream isolates throwing and self-removing listeners', async () => {
+test('workspace stream isolates throwing and self-removing listeners', async (t) => {
   const stream = new WorkspaceChangeStream()
   stream.replace({ workspaceId: 'workspace', workspaceGeneration: 1 })
   const seen = []
   const status = { stale: false, complete: true, capReached: false }
-  const originalError = console.error
-  console.error = () => {}
-  try {
-    stream.subscribe(
-      () => {
-        throw new Error('broken addon')
-      },
-      [],
-      status,
-    )
-    stream.subscribe(
-      async () => {
-        throw new Error('rejected addon')
-      },
-      [],
-      status,
-    )
-    const own = stream.subscribe(
-      () => {
-        seen.push('once')
-        own.dispose()
-      },
-      [],
-      status,
-    )
-    stream.subscribe(() => seen.push('healthy'), [], status)
-    stream.publish('content', ['a.md'])
-    stream.publish('content', ['b.md'])
-    await new Promise((resolve) => setImmediate(resolve))
-    assert.deepEqual(seen, ['once', 'healthy', 'healthy'])
-  } finally {
-    console.error = originalError
-  }
+  const errors = t.mock.method(console, 'error', () => {})
+  stream.subscribe(
+    () => {
+      throw new Error('broken addon')
+    },
+    [],
+    status,
+  )
+  stream.subscribe(
+    async () => {
+      throw new Error('rejected addon')
+    },
+    [],
+    status,
+  )
+  const own = stream.subscribe(
+    () => {
+      seen.push('once')
+      own.dispose()
+    },
+    [],
+    status,
+  )
+  stream.subscribe(() => seen.push('healthy'), [], status)
+  stream.publish('content', ['a.md'])
+  stream.publish('content', ['b.md'])
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(seen, ['once', 'healthy', 'healthy'])
+  // Each failing listener is reported at each of the two changes.
+  assert.deepEqual(
+    errors.mock.calls
+      .map(({ arguments: [text, error] }) => `${text} ${error.message}`)
+      .sort(),
+    [
+      'workspace change listener failed: broken addon',
+      'workspace change listener failed: broken addon',
+      'workspace change listener failed: rejected addon',
+      'workspace change listener failed: rejected addon',
+    ],
+  )
 })
 
 test('workspace stream preserves order when a listener publishes again', () => {
@@ -119,27 +126,26 @@ test('workspace stream preserves order when a listener publishes again', () => {
   assert.deepEqual(seen, [1, 2])
 })
 
-test('recursive workspace publisher is disabled and subscribers resync', () => {
+test('recursive workspace publisher is disabled and subscribers resync', (t) => {
   const stream = new WorkspaceChangeStream()
   stream.replace({ workspaceId: 'workspace', workspaceGeneration: 1 })
   const status = { stale: false, complete: true, capReached: false }
   let resyncs = 0
-  const originalError = console.error
-  console.error = () => {}
-  try {
-    stream.subscribe(() => stream.publish('content', ['again.md']), [], status)
-    stream.subscribe(
-      (event) => {
-        if (event.kind === 'resync') resyncs++
-      },
-      [],
-      status,
-    )
-    stream.publish('content', ['first.md'])
-    assert.equal(resyncs, 1)
-  } finally {
-    console.error = originalError
-  }
+  const errors = t.mock.method(console, 'error', () => {})
+  stream.subscribe(() => stream.publish('content', ['again.md']), [], status)
+  stream.subscribe(
+    (event) => {
+      if (event.kind === 'resync') resyncs++
+    },
+    [],
+    status,
+  )
+  stream.publish('content', ['first.md'])
+  assert.equal(resyncs, 1)
+  assert.deepEqual(
+    errors.mock.calls.map(({ arguments: args }) => args),
+    [['recursive workspace change listener disabled']],
+  )
 })
 
 test('workspace paths reject traversal and symlinks; create is exclusive', async (t) => {

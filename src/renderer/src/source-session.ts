@@ -197,6 +197,39 @@ const editorSelection = (
   )
 
 /**
+ * Views whose redraw failed: CodeMirror has dropped their plugins and content
+ * by then, so they can show nothing more, and each further redraw starts their
+ * plugins' work over. The session keeps what they accepted. It also takes the
+ * failure of an update made for its edit, so whoever dispatched never hears of
+ * it: a listener does.
+ */
+const deadViews = new WeakSet<object>()
+const deathListeners = new WeakMap<object, (error: unknown) => void>()
+export const onViewDeath = (view: object, listener: (error: unknown) => void) =>
+  deathListeners.set(view, listener)
+/** What a view still knows only until it is redrawn. */
+const redrawListeners = new WeakMap<object, () => void>()
+export const onRedraw = (view: object, listener: () => void) =>
+  redrawListeners.set(view, listener)
+export const isViewDead = (view: object) => deadViews.has(view)
+export function viewDied(view: object, error: unknown) {
+  if (deadViews.has(view)) return
+  deadViews.add(view)
+  deathListeners.get(view)?.(error)
+}
+
+/** Draws a state anew. A view this fails on is dead, unless it refused because it is still updating (internal; 0 is idle). */
+export function redraw(view: Pick<EditorView, 'setState'>, state: EditorState) {
+  redrawListeners.get(view)?.()
+  try {
+    view.setState(state)
+  } catch (error) {
+    if ((view as unknown as { updateState?: number }).updateState) throw error
+    viewDied(view, error)
+  }
+}
+
+/**
  * A view whose update throws, as when an extension fails while it draws, may
  * hold the new text while its DOM keeps the old, and would read the next
  * input from that DOM twice. It is redrawn at the state the update reached.
@@ -210,7 +243,7 @@ function update(
   try {
     view.update(transactions)
   } catch (error) {
-    view.setState(transactions.at(-1)?.state ?? view.state)
+    redraw(view, transactions.at(-1)?.state ?? view.state)
     throw error
   }
 }
@@ -388,9 +421,6 @@ export function failingParts<Part>(
   return failing
 }
 
-/** How far above a pane's kept top line its scroll position was, per session and view. */
-const keptMargins = new WeakMap<DocumentSession, Map<string, number>>()
-
 /** Accepted CM transactions enter the same source/history/recovery authority as visual edits. */
 export function createSourceSession(
   session: DocumentSession,
@@ -413,15 +443,29 @@ export function createSourceSession(
   // A hidden view keeps one composed echo until it is shown or read.
   let visible = true,
     pending: ChangeSet | null = null,
-    flush = () => {},
+    flush: (scroll?: boolean) => void = () => {},
     // A view that could not show an echo takes no edits until it is rebuilt.
     failed = false,
     // Only an attached view that is not read-only undoes or redoes, by any route.
-    attached: Pick<EditorView, 'state'> | null = null
+    attached: Pick<EditorView, 'state'> | null = null,
+    // While this view undoes or redoes its own edit, its echo shows the
+    // selection that restores.
+    stepping = false
   const writable = () => !failed && !!attached && !attached.state.readOnly
+  const step = (direction: 'undo' | 'redo') => {
+    if (!writable()) return false
+    // Each view keeps its own caret: a step restores the selection of the
+    // view that made its edit, and leaves another view's where it was.
+    stepping = session.historyView(direction) === viewId
+    try {
+      return !!session[direction]()
+    } finally {
+      stepping = false
+    }
+  }
   const history = {
-    undo: () => writable() && !!session.undo(),
-    redo: () => writable() && !!session.redo(),
+    undo: () => step('undo'),
+    redo: () => step('redo'),
   }
   const { undo, redo } = history
   /** Editor changes as this view commits them, in its opening's line breaks. */
@@ -592,7 +636,7 @@ export function createSourceSession(
       let echo = '',
         selection: EditorSelection | null = null,
         effects: readonly StateEffect<unknown>[] = []
-      flush = () => {
+      flush = (scroll = false) => {
         if (!pending || failed) return
         try {
           for (const effect of effects)
@@ -609,6 +653,7 @@ export function createSourceSession(
               sourceOperationEcho.of(echo),
               Transaction.addToHistory.of(false),
             ],
+            scrollIntoView: scroll,
             filter: false,
           })
           pending = selection = null
@@ -659,7 +704,9 @@ export function createSourceSession(
             : []
         snapshot = prepared.after
         group = ''
-        if (visible) flush()
+        // As the editors' own history does, a view that undid or redid its
+        // own edit scrolls to the selection; others keep their place.
+        if (visible) flush(stepping)
       })
       const unsubscribeStorage = session.subscribeStorage((change) => {
         if (snapshot !== change.before)
@@ -705,21 +752,16 @@ export function createSourceSession(
         // A closing or synchronizing session keeps no place.
         return
       }
-      let margins = keptMargins.get(session)
-      if (!margins) {
-        margins = new Map()
-        keptMargins.set(session, margins)
-      }
-      margins.set(viewId, margin)
+      session.keptMargins.set(viewId, margin)
     },
     /** The place this pane kept, in this replica's positions; taking it forgets it. */
     place() {
       const selection = session.selection(`${viewId}\0selection`),
         top = session.selection(`${viewId}\0top`),
-        margin = keptMargins.get(session)?.get(viewId)
+        margin = session.keptMargins.get(viewId)
       session.releaseView(`${viewId}\0selection`)
       session.releaseView(`${viewId}\0top`)
-      keptMargins.get(session)?.delete(viewId)
+      session.keptMargins.delete(viewId)
       if (margin === undefined) return null
       try {
         const kept = editorSelection(snapshot, selection),

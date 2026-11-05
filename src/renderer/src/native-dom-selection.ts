@@ -43,6 +43,17 @@ export function readDOMPosition(view: EditorView, node: Node, offset: number) {
   }
 }
 
+/**
+ * The position at a point inside a widget that maps its DOM positions, as
+ * a table cell's text does, where `posAtCoords` gives the widget's edges.
+ */
+export function mappedPositionAt(view: EditorView, x: number, y: number) {
+  const range = view.contentDOM.ownerDocument.caretRangeFromPoint(x, y)
+  const read =
+    range && readDOMPosition(view, range.startContainer, range.startOffset)
+  return read?.mapped ? read.at : null
+}
+
 type Points = Pick<
   Selection,
   'anchorNode' | 'anchorOffset' | 'focusNode' | 'focusOffset'
@@ -84,6 +95,10 @@ const samePoints = (a: Points | null, b: Points | null) =>
   a?.anchorOffset === b?.anchorOffset &&
   a?.focusNode === b?.focusNode &&
   a?.focusOffset === b?.focusOffset
+
+/** What a point's offset counts in its node. */
+const contentOf = (node: Node | null | undefined) =>
+  node?.nodeValue ?? node?.childNodes.length
 
 const writable = (state: EditorState) =>
   !state.readOnly && state.facet(EditorView.editable)
@@ -180,10 +195,20 @@ export const nativeDOMSelection = ViewPlugin.fromClass(
       // can also read that pick first, as a selection at the widget's edge.
       if (this.armed && !writable(update.state)) {
         const points = pointsOf(this.document.getSelection())
-        if (!update.selectionSet || !samePoints(points, this.taken))
+        if (!update.selectionSet || !samePoints(points, this.taken)) {
+          // A key the view does not take is in the DOM until a redraw takes
+          // it out: an offset read before that is not a place in the note.
+          const anchor = contentOf(points?.anchorNode)
+          const focus = contentOf(points?.focusNode)
           queueMicrotask(() => {
-            if (!this.destroyed) this.read(points)
+            if (
+              !this.destroyed &&
+              anchor === contentOf(points?.anchorNode) &&
+              focus === contentOf(points?.focusNode)
+            )
+              this.read(points)
           })
+        }
       }
       if (!this.armed || !writable(update.state) || writable(update.startState))
         return
@@ -236,3 +261,21 @@ export const shiftDoubleClick = EditorView.mouseSelectionStyle.of(
     }
   },
 )
+
+/**
+ * The editor that has the focus in `view`: the view itself, or the editor
+ * of one of its table cells, whose caret the view follows.
+ */
+export function focusedEditor(view: EditorView) {
+  if (view.hasFocus) return view
+  const active = view.contentDOM.ownerDocument.activeElement
+  // findFromDOM looks inside an element first, so only a cell's own
+  // content is asked, never the view's, which holds the cells'.
+  return active instanceof HTMLElement &&
+    active.classList.contains('cm-content') &&
+    active.closest('.hibi-lp-table') &&
+    view.contentDOM.contains(active) &&
+    active.ownerDocument.hasFocus()
+    ? EditorView.findFromDOM(active)
+    : null
+}

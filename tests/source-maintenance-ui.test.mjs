@@ -19,7 +19,7 @@ test('ENG23/J01: fragmented source remains editable and savable across quiet-tim
       name: 'Maintenance fixture',
       description: 'Storage lifecycle fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       capabilities: ['source'],
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],

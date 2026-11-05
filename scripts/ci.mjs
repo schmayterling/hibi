@@ -17,6 +17,10 @@ const git = (root, ...args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trimEnd()
 const paths = (text) => text.split('\0').filter(Boolean)
+// GitHub Actions runs every test under tests/ except tests/dev/, which holds
+// tests of developer tooling and which only check:dev selects.
+const hostedTest = /^tests\/(?!dev\/).*\.test\.mjs$/
+const devTest = /^tests\/dev\/.*\.test\.mjs$/
 // Without --no-renames, a moved file lists only its new path.
 const changedFiles = (root, ...revisions) =>
   paths(
@@ -31,7 +35,13 @@ const typedInput = /^tests\/fixtures\/local-diagnostics-off\//
 
 export function planChecks(
   root,
-  { changed, previousTests, force = false, outputAvailable = true },
+  {
+    changed,
+    previousTests,
+    force = false,
+    outputAvailable = true,
+    dev = false,
+  },
 ) {
   const untracked = paths(
     git(root, 'ls-files', '-z', '--others', '--exclude-standard'),
@@ -43,7 +53,7 @@ export function planChecks(
     ),
   )
   const tests = [...files]
-    .filter((file) => /^tests\/.*\.test\.mjs$/.test(file))
+    .filter((file) => hostedTest.test(file) || (dev && devTest.test(file)))
     .sort()
   const full =
     force ||
@@ -68,15 +78,19 @@ export function planChecks(
         /^docs\/.*\.(md|png|jpe?g|gif|webp|avif|svg)$/.test(file) &&
         !file.startsWith('docs/licenses/'),
     )
-  const dataChanged = [...changes].some(
+  // Nothing in tests/dev/ can reach what check:ci runs.
+  const reaching = [...changes].filter(
+    (file) => dev || !file.startsWith('tests/dev/'),
+  )
+  const dataChanged = reaching.some(
     (file) =>
       !file.startsWith('tests/') ||
       file.startsWith('tests/fixtures/') ||
       !/\.[cm]?[jt]sx?$/.test(file),
   )
   // Nothing imports a test file, so changing one can't reach another test.
-  const beyondTests = [...changes].some(
-    (file) => !/^tests\/[^/]*\.test\.mjs$/.test(file),
+  const beyondTests = reaching.some(
+    (file) => !hostedTest.test(file) && !devTest.test(file),
   )
   const modules = new Map()
   function dependencies(file, seen = new Set()) {
@@ -177,10 +191,11 @@ export function shardTests(selected, all, index, total) {
   return selected.filter((test) => assigned.has(test))
 }
 
-function runCI() {
+export function runCI({ dev = false } = {}) {
   const root = process.cwd()
   const directory = join(root, '.cache/ci')
-  const stateFile = join(directory, 'success.json')
+  // Each answers for different tests, so neither can stand in for the other.
+  const stateFile = join(directory, dev ? 'success-dev.json' : 'success.json')
   const shard = process.env.CI_SHARD ?? '0/1'
   const [index, total] = shard.split('/').map(Number)
   if (
@@ -241,6 +256,7 @@ function runCI() {
     changed,
     previousTests,
     force,
+    dev,
     // A pull request's diff picks its tests even when it has to build first.
     outputAvailable: outputAvailable || !!pullRequestBase,
   })

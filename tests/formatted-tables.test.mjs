@@ -961,6 +961,9 @@ const hugeParagraph = `${hugeParagraphs}\n\n${hugeLines}\n\nAfter.\n${hugeMore}`
 test('the reading place deep inside a huge line holds through second changes, shrinks and splits', {
   timeout: 300000,
 }, async (t) => {
+  // A clipped 800 px pane chooses different line gaps and misses the join.
+  await harness.setViewportSize({ width: 1500, height: 900 })
+  t.after(() => harness.setViewportSize({ width: 1000, height: 720 }))
   // Lines so long the view draws only the part near the screen: elsewhere
   // a position's coordinates are the edge of the space standing in for the
   // rest. The view starts the line's rows again after the part it draws, so
@@ -1070,11 +1073,27 @@ test('the reading place deep inside a huge line holds through second changes, sh
         const pane = document.querySelector('.rich-pane')
         const frame = () => new Promise(requestAnimationFrame)
         const at = doc.indexOf(target)
+        // A character's box reads what is drawn without running a pending
+        // measure, which can move the reveal ahead of the reader's task.
         const where = (pos = at) => {
-          const box = view.coordsAtPos(pos, 1)
-          return box
-            ? Math.round(box.top - pane.getBoundingClientRect().top)
-            : null
+          if (
+            !view.visibleRanges.some(
+              (range) => range.from <= pos && pos < range.to,
+            )
+          )
+            return null
+          for (const at of [pos, pos + 1]) {
+            const { node, offset } = view.domAtPos(at, 1)
+            if (node.nodeType !== Node.TEXT_NODE || offset >= node.length)
+              continue
+            const range = document.createRange()
+            range.setStart(node, offset)
+            range.setEnd(node, offset + 1)
+            return Math.round(
+              range.getClientRects()[0].top - pane.getBoundingClientRect().top,
+            )
+          }
+          return null
         }
         const still = async (pos = at) => {
           let last
@@ -1148,7 +1167,15 @@ test('the reading place deep inside a huge line holds through second changes, sh
             if (step.scroll) {
               // The reader's next chance, once the slice is over: a task, and
               // often the same frame.
-              await new Promise((done) => setTimeout(done))
+              await new Promise((done) => {
+                const channel = new MessageChannel()
+                channel.port1.onmessage = () => {
+                  channel.port1.close()
+                  channel.port2.close()
+                  done()
+                }
+                channel.port2.postMessage(0)
+              })
               pane.scrollTop += step.scroll
             }
             if (step.frame) await frame()
@@ -1268,6 +1295,12 @@ for (const [layout, doc, target] of [
     const widths = await harness.evaluate(async () => {
       const { rowAtTop, where, frame, panes } = window.reading
       for (let frames = 0; frames < 30; frames++) await frame()
+      // A command already inside the pane moves nothing and keeps the place.
+      const view = window.tables.view()
+      view.dispatch({
+        effects: view.constructor.scrollIntoView(rowAtTop(300)),
+      })
+      for (let frames = 0; frames < 3; frames++) await frame()
       const pos = rowAtTop()
       const start = where(pos)
       const offs = []

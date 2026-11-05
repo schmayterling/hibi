@@ -164,7 +164,13 @@ function textAt(view: EditorView, y: number) {
       : y
   const caret = ownerDocument.caretPositionFromPoint(x, below)
   const read = caret && readDOMPosition(view, caret.offsetNode, caret.offset)
-  return read && !read.mapped ? read.at : null
+  if (!read || read.mapped) return null
+  // A joined newline belongs to the row above when revealed. Hold the next
+  // character, whose own box is the text the reader sees here.
+  return (
+    read.at +
+    (view.state.doc.sliceString(read.at, read.at + 1) === '\n' ? 1 : 0)
+  )
 }
 
 /** Just inside where the content's lines start. */

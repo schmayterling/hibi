@@ -571,7 +571,13 @@ test('display blocks read on like fenced code, as in Obsidian', () => {
     ['- a\n  $$\n# $y$', [['inline', 'y']]],
     // A closing line holds no other dollar sign; a carriage return ends a line.
     ['$$\nx$ y$$\nz\n$$', [['block', 'x$ y$$\nz']]],
-    ['$$\r\nx\r\n$$\r\n\r\nafter $y$', [['block', 'x'], ['inline', 'y']]],
+    [
+      '$$\r\nx\r\n$$\r\n\r\nafter $y$',
+      [
+        ['block', 'x'],
+        ['inline', 'y'],
+      ],
+    ],
   ]) {
     assert.deepEqual(lezerMath(source), expected, JSON.stringify(source))
     assert.deepEqual(markedMath(source), expected, JSON.stringify(source))

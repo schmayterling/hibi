@@ -2172,6 +2172,119 @@ test('reference labels follow definition changes after an edit and ask only abou
   assert.equal(multiline.undrawn, 0, JSON.stringify(multiline))
 })
 
+test('code keeps sideways scrolling through a pending reparse and an offscreen edit', async () => {
+  const doc =
+    '# Wide code\n\n\x60\x60\x60js\n' +
+    `${'const horizontal = 42; '.repeat(50)}\n`.repeat(80) +
+    '\x60\x60\x60\n\n' +
+    'After the code.\n\n'.repeat(100)
+  const box = '.hibi-lp-codescroll'
+  const drawn = (text) =>
+    harness.waitForFunction(
+      ({ selector, text }) => {
+        const block = document.querySelector(selector)
+        return (
+          !window.livePreview.settling() &&
+          block?.textContent.includes(text) &&
+          block.scrollWidth > block.clientWidth
+        )
+      },
+      { selector: box, text },
+      { timeout: 8000 },
+    )
+  await harness.evaluate(async (doc) => {
+    document.querySelector('.rich-pane').scrollTop = 0
+    await window.livePreview.mount(
+      doc,
+      { width: 800, height: 600 },
+      { slice: 0 },
+    )
+  }, doc)
+  const ready = await harness.waitForFunction(
+    (selector) => {
+      const preview = window.livePreview
+      const initial = document.querySelector(selector)
+      // Check readiness and edit in one task: an idle redraw may replace the box.
+      if (
+        preview.settling() ||
+        !initial?.textContent.includes('horizontal') ||
+        initial.scrollWidth <= initial.clientWidth
+      )
+        return false
+      const view = preview.view()
+      // One bounded parse step leaves the changed block out of the new tree;
+      // its existing wrapper remains on screen until the reparse finishes.
+      view.dispatch({
+        changes: { from: view.state.doc.line(4).from, insert: '// pending\n' },
+      })
+      const block = document.querySelector(selector)
+      let parsed = false
+      for (
+        let node = preview.tree().resolve(view.posAtDOM(block), 1);
+        node;
+        node = node.parent
+      )
+        parsed ||= node.name === 'FencedCode' || node.name === 'CodeBlock'
+      block.scrollLeft = (block.scrollWidth - block.clientWidth) / 2
+      const requested = block.scrollLeft
+      block.scrollIntoView({ block: 'end' })
+      // Run the pending viewport draw before the queued native scroll event.
+      view.measure()
+      return { settling: preview.settling(), parsed, requested }
+    },
+    box,
+    { timeout: 8000 },
+  )
+  const pending = await ready.jsonValue()
+  assert.ok(pending.settling && !pending.parsed, JSON.stringify(pending))
+  assert.ok(pending.requested > 0, JSON.stringify(pending))
+  const retained = async (message) => {
+    const left = await harness
+      .locator(box)
+      .evaluate((block) => block.scrollLeft)
+    assert.ok(
+      Math.abs(left - pending.requested) <= 1,
+      `${message}: ${left}/${pending.requested}`,
+    )
+  }
+  await drawn('horizontal')
+  await retained('the pending reparse retains sideways scrolling')
+
+  // Visit another block so returning restores the first block's saved position.
+  await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    view.dispatch({
+      changes: {
+        from: view.state.doc.length,
+        insert: `\n\`\`\`js\n${'const second = "second block"; '.repeat(40)}\n\`\`\`\n`,
+      },
+    })
+    preview.scrollTo(view.state.doc.length)
+  })
+  await drawn('second block')
+  assert.equal(
+    await harness.locator(box).evaluate((block) => block.scrollLeft),
+    0,
+  )
+  await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    view.dispatch({
+      changes: [
+        { from: 0, insert: 'Before the code.\n\n' },
+        { from: view.state.doc.line(4).from, insert: '// first\n' },
+      ],
+    })
+    // Returning to a code caret would also ask to reveal its column.
+    preview.scrollTo(0)
+  })
+  await drawn('horizontal')
+  await retained(
+    'editing the first row offscreen retains the same block scroll',
+  )
+})
+
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {
   timeout: 180000,
 }, async () => {

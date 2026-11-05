@@ -45,6 +45,8 @@ function quoteInterrupt(tokenizer: Tokenizer) {
 type QuoteScan = {
   /** Line `index` of the quote's extent, or undefined past its end. */
   line(index: number): string | undefined
+  /** The first `count` lines exactly as read, joined. */
+  raw(count: number): string
   /** The source up to the end of the scanned lines, as the native rule matches. */
   extent(): string
   /** A scanned line contains a tab. */
@@ -139,6 +141,13 @@ function quoteScan(
       const end = index + 1 < starts.length ? starts[index + 1]! - 1 : at - 1
       return source.slice(from, end)
     },
+    raw(count) {
+      if (feed) return lines.slice(0, count).map(content).join('\n')
+      return source.slice(
+        0,
+        count < starts.length ? starts[count]! - 1 : at - 1,
+      )
+    },
     extent() {
       let count = feed ? lines.length : starts.length
       while (scan.line(count) !== undefined) count++
@@ -185,13 +194,28 @@ let nativeQuoteRules: Tokenizer['rules'] | undefined
  * quadratic for a reader called at every quote.
  */
 export function readNativeQuote(source: string) {
-  // The rule's extent stops at a blank line: when one comes within a few
-  // lines, Marked's own quote reads only those, at a fraction of the cost.
+  // The rule's extent stops at a blank line: bound the fast native read.
   const end = quoteWindow(source)
   if (end !== undefined) {
+    source = source.slice(0, end)
     const tokenizer = new Tokenizer()
     new marked.Lexer({ gfm: true, tokenizer })
-    return tokenizer.blockquote(source.slice(0, end))
+    let valid = true
+    tokenizer.blockquote = (input) => {
+      const quote = Tokenizer.prototype.blockquote.call(tokenizer, input)
+      // Check nested re-reads too: their corrupt raw can lose body lines even
+      // when the outer raw still matches. Retry with the shared reader.
+      if (quote && !input.startsWith(quote.raw) && quote.raw !== `${input}\n`)
+        valid = false
+      return quote
+    }
+    const quote = tokenizer.blockquote(source)
+    if (valid) {
+      // A lone invented newline at EOF needs no body re-read. Keep native
+      // text decisions and bound only the physical source it consumes.
+      if (quote && quote.raw.length > source.length) quote.raw = source
+      return quote
+    }
   }
   const tokenizer = new BlockTokenizer()
   new marked.Lexer({ gfm: true, tokenizer })
@@ -315,7 +339,6 @@ function readQuote(
   let frontAt = 0
   // Physical rows consumed; a pending front line still belongs to a taken row.
   const rows = () => from - (front.length - frontAt)
-  const raw: string[] = []
   const text: string[] = []
   const tokens: Token[] = []
   let chunkLines: string[] = []
@@ -426,7 +449,6 @@ function readQuote(
         .replace(this.rules.other.blockquoteSetextReplace, '\n    $1')
         .replace(this.rules.other.blockquoteSetextReplace2, '')
       chunkLines = []
-      raw.push(chunk)
       // Marked joins a body to the text only once the text is not empty.
       if (text.length === 1 && !text[0]) text.pop()
       text.push(body)
@@ -579,8 +601,7 @@ function readQuote(
           !RegExp.prototype[Symbol.replace].call(strip, rest, () => '')
         )
           used++
-        if (used > 0)
-          raw.push(Array.from({ length: used }, takeLine).join('\n'))
+        for (; used > 0; used--) takeLine()
         replaceQuoteTail(text, last.text.length, quote.text)
         break
       }
@@ -588,10 +609,6 @@ function readQuote(
         const input = quoteListInput(this, last.raw, lineAt)
         const list = this.list(input)!
         tokens[tokens.length - 1] = list
-        // Marked cuts the old list's length out of the raw, whose lines still
-        // hold their markers, and pastes the new list in: an enclosing re-read
-        // of that raw loses lines, or finds no quote. Keep the lines as read.
-        raw[raw.length - 1] += list.raw.slice(last.raw.length)
         replaceQuoteTail(text, last.raw.length, list.raw)
         let consumed = list.raw.length - last.raw.length - 1
         if (consumed < 0) {
@@ -620,13 +637,13 @@ function readQuote(
   }
   const token: Tokens.Blockquote = {
     type: 'blockquote',
-    raw: raw.join('\n'),
+    // The rows as read. Marked's own raw pastes each re-read list over them,
+    // and gains a newline there that makes the lexer skip following text.
+    raw: scan.raw(rows()),
     text: text.join('\n'),
     tokens,
   }
   if (adopted) state!.origins.set(token, origin!)
-  // Under its own column state the raw stays a slice of the source.
-  if (release) token.raw = source.slice(0, token.raw.length)
   if (handoff) handoff.length = token.raw.length
   return token
 }

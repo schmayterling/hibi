@@ -23,4 +23,4 @@ jobs:
         env:
           electron_config_cache: ${{ github.workspace }}/.cache/electron
       - run: npm run build:app
-      - run: node scripts/probe-windows-relaunch.mjs
+      - run: node --test --test-reporter=tap --test-concurrency=1 tests/recovery-journal.test.mjs

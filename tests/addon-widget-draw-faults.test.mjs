@@ -1045,6 +1045,7 @@ for (const presentation of ['formatted', 'source'])
       presentation,
       code: decorationsAddon(presentation),
     })
+    await context.page.setViewportSize({ width: 1000, height: 720 })
     await opened(context, source, presentation)
     const at = source.indexOf('line 300')
     const lineTop = () =>
@@ -1096,5 +1097,6 @@ for (const presentation of ['formatted', 'source'])
       { timeout: 5000 },
     )
     const after = await lineTop()
+    t.diagnostic(`line moved ${before} to ${after}`)
     assert.ok(Math.abs(after - before) < 60, `line moved ${before} to ${after}`)
   })

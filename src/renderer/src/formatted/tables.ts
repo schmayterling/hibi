@@ -3523,9 +3523,6 @@ export const contribution: FormattedContribution = {
         // Typing below a table that ends the note, and text without a key,
         // as from dictation or an emoji picker.
         beforeinput(event, view) {
-          // Foreign input must not arm CodeMirror's next DOM read.
-          if (event.target !== view.contentDOM && view.state.field(pickedTable))
-            return true
           if (event.inputType !== 'insertText' || !event.data) return false
           if (belowTable(event, view))
             view.dispatch(paragraphBelow(view), { userEvent: 'input.type' })
@@ -3533,7 +3530,9 @@ export const contribution: FormattedContribution = {
             // CodeMirror takes declined text as typed over its next DOM
             // read of the selection: that read must find no new pick.
             if (view.state.field(pickedTable)) recordPageSelection(view)
-            return false
+            // The page applies no untrusted text, which CodeMirror's next
+            // read must not apply either.
+            return !event.isTrusted
           }
           event.preventDefault()
           type(view, event.data)

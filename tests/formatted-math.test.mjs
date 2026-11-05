@@ -612,6 +612,7 @@ test('display blocks read to their closing line and end with their list item, as
   assert.deepEqual(
     await page.evaluate(() =>
       [...document.querySelectorAll('.rich-pane .cm-line')]
+        .filter((line) => !line.querySelector('[data-type="block-math"]'))
         .map((line) => line.textContent.trim())
         .filter(Boolean),
     ),

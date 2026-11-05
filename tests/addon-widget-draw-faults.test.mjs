@@ -486,7 +486,7 @@ test('a feature that dispatches while its decorations draw is the one named, and
   assert.deepEqual(
     await context.page.evaluate(() =>
       [...window.shownToasts].filter((toast) =>
-        /^(good-ext|slash-commands)/.test(toast),
+        /good-ext|slash-commands/.test(toast),
       ),
     ),
     [],
@@ -579,7 +579,16 @@ test('a note already holding what a decoration source throws on opens, names it 
   const source = `${withTable}Q held\n\n`
   const context = await open(t, { source, code: decorationsAddon('formatted') })
   await opened(context, source)
-  await named(context, 'bad-ext.bad: decorations boom')
+  // A healthy addon can be named too: what is read and announced says likely.
+  await context.page
+    .getByRole('alert')
+    .getByText(
+      'Likely addon behind this error: bad-ext.bad: decorations boom',
+      {
+        exact: true,
+      },
+    )
+    .waitFor({ timeout: 10000 })
   await editorReady(context)
   // The view it failed in reports nothing more: no edit failed here.
   assert.equal(await context.page.locator('.document-notice').count(), 0)

@@ -3489,6 +3489,9 @@
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
   ],
+  "1712ab765440": [
+    "src/renderer/src/SourceEditor.tsx"
+  ],
   "d7852cd0d245": [
     "src/addons/vim/Settings.tsx"
   ],

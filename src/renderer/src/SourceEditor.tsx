@@ -486,10 +486,16 @@ const featureExtensions = (
 /** CodeMirror internal: lays out and draws what the viewport now shows. */
 type MeasuredView = { measure: (flush?: boolean) => void }
 
-/** Names a failing feature, which then leaves every editor. */
+/**
+ * Names a failing feature, which then leaves every editor. A healthy one can be
+ * named, as when a failure depends on focus: the user reads that it is likely.
+ */
 const reportFailure = ({ feature }: InstalledFeature, error: unknown) =>
   feature.fail?.(
-    new Error(`${feature.id}: ${errorMessage(error)}`, { cause: error }),
+    new Error(
+      `Likely addon behind this error: ${feature.id}: ${errorMessage(error)}`,
+      { cause: error },
+    ),
   )
 
 /**

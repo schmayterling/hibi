@@ -163,6 +163,87 @@ test('hibi garden tab, installs, and addon links', {
     },
   )
 
+  await t.test(
+    'filtering keeps controls aligned with the sidebar',
+    async () => {
+      const size = await app.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].getContentSize(),
+      )
+      // Overlay scrollbars (macOS with a trackpad) take no space, so give
+      // the page the classic scrollbar Windows, Linux and mouse users see.
+      await page.evaluate(() => {
+        const style = document.createElement('style')
+        style.id = 'classic-scrollbar'
+        style.textContent =
+          '.settings-content { scrollbar-width: auto; scrollbar-color: auto } .settings-content::-webkit-scrollbar { width: 10px }'
+        document.head.append(style)
+      })
+      const filter = addons.getByRole('searchbox', { name: /filter addons/i })
+      const geometry = () =>
+        page.evaluate(() => {
+          const content = document.querySelector('.settings-content')
+          const left = content.getBoundingClientRect().left
+          const controls = [
+            ...document.querySelectorAll(
+              '#settings-addons h1, #settings-addons [role="tablist"], #settings-addons input[type="search"]',
+            ),
+          ].map((element) => {
+            const rect = element.getBoundingClientRect()
+            return { gap: rect.left - left, width: rect.width }
+          })
+          return {
+            scrolls: content.scrollHeight > content.clientHeight,
+            controls,
+          }
+        })
+      try {
+        // Wide windows move the centered column, narrow ones resize it.
+        for (const width of [1440, 800]) {
+          await app.evaluate(({ BrowserWindow }, width) => {
+            BrowserWindow.getAllWindows()[0].setContentSize(width, 1000)
+          }, width)
+          await page.waitForFunction(
+            (width) => window.innerWidth === width,
+            width,
+          )
+          const all = await geometry()
+          assert.equal(all.scrolls, true, 'the full list needs a scrollbar')
+          assert.ok(
+            await page.evaluate(() => {
+              const content = document.querySelector('.settings-content')
+              return content.offsetWidth > content.clientWidth
+            }),
+            'the scrollbar takes space',
+          )
+          await filter.fill('no-matching-addon')
+          await addons
+            .getByText('No matching addons', { exact: true })
+            .waitFor()
+          const filtered = await geometry()
+          assert.equal(
+            filtered.scrolls,
+            false,
+            'the empty results fit without scrolling',
+          )
+          assert.deepEqual(filtered.controls, all.controls, `at ${width}px`)
+          await filter.fill('')
+          await addons
+            .locator('[data-setting-id="garden-garden-hello"]')
+            .waitFor()
+          assert.deepEqual(await geometry(), all, `at ${width}px`)
+        }
+      } finally {
+        await filter.fill('')
+        await page.evaluate(() =>
+          document.getElementById('classic-scrollbar').remove(),
+        )
+        await app.evaluate(({ BrowserWindow }, [width, height]) => {
+          BrowserWindow.getAllWindows()[0].setContentSize(width, height)
+        }, size)
+      }
+    },
+  )
+
   await t.test('rows show metadata and the right action', async () => {
     const row = (id) => addons.locator(`[data-setting-id="garden-${id}"]`)
     assert.match(await row('garden-hello').innerText(), /MIT/)

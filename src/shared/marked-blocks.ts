@@ -253,49 +253,6 @@ function replaceQuoteTail(parts: string[], count: number, value: string) {
   parts.push(value)
 }
 
-// Marked splices a re-read list into a quote's raw by the list's length in its
-// own body text. A tab widened after a marker adds spaces at the start of its
-// line: measure the splice without them, or it cuts into the raw's markers.
-function plainSplice(
-  text: string[],
-  plain: string[],
-  length: number,
-  value: string,
-) {
-  let parts = 1
-  for (let size = text.at(-1)!.length; size < length && parts < text.length; )
-    size += text.at(-++parts)!.length + 1
-  const wide = text.slice(-parts).join('\n')
-  const own = plain.slice(-parts).join('\n')
-  if (wide === own) return { length, value }
-  // Lines match one to one; a widened line only has more leading spaces.
-  const wideLines = wide.split('\n')
-  const ownLines = own.split('\n')
-  const added = wideLines.map(
-    (line, index) => line.length - ownLines[index]!.length,
-  )
-  let line = 0,
-    from = 0,
-    column = Math.max(0, wide.length - length)
-  while (column > wideLines[line]!.length) {
-    column -= wideLines[line]!.length + 1
-    from += ownLines[line++]!.length + 1
-  }
-  from += Math.max(0, column - added[line]!)
-  // The re-read list's raw starts with the old list's lines: they lose the
-  // same spaces. The lines it read after them keep theirs.
-  const lines = value.split('\n')
-  for (let index = 0; index < lines.length; index++) {
-    if (line + index >= wideLines.length) break
-    const spaces = index
-      ? added[line + index]!
-      : Math.max(0, added[line]! - column)
-    if (lines[index]!.startsWith(' '.repeat(spaces)))
-      lines[index] = lines[index]!.slice(spaces)
-  }
-  return { length: own.length - from, value: lines.join('\n') }
-}
-
 // The lines of a nested re-read's input that Marked counts as read: it keeps
 // the input after the new quote's raw, less one newline, by length, so a raw
 // that a list re-read changed takes other lines than the quote itself read.
@@ -360,8 +317,6 @@ function readQuote(
   const rows = () => from - (front.length - frontAt)
   const raw: string[] = []
   const text: string[] = []
-  // The bodies as Marked's own strip leaves them, once a tab is widened.
-  let plain: string[] | undefined
   const tokens: Token[] = []
   let chunkLines: string[] = []
   // The chunk that produced the last token, for its row if tab state arrives later.
@@ -467,27 +422,14 @@ function readQuote(
         chunkLines.push(takeLine())
       }
       const chunk = chunkLines.join('\n')
-      const setext = chunk.replace(
-        this.rules.other.blockquoteSetextReplace,
-        '\n    $1',
-      )
-      const body = setext.replace(this.rules.other.blockquoteSetextReplace2, '')
+      const body = chunk
+        .replace(this.rules.other.blockquoteSetextReplace, '\n    $1')
+        .replace(this.rules.other.blockquoteSetextReplace2, '')
       chunkLines = []
       raw.push(chunk)
       // Marked joins a body to the text only once the text is not empty.
       if (text.length === 1 && !text[0]) text.pop()
       text.push(body)
-      if (scope?.columns) {
-        const own = RegExp.prototype[Symbol.replace].call(
-          this.rules.other.blockquoteSetextReplace2,
-          setext,
-          () => '',
-        )
-        if (plain || own !== body) {
-          plain ??= text.slice(0, -1)
-          plain.push(own)
-        }
-      }
       const readers = {
         code: this.code,
         def: this.def,
@@ -646,11 +588,10 @@ function readQuote(
         const input = quoteListInput(this, last.raw, lineAt)
         const list = this.list(input)!
         tokens[tokens.length - 1] = list
-        const own = plain
-          ? plainSplice(text, plain, last.raw.length, list.raw)
-          : { length: last.raw.length, value: list.raw }
-        replaceQuoteTail(raw, own.length, own.value)
-        if (plain) replaceQuoteTail(plain, own.length, own.value)
+        // Marked cuts the old list's length out of the raw, whose lines still
+        // hold their markers, and pastes the new list in: an enclosing re-read
+        // of that raw loses lines, or finds no quote. Keep the lines as read.
+        raw[raw.length - 1] += list.raw.slice(last.raw.length)
         replaceQuoteTail(text, last.raw.length, list.raw)
         let consumed = list.raw.length - last.raw.length - 1
         if (consumed < 0) {

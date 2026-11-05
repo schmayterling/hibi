@@ -64,6 +64,32 @@ test('a list re-read in a tabbed nested quote keeps the quote markers', () => {
     }
 })
 
+test('a list re-read in a nested quote keeps every line', () => {
+  // Marked cuts the old list's length out of the quote's raw, whose lines hold
+  // markers the list's text does not, and pastes the new list over the rest.
+  // The enclosing quote's re-read of that raw lost lines, or read a list number
+  // from what the cut left.
+  for (const sample of [
+    '> > - one\n> > - two\n> three\nfour',
+    '>\t>\t- one\n>\t>\t- two\n>\tthree\nfour',
+    '>\t>\t1. one\n>\t>\t   two\n>\t>\t1. three\n>\t>\t   four\n>\tfive\nsix',
+    '>>>\t-\tone\n>\t>  >\t  - two\n> > \t\tthree\n> four',
+    '>>[!E]\n>>>one\n>  >\t1. two\n>>three\nfour',
+    '>\t- one\ntwo\n  >\t\nthree',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      const html = new Marked(blockMarkdown, alertMarkdown).parse(source)
+      const words = html.replace(/<[^>]*>/g, ' ').match(/[a-z]{3,}/g)
+      const expected = sample.match(/[a-z]{3,}/g)
+      assert.deepEqual(words, expected, source)
+    }
+  const html = new Marked(blockMarkdown, alertMarkdown).parse(
+    '>>[!E]\n>>>]\n>  >\t1. m\n>>=\n"',
+  )
+  assert.match(html, /<ol>/)
+})
+
 test('reference definitions take tabs between their parts', () => {
   // CommonMark separates a definition's label, destination and title with
   // spaces or tabs; Marked's rule took spaces only.

@@ -280,6 +280,43 @@ const scrollInput = ['keydown', 'pointerdown', 'touchstart', 'wheel'] as const
  * when heights change, CodeMirror moves the view to hold the line it anchored
  * before them. Input or any other scroll ends this.
  */
+let sourceTraceSequence = 0
+const sourceTraceViews = new WeakMap<EditorView, number>()
+function traceSourceView(
+  phase: string,
+  view: EditorView | null,
+  detail: unknown,
+) {
+  if (view && !sourceTraceViews.has(view))
+    sourceTraceViews.set(view, ++sourceTraceSequence)
+  console.debug(
+    'hibi-source-trace',
+    JSON.stringify({
+      at: Date.now(),
+      phase,
+      view: view && {
+        id: sourceTraceViews.get(view),
+        kind: view.dom.closest('.source-pane') ? 'source' : 'formatted',
+        pane: view.dom.closest('.editor-panes')?.className,
+        active:
+          view.dom.ownerDocument.activeElement?.getAttribute('aria-label'),
+        connected: view.dom.isConnected,
+        editable: view.contentDOM.contentEditable,
+        length: view.state.doc.length,
+        inView: view.inView,
+        scroll: view.scrollDOM.scrollTop,
+        richScroll: view.dom.closest<HTMLElement>('.rich-pane')?.scrollTop,
+        viewport: [view.viewport.from, view.viewport.to],
+        selection: [
+          view.state.selection.main.anchor,
+          view.state.selection.main.head,
+        ],
+      },
+      detail,
+    }),
+  )
+}
+
 function keptPlaceScroll(top: number, margin: number) {
   let state: 'waiting' | 'aligning' | 'holding' | 'done' = 'waiting',
     moved = false,
@@ -291,20 +328,36 @@ function keptPlaceScroll(top: number, margin: number) {
     settling: ReturnType<typeof setTimeout> | null = null,
     // The first wait sets when waiting ends, whatever moves after it.
     deadline: number | null = null
-  const stop = () => {
+  const trace = (phase: string, view?: EditorView, detail?: unknown) =>
+    traceSourceView(phase, view ?? null, {
+      top,
+      margin,
+      state,
+      scrolling,
+      moved,
+      scrolled,
+      held,
+      detail,
+    })
+  trace('created')
+  const stop = (event?: Event) => {
+    trace('stop', undefined, event?.type)
     state = 'done'
     if (settling) clearTimeout(settling)
     settling = null
   }
   const align = {
     // Only a line CodeMirror has laid out has a measured position.
-    read: (view: EditorView) =>
-      top < view.viewport.from || top > view.viewport.to
+    read: (view: EditorView) => {
+      trace('read', view)
+      return top < view.viewport.from || top > view.viewport.to
         ? null
         : view.documentTop +
-          view.lineBlockAt(top).top -
-          view.scrollDOM.getBoundingClientRect().top,
+            view.lineBlockAt(top).top -
+            view.scrollDOM.getBoundingClientRect().top
+    },
     write: (offset: number | null, view: EditorView) => {
+      trace('write', view, offset)
       if (state !== 'aligning') return
       if (offset === null) {
         // Scroll there once, which lays it out; the measure after aligns it.
@@ -334,6 +387,7 @@ function keptPlaceScroll(top: number, margin: number) {
     },
   }
   const begin = (view: EditorView) => {
+    trace('begin', view)
     if (state !== 'waiting' || scrolling || settling) return
     // Its lines wrap again when the pane reaches its last width. The wait
     // ends with that motion, or at the latest when it was due to end, and
@@ -361,6 +415,10 @@ function keptPlaceScroll(top: number, margin: number) {
   }
   const extension: Extension = [
     EditorView.scrollHandler.of((view, range, options) => {
+      trace('scroll-target', view, {
+        head: range.head,
+        margin: options.yMargin,
+      })
       if (range.head !== top || options.yMargin !== margin) stop()
       else {
         scrolling = false
@@ -381,6 +439,7 @@ function keptPlaceScroll(top: number, margin: number) {
       },
     }),
     ViewPlugin.define((view) => {
+      trace('attached', view)
       const options = { capture: true, passive: true }
       for (const type of scrollInput)
         view.scrollDOM.addEventListener(type, stop, options)
@@ -391,6 +450,13 @@ function keptPlaceScroll(top: number, margin: number) {
             view.scrollDOM.removeEventListener(type, stop, options)
         },
         update(update) {
+          trace('update', update.view, {
+            doc: update.docChanged,
+            height: update.heightChanged,
+            geometry: update.geometryChanged,
+            viewport: update.viewportChanged,
+            transactions: update.transactions.length,
+          })
           if (update.docChanged) top = update.changes.mapPos(top, 1)
           if (update.heightChanged || update.geometryChanged) moved = true
           // A measure on screen; its own height changes still move the view.
@@ -1261,6 +1327,12 @@ export function SourceEditor({
     }
     // A note that shrank since its view left still gets the place it kept.
     const place = bridge.place()
+    traceSourceView('place', null, {
+      place,
+      length: preparedText.text.length,
+      version: bridge.snapshot().version,
+      formatted,
+    })
     const selection = place?.selection ?? bridge.selection()
     const restore = place && keptPlaceScroll(place.top, place.margin)
     // Until it gets there, a restored view's place is the one it kept.
@@ -3075,6 +3147,7 @@ export function SourceEditor({
       if (!keepingPlace.current || !editor || isViewDead(editor)) return
       const { top, margin } = shownPlace.current ?? placeOf(editor)
       bridge.keepPlace(editor, top, margin)
+      traceSourceView('kept', editor, { top, margin, shown: shown.current })
     },
     [bridge],
   )
@@ -3285,6 +3358,11 @@ export function SourceEditor({
         : inputReady && (!waitForFont || fontReadyBridge === bridge)
           ? 'ready'
           : 'loading'
+    traceSourceView('ready', view.current, {
+      status,
+      inputReady,
+      fontReady: fontReadyBridge === bridge,
+    })
     ready.current(status)
     if (status === 'ready' && !disabled) {
       const restore = restoreFocus.current

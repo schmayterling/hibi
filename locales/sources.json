@@ -3540,6 +3540,15 @@
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
   ],
+  "adb21012075d": [
+    "src/renderer/src/likely-addons.ts"
+  ],
+  "58dcc05f3a12": [
+    "src/renderer/src/likely-addons.ts"
+  ],
+  "eeb809788685": [
+    "src/renderer/src/likely-addons.ts"
+  ],
   "d7852cd0d245": [
     "src/addons/vim/Settings.tsx"
   ],

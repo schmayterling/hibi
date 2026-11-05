@@ -12,6 +12,20 @@ const execute = promisify(execFile)
 
 const pageErrors = []
 const expectedPageErrors = new Set()
+/**
+ * Autosave is on unless turned off. A test that holds unsaved text for longer
+ * than its delay and isn't about autosave turns it off, as a person would.
+ */
+export async function autosaveOff(app, page) {
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'hibi:autosave',
+      JSON.stringify({ enabled: false, delay: 2000 }),
+    ),
+  )
+  await page.reload()
+  await waitForFormattedEditor(app, page)
+}
 /** Lets this test's renderer throw errors matching `pattern`, and fails it if none is thrown. */
 export function expectPageError(t, pattern) {
   const entry = { pattern, seen: false }

@@ -14,6 +14,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { MEDIA_CHANNELS } from '../src/shared/media.ts'
 import {
+  autosaveOff,
   electron,
   waitForDocumentEditor,
   waitForFormattedEditor,
@@ -640,6 +641,7 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
   })
   const page = await app.firstWindow()
   await waitForFormattedEditor(app, page)
+  await autosaveOff(app, page)
   page.setDefaultTimeout(6500)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await waitForDocumentEditor(app, page)
@@ -1230,6 +1232,7 @@ for (const failure of [false, true]) {
     })
     const page = await app.firstWindow()
     await waitForFormattedEditor(app, page)
+    await autosaveOff(app, page)
     page.setDefaultTimeout(6500)
     await waitForDocumentEditor(app, page)
     const read = () => page.evaluate(() => window.hibi.getDocument())
@@ -1370,6 +1373,7 @@ test('quit and workspace deletion keep tabs saved before a later prompt cancels'
   })
   const page = await app.firstWindow()
   await waitForFormattedEditor(app, page)
+  await autosaveOff(app, page)
   page.setDefaultTimeout(6500)
   await waitForDocumentEditor(app, page)
   const read = () => page.evaluate(() => window.hibi.getDocument())

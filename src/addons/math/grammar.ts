@@ -81,7 +81,8 @@ export function blockMath(source: string) {
   const [line, run = '', rest = ''] = open
   const size = run.length
   const lines = [rest]
-  let raw = source
+  let raw = source,
+    closed = false
   for (let at = line.length; at < source.length; ) {
     let end = source.indexOf('\n', at)
     if (end < 0) end = source.length
@@ -89,6 +90,7 @@ export function blockMath(source: string) {
     lines.push(source.slice(at, close < 0 ? end : close))
     if (close >= 0) {
       raw = source.slice(0, end + 1)
+      closed = true
       break
     }
     at = end + 1
@@ -96,7 +98,7 @@ export function blockMath(source: string) {
   const body = lines.join('\n')
   if (body.length > formulaLimit)
     return { type: 'blockMathText', raw, tokens: [literalPair(raw.trimEnd())] }
-  return { type: 'blockMath', raw, latex: body.trim() }
+  return { type: 'blockMath', raw, latex: body.trim(), closed }
 }
 export const mathTokens: MarkedExtension = {
   extensions: [

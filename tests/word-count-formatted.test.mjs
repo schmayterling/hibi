@@ -144,6 +144,28 @@ test('mid-line display math is excluded from counts while literal dollars stay',
     )
 })
 
+test('with display math off, an unclosed `$$` line holds no text', () => {
+  // The formatted view reads no block there, so what follows stays Markdown.
+  const syntax = {
+    ...defaultNoteSyntax,
+    math: true,
+    disabledFeatures: ['math.block'],
+  }
+  const rest = '**bold** and [label](http://a.example)\n\n# heading\n'
+  assert.equal(richText(`$$\n${rest}`, syntax), '\n$$ bold and label\nheading')
+  assert.equal(
+    richText(`$$ - moderate\n${rest}`, syntax),
+    '\n$$ - moderate bold and label\nheading',
+  )
+  // A closed block stays as written, as the recorded corpus reads it.
+  assert.equal(richText('$$\n**x**\n$$\n', syntax), '\n$$\n**x**\n$$')
+  // With it on, the same lines are a formula, which holds no words.
+  assert.equal(
+    richText(`$$\n${rest}`, { ...syntax, disabledFeatures: [] }),
+    '\n',
+  )
+})
+
 test('a `$$` line ending a task item stays text, as in Obsidian', () => {
   // With no line after it in the item, it opens no display math.
   const syntax = { ...defaultNoteSyntax, math: true }

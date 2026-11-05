@@ -77,13 +77,9 @@ const bodyOf = (source, syntax) =>
  */
 const obsidianBlockStates = new Set(
   (
-    '6:13 6:14 6:15 6:16 6:17 6:18 6:19 6:20 6:21 6:22 6:23 6:24 16:2 16:3 ' +
-    '16:4 16:5 16:6 16:8 16:9 16:10 26:7 26:8 26:9 26:10 26:11 26:12 26:13 ' +
-    '13:1 13:2 13:3 13:4 13:5 13:6 13:7 13:8 13:9 13:10 13:11 13:12 13:13 ' +
-    '13:14 13:15 13:16 13:17 13:18 13:19 13:20 13:21 13:22 13:23 13:24 23:20 ' +
-    '23:21 23:22 23:23 23:24 33:4 33:6 33:21 33:22 33:23 33:24 58:1 53:1 53:2 ' +
-    '53:3 53:4 53:5 53:6 53:7 53:8 53:9 53:10 53:11 53:13 53:14 53:15 53:16 ' +
-    '53:17 53:18 53:19 53:20 53:21'
+    '6:13 6:14 6:15 6:16 6:17 6:18 6:19 6:20 6:21 6:22 6:23 6:24 16:2 ' +
+    '16:3 16:4 16:5 16:6 16:8 16:9 16:10 26:7 26:8 26:9 26:10 26:11 ' +
+    '26:12 26:13'
   ).split(' '),
 )
 
@@ -399,6 +395,21 @@ test('schema corpus: formatted counts match the rich parser and schema in every 
   )
   const quirks = new Map(
     richQuirks.flatMap((quirk) => quirk.states.map((state) => [state, quirk])),
+  )
+  // The list only holds what the new rule changed, with display math on: a
+  // state that matches its recorded text again, or has it off, is compared.
+  assert.deepEqual(
+    results
+      .filter(
+        (result) =>
+          obsidianBlockStates.has(`${result.doc}:${result.step}`) &&
+          (!differs(result.formatted, result.rich) ||
+            corpus.configs[result.config].disabledFeatures.includes(
+              'math.block',
+            )),
+      )
+      .map(summary),
+    [],
   )
   assert.deepEqual(
     results

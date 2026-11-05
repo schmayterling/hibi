@@ -10,13 +10,14 @@ const fixture = readFileSync(
   'utf8',
 )
 
-function outline(source) {
+function outline(source, disabled = []) {
   const store = new SourceStore(source, { tabId: 'outline-math', revision: 0 })
   const model = new SourceOutlineModel(store.snapshot(), {
     gfm: true,
     frontmatter: true,
     alerts: true,
     math: true,
+    disabled,
     renderLabel: createOutlineLabelRenderer(['markdown.github', 'math.latex']),
   })
   try {
@@ -30,6 +31,15 @@ function outline(source) {
     model.dispose()
   }
 }
+
+test('an unclosed `$$` line holds the headings after it only while display math is on', () => {
+  const labels = (disabled) =>
+    outline('# top\n\n$$\nwords\n\n# after\n', disabled).headings.map(
+      ({ label }) => label,
+    )
+  assert.deepEqual(labels(), ['top'])
+  assert.deepEqual(labels(['math.block']), ['top', 'after'])
+})
 
 test('source outline reads synthetic course math in paragraphs, headings and containers', () => {
   for (const source of [fixture, fixture.replaceAll('\n', '\r\n')]) {

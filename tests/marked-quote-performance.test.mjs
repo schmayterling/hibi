@@ -56,6 +56,13 @@ const nested = '> > b\nc\n>\n> d\n'
 // extent widened at its tabs, here with tabs after and away from the marker.
 const tabbed = '> > # h\t\n> lazy\n'
 const widened = '> >\t# h\n> lazy\n'
+// Native quote bodies splice child text; compare grammar independently.
+const quoteGrammar = (tokens) =>
+  JSON.parse(
+    JSON.stringify(tokens, function (key, value) {
+      return key === 'text' && this.type === 'blockquote' ? undefined : value
+    }),
+  )
 
 test('quotes that stop early leave the rest of the extent unscanned', () => {
   // Every quote line check, in any scan, uses Marked's shared quote start rule.
@@ -201,9 +208,15 @@ test('a nested re-read keeps the last quote lines where Marked puts them', () =>
   ])
     for (const eol of ['\n', '\r\n']) {
       const source = sample.replaceAll('\n', eol)
+      const tokens = new Marked(blockMarkdown).lexer(source)
+      assert.equal(
+        tokens[0].text,
+        tokens[0].raw.replace(/\n$/, '').replace(/^ {0,3}>[ \t]?/gm, ''),
+        source,
+      )
       assert.deepEqual(
-        new Marked(blockMarkdown).lexer(source),
-        new Marked().lexer(source),
+        quoteGrammar(tokens),
+        quoteGrammar(new Marked().lexer(source)),
         source,
       )
     }
@@ -248,9 +261,8 @@ test('nested re-reads keep their words and physical source boundaries', () => {
     }
 })
 
-test('a quote joins a body to an empty text like Marked', () => {
-  // A nested quote whose first body strips to nothing, here a marker and a
-  // one-column tab, takes the lazy line after it as its whole text.
+test('empty quote bodies keep source newlines and native lazy boundaries', () => {
+  // An empty first body still owns its newline before a lazy continuation.
   for (const sample of [
     '>p\n> >\t\ny',
     '> >\t\ny',
@@ -258,9 +270,15 @@ test('a quote joins a body to an empty text like Marked', () => {
   ])
     for (const eol of ['\n', '\r\n']) {
       const source = sample.replaceAll('\n', eol)
+      const tokens = new Marked(blockMarkdown).lexer(source)
+      assert.equal(
+        tokens[0].text,
+        tokens[0].raw.replace(/\n$/, '').replace(/^ {0,3}>[ \t]?/gm, ''),
+        source,
+      )
       assert.deepEqual(
-        new Marked(blockMarkdown).lexer(source),
-        new Marked().lexer(source),
+        quoteGrammar(tokens),
+        quoteGrammar(new Marked().lexer(source)),
         source,
       )
     }

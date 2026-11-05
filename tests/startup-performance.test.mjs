@@ -170,7 +170,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Reading display blocks as Obsidian reads fenced math, including their
   // closed state, preferences and shared list bounds, adds 894 (#731).
   // Default-on autosave and spacing attempts by their last duration adds
-  // 175 (autosave default).
+  // 175 (#883).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=

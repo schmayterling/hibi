@@ -27,7 +27,11 @@ import { defaultNoteSyntax, noteParser } from '../src/shared/note-syntax.ts'
 function boundaries(tokens) {
   return tokens.map((token) => {
     const type = token.type === 'typstBlock' ? 'code' : token.type
-    const result = { type, raw: token.raw }
+    // Marked pastes a re-read list over a quote's raw: only its length matches.
+    const result = {
+      type,
+      raw: type === 'blockquote' ? token.raw.length : token.raw,
+    }
     if (type === 'heading')
       Object.assign(result, { depth: token.depth, text: token.text })
     if (type === 'code') result.text = token.text ?? token.source

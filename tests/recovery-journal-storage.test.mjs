@@ -659,6 +659,35 @@ test('turned off, nothing is written and every copy goes', async (t) => {
   assert.deepEqual((await next.waitingRecovery()).copies, [])
 })
 
+test('a failed replacement when restoring keeps the waiting copy at the size limit', async (t) => {
+  const root = await profile(t)
+  await fs.writeFile(
+    join(root, 'recovery-settings.json'),
+    JSON.stringify({
+      keep: true,
+      days: 30,
+      megabytes: 128,
+      openAtLaunch: false,
+    }),
+  )
+  const text = 'x'.repeat(70 * mib)
+  await leftBehind(root, text)
+  const io = {
+    ...fs,
+    open: async (...args) => {
+      if (args[1] === 'wx')
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+      return fs.open(...args)
+    },
+  }
+  const journal = await main(root, { io, notes: [note(5, text)] })
+  await journal.waitingRecovery()
+  const before = await files(root)
+  await assert.rejects(journal.recoveryOpened(tab(1), tab(5)), /disk full/)
+  assert.deepEqual(await files(root), before)
+  assert.equal((await journal.waitingRecovery()).copies.length, 1)
+})
+
 test('an open tab opened from a copy replaces it only once it has its own', async (t) => {
   const root = await profile(t)
   await leftBehind(root, 'back again')

@@ -201,6 +201,7 @@ test('typing nonstop loses about the last second to a kill', {
   timeout: 180000,
 }, async (t) => {
   const losses = []
+  const lostWords = []
   for (let round = 0; round < 3; round++) {
     const { launch } = await note(t, 'start ')
     const first = await launch()
@@ -233,8 +234,11 @@ test('typing nonstop loses about the last second to a kill', {
     for (let i = 0; i <= last; i += 50)
       assert.ok(markdown.includes(`w${i} `), `word ${i} is there`)
     losses.push(killedAt - typed[last])
+    lostWords.push(typed.length - last - 1)
   }
-  t.diagnostic(`text lost to a kill, ms: ${losses.map(Math.round).join(', ')}`)
+  t.diagnostic(
+    `text lost to a kill, ms: ${losses.map(Math.round).join(', ')}; whole words: ${lostWords.join(', ')}`,
+  )
   // One write interval plus one write, with room for a loaded machine.
   assert.ok(Math.max(...losses) < 3000, losses.join(', '))
 })

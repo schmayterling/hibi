@@ -166,7 +166,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // adds 958 (#866).
   // Keeping one likely-addon list across different errors adds 924 (#872).
   // Asking after launch whether a crash left unsaved text, and opening what it
-  // left, adds 528 (#873).
+  // left, adds 528 (#878).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=

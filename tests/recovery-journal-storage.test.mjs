@@ -347,6 +347,42 @@ test('saving, discarding or closing removes a copy at once, after any write in p
   assert.deepEqual((await next.waitingRecovery()).copies, [])
 })
 
+test('discarding during the first write removes its copy after the write finishes', async (t) => {
+  const root = await profile(t)
+  let started, release
+  const writing = new Promise((resolve) => {
+    started = resolve
+  })
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  t.after(() => release())
+  const io = {
+    ...fs,
+    open: async (...args) => {
+      const handle = await fs.open(...args)
+      if (args[1] === 'wx') {
+        const sync = handle.sync.bind(handle)
+        handle.sync = async () => {
+          started()
+          await held
+          await sync()
+        }
+      }
+      return handle
+    },
+  }
+  const notes = [note(1, 'discarded before its first copy finished')]
+  const journal = await main(root, { io, notes })
+  journal.recoveryChanged()
+  await writing
+  notes.length = 0
+  journal.recoverySettled()
+  release()
+  await journal.recoveryWritten()
+  assert.deepEqual(await files(root), [])
+})
+
 test('a copy whose text reached the note is not offered', async (t) => {
   const root = await profile(t)
   const path = join(root, 'note.md')

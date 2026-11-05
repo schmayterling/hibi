@@ -544,7 +544,7 @@ export function recoveryChanged() {
 /** A file operation ended: anything it saved or closed loses its copy now, not at the next write. */
 export function recoverySettled() {
   if (!unsavedNotes) return
-  if (written.size || leftover.size)
+  if (written.size || leftover.size || running.size)
     void tracked(serial(removeSettled)).catch((error: unknown) =>
       console.error('Could not remove a recovery copy:', error),
     )

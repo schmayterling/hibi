@@ -2750,6 +2750,64 @@ test('a <br> in a cell is one line break, drawn alike in the cell and its editor
   assert.deepEqual(await breaks(), { editing: true, breaks: 1 })
 })
 
+test('cell formatting survives a late table snapshot and refreshes when it arrives', async (t) => {
+  const doc = '| a | b |\n| --- | --- |\n| one<br>two | c |\n'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td', { hasText: 'two' }).click()
+  await harness.keyboard.press('End')
+  await harness.evaluate(() => {
+    const table = document.querySelector('.hibi-lp-table')
+    const prototype = Object.getPrototypeOf(table.cmTile.widget)
+    const update = prototype.updateDOM
+    let pending
+    window.holdCellSnapshot = () => {
+      pending = null
+      prototype.updateDOM = function (dom, view) {
+        if (dom !== table) return update.call(this, dom, view)
+        pending = () => update.call(this, dom, view)
+        return true
+      }
+    }
+    window.holdCellSnapshot()
+    window.releaseCellSnapshot = () => {
+      prototype.updateDOM = update
+      if (!pending) throw new Error('The cell edit did not update its table.')
+      pending()
+    }
+    window.restoreCellSnapshot = () => {
+      prototype.updateDOM = update
+    }
+  })
+  t.after(() => harness.evaluate(() => window.restoreCellSnapshot()))
+  const breaks = () =>
+    harness.locator('.hibi-lp-cell-editor .cm-content br').count()
+  await harness.keyboard.insertText('Q')
+  assert.equal((await state()).doc, doc.replace('two', 'twoQ'))
+  await t.test(
+    'existing line breaks stay drawn while the table is stale',
+    async () => {
+      assert.equal(await breaks(), 1)
+    },
+  )
+  await harness.evaluate(() => {
+    window.releaseCellSnapshot()
+    window.holdCellSnapshot()
+  })
+  await harness.keyboard.press('Shift+Enter')
+  const expected = doc.replace('two', 'twoQ<br>')
+  assert.equal((await state()).doc, expected)
+  await harness.evaluate(() => window.releaseCellSnapshot())
+  await t.test(
+    'the current snapshot draws the new line break too',
+    async () => {
+      assert.equal(await breaks(), 2)
+    },
+  )
+  const selected = await state()
+  assert.equal(selected.doc, expected)
+  assert.equal(selected.head, expected.indexOf('twoQ<br>') + 'twoQ<br>'.length)
+})
+
 test('cell editors move with tab and arrows and leave with escape', {
   timeout: 30000,
 }, async () => {

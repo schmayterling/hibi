@@ -1895,7 +1895,11 @@ class TableView {
       return
     }
     const span = this.span(editing)
-    if (span) editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+    if (span) {
+      editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+      // A local edit may have refreshed while this span was still stale.
+      editing.editor.refresh()
+    }
     editing.editor.resend()
   }
 

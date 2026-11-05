@@ -25,6 +25,14 @@ type FindRequest = Extract<DocumentWorkerRequest, { type: 'find' }>
 type MetadataRequest = Extract<DocumentWorkerRequest, { type: 'metadata' }>
 const semanticBytes = 512 * 1024
 const semanticRows = 32
+const referenceSyntaxKey = (syntax: MarkdownReferenceSyntax) =>
+  JSON.stringify([
+    syntax.gfm,
+    syntax.alerts,
+    syntax.textExtras,
+    !!syntax.math,
+    !syntax.math || syntax.mathBlocks !== false,
+  ])
 const validSyntax = (
   syntax: MarkdownReferenceSyntax,
   dialect: MetadataRequest['dialect'],
@@ -34,6 +42,7 @@ const validSyntax = (
   typeof syntax.alerts === 'boolean' &&
   typeof syntax.textExtras === 'boolean' &&
   (syntax.math === undefined || typeof syntax.math === 'boolean') &&
+  (syntax.mathBlocks === undefined || typeof syntax.mathBlocks === 'boolean') &&
   syntax.gfm === (dialect === 'gfm')
 
 /** Trusted derived replica. The renderer/native journal remain the source authority. */
@@ -515,7 +524,9 @@ export class DocumentWorkerService {
                 (message.reference.alerts !== message.semantic.alerts ||
                   message.reference.textExtras !==
                     message.semantic.textExtras ||
-                  !!message.reference.math !== !!message.semantic.math)))) ||
+                  !!message.reference.math !== !!message.semantic.math ||
+                  (message.reference.mathBlocks !== false) !==
+                    (message.semantic.mathBlocks !== false))))) ||
           !Number.isSafeInteger(message.from) ||
           !Number.isSafeInteger(message.to) ||
           message.from < 0 ||
@@ -672,12 +683,7 @@ export class DocumentWorkerService {
       return found
     }
     const syntax = module.renderedReferenceSyntax(config)
-    const key = JSON.stringify([
-      syntax.gfm,
-      syntax.alerts,
-      syntax.textExtras,
-      syntax.math,
-    ])
+    const key = referenceSyntaxKey(syntax)
     const state = this.#model?.state()
     const owners = state?.owners
     const first = owners?.get(0)
@@ -818,19 +824,13 @@ export class DocumentWorkerService {
           }
           const requestedSyntax = request.semantic ?? request.reference
           if (requestedSyntax) {
-            const { gfm, alerts, textExtras, math = false } = requestedSyntax
-            const syntax = JSON.stringify([gfm, alerts, textExtras, math])
+            const syntax = referenceSyntaxKey(requestedSyntax)
             if (!this.#references || syntax !== this.#referenceSyntax) {
               this.#semantics?.clear()
               this.#semantics = null
               this.#references?.dispose()
               this.#referenceOwners = null
-              this.#references = new MarkdownSourceReferences!({
-                gfm,
-                alerts,
-                textExtras,
-                math,
-              })
+              this.#references = new MarkdownSourceReferences!(requestedSyntax)
               this.#referenceSyntax = syntax
             }
             if (request.semantic && !this.#semantics)

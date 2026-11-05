@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { Select, SettingRow, Toggle } from '../../ui/Controls'
 import { autosave, autosaveDelays } from './autosave'
+import { RecoverySettings } from './RecoverySettings'
 
 export function AutosaveSettings() {
   const settings = useSyncExternalStore(autosave.subscribe, autosave.snapshot)
@@ -37,6 +38,7 @@ export function AutosaveSettings() {
             ))}
           </Select>
         </SettingRow>
+        <RecoverySettings />
       </div>
     </>
   )

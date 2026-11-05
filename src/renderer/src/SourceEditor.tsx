@@ -146,6 +146,7 @@ import { formattedSelectionPreview } from './formatted-selection-text'
 import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
+import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { mappedPositionAt } from './native-dom-selection'
@@ -447,6 +448,7 @@ const sameReferenceSyntax = (
   a.alerts === b.alerts &&
   a.textExtras === b.textExtras &&
   !!a.math === !!b.math &&
+  (a.mathBlocks !== false) === (b.mathBlocks !== false) &&
   a.frontmatter === b.frontmatter
 
 /**
@@ -487,10 +489,10 @@ const featureExtensions = (
 type MeasuredView = { measure: (flush?: boolean) => void }
 
 /** Names a failing feature, which then leaves every editor. */
-const reportFailure = ({ feature }: InstalledFeature, error: unknown) =>
-  feature.fail?.(
-    new Error(`${feature.id}: ${errorMessage(error)}`, { cause: error }),
-  )
+const reportFailure = ({ feature }: InstalledFeature, error: unknown) => {
+  console.error(`Editor feature ${feature.id}:`, error)
+  feature.fail?.(new LikelyAddonError(feature.id, errorMessage(error), error))
+}
 
 /**
  * Reports the features an edit fails with, which then leave every editor,
@@ -528,7 +530,10 @@ const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
   const widget =
     event.target instanceof Element &&
     event.target.closest('[contenteditable="false"]')
-  if (!opensContextMenu(event) || (widget && view.contentDOM.contains(widget)))
+  if (
+    !opensContextMenu(event) ||
+    (widget && widget !== view.contentDOM && view.contentDOM.contains(widget))
+  )
     return null
   const pressed = view.posAtCoords({
     x: event.clientX,
@@ -540,6 +545,8 @@ const rightPress = EditorView.mouseSelectionStyle.of((view, event) => {
   if (from < to && pressed >= from && pressed <= to) {
     // A right press keeps it by itself; a macOS Control+click does not.
     if (event.button === 2) return null
+    // Shift can extend the native selection before the context menu opens.
+    event.preventDefault()
     // A click collapses it on release; this keeps it. Focused now,
     // the editor does not select it again on release either, as it
     // does after taking focus.
@@ -1968,8 +1975,7 @@ export function SourceEditor({
           // A widget that fails shows empty and the editor goes on: the user
           // sees why it is empty, and every failure still reaches the console.
           EditorView.exceptionSink.of((error: unknown, context?: string) => {
-            if (context) console.error(`${context}:`, error)
-            else console.error(error)
+            console.error(`${context ?? 'editor exception'}:`, error)
             if (context !== 'widget') return
             setWidgetError(errorMessage(error))
             if (tryingFailure.current)

@@ -286,6 +286,17 @@ test('identical normalized sibling bodies retain tab provenance in both orders',
 })
 
 test('lazy frame transitions preserve quote text, nested siblings and parser reuse', () => {
+  // Native re-reads corrupt quote raw and body text. Compare their grammar
+  // here; source accounting and the outer body are checked independently.
+  const comparable = (token) =>
+    JSON.parse(
+      JSON.stringify(token, function (key, value) {
+        if (key === 'text' && this.type === 'blockquote') return undefined
+        return key === 'raw' && this.type === 'blockquote'
+          ? value.replaceAll('\n', '')
+          : value
+      }),
+    )
   const markdown = new Marked({ gfm: false }, blockMarkdown)
   const native = new Marked({ gfm: false })
   for (const fence of ['```', '~~~'])
@@ -318,6 +329,15 @@ test('lazy frame transitions preserve quote text, nested siblings and parser reu
           native.lexer(source)
         const normalized = source.replaceAll('\r\n', '\n')
         assert.equal(raw, normalized.slice(0, raw.length), source)
+        const { other } = new Lexer().tokenizer.rules
+        assert.equal(
+          quote.text,
+          raw
+            .replace(/\n$/, '')
+            .replace(other.blockquoteSetextReplace, '\n    $1')
+            .replace(other.blockquoteSetextReplace2, ''),
+          source,
+        )
         assert.equal(
           raw + tail.map(({ raw }) => raw).join(''),
           normalized,
@@ -325,8 +345,15 @@ test('lazy frame transitions preserve quote text, nested siblings and parser reu
         )
         // Native lazy list continuation can duplicate its outer raw prefix.
         if (nativeRaw !== raw) assert.ok(start.includes('-'))
-        assert.deepEqual(quote, nativeQuote, source)
-        assert.deepEqual(tail, nativeTail, source)
+        assert.deepEqual(comparable(quote), comparable(nativeQuote), source)
+        // Correcting phantom quote bytes leaves real separator lines outside
+        // the quote. They have no rendered content; the exact raw check above
+        // keeps those lines accounted for.
+        assert.deepEqual(
+          tail.filter((token) => token.type !== 'space'),
+          nativeTail.filter((token) => token.type !== 'space'),
+          source,
+        )
         assert.equal(markdown.parse(source), native.parse(source), source)
         assert.equal(
           markdown.parse('[ref]: /next\n\n[ref]'),

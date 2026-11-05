@@ -1,3 +1,4 @@
+// ci: alone (asserts a tab closes under a wall-clock limit)
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import {

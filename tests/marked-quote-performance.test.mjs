@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
-import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
+import { alertMarkdown, alertToken } from '../src/addons/markdown/alerts.ts'
 import { mathTokens } from '../src/addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { typstTokens } from '../src/addons/typst/syntax.ts'
@@ -56,6 +56,13 @@ const nested = '> > b\nc\n>\n> d\n'
 // extent widened at its tabs, here with tabs after and away from the marker.
 const tabbed = '> > # h\t\n> lazy\n'
 const widened = '> >\t# h\n> lazy\n'
+// Native quote bodies splice child text; compare grammar independently.
+const quoteGrammar = (tokens) =>
+  JSON.parse(
+    JSON.stringify(tokens, function (key, value) {
+      return key === 'text' && this.type === 'blockquote' ? undefined : value
+    }),
+  )
 
 test('quotes that stop early leave the rest of the extent unscanned', () => {
   // Every quote line check, in any scan, uses Marked's shared quote start rule.
@@ -85,6 +92,87 @@ test('quotes that stop early leave the rest of the extent unscanned', () => {
   }
 })
 
+test('alerts read their quote only as far as it goes', () => {
+  // Marked's quote rule scans the rest of a lazy extent before it reads the
+  // first line: for every alert, millions of units here.
+  const rules = new Set([
+    Lexer.rules.block.normal.blockquote.source,
+    Lexer.rules.block.gfm.blockquote.source,
+  ])
+  const exec = RegExp.prototype.exec
+  let units = 0
+  RegExp.prototype.exec = function (text) {
+    if (rules.has(this.source)) units += text.length
+    return exec.call(this, text)
+  }
+  try {
+    for (const unit of [
+      '> [!NOTE]\n> # h\nlazy\n',
+      '> [!tip]-\n> ```\n> c\n> ```\nlazy\n',
+      '> > [!NOTE]\n> > # h\n> lazy\n',
+      '>\t> [!NOTE]\n>\t> # h\n> lazy\n',
+    ]) {
+      const source = unit.repeat(2000)
+      units = 0
+      blockScanCounters.quoteLines = 0
+      const html = parser().parse(source)
+      assert.equal(html.match(/class="github-alert"/g)?.length, 2000, unit)
+      assert.ok(units < source.length, `${JSON.stringify(unit)}: ${units}`)
+      assert.ok(
+        blockScanCounters.quoteLines < 2000 * 20,
+        `${JSON.stringify(unit)}: ${blockScanCounters.quoteLines}`,
+      )
+    }
+  } finally {
+    RegExp.prototype.exec = exec
+  }
+})
+
+test('an alert reads its quote without building rules per call', () => {
+  // A short alert reads with Marked's own quote rule; a long one shares one
+  // rules object, so the fence and definition rules come from its cache.
+  for (const alert of [
+    '> [!WARNING]\n> careful with this one\n> and the next line\n',
+    `> [!WARNING]\n${'> a line\n'.repeat(40)}`,
+  ]) {
+    alertToken(alert)
+    const Native = globalThis.RegExp
+    let built = 0
+    globalThis.RegExp = new Proxy(Native, {
+      construct(target, args, newTarget) {
+        built++
+        return Reflect.construct(target, args, newTarget)
+      },
+    })
+    try {
+      for (let index = 0; index < 50; index++) alertToken(alert)
+    } finally {
+      globalThis.RegExp = Native
+    }
+    assert.equal(built, 0, alert.slice(0, 40))
+  }
+})
+
+test('a new lexer reuses the tabbed definition rule', () => {
+  // The semantic reader makes a lexer per region, each with its own rules.
+  const markdown = new Marked(blockMarkdown)
+  markdown.lexer('[a]: /u\n')
+  const Native = globalThis.RegExp
+  let built = 0
+  globalThis.RegExp = new Proxy(Native, {
+    construct(target, args, newTarget) {
+      if (String(args[0]).includes(String.raw`\]:[ \t]*`)) built++
+      return Reflect.construct(target, args, newTarget)
+    },
+  })
+  try {
+    for (let index = 0; index < 20; index++) markdown.lexer('[a]: /u\n\ntext\n')
+  } finally {
+    globalThis.RegExp = Native
+  }
+  assert.equal(built, 0)
+})
+
 test('empty quote markers retain native lazy-line boundaries', () => {
   for (const first of ['>', '> ', '>  ', ' >', '  > ', '> p']) {
     for (const next of [
@@ -103,6 +191,97 @@ test('empty quote markers retain native lazy-line boundaries', () => {
       )
     }
   }
+})
+
+test('a nested re-read keeps the last quote lines where Marked puts them', () => {
+  // Marked re-reads a nested quote from the rest of the quote's lines, which
+  // end without a newline, and counts the lines it leaves from the text after
+  // it: one last quote line that strips to nothing stays in the outer quote.
+  for (const sample of [
+    '> > o\ny\n>',
+    '> > a\n> > > b\n> c\n> >',
+    '>>o\ny\n>\nz',
+    '> > o\ny\n> \n\nafter',
+    '>>a\n>>>]\n>$\n>>  \n>```',
+    // A last line past a nested leaf leaves the raw without its own newline.
+    '>  >  ### w1w\n>  ',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      const tokens = new Marked(blockMarkdown).lexer(source)
+      assert.equal(
+        tokens[0].text,
+        tokens[0].raw.replace(/\n$/, '').replace(/^ {0,3}>[ \t]?/gm, ''),
+        source,
+      )
+      assert.deepEqual(
+        quoteGrammar(tokens),
+        quoteGrammar(new Marked().lexer(source)),
+        source,
+      )
+    }
+})
+
+test('nested re-reads keep their words and physical source boundaries', () => {
+  // Native list re-reads manufacture raw blank lines, which can also move
+  // empty quote tokens. Check physical source and visible word identities
+  // independently of those corrupt raw lengths.
+  for (const sample of [
+    '> > o\ny\n>',
+    '> > a\n> > > b\n> c\n> >',
+    '>>o\ny\n>\nz',
+    '> > o\ny\n> \n\nafter',
+    '>>a\n>>>]\n>$\n>>  \n>```',
+    '>>e\n>>>*\n>$\n>>\n>>',
+    '>>>1.\ny\n>>\n>>',
+    '>>>-\ny\n>>\n>>\nx\n',
+    '>>>-\ny\n>>\n>>\nx\n\t',
+    '>>>-\ny\n>>\n>>\nx\ty',
+    '>>>-\ny\n>>\n>>\n\tx',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      const markdown = new Marked(blockMarkdown)
+      assert.equal(
+        markdown
+          .lexer(source)
+          .map((token) => token.raw)
+          .join(''),
+        source.replaceAll('\r\n', '\n'),
+        source,
+      )
+      assert.deepEqual(
+        markdown
+          .parse(source)
+          .replace(/<[^>]*>/g, ' ')
+          .match(/[a-z]+|\$/g),
+        sample.match(/[a-z]+|\$/g),
+        source,
+      )
+    }
+})
+
+test('empty quote bodies keep source newlines and native lazy boundaries', () => {
+  // An empty first body still owns its newline before a lazy continuation.
+  for (const sample of [
+    '>p\n> >\t\ny',
+    '> >\t\ny',
+    '> > a\n> >\t\ny\n> >\t\nz',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      const tokens = new Marked(blockMarkdown).lexer(source)
+      assert.equal(
+        tokens[0].text,
+        tokens[0].raw.replace(/\n$/, '').replace(/^ {0,3}>[ \t]?/gm, ''),
+        source,
+      )
+      assert.deepEqual(
+        quoteGrammar(tokens),
+        quoteGrammar(new Marked().lexer(source)),
+        source,
+      )
+    }
 })
 
 test('quote matching avoids the native recursive regex on whole notes', () => {
@@ -292,6 +471,7 @@ test('code and definition continuations bound paragraph merge work', () => {
   }
 })
 
+const alert = '> [!NOTE]\n> # h\nlazy\n'
 for (const [shape, unit] of Object.entries({
   giant,
   lazy,
@@ -301,6 +481,7 @@ for (const [shape, unit] of Object.entries({
   heading,
   fence,
   nested,
+  alert,
 })) {
   const source = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
   for (const operation of ['export', 'count']) {
@@ -318,7 +499,7 @@ for (const [shape, unit] of Object.entries({
         const pattern =
           shape === 'giant'
             ? /<m>/g
-            : shape === 'lazy' || shape === 'heading'
+            : shape === 'lazy' || shape === 'heading' || shape === 'alert'
               ? /<h1>/g
               : shape === 'list'
                 ? /<ul>/g

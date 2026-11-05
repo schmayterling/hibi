@@ -5,6 +5,7 @@ import {
   type Extension,
   Facet,
   findClusterBreak,
+  MapMode,
   Prec,
   type Range,
   RangeSet,
@@ -38,6 +39,7 @@ import {
   formattedDefinitionRange,
   formattedListStart,
   formattedMarkerRanges,
+  formattedMathAtom,
 } from '../../shared/formatted-text-rules.ts'
 import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
@@ -1471,27 +1473,71 @@ function spacing(
 /**
  * The space below a text's last line, found from the lines after its last
  * block, which start at `from`, and the margin below that block; null when
- * text follows the block. Each line before the last can be whitespace, so
- * the lines are read once per text, and edits above them keep the space.
+ * text follows the block. Found once per text: edits above the lines, and
+ * whitespace typed or deleted among them, keep it.
  */
 const endSpaces = new WeakMap<
   Text,
   { from: number; margin: number; below: number | null }
 >()
 
-/** An edit that ends above the lines after the last block leaves their space as it was. */
+/** An edit above the lines after the last block, or of whitespace among them, keeps their space. */
 function keepEndSpace(update: ViewUpdate) {
   const known = endSpaces.get(update.startState.doc)
   if (!known) return
+  const { changes, state } = update
   let above = true
-  update.changes.iterChangedRanges((_, to) => {
-    if (to >= known.from) above = false
+  let blank = known.below !== null
+  changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    if (toA >= known.from) above = false
+    if (fromA <= known.from || /\S/.test(inserted.toString())) blank = false
   })
   if (above)
-    endSpaces.set(update.state.doc, {
+    endSpaces.set(state.doc, { ...known, from: changes.mapPos(known.from) })
+  else if (blank)
+    endSpaces.set(state.doc, {
       ...known,
-      from: update.changes.mapPos(known.from),
+      below: endSpace(state.doc, known.from, known.margin),
     })
+}
+
+/** Whether the lines after line `end` hold only whitespace; runs of empty lines are not read one by one. */
+function blankAfter(doc: Text, end: number) {
+  for (let number = end + 1; number <= doc.lines; number++) {
+    const line = doc.line(number)
+    if (line.text.trim()) return false
+    // Lines from here to `at` are empty while they hold only line breaks.
+    if (!line.text && number < doc.lines && !doc.line(number + 1).text)
+      number =
+        firstWhere(
+          number,
+          doc.lines,
+          (at) => doc.line(at).to - line.from > at - number,
+        ) - 1
+  }
+  return true
+}
+
+/**
+ * The space below the last line when only blank lines follow the last block,
+ * which ends at `from`: the margin below the block when no line follows it.
+ * Otherwise an empty line with another line break after it is the margin
+ * above an empty paragraph, which shows on the next line, so the last line
+ * shows one after an odd run of empty lines.
+ */
+function endSpace(doc: Text, from: number, margin: number) {
+  const end = doc.lineAt(from).number
+  if (end === doc.lines) return margin
+  const before = doc.line(doc.lines - 1)
+  // Lines from `at` to the one before the last are empty while they hold only line breaks.
+  const run =
+    doc.lines -
+    firstWhere(
+      end + 1,
+      doc.lines,
+      (at) => before.to - doc.line(at).from === doc.lines - 1 - at,
+    )
+  return run % 2 ? blockSpace('Paragraph').bottom : 0
 }
 
 /**
@@ -1510,69 +1556,38 @@ function ending(view: EditorView, tree: Tree, line: (pos: number) => LineInfo) {
   const end = doc.lineAt(last.to)
   // Text after the last block that is not parsed yet may hold more blocks.
   if (uncovered(tree, end.to, doc.length)) return 0
-  const { viewport } = view
-  // Where the lines to lay out end: none while the last block's end is not drawn.
-  const drawn =
-    end.to >= viewport.from && end.to <= viewport.to ? viewport.to : -1
-  const paragraph = blockSpace('Paragraph')
   const after = bottomMargin(last)
-  const known = endSpaces.get(doc)
-  const space =
-    known?.from === end.to && known.margin === after ? known.below : undefined
-  // Text after the last block, such as a definition, leaves no space.
-  if (space === null) return 0
+  let known = endSpaces.get(doc)
+  if (known?.from !== end.to || known.margin !== after) {
+    known = {
+      from: end.to,
+      margin: after,
+      // Text after the last block, such as a definition, leaves no space.
+      below: blankAfter(doc, end.number) ? endSpace(doc, end.to, after) : null,
+    }
+    endSpaces.set(doc, known)
+  }
+  if (known.below === null) return 0
+  const { viewport } = view
+  if (end.to < viewport.from || end.to > viewport.to) return known.below
+  const paragraph = blockSpace('Paragraph')
   let margin = after,
-    below = margin,
     shown = false
-  const gaps: [number, number][] = []
   for (let number = end.number + 1; number <= doc.lines; number++) {
-    let blank = doc.line(number)
-    if (blank.from > drawn) {
-      // Past those, only the space is left, once found for this text.
-      if (space !== undefined) {
-        below = space
-        break
-      }
-      // A run of empty lines before the last line alternates between a
-      // margin and an empty paragraph: skip it in pairs.
-      if (!blank.text && number + 1 < doc.lines && !doc.line(number + 1).text) {
-        const { from } = blank
-        // Lines from here to `at` are empty while they hold only line breaks.
-        const run =
-          firstWhere(
-            number,
-            doc.lines,
-            (at) => doc.line(at).to - from > at - number,
-          ) - number
-        number += run - (run % 2)
-        margin = below = paragraph.bottom
-        blank = doc.line(number)
-      }
-    }
-    if (blank.text.trim()) {
-      endSpaces.set(doc, { from: end.to, margin: after, below: null })
-      return 0
-    }
+    const blank = doc.line(number)
+    if (blank.from > viewport.to) break
     if (shown) {
       shown = false
-      margin = below = paragraph.bottom
-    } else if (!blank.text && number < doc.lines) {
-      if (blank.from <= drawn)
-        gaps.push([blank.from, Math.max(margin, paragraph.top)])
-      shown = true
-    } else {
-      if (blank.from <= drawn) gaps.push([blank.from, margin])
-      below = 0
+      margin = paragraph.bottom
+      continue
     }
-  }
-  if (space === undefined)
-    endSpaces.set(doc, { from: end.to, margin: after, below })
-  for (const [at, height] of gaps) {
-    const info = line(at)
+    shown = !blank.text && number < doc.lines
+    const height = shown ? Math.max(margin, paragraph.top) : margin
+    const info = line(blank.from)
     info.classes.push('hibi-lp-gap')
     info.style.push(`height: ${height}px`, `line-height: ${height}px`)
   }
-  return below
+  return known.below
 }
 
 /** Layout decorations for one parsed chunk, relative to the chunk start. */
@@ -1588,12 +1603,14 @@ function chunkLayout(
   const literal = new Set(state.facet(formattedLiteral))
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
-  let sensitive = false
+  let sensitive = false,
+    atomic = true
   const sink: FormattedLayout = {
     replace(rangeFrom, rangeTo, widget, options) {
       if (rangeTo < rangeFrom) return
       out.push(
         Decoration.replace({
+          atomic,
           ...(widget ? { widget } : {}),
           ...(options?.block ? { block: true } : {}),
         }).range(rangeFrom - from, rangeTo - from),
@@ -1640,6 +1657,7 @@ function chunkLayout(
             ),
             visible: null,
           }
+          atomic = ref.name !== 'BlockMath' || formattedMathAtom(ref.node)
           let skip = false
           for (const view of contributed)
             if (view.layout?.(ref, sink, context) === false) skip = true
@@ -1812,6 +1830,9 @@ function cacheFor(state: EditorState) {
 }
 const intersects = (reveal: readonly Revealed[], from: number, to: number) =>
   reveal.some((range) => range.from <= to && range.to >= from)
+// Unclosed math still draws, but the rest of the note must not become one edit atom.
+const layoutAtoms = new WeakMap<DecorationSet, DecorationSet>()
+
 function layoutDecorations(
   state: EditorState,
   tree: Tree,
@@ -1819,6 +1840,8 @@ function layoutDecorations(
 ): DecorationSet {
   const cache = cacheFor(state)
   const out: Range<Decoration>[] = []
+  let nonAtomicFrom = Number.POSITIVE_INFINITY,
+    nonAtomicTo = -1
   for (const { from, chunk, covered } of parsedChunks(tree)) {
     let layout = cache.get(chunk)
     if (!layout || (layout.sensitive && layout.doc !== state.doc)) {
@@ -1827,10 +1850,27 @@ function layoutDecorations(
     }
     if (layout.sensitive && intersects(reveal, from, from + chunk.length))
       layout = chunkLayout(state, tree, from, covered, reveal)
-    for (const range of layout.ranges)
-      out.push(range.value.range(range.from + from, range.to + from))
+    for (const range of layout.ranges) {
+      const start = range.from + from,
+        end = range.to + from
+      out.push(range.value.range(start, end))
+      if (range.value.spec.atomic === false) {
+        nonAtomicFrom = Math.min(nonAtomicFrom, start)
+        nonAtomicTo = Math.max(nonAtomicTo, end)
+      }
+    }
   }
-  return Decoration.set(out, true)
+  const set = Decoration.set(out, true)
+  if (nonAtomicTo > nonAtomicFrom)
+    layoutAtoms.set(
+      set,
+      set.update({
+        filterFrom: nonAtomicFrom,
+        filterTo: nonAtomicTo,
+        filter: (_, __, value) => value.spec.atomic !== false,
+      }),
+    )
+  return set
 }
 
 /** Whether moving the reveal ranges can change a contributed layout. */
@@ -2011,8 +2051,12 @@ export function livePreview(
           (sameRanges(reveal, revealedIn(startState, tree)) ||
             (!revealMatters(state, tree, reveal) &&
               !revealMatters(state, tree, revealedIn(startState, tree)))))
-      )
-        return value.map(transaction.changes)
+      ) {
+        const mapped = value.map(transaction.changes)
+        const atoms = layoutAtoms.get(value)
+        if (atoms) layoutAtoms.set(mapped, atoms.map(transaction.changes))
+        return mapped
+      }
       return layoutDecorations(state, tree, reveal)
     },
   })
@@ -2059,18 +2103,24 @@ export function livePreview(
       readonly scrolls = new Map<number, number>()
       /** The block each drawn box showed when its scroll was last set. */
       boxes = new WeakMap<Element, number | null>()
-      /** The start of the code block around `pos`. */
-      blockAt(pos: number) {
-        for (
-          let node: SyntaxNode | null = syntax
-            .tree(this.view.state)
-            .resolve(pos, 1);
-          node;
-          node = node.parent
-        )
-          if (node.name === 'FencedCode' || node.name === 'CodeBlock')
-            return node.from
-        return null
+      /**
+       * Where a saved scroll's block starts after an edit, unless the edit
+       * removed that start: a later block there is another block.
+       */
+      keptScroll(update: ViewUpdate, at: number, left: number) {
+        const kept = update.changes.mapPos(at, -1, MapMode.TrackDel)
+        if (kept !== null) this.scrolls.set(kept, left)
+      }
+      /** The drawn block's content start, even while its syntax is reparsed. */
+      blockAt(pos: number): number | null {
+        let start: number | null = null
+        this.wrappers.between(pos, pos, (from, to, wrapper) => {
+          if (wrapper === codeScroll && from <= pos && pos < to) {
+            start = from
+            return false
+          }
+        })
+        return start
       }
       /** Code blocks scrolled sideways show other columns. */
       readonly scrolled = (event: Event) => {
@@ -2096,10 +2146,8 @@ export function livePreview(
           '.hibi-lp-codescroll',
         )) {
           if (!box.scrollLeft) continue
-          const at = this.blockAt(
-            update.changes.mapPos(update.view.posAtDOM(box)),
-          )
-          if (at !== null) this.scrolls.set(at, box.scrollLeft)
+          const at = this.blockAt(update.view.posAtDOM(box))
+          if (at !== null) this.keptScroll(update, at, box.scrollLeft)
         }
       }
       constructor(readonly view: EditorView) {
@@ -2190,8 +2238,7 @@ export function livePreview(
         if (update.docChanged && this.scrolls.size) {
           const scrolls = [...this.scrolls]
           this.scrolls.clear()
-          for (const [at, left] of scrolls)
-            this.scrolls.set(update.changes.mapPos(at), left)
+          for (const [at, left] of scrolls) this.keptScroll(update, at, left)
         }
         if (update.viewportChanged) this.keepScrolls(update)
         if (update.docChanged && this.columns.size)
@@ -2442,9 +2489,10 @@ export function livePreview(
       revealDestinations(state.field(layout), state),
     ),
     // Hidden layout syntax is atomic too.
-    EditorView.atomicRanges.of((view) =>
-      revealDestinations(view.state.field(layout), view.state),
-    ),
+    EditorView.atomicRanges.of((view) => {
+      const set = view.state.field(layout)
+      return revealDestinations(layoutAtoms.get(set) ?? set, view.state)
+    }),
     // A source of higher precedence than the preview's own: the editor
     // draws its marks inside the preview's.
     EditorView.decorations.of(

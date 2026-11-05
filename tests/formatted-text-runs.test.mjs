@@ -508,6 +508,35 @@ test('a line break inside a formula or image alt adds no text, as its widget sho
   }
 })
 
+test('a block formula costs find text effects no work per line, as its widget shows none', () => {
+  const lines = (count) => {
+    const text = `a\n\n$$\n${'x\n'.repeat(count)}$$\n\nb`,
+      input = inputFor(text),
+      lineAt = input.lineAt
+    let calls = 0
+    input.lineAt = (at) => {
+      calls++
+      return lineAt(at)
+    }
+    const range = { from: 0, to: text.length }
+    const effects = effectsFor(parser.parse(text), input, range)
+    input.lineAt = lineAt
+    assert.equal(
+      textFor(
+        formattedTextRuns(effects, input, { window: range, selection: range }),
+        input,
+        range,
+      ),
+      'a\n\nb',
+    )
+    return calls
+  }
+  // Its lines hold no soft breaks to undo; walking them read every line.
+  const few = lines(30),
+    many = lines(3000)
+  assert.ok(many - few < 30, `${few} ${many}`)
+})
+
 test('an enclosing quoted-list leaf shares the same bounded run assembly as find', () => {
   const text = '> - first\n>   **word**',
     input = inputFor(text),

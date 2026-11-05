@@ -12,6 +12,7 @@ import {
   type TransactionSpec,
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import { formattedMathAtom } from '../../shared/formatted-text-rules.ts'
 import {
   markdownLineStarts as escapeLineStarts,
   markdownLiteral as literal,
@@ -514,7 +515,6 @@ const atomBlocks = new Set([
   'HTMLBlock',
   'CommentBlock',
   'ProcessingInstructionBlock',
-  'BlockMath',
 ])
 /** Nodes drawn as one node only where a widget replaces them. */
 const atomWidgets = new Set([
@@ -542,6 +542,7 @@ export function blockAtom(
     for (let node: SyntaxNode | null = tree.resolveInner(pos, side); node; ) {
       if (
         atomBlocks.has(node.name) ||
+        (node.name === 'BlockMath' && formattedMathAtom(node)) ||
         (widget &&
           atomWidgets.has(node.name) &&
           (node.from === pos || node.to === pos))

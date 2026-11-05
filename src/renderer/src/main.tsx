@@ -39,7 +39,7 @@ import { startupMark } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { DialogProvider, useDialogService } from '../../ui/DialogProvider'
 import { MenuHost } from '../../ui/MenuHost'
-import { ToastProvider, useToasts } from '../../ui/Sonner'
+import { ToastProvider, useToastService } from '../../ui/Sonner'
 import type { ToastHandle } from '../../ui/toasts'
 import type { PrepareMediaInsert } from './FormattingToolbar'
 import { createWorkspaceView, type WorkspaceView } from './workspace-view'
@@ -103,6 +103,7 @@ import {
 } from './flavors'
 import type { HistoryResult } from './History'
 import { LoadingScreen } from './LoadingScreen'
+import { LikelyAddonError, likelyAddonsNotices } from './likely-addons'
 import { installRendererDiagnostics } from './local-diagnostics'
 import { transformMarkdown } from './markdown-projection'
 import {
@@ -264,7 +265,9 @@ function App() {
   }, [settingTarget, settingsCategory])
   const dialogService = useDialogService()
   const dialogs = dialogService.api
-  const toasts = useToasts()
+  const toastService = useToastService()
+  const toasts = toastService.api
+  const [showLikelyAddons] = useState(() => likelyAddonsNotices(toastService))
   // An addon's failure is not the open document's, so each has its own
   // notice: the next document operation clears a document error only.
   const errorNotices = useRef<
@@ -1057,12 +1060,14 @@ function App() {
         }
       },
       error: (error) =>
-        setError(
-          error instanceof Error
-            ? error.message
-            : 'The addon could not complete this action.',
-          'addon',
-        ),
+        error instanceof LikelyAddonError
+          ? showLikelyAddons(error)
+          : setError(
+              error instanceof Error
+                ? error.message
+                : 'The addon could not complete this action.',
+              'addon',
+            ),
     },
     document?.name,
     documentFormat?.views
@@ -1466,6 +1471,35 @@ function App() {
       unsubscribe()
     }
   }, [documentLoaded, dialogs, setError])
+
+  // Text an earlier run left unsaved. Its dialog isn't part of the first load.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: opening reads live refs.
+  useEffect(() => {
+    if (!documentLoaded) return
+    void window.hibi
+      .waitingRecovery()
+      .then(async (waiting) => {
+        if (!waiting.copies.length && !waiting.newer) return
+        const { offerRecovery } = await import('./recovery-offer')
+        await offerRecovery(waiting, {
+          dialogs,
+          toasts,
+          tabsEnabled: currentDocument.current?.tabsEnabled ?? true,
+          open: async (id) => {
+            while (busyRef.current || dialogs.isOpen())
+              await new Promise((resolve) => setTimeout(resolve, 100))
+            await applyDocumentOperation(
+              () => window.hibi.restoreRecovery(id),
+              true,
+              true,
+            )
+            return currentDocument.current?.tabId
+          },
+          show: selectTab,
+        })
+      })
+      .catch(setError)
+  }, [documentLoaded])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: recovery reads live refs while this command handler must stay stable across renders.
   const performCommand = useCallback(

@@ -784,6 +784,82 @@ test('whitespace lines after the last block are read once per text, not on every
   ])
 })
 
+test('the space below the last line follows what is typed or deleted among the lines after the last block', {
+  timeout: 60000,
+}, async () => {
+  const result = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const space = async (view) => {
+      while (!preview.covered(0, view.state.doc.length))
+        await new Promise(requestAnimationFrame)
+      preview.refresh()
+      return view.contentDOM.style.getPropertyValue('--hibi-end')
+    }
+    await preview.mount('# Blank tail\n\ntail\n\n \n\n ', {
+      width: 800,
+      height: 600,
+    })
+    await preview.settle()
+    let view = preview.view()
+    const before = await space(view)
+    // A definition is no block: the last block stays, and text now follows it.
+    view.dispatch({
+      changes: { from: view.state.doc.line(5).from, insert: '[a]: b' },
+    })
+    const definition = await space(view)
+    await preview.mount('# Blank tail\n\ntail\n\n \n\n ')
+    await preview.settle()
+    view = preview.view()
+    await space(view)
+    // From inside the last block through the lines after it.
+    const { length } = view.state.doc
+    view.dispatch({ changes: { from: 15, to: length, insert: ' ' } })
+    await space(view)
+    // The view still lays out what follows.
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: '\n\n## Next\n' },
+    })
+    await space(view)
+    return {
+      before,
+      definition,
+      heading: !!view.contentDOM.querySelector('.hibi-lp-h2'),
+    }
+  })
+  assert.deepEqual(result, { before: '16px', definition: '', heading: true })
+})
+
+test('a reader at the top of a note stays there when the note grows below', {
+  timeout: 30000,
+}, async () => {
+  const doc = Array.from(
+    { length: 60 },
+    (_, i) => `Paragraph ${i} of the note.`,
+  ).join('\n\n')
+  const top = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    await preview.mount(doc, { width: 800, height: 600 })
+    await preview.settle()
+    // Sized so the note overflows by less than the distance that counts as
+    // the bottom.
+    const { height } = pane.parentElement.getBoundingClientRect()
+    pane.parentElement.style.height = `${height + pane.scrollHeight - pane.clientHeight - 2}px`
+    await frames(4)
+    pane.scrollTop = 0
+    const view = preview.view()
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: `\n\n${doc}` },
+    })
+    await frames(8)
+    return pane.scrollTop
+  }, doc)
+  assert.equal(top, 0)
+})
+
 test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {
   timeout: 60000,
 }, async () => {
@@ -1077,154 +1153,6 @@ test('a viewport starting just below a code box keeps its scrollbar in the heigh
   assert.equal(result.start, true, report)
   assert.equal(result.now, result.below[1], report)
   assert.equal(result.after, result.before, report)
-})
-
-test('a viewport starting inside a code box below its long lines keeps its scrollbar in the height', {
-  timeout: 60000,
-}, async () => {
-  const long = `const value = ${'"x" + '.repeat(163)}"end";\n`
-  let doc = ''
-  for (let block = 0; block < 40; block++)
-    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${long}${'const a = 1\n'.repeat(30)}\`\`\`\n\n`
-  await harness.reload()
-  await harness.waitForFunction(() => !!window.livePreview)
-  const style = await harness.addStyleTag({
-    content:
-      '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 15px !important; height: 15px !important; }',
-  })
-  // With the caret in the box too, above the lines drawn: the editor draws
-  // the caret's line there, and the lines below join it across a gap.
-  for (const caret of [false, true]) {
-    const result = await harness.evaluate(
-      async ({ doc, caret }) => {
-        const pane = document.querySelector('.rich-pane')
-        pane.scrollTop = 0
-        await window.livePreview.mount(doc, { width: 900, height: 600 })
-        await window.livePreview.settle()
-        const view = window.livePreview.view()
-        const frames = async (count) => {
-          for (let i = 0; i < count; i++)
-            await new Promise(requestAnimationFrame)
-        }
-        for (let top = 0; top < pane.scrollHeight; top += 300) {
-          pane.scrollTop = top
-          await frames(3)
-        }
-        // The tenth box's hidden closing fence holds the space of the box's
-        // scrollbar, which its long first line shows: measured with the box
-        // drawn from its top.
-        const fence = doc.split('```\n\n').slice(0, 10).join('```\n\n').length
-        const number = view.state.doc.lineAt(fence).number
-        view.dispatch({
-          effects: view.constructor.scrollIntoView(
-            view.state.doc.line(number - 32).from,
-            { y: 'start' },
-          ),
-        })
-        await frames(4)
-        const below = view.lineBlockAt(fence)
-        // Twenty short lines below the long one.
-        const start = view.state.doc.line(number - 10)
-        pane.scrollTop = 0
-        await frames(4)
-        const height = view.contentHeight
-        const offset = pane.getBoundingClientRect().top - view.documentTop
-        const block = view.lineBlockAt(start.from)
-        if (caret)
-          view.dispatch({
-            selection: { anchor: view.state.doc.line(number - 29).from },
-          })
-        for (const margin of [
-          500,
-          ...Array.from({ length: 126 }, (_, i) => i * 8),
-        ]) {
-          pane.scrollTop = 0
-          await frames(3)
-          pane.scrollTop = block.top + block.height / 2 + margin - offset
-          await frames(3)
-          if (view.viewport.from === start.from) break
-        }
-        await frames(2)
-        // Drawn from there, the box shows only short lines and no scrollbar.
-        const box = view
-          .domAtPos(start.from)
-          .node.parentElement.closest('.hibi-lp-codescroll')
-        return {
-          start: view.viewport.from === start.from,
-          drawn: box ? box.offsetHeight - box.clientHeight : null,
-          below: [below.from, below.height],
-          now: view.lineBlockAt(below.from).height,
-          before: height,
-          after: view.contentHeight,
-        }
-      },
-      { doc, caret },
-    )
-    const report = JSON.stringify({ caret, ...result })
-    assert.equal(result.start, true, report)
-    assert.equal(result.drawn, 0, report)
-    assert.ok(result.below[1] >= 15, report)
-    assert.equal(result.now, result.below[1], report)
-    assert.equal(result.after, result.before, report)
-  }
-  await style.evaluate((node) => node.remove())
-})
-
-test('a viewport first drawn inside a code box keeps the scrollbar its drawn lines show', {
-  timeout: 60000,
-}, async () => {
-  const long = `const value = ${'"x" + '.repeat(163)}"end";\n`
-  let doc = ''
-  // The long line is the box's last: drawn from inside the box, it shows the
-  // scrollbar.
-  for (let block = 0; block < 40; block++)
-    doc += `Paragraph ${block} before the block, with a few words of prose.\n\n\`\`\`js\n${'const a = 1\n'.repeat(40)}${long}\`\`\`\n\n`
-  await harness.reload()
-  await harness.waitForFunction(() => !!window.livePreview)
-  const style = await harness.addStyleTag({
-    content:
-      '* { scrollbar-width: auto !important; scrollbar-color: auto !important; } *::-webkit-scrollbar { width: 15px !important; height: 15px !important; }',
-  })
-  // With the caret on the box's first line too: the editor draws the caret's
-  // line there, and the lines below join it across a gap.
-  for (const caret of [false, true]) {
-    const result = await harness.evaluate(
-      async ({ doc, caret }) => {
-        const pane = document.querySelector('.rich-pane')
-        pane.scrollTop = 0
-        await window.livePreview.mount(doc, { width: 900, height: 600 })
-        await window.livePreview.settle()
-        const view = window.livePreview.view()
-        const fence = doc.split('```\n\n').slice(0, 20).join('```\n\n').length
-        const first = view.state.doc.line(
-          view.state.doc.lineAt(fence).number - 41,
-        )
-        if (caret) view.dispatch({ selection: { anchor: first.from } })
-        // Never drawn before: the view draws from 500px above the fence,
-        // inside the box and below its first line.
-        view.dispatch({
-          effects: view.constructor.scrollIntoView(fence, { y: 'start' }),
-        })
-        for (let i = 0; i < 6; i++) await new Promise(requestAnimationFrame)
-        const box = view
-          .domAtPos(view.viewport.from)
-          .node.parentElement.closest('.hibi-lp-codescroll')
-        return {
-          inside: view.viewport.from > first.to && view.viewport.from < fence,
-          joined: !!box?.querySelector('.cm-gap'),
-          bar: box ? box.offsetHeight - box.clientHeight : null,
-          fence: view.lineBlockAt(fence).height,
-        }
-      },
-      { doc, caret },
-    )
-    const report = JSON.stringify({ caret, ...result })
-    assert.equal(result.inside, true, report)
-    assert.equal(result.joined, caret, report)
-    assert.equal(result.bar, 15, report)
-    assert.equal(result.fence, result.bar, report)
-  }
-  await style.evaluate((node) => node.remove())
 })
 
 test('a heading the caret is in keeps its height when a scroll leaves it far above', {

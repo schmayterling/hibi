@@ -93,9 +93,29 @@ type Found = { size: number; over: boolean }
 
 const blankText = (text: string, from: number) =>
   /^[ \t\r]*$/.test(text.slice(from))
-/** Where a list item's lazy text ends: at a blank line or the next item. */
-const lazyEnd = (text: string) =>
-  blankText(text, 0) || /^[ \t]*(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/.test(text)
+/** A line that ends a list item as Obsidian reads one: a marker, heading, fence or rule. */
+const leavesItem =
+  /^ {0,3}(?:(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|#{1,6}(?:[ \t]|$)|`{3,}[^`]*$|~{3,}|([-*_])[ \t]*(?:\1[ \t]*){2,}$)/
+
+/**
+ * Where a line that its innermost list items do not continue starts its
+ * content, when Obsidian keeps it in them as lazy text, or -1. A blank line
+ * before it, a quote it leaves or a line in leavesItem ends them.
+ */
+function lazyStart(levels: readonly Level[], text: string) {
+  for (let keep = levels.length; keep-- > 0 && !levels[keep]!.quote; ) {
+    const base = contentStart(levels.slice(0, keep), text)
+    if (base >= 0) return leavesItem.test(text.slice(base)) ? -1 : base
+  }
+  return -1
+}
+
+/** The contexts a line stays in as its parser reads it: all but those from the first quote it leaves. */
+function keptDepth(cx: BlockContext, line: Line) {
+  for (let index = lineDepth(line); index < cx.depth; index++)
+    if (cx.parentType(index).name === 'Blockquote') return index
+  return cx.depth
+}
 
 const listMarker = /^(?:[-+*]|\d{1,9}([.)]))(?=[ \t]|$)/
 
@@ -136,7 +156,6 @@ function findBlock(
   line: Line,
   input: Input,
   depth: number,
-  item: boolean,
 ): { found: Found | null; read: number } {
   // The parsed range can end inside this line; decisions read the document.
   const opening = rawLine(input, cx.parsedPos)
@@ -154,21 +173,21 @@ function findBlock(
   while (opening.charCodeAt(at) === 32) at++
   let body = opening.length - at,
     follows = false,
-    blanks = false
+    blanks = false,
+    blank = false
   for (let next = cx.parsedPos + opening.length + 1; next <= input.length; ) {
     const raw = rawLine(input, next)
     read = Math.min(input.length, next + raw.length + 1)
-    // After a list item, Obsidian reads a lazy line as the item's text, which
-    // a blank line or the next item ends.
-    if (item && !follows && lazyEnd(raw)) break
-    const base = levels.length ? contentStart(levels, raw) : 0
+    let base = levels.length ? contentStart(levels, raw) : 0
+    if (base < 0 && !blank) base = lazyStart(levels, raw)
     if (base < 0) {
       // Obsidian keeps an item's blank lines when the list's next item follows.
       follows ||= blanks && inItem && nextItem(cx, depth, levels, input, raw)
       break
     }
-    blanks ||= blankText(raw, base)
-    follows ||= !inItem || !blankText(raw, base)
+    blank = blankText(raw, base)
+    blanks ||= blank
+    follows ||= !inItem || !blank
     const close = blockMathClose(raw, base, raw.length, size)
     body += 1 + (close < 0 ? raw.length : close) - base
     if (close >= 0 || (follows && body > formulaLimit)) break
@@ -198,8 +217,17 @@ function parseBlock(cx: BlockContext, line: Line, found: Found) {
     cx.lineStart + line.skipSpace(line.pos + found.size),
     cx.lineStart + line.text.length,
   )
-  // As fenced code, the block ends with its quote or list item.
-  while (cx.nextLine() && lineDepth(line) >= cx.depth) {
+  // As fenced code, the block ends with its quote or list item, past the
+  // lazy text Obsidian keeps in the item.
+  let blank = false
+  while (
+    cx.nextLine() &&
+    (lineDepth(line) >= cx.depth ||
+      (!blank &&
+        keptDepth(cx, line) === cx.depth &&
+        !leavesItem.test(line.text.slice(line.basePos))))
+  ) {
+    blank = blankText(line.text, line.basePos)
     // Line breaks inside the body are body text.
     if (texts.length) add(cx.lineStart - 1, cx.lineStart)
     marks.push(...line.markers)
@@ -233,25 +261,19 @@ let last: {
   input: Input
   at: number
   depth: number
-  item: boolean
   found: Found | null
   read: number
 } | null = null
-function decide(cx: BlockContext, line: Line, depth = cx.depth, item = false) {
+function decide(cx: BlockContext, line: Line, depth = cx.depth) {
   const at = cx.parsedPos + line.pos
   if (!current) return null
-  if (
-    last?.input !== current ||
-    last.at !== at ||
-    last.depth !== depth ||
-    last.item !== item
-  )
+  // A lazy line is checked inside its containers, then parsed in those it stays in.
+  if (last?.input !== current || last.at !== at || last.depth !== depth)
     last = {
       input: current,
       at,
       depth,
-      item,
-      ...findBlock(cx, line, blockInput(current), depth, item),
+      ...findBlock(cx, line, blockInput(current), depth),
     }
   // The decision read later lines: an edit before their end parses this
   // line's chunk again, as a whole-document parse would decide anew.
@@ -508,12 +530,12 @@ export const blockMathSyntax: MarkdownConfig = {
           starts.add(cx.lineStart + line.basePos)
         }
         if (line.next !== 36) return false
-        // A lazy line is decided where it opens a block, after the
-        // containers it leaves end; one leaving a list item also as its text.
-        const depth = lineDepth(line)
-        if (depth >= cx.depth) return decide(cx, line) !== null
-        const item = cx.parentType(depth).name !== 'Blockquote'
-        return decide(cx, line, depth, item) !== null
+        // A lazy line opens a block after the quotes it leaves end; list
+        // items keep it, as Obsidian reads their lazy text.
+        const depth = keptDepth(cx, line)
+        if (!decide(cx, line, depth)) return false
+        ;(line as typeof line & { depth: number }).depth = depth
+        return true
       },
     },
   ],

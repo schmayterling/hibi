@@ -544,6 +544,30 @@ test('display blocks read on like fenced code, as in Obsidian', () => {
     ['- $$\n\nafter', []],
     // A lazy `$$` line ends a quote, as other blocks that interrupt text do.
     ['> a\n$$\nx\n$$', [['block', 'x']]],
+    // A list item keeps lazy lines, so a block there reads through them and
+    // ends with the item: at a blank line before an unindented one, its next
+    // item, a heading, a fence or a rule.
+    ...[
+      ['1. a\n   $$\n   x\n$$\n2. $y$', 'x'],
+      ['- a\n  $$\n  x\n$$\n\n$y$', 'x'],
+      ['- a\n  $$\nx\n\n$y$', 'x'],
+      ['1.  a\n$$\nx\n    z\n\n$y$', 'x\nz'],
+      ['- a\n$$\nx\n- $y$', 'x'],
+      ['- a\n  $$\nx\n# $y$', 'x'],
+      ['- a\n  $$\nx\n---\n$y$', 'x'],
+      ['- a\n  $$\nx\n\n  z\n\n$y$', 'x\n\nz'],
+      ['- a\n  - b\n    $$\n    x\n  z\n    w$$\n- $y$', 'x\nz\nw'],
+    ].map(([source, latex]) => [
+      source,
+      [
+        ['block', latex],
+        ['inline', 'y'],
+      ],
+    ]),
+    ['- a\n  $$\nx\n```\n$y$\n```', [['block', 'x']]],
+    // A `$$` line a list item keeps as its last line stays its text.
+    ['- a\n$$', []],
+    ['- a\n$$\n\nafter $y$', [['inline', 'y']]],
   ]) {
     assert.deepEqual(lezerMath(source), expected, JSON.stringify(source))
     assert.deepEqual(markedMath(source), expected, JSON.stringify(source))
@@ -717,6 +741,9 @@ test('chunked parses with math match whole-document trees', () => {
     '$$\nunclosed',
     '> $$\n> q\n> $$',
     '- $$\n  w\n  $$',
+    '- a\n  $$\n  w\n$$\n- b',
+    '1.  a\n$$\nw\n    v\n\nz',
+    '> - a\n>   $$\n> w\n> $$',
     '# heading $h$',
     'plain words here',
     '```\n$$\ncode\n$$\n```',

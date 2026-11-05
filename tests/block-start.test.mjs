@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
-import { blockStartCounters } from '../src/addons/_shared/block-start.ts'
+import {
+  blockStart,
+  blockStartCounters,
+} from '../src/addons/_shared/block-start.ts'
 import { alertMarkdown, alertStart } from '../src/addons/markdown/alerts.ts'
 import { blockMathStart, mathTokens } from '../src/addons/math/syntax.ts'
 import {
@@ -49,6 +52,28 @@ const random = () => {
 const pick = () => lines[Math.floor(random() * lines.length)]
 const reset = () =>
   Object.assign(blockStartCounters, { calls: 0, units: 0, max: 0 })
+
+test('list recovery leaves other addon block starts outside the item', () => {
+  const parser = new Marked(mathTokens, {
+    extensions: [
+      {
+        name: 'other',
+        level: 'block',
+        start: blockStart(/ {0,3}%%[^%\n]*\n/),
+        tokenizer(source) {
+          const match = /^%%\n[^\n]*/.exec(source)
+          return match ? { type: 'other', raw: match[0] } : undefined
+        },
+      },
+    ],
+  })
+  const source = '- # h\n%%\nx\n\noutside words\n'
+  const tokens = parser.lexer(source)
+  assert.equal(tokens[0].type, 'list')
+  assert.equal(tokens[0].raw.trimEnd(), '- # h')
+  assert.equal(tokens[1].type, 'other')
+  assert.equal(tokens.map(({ raw }) => raw).join(''), source)
+})
 
 test('block start hints read exactly the paragraph marked would read', () => {
   for (const [mode, options] of [

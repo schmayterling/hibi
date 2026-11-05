@@ -574,6 +574,13 @@ test('display blocks read on like fenced code, as in Obsidian', () => {
       ],
     ]),
     ['-\n$$\n\nafter $y$', [['inline', 'y']]],
+    [
+      '- # h\n$$\n\n- $y$',
+      [
+        ['block', ''],
+        ['inline', 'y'],
+      ],
+    ],
     ['> - w\n    $$\n   abc\n', []],
     [
       '- $$\n  x\n\n$$\n```\ny',

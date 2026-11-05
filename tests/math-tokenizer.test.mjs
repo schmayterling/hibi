@@ -49,6 +49,7 @@ const fixtures = [
   // Lazy quote text cannot open a new formula when a nested list is re-read.
   ['> - w\n    $$\n   abc\n', 0],
   ['> - w\n    ordinary\n    $$\n   abc\n', 0],
+  ['> - $$\n>   x\n>   $$\n    $$\n   abc\n', 1],
   ['> - w\n    $$\n   abc\n\noutside words\n', 0],
   ['> - w\n>   $$\n>   abc\n', 1],
   // As in Obsidian, across lines of a paragraph or blank.
@@ -90,6 +91,15 @@ test('display math blocks start only at line boundaries in visual and source tok
       assert.equal(mathFlavor.detect(source), expected + inline > 0, source)
     }
   }
+})
+
+test('recovered equations keep numbered items in the same list', () => {
+  const source = '10. # a\n$$\nx\n11. # b\n$$\ny\n'
+  const tokens = new Marked(mathTokens).lexer(source)
+  assert.equal(tokens[0].type, 'list')
+  assert.equal(tokens[0].start, 10)
+  assert.equal(tokens[0].items.length, 2)
+  assert.equal(tokens.map(({ raw }) => raw).join(''), source)
 })
 
 test('display math start hints and tokenizer agree on indentation and real newlines', () => {

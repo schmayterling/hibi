@@ -166,6 +166,8 @@ test('after a killed process the prompt gets the text back, the file untouched, 
   await prompt.getByText('note.md', { exact: true }).waitFor()
   await prompt.getByText('typed and never saved').waitFor()
   await prompt.getByText(/as unsaved changes/).waitFor()
+  // Clearing saved undo steps must leave waiting unsaved text recoverable.
+  await second.page.evaluate(() => window.hibi.clearUndoHistory())
   await second.page.getByRole('button', { name: 'Restore note.md' }).click()
   await second.shows('typed and never saved')
   const restored = await second.document()

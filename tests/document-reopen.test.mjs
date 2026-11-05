@@ -1166,6 +1166,53 @@ test('a link to a heading of another note or the note itself moves to the headin
   await atHeading(self)
 })
 
+test('a link up to a heading takes a reader away from the end of the note', {
+  timeout: 150000,
+}, async (t) => {
+  const { app, page, file, idle, open } = await setup(t)
+  const lines = Array.from(
+    { length: 512 },
+    (_, index) => `word ${index} ${'word '.repeat(50)}`,
+  ).join('\n')
+  const fence = `\n\n~~~text\n${lines}\n~~~\n\n`
+  const text = `[down](note.md#far-away)${fence}## Middle${fence}## Far away\n\n[up](note.md#middle)\n`
+  await writeFile(file, text)
+  await open()
+  const editor = page.locator('.rich-pane [aria-label="Document editor"]')
+  // The pane once the link's scroll and the heights it draws are done. The
+  // link can give the pane a new view, so each frame looks it up.
+  const follow = async (name, heading) => {
+    const done = await replied(app, 'document:link')
+    await editor
+      .getByRole('link', { name, exact: true })
+      .click({ modifiers: ['Shift'] })
+    await done()
+    await idle()
+    return page.evaluate(async (from) => {
+      let last = ''
+      let still = 0
+      while (still < 4) {
+        await new Promise(requestAnimationFrame)
+        const pane = document.querySelector('.rich-pane')
+        const view = pane.querySelector('.cm-content')?.cmTile.root.view
+        if (view?.state.selection.main.head !== from) continue
+        const now = `${pane.scrollTop} ${pane.scrollHeight} ${view.viewport.from}`
+        still = now === last ? still + 1 : 0
+        last = now
+      }
+      const pane = document.querySelector('.rich-pane')
+      return {
+        height: pane.clientHeight,
+        bottom: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
+      }
+    }, heading)
+  }
+  const end = await follow('down', text.indexOf('## Far away') + 3)
+  assert.ok(end.bottom < end.height, JSON.stringify(end))
+  const up = await follow('up', text.indexOf('## Middle') + 3)
+  assert.ok(up.bottom > up.height, JSON.stringify({ end, up }))
+})
+
 test('a missing Finder file and a moved note folder get plain messages', {
   timeout: 150000,
 }, async (t) => {

@@ -954,6 +954,11 @@ test('a reader who scrolls back to the end of a giant last block stays at the bo
           last = now
         }
       }
+      // The reader's own input takes over from a scroll command before it.
+      view.dispatch({ effects: view.constructor.scrollIntoView(0) })
+      await frame()
+      await frame()
+      pane.dispatchEvent(new WheelEvent('wheel'))
       const stride = Math.round(pane.clientHeight * 0.8)
       for (
         let target = 0;
@@ -974,6 +979,51 @@ test('a reader who scrolls back to the end of a giant last block stays at the bo
     }, `${prose}${tail}\n\n`)
     assert.ok(Math.abs(result.bottom) <= 1, JSON.stringify(result))
   }
+})
+
+test('a scroll command that ends at the bottom holds nobody there until the reader moves the pane', {
+  timeout: 30000,
+}, async () => {
+  const doc = Array.from(
+    { length: 200 },
+    (_, i) => `Paragraph ${i} of the note.`,
+  ).join('\n\n')
+  const result = await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    const pane = document.querySelector('.rich-pane')
+    const frames = async (count) => {
+      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    }
+    pane.scrollTop = 0
+    await preview.mount(doc, { width: 800, height: 600 })
+    await preview.settle()
+    const view = preview.view()
+    const bottom = () => pane.scrollHeight - pane.clientHeight - pane.scrollTop
+    const grow = async () => {
+      view.dispatch({
+        changes: { from: view.state.doc.length, insert: `\n\n${doc}` },
+      })
+      await frames(8)
+      return bottom()
+    }
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(view.state.doc.length),
+    })
+    await frames(8)
+    // Not the reader: what heights shrinking under the command's target do.
+    pane.scrollTop = pane.scrollHeight
+    await frames(8)
+    const sent = bottom()
+    const commanded = await grow()
+    pane.scrollTop = pane.scrollHeight
+    pane.dispatchEvent(new WheelEvent('wheel'))
+    await frames(8)
+    return { sent, commanded, read: await grow(), height: pane.clientHeight }
+  }, doc)
+  const report = JSON.stringify(result)
+  assert.ok(Math.abs(result.sent) <= 1, report)
+  assert.ok(result.commanded > result.height, report)
+  assert.ok(Math.abs(result.read) <= 1, report)
 })
 
 test('scrolling up through known code blocks keeps the scroll position and full height', {

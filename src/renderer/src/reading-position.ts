@@ -62,7 +62,7 @@ function scrollPane(view: EditorView) {
 function readingPosition(view: EditorView): Reading | null {
   const pane = scrollPane(view)
   // A reader at the bottom stays there instead: see `keepRead`.
-  if (pane && atBottom(pane)) return null
+  if (pane && readsBottom(view, pane)) return null
   const scroller = pane ?? document.scrollingElement
   const { top, bottom } = pane?.getBoundingClientRect() ?? {
     top: 0,
@@ -285,6 +285,21 @@ function watchReader(pane: Element) {
     pane.addEventListener(type, seen, { capture: true, passive: true })
 }
 
+/** When each view was last sent a scroll command. */
+const commanded = new WeakMap<EditorView, number>()
+/**
+ * Whether a reader holds the pane at its bottom. After a scroll command, as a
+ * link's to a heading above, heights can shrink under its target and leave
+ * the pane at a bottom nobody chose, until the reader moves it again.
+ */
+function readsBottom(view: EditorView, pane: Element, height?: number) {
+  const sent = commanded.get(view)
+  return (
+    atBottom(pane, height) &&
+    (sent === undefined || (readerInput.get(pane) ?? -1) > sent)
+  )
+}
+
 /** A scroll command the reading position sends itself. */
 const revealed = Annotation.define<boolean>()
 // ponytail: CodeMirror exports no type for its scroll command's effect; its
@@ -411,8 +426,11 @@ const keepBottom = {
       !!pane &&
       known?.pane === pane &&
       pane.scrollHeight !== known.height &&
-      atBottom(pane, known.height)
-    if (pane) heights.set(view, { pane, height: pane.scrollHeight })
+      readsBottom(view, pane, known.height)
+    if (pane) {
+      watchReader(pane)
+      heights.set(view, { pane, height: pane.scrollHeight })
+    }
     return pinned ? pane : null
   },
   write(pane: Element | null) {
@@ -438,6 +456,7 @@ export const keepRead = [
         (scrollRequests.get(update.view) ?? 0) + 1,
       )
       scrollsWaiting.add(update.view)
+      commanded.set(update.view, performance.now())
       revealing.delete(update.view)
     }
     // Scrolling away ends the place held: back at the same scroll, the

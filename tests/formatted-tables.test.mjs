@@ -1198,7 +1198,7 @@ for (const [layout, doc, target] of [
           )
             ? view.coordsAtPos(pos, 1).top
             : null
-        for (let i = 0; i < 60 && Math.abs(where(at) ?? 99) >= 200; i++) {
+        for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
           view.dispatch({
             effects: view.constructor.scrollIntoView(at, {
               y: 'start',
@@ -1246,10 +1246,6 @@ for (const [layout, doc, target] of [
         }, before.pos)
         steps.push(after === null ? null : after - before.top + delta)
       }
-    assert.ok(
-      steps.every((off) => off !== null && Math.abs(off) <= 30),
-      JSON.stringify(steps),
-    )
     // A new width wraps the text at once, the editor's estimates follow later.
     const widths = await harness.evaluate(async () => {
       const { rowAtTop, where, frame, panes } = window.reading
@@ -1271,8 +1267,8 @@ for (const [layout, doc, target] of [
       return offs
     })
     assert.ok(
-      widths.every((off) => off !== null && Math.abs(off) <= 30),
-      JSON.stringify(widths),
+      [...steps, ...widths].every((off) => off !== null && Math.abs(off) <= 30),
+      JSON.stringify({ steps, widths }),
     )
     await harness.evaluate(() => {
       delete window.reading

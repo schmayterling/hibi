@@ -468,29 +468,23 @@ export const keepRead = [
     )
       held.scroll = Number.POSITIVE_INFINITY
     const keep = kept.get(update.view)
-    if (!keep) {
-      if (
-        update.geometryChanged ||
-        update.heightChanged ||
-        update.viewportChanged
-      )
-        holdHeld(update.view)
-      return
-    }
     if (
-      update.docChanged ||
-      update.selectionSet ||
-      Math.abs(keep.pane.scrollTop - keep.scroll) > 1
-    ) {
+      keep &&
+      (update.docChanged ||
+        update.selectionSet ||
+        Math.abs(keep.pane.scrollTop - keep.scroll) > 1)
+    )
       kept.delete(update.view)
-      return
-    }
     if (
       !update.geometryChanged &&
       !update.heightChanged &&
       !update.viewportChanged
     )
       return
+    if (!keep || kept.get(update.view) !== keep) {
+      holdHeld(update.view)
+      return
+    }
     if (--keep.left <= 0) kept.delete(update.view)
     restore(update.view, keep)
     keep.scroll = keep.pane.scrollTop

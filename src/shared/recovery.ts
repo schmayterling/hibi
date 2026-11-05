@@ -31,17 +31,18 @@ const record = (value: unknown) =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {}
-/** Anything but an allowed value is its default, so a damaged file deletes nothing early. */
-export function parseRecoverySettings(value: unknown): RecoverySettings {
+/** Anything but an allowed value takes the fallback's. */
+export function parseRecoverySettings(
+  value: unknown,
+  fallback = defaultRecoverySettings,
+): RecoverySettings {
   const { keep, days, megabytes, openAtLaunch } = record(value)
   return {
     keep: keep !== false,
-    days:
-      recoveryDays.find((allowed) => allowed === days) ??
-      defaultRecoverySettings.days,
+    days: recoveryDays.find((allowed) => allowed === days) ?? fallback.days,
     megabytes:
       recoveryMegabytes.find((allowed) => allowed === megabytes) ??
-      defaultRecoverySettings.megabytes,
+      fallback.megabytes,
     openAtLaunch: openAtLaunch === true,
   }
 }

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { constants } from 'node:fs'
 import {
   type FileHandle,
   mkdir,
@@ -9,8 +10,9 @@ import {
   rm,
   stat,
   unlink,
+  writeFile,
 } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import {
   parseRecoverySettings,
@@ -30,6 +32,10 @@ const folder = () => join(app.getPath('userData'), 'recovery')
 const settingsPath = () =>
   join(app.getPath('userData'), 'recovery-settings.json')
 const FILE_NAME = /^([0-9a-f-]{36})\.(\d+)(?:\.(\d+))?\.recovery$/
+/** Marks a tab whose copies were given up but a program held; they are never offered. */
+const GONE_NAME = /^([0-9a-f-]{36})\.gone$/
+/** A note's path can name a pipe or a device: opening one must not wait for a writer. */
+const READ_ONLY = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0)
 const FORMAT = 1
 const HEADER_BYTES = 64 * 1024
 /** A hash of the header and one of the text, then a line end. */
@@ -45,6 +51,13 @@ const LONGEST_GAP = 30_000
  */
 const BYTES_PER_GAP_SECOND = 8 * MEBIBYTE
 const PREVIEW_UNITS = 120
+/** Settings that can't be read say nothing about limits, so they delete nothing. */
+const UNREADABLE_SETTINGS: RecoverySettings = {
+  keep: true,
+  days: 0,
+  megabytes: 4096,
+  openAtLaunch: false,
+}
 
 export type UnsavedNote = Readonly<{
   tabId: string
@@ -93,6 +106,8 @@ const written = new Map<
 let generation = 0
 const waiting = new Map<string, Waiting>()
 let unreadable: Unreadable[] = []
+/** Copies opened in a tab this launch whose own copy could not be written yet: not offered again until the next launch. */
+const reopened = new Set<string>()
 /** Files a program held when they were to go; each queue turn tries again. */
 const leftover = new Set<string>()
 let dismissed = false
@@ -104,12 +119,15 @@ export const recoverySettings = () =>
   (settingsRead ??= readFile(settingsPath(), 'utf8').then(
     (text) => {
       try {
-        return parseRecoverySettings(JSON.parse(text))
+        return parseRecoverySettings(JSON.parse(text), UNREADABLE_SETTINGS)
       } catch {
-        return parseRecoverySettings(null)
+        return UNREADABLE_SETTINGS
       }
     },
-    () => parseRecoverySettings(null),
+    (error: NodeJS.ErrnoException) =>
+      error.code === 'ENOENT'
+        ? parseRecoverySettings(null)
+        : UNREADABLE_SETTINGS,
   ))
 
 // Writes and removals run one at a time, in order.
@@ -140,6 +158,12 @@ async function drop(file: string) {
 async function dropLeftovers() {
   for (const file of [...leftover]) await drop(file)
 }
+/** A tab's copy was given up. If a program still holds one of its files, the next launch must not offer it. */
+async function giveUp(id: string, file: string) {
+  await drop(file)
+  if ([...leftover].some((other) => basename(other).startsWith(id)))
+    await writeFile(join(folder(), `${id}.gone`), '').catch(() => {})
+}
 
 async function readAt(file: FileHandle, position: number, length: number) {
   const bytes = Buffer.allocUnsafe(length)
@@ -160,12 +184,14 @@ async function readAt(file: FileHandle, position: number, length: number) {
 async function inspect(path: string) {
   let file: FileHandle
   try {
-    file = await open(path, 'r')
+    file = await open(path, READ_ONLY)
   } catch {
     return null
   }
   try {
-    const { size } = await file.stat()
+    const info = await file.stat()
+    if (!info.isFile()) return null
+    const { size } = info
     const start = await readAt(file, 0, Math.min(size, HEADER_BYTES))
     const end = start.indexOf(10)
     if (end < 0) return null
@@ -226,11 +252,12 @@ async function inspect(path: string) {
 async function fileHash(path: string) {
   let file: FileHandle
   try {
-    file = await open(path, 'r')
+    file = await open(path, READ_ONLY)
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : ''
   }
   try {
+    if (!(await file.stat()).isFile()) return ''
     const digest = createHash('sha256')
     for (let at = 0; ; ) {
       const part = await readAt(file, at, MEBIBYTE)
@@ -260,11 +287,14 @@ const load = () =>
   (loaded ??= (async () => {
     const settings = await recoverySettings()
     if (!settings.keep) {
-      await rm(folder(), { recursive: true, force: true })
+      // A program holding a file leaves it for the next launch, and the app works.
+      await rm(folder(), { recursive: true, force: true }).catch(() => {})
       return
     }
     const tabs = new Map<string, { file: string; generation: number }[]>()
-    for (const name of await readdir(folder()).catch(() => [])) {
+    const names = await readdir(folder()).catch(() => [])
+    const gone = names.filter((name) => GONE_NAME.test(name))
+    for (const name of names) {
       const match = FILE_NAME.exec(name)
       if (!match || written.has(match[1]!)) continue
       const files = tabs.get(match[1]!) ?? []
@@ -272,6 +302,10 @@ const load = () =>
       files.push({ file: join(folder(), name), generation: Number(match[2]) })
     }
     for (const [id, files] of tabs) {
+      if (gone.includes(`${id}.gone`)) {
+        for (const { file } of files) await drop(file)
+        continue
+      }
       files.sort((a, b) => b.generation - a.generation)
       let found = false
       for (const { file } of files) {
@@ -288,18 +322,23 @@ const load = () =>
             await drop(file)
             continue
           }
-          const { header } = copy
-          const hash =
-            header.named && header.path !== null
-              ? await fileHash(header.path)
-              : undefined
+          // A path from another system, or a tampered one, names no note here.
+          const header =
+            copy.header.path === null || isAbsolute(copy.header.path)
+              ? copy.header
+              : { ...copy.header, path: null }
+          const hash = !header.named
+            ? undefined
+            : header.path === null
+              ? null
+              : await fileHash(header.path)
           // The text reached the note after all, as a crash after a save leaves it.
           if (hash === copy.textHash) {
             await drop(file)
             continue
           }
           waiting.set(id, {
-            ...copy.header,
+            ...header,
             id,
             file,
             size: copy.size,
@@ -341,6 +380,11 @@ const load = () =>
         unreadable = unreadable.filter((other) => other !== item)
         await drop(item.file)
       }
+    for (const name of gone) {
+      const id = GONE_NAME.exec(name)![1]!
+      if (![...leftover].some((file) => basename(file).startsWith(id)))
+        await drop(join(folder(), name))
+    }
   })())
 
 const total = () => {
@@ -360,7 +404,7 @@ const unclaimed = () =>
       offered: copy.offered,
       go: async () => {
         waiting.delete(copy.id)
-        await drop(copy.file)
+        await giveUp(copy.id, copy.file)
       },
     })),
     ...unreadable.map((item) => ({
@@ -430,20 +474,6 @@ async function writeCopy(note: UnsavedNote, key: string) {
     return 0
   }
   tooLarge.delete(note.tabId)
-  let bytes = total() - (previous?.size ?? 0) + size
-  let removed = 0
-  for (const item of unclaimed()) {
-    if (bytes <= limit) break
-    await item.go()
-    bytes -= item.size
-    removed++
-  }
-  if (removed)
-    notify(
-      removed === 1
-        ? 'Hibi removed an older recovery copy to stay under its size limit.'
-        : `Hibi removed ${removed} older recovery copies to stay under their size limit.`,
-    )
   await mkdir(folder(), { recursive: true, mode: 0o700 })
   const file = join(folder(), `${note.tabId}.${++generation}.recovery`)
   const handle = await open(file, 'wx', 0o600)
@@ -473,6 +503,22 @@ async function writeCopy(note: UnsavedNote, key: string) {
   await syncFolder(folder())
   written.set(note.tabId, { key, file, size, name: note.name })
   if (previous) await drop(previous.file)
+  // Only now: a waiting copy may be the only place its text is, and the note
+  // being written is still safe in memory if this write fails.
+  let bytes = total()
+  let removed = 0
+  for (const item of unclaimed()) {
+    if (bytes <= limit) break
+    await item.go()
+    bytes -= item.size
+    removed++
+  }
+  if (removed)
+    notify(
+      removed === 1
+        ? 'Hibi removed an older recovery copy to stay under its size limit.'
+        : `Hibi removed ${removed} older recovery copies to stay under their size limit.`,
+    )
   return note.text.utf8Bytes
 }
 const noteKey = (note: UnsavedNote) =>
@@ -487,21 +533,31 @@ async function removeSettled() {
     if (!open.has(tabId)) {
       written.delete(tabId)
       tooLarge.delete(tabId)
-      await drop(copy.file)
+      await giveUp(tabId, copy.file)
     }
 }
+/** The tab whose copy was last started, which may still be being written. */
+let writing: string | undefined
 /** Writes what changed; returns how many bytes that took. */
 async function writeDue(only?: string) {
   await removeSettled()
   let bytes = 0
   if (!(await recoverySettings()).keep) return bytes
+  // A note that can't be written must not cost the notes after it their copies.
+  let failure: { error: unknown } | undefined
   for (const note of unsavedNotes?.() ?? []) {
     if (only && note.tabId !== only) continue
     const key = noteKey(note)
     if (written.get(note.tabId)?.key === key) continue
-    bytes += await writeCopy(note, key)
-    writeFailed = false
+    writing = note.tabId
+    try {
+      bytes += await writeCopy(note, key)
+    } catch (error) {
+      failure ??= { error }
+    }
   }
+  if (failure) throw failure.error
+  writeFailed = false
   return bytes
 }
 
@@ -567,36 +623,55 @@ export function startRecoveryJournal(
 /** Waits for queued writes and removals, as a quit must, for 5 seconds at most. */
 export async function recoveryWritten() {
   let bound: ReturnType<typeof setTimeout> | undefined
-  await Promise.race([
-    Promise.allSettled(running),
-    new Promise((resolve) => {
-      bound = setTimeout(resolve, 5000)
+  const finished = await Promise.race([
+    Promise.allSettled(running).then(() => true),
+    new Promise<boolean>((resolve) => {
+      bound = setTimeout(resolve, 5000, false)
     }),
   ])
   clearTimeout(bound)
+  if (finished) return
+  // A long write outlasted the wait and held removals up: the quit goes on, and
+  // what those removals were for must still not come back.
+  const open = new Set(unsavedNotes?.().map(({ tabId }) => tabId))
+  for (const id of new Set([...written.keys(), writing]))
+    if (id && !open.has(id))
+      await writeFile(join(folder(), `${id}.gone`), '').catch(() => {})
 }
 
+const offeredName = (file: string, now: number) => {
+  const [, id, generation] = FILE_NAME.exec(basename(file))!
+  return join(folder(), `${id}.${generation}.${now}.recovery`)
+}
+const renamed = (from: string, to: string) =>
+  rename(from, to).then(
+    () => true,
+    () => false,
+  )
 /** What an earlier run left, once a launch; the first offer starts a copy's time limit. */
 export function waitingRecovery(): Promise<RecoveryWaiting> {
   return serial(async () => {
     await load()
     const settings = await recoverySettings()
     const copies: RecoveryCopy[] = []
+    // A damaged copy is never offered, so this is when its time limit starts.
+    for (const item of unreadable)
+      if (!item.newer && item.offered === undefined) {
+        const now = Date.now()
+        const marked = offeredName(item.file, now)
+        if (await renamed(item.file, marked)) {
+          item.file = marked
+          item.offered = now
+        }
+      }
     if (!dismissed)
       for (const copy of waiting.values()) {
+        if (reopened.has(copy.id)) continue
         if (copy.offered === undefined) {
           const now = Date.now()
-          const marked = join(
-            folder(),
-            `${copy.id}.${FILE_NAME.exec(basename(copy.file))![2]}.${now}.recovery`,
-          )
+          const marked = offeredName(copy.file, now)
           // A held file keeps its name and is first offered again next time.
-          if (
-            await rename(copy.file, marked).then(
-              () => true,
-              () => false,
-            )
-          ) {
+          if (await renamed(copy.file, marked)) {
             copy.file = marked
             copy.offered = now
           }
@@ -635,7 +710,7 @@ export function discardRecovery(id: unknown) {
       const copy = typeof id === 'string' ? waiting.get(id) : undefined
       if (!copy) return
       waiting.delete(copy.id)
-      await drop(copy.file)
+      await giveUp(copy.id, copy.file)
     }),
   )
 }
@@ -673,12 +748,13 @@ export function recoveryOpened(id: string, tabId: string) {
       if (!copy) return
       // Its replacement may need the room, but the claimed copy must stay
       // on disk until that replacement is whole.
+      reopened.add(id)
       waiting.delete(id)
       let kept = false
       try {
         await writeDue(tabId)
         kept = written.has(tabId)
-        if (kept) await drop(copy.file)
+        if (kept) await giveUp(id, copy.file)
       } finally {
         if (!kept) waiting.set(id, copy)
       }

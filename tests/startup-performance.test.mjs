@@ -166,9 +166,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // adds 958 (#866).
   // Keeping one likely-addon list across different errors adds 924 (#872).
   // Asking after launch whether a crash left unsaved text, and opening what it
-  // left, adds 528 (#873).
-  // Autosave on unless turned off, and a large note resting between saves,
-  // adds 175 (#874).
+  // left, adds 528 (#878).
+  // Reading display blocks as Obsidian reads fenced math, including their
+  // closed state, preferences and shared list bounds, adds 894 (#731).
+  // Default-on autosave and spacing attempts by their last duration adds
+  // 175 (autosave default).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -210,6 +212,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         958 +
         924 +
         528 +
+        894 +
         175,
     `startup catalog grew to ${bytes} bytes`,
   )

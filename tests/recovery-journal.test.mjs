@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -29,6 +30,7 @@ async function note(t, text = 'original') {
   const file = join(profile, 'note.md')
   await writeFile(file, text)
   const running = new Set()
+  let autosavePinned = false
   const copies = () => readdir(join(profile, 'recovery')).catch(() => [])
   t.after(async () => {
     for (const app of running) await app.close()
@@ -77,6 +79,10 @@ async function note(t, text = 'original') {
             })),
         ),
       async open(text) {
+        if (!autosavePinned) {
+          await autosaveOff(app, page)
+          autosavePinned = true
+        }
         await pressShortcut(app, `${mod}+o`)
         await shows(text)
         await page.waitForFunction(
@@ -160,7 +166,6 @@ test('after a killed process the prompt gets the text back, the file untouched, 
 }, async (t) => {
   const { file, copies, launch } = await note(t)
   const first = await launch()
-  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('typed and never saved')
   await first.kept('typed and never saved')
@@ -211,7 +216,6 @@ test('typing nonstop loses about the last second to a kill', {
   for (let round = 0; round < 3; round++) {
     const { launch } = await note(t, 'start ')
     const first = await launch()
-    await autosaveOff(first.app, first.page)
     await first.open('start ')
     await first.edit('typing ')
     const typed = []
@@ -255,7 +259,6 @@ test('a copy cut off by the crash falls back to the whole one before it', {
 }, async (t) => {
   const { profile, launch } = await note(t)
   const first = await launch()
-  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('the whole copy')
   const name = await first.kept('the whole copy')
@@ -276,7 +279,6 @@ test('over a file changed outside, a copy opens apart and autosave cannot replac
 }, async (t) => {
   const { file, launch } = await note(t)
   const first = await launch()
-  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('my unsaved words')
   await first.kept('my unsaved words')
@@ -313,7 +315,6 @@ test('a note deleted outside and a note never saved both come back as new notes'
 }, async (t) => {
   const { file, launch } = await note(t)
   const first = await launch()
-  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('gone but kept')
   await first.kept('gone but kept')
@@ -346,7 +347,6 @@ test('don’t save leaves no copy, at tab close and at quit', {
 }, async (t) => {
   const { copies, launch } = await note(t)
   const first = await launch()
-  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('thrown away in a tab')
   await first.kept('thrown away in a tab')
@@ -366,12 +366,88 @@ test('don’t save leaves no copy, at tab close and at quit', {
   assert.deepEqual(await copies(), [])
 })
 
+test('a restore whose own copy cannot be written still opens the note, and the app stays usable', {
+  skip: process.platform === 'win32',
+  timeout: 90000,
+}, async (t) => {
+  const { profile, file, launch } = await note(t)
+  const first = await launch()
+  await first.open('original')
+  await first.edit('words kept')
+  await first.kept('words kept')
+  await first.kill()
+  const folder = join(profile, 'recovery')
+  await chmod(folder, 0o500)
+  const second = await launch()
+  await second.page.getByRole('button', { name: 'Restore note.md' }).click()
+  await second.page.waitForFunction(
+    () =>
+      document.querySelector('[aria-label="Document editor"]')?.textContent ===
+      'words kept',
+  )
+  // Its text is open, so the prompt doesn't come back this launch.
+  await second.page
+    .getByText(/could not keep a recovery copy/i)
+    .first()
+    .waitFor()
+  assert.equal(await second.page.locator('[data-recovery-copy]').count(), 0)
+  await second.editor.click()
+  await second.page.keyboard.press(`${mod}+a`)
+  await second.page.keyboard.type('still editing')
+  await second.shows('still editing')
+  assert.equal(await readFile(file, 'utf8'), 'original')
+  await second.kill()
+  await chmod(folder, 0o700)
+  // The copy it came from survives a second stop: nothing is lost on the way.
+  const third = await launch()
+  await third.page.getByRole('button', { name: 'Restore note.md' }).waitFor()
+  assert.equal(await third.page.locator('[data-recovery-copy]').count(), 1)
+  assert.match(
+    await third.page.locator('[data-recovery-copy] blockquote').textContent(),
+    /words kept/,
+  )
+})
+
+test('a copy that cannot be read leaves the window on what main shows, and it stays offered', {
+  skip: process.platform === 'win32',
+  timeout: 90000,
+}, async (t) => {
+  const { profile, launch, copies } = await note(t)
+  await forge(profile, { name: 'draft.md', text: 'draft words' })
+  const first = await launch()
+  const [name] = await copies()
+  await chmod(join(profile, 'recovery', name), 0o000)
+  await first.page.getByRole('button', { name: 'Restore draft.md' }).click()
+  await first.page
+    .getByText(/could not read this recovery copy/i)
+    .first()
+    .waitFor()
+  await first.page.getByRole('button', { name: 'Restore draft.md' }).waitFor()
+  await first.page.getByRole('button', { name: /^decide later$/i }).click()
+  await first.page.waitForFunction(() => !document.querySelector('dialog'))
+  await first.editor.click()
+  await first.page.keyboard.type('typed after')
+  await first.shows('typed after')
+})
+
+test('a tampered name stays a name, not a path', {
+  timeout: 60000,
+}, async (t) => {
+  const { profile, launch } = await note(t)
+  await forge(profile, { name: '../../outside.md', text: 'draft words' })
+  const first = await launch()
+  await first.page
+    .getByRole('button', { name: 'Restore ../../outside.md' })
+    .click()
+  await first.shows('draft words')
+  assert.equal((await first.document()).name, 'outside.md')
+})
+
 test('discarding from the prompt deletes the copy; deciding later asks again', {
   timeout: 120000,
 }, async (t) => {
   const { copies, launch } = await note(t)
   const first = await launch()
-  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('still undecided')
   await first.kept('still undecided')
@@ -402,7 +478,6 @@ test('with the setting on, a killed note opens without a prompt and stays protec
     }),
   )
   const first = await launch()
-  await autosaveOff(first.app, first.page)
   await first.open('original')
   await first.edit('opened by itself')
   await first.kept('opened by itself')
@@ -531,7 +606,6 @@ test('lowering the size limit says what goes and removes the oldest, not an open
   })
   const app = await launch(1)
   await later(app.page)
-  await autosaveOff(app.app, app.page)
   await app.open('original')
   await app.edit('open and unsaved')
   const open = await app.kept('open and unsaved')

@@ -448,6 +448,7 @@ const sameReferenceSyntax = (
   a.alerts === b.alerts &&
   a.textExtras === b.textExtras &&
   !!a.math === !!b.math &&
+  (a.mathBlocks !== false) === (b.mathBlocks !== false) &&
   a.frontmatter === b.frontmatter
 
 /**

@@ -1305,7 +1305,7 @@ export async function openRecovered(
   const extension = extname(copy.name)
   untitledName = copy.named
     ? `${basename(copy.name, extension)} (recovered)${extension}`
-    : copy.name
+    : basename(copy.name)
   return restoreDocument(window, text())
 }
 

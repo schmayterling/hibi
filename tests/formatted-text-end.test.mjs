@@ -2,6 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState, Text } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
+import {
+  blockMathSyntax,
+  inlineMathSyntax,
+} from '../src/addons/math/formatted-syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
   formattedOpenSelection,
@@ -97,6 +101,31 @@ test('a note ending in a block the rich editor draws as one node opens with it s
     formattedOpenSelection(text(tag), tree),
     caret(tag.length - 1),
   )
+})
+
+test('a note ending in display math selects only a closed formula', () => {
+  const math = parser.configure([GFM, blockMathSyntax, inlineMathSyntax])
+  const open = (source) =>
+    formattedOpenSelection(text(source), math.parse(source))
+  const closed = 'plain\n\n$$\nx\n$$\n'
+  assert.deepEqual(open(closed), { anchor: 7, head: closed.length - 1 })
+  // A stray opening line holds the rest of the note, or a list item's or
+  // quote's: a key typed on opening must not replace it. A block over the
+  // formula limit, closed or not, shows as text.
+  const over = `${'word '.repeat(2100)}end\n`
+  for (const source of [
+    'plain\n\n$$\nfirst\n\n# second\n\nthird\n',
+    'plain\n\n$$ - moderate\n\nthird\n',
+    '- item\n  $$\n  first\n\n  third\n',
+    '> $$\n> first\n>\n> third\n',
+    `plain\n\n$$\n${over}$$\n`,
+    `plain\n\n$$\n${over}`,
+  ])
+    assert.deepEqual(
+      open(source),
+      caret(source.length - 1),
+      JSON.stringify(source.slice(0, 40)),
+    )
 })
 
 test('a fence a renderer draws is selected whole; a tree short of the end gives null', () => {

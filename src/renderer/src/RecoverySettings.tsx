@@ -61,7 +61,7 @@ export function RecoverySettings() {
       <SettingRow
         id="keep-recovery"
         label="Keep unsaved text for recovery"
-        description="If Hibi or your computer stops suddenly, you can get unsaved text back. Hibi keeps it as plain text in its app data on this device until you save or discard it. Turning this off deletes these copies."
+        description="If Hibi or your computer stops suddenly, you can get unsaved text back. Hibi keeps it as plain text in its app data until you save or discard it, and backups of your user folder can include it. Turning this off deletes these copies."
       >
         <Toggle
           id="keep-recovery"

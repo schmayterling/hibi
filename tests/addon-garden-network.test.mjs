@@ -11,8 +11,9 @@ const github = (repository, commit) =>
   `https://github.com/hibigarden/${repository}/tree/${commit}`
 const ADDON_STARTER = github(
   'addon-starter',
-  '422be6feaf5cd0edea8d45deac6938b71210567a',
+  'cb8d3b78d1fdc1fb7ebfb9ca9dd9cf49b5961272',
 )
+// These immutable API 2 packages must stay blocked, even with unsigned opt-in.
 const THEME_STARTER = github(
   'theme-starter',
   'ea985167e2c0c6d3effd4b642d32d1ac6707a1a9',
@@ -40,6 +41,13 @@ test('hibi garden installs real packages through the addon manager', {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await waitForDocumentEditor(app, page)
+  assert.deepEqual(
+    await page.evaluate(() => window.hibi.getAddonTrustSettings()),
+    {
+      allowUnsigned: false,
+      checkRevocations: true,
+    },
+  )
   // Capture native install confirmations; `answer` picks Cancel (0) or Install (1).
   await app.evaluate(({ dialog }) => {
     globalThis.confirmations = []
@@ -74,6 +82,17 @@ test('hibi garden installs real packages through the addon manager', {
   const garden = (id) => addons.locator(`[data-setting-id="garden-${id}"]`)
   const row = (id) => addons.locator(`[data-setting-id="addon-${id}"]`)
   const toggle = (id) => addons.locator(`input#addon-${id}`)
+  let typing, catalogTheme
+  // Each step depends on the previous one. Stop on its failure, before stale UI
+  // produces unrelated locator failures and consumes the file's time limit.
+  const step = async (name, run) => {
+    let completed = false
+    await t.test(name, async () => {
+      await run()
+      completed = true
+    })
+    assert.ok(completed, `Stopped after "${name}" failed.`)
+  }
   const palette = async (label) => {
     await clickMenu(app, 'Command palette')
     const input = page.getByRole('combobox', { name: /search commands/i })
@@ -102,37 +121,43 @@ test('hibi garden installs real packages through the addon manager', {
     await button.and(page.locator(':disabled')).waitFor()
     await button.and(page.locator(':enabled')).waitFor()
   }
-  const until = async (check, message) => {
-    for (const deadline = Date.now() + 15000; Date.now() < deadline; ) {
-      if (await check()) return
-      await new Promise((done) => setTimeout(done, 200))
-    }
-    assert.fail(message)
-  }
+  await step(
+    'the live directory shows compatible catalog metadata',
+    async () => {
+      await gardenTab.click()
+      await garden('typing-speed').waitFor()
+      const directory = await page.evaluate(() =>
+        window.hibi.getAddonDirectory(),
+      )
+      assert.equal(directory.error, undefined)
+      for (const entry of directory.entries) {
+        assert.equal(entry.apiVersion, 3)
+        const metadata = await garden(entry.id).textContent()
+        assert.ok(metadata.includes(`v${entry.version}`), metadata)
+        assert.ok(metadata.includes(entry.license), metadata)
+      }
+      typing = directory.entries.find(({ id }) => id === 'typing-speed')
+      catalogTheme = directory.entries.find(({ kind }) => kind === 'theme')
+      assert.ok(
+        typing && catalogTheme,
+        'The live catalog needs typing speed and a compatible theme.',
+      )
+    },
+  )
 
-  await t.test('the live directory lists signed typing speed', async () => {
-    await gardenTab.click()
-    await garden('typing-speed').waitFor()
-    await garden('hibi-doom').waitFor()
-    assert.match(await garden('typing-speed').innerText(), /GPL-3\.0-only/)
-  })
-
-  await t.test('cancelling the confirmation installs nothing', async () => {
+  await step('cancelling the confirmation installs nothing', async () => {
     await answer(0)
     await garden('typing-speed')
-      .getByRole('button', { name: 'Install Typing speed' })
+      .getByRole('button', { name: `Install ${typing.name}` })
       .click()
     await addons.locator('#garden-typing-speed-install:enabled').waitFor()
     const [box] = await confirmations()
-    assert.equal(box.message, 'Install Typing speed 1.1.1?')
+    assert.equal(box.message, `Install ${typing.name} ${typing.version}?`)
     assert.match(box.detail, /Signed by Hibi\./)
-    await until(
-      async () => !(await installed()).includes('typing-speed'),
-      'typing-speed is still installed after Uninstall',
-    )
+    assert.ok(!(await installed()).includes('typing-speed'))
   })
 
-  await t.test(
+  await step(
     'an install link asks, then installs the signed package',
     async () => {
       await answer(1)
@@ -142,12 +167,16 @@ test('hibi garden installs real packages through the addon manager', {
         .waitFor()
       const boxes = await confirmations()
       assert.equal(boxes.length, 2)
+      assert.equal(
+        boxes[1].message,
+        `Install ${typing.name} ${typing.version}?`,
+      )
       assert.match(boxes[1].detail, /Signed by Hibi\./)
       assert.ok((await installed()).includes('typing-speed'))
     },
   )
 
-  await t.test(
+  await step(
     'an open link reveals the installed addon without enabling it',
     async () => {
       await link('hibi://addons/open?id=typing-speed')
@@ -162,7 +191,7 @@ test('hibi garden installs real packages through the addon manager', {
     },
   )
 
-  await t.test(
+  await step(
     'typing speed reports while enabled and cleans up when disabled',
     async () => {
       await toggle('typing-speed').click()
@@ -195,81 +224,100 @@ test('hibi garden installs real packages through the addon manager', {
     },
   )
 
-  await t.test(
-    'curated doom installs signed without unsigned opt-in',
+  await step(
+    'a compatible garden theme installs signed and falls back when uninstalled',
     async () => {
       await openAddonManager()
       await gardenTab.click()
-      await answer(1)
       const before = (await confirmations()).length
-      await garden('hibi-doom')
-        .getByRole('button', { name: 'Install Doom' })
+      await garden(catalogTheme.id)
+        .getByRole('button', { name: `Install ${catalogTheme.name}` })
         .click()
-      await garden('hibi-doom')
+      await garden(catalogTheme.id)
         .getByText('Installed', { exact: true })
         .waitFor()
       const boxes = await confirmations()
       assert.equal(boxes.length, before + 1)
-      assert.equal(boxes.at(-1).message, 'Install Doom 0.4.1?')
+      assert.equal(
+        boxes.at(-1).message,
+        `Install ${catalogTheme.name} ${catalogTheme.version}?`,
+      )
       assert.match(boxes.at(-1).detail, /Signed by Hibi\./)
-      assert.match(boxes.at(-1).detail, /gist\.githubusercontent\.com/)
       await installedTab.click()
-      await toggle('hibi-doom').click()
-      await addons.locator('input#addon-hibi-doom:checked:enabled').waitFor()
-      // Running the command loads the addon's code and opens its tab. The first
-      // game downloads Doom's shareware data from the addon's declared origin.
-      const { input } = await palette('Play Doom')
-      await input.press('Enter')
-      const game = page.locator('section[aria-label="Doom game"]')
-      await game.waitFor()
-      await game.locator('canvas[aria-label="Doom canvas"]').waitFor()
-      await page
-        .waitForFunction(
-          () =>
-            window.document.querySelector('section[aria-label="Doom game"]')
-              ?.dataset.state === 'ready',
-          null,
-          { timeout: 120000 },
-        )
-        .catch(async (error) => {
-          throw new Error(
-            `Doom did not become ready (state ${await game.getAttribute('data-state')}): ${await game.innerText()}`,
-            { cause: error },
-          )
-        })
+      assert.equal(await toggle(catalogTheme.id).isChecked(), false)
+      await toggle(catalogTheme.id).click()
+      await toggle(catalogTheme.id)
+        .and(page.locator(':checked:enabled'))
+        .waitFor()
+      const theme = await page.evaluate(
+        async (id) =>
+          (await window.hibi.getInstalledAddons()).find(
+            ({ manifest }) => manifest.id === id,
+          ),
+        catalogTheme.id,
+      )
+      const scheme = theme.themes[0]
+      assert.ok(scheme)
+      const schemeId = `${catalogTheme.id}.${scheme.id}`
+      await page.getByRole('tab', { name: /^appearance$/i }).click()
+      const appearance = page.locator('#settings-appearance')
+      await appearance
+        .locator('select#theme-mode')
+        .selectOption(scheme.appearance)
+      await appearance
+        .locator(`select#theme-${scheme.appearance}`)
+        .selectOption(schemeId)
+      await page.waitForFunction(
+        (id) => document.documentElement.dataset.colorscheme === id,
+        schemeId,
+      )
+      await openAddonManager()
+      await installedTab.click()
+      await row(catalogTheme.id)
+        .getByRole('button', { name: /^uninstall$/i })
+        .click()
+      await row(catalogTheme.id).waitFor({ state: 'detached' })
+      await page.waitForFunction(
+        (id) => document.documentElement.dataset.colorscheme === id,
+        `hibi-${scheme.appearance}`,
+      )
+      await page.getByRole('tab', { name: /^appearance$/i }).click()
+      await appearance.locator('select#theme-mode').selectOption('system')
     },
   )
 
-  await t.test(
+  await step(
     'uncurated packages stay unsigned and blocked by default',
     async () => {
       await openAddonManager()
       const before = (await confirmations()).length
-      await installFromUrl(
-        'https://github.com/ralphbibera/hibi-doom/tree/446296f572ba80ba6290fba864f104412794bca2/addon',
-      )
+      await installFromUrl(ADDON_STARTER)
       await page
         .getByText(/Turn on "Allow unsigned addons"/)
         .first()
         .waitFor()
-      for (const url of [ADDON_STARTER, THEME_STARTER]) {
-        await installFromUrl(url)
-        await page
-          .getByText(/Turn on "Allow unsigned addons"/)
-          .first()
-          .waitFor()
-      }
+      await installFromUrl(THEME_STARTER)
+      await page
+        .getByText(/made for an earlier version of Hibi/)
+        .first()
+        .waitFor()
       // A repository with several packages opens the chooser instead.
       await installFromUrl(TWO_PACKAGES, { wait: false })
       const chooser = page.getByRole('dialog', { name: /^install addons$/i })
       await chooser.waitFor()
-      for (const name of ['Hello', 'Hello theme'])
-        assert.equal(
-          await chooser
-            .getByRole('checkbox', { name, exact: true })
-            .isEnabled(),
-          false,
+      const choices = chooser.getByRole('checkbox')
+      assert.equal(await choices.count(), 2)
+      for (const choice of await choices.all()) {
+        assert.equal(await choice.isEnabled(), false)
+        assert.match(
+          await choice.evaluate(
+            (input) =>
+              document.getElementById(input.getAttribute('aria-describedby'))
+                .textContent,
+          ),
+          /made for an earlier version of Hibi/,
         )
+      }
       await chooser.getByRole('button', { name: /^cancel$/i }).click()
       await chooser.waitFor({ state: 'hidden' })
       assert.equal((await confirmations()).length, before)
@@ -278,8 +326,8 @@ test('hibi garden installs real packages through the addon manager', {
     },
   )
 
-  await t.test(
-    'allowing unsigned addons installs both starters from their commits',
+  await step(
+    'unsigned opt-in installs the API 3 starter and still rejects API 2',
     async () => {
       await openAddonManager()
       const allow = addons.getByRole('checkbox', {
@@ -310,22 +358,27 @@ test('hibi garden installs real packages through the addon manager', {
       })
       assert.equal(settled, 'checked')
       await answer(1)
-      for (const [url, id, message] of [
-        [ADDON_STARTER, 'hello', 'Install Hello 1.0.0?'],
-        [THEME_STARTER, 'hello-theme', 'Install Hello theme 1.0.0?'],
-      ]) {
-        const before = (await confirmations()).length
-        await installFromUrl(url)
-        assert.ok((await installed()).includes(id), `${id} was not installed`)
-        const boxes = await confirmations()
-        assert.equal(boxes.length, before + 1)
-        assert.equal(boxes.at(-1).message, message)
-        assert.match(boxes.at(-1).detail, /Unsigned\./)
-      }
+      const before = (await confirmations()).length
+      await installFromUrl(ADDON_STARTER)
+      assert.ok(
+        (await installed()).includes('hello'),
+        'hello was not installed',
+      )
+      const boxes = await confirmations()
+      assert.equal(boxes.length, before + 1)
+      assert.equal(boxes.at(-1).message, 'Install Hello 1.0.0?')
+      assert.match(boxes.at(-1).detail, /Unsigned\./)
+      await installFromUrl(THEME_STARTER)
+      await page
+        .getByText(/made for an earlier version of Hibi/)
+        .first()
+        .waitFor()
+      assert.ok(!(await installed()).includes('hello-theme'))
+      assert.equal((await confirmations()).length, before + 1)
     },
   )
 
-  await t.test(
+  await step(
     'the starter extension greets and remembers its count',
     async () => {
       await openAddonManager()
@@ -343,66 +396,18 @@ test('hibi garden installs real packages through the addon manager', {
     },
   )
 
-  await t.test(
-    'the starter theme is selectable and falls back when uninstalled',
-    async () => {
-      await openAddonManager()
-      await installedTab.click()
-      await toggle('hello-theme').click()
-      await addons.locator('input#addon-hello-theme:checked:enabled').waitFor()
-      await page.getByRole('tab', { name: /^appearance$/i }).click()
-      const appearance = page.locator('#settings-appearance')
-      const light = appearance.locator('select#theme-light')
-      await light
-        .locator('option[value="hello-theme.light"]')
-        .waitFor({ state: 'attached' })
-      assert.equal(
-        await light.locator('option[value="hello-theme.light"]').textContent(),
-        'Hello light',
-      )
-      await appearance.locator('select#theme-mode').selectOption('dark')
-      await appearance
-        .locator('select#theme-dark')
-        .selectOption('hello-theme.dark')
-      await page.waitForFunction(
-        () =>
-          window.document.documentElement.dataset.colorscheme ===
-          'hello-theme.dark',
-      )
-      await openAddonManager()
-      await installedTab.click()
-      await row('hello-theme')
-        .getByRole('button', { name: /^uninstall$/i })
-        .click()
-      await row('hello-theme').waitFor({ state: 'detached' })
-      await page.waitForFunction(
-        () =>
-          window.document.documentElement.dataset.colorscheme === 'hibi-dark',
-      )
-      await page.getByRole('tab', { name: /^appearance$/i }).click()
-      await page
-        .locator('#settings-appearance select#theme-mode')
-        .selectOption('system')
-    },
-  )
-
-  await t.test(
-    'garden rows uninstall and offer the install again',
-    async () => {
-      await openAddonManager()
-      await gardenTab.click()
-      await garden('typing-speed')
-        .getByRole('button', { name: 'Uninstall Typing speed' })
-        .click()
-      await garden('typing-speed')
-        .getByRole('button', { name: 'Install Typing speed' })
-        .waitFor()
-      await until(
-        async () => !(await installed()).includes('typing-speed'),
-        'Typing speed is still installed after Uninstall.',
-      )
-    },
-  )
+  await step('garden rows uninstall and offer the install again', async () => {
+    await openAddonManager()
+    await gardenTab.click()
+    await garden('typing-speed')
+      .getByRole('button', { name: `Uninstall ${typing.name}` })
+      .click()
+    await garden('typing-speed')
+      .getByRole('button', { name: `Install ${typing.name}` })
+      .and(page.locator(':enabled'))
+      .waitFor()
+    assert.ok(!(await installed()).includes('typing-speed'))
+  })
 
   assert.deepEqual(errors, [])
 })

@@ -457,8 +457,10 @@ test('a note whose save took long rests ten times as long before the next', {
   await app.evaluate(({ ipcMain }) => {
     const save = ipcMain._invokeHandlers.get('document:autosave')
     let first = true
+    globalThis.autosaveAttempts = 0
     globalThis.slowAutosaveStarted = new Promise((started) => {
       ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
+        globalThis.autosaveAttempts++
         if (first) {
           first = false
           await new Promise((release) => {
@@ -501,9 +503,13 @@ test('a note whose save took long rests ten times as long before the next', {
       async () => (await window.hibi.getDocument()).markdown === 'second',
     )
     await page.clock.runFor(9999)
+    // Drain earlier renderer IPC before asking whether another write began.
+    await page.evaluate(() => window.hibi.getDocument())
+    assert.equal(await app.evaluate(() => globalThis.autosaveAttempts), 1)
     assert.equal(await readFile(file, 'utf8'), 'first')
     await page.clock.runFor(1)
     assert.equal(await saved('second'), true)
+    assert.equal(await app.evaluate(() => globalThis.autosaveAttempts), 2)
   } finally {
     await app.evaluate(() => globalThis.releaseSlowAutosave?.())
   }

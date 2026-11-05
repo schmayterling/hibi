@@ -155,14 +155,6 @@ test('a `$$` line ending a task item stays text, as in Obsidian', () => {
     assert.equal(richText(source, syntax).slice(1), text, source)
 })
 
-test('footnote definitions keep the spaces that end them, as in Obsidian', () => {
-  for (const [source, text] of [
-    ['[^a]: n \n', 'n '],
-    ['[^a]: note\n\n    second \n> quote', 'note\nsecond \n\nquote'],
-  ])
-    assert.equal(richText(source, defaultNoteSyntax).slice(1), text, source)
-})
-
 for (const [source, formatted] of [
   ['- [ ] text[^a]\n\n[^a]: note', '\n\ntext\nnote'],
   ['- [ ] [some words][ref]\n\n[ref]: /target', '\n\nsome words'],

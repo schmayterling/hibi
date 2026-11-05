@@ -185,13 +185,28 @@ let nativeQuoteRules: Tokenizer['rules'] | undefined
  * quadratic for a reader called at every quote.
  */
 export function readNativeQuote(source: string) {
-  // The rule's extent stops at a blank line: when one comes within a few
-  // lines, Marked's own quote reads only those, at a fraction of the cost.
+  // The rule's extent stops at a blank line: bound the fast native read.
   const end = quoteWindow(source)
   if (end !== undefined) {
+    source = source.slice(0, end)
     const tokenizer = new Tokenizer()
     new marked.Lexer({ gfm: true, tokenizer })
-    return tokenizer.blockquote(source.slice(0, end))
+    let valid = true
+    tokenizer.blockquote = (input) => {
+      const quote = Tokenizer.prototype.blockquote.call(tokenizer, input)
+      // Check nested re-reads too: their corrupt raw can lose body lines even
+      // when the outer raw still matches. Retry with the shared reader.
+      if (quote && !input.startsWith(quote.raw) && quote.raw !== `${input}\n`)
+        valid = false
+      return quote
+    }
+    const quote = tokenizer.blockquote(source)
+    if (valid) {
+      // A lone invented newline at EOF needs no body re-read. Keep native
+      // text decisions and bound only the physical source it consumes.
+      if (quote && quote.raw.length > source.length) quote.raw = source
+      return quote
+    }
   }
   const tokenizer = new BlockTokenizer()
   new marked.Lexer({ gfm: true, tokenizer })
@@ -426,7 +441,9 @@ function readQuote(
         .replace(this.rules.other.blockquoteSetextReplace, '\n    $1')
         .replace(this.rules.other.blockquoteSetextReplace2, '')
       chunkLines = []
-      raw.push(chunk)
+      // A list re-read already appended the newline of a fully consumed lazy
+      // line. Its empty cursor line must not add that newline a second time.
+      if (chunk) raw.push(chunk[0] === '\n' ? chunk.slice(1) : chunk)
       // Marked joins a body to the text only once the text is not empty.
       if (text.length === 1 && !text[0]) text.pop()
       text.push(body)

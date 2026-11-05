@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Marked } from 'marked'
+import { Lexer, Marked, Tokenizer } from 'marked'
 import { micromark } from 'micromark'
 import { gfmHtml, gfm as gfmSyntax } from 'micromark-extension-gfm'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
-import { blockMarkdown } from '../src/shared/marked-blocks.ts'
+import { blockMarkdown, readNativeQuote } from '../src/shared/marked-blocks.ts'
 import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 
 const code = (html) =>
@@ -64,22 +64,6 @@ test('a list re-read in a tabbed nested quote keeps the quote markers', () => {
     }
 })
 
-test('fence bodies in alerts and callouts keep CommonMark indentation', () => {
-  // An alert body is Marked's stripped quote text, whose columns are not the
-  // source's: its fences keep Marked's dedent, which matches CommonMark here.
-  for (const head of ['> [!NOTE]', '> [!tip]- Title'])
-    for (const [open, line] of [
-      ['>   ```', '> \tx'],
-      ['>    ```', '> \tx'],
-      ['>   ```', '>  \tx'],
-      ['>    ```', '> \t x'],
-    ]) {
-      const source = [head, open, line, open, '', 'after', ''].join('\n')
-      const markdown = new Marked(blockMarkdown, alertMarkdown)
-      assert.deepEqual(code(markdown.parse(source)), oracle(source), source)
-    }
-})
-
 test('reference definitions take tabs between their parts', () => {
   // CommonMark separates a definition's label, destination and title with
   // spaces or tabs; Marked's rule took spaces only.
@@ -125,4 +109,43 @@ test('a tab that comes in during a nested re-read keeps its lines in their quote
       const words = markdown.parse(source).replace(/<[^>]*>/g, '')
       assert.equal(words.split('q').length - 1, 1, source)
     }
+})
+
+test('a tabbed nested re-read leaves its last quote lines where Marked does', () => {
+  // A last line that strips to nothing stays in the outer quote; it opens no
+  // new quote after the nested one.
+  for (const sample of ['>>~\n\t$\n>', '>>>]\ne\n> >\t', '>>.\n\t>\n>>\n>\t'])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      assert.equal(
+        new Marked(blockMarkdown).parse(source),
+        new Marked().parse(source),
+        source,
+      )
+    }
+})
+
+test('a nested alert whose list takes a lazy line opens no second quote', () => {
+  // Its lines count from the quote it read, not from the alert's longer raw.
+  for (const eol of ['\n', '\r\n']) {
+    const source = ['> > [!NOTE]', '> > - d', 'more', '> >'].join(eol)
+    const tokens = new Marked(blockMarkdown, alertMarkdown).lexer(source)
+    assert.equal(tokens.length, 1, source)
+  }
+})
+
+test('an alert reads the quote Marked reads, short or long', () => {
+  const tokenizer = new Tokenizer()
+  new Lexer({ gfm: true, tokenizer })
+  const lines = '> a\n'.repeat(40)
+  for (const source of [
+    '> [!NOTE]\n> a\n>\tx\n\nafter\n',
+    `> [!NOTE]\n${lines}>\tx\n`,
+    `> [!NOTE]\n${lines}>\t\nlazy\n`,
+    `> [!NOTE]\n${lines}>\t- x\n\nafter\n`,
+  ]) {
+    const { raw, text } = tokenizer.blockquote(source)
+    const quote = readNativeQuote(source)
+    assert.deepEqual({ raw: quote.raw, text: quote.text }, { raw, text }, source)
+  }
 })

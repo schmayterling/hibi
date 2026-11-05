@@ -199,14 +199,11 @@ export function readNativeQuote(source: string) {
   untabbedQuotes.add(tokenizer)
   return tokenizer.blockquote(source)
 }
-// Where the first blank line within 32 lines starts, or the end of a source
-// that ends sooner. Like Marked's paragraph rule, spaces at the very end are
-// still a line of text.
+// Where the first empty line within 32 lines starts, or the end of a source
+// that ends sooner.
 function quoteWindow(source: string) {
   for (let at = 0, line = 0; line < 32; line++) {
-    let char = at
-    while (source.charCodeAt(char) === 32) char++
-    if (line && source.charCodeAt(char) === 10) return at
+    if (source.charCodeAt(at) === 10) return at
     const next = source.indexOf('\n', at)
     if (next < 0) return source.length
     at = next + 1
@@ -478,8 +475,7 @@ function readQuote(
       chunkLines = []
       raw.push(chunk)
       // Marked joins a body to the text only once the text is not empty.
-      const empty = text.length === 1 && !text[0]
-      if (empty) text.pop()
+      if (text.length === 1 && !text[0]) text.pop()
       text.push(body)
       if (scope?.columns) {
         const own = RegExp.prototype[Symbol.replace].call(
@@ -489,7 +485,6 @@ function readQuote(
         )
         if (plain || own !== body) {
           plain ??= text.slice(0, -1)
-          if (empty) plain.pop()
           plain.push(own)
         }
       }

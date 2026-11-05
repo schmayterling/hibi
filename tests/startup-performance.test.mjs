@@ -169,6 +169,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // left, adds 528 (#878).
   // Reading display blocks as Obsidian reads fenced math, including their
   // closed state, preferences and shared list bounds, adds 894 (#731).
+  // Sharing failed-view checks with reading restoration splits source metrics
+  // into a shared chunk, adding 108 bytes of startup chunk overhead (#894).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -210,7 +212,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         958 +
         924 +
         528 +
-        894,
+        894 +
+        108,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

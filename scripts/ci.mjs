@@ -45,14 +45,13 @@ export function testWorkers({
   memory = totalmem(),
   override = process.env.CI_WORKERS,
 } = {}) {
-  const apps = Math.max(
-    1,
-    Math.min(cores - 4, Math.floor(memory / 2 ** 30 / 3)),
-  )
-  return {
-    apps: override ? Number(override) : apps,
-    node: Math.max(1, Math.floor(cores / 2)),
-  }
+  const apps = override
+    ? Number(override)
+    : Math.max(1, Math.min(cores - 4, Math.floor(memory / 2 ** 30 / 3)))
+  // Node reads 0 or a word as no limit, and would start an app per core.
+  if (!Number.isInteger(apps) || apps < 1)
+    throw new Error(`Invalid CI_WORKERS: ${override}`)
+  return { apps, node: Math.max(1, Math.floor(cores / 2)) }
 }
 
 export function planChecks(
@@ -313,6 +312,7 @@ export function runCI({ dev = false } = {}) {
   const unitTests = shardTests(plan.unitTests, plan.allTests, index, total)
   const aloneTests = shardTests(plan.aloneTests, plan.allTests, index, total)
   const appTests = shardTests(plan.appTests, plan.allTests, index, total)
+  const workers = testWorkers()
   if (clean) {
     rmSync(join(root, 'out'), { recursive: true, force: true })
     rmSync(directory, { recursive: true, force: true })
@@ -374,19 +374,29 @@ export function runCI({ dev = false } = {}) {
         ...tests,
       ])
   }
-  const workers = testWorkers()
   runTests(unitTests, availableParallelism())
-  runTests(
-    selected.filter(
-      (test) =>
-        !unitTests.includes(test) &&
-        !aloneTests.includes(test) &&
-        !appTests.includes(test),
-    ),
-    workers.node,
-  )
-  runTests(appTests, workers.apps)
-  runTests(aloneTests, 1)
+  // A red here must not hide the reds of the groups after it.
+  const failures = []
+  for (const [tests, concurrency] of [
+    [
+      selected.filter(
+        (test) =>
+          !unitTests.includes(test) &&
+          !aloneTests.includes(test) &&
+          !appTests.includes(test),
+      ),
+      workers.node,
+    ],
+    [appTests, workers.apps],
+    [aloneTests, 1],
+  ]) {
+    try {
+      runTests(tests, concurrency)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  if (failures.length) throw failures[0]
   const sha = git(root, 'rev-parse', 'HEAD')
   // Never certify a dirty checkout as the committed revision.
   if (

@@ -37,12 +37,11 @@ type Reading = {
 }
 const reading = new WeakMap<EditorView, Reading | null>()
 
-/** Whether a pane whose content was `height` tall is scrolled to its bottom, as CodeMirror tells. */
-const atBottom = (pane: Element, height = pane.scrollHeight) =>
-  pane.scrollTop > Math.max(1, height - pane.clientHeight - 4)
-
-/** The element that scrolls the editor: the first around it that scrolls vertically. */
-function scrollPane(view: EditorView) {
+/**
+ * Where the reader is: the caret while it is on screen, else the first line
+ * below the top of the scrolled pane, or the block the pane's top is in.
+ */
+function readingPosition(view: EditorView): Reading | null {
   let pane: Element | null = view.scrollDOM
   while (
     pane &&
@@ -52,17 +51,6 @@ function scrollPane(view: EditorView) {
     )
   )
     pane = pane.parentElement
-  return pane
-}
-
-/**
- * Where the reader is: the caret while it is on screen, else the first line
- * below the top of the scrolled pane, or the block the pane's top is in.
- */
-function readingPosition(view: EditorView): Reading | null {
-  const pane = scrollPane(view)
-  // A reader at the bottom stays there instead: see `keepRead`.
-  if (pane && readsBottom(view, pane)) return null
   const scroller = pane ?? document.scrollingElement
   const { top, bottom } = pane?.getBoundingClientRect() ?? {
     top: 0,
@@ -285,21 +273,6 @@ function watchReader(pane: Element) {
     pane.addEventListener(type, seen, { capture: true, passive: true })
 }
 
-/** When each view was last sent a scroll command. */
-const commanded = new WeakMap<EditorView, number>()
-/**
- * Whether a reader holds the pane at its bottom. After a scroll command, as a
- * link's to a heading above, heights can shrink under its target and leave
- * the pane at a bottom nobody chose, until the reader moves it again.
- */
-function readsBottom(view: EditorView, pane: Element, height?: number) {
-  const sent = commanded.get(view)
-  return (
-    atBottom(pane, height) &&
-    (sent === undefined || (readerInput.get(pane) ?? -1) > sent)
-  )
-}
-
 /** A scroll command the reading position sends itself. */
 const revealed = Annotation.define<boolean>()
 // ponytail: CodeMirror exports no type for its scroll command's effect; its
@@ -409,39 +382,7 @@ const kept = new WeakMap<
   EditorView,
   Reading & { scroll: number; left: number }
 >()
-
-/** Each editor's scrolled pane and how tall its content was when last measured. */
-const heights = new WeakMap<EditorView, { pane: Element; height: number }>()
-/**
- * A reader at the bottom of the pane stays there when heights change, as
- * drawn lines replace estimates and the space below the last line comes
- * back: CodeMirror keeps one only in its own scroller or during input.
- */
-const keepBottom = {
-  key: heights,
-  read(view: EditorView) {
-    const pane = scrollPane(view)
-    const known = heights.get(view)
-    const pinned =
-      !!pane &&
-      known?.pane === pane &&
-      pane.scrollHeight !== known.height &&
-      readsBottom(view, pane, known.height)
-    if (pane) {
-      watchReader(pane)
-      heights.set(view, { pane, height: pane.scrollHeight })
-    }
-    return pinned ? pane : null
-  },
-  write(pane: Element | null) {
-    if (pane) pane.scrollTop = pane.scrollHeight
-  },
-}
-
 export const keepRead = [
-  EditorView.updateListener.of((update) =>
-    update.view.requestMeasure(keepBottom),
-  ),
   // A view given a new state, as after a failed edit, drops its scroll command.
   ViewPlugin.define((view) => {
     scrollsWaiting.delete(view)
@@ -456,7 +397,6 @@ export const keepRead = [
         (scrollRequests.get(update.view) ?? 0) + 1,
       )
       scrollsWaiting.add(update.view)
-      commanded.set(update.view, performance.now())
       revealing.delete(update.view)
     }
     // Scrolling away ends the place held: back at the same scroll, the

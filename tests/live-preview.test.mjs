@@ -829,42 +829,6 @@ test('the space below the last line follows what is typed or deleted among the l
   assert.deepEqual(result, { before: '16px', definition: '', heading: true })
 })
 
-test('a reader at the top of a note stays there when the note grows below', {
-  timeout: 30000,
-}, async () => {
-  const doc = Array.from(
-    { length: 60 },
-    (_, i) => `Paragraph ${i} of the note.`,
-  ).join('\n\n')
-  const result = await harness.evaluate(async (doc) => {
-    const preview = window.livePreview
-    const pane = document.querySelector('.rich-pane')
-    const frames = async (count) => {
-      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
-    }
-    await preview.mount(doc, { width: 800, height: 600 })
-    await preview.settle()
-    // Sized so the note overflows by less than the distance that counts as
-    // the bottom.
-    await preview.mount(doc, {
-      width: 800,
-      height: 600 + pane.scrollHeight - pane.clientHeight - 2,
-    })
-    await preview.settle()
-    await frames(4)
-    pane.scrollTop = 0
-    const overflow = pane.scrollHeight - pane.clientHeight
-    const view = preview.view()
-    view.dispatch({
-      changes: { from: view.state.doc.length, insert: `\n\n${doc}` },
-    })
-    await frames(8)
-    return { overflow, top: pane.scrollTop }
-  }, doc)
-  assert.ok(result.overflow > 0 && result.overflow <= 4, JSON.stringify(result))
-  assert.equal(result.top, 0)
-})
-
 test('the space below the last line stays while the end is out of view, so scrolling back reaches the bottom', {
   timeout: 60000,
 }, async () => {
@@ -919,111 +883,75 @@ test('the space below the last line stays while the end is out of view, so scrol
   assert.ok(Math.abs(result.bottom) <= 1, report)
 })
 
-test('a reader who scrolls back to the end of a giant last block stays at the bottom', {
-  timeout: 240000,
+test('a layout clamp does not make the reader follow text appended below', {
+  timeout: 60000,
 }, async () => {
-  let prose = ''
-  for (let block = 0; block < 200; block++)
-    prose += `Paragraph ${block} with a few words of prose.\n\n`
-  // Parsed only near the view: away from it, a list loses its layout and
-  // the space below it; a paragraph's joined lines are estimated.
-  for (const tail of [
-    Array.from(
-      { length: 3000 },
-      (_, i) => `words of one giant paragraph, line ${i}`,
-    ).join('\n'),
-    Array.from(
-      { length: 3000 },
-      (_, i) => `- item ${i} with a few words in it`,
-    ).join('\n'),
-  ]) {
-    const result = await harness.evaluate(async (doc) => {
-      const pane = document.querySelector('.rich-pane')
-      pane.scrollTop = 0
-      await window.livePreview.mount(doc, { width: 900, height: 600 })
-      const view = window.livePreview.view()
-      const frame = () => new Promise(requestAnimationFrame)
-      const scroll = async (target) => {
-        pane.scrollTop = target
-        let still = 0
-        let last = ''
-        for (let i = 0; i < 60 && still < 4; i++) {
-          await frame()
-          const now = `${pane.scrollTop} ${view.viewport.from} ${view.viewport.to} ${view.contentDOM.offsetHeight}`
-          still = now === last ? still + 1 : 0
-          last = now
-        }
-      }
-      // The reader's own input takes over from a scroll command before it.
-      view.dispatch({ effects: view.constructor.scrollIntoView(0) })
-      await frame()
-      await frame()
-      pane.dispatchEvent(new WheelEvent('wheel'))
-      const stride = Math.round(pane.clientHeight * 0.8)
-      for (
-        let target = 0;
-        target < pane.scrollHeight - pane.clientHeight;
-        target += stride
-      )
-        await scroll(target)
-      await scroll(pane.scrollHeight)
-      await scroll(pane.scrollTop - 40000)
-      await scroll(pane.scrollHeight)
-      // Idle parsing near the end lands too.
-      for (let i = 0; i < 30; i++) await frame()
-      return {
-        length: doc.length,
-        height: pane.scrollHeight,
-        bottom: pane.scrollHeight - pane.clientHeight - pane.scrollTop,
-      }
-    }, `${prose}${tail}\n\n`)
-    assert.ok(Math.abs(result.bottom) <= 1, JSON.stringify(result))
-  }
-})
-
-test('a scroll command that ends at the bottom holds nobody there until the reader moves the pane', {
-  timeout: 30000,
-}, async () => {
-  const doc = Array.from(
-    { length: 200 },
-    (_, i) => `Paragraph ${i} of the note.`,
-  ).join('\n\n')
-  const result = await harness.evaluate(async (doc) => {
+  const rows = await harness.evaluate(async () => {
     const preview = window.livePreview
     const pane = document.querySelector('.rich-pane')
-    const frames = async (count) => {
-      for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame)
+    const panes = document.querySelector('.editor-panes')
+    const doc = Array.from(
+      { length: 200 },
+      (_, i) => `Paragraph ${i} ${'reading words '.repeat(6)}`,
+    ).join('\n\n')
+    const settle = async () => {
+      let last = ''
+      let still = 0
+      for (let frame = 0; frame < 180 && still < 5; frame++) {
+        await new Promise(requestAnimationFrame)
+        const view = preview.view()
+        const now = `${pane.scrollTop} ${pane.scrollHeight} ${view.viewport.from} ${view.viewport.to}`
+        still = now === last ? still + 1 : 0
+        last = now
+      }
     }
-    pane.scrollTop = 0
-    await preview.mount(doc, { width: 800, height: 600 })
-    await preview.settle()
-    const view = preview.view()
     const bottom = () => pane.scrollHeight - pane.clientHeight - pane.scrollTop
-    const grow = async () => {
+    const rows = []
+    for (const action of ['delete', 'height', 'width', 'frontmatter']) {
+      const text =
+        action === 'frontmatter'
+          ? `---\n${Array.from({ length: 90 }, (_, i) => `key${i}: value`).join('\n')}\n---\n\n${doc}`
+          : doc
+      await preview.mount(text, { width: 800, height: 600 })
+      pane.scrollTop = pane.scrollHeight
+      await settle()
+      pane.scrollTop = pane.scrollHeight - pane.clientHeight - 100
+      await settle()
+      const before = bottom()
+      const view = preview.view()
+      if (action === 'delete')
+        view.dispatch({
+          changes: {
+            from: Math.floor(view.state.doc.length * 0.6),
+            to: view.state.doc.length,
+            insert: '\n\nend',
+          },
+        })
+      if (action === 'height') panes.style.height = '1200px'
+      if (action === 'width') panes.style.width = '1100px'
+      if (action === 'frontmatter') preview.setFrontmatter(true)
+      await settle()
+      const clamped = bottom()
       view.dispatch({
         changes: { from: view.state.doc.length, insert: `\n\n${doc}` },
       })
-      await frames(8)
-      return bottom()
+      await settle()
+      rows.push({
+        action,
+        before,
+        clamped,
+        after: bottom(),
+        height: pane.clientHeight,
+      })
     }
-    view.dispatch({
-      effects: view.constructor.scrollIntoView(view.state.doc.length),
-    })
-    await frames(8)
-    // Not the reader: what heights shrinking under the command's target do.
-    pane.scrollTop = pane.scrollHeight
-    await frames(8)
-    const sent = bottom()
-    const commanded = await grow()
-    pane.scrollTop = pane.scrollHeight
-    pane.dispatchEvent(new WheelEvent('wheel'))
-    await frames(8)
-    return { sent, commanded, read: await grow(), height: pane.clientHeight }
-  }, doc)
-  const report = JSON.stringify(result)
-  assert.ok(Math.abs(result.sent) <= 1, report)
-  assert.ok(result.commanded > result.height, report)
-  assert.ok(Math.abs(result.read) <= 1, report)
+    return rows
+  })
+  for (const row of rows) {
+    const report = JSON.stringify(row)
+    assert.ok(row.before > 0, report)
+    assert.ok(Math.abs(row.clamped) <= 1, report)
+    assert.ok(row.after > row.height, report)
+  }
 })
 
 test('scrolling up through known code blocks keeps the scroll position and full height', {

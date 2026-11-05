@@ -48,11 +48,12 @@ export const alertMarkdown: MarkedExtension = {
         const token = alertToken(source, this.lexer)
         if (token) {
           const { text } = token
-          // Like a quote, its blocks stay whole inside a tight list item.
-          const { top } = this.lexer.state
-          this.lexer.state.top = true
           const tokens = this.lexer.blockTokens(text)
-          this.lexer.state.top = top
+          // A tight list item reads text, and Marked joins text blocks without
+          // a separator. Blocks of a longer body stay apart.
+          if (tokens.filter(({ type }) => type !== 'space').length > 1)
+            for (const child of tokens)
+              if (child.type === 'text') child.type = 'paragraph'
           const quote = { ...token, tokens }
           return quoteBlock(quote, token)
         }

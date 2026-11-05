@@ -155,8 +155,9 @@ test('an alert in a list item keeps its body blocks apart like a quote', () => {
       source,
     )
   }
-  // The list item's own text after the alert stays tight.
-  const tail = (head) =>
-    parser.parse(`- > ${head}w1w\n  ---\n  w2w`).split('</blockquote>').at(-1)
-  assert.equal(tail('[!NOTE]\n  > '), tail(''))
+  // A one-block body stays tight, as it always read.
+  assert.match(
+    parser.parse('- > [!NOTE]\n  > w1w'),
+    /github-alert-body">w1w<\/div>/,
+  )
 })

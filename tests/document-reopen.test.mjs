@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
+  autosaveOff,
   electron,
   waitForAsync,
   waitForDocumentEditor,
@@ -63,6 +64,7 @@ async function setup(t) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(15000)
   await waitForFormattedEditor(app, page)
+  await autosaveOff(app, page)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog, BrowserWindow }, file) => {
     for (const window of BrowserWindow.getAllWindows())

@@ -1054,6 +1054,10 @@ for (const [presentation, headings] of [
     })
     await context.page.setViewportSize({ width: 1000, height: 720 })
     await opened(context, source, presentation)
+    // On a slow machine, as on hosted runners, the rebuilt view settles after
+    // its first measure; at full speed it lands near its place by itself.
+    const cpu = await context.page.context().newCDPSession(context.page)
+    await cpu.send('Emulation.setCPUThrottlingRate', { rate: 6 })
     const at = source.indexOf('line 300')
     const lineTop = () =>
       context.page.evaluate(

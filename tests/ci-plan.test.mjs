@@ -278,6 +278,14 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
   const fixture = { changed: ['tests/dev/fixtures/held.mjs'], previousTests }
   assert.deepEqual(planChecks(repo, fixture).tests, [])
   assert.deepEqual(planChecks(repo, { ...fixture, dev: true }).tests, [spawns])
+  // Data kept there would otherwise count as data for every hosted test.
+  const data = { changed: ['tests/dev/fixtures/held.json'], previousTests }
+  assert.deepEqual(planChecks(repo, data).tests, [])
+  assert.deepEqual(planChecks(repo, { ...data, dev: true }).tests, [
+    dev,
+    hosted,
+    spawns,
+  ])
   const stub = join(root, 'npm.cjs')
   writeFileSync(stub, '')
   const { NODE_TEST_CONTEXT: _, ...env } = process.env
@@ -318,6 +326,23 @@ test('check:ci never runs tests/dev, check:dev does, and neither takes the other
   // Each still trusts its own record.
   assert.equal(check('scripts/ci.mjs').cold, false)
   assert.equal(check('scripts/ci-dev.mjs').cold, false)
+})
+
+test('a test in a subfolder runs in the check its folder belongs to', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'hibi-ci-nested-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const nested = 'tests/group/one.test.mjs'
+  const nestedDev = 'tests/dev/group/two.test.mjs'
+  for (const file of [nested, nestedDev]) {
+    mkdirSync(dirname(join(root, file)), { recursive: true })
+    writeFileSync(join(root, file), '')
+  }
+  execFileSync('git', ['init'], { cwd: root, stdio: 'pipe' })
+  assert.deepEqual(planChecks(root, { force: true }).allTests, [nested])
+  assert.deepEqual(planChecks(root, { force: true, dev: true }).allTests, [
+    nestedDev,
+    nested,
+  ])
 })
 
 test('a pull request rebuilds an app the cache kept from another revision, and sees both ends of a move', (t) => {

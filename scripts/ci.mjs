@@ -17,10 +17,10 @@ const git = (root, ...args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trimEnd()
 const paths = (text) => text.split('\0').filter(Boolean)
-// GitHub Actions runs tests/*.test.mjs. Tests of developer tooling sit in
-// tests/dev/, which only check:dev selects.
-const hostedTest = /^tests\/[^/]+\.test\.mjs$/
-const devTest = /^tests\/dev\/[^/]+\.test\.mjs$/
+// GitHub Actions runs every test under tests/ except tests/dev/, which holds
+// tests of developer tooling and which only check:dev selects.
+const hostedTest = /^tests\/(?!dev\/).*\.test\.mjs$/
+const devTest = /^tests\/dev\/.*\.test\.mjs$/
 // Without --no-renames, a moved file lists only its new path.
 const changedFiles = (root, ...revisions) =>
   paths(
@@ -78,19 +78,19 @@ export function planChecks(
         /^docs\/.*\.(md|png|jpe?g|gif|webp|avif|svg)$/.test(file) &&
         !file.startsWith('docs/licenses/'),
     )
-  const dataChanged = [...changes].some(
+  // Nothing in tests/dev/ can reach what check:ci runs.
+  const reaching = [...changes].filter(
+    (file) => dev || !file.startsWith('tests/dev/'),
+  )
+  const dataChanged = reaching.some(
     (file) =>
       !file.startsWith('tests/') ||
       file.startsWith('tests/fixtures/') ||
       !/\.[cm]?[jt]sx?$/.test(file),
   )
-  // Nothing imports a test file, so changing one can't reach another test. Nor
-  // can anything else in tests/dev/ reach what check:ci runs.
-  const beyondTests = [...changes].some(
-    (file) =>
-      !hostedTest.test(file) &&
-      !devTest.test(file) &&
-      (dev || !file.startsWith('tests/dev/')),
+  // Nothing imports a test file, so changing one can't reach another test.
+  const beyondTests = reaching.some(
+    (file) => !hostedTest.test(file) && !devTest.test(file),
   )
   const modules = new Map()
   function dependencies(file, seen = new Set()) {

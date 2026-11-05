@@ -149,6 +149,8 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'openSponsor',
         'writeClipboardText',
         'copyWorkspacePaths',
+        'getAppIconMode',
+        'setAppIconMode',
         'setAppearance',
         'getHideWindowControls',
         'setHideWindowControls',

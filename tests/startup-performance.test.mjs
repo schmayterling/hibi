@@ -164,6 +164,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Showing any error an addon can throw, however long or unreadable, adds 92 (#854).
   // Saying when a program holds a note, and a held autosave's turns and notice,
   // adds 958 (#866).
+  // Keeping one likely-addon list across different errors adds 924 (#872).
   // Asking after launch whether a crash left unsaved text, and opening what it
   // left, adds 528 (#873).
   // Autosave on unless turned off, and a large note resting between saves,
@@ -207,6 +208,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         139 +
         92 +
         958 +
+        924 +
         528 +
         174,
     `startup catalog grew to ${bytes} bytes`,

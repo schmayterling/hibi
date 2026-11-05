@@ -157,9 +157,35 @@ test('damage is never offered and the damaged file stays for a rescue by hand', 
   const bytes = await fs.readFile(path)
   bytes[bytes.indexOf('precious')] ^= 1
   await fs.writeFile(path, bytes)
+  t.mock.timers.enable({
+    apis: ['Date'],
+    now: Math.ceil((await fs.stat(path)).mtimeMs) + 31 * day,
+  })
   const next = await main(root)
   assert.deepEqual((await next.waitingRecovery()).copies, [])
   assert.deepEqual(await files(root), [name])
+})
+
+test('lowering the time limit counts a damaged copy from its first offer', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'offered words')
+  await (await main(root)).waitingRecovery()
+  const [name] = await files(root)
+  const path = join(folder(root), name)
+  const bytes = await fs.readFile(path)
+  bytes[bytes.indexOf('offered words')] ^= 1
+  await fs.writeFile(path, bytes)
+  t.mock.timers.enable({
+    apis: ['Date'],
+    now: Number(name.split('.')[2]) + 8 * day,
+  })
+  const next = await main(root)
+  assert.deepEqual((await next.waitingRecovery()).copies, [])
+  assert.deepEqual(await files(root), [name])
+  const settings = { ...(await next.recoverySettings()), days: 7 }
+  assert.deepEqual(await next.previewRecoverySettings(settings), [null])
+  await next.setRecoverySettings(settings)
+  assert.deepEqual(await files(root), [])
 })
 
 test('a damaged header is never trusted: the path it names may be wrong', async (t) => {

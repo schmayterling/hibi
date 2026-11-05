@@ -118,7 +118,7 @@ export function RecoverySettings() {
       <SettingRow
         id="recovery-open"
         label="Open unsaved text at launch"
-        description="Opens recovered notes without asking. Your files stay as they are until you save."
+        description="Opens recovered notes without asking. Autosave can save them if their files have not changed."
       >
         <Toggle
           id="recovery-open"

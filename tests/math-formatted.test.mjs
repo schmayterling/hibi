@@ -565,6 +565,23 @@ test('display blocks read on like fenced code, as in Obsidian', () => {
       ],
     ]),
     ['- a\n  $$\nx\n```\n$y$\n```', [['block', 'x']]],
+    // Empty and non-text item tails keep a lazy opener in the same item too.
+    ...['-', '- # h', '- ```\n  code\n  ```'].map((item) => [
+      `${item}\n$$\nx\n\nafter $y$`,
+      [
+        ['block', 'x'],
+        ['inline', 'y'],
+      ],
+    ]),
+    ['-\n$$\n\nafter $y$', [['inline', 'y']]],
+    ['> - w\n    $$\n   abc\n', []],
+    [
+      '- $$\n  x\n\n$$\n```\ny',
+      [
+        ['block', 'x'],
+        ['block', '```\ny'],
+      ],
+    ],
     // A `$$` line a list item keeps as its last line stays its text.
     ['- a\n$$', []],
     ['- a\n$$\n\nafter $y$', [['inline', 'y']]],
@@ -753,6 +770,10 @@ test('chunked parses with math match whole-document trees', () => {
     '- $$\n  w\n  $$',
     '- a\n  $$\n  w\n$$\n- b',
     '1.  a\n$$\nw\n    v\n\nz',
+    '-\n$$\nx\n\nz',
+    '- # h\n$$\nx\n\nz',
+    '- ```\n  code\n  ```\n$$\nx\n\nz',
+    '-\n$$\n\nz',
     '> - a\n>   $$\n> w\n> $$',
     '# heading $h$',
     'plain words here',
@@ -793,6 +814,39 @@ test('chunked parses with math match whole-document trees', () => {
       nodes(formatted.parse(text)),
       JSON.stringify(text),
     )
+  }
+  // Addons may hide the native parse context, and two parses may share Input.
+  const wrapped = parser.configure([
+    GFM,
+    {
+      wrap: (inner) => ({
+        get parsedPos() {
+          return inner.parsedPos
+        },
+        get stoppedAt() {
+          return inner.stoppedAt
+        },
+        stopAt: (pos) => inner.stopAt(pos),
+        advance: () => inner.advance(),
+      }),
+    },
+    inlineMathSyntax,
+    blockMathSyntax,
+  ])
+  for (const item of ['-', '- # h', '- ```\n  code\n  ```']) {
+    const text = `${item}\n$$\nx\n\noutside words\n`
+    const input = stringInput(text)
+    const suffix = [{ from: text.indexOf('$$'), to: text.length }]
+    const full = wrapped.startParse(input),
+      tail = wrapped.startParse(input, [], suffix)
+    let a, b
+    while (!a || !b) {
+      a ??= full.advance()
+      b ??= tail.advance()
+      b ??= tail.advance()
+    }
+    assert.deepEqual(nodes(a), nodes(wrapped.parse(text)))
+    assert.deepEqual(nodes(b), nodes(wrapped.parse(text, [], suffix)))
   }
 })
 
@@ -903,16 +957,21 @@ test('giant paragraphs pair math and code spans across window seams as the whole
 
 test('a display block over a giant note continues in windows like fenced code', () => {
   const lines = 'x + y\n'.repeat(40_000)
-  for (const [text, end] of [
+  for (const [text, end, options] of [
     [`intro\n\n$$\n${lines}`, null],
     [`intro\n\n$$\n${lines}$$\n\n# after\n`, '# after'],
+    ...['-', '- # h', '- ```\n  code\n  ```'].map((item) => [
+      `intro\n\n${item}\n$$\n${lines}\n# after\n`,
+      '# after',
+      { chunkSize: 64, groupSize: 4, giantBlock: 1024 },
+    ]),
   ]) {
     const at = Math.floor(text.length / 2)
     for (const demand of [
       { from: at, to: at + 3000 },
       { from: text.length - 2000, to: text.length },
     ]) {
-      const { tree, probe } = chunkedParse(text, demand)
+      const { tree, probe } = chunkedParse(text, demand, options)
       let block = tree.resolveInner(demand.from + 100, 1)
       while (block && block.name !== 'BlockMath') block = block.parent
       if (end === null || demand.from === at)

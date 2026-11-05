@@ -46,6 +46,11 @@ const fixtures = [
   ['> $$\n> x\n> $$', 1],
   ['> text $$x$$', 0, 1],
   ['> text $$x$$ more', 0, 1],
+  // Lazy quote text cannot open a new formula when a nested list is re-read.
+  ['> - w\n    $$\n   abc\n', 0],
+  ['> - w\n    ordinary\n    $$\n   abc\n', 0],
+  ['> - w\n    $$\n   abc\n\noutside words\n', 0],
+  ['> - w\n>   $$\n>   abc\n', 1],
   // As in Obsidian, across lines of a paragraph or blank.
   ['text $$x\n+y$$ more', 0, 1],
   ['text $$ $$ more', 0, 1],

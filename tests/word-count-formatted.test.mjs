@@ -144,6 +144,23 @@ test('mid-line display math is excluded from counts while literal dollars stay',
     )
 })
 
+test('display math respects list boundaries and lazy quote text in word counts', () => {
+  const syntax = { ...defaultNoteSyntax, math: true }
+  for (const [source, on, off] of [
+    ['-\n$$\nx\n\noutside words\n', 2, 3],
+    ['> - w\n    $$\n   abc\n', 2, 2],
+  ]) {
+    assert.equal(countText(richText(source, syntax)).words, on, source)
+    assert.equal(
+      countText(
+        richText(source, { ...syntax, disabledFeatures: ['math.block'] }),
+      ).words,
+      off,
+      source,
+    )
+  }
+})
+
 test('with display math off, an unclosed `$$` line holds no text', () => {
   // The formatted view reads no block there, so what follows stays Markdown.
   const syntax = {

@@ -4,7 +4,14 @@ import { Lexer, type TokenizerThis } from 'marked'
  * The line each block start looks for, at any line start: as a paragraph's
  * interruption, it also ends a quote's lazy lines and setext heading text.
  */
-export const blockStartLines = new WeakMap<object, Pick<RegExp, 'test'>>()
+export const blockStartLines = new WeakMap<
+  object,
+  Pick<RegExp, 'test'> & { lazyItem: boolean }
+>()
+
+/** A new item, heading, fence or rule ends an unindented lazy item tail. */
+export const lazyItemEnd =
+  /^ {0,3}(?:(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|#{1,6}(?:[ \t]|$)|`{3,}[^`]*$|~{3,}|([-*_])[ \t]*(?:\1[ \t]*){2,}$)/
 
 /** Calls, source units read, and the largest single read, for complexity checks. */
 export const blockStartCounters = { calls: 0, units: 0, max: 0 }
@@ -33,7 +40,11 @@ function interruptions(paragraph: RegExp) {
  * once instead of the whole remaining note. Flags on `line` are ignored, as
  * they would also change Marked's interruptions; spell out letter case.
  */
-export function blockStart(line: RegExp, enabled = () => true) {
+export function blockStart(
+  line: RegExp,
+  enabled = () => true,
+  lazyItem = false,
+) {
   const probes = new WeakMap<RegExp, RegExp>()
   const probe = (paragraph: RegExp) => {
     let regex = probes.get(paragraph)
@@ -66,6 +77,7 @@ export function blockStart(line: RegExp, enabled = () => true) {
   }
   const boundary = new RegExp(`^(?:${line.source})`, 'm')
   blockStartLines.set(start, {
+    lazyItem,
     test: (source) => enabled() && boundary.test(source),
   })
   return start

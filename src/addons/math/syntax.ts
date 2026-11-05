@@ -30,7 +30,7 @@ export const mathTokensWith = (blocks: () => boolean): MarkedExtension => ({
     extension.name === 'blockMath'
       ? {
           ...extension,
-          start: blockStart(blockMathLine, blocks),
+          start: blockStart(blockMathLine, blocks, true),
           tokenizer: (source) => {
             const token = blockMath(source)
             return blocks() || (token?.type === 'blockMath' && token.closed)

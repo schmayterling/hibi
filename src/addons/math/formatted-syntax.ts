@@ -7,6 +7,7 @@ import type {
   MarkdownConfig,
 } from '@lezer/markdown'
 import { blockInput, readAhead } from '../../shared/chunked-markdown.ts'
+import { lazyItemEnd } from '../_shared/block-start.ts'
 import { blockMathClose, blockMathRun } from './grammar.ts'
 import {
   type Closers,
@@ -31,25 +32,60 @@ export { inlineMathEnd }
  * The input of the parse that is running, so the block parser can read past
  * the current line, and past the parsed range, as a whole-document parse does.
  */
-let current: Input | null = null
-const wrap = (inner: PartialParse, input: Input): PartialParse => ({
-  get parsedPos() {
-    return inner.parsedPos
-  },
-  get stoppedAt() {
-    return inner.stoppedAt
-  },
-  stopAt: (pos) => inner.stopAt(pos),
-  advance() {
-    const outer = current
-    current = input
-    try {
-      return inner.advance()
-    } finally {
-      current = outer
-    }
-  },
-})
+type MathParse = {
+  input: Input
+  block?: { cx: BlockContext; line: Line }
+  itemEnd?: number
+}
+let current: MathParse | null = null
+const wrap = (inner: PartialParse, input: Input): PartialParse => {
+  const frame: MathParse = { input }
+  return {
+    get parsedPos() {
+      return inner.parsedPos
+    },
+    get stoppedAt() {
+      return inner.stoppedAt
+    },
+    stopAt: (pos) => inner.stopAt(pos),
+    advance() {
+      const outer = current
+      current = frame
+      try {
+        // Composite contexts close before block readers run. Keep a lazy math
+        // candidate in its item after an empty item, heading or fence too, so
+        // its forward scan ends with the item rather than taking the note.
+        // Capture the context from our callback: another addon can wrap inner.
+        const block = frame.block
+        if (block) {
+          const { cx, line } = block
+          if (
+            line.next === 36 &&
+            lineDepth(line) < cx.depth &&
+            frame.itemEnd !== cx.parsedPos
+          ) {
+            const opening = rawLine(blockInput(input), cx.parsedPos)
+            readAhead(
+              input,
+              Math.min(input.length, cx.parsedPos + opening.length + 1),
+            )
+            if (blockMathRun(opening, line.pos)) {
+              const depth = keptDepth(cx, line)
+              for (let index = lineDepth(line); index < depth; index++)
+                if (cx.parentType(index).name === 'ListItem') {
+                  ;(line as Line & { depth: number }).depth = depth
+                  break
+                }
+            }
+          }
+        }
+        return inner.advance()
+      } finally {
+        current = outer
+      }
+    },
+  }
+}
 
 /** The text of the line starting at `pos`. */
 function rawLine(input: Input, pos: number) {
@@ -93,19 +129,15 @@ type Found = { size: number; over: boolean }
 
 const blankText = (text: string, from: number) =>
   /^[ \t\r]*$/.test(text.slice(from))
-/** A line that ends a list item as Obsidian reads one: a marker, heading, fence or rule. */
-const leavesItem =
-  /^ {0,3}(?:(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|#{1,6}(?:[ \t]|$)|`{3,}[^`]*$|~{3,}|([-*_])[ \t]*(?:\1[ \t]*){2,}$)/
-
 /**
  * Where a line that its innermost list items do not continue starts its
  * content, when Obsidian keeps it in them as lazy text, or -1. A blank line
- * before it, a quote it leaves or a line in leavesItem ends them.
+ * before it, a quote it leaves or a line in lazyItemEnd ends them.
  */
 function lazyStart(levels: readonly Level[], text: string) {
   for (let keep = levels.length; keep-- > 0 && !levels[keep]!.quote; ) {
     const base = contentStart(levels.slice(0, keep), text)
-    if (base >= 0) return leavesItem.test(text.slice(base)) ? -1 : base
+    if (base >= 0) return lazyItemEnd.test(text.slice(base)) ? -1 : base
   }
   return -1
 }
@@ -225,7 +257,7 @@ function parseBlock(cx: BlockContext, line: Line, found: Found) {
     (lineDepth(line) >= cx.depth ||
       (!blank &&
         keptDepth(cx, line) === cx.depth &&
-        !leavesItem.test(line.text.slice(line.basePos))))
+        !lazyItemEnd.test(line.text.slice(line.basePos))))
   ) {
     blank = blankText(line.text, line.basePos)
     // Line breaks inside the body are body text.
@@ -254,6 +286,10 @@ function parseBlock(cx: BlockContext, line: Line, found: Found) {
     ...texts.map((text) => cx.elt('MathText', text.from, text.to)),
   ].sort((a, b) => a.from - b.from)
   cx.addElement(cx.elt('BlockMath', from, cx.prevLineEnd(), children))
+  // This scan already found the item's blank-line boundary; a later opener
+  // there belongs to a new block rather than continuing the old item.
+  if (current && blank && lineDepth(line) < cx.depth)
+    current.itemEnd = cx.parsedPos
 }
 
 /** The last decision, shared by the paragraph interruption check and the block parser. */
@@ -268,16 +304,16 @@ function decide(cx: BlockContext, line: Line, depth = cx.depth) {
   const at = cx.parsedPos + line.pos
   if (!current) return null
   // A lazy line is checked inside its containers, then parsed in those it stays in.
-  if (last?.input !== current || last.at !== at || last.depth !== depth)
+  if (last?.input !== current.input || last.at !== at || last.depth !== depth)
     last = {
-      input: current,
+      input: current.input,
       at,
       depth,
-      ...findBlock(cx, line, blockInput(current), depth),
+      ...findBlock(cx, line, blockInput(current.input), depth),
     }
   // The decision read later lines: an edit before their end parses this
   // line's chunk again, as a whole-document parse would decide anew.
-  if (last.read >= 0) readAhead(current, last.read)
+  if (last.read >= 0) readAhead(current.input, last.read)
   return last.found
 }
 
@@ -476,7 +512,7 @@ export const inlineMathSyntax: MarkdownConfig = {
       parse(cx: InlineContext, next: number, pos: number) {
         if (next !== 36) return -1
         const display = cx.char(pos + 1) === 36
-        const starts = current && contentStarts.get(current)
+        const starts = current && contentStarts.get(current.input)
         const end = display
           ? inlineDisplayMathEnd(cx.text, pos - cx.offset)
           : inlineMathEnd(
@@ -514,6 +550,7 @@ export const blockMathSyntax: MarkdownConfig = {
       name: 'BlockMath',
       before: 'FencedCode',
       parse(cx, line) {
+        if (current) current.block ??= { cx, line }
         if (line.next !== 36) return false
         const found = decide(cx, line)
         if (!found) return false
@@ -522,10 +559,10 @@ export const blockMathSyntax: MarkdownConfig = {
       },
       endLeaf(cx, line) {
         if (line.baseIndent && current) {
-          let starts = contentStarts.get(current)
+          let starts = contentStarts.get(current.input)
           if (!starts) {
             starts = new Set()
-            contentStarts.set(current, starts)
+            contentStarts.set(current.input, starts)
           }
           starts.add(cx.lineStart + line.basePos)
         }

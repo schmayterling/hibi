@@ -39,6 +39,10 @@ test('an unclosed `$$` line holds the headings after it only while display math 
     )
   assert.deepEqual(labels(), ['top'])
   assert.deepEqual(labels(['math.block']), ['top', 'after'])
+  assert.deepEqual(
+    outline('-\n$$\nx\n\n# after\n').headings.map(({ label }) => label),
+    ['after'],
+  )
 })
 
 test('source outline reads synthetic course math in paragraphs, headings and containers', () => {

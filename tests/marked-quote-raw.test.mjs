@@ -24,6 +24,11 @@ const samples = [
   '> - w1w\nw2w\n> - w3w\nw4w\n> - w5w\nw6w\n> # w7w\n\nw8w',
   '> >  *\n>w1w\nw2w',
   '> - w1w\nw2w\n> - w3w\nw4w\n> w5w\nw6w\n\nw7w',
+  // A list re-read trims the spaces ending its last line; they stay in the row.
+  '> - w1w\nw2w  \n> - w3w\nw4w  \n> # w5w\nw6w',
+  '> - w1w\nw2w \n> - w3w\nw4w \n> - w5w\nw6w \n> ---\nw7w',
+  '> - w1w \nw2w\n> - w3w \nw4w\n> # w5w\nw6w',
+  '> > * w1w \n>  w2w\nw3w',
 ]
 
 for (const alerts of [false, true])
@@ -48,3 +53,12 @@ for (const alerts of [false, true])
           assert.equal(rest, '', source)
         }
   })
+
+test('a heading after a wrapped list row with a hard break stays a heading', () => {
+  const parser = new Marked(blockMarkdown)
+  for (const source of [
+    '> - w1w\nw2w  \n> - w3w\nw4w  \n# w5w',
+    '> - w1w \nw2w\n> - w3w \nw4w\n# w5w',
+  ])
+    assert.match(parser.parse(source), /<h1>w5w<\/h1>/, source)
+})

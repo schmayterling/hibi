@@ -186,6 +186,29 @@ test('empty quote markers retain native lazy-line boundaries', () => {
   }
 })
 
+test('a nested re-read keeps the last quote lines where Marked puts them', () => {
+  // Marked re-reads a nested quote from the rest of the quote's lines, which
+  // end without a newline, and counts the lines it leaves from the text after
+  // it: one last quote line that strips to nothing stays in the outer quote.
+  for (const sample of [
+    '> > o\ny\n>',
+    '> > a\n> > > b\n> c\n> >',
+    '>>o\ny\n>\nz',
+    '> > o\ny\n> \n\nafter',
+    '>>a\n>>>]\n>$\n>>  \n>```',
+    // A last line past a nested leaf leaves the raw without its own newline.
+    '>  >  ### w1w\n>  ',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      assert.deepEqual(
+        new Marked(blockMarkdown).lexer(source),
+        new Marked().lexer(source),
+        source,
+      )
+    }
+})
+
 test('nested re-reads keep their words and physical source boundaries', () => {
   // Native list re-reads manufacture raw blank lines, which can also move
   // empty quote tokens. Check physical source and visible word identities

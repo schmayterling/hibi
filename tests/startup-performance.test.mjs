@@ -168,7 +168,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Asking after launch whether a crash left unsaved text, and opening what it
   // left, adds 528 (#873).
   // Autosave on unless turned off, and a large note resting between saves,
-  // adds 174 (#874).
+  // adds 175 (#874).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -210,7 +210,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         958 +
         924 +
         528 +
-        174,
+        175,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

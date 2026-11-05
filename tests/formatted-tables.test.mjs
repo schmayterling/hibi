@@ -1216,14 +1216,14 @@ for (const [layout, doc, target] of [
           where,
           frame,
           panes: document.querySelector('.editor-panes'),
-          rowAtTop: () => {
+          rowAtTop: (y = 1) => {
             const caret = document.caretPositionFromPoint(
               view.contentDOM.getBoundingClientRect().left +
                 Number.parseFloat(
                   getComputedStyle(view.contentDOM).paddingLeft,
                 ) +
                 1,
-              pane.getBoundingClientRect().top + 1,
+              pane.getBoundingClientRect().top + y,
             )
             return view.posAtDOM(caret.offsetNode, caret.offset)
           },
@@ -1283,21 +1283,82 @@ for (const [layout, doc, target] of [
       const settle = async () => {
         for (let frames = 0; frames < 30; frames++) await frame()
       }
+      const off = (pos, from) => {
+        const top = where(pos)
+        return top === null ? null : top - from
+      }
       const pos = rowAtTop()
       const start = where(pos)
       view.dispatch({ changes: { from: 0, insert: 'x' } })
       await settle()
       panes.style.width = '1200px'
       await settle()
-      const edited = where(pos + 1) - start
+      const edited = off(pos + 1, start)
       pane.style.marginTop = '80px'
       await settle()
       panes.style.width = '1000px'
       await settle()
-      const moved = where(pos + 1) - start - 80
+      const moved = off(pos + 1, start + 80)
       pane.style.marginTop = ''
       await settle()
-      const asked = view.state.doc.toString().indexOf('Paragraph 5 ')
+      // A cut above moves the text held.
+      const here = rowAtTop()
+      const hereTop = where(here)
+      view.dispatch({ changes: { from: 0, to: 3000 } })
+      await settle()
+      const cutAbove = off(here - 3000, hereTop)
+      // Typing asks for a scroll that moves nothing: the place stays.
+      const typed = rowAtTop()
+      const typedTop = where(typed)
+      view.dispatch({
+        changes: { from: typed + 200, insert: 'z' },
+        selection: { anchor: typed + 201 },
+        scrollIntoView: true,
+      })
+      await settle()
+      panes.style.width = '1100px'
+      await settle()
+      const typing = off(typed, typedTop)
+      // A cut of the text held: the text after it is the place.
+      const gone = rowAtTop()
+      const goneTop = where(gone)
+      view.dispatch({ changes: { from: gone - 20, to: gone + 20 } })
+      await settle()
+      panes.style.width = '1000px'
+      await settle()
+      const nextPlace = off(gone - 20, goneTop)
+      // Under a bar over the pane's top, the text below the bar holds.
+      const bar = document.createElement('div')
+      bar.style.cssText = 'position:fixed;inset:0 0 auto;height:48px;z-index:10'
+      document.body.append(bar)
+      for (let step = 0; step < 5; step++) {
+        pane.scrollTop += 100
+        await frame()
+      }
+      await settle()
+      const under = rowAtTop(50)
+      const underTop = where(under)
+      panes.style.width = '800px'
+      await settle()
+      const covered = off(under, underTop)
+      bar.remove()
+      panes.style.width = '1000px'
+      await settle()
+      // A jump past what the editor draws, as the scrollbar's, stands: a line
+      // gap's edge is no place to hold.
+      const jumpTo = pane.scrollTop + 8000
+      pane.scrollTop = jumpTo
+      await settle()
+      const jumped = pane.scrollTop - jumpTo
+      // A cut of the text held, and all after it: the place is past the note's
+      // end now.
+      pane.scrollTop += 10
+      await settle()
+      view.dispatch({
+        changes: { from: rowAtTop() - 50, to: view.state.doc.length },
+      })
+      await settle()
+      const asked = view.state.doc.toString().indexOf('Paragraph 250 ')
       view.dispatch({
         effects: view.constructor.scrollIntoView(asked, {
           y: 'start',
@@ -1309,11 +1370,16 @@ for (const [layout, doc, target] of [
       return {
         edited,
         moved,
-        asked: where(asked) - pane.getBoundingClientRect().top,
+        cutAbove,
+        typing,
+        nextPlace,
+        covered,
+        jumped,
+        asked: off(asked, pane.getBoundingClientRect().top),
       }
     })
     assert.ok(
-      Object.values(since).every((off) => Math.abs(off) <= 30),
+      Object.values(since).every((off) => off !== null && Math.abs(off) <= 30),
       JSON.stringify(since),
     )
   })

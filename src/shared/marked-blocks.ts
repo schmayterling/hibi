@@ -1,4 +1,5 @@
 import {
+  type Lexer,
   type MarkedExtension,
   marked,
   type Token,
@@ -191,7 +192,15 @@ type QuoteHandoff = {
 let quoteFeed: QuoteHandoff | undefined
 // A quote's raw text that its extensions re-read, and the source it was read
 // from: the raw is no suffix of the frame, so its row comes from the source.
-let quoteSource: { raw: string; source: string } | undefined
+let quoteSource:
+  | {
+      raw: string
+      source: string
+      quote: Tokens.Blockquote
+      lexer: Lexer
+      input?: string
+    }
+  | undefined
 
 type SetextFrame = {
   source: string
@@ -206,13 +215,44 @@ const untabbedQuotes = new WeakSet<Tokenizer>()
 // Each lexer makes a rules object: the long native quotes share one, so the
 // fence and definition rules derived from it are built once.
 let nativeQuoteRules: Tokenizer['rules'] | undefined
+type QuoteRead = { source: string; quote: Tokens.Blockquote }
+const nativeQuoteReads = new WeakMap<Lexer, Map<number, QuoteRead>>()
+const quoteReadCaches = new WeakMap<Tokenizer, Map<number, QuoteRead>>()
+
+function rememberQuote(
+  tokenizer: Tokenizer,
+  quote: Tokens.Blockquote,
+  source?: string,
+) {
+  const cache = quoteReadCaches.get(tokenizer)
+  // A known definition can change a nested re-read's boundary. Cache only
+  // independent reads, and key by length before comparing the source bytes.
+  if (!cache || Object.keys(tokenizer.lexer.tokens.links).length) return
+  cache.set(quote.raw.length, { source: quote.raw, quote: { ...quote } })
+  if (source && source !== quote.raw)
+    cache.set(source.length, { source, quote: { ...quote } })
+}
+function quoteText(source: string, rules: Tokenizer['rules']) {
+  return source
+    .replace(rules.other.blockquoteSetextReplace, '\n    $1')
+    .replace(rules.other.blockquoteSetextReplace2, '')
+}
 
 /**
  * A quote read with Marked's decisions and tab handling, only as far as it
  * goes: Marked's quote rule first scans the rest of a lazy extent, which is
  * quadratic for a reader called at every quote.
  */
-export function readNativeQuote(source: string) {
+export function readNativeQuote(source: string, lexer?: Lexer) {
+  // An extension of this quote must keep the boundary already consumed.
+  if (quoteSource?.raw === source && quoteSource.lexer === lexer)
+    return quoteSource.quote
+  if (quoteSource?.input === source && quoteSource.lexer === lexer)
+    return { ...quoteSource.quote, raw: source }
+  let cache = lexer && nativeQuoteReads.get(lexer)
+  const cached = cache?.get(source.length)
+  if (cached?.source === source) return cached.quote
+  const input = source
   // The rule's extent stops at a blank line: bound the fast native read.
   const end = quoteWindow(source)
   if (end !== undefined) {
@@ -220,27 +260,61 @@ export function readNativeQuote(source: string) {
     const tokenizer = new Tokenizer()
     new marked.Lexer({ gfm: true, tokenizer })
     let valid = true
+    const nested: QuoteRead[] = []
     tokenizer.blockquote = (input) => {
       const quote = Tokenizer.prototype.blockquote.call(tokenizer, input)
       // Check nested re-reads too: their corrupt raw can lose body lines even
       // when the outer raw still matches. Retry with the shared reader.
       if (quote && !input.startsWith(quote.raw) && quote.raw !== `${input}\n`)
         valid = false
+      if (lexer && quote && input !== source)
+        nested.push({ source: input, quote: { ...quote } })
       return quote
     }
     const quote = tokenizer.blockquote(source)
     if (valid) {
-      // A lone invented newline at EOF needs no body re-read. Keep native
-      // text decisions and bound only the physical source it consumes.
-      if (quote && quote.raw.length > source.length) quote.raw = source
+      // A lone invented newline at EOF needs no body re-read. Bound the
+      // physical source and remove one quote level without child text splices.
+      if (quote) {
+        if (quote.raw.length > source.length) quote.raw = source
+        // Native leaf-only alerts already have one source quote level.
+        if (
+          !/^ {0,3}>[ \t]*\[!/.test(quote.raw) ||
+          quote.tokens.some(
+            ({ type }) => type === 'blockquote' || type === 'list',
+          )
+        )
+          quote.text = quoteText(quote.raw, tokenizer.rules)
+        if (lexer && nested.length) {
+          if (!cache) {
+            cache = new Map()
+            nativeQuoteReads.set(lexer, cache)
+          }
+          quoteReadCaches.set(tokenizer, cache)
+          for (const read of nested) {
+            if (read.quote.raw.length > read.source.length)
+              read.quote.raw = read.source
+            read.quote.text = quoteText(read.quote.raw, tokenizer.rules)
+            rememberQuote(tokenizer, read.quote, read.source)
+          }
+          rememberQuote(tokenizer, quote, input)
+        }
+      }
       return quote
     }
+  }
+  if (lexer && !cache) {
+    cache = new Map()
+    nativeQuoteReads.set(lexer, cache)
   }
   const tokenizer = new BlockTokenizer()
   new marked.Lexer({ gfm: true, tokenizer })
   tokenizer.rules = nativeQuoteRules ??= tokenizer.rules
   untabbedQuotes.add(tokenizer)
-  return tokenizer.blockquote(source)
+  if (cache) quoteReadCaches.set(tokenizer, cache)
+  const quote = tokenizer.blockquote(source)
+  if (quote && input !== source) rememberQuote(tokenizer, quote, input)
+  return quote
 }
 // Where the first empty line within 32 lines starts, or the end of a source
 // that ends sooner.
@@ -281,19 +355,6 @@ function withQuoteScan<T>(tokenizer: Tokenizer, read: () => T): T {
     lexer.blockTokens = blockTokens
     scanningQuotes.delete(tokenizer)
   }
-}
-
-// Replace the final characters without joining the already parsed quote.
-function replaceQuoteTail(parts: string[], count: number, value: string) {
-  while (parts.length) {
-    const last = parts.pop()!
-    if (count <= last.length) {
-      parts.push(last.slice(0, last.length - count) + value)
-      return
-    }
-    count -= last.length + 1
-  }
-  parts.push(value)
 }
 
 // The lines of a nested re-read's input that Marked counts as read: it keeps
@@ -358,7 +419,8 @@ function readQuote(
   let frontAt = 0
   // Physical rows consumed; a pending front line still belongs to a taken row.
   const rows = () => from - (front.length - frontAt)
-  const text: string[] = []
+  let text = ''
+  let textRows = -1
   const tokens: Token[] = []
   let chunkLines: string[] = []
   // The chunk that produced the last token, for its row if tab state arrives later.
@@ -486,13 +548,12 @@ function readQuote(
         chunkLines.push(takeLine())
       }
       const chunk = chunkLines.join('\n')
-      const body = chunk
-        .replace(this.rules.other.blockquoteSetextReplace, '\n    $1')
-        .replace(this.rules.other.blockquoteSetextReplace2, '')
+      const body = quoteText(chunk, this.rules)
       chunkLines = []
-      // Marked joins a body to the text only once the text is not empty.
-      if (text.length === 1 && !text[0]) text.pop()
-      text.push(body)
+      if (chunkRow === 0) {
+        text = body
+        textRows = rows()
+      } else textRows = -1
       const readers = {
         code: this.code,
         def: this.def,
@@ -500,6 +561,7 @@ function readQuote(
       }
       const parent = setextFrames.get(this)
       let remaining = body.length
+      let definitionEnd = -1
       let merge = false
       const arm = <T>(token: T) => {
         if (setextFrames.get(this)?.parent === parent && !this.options.pedantic)
@@ -511,7 +573,10 @@ function readQuote(
         return arm(readers.code.call(this, input))
       }
       this.def = function (input) {
-        return arm(readers.def.call(this, input))
+        const token = readers.def.call(this, input)
+        if (token && setextFrames.get(this)?.parent === parent)
+          definitionEnd = body.length - input.length + token.raw.length
+        return arm(token)
       }
       this.paragraph = function (input) {
         const token = readers.paragraph.call(this, input)
@@ -588,6 +653,9 @@ function readQuote(
               }
             : undefined
       if (lineAt() === undefined) break
+      // A re-read can omit an already known definition from the token list.
+      // Its preceding leaf is no longer the block at the continuation boundary.
+      if (definitionEnd === body.length) continue
       if (last && ['code', 'heading', 'hr', 'html'].includes(last.type)) break
       if (last?.type === 'blockquote') {
         // Marked re-reads the nested quote with every remaining line, one
@@ -643,7 +711,6 @@ function readQuote(
         )
           used++
         for (; used > 0; used--) takeLine()
-        replaceQuoteTail(text, last.text.length, quote.text)
         break
       }
       if (last?.type === 'list') {
@@ -662,7 +729,6 @@ function readQuote(
         })
         const list = this.list(input)!
         tokens[tokens.length - 1] = list
-        replaceQuoteTail(text, last.raw.length, list.raw)
         let consumed = list.raw.length - last.raw.length - 1
         if (consumed < 0) {
           front = last.raw
@@ -680,6 +746,12 @@ function readQuote(
         }
       }
     }
+    // Body text removes exactly one source quote level. Child re-reads have
+    // different prefixes and lengths, so their text cannot replace a suffix.
+    if (textRows !== rows()) {
+      if (scope) scope.next = origin ?? 0
+      text = quoteText(scan.raw(rows()), this.rules)
+    }
   } finally {
     if (handoff) handoff.taken = from
     if (adopted) {
@@ -693,11 +765,12 @@ function readQuote(
     // The rows as read. Marked's own raw pastes each re-read list over them,
     // and gains a newline there that makes the lexer skip following text.
     raw: scan.raw(rows()),
-    text: text.join('\n'),
+    text,
     tokens,
   }
   if (adopted) state!.origins.set(token, origin!)
   if (handoff) handoff.length = token.raw.length
+  rememberQuote(this, token, handoff ? undefined : source)
   return token
 }
 
@@ -1220,6 +1293,9 @@ function installQuoteState(
               line,
               tokens,
             )
+            const previousQuote = quoteSource
+            if (quoteSource?.raw === source && quoteSource.lexer === lexer)
+              quoteSource = { ...quoteSource, input: input.text }
             try {
               const token = read.call(this, input.text, tokens)
               if (
@@ -1231,6 +1307,7 @@ function installQuoteState(
               if (token && input.raw) token.raw = input.raw(token.raw.length)
               return token
             } finally {
+              quoteSource = previousQuote
               state.extension = previous
             }
           }, read),
@@ -1511,7 +1588,7 @@ export class BlockTokenizer extends Tokenizer {
         const quote = read.call(this, source)
         if (!quote) return quote
         const previous = quoteSource
-        quoteSource = { raw: quote.raw, source }
+        quoteSource = { raw: quote.raw, source, quote, lexer: this.lexer }
         try {
           return extendQuote(quote, this.lexer)
         } finally {

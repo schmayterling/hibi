@@ -88,6 +88,27 @@ const place = (editor, anchor, text) =>
     { anchor, text },
   )
 
+// The note turns read-only as while an addon it needs reloads.
+const readOnly = (editor, on) =>
+  editor.evaluate((element, on) => {
+    const view = element.cmTile.root.view
+    if (!on) return window.restoreInput()
+    const [compartment, access] = [...view.state.config.compartments].find(
+      ([, value]) =>
+        Array.isArray(value) &&
+        value.length === 2 &&
+        value.every((part) => part.facet && typeof part.value === 'boolean'),
+    )
+    window.restoreInput = () =>
+      view.dispatch({ effects: compartment.reconfigure(access) })
+    view.dispatch({
+      effects: compartment.reconfigure(
+        access.map((part) => part.facet.of(!part.value)),
+      ),
+    })
+    return view.state.readOnly
+  }, on)
+
 /** Let a caret move or keystroke reach the panel: frames and a pause. */
 const settle = (page) =>
   page.evaluate(async () => {
@@ -845,31 +866,102 @@ test('codemirror table cell link menu holds the editor actions of addons too', {
   await page.getByRole('dialog', { name: 'Define “cats”' }).waitFor()
 })
 
+test('codemirror macOS Control+Shift+click opens the menu as Control+click does', {
+  timeout: 60000,
+  skip: process.platform !== 'darwin',
+}, async (t) => {
+  const { app, page, editor } = await open(t, { dictionary: true })
+  await offline(app)
+  const text =
+    'Intro words here\n\nSee [docs](https://old.example) and more words.\n\n| name |\n| --- |\n| [cats](https://cell.example) and dogs |\n'
+  const menu = page.getByRole('menu', { name: 'Editor actions', exact: true })
+  const selection = () =>
+    editor.evaluate((element) => {
+      const { from, to } = element.cmTile.root.view.state.selection.main
+      return [from, to]
+    })
+  // A Control+click is the secondary click: Shift does not make it extend
+  // the selection from the caret, follow a link or edit a cell.
+  const press = async (target, modifiers, range, locked = false) => {
+    await place(editor, 0, text)
+    if (range)
+      await editor.evaluate((element, range) => {
+        element.cmTile.root.view.dispatch({ selection: range })
+      }, range)
+    if (locked) await readOnly(editor, true)
+    const actions = locked
+      ? page.getByRole('menu', { name: 'Link actions', exact: true })
+      : menu
+    await settle(page)
+    const point =
+      typeof target === 'string'
+        ? await editor.evaluate((element, word) => {
+            // The word's first character, in a line or a table cell.
+            const walker = document.createTreeWalker(
+              element,
+              NodeFilter.SHOW_TEXT,
+            )
+            let node = walker.nextNode()
+            while (node && !node.data.includes(word)) node = walker.nextNode()
+            const range = document.createRange()
+            const at = node.data.indexOf(word)
+            range.setStart(node, at)
+            range.setEnd(node, at + 1)
+            const box = range.getBoundingClientRect()
+            return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+          }, target)
+        : await target.boundingBox().then((box) => ({
+            x: box.x + box.width / 2,
+            y: box.y + box.height / 2,
+          }))
+    for (const key of modifiers) await page.keyboard.down(key)
+    await page.mouse.click(point.x, point.y)
+    for (const key of modifiers) await page.keyboard.up(key)
+    await actions
+      .getByRole('menuitem', {
+        name: locked ? 'Open link' : 'Define word',
+        exact: true,
+      })
+      .waitFor()
+    await settle(page)
+    const result = {
+      selection: await selection(),
+      items: await groupedItems(actions),
+      cellEditors: await page.locator('.hibi-lp-cell-editor').count(),
+    }
+    await page.keyboard.press('Escape')
+    await actions.waitFor({ state: 'hidden' })
+    if (locked) await readOnly(editor, false)
+    return result
+  }
+  for (const target of [
+    'more words',
+    page.getByRole('link', { name: 'docs', exact: true }),
+    'dogs',
+    page.getByRole('link', { name: 'cats', exact: true }),
+  ]) {
+    const control = await press(target, ['Control'])
+    const shift = await press(target, ['Control', 'Shift'])
+    assert.deepEqual(shift, control, String(target))
+    assert.equal(shift.selection[0], shift.selection[1], String(target))
+    assert.equal(shift.cellEditors, 0, String(target))
+  }
+  const range = { anchor: text.indexOf('docs'), head: text.indexOf('more') + 4 }
+  const link = page.getByRole('link', { name: 'docs', exact: true })
+  for (const locked of [false, true]) {
+    const control = await press(link, ['Control'], range, locked)
+    const shift = await press(link, ['Control', 'Shift'], range, locked)
+    assert.deepEqual(shift, control)
+    assert.deepEqual(shift.selection, [range.anchor, range.head])
+  }
+  assert.deepEqual(await app.evaluate(() => globalThis.openedLinks), [])
+})
+
 test('codemirror read-only link actions open and copy but refuse edits', {
   timeout: 60000,
 }, async (t) => {
   const { app, page, editor, panel, dialog, read } = await open(t)
   const link = page.getByRole('link', { name: 'docs', exact: true })
-  // The note turns read-only as while an addon it needs reloads.
-  const readOnly = (on) =>
-    editor.evaluate((element, on) => {
-      const view = element.cmTile.root.view
-      if (!on) return window.restoreInput()
-      const [compartment, access] = [...view.state.config.compartments].find(
-        ([, value]) =>
-          Array.isArray(value) &&
-          value.length === 2 &&
-          value.every((part) => part.facet && typeof part.value === 'boolean'),
-      )
-      window.restoreInput = () =>
-        view.dispatch({ effects: compartment.reconfigure(access) })
-      view.dispatch({
-        effects: compartment.reconfigure(
-          access.map((part) => part.facet.of(!part.value)),
-        ),
-      })
-      return view.state.readOnly
-    }, on)
   const states = (scope, role, names) =>
     Promise.all(
       names.map(async (name) =>
@@ -883,7 +975,7 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   await panel.waitFor()
   await panel.getByRole('button', { name: 'Edit link', exact: true }).click()
   await dialog.waitFor()
-  assert.equal(await readOnly(true), true)
+  assert.equal(await readOnly(editor, true), true)
   await dialog.getByLabel('Link destination').fill('https://new.example')
   await dialog.getByRole('button', { name: 'Save', exact: true }).click()
   await dialog.waitFor({ state: 'hidden' })
@@ -891,13 +983,13 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   assert.equal(await read(), note)
   // A shown panel offers only what changes nothing once the note is read-only.
   const buttons = ['Edit link', 'Open link', 'Copy link', 'Remove link']
-  await readOnly(false)
+  await readOnly(editor, false)
   await page.mouse.move(4, 4)
   await panel.waitFor({ state: 'hidden' })
   await link.hover()
   await panel.waitFor()
   assert.deepEqual(await states(panel, 'button', buttons), buttons)
-  await readOnly(true)
+  await readOnly(editor, true)
   const offered = [
     'Edit link disabled',
     'Open link',
@@ -931,12 +1023,12 @@ test('codemirror read-only link actions open and copy but refuse edits', {
   await menu.waitFor({ state: 'hidden' })
   // A menu opened before the note turned read-only disables its edits then,
   // and keeps its focused action.
-  await readOnly(false)
+  await readOnly(editor, false)
   await link.click({ button: 'right' })
   await menu.waitFor()
   assert.deepEqual(await states(menu, 'menuitem', items), items)
   await page.keyboard.press('ArrowDown')
-  await readOnly(true)
+  await readOnly(editor, true)
   await page.waitForFunction(
     () =>
       [

@@ -15,6 +15,7 @@ import { mathFlavor, mathTokensWith } from './syntax'
 
 const options = {
   throwOnError: false,
+  strict: false,
   trust: false,
   maxExpand: 500,
   maxSize: 20,

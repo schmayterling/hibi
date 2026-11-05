@@ -6,8 +6,10 @@ import {
   inlineMath,
   mathFlavor,
   mathTokens,
+  mathTokensWith,
 } from '../src/addons/math/syntax.ts'
 import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
+import { blockMarkdown } from '../src/shared/marked-blocks.ts'
 
 // As in Obsidian, a `$$` line opens a block only without another `$` on it,
 // so `$$x$$` on a line of its own is display math in a paragraph.
@@ -161,4 +163,70 @@ test('literal double dollars stay literal after rich serialization and export', 
       })
       assert.equal(formulas, 0, JSON.stringify({ source, text }))
     }
+})
+
+test('disabled block math leaves lazy quotes and setext headings as Markdown', () => {
+  let enabled = false
+  const parser = new Marked(
+    blockMarkdown,
+    mathTokensWith(() => enabled),
+  )
+  for (const source of ['> a\n$$\nx\n', 'a\n$$\nx\n---\n'])
+    assert.equal(parser.parse(source), new Marked().parse(source))
+  enabled = true
+  assert.equal(parser.lexer('$$\nx\n')[0].type, 'blockMath')
+  enabled = false
+  assert.equal(parser.lexer('$$\nx\n')[0].type, 'paragraph')
+})
+
+test('the math addon exports headings after an unclosed block when block math is off', async (t) => {
+  const { createServer } = await import('vite')
+  const server = await createServer({
+    configFile: false,
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true, watch: null },
+    appType: 'custom',
+  })
+  t.after(() => server.close())
+  const { startMath } = await server.ssrLoadModule('/src/addons/math/engine.ts')
+  // Export renders synchronously; no formula is mounted for observation.
+  const observers = ['IntersectionObserver', 'ResizeObserver']
+  const previous = observers.map((name) => globalThis[name])
+  for (const name of observers) globalThis[name] = class {}
+  t.after(() =>
+    observers.forEach((name, index) => {
+      globalThis[name] = previous[index]
+    }),
+  )
+  let flavor
+  let blocks = false
+  t.after(
+    startMath({
+      editor: {
+        registerSyntax() {},
+        registerSource() {},
+        registerFlavor(value) {
+          flavor = value
+        },
+        isSyntaxEnabled: () => blocks,
+        onDocumentChange() {},
+      },
+      styles: { register() {} },
+      commands: { register() {} },
+      toolbar: { register: () => ({ update() {} }) },
+    }),
+  )
+  const parser = new Marked(...flavor.export.extensions)
+  const source = '$$\n**bold**\n\n# after\n'
+  assert.match(parser.parse(source), /<strong>bold<\/strong>/)
+  assert.match(parser.parse(source), /<h1>after<\/h1>/)
+  blocks = true
+  assert.doesNotMatch(parser.parse(source), /<h1>/)
+  assert.match(parser.parse(source), /class="katex/)
+  const warnings = []
+  t.mock.method(console, 'warn', (message) => warnings.push(message))
+  assert.match(parser.parse('$$\nördinäry 日本語\n$$\n'), /class="katex/)
+  assert.deepEqual(warnings, [])
+  blocks = false
+  assert.match(parser.parse(source), /<h1>after<\/h1>/)
 })

@@ -618,6 +618,26 @@ test('display blocks read to their closing line and end with their list item, as
     ),
     ['Compute:', 'Next step', 'Unclosed:', 'After the list', 'last'],
   )
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('b^2') },
+    })
+    view.focus()
+  })
+  await page
+    .locator('.rich-pane .hibi-lp-math-source', { hasText: 'b^2' })
+    .waitFor()
+  assert.equal(
+    await page
+      .locator('.rich-pane [data-type="block-math"][data-latex="b^2"]')
+      .count(),
+    0,
+    'an unclosed formula shows its source while edited, without rendering it per key',
+  )
 })
 
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {

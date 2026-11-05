@@ -21,6 +21,37 @@ function* resolve(source, config, labels) {
   }
 }
 
+test('rendered reference lookup follows the display math preference', () => {
+  const store = new SourceStore('$$\nx\n\n[ref]: /target\n', {
+    tabId: 'math-reference',
+    revision: 0,
+  })
+  for (const enabled of [false, true]) {
+    const references = finish(
+      prepareRenderedReferences(store.snapshot(), {
+        ...renderedConfig,
+        flavors: [...renderedConfig.flavors, 'math.latex'],
+        syntax: [
+          ...renderedConfig.syntax,
+          ...(enabled ? ['math-block@1'] : []),
+        ],
+        textFeatures: [
+          ...renderedConfig.textFeatures,
+          ...(enabled ? ['math.block'] : []),
+        ],
+      }),
+    )
+    try {
+      assert.equal(
+        references.lookup('ref')?.href ?? null,
+        enabled ? null : '/target',
+      )
+    } finally {
+      references.dispose()
+    }
+  }
+})
+
 test('plain paragraph proof retains reference definitions outside its local window', () => {
   const source =
     '[known]: /target\n\n' + 'plain words '.repeat(10000) + 'TARGET tail'

@@ -1631,6 +1631,33 @@ function contentStart(line: Line, hidden: Hidden) {
 const syntaxOf = (tree: Tree | (() => Tree)) =>
   typeof tree === 'function' ? tree() : tree
 
+/** A formula without a closing line may hold the rest of the note: delete only the adjacent character. */
+function unclosedMathDeletion(
+  state: EditorState,
+  read: Tree | (() => Tree),
+  hidden: Hidden,
+  forward: boolean,
+): TransactionSpec | null {
+  const pos = state.selection.main.head
+  let unclosed = false
+  hidden.between(pos, pos, (from, to, value) => {
+    if (!shown(value) || (forward ? to <= pos : from >= pos)) return
+    const node = around(syntaxOf(read), from + 1, ['BlockMath'])
+    unclosed ||=
+      node?.from === from && node.to >= to && !formattedMathAtom(node)
+  })
+  if (!unclosed) return null
+  const line = state.doc.lineAt(pos)
+  const adjacent =
+    findClusterBreak(line.text, pos - line.from, forward) + line.from
+  const other = adjacent === pos ? pos + (forward ? 1 : -1) : adjacent
+  return {
+    changes: forward ? { from: pos, to: other } : { from: other, to: pos },
+    selection: EditorSelection.cursor(forward ? pos : other),
+    userEvent: forward ? 'delete.forward' : 'delete.backward',
+  }
+}
+
 /** Backspace in formatted text. Null leaves the key to the default command. */
 export function deleteBackward(
   state: EditorState,
@@ -1641,6 +1668,8 @@ export function deleteBackward(
   if (state.readOnly || !range.empty || state.selection.ranges.length > 1)
     return null
   const pos = range.head
+  const math = unclosedMathDeletion(state, read, hidden, false)
+  if (math) return math
   const line = state.doc.lineAt(pos)
   const start = contentStart(line, hidden)
   const remove = (from: number, to: number, cursor = from) => ({
@@ -1753,6 +1782,8 @@ export function deleteForward(
   if (state.readOnly || !range.empty || state.selection.ranges.length > 1)
     return null
   const pos = range.head
+  const math = unclosedMathDeletion(state, read, hidden, true)
+  if (math) return math
   const line = state.doc.lineAt(pos)
   // Joining a fence line or underline into this one would end or open a
   // block elsewhere.

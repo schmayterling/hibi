@@ -34,6 +34,7 @@ const validSyntax = (
   typeof syntax.alerts === 'boolean' &&
   typeof syntax.textExtras === 'boolean' &&
   (syntax.math === undefined || typeof syntax.math === 'boolean') &&
+  (syntax.mathBlocks === undefined || typeof syntax.mathBlocks === 'boolean') &&
   syntax.gfm === (dialect === 'gfm')
 
 /** Trusted derived replica. The renderer/native journal remain the source authority. */
@@ -515,7 +516,9 @@ export class DocumentWorkerService {
                 (message.reference.alerts !== message.semantic.alerts ||
                   message.reference.textExtras !==
                     message.semantic.textExtras ||
-                  !!message.reference.math !== !!message.semantic.math)))) ||
+                  !!message.reference.math !== !!message.semantic.math ||
+                  (message.reference.mathBlocks !== false) !==
+                    (message.semantic.mathBlocks !== false))))) ||
           !Number.isSafeInteger(message.from) ||
           !Number.isSafeInteger(message.to) ||
           message.from < 0 ||
@@ -677,6 +680,7 @@ export class DocumentWorkerService {
       syntax.alerts,
       syntax.textExtras,
       syntax.math,
+      syntax.mathBlocks !== false,
     ])
     const state = this.#model?.state()
     const owners = state?.owners
@@ -818,8 +822,20 @@ export class DocumentWorkerService {
           }
           const requestedSyntax = request.semantic ?? request.reference
           if (requestedSyntax) {
-            const { gfm, alerts, textExtras, math = false } = requestedSyntax
-            const syntax = JSON.stringify([gfm, alerts, textExtras, math])
+            const {
+              gfm,
+              alerts,
+              textExtras,
+              math = false,
+              mathBlocks = true,
+            } = requestedSyntax
+            const syntax = JSON.stringify([
+              gfm,
+              alerts,
+              textExtras,
+              math,
+              mathBlocks,
+            ])
             if (!this.#references || syntax !== this.#referenceSyntax) {
               this.#semantics?.clear()
               this.#semantics = null
@@ -830,6 +846,7 @@ export class DocumentWorkerService {
                 alerts,
                 textExtras,
                 math,
+                mathBlocks,
               })
               this.#referenceSyntax = syntax
             }

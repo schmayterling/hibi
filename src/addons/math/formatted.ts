@@ -6,7 +6,10 @@ import {
   showMarkdownMarkers,
 } from '../../renderer/src/formatted-contributions'
 import { keepReading } from '../../renderer/src/reading-position.ts'
-import { formattedMathBlock } from '../../shared/formatted-text-rules.ts'
+import {
+  formattedMathAtom,
+  formattedMathBlock,
+} from '../../shared/formatted-text-rules.ts'
 import { blockMathSyntax, inlineMathSyntax } from './formatted-syntax'
 import type { formulaScheduler } from './rendering'
 
@@ -299,6 +302,9 @@ export function mathContributions(host: MathHost) {
     // display margins are inside the widget.
     space: { top: 0, bottom: 0 },
     layout(node, out, { state, revealed }) {
+      // An unclosed block has no closing line for a live preview. Rendering
+      // the rest of the note on every key also stalls typing.
+      if (revealed && !formattedMathAtom(node.node)) return false
       const widget = display(node, state.sliceDoc(node.from, node.to))
       if (!widget) return false
       // Inside quotes and lists the line keeps its container layout, so the

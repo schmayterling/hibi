@@ -67,7 +67,8 @@ export function blockMathClose(
 }
 
 // The tokenizer handles the current line itself.
-export const blockMathStart = blockStart(/ {0,3}\${2,}[^$\n]*\n/)
+export const blockMathLine = / {0,3}\${2,}[^$\n]*\n/
+export const blockMathStart = blockStart(blockMathLine)
 /**
  * A display block as Obsidian 1.13.7 reads it: a `$$` line opens it when a
  * line follows in its quote, list item or note, and it runs to its closing

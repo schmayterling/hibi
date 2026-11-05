@@ -1,7 +1,9 @@
 import { Marked, type MarkedExtension } from 'marked'
 import { blockContainers } from '../../shared/marked-blocks.ts'
 import { leafBlock } from '../../shared/marked-leaf-blocks.ts'
+import { blockStart } from '../_shared/block-start.ts'
 import {
+  blockMathLine,
   detector,
   mathTokens as grammar,
   mathFlavor as info,
@@ -28,6 +30,7 @@ export const mathTokensWith = (blocks: () => boolean): MarkedExtension => ({
     extension.name === 'blockMath'
       ? {
           ...extension,
+          start: blockStart(blockMathLine, blocks),
           tokenizer: (source) => {
             const token = blockMath(source)
             return blocks() || (token?.type === 'blockMath' && token.closed)

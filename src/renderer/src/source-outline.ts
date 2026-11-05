@@ -230,6 +230,7 @@ export class SourceOutlineModel {
       alerts: options.alerts ?? false,
       textExtras: options.textExtras ?? false,
       math: options.math ?? false,
+      mathBlocks: !this.#disabled.has('math.block'),
     })
     this.#renderLabel = options.renderLabel ?? ((tokens) => plainText(tokens))
     const markdown = parser.configure([

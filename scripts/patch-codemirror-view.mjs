@@ -227,6 +227,21 @@ function fallbackRect(tile) {`,
     `context && context.isWidget() && context.widget.ignoreEvent(event)) {`,
     `context && context.isWidget() && widgetIgnoresEvent(context.widget, event, view)) {`,
   ],
+  // Drawing a mark around a note's first text moves its text node, and Chromium
+  // collapses a selection inside it at the start of the line. Soon after focus
+  // that looks like the browser placing the selection, so CodeMirror resets it
+  // from the editor state, but skips the write when its cached range, which the
+  // move did not change, already matches. The next read then took the collapsed
+  // selection for the user's: the selected text was lost.
+  [
+    `            this.view.inputState.lastFocusTime = 0;
+            view.docView.updateSelection();
+            return false;`,
+    `            this.view.inputState.lastFocusTime = 0;
+            view.docView.forceSelection = true;
+            view.docView.updateSelection();
+            return false;`,
+  ],
 ]
 
 let source = await readFile(path, 'utf8')

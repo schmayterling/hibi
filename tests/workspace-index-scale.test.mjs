@@ -1,3 +1,4 @@
+// ci: alone (indexes 2000 notes under a 60 s limit: 31, 46 and 61 s among four apps, 12 s alone)
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

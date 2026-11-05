@@ -1,4 +1,4 @@
-import type { MarkedExtension } from 'marked'
+import type { Lexer, MarkedExtension } from 'marked'
 import { blockContainers, readNativeQuote } from '../../shared/marked-blocks.ts'
 import { quoteBlock, quoteReader } from '../../shared/marked-leaf-blocks.ts'
 import { blockStart } from '../_shared/block-start.ts'
@@ -19,10 +19,10 @@ export function alertType(value: unknown): string | undefined {
 }
 export const alertStart = blockStart(/ {0,3}>[ \t]*\[![a-zA-Z][a-zA-Z0-9-]*\]/)
 
-export function alertToken(source: string) {
+export function alertToken(source: string, lexer?: Lexer) {
   if (!/^ {0,3}>[ \t]*\[!/i.test(source)) return
   // Use Markdown's own quote boundaries, including lazy continuation and nested blocks.
-  const quote = readNativeQuote(source)
+  const quote = readNativeQuote(source, lexer)
   const marker = quote && alertMarker(quote.text)
   if (!quote || !marker) return
   return quoteBlock(
@@ -45,10 +45,16 @@ export const alertMarkdown: MarkedExtension = {
       name: 'githubAlert',
       level: 'block',
       tokenizer: quoteReader(function (source) {
-        const token = alertToken(source)
+        const token = alertToken(source, this.lexer)
         if (token) {
           const { text } = token
-          const quote = { ...token, tokens: this.lexer.blockTokens(text) }
+          const tokens = this.lexer.blockTokens(text)
+          // A tight list item reads text, and Marked joins text blocks without
+          // a separator. Blocks of a longer body stay apart.
+          if (tokens.filter(({ type }) => type !== 'space').length > 1)
+            for (const child of tokens)
+              if (child.type === 'text') child.type = 'paragraph'
+          const quote = { ...token, tokens }
           return quoteBlock(quote, token)
         }
       }),

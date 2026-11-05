@@ -125,6 +125,7 @@ export function linkScroll(
     document.addEventListener('selectionchange', nativeSelection)
     first.addEventListener('hibi:source-caret', selection)
     second.addEventListener('hibi:source-caret', selection)
+    first.addEventListener('hibi:source-layout', schedule)
   }
   first.addEventListener('scroll', scroll, { passive: true })
   second.addEventListener('scroll', scroll, { passive: true })
@@ -144,6 +145,7 @@ export function linkScroll(
     document.removeEventListener('selectionchange', nativeSelection)
     first.removeEventListener('hibi:source-caret', selection)
     second.removeEventListener('hibi:source-caret', selection)
+    first.removeEventListener('hibi:source-layout', schedule)
     first.removeEventListener('scroll', scroll)
     second.removeEventListener('scroll', scroll)
     first.removeEventListener('transitionend', settled)

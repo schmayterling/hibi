@@ -571,6 +571,9 @@ class TableView {
     this.applySizes()
     this.syncEditor()
     if (focused && !this.editing) this.regain()
+    // Current cell coordinates can replace pending row bounds without a DOM change.
+    if (previous.doc !== widget.doc)
+      this.dom.dispatchEvent(new Event('hibi:source-layout', { bubbles: true }))
   }
 
   /**

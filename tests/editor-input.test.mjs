@@ -968,6 +968,100 @@ test('a native table pick keeps the shared input guards', {
   }
 })
 
+test('foreign text cannot replace a native table pick during a DOM selection echo', {
+  timeout: 60000,
+}, async (t) => {
+  const oracle = inputFixture('multiline', 'into a table')
+  const { page, rich } = await launchInputFixture(t, oracle.source)
+  await rich.focus()
+  await selectNativeInputTable(t, page, rich, 'into a table', oracle)
+  const before = await acceptedInput(page)
+  await inputWorkProbe(rich)
+  await withHeldClock(page, () =>
+    rich.evaluate(async (element) => {
+      element.querySelector('.cm-line').dispatchEvent(
+        new InputEvent('beforeinput', {
+          bubbles: true,
+          cancelable: true,
+          inputType: 'insertText',
+          data: 'Q',
+        }),
+      )
+      // The same native range can echo back in the other direction before
+      // CodeMirror's next measure. No text in the page has changed.
+      const selection = getSelection()
+      const { anchorNode, anchorOffset, focusNode, focusOffset } = selection
+      selection.setBaseAndExtent(
+        focusNode,
+        focusOffset,
+        anchorNode,
+        anchorOffset,
+      )
+      element.cmTile.root.view.requestMeasure()
+      await new Promise(requestAnimationFrame)
+    }),
+  )
+  const after = await acceptedInput(page)
+  assert.equal(after.markdown, before.markdown)
+  assert.equal(after.contentVersion, before.contentVersion)
+  const work = await page.evaluate(() => window.cmInputWork)
+  assert.equal(work.changes, 0)
+  assert.deepEqual(work.inputs, [])
+
+  // A cell owns its native events, even though they bubble through the main view.
+  await selectNativeInputTable(t, page, rich, 'cell', {
+    ...oracle,
+    from: oracle.to,
+  })
+  await page.evaluate(() => {
+    window.cmInputWork.beforeinput = []
+    window.cmInputWork.prevented = []
+    window.cmInputWork.inputs = []
+  })
+  const typed =
+    before.markdown.slice(0, oracle.to) + 'Z' + before.markdown.slice(oracle.to)
+  await page.keyboard.insertText('Z')
+  await waitForInputSource(page, typed)
+  assert.equal(
+    (await acceptedInput(page)).contentVersion,
+    before.contentVersion + 1,
+  )
+  const typing = await page.evaluate(() => window.cmInputWork)
+  assert.deepEqual(typing.beforeinput, [
+    { owner: 'Table cell', type: 'insertText', data: 'Z' },
+  ])
+  assert.deepEqual(typing.prevented, [false])
+  assert.deepEqual(typing.inputs, [{ type: 'insertText', data: 'Z' }])
+  assert.equal(typing.changes, 1)
+
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await cdp.send('Input.imeSetComposition', {
+    text: '仮',
+    selectionStart: 1,
+    selectionEnd: 1,
+  })
+  const prefix = typed.slice(0, oracle.to + 1),
+    suffix = typed.slice(oracle.to + 1)
+  await waitForInputSource(page, prefix + '仮' + suffix)
+  await cdp.send('Input.insertText', { text: '日本' })
+  await waitForInputSource(page, prefix + '日本' + suffix)
+  const composition = await page.evaluate(() => window.cmInputWork)
+  assert.equal(
+    composition.beforeinput.every((event) => event.owner === 'Table cell'),
+    true,
+  )
+  assert.deepEqual(
+    composition.prevented,
+    composition.beforeinput.map(() => false),
+  )
+  assert.equal(
+    composition.inputs.filter((event) => event.data === '日本').length,
+    1,
+  )
+  await cdp.detach()
+})
+
 test('multi-line text input reaches source view in one edit, without native paragraph steps', {
   timeout: 60000,
 }, async (t) => {

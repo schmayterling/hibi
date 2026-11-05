@@ -3523,6 +3523,9 @@ export const contribution: FormattedContribution = {
         // Typing below a table that ends the note, and text without a key,
         // as from dictation or an emoji picker.
         beforeinput(event, view) {
+          // Foreign input must not arm CodeMirror's next DOM read.
+          if (event.target !== view.contentDOM && view.state.field(pickedTable))
+            return true
           if (event.inputType !== 'insertText' || !event.data) return false
           if (belowTable(event, view))
             view.dispatch(paragraphBelow(view), { userEvent: 'input.type' })

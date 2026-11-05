@@ -453,17 +453,25 @@ test('a note whose save took long rests ten times as long before the next', {
   timeout: 60000,
 }, async (t) => {
   const { app, page, rich, file } = await openNote(t)
-  // The time a large note takes, without a large note's other costs.
+  // Only an IPC gate can hold a save for an exact amount of page-clock time.
   await app.evaluate(({ ipcMain }) => {
     const save = ipcMain._invokeHandlers.get('document:autosave')
-    ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-      return save(...args)
+    let first = true
+    globalThis.slowAutosaveStarted = new Promise((started) => {
+      ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
+        if (first) {
+          first = false
+          await new Promise((release) => {
+            globalThis.releaseSlowAutosave = release
+            started()
+          })
+        }
+        return save(...args)
+      })
     })
   })
   await page.clock.install()
-  await replaceRichText(page, rich, 'first')
-  await page.clock.fastForward(2500)
+  await page.clock.pauseAt(Date.now() + 60000)
   const saved = async (text) => {
     const deadline = performance.now() + 5000
     while (performance.now() < deadline) {
@@ -472,15 +480,33 @@ test('a note whose save took long rests ten times as long before the next', {
     }
     return false
   }
-  assert.equal(await saved('first'), true)
-  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
-  await replaceRichText(page, rich, 'second')
-  await page.clock.fastForward(5000)
-  // A 2 s rest would have saved by now.
-  await delay(2000)
-  assert.equal(await readFile(file, 'utf8'), 'first')
-  await page.clock.fastForward(6000)
-  assert.equal(await saved('second'), true)
+  try {
+    await replaceRichText(page, rich, 'first')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === 'first',
+    )
+    await page.clock.runFor(2000)
+    await app.evaluate(() => globalThis.slowAutosaveStarted)
+    await page.clock.runFor(1000)
+    await app.evaluate(() => globalThis.releaseSlowAutosave())
+    assert.equal(await saved('first'), true)
+    await waitForAsync(
+      page,
+      async () => !(await window.hibi.getDocument()).dirty,
+    )
+    await replaceRichText(page, rich, 'second')
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === 'second',
+    )
+    await page.clock.runFor(9999)
+    assert.equal(await readFile(file, 'utf8'), 'first')
+    await page.clock.runFor(1)
+    assert.equal(await saved('second'), true)
+  } finally {
+    await app.evaluate(() => globalThis.releaseSlowAutosave?.())
+  }
 })
 
 test('one key over a whole note reaches the file by itself, and the text it replaced stays reachable', {

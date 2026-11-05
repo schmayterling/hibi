@@ -35,6 +35,12 @@ Missing caches/history, configuration changes, and unknown inputs trigger full c
 
 Local incremental checks include uncommitted and untracked files. Dirty checkouts never save a successful revision checkpoint. Superseded CI runs are cancelled; platform jobs have a 20-minute limit.
 
+## Which check to run
+
+Run `npm run check:dev` before pushing: it runs what `npm run check:ci` runs, plus `tests/dev/`. GitHub Actions runs `check:ci`, and `npm test` also leaves out `tests/dev/`.
+
+`tests/dev/` holds tests of developer tooling that never reaches a user or addon author, such as scripts, benchmarks and the test harness. A test that keeps a check honest stays in `tests/`, since a broken check passes silently on GitHub Actions too.
+
 ## Writing tests
 
 Ask of every test: would a person or an addon author notice if this broke, and would another test fail?

@@ -164,6 +164,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Showing any error an addon can throw, however long or unreadable, adds 92 (#854).
   // Saying when a program holds a note, and a held autosave's turns and notice,
   // adds 958 (#866).
+  // Reading display blocks as Obsidian reads fenced math adds 677 (#731).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -202,7 +203,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         225 +
         139 +
         92 +
-        958,
+        958 +
+        677,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

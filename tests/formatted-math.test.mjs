@@ -589,7 +589,7 @@ test('display blocks read to their closing line and end with their list item, as
   // line there opens nothing and the next item stays a list item.
   await writeFile(
     join(folder, 'notes', 'fence-blocks.md'),
-    '1. Compute:\n   $$\n   a^2\n$$\n2. Next step\n\n- Unclosed:\n  $$\n  b^2\n\nAfter the list\n\n$$\nc^2 $$ d\ne^2$$\n\nlast\n',
+    '1. Compute:\n   $$\n   a^2\n$$\n2. Next step\n\n- Unclosed:\n  $$\n  b^2\n\nAfter the list\n\n$$\nc^2 +\ne^2$$\n\nlast\n',
   )
   await open('fence-blocks.md')
   await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
@@ -608,7 +608,7 @@ test('display blocks read to their closing line and end with their list item, as
     .catch(async (cause) => {
       throw new Error(JSON.stringify(await formulas()), { cause })
     })
-  assert.deepEqual(await formulas(), ['a^2', 'b^2', 'c^2 $$ d e^2'])
+  assert.deepEqual(await formulas(), ['a^2', 'b^2', 'c^2 + e^2'])
   assert.deepEqual(
     await page.evaluate(() =>
       [...document.querySelectorAll('.rich-pane .cm-line')]

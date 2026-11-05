@@ -214,13 +214,23 @@ test('stored mark review cases through native input and toolbar', {
     )
     await rich.focus()
   }
+  // Native shortcuts queue input; a CDP source read can beat its renderer handler.
+  const settled = (source) =>
+    waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
   const history = async (source, typed) => {
     await pressShortcut(app, `${mod}+z`)
+    await settled(source)
     assert.equal(await snapshot(), source, 'one undo restores exact source')
     await pressShortcut(
       app,
       process.platform === 'win32' ? 'Control+y' : `${mod}+Shift+z`,
     )
+    await settled(typed)
     assert.equal(await snapshot(), typed, 'redo restores typed text')
   }
   for (const item of scenarios)

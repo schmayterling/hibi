@@ -910,6 +910,35 @@ test('a copy given up while a program holds it is not offered again', async (t) 
   }
 })
 
+test('a quit that outlasts a long write still leaves discarded notes gone', async (t) => {
+  const root = await profile(t)
+  const notes = [note(1, 'has a copy already')]
+  const io = {
+    ...fs,
+    open: async (path, ...rest) => {
+      const file = await fs.open(path, ...rest)
+      if (rest[0] !== 'wx' || !String(path).includes(tab(2))) return file
+      return new Proxy(file, {
+        get: (target, key) =>
+          key === 'sync'
+            ? () => new Promise(() => {})
+            : typeof target[key] === 'function'
+              ? target[key].bind(target)
+              : target[key],
+      })
+    },
+  }
+  const journal = await main(root, { io, notes })
+  await turn(journal)
+  notes.push(note(2, 'its first copy never ends'))
+  journal.recoveryChanged()
+  await new Promise((resolve) => setTimeout(resolve, 1050))
+  notes.length = 0
+  journal.recoverySettled()
+  await journal.recoveryWritten()
+  assert.deepEqual((await (await main(root)).waitingRecovery()).copies, [])
+})
+
 test('with copies off, a program holding one does not stop the app or the setting', async (t) => {
   const root = await profile(t)
   await leftBehind(root, 'text')

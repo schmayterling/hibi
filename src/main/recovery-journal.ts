@@ -536,6 +536,8 @@ async function removeSettled() {
       await giveUp(tabId, copy.file)
     }
 }
+/** The tab whose copy was last started, which may still be being written. */
+let writing: string | undefined
 /** Writes what changed; returns how many bytes that took. */
 async function writeDue(only?: string) {
   await removeSettled()
@@ -547,6 +549,7 @@ async function writeDue(only?: string) {
     if (only && note.tabId !== only) continue
     const key = noteKey(note)
     if (written.get(note.tabId)?.key === key) continue
+    writing = note.tabId
     try {
       bytes += await writeCopy(note, key)
     } catch (error) {
@@ -620,13 +623,20 @@ export function startRecoveryJournal(
 /** Waits for queued writes and removals, as a quit must, for 5 seconds at most. */
 export async function recoveryWritten() {
   let bound: ReturnType<typeof setTimeout> | undefined
-  await Promise.race([
-    Promise.allSettled(running),
-    new Promise((resolve) => {
-      bound = setTimeout(resolve, 5000)
+  const finished = await Promise.race([
+    Promise.allSettled(running).then(() => true),
+    new Promise<boolean>((resolve) => {
+      bound = setTimeout(resolve, 5000, false)
     }),
   ])
   clearTimeout(bound)
+  if (finished) return
+  // A long write outlasted the wait and held removals up: the quit goes on, and
+  // what those removals were for must still not come back.
+  const open = new Set(unsavedNotes?.().map(({ tabId }) => tabId))
+  for (const id of new Set([...written.keys(), writing]))
+    if (id && !open.has(id))
+      await writeFile(join(folder(), `${id}.gone`), '').catch(() => {})
 }
 
 const offeredName = (file: string, now: number) => {

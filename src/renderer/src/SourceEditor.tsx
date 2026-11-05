@@ -146,6 +146,7 @@ import { formattedSelectionPreview } from './formatted-selection-text'
 import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
+import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { mappedPositionAt } from './native-dom-selection'
@@ -487,10 +488,10 @@ const featureExtensions = (
 type MeasuredView = { measure: (flush?: boolean) => void }
 
 /** Names a failing feature, which then leaves every editor. */
-const reportFailure = ({ feature }: InstalledFeature, error: unknown) =>
-  feature.fail?.(
-    new Error(`${feature.id}: ${errorMessage(error)}`, { cause: error }),
-  )
+const reportFailure = ({ feature }: InstalledFeature, error: unknown) => {
+  console.error(`Editor feature ${feature.id}:`, error)
+  feature.fail?.(new LikelyAddonError(feature.id, errorMessage(error), error))
+}
 
 /**
  * Reports the features an edit fails with, which then leave every editor,

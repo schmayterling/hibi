@@ -522,11 +522,10 @@ test('lowering a limit names what will go, then removes only that; an open note 
 
 test('the size limit takes the oldest waiting copy first and never an open tab', async (t) => {
   const root = await profile(t)
-  const notes = [note(1, 'a'.repeat(60 * mib))]
-  const first = await main(root, { notes })
-  await turn(first)
-  notes.push(note(2, 'b'.repeat(60 * mib)))
-  await turn(first)
+  // Two launches that stopped, so the copies have different ages.
+  await turn(await main(root, { notes: [note(1, 'a'.repeat(60 * mib))] }))
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  await turn(await main(root, { notes: [note(2, 'b'.repeat(60 * mib))] }))
   await fs.writeFile(
     join(root, 'recovery-settings.json'),
     JSON.stringify({
@@ -571,6 +570,39 @@ test('a note over the size limit gets no copy, is told once, and an earlier copy
   assert.deepEqual(await files(root), before)
   assert.equal(journal.said.length, 1)
   assert.match(journal.said[0], /too large/)
+})
+
+test('with open notes filling the limit, a waiting copy stays and the new note is told once', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'waiting', { path: join('/notes', 'waiting.md') })
+  await fs.writeFile(
+    join(root, 'recovery-settings.json'),
+    JSON.stringify({
+      keep: true,
+      days: 30,
+      megabytes: 128,
+      openAtLaunch: false,
+    }),
+  )
+  const notes = [note(2, 'a'.repeat(70 * mib))]
+  const journal = await main(root, { notes })
+  await journal.waitingRecovery()
+  await turn(journal)
+  notes.push(note(3, 'b'.repeat(70 * mib)))
+  journal.recoveryChanged()
+  // 70 MiB rests about 9 s.
+  await new Promise((resolve) => setTimeout(resolve, 9500))
+  await journal.recoveryWritten()
+  notes[1] = note(3, 'c'.repeat(70 * mib))
+  journal.recoveryChanged()
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  await journal.recoveryWritten()
+  const names = await files(root)
+  assert.equal(names.length, 2)
+  assert.ok(names.some((name) => name.startsWith(tab(1))))
+  assert.ok(names.some((name) => name.startsWith(tab(2))))
+  assert.equal(journal.said.length, 1)
+  assert.match(journal.said[0], /no room/)
 })
 
 test('turned off, nothing is written and every copy goes', async (t) => {

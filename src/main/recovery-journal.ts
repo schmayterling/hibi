@@ -387,6 +387,16 @@ async function writeCopy(note: UnsavedNote, key: string) {
   await load()
   const settings = await recoverySettings()
   const previous = written.get(note.tabId)
+  const limit = settings.megabytes * MEBIBYTE
+  // A note past the limit can't have a copy; one it already has stays.
+  if (note.text.utf8Bytes + TRAILER_BYTES > limit) {
+    if (!tooLarge.has(note.tabId))
+      notify(
+        `${note.name} is too large for a recovery copy. Save it to keep your changes, or raise the limit in Settings.`,
+      )
+    tooLarge.add(note.tabId)
+    return 0
+  }
   const { hash: savedHash } = await sourceHash(note.saved)
   const header = Buffer.from(
     `${JSON.stringify({
@@ -400,15 +410,17 @@ async function writeCopy(note: UnsavedNote, key: string) {
     } satisfies Header)}\n`,
   )
   const size = header.length + note.text.utf8Bytes + TRAILER_BYTES
-  const limit = settings.megabytes * MEBIBYTE
-  // A note past the limit can't have a copy; one it already has stays.
-  if (size > limit) {
+  // Open notes' copies stay, so an unclaimed one goes only if that makes room.
+  let kept = size
+  for (const [tabId, copy] of written)
+    if (tabId !== note.tabId) kept += copy.size
+  if (kept > limit) {
     if (!tooLarge.has(note.tabId))
       notify(
-        `${note.name} is too large for a recovery copy. Save it to keep your changes, or raise the limit in Settings.`,
+        `Open notes leave no room for a recovery copy of ${note.name}. Save them to keep your changes, or raise the limit in Settings.`,
       )
     tooLarge.add(note.tabId)
-    return
+    return 0
   }
   tooLarge.delete(note.tabId)
   let bytes = total() - (previous?.size ?? 0) + size
@@ -425,14 +437,6 @@ async function writeCopy(note: UnsavedNote, key: string) {
         ? 'Hibi removed an older recovery copy to stay under its size limit.'
         : `Hibi removed ${removed} older recovery copies to stay under their size limit.`,
     )
-  if (bytes > limit) {
-    if (!tooLarge.has(note.tabId))
-      notify(
-        `Open notes leave no room for a recovery copy of ${note.name}. Save them to keep your changes, or raise the limit in Settings.`,
-      )
-    tooLarge.add(note.tabId)
-    return
-  }
   await mkdir(folder(), { recursive: true, mode: 0o700 })
   const file = join(folder(), `${note.tabId}.${++generation}.recovery`)
   const handle = await open(file, 'wx', 0o600)
@@ -462,6 +466,7 @@ async function writeCopy(note: UnsavedNote, key: string) {
   await syncFolder(folder())
   written.set(note.tabId, { key, file, size, name: note.name })
   if (previous) await drop(previous.file)
+  return note.text.utf8Bytes
 }
 const noteKey = (note: UnsavedNote) =>
   `${note.text.version}:${note.saved.version}:${note.named}:${note.path}:${note.name}`
@@ -487,8 +492,7 @@ async function writeDue(only?: string) {
     if (only && note.tabId !== only) continue
     const key = noteKey(note)
     if (written.get(note.tabId)?.key === key) continue
-    await writeCopy(note, key)
-    bytes += note.text.utf8Bytes
+    bytes += await writeCopy(note, key)
     writeFailed = false
   }
   return bytes

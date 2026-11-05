@@ -1,6 +1,7 @@
 import { Annotation, Facet, type Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import { readDOMPosition } from './native-dom-selection.ts'
+import { isViewDead } from './source-session.ts'
 
 /**
  * Whether the view placed the selection itself, as a note opens with its
@@ -203,6 +204,7 @@ function blockAt(view: EditorView, y: number) {
  * delta once per slice. Later edits, selections and scrolling still stand.
  */
 export function keepReading(view: EditorView, at = 0) {
+  if (isViewDead(view)) return
   // Changes below what is on screen never move it, nor do hidden editors. A
   // screen inside one block, as a long table, has no visible ranges.
   const end = view.visibleRanges.at(-1)?.to ?? view.viewport.to
@@ -215,6 +217,7 @@ export function keepReading(view: EditorView, at = 0) {
       if (reading.get(view) !== position) return
       reading.delete(view)
       if (
+        isViewDead(view) ||
         !position?.moved ||
         !view.dom.isConnected ||
         view.composing ||

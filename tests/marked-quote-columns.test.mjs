@@ -107,3 +107,22 @@ test('reference definitions take tabs between their parts', () => {
         assert.equal(links.a?.title || null, link?.[2] ?? null, source)
       }
 })
+
+test('a tab that comes in during a nested re-read keeps its lines in their quote', () => {
+  // Counting those lines by the length of the lines the tab widened ended the
+  // outer quote early, and the next quote read the alert's last line again.
+  for (const sample of [
+    '>>>[!E]\ny\ny\n>>\tq',
+    '> > >[!NOTE]\n    y\ny\n>\t>\tq\n>>>```\ny\n',
+  ])
+    for (const eol of ['\n', '\r\n']) {
+      const source = sample.replaceAll('\n', eol)
+      const markdown = new Marked(blockMarkdown, alertMarkdown)
+      const quotes = markdown
+        .lexer(source)
+        .filter((token) => token.type === 'blockquote')
+      assert.equal(quotes.length, 1, source)
+      const words = markdown.parse(source).replace(/<[^>]*>/g, '')
+      assert.equal(words.split('q').length - 1, 1, source)
+    }
+})

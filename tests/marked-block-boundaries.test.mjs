@@ -23,26 +23,28 @@ import { markedGithubFootnote } from '../src/shared/marked-footnotes.ts'
 import { leafBlockCounters } from '../src/shared/marked-leaf-blocks.ts'
 import { defaultNoteSyntax, noteParser } from '../src/shared/note-syntax.ts'
 
-// Compare structure and consumed source, excluding inline token spelling.
+// Native quotes can insert phantom blank lines in raw. Compare grammar and
+// nonblank source here; marked-quote-raw checks exact source consumption.
 function boundaries(tokens) {
-  return tokens.map((token) => {
-    const type = token.type === 'typstBlock' ? 'code' : token.type
-    // Marked pastes a re-read list over a quote's raw: only its length matches.
-    const result = {
-      type,
-      raw: type === 'blockquote' ? token.raw.length : token.raw,
-    }
-    if (type === 'heading')
-      Object.assign(result, { depth: token.depth, text: token.text })
-    if (type === 'code') result.text = token.text ?? token.source
-    if (type === 'list')
-      result.items = token.items.map((item) => ({
-        raw: item.raw,
-        tokens: boundaries(item.tokens),
-      }))
-    if (type === 'blockquote') result.tokens = boundaries(token.tokens)
-    return result
-  })
+  return tokens
+    .filter((token) => token.type !== 'space')
+    .map((token) => {
+      const type = token.type === 'typstBlock' ? 'code' : token.type
+      // Native quotes also splice list text over markers; their raw is unsafe
+      // as a source oracle. The separate corpus test below checks physical raw.
+      const result = { type }
+      if (type !== 'blockquote') result.raw = token.raw
+      if (type === 'heading')
+        Object.assign(result, { depth: token.depth, text: token.text })
+      if (type === 'code') result.text = token.text ?? token.source
+      if (type === 'list')
+        result.items = token.items.map((item) => ({
+          raw: item.raw,
+          tokens: boundaries(item.tokens),
+        }))
+      if (type === 'blockquote') result.tokens = boundaries(token.tokens)
+      return result
+    })
 }
 
 function containerBoundaries(tokens) {
@@ -58,7 +60,9 @@ function containerBoundaries(tokens) {
           : token.type === 'githubAlert'
             ? 'blockquote'
             : token.type,
-        lines: token.raw.trimEnd().split('\n').length,
+        lines: ['blockquote', 'githubAlert'].includes(token.type)
+          ? token.raw.trimEnd().split('\n').filter(Boolean).length
+          : token.raw.trimEnd().split('\n').length,
       }
       if (token.type === 'heading' && !leaf) result.text = token.text
       if (['blockquote', 'githubAlert'].includes(token.type)) {
@@ -466,6 +470,21 @@ test('typst word counts exclude diagrams and keep following headings', () => {
     /diagram body/,
   )
   assert.match(richText('```typst\nunclosed', syntax), /unclosed/)
+})
+
+test('quote corpus raw consumes exactly the physical source', () => {
+  const parser = new Marked(blockMarkdown)
+  for (const { name, source } of corpus) {
+    let rest = source.replaceAll('\r\n', '\n')
+    for (const token of parser.lexer(source)) {
+      assert.ok(
+        rest.startsWith(token.raw),
+        `${name}: ${JSON.stringify(token.raw)}`,
+      )
+      rest = rest.slice(token.raw.length)
+    }
+    assert.equal(rest, '', name)
+  }
 })
 
 for (const [flavor, makeParser] of Object.entries(flavors))

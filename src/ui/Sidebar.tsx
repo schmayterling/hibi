@@ -13,6 +13,7 @@ import {
 import './sidebar.css'
 import type { ExplorerDecoration } from '../shared/workspace'
 import { TextInput } from './Controls'
+import { composing } from './composing'
 import { sidebarParents, sidebarRows } from './sidebar-rows'
 import type { ToolbarItem } from './toolbar'
 import { MIN_SIDEBAR_WIDTH } from './useSidebarResize'
@@ -126,6 +127,7 @@ function RenameInput({
       }}
       onKeyDown={(event) => {
         event.stopPropagation()
+        if (composing(event)) return
         if (event.key === 'Enter') {
           event.preventDefault()
           editing.onCommit()

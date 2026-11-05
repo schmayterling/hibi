@@ -2,7 +2,7 @@
   "id": "diagnostics",
   "name": "Diagnostics",
   "description": "Inspect startup timings, addon activity, and app performance.",
-  "apiVersion": 2,
+  "apiVersion": 3,
   "kind": "extension",
   "version": "1.0.1",
   "authors": [

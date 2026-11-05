@@ -77,6 +77,7 @@ export function createDocumentTransfers() {
           ...metadata,
           saveReceipt: true,
           savedVersion: source.saved.version,
+          versionsKept: state.versionsKept,
         }
       if (!force && known.get(owner)?.has(source.store))
         return {

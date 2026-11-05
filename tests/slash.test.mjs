@@ -5,11 +5,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { filterCommands } from '../src/addons/slash-commands/commands.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   replaceRichText,
@@ -77,7 +77,7 @@ test('slash search matches labels, descriptions, and extension keywords without 
   }
 })
 
-it('slash commands work in both editors, preserve undo, and coexist with vim', {
+test('slash commands work in both editors, preserve undo, and coexist with vim', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-slash-'))
@@ -92,7 +92,7 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(5000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -147,16 +147,7 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
       await menu
         .getByRole('option', { name: /^Quotes Indented quotation$/ })
         .click()
-      assert.equal(
-        await rich
-          .locator(
-            t.formattedEngine === 'tiptap'
-              ? 'blockquote'
-              : '.cm-line.hibi-lp-quote',
-          )
-          .count(),
-        1,
-      )
+      assert.equal(await rich.locator('.cm-line.hibi-lp-quote').count(), 1)
       await replaceRichText(page, rich, '/')
       await menu.waitFor()
       const beforeDismiss = await read()
@@ -165,63 +156,29 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
       assert.equal(await read(), beforeDismiss)
       await rich.pressSequentially('literal')
       assert.equal(await menu.isVisible(), false)
-      if (t.formattedEngine === 'tiptap')
-        await rich.evaluate((element) => {
-          const editor = element.editor
-          editor.commands.setContent('<p>/table</p>')
-          editor.commands.setTextSelection(7)
-          editor.commands.focus()
-        })
-      else await replaceRichText(page, rich, '/table')
+      await replaceRichText(page, rich, '/table')
       assert.equal(await read(), '/table')
       await menu.waitFor()
       await rich.press('Tab')
       assert.equal(await rich.locator('table').count(), 1)
-      if (t.formattedEngine === 'tiptap')
-        await rich.evaluate((element) => {
-          const editor = element.editor
-          editor.commands.setContent('<p>/</p>')
-          editor.commands.setTextSelection(2)
-          editor.commands.focus()
-        })
-      else await setFormattedFixture('/')
+      await setFormattedFixture('/')
       await menu.waitFor()
       await rich.press('Escape')
       await menu.waitFor({ state: 'hidden' })
-      if (t.formattedEngine === 'tiptap')
-        await rich.evaluate((element) => {
-          const editor = element.editor
-          editor.commands.insertContent('literal')
-          editor.commands.setContent('<p>/table</p>')
-          editor.commands.setTextSelection(7)
-        })
-      else {
-        await page.keyboard.insertText('literal')
-        await setFormattedFixture('/table')
-      }
+
+      await page.keyboard.insertText('literal')
+      await setFormattedFixture('/table')
+
       await menu.waitFor()
       assert.match(await menu.innerText(), /Tables/)
       await rich.press('Tab')
       assert.equal(await rich.locator('table').count(), 1)
       // A DOM fill cannot remove the table and quote nodes from earlier commands.
-      if (t.formattedEngine === 'tiptap')
-        await rich.evaluate((element) =>
-          element.editor.commands.setContent('<p></p>'),
-        )
-      else await setFormattedFixture('')
+      await setFormattedFixture('')
       await replaceRichText(page, rich, '/alerts')
       await menu.waitFor()
       await rich.press('Enter')
-      assert.equal(
-        await rich
-          .locator(
-            t.formattedEngine === 'tiptap'
-              ? '.github-alert'
-              : '.hibi-lp-alert-title',
-          )
-          .count(),
-        1,
-      )
+      assert.equal(await rich.locator('.hibi-lp-alert-title').count(), 1)
       assert.match(await read(), /> \[!NOTE\]/)
     },
   )
@@ -229,13 +186,7 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
   await t.test(
     'physical typing replaces a selected table and undo restores it',
     async () => {
-      if (t.formattedEngine === 'tiptap')
-        await rich.evaluate((element) => {
-          element.editor.commands.setContent('<p>/table</p>')
-          element.editor.commands.setTextSelection(7)
-          element.editor.commands.focus()
-        })
-      else await setFormattedFixture('/table')
+      await setFormattedFixture('/table')
       await menu.waitFor()
       await rich.press('Tab')
       assert.equal(await rich.locator('table').count(), 1)
@@ -342,76 +293,34 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
-  if (t.formattedEngine === 'codemirror')
-    // Accepted difference: the codemirror split pane stays editable.
-    assert.equal(await rich.getAttribute('contenteditable'), 'true')
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await t.test(
     'formatted heading slash commands survive split mode',
     async () => {
-      if (t.formattedEngine === 'tiptap')
-        await page.waitForFunction(
-          () => document.querySelector('.tiptap')?.editor?.isEditable === false,
-        )
       await rich.getByRole('heading', { level: 2 }).last().waitFor()
       await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-      if (t.formattedEngine === 'tiptap')
-        await page.waitForFunction(
-          () => document.querySelector('.tiptap')?.editor?.isEditable,
-        )
-      else await rich.and(page.locator('[contenteditable="true"]')).waitFor()
-      if (t.formattedEngine === 'tiptap')
-        await rich
-          .getByRole('heading', { level: 2 })
-          .last()
-          .evaluate((heading) => {
-            const editor = heading.closest('.tiptap').editor
-            editor.commands.setTextSelection(editor.view.posAtDOM(heading, 0))
-            editor.commands.focus()
-          })
-      else
-        await rich.evaluate((element) => {
-          const view = element.cmTile.root.view
-          const from = view.state.doc.toString().lastIndexOf('## ') + 3
-          view.dispatch({ selection: { anchor: from } })
-          view.focus()
-        })
+      await rich.and(page.locator('[contenteditable="true"]')).waitFor()
+      await rich.evaluate((element) => {
+        const view = element.cmTile.root.view
+        const from = view.state.doc.toString().lastIndexOf('## ') + 3
+        view.dispatch({ selection: { anchor: from } })
+        view.focus()
+      })
       await rich.pressSequentially('/quote')
       await menu.waitFor()
       await rich.press('Enter')
-      assert.equal(
-        await rich
-          .locator(
-            t.formattedEngine === 'tiptap'
-              ? 'blockquote'
-              : '.cm-line.hibi-lp-quote',
-          )
-          .count(),
-        1,
-      )
+      assert.equal(await rich.locator('.cm-line.hibi-lp-quote').count(), 1)
       assert.match(await read(), />/)
       await page.mouse.move(400, 18)
       await page
         .getByRole('button', { name: /^side-by-side$/i, exact: true })
         .click()
-      await page.waitForFunction(
-        (engine) =>
-          (engine === 'codemirror' ||
-            document.querySelector('.tiptap')?.editor?.isEditable === false) &&
-          document
-            .querySelector('.source-pane .cm-content')
-            ?.textContent.includes('>'),
-        t.formattedEngine,
+      await page.waitForFunction(() =>
+        document
+          .querySelector('.source-pane .cm-content')
+          ?.textContent.includes('>'),
       )
-      assert.equal(
-        await rich
-          .locator(
-            t.formattedEngine === 'tiptap'
-              ? 'blockquote'
-              : '.cm-line.hibi-lp-quote',
-          )
-          .count(),
-        1,
-      )
+      assert.equal(await rich.locator('.cm-line.hibi-lp-quote').count(), 1)
     },
   )
   await page

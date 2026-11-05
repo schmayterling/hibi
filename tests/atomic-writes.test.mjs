@@ -19,7 +19,7 @@ async function runtime({
       build({
         stdin: {
           contents:
-            "export { loadAppearance, saveAppearance } from './src/main/appearance.ts'; export { rememberWorkspace, setKnownWorkspace, observeKnownWorkspaces } from './src/main/recent-workspaces.ts'; export { saveUiCase, getUiCase } from './src/main/ui-case.ts'; export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
+            "export { loadAppearance, saveAppearance } from './src/main/appearance.ts'; export { rememberWorkspace, setKnownWorkspace, observeKnownWorkspaces } from './src/main/recent-workspaces.ts'; export { saveUiCase, getUiCase } from './src/main/ui-case.ts'; export { PATIENT_RENAME } from './src/main/atomic-rename.ts'; export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
           resolveDir: resolve('.'),
         },
         bundle: true,
@@ -220,6 +220,78 @@ async function writer(t, kind, options) {
     assertClean: async () =>
       assert.deepEqual(await fs.readdir(dirname(file)), [basename(file)]),
   }
+}
+
+test('a save someone is waiting on keeps trying about 10 s for a program to let go', async (t) => {
+  const { module, state, original } = await runtime({ failures: Infinity })
+  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-patient-rename-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const file = join(root, 'note.md')
+  await fs.writeFile(file, 'original')
+  const { PATIENT_RENAME, writeText } = module.exports
+  await assert.rejects(
+    writeText(file, 'replacement', false, undefined, PATIENT_RENAME),
+    (error) => error === original,
+  )
+  assert.equal(
+    state.delays.reduce((sum, ms) => sum + ms, 0),
+    10000,
+  )
+  assert.ok(state.delays.every((ms) => ms <= 100))
+  assert.equal(await fs.readFile(file, 'utf8'), 'original')
+  assert.deepEqual(await fs.readdir(root), ['note.md'])
+})
+
+for (const [name, change, kept] of [
+  [
+    'wrote the same length',
+    async (file, past) => {
+      await fs.writeFile(file, 'outsider')
+      await fs.utimes(file, past, past)
+    },
+    'outsider',
+  ],
+  [
+    'wrote at the same time',
+    async (file, _past, time) => {
+      await fs.writeFile(file, 'outside text')
+      await fs.utimes(file, time, time)
+    },
+    'outside text',
+  ],
+  [
+    'replaced the file',
+    async (file, _past, time) => {
+      await fs.writeFile(`${file}.other`, 'outsider')
+      await fs.utimes(`${file}.other`, time, time)
+      await fs.rename(`${file}.other`, file)
+    },
+    'outsider',
+  ],
+  ['removed the file', (file) => fs.rm(file), null],
+]) {
+  test(`a save that waits leaves alone what a program ${name} meanwhile`, async (t) => {
+    const { module, state } = await runtime({ failures: Infinity })
+    const root = await fs.mkdtemp(join(tmpdir(), 'hibi-patient-rename-'))
+    t.after(() => fs.rm(root, { recursive: true, force: true }))
+    const file = join(root, 'note.md')
+    await fs.writeFile(file, 'original')
+    // Whole seconds, so a change can put back the very same time.
+    const time = new Date(1_700_000_000_000)
+    await fs.utimes(file, time, time)
+    state.onDelay = async () => {
+      state.onDelay = undefined
+      await change(file, new Date(time.getTime() - 60000), time)
+    }
+    const { PATIENT_RENAME, writeText } = module.exports
+    await assert.rejects(
+      writeText(file, 'replacement', false, undefined, PATIENT_RENAME),
+      /changed outside Hibi/,
+    )
+    assert.equal(state.attempts, 1)
+    assert.equal(await fs.readFile(file, 'utf8').catch(() => null), kept)
+    assert.deepEqual(await fs.readdir(root), kept === null ? [] : ['note.md'])
+  })
 }
 
 for (const kind of ['document', 'storage', 'workspace']) {

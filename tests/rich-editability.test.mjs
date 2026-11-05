@@ -3,15 +3,15 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-it('empty formatted blocks remain editable and rich editing survives vim and view switches', {
+test('empty formatted blocks remain editable and rich editing survives vim and view switches', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-editability-'))
@@ -28,7 +28,7 @@ it('empty formatted blocks remain editable and rich editing survives vim and vie
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -65,19 +65,13 @@ it('empty formatted blocks remain editable and rich editing survives vim and vie
     (await window.hibi.getDocument()).markdown.includes('extra'),
   )
   // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
-  assert.equal(
-    await rich.getAttribute('contenteditable'),
-    t.formattedEngine === 'codemirror' ? 'true' : 'false',
-  )
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await pressShortcut(app, `${mod}+Shift+[`)
   await source.waitFor({ state: 'hidden' })
   await page.waitForFunction(
-    (engine) =>
-      engine === 'tiptap'
-        ? document.querySelector('.tiptap')?.editor?.isEditable
-        : document.querySelector('.rich-pane .hibi-formatted .cm-content')
-            ?.isContentEditable,
-    t.formattedEngine,
+    () =>
+      document.querySelector('.rich-pane .hibi-formatted .cm-content')
+        ?.isContentEditable,
   )
   await rich.locator('td').first().click()
   await page.keyboard.type(' rich')
@@ -103,48 +97,33 @@ it('empty formatted blocks remain editable and rich editing survives vim and vie
       revision,
     )
     await rich.waitFor()
-    if (t.formattedEngine === 'tiptap')
-      await page.waitForFunction(
-        () =>
-          document.querySelector('.tiptap')?.textContent === '' &&
-          document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-            'true',
-      )
-    else {
-      await waitForAsync(
-        page,
-        async () => (await window.hibi.getDocument()).markdown === '',
-      )
-      assert.equal(await rich.getAttribute('contenteditable'), 'true')
-    }
+
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === '',
+    )
+    assert.equal(await rich.getAttribute('contenteditable'), 'true')
+
     await replaceRichText(page, rich, `/${command}`)
     await page.getByRole('listbox', { name: /slash commands/i }).waitFor()
     await rich.press('Enter')
     await rich
       .locator(
-        (t.formattedEngine === 'tiptap'
-          ? { code: 'pre', quote: 'blockquote', h1: 'h1' }
-          : {
-              code: '.hibi-lp-codeblock',
-              quote: '.hibi-lp-quote',
-              h1: '.hibi-lp-h1',
-            })[command],
+        {
+          code: '.hibi-lp-codeblock',
+          quote: '.hibi-lp-quote',
+          h1: '.hibi-lp-h1',
+        }[command],
       )
       .waitFor()
     await rich.press(`${mod}+Enter`)
     await page.keyboard.type('outside')
     assert.equal(await rich.getAttribute('contenteditable'), 'true')
-    assert.equal(
-      await rich
-        .locator(t.formattedEngine === 'tiptap' ? 'p' : '.cm-line')
-        .last()
-        .innerText(),
-      'outside',
-    )
+    assert.equal(await rich.locator('.cm-line').last().innerText(), 'outside')
   }
 })
 
-test('codemirror: enter in an empty table cell inserts a line break', {
+test('enter in an empty table cell inserts a line break', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-native-editability-'))
@@ -162,7 +141,7 @@ test('codemirror: enter in an empty table cell inserts a line break', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,
@@ -186,7 +165,7 @@ test('codemirror: enter in an empty table cell inserts a line break', {
   })
 })
 
-test('codemirror: canonical empty blocks remain editable across vim and source switches', {
+test('canonical empty blocks remain editable across vim and source switches', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-native-editability-'))
@@ -204,7 +183,7 @@ test('codemirror: canonical empty blocks remain editable across vim and source s
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await selectFormattedEngine(app, page, 'codemirror')
+  await waitForFormattedEditor(app, page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
     exact: true,

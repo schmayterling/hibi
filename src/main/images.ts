@@ -7,8 +7,6 @@ import sanitizeHtml from 'sanitize-html'
 import { lexMarkdown } from '../shared/marked-blocks.ts'
 import { isPathInside } from './workspace-paths.ts'
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024
-
 export function imageMime(data: Buffer): string | null {
   const start = data.subarray(0, 16).toString('hex')
   if (start.startsWith('89504e470d0a1a0a')) return 'image/png'
@@ -25,13 +23,42 @@ export function imageMime(data: Buffer): string | null {
   )
     return 'image/avif'
   if (
-    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/.test(
+    // A comment can't contain `-->`, so each run of comments matches one way:
+    // a lazy `[\s\S]*?` here backtracked exponentially on `<!---->` runs.
+    /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--(?:[^-]|-(?!->))*-->\s*)*<svg[\s>]/.test(
       data.toString('utf8'),
     )
   )
     return 'image/svg+xml'
   return null
 }
+
+/**
+ * Request headers for a remote image that give its host nothing to recognize a
+ * returning reader by: no cookies, and no cache validators (ETag,
+ * Last-Modified). The page's memory cache sets validators on the request,
+ * where they are dropped; Chromium's HTTP cache adds its own after webRequest,
+ * so the request tells it to skip the cache.
+ */
+export const remoteImageRequestHeaders = (headers: Record<string, string>) => ({
+  ...Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) =>
+        !/^(?:cookie|cache-control|if-none-match|if-modified-since)$/i.test(
+          name,
+        ),
+    ),
+  ),
+  'Cache-Control': 'no-cache',
+})
+
+/** Response headers without Set-Cookie, so a remote image host stores no cookie. */
+export const withoutSetCookie = (headers: Record<string, string[]>) =>
+  Object.fromEntries(
+    Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() !== 'set-cookie',
+    ),
+  )
 
 export function imageSources(markdown: string): Set<string> {
   const sources = new Set<string>()
@@ -50,7 +77,7 @@ export function imageSources(markdown: string): Set<string> {
   return sources
 }
 
-/** Local image bytes only; never exposes a general filesystem read API. */
+/** Compatibility and export bytes; interactive views use streamed media URLs. */
 export async function readDocumentImage(
   source: string,
   documentPath: string | null,
@@ -69,13 +96,19 @@ export async function readDocumentImage(
     )
     try {
       const stat = await file.stat()
-      if (!stat.isFile() || stat.size > MAX_IMAGE_BYTES) return null
+      if (!stat.isFile() || !stat.size || !Number.isSafeInteger(stat.size))
+        return null
+      // Reject non-images before allocating a file-sized buffer.
+      const header = Buffer.alloc(Math.min(4096, stat.size))
+      const head = await file.read(header, 0, header.length, 0)
+      const mime = imageMime(header.subarray(0, head.bytesRead))
+      if (!mime) return null
       const bytes = Buffer.alloc(stat.size + 1)
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0)
       if (bytesRead !== stat.size) return null
       const data = bytes.subarray(0, bytesRead)
-      const mime = imageMime(data)
-      return mime ? `data:${mime};base64,${data.toString('base64')}` : null
+      if (imageMime(data.subarray(0, 4096)) !== mime) return null
+      return `data:${mime};base64,${data.toString('base64')}`
     } finally {
       await file.close()
     }

@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  reloadFormattedEngine,
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -82,7 +82,7 @@ test('required addons confirm together, share versioned exports, and leave consu
         ...manifest,
         description: 'Addon dependency lifecycle fixture',
         kind: 'extension',
-        apiVersion: 2,
+        apiVersion: 3,
         version: '1.0.0',
         authors: [{ displayName: 'Test' }],
         entry: 'index.js',
@@ -114,7 +114,7 @@ test('required addons confirm together, share versioned exports, and leave consu
     }
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() =>
     window.hibi.setAddonTrustSettings({
       allowUnsigned: true,
@@ -288,7 +288,7 @@ async function writeInstalledFixture(profile, id, manifest, source) {
       name: id,
       description: 'Addon dependency fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',
@@ -352,7 +352,7 @@ test('a blocked feature consumer keeps rich editing and its draft through disabl
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   assert.equal(
     await page.evaluate(() => window.startupConsumerGreeting),
@@ -492,7 +492,8 @@ test('optional readiness settles when a pending consumer loses its required prov
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await reloadFormattedEngine(page, t.formattedEngine)
+  await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+  await page.reload({ waitUntil: 'commit' })
   await page.waitForFunction(
     () => window.optionalReadyRequested && !!window.failPendingProvider,
   )
@@ -507,13 +508,7 @@ test('optional readiness settles when a pending consumer loses its required prov
   await page.evaluate(() => window.failPendingProvider())
   await waitForAsync(page, () => window.optionalReadySettled)
   await waitForDocumentEditor(app, page)
-  await page
-    .locator(
-      t.formattedEngine === 'tiptap'
-        ? '.rich-pane .tiptap'
-        : '.rich-pane .hibi-formatted .cm-content',
-    )
-    .waitFor()
+  await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
   assert.equal(await page.evaluate(() => window.optionalReadySettled), true)
   assert.equal(await page.evaluate(() => window.optionalReadyUnavailable), true)
   assert.equal(
@@ -603,7 +598,7 @@ test('a background consumer does not make its source-activated provider block ri
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => !!window.releaseSourceProvider)
   assert.equal(

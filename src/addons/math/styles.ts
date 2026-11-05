@@ -19,4 +19,4 @@ export const mathStyles =
   // Accent marks and the overlays of laps (`\not`, `\neq`) paint after the glyph
   // under them, so their own opaque selection background would hide it
   // (`\bar x` selected read as `¯`).
-  '\n.tiptap-mathematics-render{cursor:pointer;overflow-anchor:none}.tiptap-mathematics-render[data-type="inline-math"]{display:inline-block}.tiptap-mathematics-render[data-type="block-math"]{overflow-x:auto;padding:8px 0}.katex-display{overflow-x:auto;overflow-y:hidden;margin:.75em 0;padding:.25em 0}.katex{color:inherit}.katex :is(.accent-body,.katex-inner) ::selection{background:transparent}'
+  '\n.hibi-lp-math{cursor:pointer;overflow-anchor:none}.hibi-lp-math[data-type="inline-math"]{display:inline-block}.hibi-lp-math[data-type="block-math"]{overflow-x:auto;padding:8px 0}.katex-display{overflow-x:auto;overflow-y:hidden;margin:.75em 0;padding:.25em 0}.katex{color:inherit}.katex :is(.accent-body,.katex-inner) ::selection{background:transparent}'

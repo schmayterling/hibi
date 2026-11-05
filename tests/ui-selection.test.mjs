@@ -3,11 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  selectFormattedEngine,
-  testFormattedEngines,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -159,7 +159,6 @@ test('copyable messages, dialog code and addon documents opt back in', {
       </dialog>
       <textarea data-copy>Editable text</textarea>
       <div contenteditable="plaintext-only" data-copy>Editable addon</div>
-      <div class="tiptap" contenteditable="false" data-copy>Read-only preview</div>
       <div class="cm-content" contenteditable="false" data-copy>Read-only source</div>
       <div class="addon-view-content"><span data-chrome>Addon sidebar label</span></div>
     `
@@ -181,74 +180,67 @@ test('copyable messages, dialog code and addon documents opt back in', {
     assert.equal(select, 'none', text)
 })
 
-testFormattedEngines(
-  'document text and inputs remain selectable',
-  {
-    timeout: 90000,
-  },
-  async (t) => {
-    const { app, page, tree } = await openWorkspace(t)
-    const editor = await selectFormattedEngine(app, page, t.formattedEngine)
-    const paragraph = () =>
-      page
-        .locator('.rich-pane :is(p, .cm-line)')
-        .filter({ hasText: text })
-        .first()
-    await paragraph().waitFor()
-    assert.equal(await userSelect(editor), 'text')
-    assert.match(await dragText(page, paragraph()), /this document text/)
-    await editor.press('ControlOrMeta+a')
-    assert.match(
-      await page.evaluate(() => window.getSelection().toString()),
-      /Heading[\s\S]*Copy this document text/,
-    )
-    await page.getByRole('button', { name: /^side-by-side$/i }).click()
+test('document text and inputs remain selectable', {
+  timeout: 90000,
+}, async (t) => {
+  const { app, page, tree } = await openWorkspace(t)
+  const editor = await waitForFormattedEditor(app, page)
+  const paragraph = () =>
+    page
+      .locator('.rich-pane :is(p, .cm-line)')
+      .filter({ hasText: text })
+      .first()
+  await paragraph().waitFor()
+  assert.equal(await userSelect(editor), 'text')
+  assert.match(await dragText(page, paragraph()), /this document text/)
+  await editor.press('ControlOrMeta+a')
+  assert.match(
+    await page.evaluate(() => window.getSelection().toString()),
+    /Heading[\s\S]*Copy this document text/,
+  )
+  await page.getByRole('button', { name: /^side-by-side$/i }).click()
+  await page
+    .locator('.editor-panes.mode-side-by-side[data-source-ready="true"]')
+    .waitFor()
+  await paragraph().waitFor()
+  assert.equal(await userSelect(editor), 'text')
+  assert.match(await dragText(page, paragraph()), /this document text/)
+  const source = page.locator('.source-pane .cm-content')
+  await source.waitFor()
+  assert.equal(await userSelect(source), 'text')
+  assert.match(
+    await dragText(page, source.locator('.cm-line').filter({ hasText: text })),
+    /this document text/,
+  )
+
+  if (!(await tree.isVisible()))
     await page
-      .locator('.editor-panes.mode-side-by-side[data-source-ready="true"]')
-      .waitFor()
-    await paragraph().waitFor()
-    assert.equal(await userSelect(editor), 'text')
-    assert.match(await dragText(page, paragraph()), /this document text/)
-    const source = page.locator('.source-pane .cm-content')
-    await source.waitFor()
-    assert.equal(await userSelect(source), 'text')
-    assert.match(
-      await dragText(
-        page,
-        source.locator('.cm-line').filter({ hasText: text }),
-      ),
-      /this document text/,
-    )
+      .getByRole('button', { name: /toggle workspace sidebar/i })
+      .click()
+  await tree.getByRole('treeitem', { name: 'one.md', exact: true }).click({
+    button: 'right',
+  })
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click()
+  const input = page.getByRole('textbox', {
+    name: 'Rename item',
+    exact: true,
+  })
+  await input.fill('selectable name.md')
+  await input.press('ControlOrMeta+a')
+  assert.equal(await userSelect(input), 'text')
+  assert.equal(
+    await input.evaluate((element) =>
+      element.value.slice(element.selectionStart, element.selectionEnd),
+    ),
+    'selectable name.md',
+  )
+  await input.press('Escape')
 
-    if (!(await tree.isVisible()))
-      await page
-        .getByRole('button', { name: /toggle workspace sidebar/i })
-        .click()
-    await tree.getByRole('treeitem', { name: 'one.md', exact: true }).click({
-      button: 'right',
-    })
-    await page.getByRole('menuitem', { name: 'Rename', exact: true }).click()
-    const input = page.getByRole('textbox', {
-      name: 'Rename item',
-      exact: true,
-    })
-    await input.fill('selectable name.md')
-    await input.press('ControlOrMeta+a')
-    assert.equal(await userSelect(input), 'text')
-    assert.equal(
-      await input.evaluate((element) =>
-        element.value.slice(element.selectionStart, element.selectionEnd),
-      ),
-      'selectable name.md',
-    )
-    await input.press('Escape')
-
-    await clickMenu(app, 'Settings')
-    await page.getByRole('tab', { name: /^about$/i, exact: true }).click()
-    const version = page.locator('.hibi-identity p')
-    await version.waitFor()
-    assert.equal(await userSelect(version), 'text')
-    assert.match(await dragText(page, version), /version/i)
-    assert.equal(await userSelect(page.locator('.settings-versions')), 'text')
-  },
-)
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: /^about$/i, exact: true }).click()
+  const version = page.locator('.hibi-identity p')
+  await version.waitFor()
+  assert.equal(await userSelect(version), 'text')
+  assert.match(await dragText(page, version), /version/i)
+  assert.equal(await userSelect(page.locator('.settings-versions')), 'text')
+})

@@ -31,7 +31,7 @@ test('language registration stays inert and aliases share one pending load', asy
 })
 
 test('failed languages retry explicitly, deduplicate retries, and respect disabled preferences', async (t) => {
-  t.mock.method(console, 'error', () => {})
+  const errors = t.mock.method(console, 'error', () => {})
   let calls = 0,
     finish
   t.after(
@@ -61,6 +61,13 @@ test('failed languages retry explicitly, deduplicate retries, and respect disabl
   finish(result)
   assert.deepEqual(await Promise.all([first, second]), [result, result])
   assert.equal(codeLanguages.resolve('retry-fixture'), result)
+  assert.deepEqual(
+    errors.mock.calls.map(({ arguments: [text, error] }) => [
+      text,
+      error.message,
+    ]),
+    [['Could not load code language: retry-fixture', 'fixture import failed']],
+  )
 })
 
 test('late language completion cannot overwrite a replacement registration', async (t) => {

@@ -76,6 +76,11 @@ const splitTabsMode = values.mode === 'split-tabs',
 assert.ok(['hibi', 'bare'].includes(values.engine))
 const bare = values.engine === 'bare'
 assert.ok(
+  !bare ||
+    (modes.every((mode) => mode === 'source') && values.target === 'source'),
+  '--engine bare mounts a source view only; use --mode source --target source.',
+)
+assert.ok(
   !splitTabsMode || (!bare && !values.file && values.target === 'both'),
   '--mode split-tabs requires Hibi, generated fixtures, and --target both.',
 )
@@ -206,7 +211,7 @@ const summary = {
         ]),
     ...(bare
       ? [
-          `Engine-only uses CodeMirror ${values['bare-markdown'] ? 'with native Markdown parsing and highlighting' : 'without a language or highlighting extension'} and ProseMirror history with a static, inert split peer. No Hibi runtime, React, addons, canonical journal, or IPC save runs; saved artifacts are engine snapshots written by the benchmark runner.`,
+          `Engine-only uses CodeMirror ${values['bare-markdown'] ? 'with native Markdown parsing and highlighting' : 'without a language or highlighting extension'} with history. No Hibi runtime, React, addons, canonical journal, or IPC save runs; saved artifacts are engine snapshots written by the benchmark runner.`,
         ]
       : []),
     ...(values['fixed-chrome']
@@ -315,7 +320,7 @@ async function installProbe(profile) {
       name: 'Input paint probe',
       description: 'Benchmark-only input timing callbacks',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Benchmark' }],
       capabilities: ['source'],
@@ -338,19 +343,22 @@ async function installProbe(profile) {
   )
   await writeFile(join(profile, 'addons.json'), JSON.stringify(addons))
 }
-function instrument({ target, offset, fileVisual, requestedPosition }) {
+function instrument({ target, offset }) {
   const bare = window.__bareInput,
     codeMirror = bare?.codeMirror ?? window.__inputPaintSdk.codeMirror,
-    sourceElement = document.querySelector('.cm-content'),
-    sourceView =
-      bare?.sourceView ??
-      (sourceElement
-        ? codeMirror.view.EditorView.findFromDOM(sourceElement)
-        : null),
-    rich = document.querySelector('.tiptap')?.editor,
-    richView = bare?.richView ?? rich?.view,
-    view = target === 'source' ? sourceView : richView,
-    element = target === 'source' ? sourceView.contentDOM : richView.dom
+    // Both views are CodeMirror; the pane tells them apart.
+    find = (selector) => {
+      const content = document.querySelector(selector)
+      return content ? codeMirror.view.EditorView.findFromDOM(content) : null
+    },
+    sourceView = bare?.sourceView ?? find('.source-pane .cm-content'),
+    visualView = bare
+      ? null
+      : find(
+          '.rich-pane .hibi-formatted .cm-content:not(.hibi-lp-cell-editor *)',
+        ),
+    view = target === 'source' ? sourceView : visualView,
+    element = view.contentDOM
   const measurement = {
     phase: 'setup',
     target,
@@ -403,30 +411,14 @@ function instrument({ target, offset, fileVisual, requestedPosition }) {
     }
     object[method] = wrapped
   }
-  const attached = new WeakSet()
-  measurement.attachRich = (editor) => {
-    if (attached.has(editor)) return
-    attached.add(editor)
-    timed(editor.markdown, 'parse', 'rich.markdown.parse')
-    timed(editor, 'getMarkdown', 'rich.getMarkdown')
-    timed(editor.view, 'updateState', 'rich.view.updateState')
-    const holder = { dispatch: editor.view.props.dispatchTransaction }
-    timed(holder, 'dispatch', 'rich.dispatchTransaction')
-    if (holder.dispatch)
-      editor.view.setProps({ dispatchTransaction: holder.dispatch })
-  }
-  // Observe the mounted native editor without registering an addon rich hook:
-  // unknown rich hooks intentionally disable audited codec fast paths.
-  if (rich && !rich.isDestroyed) measurement.attachRich(rich)
-  if (bare?.richView) measurement.attachRich({ view: bare.richView })
-  if (sourceView) {
+  const observe = (surface, observed) => {
     timed(
-      sourceView,
+      observed,
       'update',
-      'source.view.update',
+      `${surface}.view.update`,
       undefined,
       ([transactions]) => {
-        measurement.model('source', {
+        measurement.model(surface, {
           docChanged: transactions.some(
             (transaction) => transaction.docChanged,
           ),
@@ -437,16 +429,15 @@ function instrument({ target, offset, fileVisual, requestedPosition }) {
       },
     )
     timed(
-      Object.getPrototypeOf(sourceView.state),
+      Object.getPrototypeOf(observed.state),
       'update',
-      'source.state.update',
-      () => sourceView.state,
+      `${surface}.state.update`,
+      () => observed.state,
     )
   }
-  const selectionHead = () =>
-    target === 'source'
-      ? view.state.selection.main.head
-      : view.state.selection.head
+  if (sourceView) observe('source', sourceView)
+  if (visualView) observe('visual', visualView)
+  const selectionHead = () => view.state.selection.main.head
   measurement.placement = () => {
     const head = selectionHead(),
       caret = view.coordsAtPos(head),
@@ -459,7 +450,7 @@ function instrument({ target, offset, fileVisual, requestedPosition }) {
         top: Math.max(0, rect.top),
         bottom: Math.min(innerHeight, rect.bottom),
       },
-      focused = target === 'source' ? view.hasFocus : view.hasFocus()
+      focused = view.hasFocus
     return {
       head,
       focused,
@@ -487,50 +478,18 @@ function instrument({ target, offset, fileVisual, requestedPosition }) {
     }
   }
   measurement.prepareSelection = (key, count) => {
-    const current =
-        target === 'source' ? view.state.selection.main : view.state.selection,
+    const current = view.state.selection.main,
       direction = key === 'ArrowRight' ? 1 : -1
     if (current.anchor !== current.head)
       throw new Error('Selection probe must begin at a caret.')
-    let head = current.head
-    if (target === 'source') {
-      let range = current
-      for (let index = 0; index < count; index++) {
-        const forward =
-          direction > 0 ===
-          (view.textDirectionAt(range.head) === codeMirror.view.Direction.LTR)
-        range = view.moveByChar(range, forward)
-      }
-      head = range.head
-    } else {
-      if (getComputedStyle(element).direction !== 'ltr')
-        throw new Error(
-          'Visual selection oracle requires a left-to-right fixture.',
-        )
-      const doc = view.state.doc,
-        Selection = current.constructor,
-        graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
-      for (let index = 0; index < count; index++) {
-        const position = doc.resolve(head),
-          adjacent = direction > 0 ? position.nodeAfter : position.nodeBefore
-        if (adjacent?.isText) {
-          const text = adjacent.text,
-            part = graphemes
-              .segment(text)
-              .containing(direction > 0 ? 0 : text.length - 1)
-          head += direction * part.segment.length
-        } else if (adjacent?.isInline) head += direction * adjacent.nodeSize
-        else
-          head =
-            Selection.findFrom(
-              doc.resolve(
-                Math.max(0, Math.min(doc.content.size, head + direction)),
-              ),
-              direction,
-              true,
-            )?.head ?? head
-      }
+    let range = current
+    for (let index = 0; index < count; index++) {
+      const forward =
+        direction > 0 ===
+        (view.textDirectionAt(range.head) === codeMirror.view.Direction.LTR)
+      range = view.moveByChar(range, forward)
     }
+    const head = range.head
     measurement.selection = {
       key,
       count,
@@ -542,8 +501,7 @@ function instrument({ target, offset, fileVisual, requestedPosition }) {
   const selectionFrame = () => {
     const selection = measurement.selection
     selection.frame = 0
-    const model =
-        target === 'source' ? view.state.selection.main : view.state.selection,
+    const model = view.state.selection.main,
       dom = window.getSelection(),
       records = measurement.records.filter(
         (record) => record.phase === 'selection',
@@ -621,11 +579,8 @@ function instrument({ target, offset, fileVisual, requestedPosition }) {
   const visible = () => {
     const head = selectionHead(),
       from = head - 1
-    if (from < (target === 'source' ? 0 : 1)) return null
-    const expected =
-      target === 'source'
-        ? view.state.doc.sliceString(from, head)
-        : view.state.doc.textBetween(from, head)
+    if (from < 0) return null
+    const expected = view.state.doc.sliceString(from, head)
     const start = view.domAtPos(from),
       end = view.domAtPos(head),
       range = document.createRange()
@@ -783,83 +738,19 @@ function instrument({ target, offset, fileVisual, requestedPosition }) {
     methods: measurement.methods,
     pending: measurement.pending.length,
     focused: document.hasFocus(),
-    finalVisibleRanges: target === 'source' ? view.visibleRanges : null,
+    finalVisibleRanges: view.visibleRanges,
     finalRenderedElements: element.querySelectorAll('*').length,
   })
   window.__inputPaint = measurement
-  rich?.on('transaction', ({ transaction }) =>
-    measurement.model('visual', {
-      docChanged: transaction.docChanged,
-      selectionSet: transaction.selectionSet,
+  // The formatted view edits the same Markdown, so one offset places both views.
+  // Split scroll leadership follows focus when the selection update fires.
+  view.focus()
+  view.dispatch({
+    selection: { anchor: offset },
+    effects: codeMirror.view.EditorView.scrollIntoView(offset, {
+      y: 'center',
     }),
-  )
-  bare?.onRichTransaction((update) => measurement.model('visual', update))
-  if (target === 'source') {
-    // Split scroll leadership follows focus when the selection update fires.
-    view.focus()
-    view.dispatch({
-      selection: { anchor: offset },
-      effects: codeMirror.view.EditorView.scrollIntoView(offset, {
-        y: 'center',
-      }),
-    })
-  } else {
-    let raw = 0,
-      position = null
-    let blockIndex = null,
-      blockCount = null
-    if (fileVisual) {
-      const blocks = []
-      richView.state.doc.descendants((node, pos) => {
-        if (!node.isTextblock || node.isAtom) return
-        blocks.push({ node, pos })
-        return false
-      })
-      if (!blocks.length)
-        throw new Error('The document has no editable textblock.')
-      blockCount = blocks.length
-      blockIndex =
-        requestedPosition === 'start'
-          ? 0
-          : requestedPosition === 'end'
-            ? blocks.length - 1
-            : Math.floor(blocks.length / 2)
-      const block = blocks[blockIndex]
-      let within =
-        requestedPosition === 'start'
-          ? 0
-          : requestedPosition === 'end'
-            ? block.node.content.size
-            : Math.floor(block.node.content.size / 2)
-      const seam = block.node.textBetween(
-        Math.max(0, within - 1),
-        Math.min(block.node.content.size, within + 1),
-      )
-      if (/^[\uD800-\uDBFF][\uDC00-\uDFFF]$/.test(seam)) within++
-      position = block.pos + 1 + within
-    } else
-      richView.state.doc.forEach((node, pos) => {
-        if (
-          position === null &&
-          offset >= raw &&
-          offset <= raw + node.textContent.length
-        )
-          position = pos + 1 + offset - raw
-        raw += node.textContent.length + 2
-      })
-    if (position === null)
-      throw new Error('Could not map plain fixture offset into visual editor')
-    if (bare) bare.setRichSelection(position)
-    else rich.chain().setTextSelection(position).focus().scrollIntoView().run()
-    return {
-      basis: fileVisual ? 'visual-textblock' : 'plain-source-offset',
-      richPosition: position,
-      blockIndex,
-      blockCount,
-      textOffset: richView.state.doc.textBetween(0, position, '').length,
-      baselineText: fileVisual ? richView.state.doc.textContent : null,
-    }
-  }
+  })
   return { basis: 'normalized-source-offset', editorOffset: offset }
 }
 async function writeProfile(path, profile) {
@@ -898,8 +789,7 @@ async function runCase(config) {
     directory = join(output, name),
     profile = join(directory, 'profile'),
     file = join(directory, 'fixture.md'),
-    source = fileText ?? documentText(config.size, config.shape),
-    fileVisual = sourceFile !== null && config.target === 'visual'
+    source = fileText ?? documentText(config.size, config.shape)
   await mkdir(directory)
   if (!bare) await installProbe(profile)
   await writeFile(file, source)
@@ -948,7 +838,7 @@ async function runCase(config) {
     chars: source.length,
     words: source.match(/\S+/g)?.length ?? 0,
     fixtureSha256: createHash('sha256').update(source).digest('hex'),
-    offset: fileVisual ? null : offset,
+    offset,
     holdMs,
     idleMs: 2000,
     rate,
@@ -1065,22 +955,11 @@ async function runCase(config) {
     )
     const readiness = await page.waitForFunction((target) => {
       const element = document.querySelector(
-        target === 'source' ? '.cm-content' : '.tiptap',
+        target === 'source'
+          ? '.source-pane .cm-content'
+          : '.rich-pane .hibi-formatted .cm-content:not(.hibi-lp-cell-editor *)',
       )
-      const notice =
-        target === 'visual'
-          ? document.querySelector(
-              '.rich-editor-host .source-notice .document-notice',
-            )
-          : null
-      if (
-        notice &&
-        !notice.closest('[hidden], [inert], [aria-hidden="true"]') &&
-        notice.getBoundingClientRect().width > 0 &&
-        getComputedStyle(notice).visibility === 'visible'
-      )
-        return { status: 'unavailable', notice: notice.textContent.trim() }
-      if (
+      return (
         document.hasFocus() &&
         element?.isContentEditable &&
         !element.closest('[inert]') &&
@@ -1088,10 +967,7 @@ async function runCase(config) {
         document.querySelector('.app-shell')?.getAttribute('aria-busy') !==
           'true'
       )
-        return { status: 'ready' }
-      return false
     }, config.target)
-    const ready = await readiness.jsonValue()
     await readiness.dispose()
     await page.evaluate(() => document.fonts.ready.then(() => {}))
     const measureGeometry = () => {
@@ -1126,52 +1002,20 @@ async function runCase(config) {
       return {
         viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
         fonts: document.fonts.status,
-        source: measure('.source-pane', '.cm-scroller'),
-        sourceScroller: measure('.cm-scroller'),
-        sourceContent: measure('.cm-content'),
-        visual: measure('.rich-pane', '.tiptap'),
-        visualContent: measure('.tiptap'),
+        source: measure('.source-pane', '.source-pane .cm-scroller'),
+        sourceScroller: measure('.source-pane .cm-scroller'),
+        sourceContent: measure('.source-pane .cm-content'),
+        visual: measure('.rich-pane', '.rich-pane .hibi-formatted .cm-content'),
+        visualContent: measure('.rich-pane .hibi-formatted .cm-content'),
       }
     }
     result.geometry = await page.evaluate(measureGeometry)
-    if (ready.status === 'unavailable') {
-      const screenshot = join(directory, 'preservation-notice.png')
-      result.unavailable = {
-        reason: 'source-preservation',
-        notice: ready.notice,
-        screenshot,
-      }
-      await page.screenshot({ path: screenshot, timeout: 5000 })
-      if (!fileVisual)
-        throw new Error(
-          `Generated visual fixture is unexpectedly protected: ${ready.notice}`,
-        )
-      assert.equal(
-        await page.evaluate(
-          () => window.__inputPaintContext.editor.getDocument().markdown,
-        ),
-        source,
-        'Protected document source changed before input',
-      )
-      assert.equal(
-        await readFile(file, 'utf8'),
-        source,
-        'Protected fixture bytes changed before input',
-      )
-      result.preservation = { canonicalUnchanged: true, diskUnchanged: true }
-      result.status = 'unavailable'
-      process.exitCode = 1
-      return
-    }
     placement = await page.evaluate(instrument, {
       target: config.target,
-      offset: config.target === 'source' ? editorOffset : offset,
-      fileVisual,
-      requestedPosition: config.position,
+      offset: editorOffset,
     })
     result.selectedPosition = { ...placement }
-    delete result.selectedPosition.baselineText
-    const expectedHead = placement.editorOffset ?? placement.richPosition
+    const expectedHead = placement.editorOffset
     try {
       const placed = await page.waitForFunction(
         (expectedHead) => {
@@ -1300,35 +1144,12 @@ async function runCase(config) {
         `${phase}: input dispatch failed`,
       )
     }
-    let acceptedSource = source
-    async function save(expected, stage, expectedRichText) {
+    async function save(expected, stage) {
       const startedEpoch = performance.timeOrigin + performance.now()
       await page.evaluate(
         (stage) => performance.mark(`input-paint:save:${stage}:start`),
         stage,
       )
-      if (expectedRichText !== undefined) {
-        const accepted = await deadline(
-          page.evaluate(() => ({
-            text: document.querySelector('.tiptap').editor.state.doc
-              .textContent,
-            source: window.__inputPaintContext.editor.getDocument().markdown,
-          })),
-          settleMs,
-          `${stage} rich input validation`,
-        )
-        assert.equal(
-          accepted.text,
-          expectedRichText,
-          `${stage}: rich document omitted or changed accepted input`,
-        )
-        assert.notEqual(
-          accepted.source,
-          acceptedSource,
-          `${stage}: rich input was not committed to canonical source`,
-        )
-        expected = accepted.source
-      }
       const saved = await deadline(
         bare
           ? page.evaluate(benchmarkDocument)
@@ -1337,11 +1158,14 @@ async function runCase(config) {
         `${stage} save`,
       )
       if (bare) await writeFile(file, saved.markdown)
-      assert.equal(
-        saved.markdown,
-        expected,
-        `${stage}: ${bare ? 'engine snapshot' : 'native save'} omitted or changed input`,
-      )
+      // A large note saves with a receipt instead of its text; the disk and
+      // renderer checks below cover what it saved.
+      if (saved?.saveReceipt !== true)
+        assert.equal(
+          saved?.markdown,
+          expected,
+          `${stage}: ${bare ? 'engine snapshot' : 'native save'} omitted or changed input`,
+        )
       assert.equal(
         await readFile(file, 'utf8'),
         expected,
@@ -1360,7 +1184,6 @@ async function runCase(config) {
         startedEpoch,
         finishedEpoch: performance.timeOrigin + performance.now(),
       })
-      acceptedSource = expected
       return expected
     }
     async function settle(phase, count) {
@@ -1381,10 +1204,7 @@ async function runCase(config) {
         { timeout: settleMs },
       )
     }
-    const rawFirst = `${source.slice(0, offset)}x${source.slice(offset)}`,
-      richFirst = fileVisual
-        ? `${placement.baselineText.slice(0, placement.textOffset)}x${placement.baselineText.slice(placement.textOffset)}`
-        : undefined
+    const rawFirst = `${source.slice(0, offset)}x${source.slice(offset)}`
     await sleep(2000)
     if (values['cpu-profile']) {
       await deadline(
@@ -1402,7 +1222,7 @@ async function runCase(config) {
     }
     await dispatch('first-after-idle', 'x', 1, 0)
     await settle('first-after-idle', 1)
-    const first = await save(rawFirst, 'first-after-visible', richFirst)
+    const first = await save(rawFirst, 'first-after-visible')
     let final = first
     await page.screenshot({ path: join(directory, 'first-key.png') })
     if (repetitions) {
@@ -1410,22 +1230,13 @@ async function runCase(config) {
       await save(
         `${source.slice(0, offset)}x${'s'.repeat(repetitions)}${source.slice(offset)}`,
         'hold-immediate',
-        fileVisual
-          ? `${placement.baselineText.slice(0, placement.textOffset)}x${'s'.repeat(repetitions)}${placement.baselineText.slice(placement.textOffset)}`
-          : undefined,
       )
       await settle('hold-s', repetitions)
       await dispatch('hold-backspace', 'Backspace', repetitions, holdMs)
-      final = await save(first, 'backspace-immediate', richFirst)
+      final = await save(first, 'backspace-immediate')
       await settle('hold-backspace', repetitions)
     }
-    const selectionKey = (
-      fileVisual
-        ? config.position === 'end'
-        : offset === source.length
-    )
-      ? 'ArrowLeft'
-      : 'ArrowRight'
+    const selectionKey = offset === source.length ? 'ArrowLeft' : 'ArrowRight'
     result.selectionPlan = await page.evaluate(
       (key) => window.__inputPaint.prepareSelection(key, 20),
       selectionKey,
@@ -1452,7 +1263,9 @@ async function runCase(config) {
       const state = window.__inputPaint
       state.phase = 'scroll'
       let element = document.querySelector(
-        state.target === 'source' ? '.cm-scroller' : '.tiptap',
+        state.target === 'source'
+          ? '.source-pane .cm-scroller'
+          : '.rich-pane .hibi-formatted .cm-scroller',
       )
       while (element && element.scrollHeight <= element.clientHeight + 5)
         element = element.parentElement
@@ -1479,30 +1292,27 @@ async function runCase(config) {
     tracing = false
     const history = await deadline(
       page.evaluate(
-        async ({ source, final, target, initialRichText, finalRichText }) => {
+        async ({ source, final, target }) => {
           const bare = window.__bareInput,
             context = window.__inputPaintContext,
             sdk = window.__inputPaintSdk,
-            rich = document.querySelector('.tiptap')?.editor,
-            richView = bare?.richView ?? rich?.view,
             getDocument = () =>
               bare ? bare.getDocument() : context.editor.getDocument(),
+            // The SDK's history commands run the session history both views share.
             view =
-              target === 'source'
-                ? (bare?.sourceView ??
-                  sdk.codeMirror.view.EditorView.findFromDOM(
-                    document.querySelector('.cm-content'),
-                  ))
-                : null
+              bare?.sourceView ??
+              sdk.codeMirror.view.EditorView.findFromDOM(
+                document.querySelector(
+                  target === 'source'
+                    ? '.source-pane .cm-content'
+                    : '.rich-pane .hibi-formatted .cm-content:not(.hibi-lp-cell-editor *)',
+                ),
+              )
           window.__inputPaint.phase = 'validation'
           window.__inputPaint.latest = null
           let undos = 0
           while (getDocument().markdown !== source && undos < 128) {
-            const done = bare
-              ? bare.undo()
-              : target === 'source'
-                ? sdk.codeMirror.commands.undo(view)
-                : rich.commands.undo()
+            const done = bare ? bare.undo() : sdk.codeMirror.commands.undo(view)
             if (!done)
               throw new Error(
                 'Undo ended before the original fixture was restored',
@@ -1511,19 +1321,8 @@ async function runCase(config) {
           }
           if (getDocument().markdown !== source)
             throw new Error('Undo did not restore original source exactly')
-          if (
-            initialRichText !== undefined &&
-            richView.state.doc.textContent !== initialRichText
-          )
-            throw new Error(
-              'Undo did not restore original rich document text exactly',
-            )
           for (let index = 0; index < undos; index++) {
-            const done = bare
-              ? bare.redo()
-              : target === 'source'
-                ? sdk.codeMirror.commands.redo(view)
-                : rich.commands.redo()
+            const done = bare ? bare.redo() : sdk.codeMirror.commands.redo(view)
             if (!done)
               throw new Error(
                 'Redo ended before all accepted input was restored',
@@ -1531,13 +1330,6 @@ async function runCase(config) {
           }
           if (getDocument().markdown !== final)
             throw new Error('Redo did not restore all accepted input exactly')
-          if (
-            finalRichText !== undefined &&
-            richView.state.doc.textContent !== finalRichText
-          )
-            throw new Error(
-              'Redo did not restore accepted rich document text exactly',
-            )
           return {
             undos,
             restoredOriginal: true,
@@ -1549,8 +1341,6 @@ async function runCase(config) {
           source,
           final,
           target: config.target,
-          initialRichText: fileVisual ? placement.baselineText : undefined,
-          finalRichText: richFirst,
         },
       ),
       settleMs,
@@ -1951,7 +1741,9 @@ async function runSplitTabsCase() {
       fixtures.left.id,
     )
     await splitTab(app, page, fixtures.right.id)
-    await page.locator('.editor-page[data-side="left"] .tiptap').click()
+    await page
+      .locator('.editor-page[data-side="left"] .hibi-formatted .cm-content')
+      .click()
     await page.waitForFunction(
       async (id) =>
         (await window.hibi.getDocument()).tabId === id &&
@@ -1960,8 +1752,12 @@ async function runSplitTabsCase() {
     )
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
     const editors = {
-      left: page.locator('.editor-page[data-side="left"] .cm-content'),
-      right: page.locator('.editor-page[data-side="right"] .tiptap'),
+      left: page.locator(
+        '.editor-page[data-side="left"] .source-pane .cm-content',
+      ),
+      right: page.locator(
+        '.editor-page[data-side="right"] .hibi-formatted .cm-content',
+      ),
     }
     await editors.left.waitFor()
     await editors.right.waitFor()
@@ -1975,10 +1771,10 @@ async function runSplitTabsCase() {
     await page.evaluate(() => {
       window.__twoPaneNodes = {
         left: document.querySelector(
-          '.editor-page[data-side="left"] .cm-content',
+          '.editor-page[data-side="left"] .source-pane .cm-content',
         ),
         right: document.querySelector(
-          '.editor-page[data-side="right"] .tiptap',
+          '.editor-page[data-side="right"] .hibi-formatted .cm-content',
         ),
       }
     })
@@ -2006,8 +1802,8 @@ async function runSplitTabsCase() {
         other = fixtures[side === 'left' ? 'right' : 'left'],
         selector =
           side === 'left'
-            ? '.editor-page[data-side="left"] .cm-content'
-            : '.editor-page[data-side="right"] .tiptap'
+            ? '.editor-page[data-side="left"] .source-pane .cm-content'
+            : '.editor-page[data-side="right"] .hibi-formatted .cm-content'
       assert.ok(
         await page.evaluate(
           async ({ side, otherId }) =>
@@ -2017,10 +1813,12 @@ async function runSplitTabsCase() {
             (await window.hibi.getDocument()).tabId === otherId &&
             window.__twoPaneNodes.left ===
               document.querySelector(
-                '.editor-page[data-side="left"] .cm-content',
+                '.editor-page[data-side="left"] .source-pane .cm-content',
               ) &&
             window.__twoPaneNodes.right ===
-              document.querySelector('.editor-page[data-side="right"] .tiptap'),
+              document.querySelector(
+                '.editor-page[data-side="right"] .hibi-formatted .cm-content',
+              ),
           { side, otherId: other.id },
         ),
         side + ': target not mounted and inactive',
@@ -2104,10 +1902,12 @@ async function runSplitTabsCase() {
       () =>
         window.__twoPaneNodes.left ===
           document.querySelector(
-            '.editor-page[data-side="left"] .cm-content',
+            '.editor-page[data-side="left"] .source-pane .cm-content',
           ) &&
         window.__twoPaneNodes.right ===
-          document.querySelector('.editor-page[data-side="right"] .tiptap'),
+          document.querySelector(
+            '.editor-page[data-side="right"] .hibi-formatted .cm-content',
+          ),
     )
     assert.ok(result.mountedAfter)
     result.traceCollection = await finishTrace()

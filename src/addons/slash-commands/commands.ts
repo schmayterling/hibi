@@ -25,7 +25,6 @@ const commands: BlockCommand[] = [
     description: 'Plain paragraph',
     keywords: 'paragraph normal',
     markdown: '',
-    rich: (chain) => chain.setParagraph(),
   },
 ]
 

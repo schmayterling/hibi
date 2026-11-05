@@ -2,11 +2,8 @@ import assert from 'node:assert/strict'
 import { link, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+import test from 'node:test'
+import { electron, waitForFormattedEditor } from './electron.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 const gif = Buffer.from(
@@ -45,7 +42,7 @@ test('large local images stream; external changes refresh one image and svg rema
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await app.evaluate(({ dialog }, workspace) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -82,11 +79,16 @@ test('large local images stream; external changes refresh one image and svg rema
     const { revision } = await window.hibi.getDocument()
     return {
       small: await window.hibi.readDocumentImage('assets/stable.gif', revision),
-      large: await window.hibi.readDocumentImage('assets/large.gif', revision),
+      large: (await window.hibi.readDocumentImage('assets/large.gif', revision))
+        ?.length,
     }
   })
   assert.match(oldBridge.small, /^data:image\/gif;base64,/)
-  assert.equal(oldBridge.large, null)
+  assert.equal(
+    oldBridge.large,
+    'data:image/gif;base64,'.length +
+      4 * Math.ceil((9 * 1024 * 1024 + gif.length) / 3),
+  )
   const headers = await page.evaluate(async (url) => {
     const response = await fetch(url)
     return Object.fromEntries(response.headers)

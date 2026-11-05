@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createPackage } from '@electron/asar'
-import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
-  testFormattedEngines as it,
-  selectFormattedEngine,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { waitForAsync } from './poll.mjs'
 
-it('native search covers all notes and giant sources while accepting draft edits', {
+test('native search covers all notes and giant sources while accepting draft edits', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-text-native-'))
@@ -60,7 +60,7 @@ it('native search covers all notes and giant sources while accepting draft edits
     })
   }, workspace)
   const page = await app.firstWindow()
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.evaluate(() => window.hibi.openWorkspace())
   const { target } = await page.evaluate(() =>
     window.hibi.getWorkspaceChangeSnapshot(),

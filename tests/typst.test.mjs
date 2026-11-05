@@ -9,11 +9,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -57,7 +58,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  const rich = await waitForFormattedEditor(app, page)
   page.setDefaultTimeout(7000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -430,16 +431,9 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   assert.match(await rich.innerText(), /keep this paragraph\./)
   assert.equal((await read()).markdown, markdown)
   // Accepted difference: the codemirror split pane stays editable; the rich editor previews read-only.
-  assert.equal(
-    await rich.getAttribute('contenteditable'),
-    t.formattedEngine === 'codemirror' ? 'true' : 'false',
-  )
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  if (t.formattedEngine === 'tiptap')
-    await page.waitForFunction(
-      () => document.querySelector('.tiptap')?.editor?.isEditable,
-    )
-  else await rich.and(page.locator('[contenteditable="true"]')).waitFor()
+  await rich.and(page.locator('[contenteditable="true"]')).waitFor()
   for (const equation of ['$ x^3 $', '$ x^4 $']) {
     await page
       .getByRole('button', { name: /^edit typst block$/i, exact: true })
@@ -472,11 +466,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     ['undo', '$ x^3 $'],
     ['redo', '$ x^4 $'],
   ]) {
-    if (t.formattedEngine === 'tiptap')
-      await page.evaluate((command) => {
-        document.querySelector('.tiptap').editor.commands[command]()
-      }, command)
-    else await rich.press(command === 'undo' ? 'ControlOrMeta+z' : redoKey)
+    await rich.press(command === 'undo' ? 'ControlOrMeta+z' : redoKey)
     const expected = markdown.replace(
       '$ sum_(k=1)^n k = (n(n+1))/2 $',
       equation,
@@ -563,9 +553,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
-  if (t.formattedEngine === 'tiptap')
-    await page.locator('.tiptap pre').waitFor()
-  else await rich.getByText('$ x^4 $', { exact: true }).waitFor()
+  await rich.getByText('$ x^4 $', { exact: true }).waitFor()
   assert.equal(await rich.getAttribute('contenteditable'), 'true')
   assert.equal(
     (await read()).markdown,

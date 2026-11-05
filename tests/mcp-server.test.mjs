@@ -1,18 +1,17 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import test from 'node:test'
 import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
+  waitForFormattedEditor,
 } from './electron.mjs'
-import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -90,7 +89,7 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
   }, workspace)
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
+  const rich = await waitForFormattedEditor(app, page)
   await page.evaluate(
     (preferences) => {
       localStorage.setItem(
@@ -202,12 +201,34 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
         assert.equal(response.status, status, JSON.stringify(headers))
         assert.equal(await response.text(), '')
       }
-      // Fetch derives Host from the URL, ignoring a caller's Host header.
-      const badHost = await request(ping, {
-        endpoint: `http://localhost.:${port}/mcp`,
+      // Send the invalid Host directly, without depending on localhost. DNS.
+      const badHost = await new Promise((resolve, reject) => {
+        const request = httpRequest(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              Host: `localhost.:${port}`,
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          },
+          (response) => {
+            let body = ''
+            response.setEncoding('utf8')
+            response.on('data', (chunk) => {
+              body += chunk
+            })
+            response.on('end', () =>
+              resolve({ status: response.statusCode, body }),
+            )
+            response.on('error', reject)
+          },
+        )
+        request.on('error', reject)
+        request.end(JSON.stringify(ping))
       })
-      assert.equal(badHost.status, 403)
-      assert.equal(await badHost.text(), '')
+      assert.deepEqual(badHost, { status: 403, body: '' })
       const get = await request(undefined, { method: 'GET' })
       assert.equal(get.status, 405)
       assert.equal(get.headers.get('allow'), 'POST')
@@ -609,12 +630,7 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
         textOf(await tool('read_document', { path: 'active.md' })),
         'Unsaved MCP draft.',
       )
-      if (t.formattedEngine === 'tiptap')
-        assert.equal(
-          await rich.evaluate((element) => element.editor.commands.undo()),
-          true,
-        )
-      else await rich.press('ControlOrMeta+z')
+      await rich.press('ControlOrMeta+z')
       await waitForAppState(
         page,
         async () =>

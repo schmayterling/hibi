@@ -21,7 +21,6 @@ body,
   text-transform: none;
 }
 :where(input, textarea)::placeholder,
-.tiptap .is-editor-empty::before,
 .cm-placeholder {
   text-transform: var(--ui-text-transform);
 }

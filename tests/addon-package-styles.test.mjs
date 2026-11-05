@@ -33,7 +33,7 @@ const metadata = (id, fields) => ({
   name: id,
   description: 'Package styles fixture',
   kind: 'extension',
-  apiVersion: 2,
+  apiVersion: 3,
   version: '1.0.0',
   authors: [{ displayName: 'Test' }],
   entry: 'index.js',

@@ -7,7 +7,6 @@ import { parseArgs } from 'node:util'
 import { showTestWindows } from '../tests/electron.mjs'
 import {
   benchmarkDocuments,
-  benchmarkEngine,
   benchmarkProvenance,
   focusBenchmarkPage,
   launchBenchmarkApp,
@@ -26,13 +25,8 @@ const { values } = parseArgs({
   options: {
     'script-census': { type: 'boolean', default: false },
     'require-build-manifest': { type: 'boolean', default: false },
-    engine: {
-      type: 'string',
-      default: process.env.HIBI_BENCH_ENGINE ?? 'tiptap',
-    },
   },
 })
-const engine = benchmarkEngine(values.engine)
 if (values['require-build-manifest'])
   assert.ok(
     !showTestWindows,
@@ -75,7 +69,7 @@ async function measure(page, start, app, scenario, profileSeed) {
     name: 'Document editor',
     exact: true,
   })
-  await waitForEditor(page, scenario === 'minimal' ? undefined : engine)
+  await waitForEditor(page, scenario !== 'minimal')
   const editable = values['script-census'] ? null : performance.now() - start
   let ready = null
   if (
@@ -166,7 +160,6 @@ async function measure(page, start, app, scenario, profileSeed) {
   samples.push({
     scenario,
     profileSeed,
-    engine: scenario === 'minimal' ? null : engine,
     addons,
     visibility,
     focusEmulation: true,
@@ -202,7 +195,7 @@ try {
           ),
         )
       if (!profileSeeds.has(profile))
-        profileSeeds.set(profile, await seedBenchmarkProfile(profile, engine))
+        profileSeeds.set(profile, await seedBenchmarkProfile(profile))
       const profileSeed = profileSeeds.get(profile)
       const start = performance.now()
       const app = await launchBenchmarkApp(
@@ -304,7 +297,6 @@ try {
       const group = samples.filter((sample) => sample.scenario === scenario)
       return {
         scenario,
-        engine: group[0].engine,
         runs: group.length,
         editableMedian: quantile(
           group.map((sample) => sample.editable),
@@ -349,7 +341,6 @@ try {
       {
         ...provenance,
         provenanceVerifiedAtEnd: true,
-        engine,
         scriptCensus: values['script-census'],
         requireBuildManifest: values['require-build-manifest'],
         windowPolicy: showTestWindows ? 'visible' : 'hidden',

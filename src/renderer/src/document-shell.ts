@@ -1,20 +1,5 @@
 import type { DocumentState } from '../../shared/desktop.ts'
-import {
-  footnoteGrammar,
-  hasFootnoteDefinitions,
-} from '../../shared/markdown-footnotes.ts'
-import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { DocumentRuntime } from './document-runtime.ts'
-import { codemirrorFormattedView } from './formatted-engine.ts'
-
-const certifiedVisualEchoes = new WeakSet<SourceSnapshot>()
-// Weak entries leave with their source snapshot, including when a tab closes.
-const footnoteSources = new WeakMap<SourceSnapshot, boolean>()
-
-/** Internal, one-shot proof from the strict native visual edit path after reconciliation. */
-export function certifyVisualEcho(source: SourceSnapshot) {
-  certifiedVisualEchoes.add(source)
-}
 
 /** A delayed display read must not run after its canonical snapshot changes. */
 export function afterDocumentQuiet(
@@ -38,9 +23,8 @@ export function afterDocumentQuiet(
 
 /** Source surfaces subscribe to edits directly; their hidden rich props can settle. */
 export function editorDocumentUpdates(
-  runtime: Pick<DocumentRuntime, 'get' | 'subscribeDocument' | 'sourceFor'>,
+  runtime: Pick<DocumentRuntime, 'get' | 'subscribeDocument'>,
   deferred: boolean,
-  certifiedVisual = false,
   tabId?: string,
 ) {
   let current = runtime.get(tabId)
@@ -51,14 +35,11 @@ export function editorDocumentUpdates(
       const remove = runtime.subscribeDocument((next, changes) => {
         if (tabId && next.tabId !== tabId) return
         clearTimeout(timer)
-        const snapshot = runtime.sourceFor(next)
-        const visualEcho = snapshot && certifiedVisualEchoes.delete(snapshot)
         const publish = () => {
           current = next
           notify()
         }
-        if (changes && (deferred || (certifiedVisual && visualEcho)))
-          timer = setTimeout(publish, 250)
+        if (changes && deferred) timer = setTimeout(publish, 250)
         else publish()
       })
       const latest = runtime.get(tabId)
@@ -107,36 +88,6 @@ export function largeSource(
   tabId: string,
 ) {
   return (runtime.session(tabId)?.snapshot().utf16Length ?? 0) > 256 * 1024
-}
-
-/**
- * ponytail: the ProseMirror view opens large notes in source view. The
- * CodeMirror formatted view parses them in bounded steps, so it opens them.
- */
-export function preferSourceOpening(
-  runtime: Pick<DocumentRuntime, 'openingLength'>,
-  document: DocumentState | null,
-) {
-  return !codemirrorFormattedView && largeOpening(runtime, document)
-}
-
-/** Shell and pane renders share one full footnote lex per immutable source. */
-export function hasDocumentFootnotes(
-  runtime: Pick<DocumentRuntime, 'sourceFor'>,
-  document: DocumentState | null,
-) {
-  if (!document || (runtime.sourceFor(document)?.utf16Length ?? 0) > 256 * 1024)
-    return false
-  const source = runtime.sourceFor(document)
-  let found = source && footnoteSources.get(source)
-  if (found === undefined) {
-    // Until the lazy block grammar loads, possible definitions keep the
-    // legacy rich view closed and are checked again.
-    const loaded = footnoteGrammar.length > 0
-    found = hasFootnoteDefinitions(document.markdown, !loaded)
-    if (source && loaded) footnoteSources.set(source, found)
-  }
-  return found
 }
 
 /** Content versions belong to the editor; shell consumers only need these fields. */

@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import test from 'node:test'
 import {
-  selectFormattedEngine,
-  testFormattedEngines as test,
-} from './formatted-engine.mjs'
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -25,10 +26,10 @@ test('editor extensions receive the view id of the editor they attach to', {
       name: 'View fixture',
       description: 'Editor extension context fixture',
       kind: 'extension',
-      apiVersion: 2,
+      apiVersion: 3,
       version: '1.0.0',
       authors: [{ displayName: 'Test' }],
-      capabilities: ['rich', 'source'],
+      capabilities: ['source'],
       entry: 'index.js',
     }),
   )
@@ -42,8 +43,6 @@ test('editor extensions receive the view id of the editor they attach to', {
         fixture.attaches++;
         return () => fixture.attached.splice(fixture.attached.indexOf(entry), 1);
       };
-      context.editor.registerRich({ id: 'rich', attach: (editor, { viewId }) =>
-        track('rich', editor.view.dom, viewId) });
       context.editor.registerSource({ id: 'source', create: ({ viewId }) =>
         sdk.codeMirror.view.ViewPlugin.define((view) =>
           ({ destroy: track('source', view.dom, viewId) })) });
@@ -81,7 +80,7 @@ test('editor extensions receive the view id of the editor they attach to', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  await selectFormattedEngine(app, page, t.formattedEngine)
+  await waitForFormattedEditor(app, page)
   await page.waitForFunction(() => window.viewFixture)
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
@@ -115,24 +114,9 @@ test('editor extensions receive the view id of the editor they attach to', {
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .click()
-  // API 2 registerRich attaches only to Tiptap; CodeMirror exposes public view identity.
-  if (t.formattedEngine === 'tiptap')
-    await page.waitForFunction(() =>
-      window.viewFixture.attached.some(
-        (entry) =>
-          entry.kind === 'rich' &&
-          entry.dom.isConnected &&
-          entry.viewId ===
-            window.viewFixture.context.editorViews.getActive()?.viewId,
-      ),
-    )
+
   const single = await views(page, 'rich')
-  if (t.formattedEngine === 'tiptap')
-    assert.deepEqual(
-      single.attached.filter((entry) => entry.connected),
-      [{ connected: true, side: null, viewId: single.active }],
-    )
-  else {
+  {
     const selection = await page.evaluate(() => {
       const api = window.viewFixture.context.editorViews
       return api.getSelection(api.getActive())
@@ -170,30 +154,8 @@ test('editor extensions receive the view id of the editor they attach to', {
     right: await focusPane('right', rich('right')),
   }
   assert.notEqual(richViews.left, richViews.right)
-  if (t.formattedEngine === 'tiptap')
-    await waitForAsync(
-      page,
-      (expected) =>
-        window.viewFixture.attached.filter(
-          (entry) =>
-            entry.kind === 'rich' &&
-            entry.dom.isConnected &&
-            entry.viewId ===
-              expected[
-                entry.dom.closest('.editor-page')?.getAttribute('data-side')
-              ],
-        ).length === 2,
-      richViews,
-    )
-  if (t.formattedEngine === 'tiptap') {
-    assert.deepEqual(
-      (await views(page, 'rich')).attached.filter((entry) => entry.connected),
-      [
-        { connected: true, side: 'left', viewId: richViews.left },
-        { connected: true, side: 'right', viewId: richViews.right },
-      ],
-    )
-  } else {
+
+  {
     const selections = await page.evaluate(() => {
       const api = window.viewFixture.context.editorViews
       return api.list().map((view) => api.getSelection(view))
@@ -214,18 +176,10 @@ test('editor extensions receive the view id of the editor they attach to', {
   assert.equal(await focusPane('left', rich('left')), richViews.left)
   assert.equal(await focusPane('right', rich('right')), richViews.right)
   assert.equal(await page.evaluate(() => window.viewFixture.attaches), attaches)
-  if (t.formattedEngine === 'tiptap') {
-    assert.deepEqual(
-      (await views(page, 'rich')).attached
-        .filter((entry) => entry.side === 'left')
-        .map((entry) => entry.viewId),
-      [richViews.left],
-    )
-  } else {
-    assert.equal(await focusPane('left', rich('left')), richViews.left)
-    assert.equal(await focusPane('right', rich('right')), richViews.right)
-    assert.deepEqual((await views(page, 'rich')).attached, [])
-  }
+
+  assert.equal(await focusPane('left', rich('left')), richViews.left)
+  assert.equal(await focusPane('right', rich('right')), richViews.right)
+  assert.deepEqual((await views(page, 'rich')).attached, [])
 
   const source = (side) => panes[side].locator('.source-pane .cm-content')
   for (const side of ['left', 'right']) {

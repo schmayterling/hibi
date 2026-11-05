@@ -1,8 +1,8 @@
 import type { EditorView } from '@codemirror/view'
-import type { Editor } from '@tiptap/core'
 import { type RefObject, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { MarkdownPositionLookup } from './markdown-positions'
+import { tableShows } from './formatted/tables'
+import { focusedEditor } from './native-dom-selection'
 import {
   editorPosition,
   sourceView as findSourceView,
@@ -10,17 +10,11 @@ import {
 } from './source-view'
 
 export function MirrorCursor({
-  editor,
   root,
-  content,
   active,
-  positions,
 }: {
-  editor?: Editor | null
   root: RefObject<HTMLDivElement | null>
-  content?: () => { source: string; body: string } | null
   active: boolean
-  positions?: MarkdownPositionLookup
 }) {
   const [position, setPosition] = useState<{
     pane: HTMLElement
@@ -36,34 +30,29 @@ export function MirrorCursor({
     let frame = 0
     const measure = () => {
       frame = 0
-      if (editor?.isDestroyed) {
-        setPosition(null)
-        return
-      }
       const focused = document.activeElement
       const sourceElement = root.current?.querySelector<HTMLElement>(
         '.source-pane .cm-content',
       )
       const sourceView = sourceElement && findSourceView(sourceElement)
-      const richElement =
-        editor?.view.dom ??
-        root.current?.querySelector<HTMLElement>('.rich-pane .cm-content')
+      const richElement = root.current?.querySelector<HTMLElement>(
+        '.rich-pane .cm-content',
+      )
       const richView = richElement && findSourceView(richElement)
-      const richFocus = focused === richElement
+      // The formatted view has the focus in its own content or in a table
+      // cell's editor, whose caret it follows.
+      const editor = richView ? focusedEditor(richView) : null
+      const richFocus = !!editor
       const sourceFocus = focused === sourceElement
       if (
         !document.hasFocus() ||
         !sourceView ||
-        (!editor && !richView) ||
+        !richView ||
         (!richFocus && !sourceFocus) ||
-        (editor?.view.composing ?? richView?.compositionStarted) ||
+        richView.compositionStarted ||
         sourceView.compositionStarted ||
-        (richFocus
-          ? !(
-              editor?.state.selection.empty ??
-              richView?.state.selection.main.empty
-            )
-          : !sourceView.state.selection.main.empty)
+        editor?.compositionStarted ||
+        !(editor ?? sourceView).state.selection.main.empty
       ) {
         setPosition(null)
         return
@@ -76,55 +65,22 @@ export function MirrorCursor({
         return
       }
       let caret: ReturnType<EditorView['coordsAtPos']> = null
-      if (editor) {
-        const text = content?.()
-        if (!text || !positions) {
-          setPosition(null)
-          return
-        }
-        const { source, body } = text
-        const bodyOffset = source.lastIndexOf(body)
-        if (
-          bodyOffset < 0 ||
-          (sourceFocus &&
-            sourcePosition(sourceView, sourceView.state.selection.main.head) <
-              bodyOffset)
-        ) {
-          setPosition(null)
-          return
-        }
-        const map = positions(body, editor.state.doc)
-        const target = map(
-          richFocus
-            ? editor.state.selection.head
-            : sourcePosition(sourceView, sourceView.state.selection.main.head) -
-                bodyOffset,
-          richFocus ? 'rich' : 'source',
-        )
-        if (target !== null) {
-          const sourceTarget = editorPosition(sourceView, target + bodyOffset)
-          caret = richFocus
-            ? sourceTarget === null
-              ? null
-              : sourceView.coordsAtPos(sourceTarget)
-            : editor.view.coordsAtPos(target)
-        }
-      } else if (richView) {
-        const from = richFocus ? richView : sourceView
-        const to = richFocus ? sourceView : richView
-        const target = editorPosition(
-          to,
-          sourcePosition(from, from.state.selection.main.head),
-        )
-        // Collapsed metadata and offscreen text have no secondary caret.
-        if (
-          target !== null &&
-          to.visibleRanges.some(
-            ({ from, to }) => target >= from && target <= to,
-          )
-        )
-          caret = to.coordsAtPos(target)
-      }
+      const from = richFocus ? richView : sourceView
+      const to = richFocus ? sourceView : richView
+      const target = editorPosition(
+        to,
+        sourcePosition(from, from.state.selection.main.head),
+      )
+      // Collapsed metadata and offscreen text have no secondary caret. A
+      // table is left out of the visible ranges too, but its cells show it.
+      if (
+        target !== null &&
+        (to.visibleRanges.some(
+          ({ from, to }) => target >= from && target <= to,
+        ) ||
+          (to === richView && tableShows(to, target)))
+      )
+        caret = to.coordsAtPos(target)
       const bounds = pane.getBoundingClientRect()
       if (
         !caret ||
@@ -167,12 +123,10 @@ export function MirrorCursor({
       'compositionstart',
       'compositionend',
       'hibi:source-caret',
-      'hibi:rich-content',
     ])
       document.addEventListener(event, schedule)
     document.addEventListener('scroll', schedule, true)
     window.addEventListener('resize', schedule)
-    editor?.on('transaction', schedule)
     schedule()
     return () => {
       cancelAnimationFrame(frame)
@@ -185,14 +139,12 @@ export function MirrorCursor({
         'compositionstart',
         'compositionend',
         'hibi:source-caret',
-        'hibi:rich-content',
       ])
         document.removeEventListener(event, schedule)
       document.removeEventListener('scroll', schedule, true)
       window.removeEventListener('resize', schedule)
-      editor?.off('transaction', schedule)
     }
-  }, [active, editor, root, positions, content])
+  }, [active, root])
   return (
     position &&
     createPortal(

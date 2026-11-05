@@ -1,12 +1,9 @@
 import { syntaxTree } from '@codemirror/language'
 import { EditorView, ViewPlugin } from '@codemirror/view'
-import type { Editor, NodeViewRenderer } from '@tiptap/core'
-import type { Node } from '@tiptap/pm/model'
 import katex from 'katex'
 import { Sigma, SquareRadical } from 'lucide-react'
 import type { MarkedExtension } from 'marked'
 import { formattedSyntaxTree } from '../../renderer/src/formatted-contributions'
-import { codemirrorFormattedView } from '../../renderer/src/formatted-engine'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
@@ -15,9 +12,6 @@ import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
 import { mathFlavor, mathTokens } from './syntax'
-
-// The Tiptap editor loads only when it is the selected engine.
-const richMath = codemirrorFormattedView ? undefined : await import('./rich')
 
 const options = {
   throwOnError: false,
@@ -34,12 +28,10 @@ export function startMath(context: AddonContext) {
     group: 'LaTeX',
     description: '$expression$',
     level: 'inline',
-    extensions: ['inlineMath'],
     matches: (token) => token.type === 'inlineMath',
     slash: {
       markdown: '$$',
       cursor: 1,
-      rich: (chain) => chain.insertInlineMath({ latex: '' }),
     },
   })
   context.editor.registerSyntax({
@@ -48,33 +40,16 @@ export function startMath(context: AddonContext) {
     group: 'LaTeX',
     description: '$$ expression $$',
     level: 'block',
-    extensions: ['blockMath'],
     matches: (token) => token.type === 'blockMath',
     slash: {
       markdown: '$$\n\n$$',
       cursor: 3,
-      rich: (chain) => chain.insertBlockMath({ latex: '' }),
     },
   })
-  let rich: Editor | null = null
   let source: EditorView | null = null
   let formatted: EditorView | null = null
-  let target: 'rich' | 'source' | 'formatted' = 'rich'
-  context.editor.registerRich({
-    id: 'editing',
-    preview: 'deferred',
-    attach(editor) {
-      rich = editor
-      const focus = () => {
-        target = 'rich'
-      }
-      editor.on('focus', focus)
-      return () => {
-        editor.off('focus', focus)
-        if (rich === editor) rich = null
-      }
-    },
-  })
+  // Unset until a source or formatted editor takes focus.
+  let target: 'source' | 'formatted' | null = null
   context.editor.registerSource({
     id: 'editing',
     create: () => [
@@ -106,15 +81,6 @@ export function startMath(context: AddonContext) {
             ? 'Use 10,000 characters or fewer.'
             : null,
     })
-  async function edit(node: Node, pos: number, block: boolean) {
-    const editor = rich
-    if (!editor?.isEditable) return
-    const doc = editor.state.doc
-    const latex = await prompt(String(node.attrs.latex ?? ''))
-    if (latex === null || editor.isDestroyed || editor.state.doc !== doc) return
-    if (block) editor.chain().focus().updateBlockMath({ pos, latex }).run()
-    else editor.chain().focus().updateInlineMath({ pos, latex }).run()
-  }
   async function insert(block: boolean) {
     const document = context.editor.getDocument()
     if (!document || !supported(document.name)) {
@@ -124,24 +90,19 @@ export function startMath(context: AddonContext) {
     // The CodeMirror formatted view takes the same source edit as the source view.
     const codeMirror = () =>
       target === 'formatted' && formatted ? formatted : source
-    const editor = rich,
-      view = codeMirror(),
-      inSource = target !== 'rich' || !isMarkdownDocument(document.name)
-    const doc = editor?.state.doc,
+    const view = codeMirror(),
       text = view?.state.doc
-    const selection = inSource
-      ? view?.state.selection.main
-      : editor?.state.selection
-    if (
-      !selection ||
-      (!inSource && !editor?.schema.nodes[block ? 'blockMath' : 'inlineMath'])
-    ) {
+    const selection =
+      target || !isMarkdownDocument(document.name)
+        ? view?.state.selection.main
+        : undefined
+    if (!selection) {
       context.notify('Enable math from the format menu in the status bar.')
       return
     }
     const latex = await prompt()
     if (latex === null) return
-    if (inSource && view && view.state.doc === text && view === codeMirror()) {
+    if (view && view.state.doc === text && view === codeMirror()) {
       // Display math keeps the quotes and list items around the caret.
       const { state } = view
       const value = mathInsertion(
@@ -162,18 +123,6 @@ export function startMath(context: AddonContext) {
         scrollIntoView: true,
       })
       view.focus()
-    } else if (
-      !inSource &&
-      editor &&
-      !editor.isDestroyed &&
-      editor.state.doc === doc
-    ) {
-      const chain = editor
-        .chain()
-        .focus()
-        .setTextSelection({ from: selection.from, to: selection.to })
-      if (block) chain.insertBlockMath({ latex }).run()
-      else chain.insertInlineMath({ latex }).run()
     }
   }
   const formulas = formulaScheduler((latex, displayMode) =>
@@ -183,57 +132,6 @@ export function startMath(context: AddonContext) {
       output: 'htmlAndMathml',
     }),
   )
-  /** Same markup as the package views; KaTeX output arrives after mounting. */
-  const view =
-    (display: boolean): NodeViewRenderer =>
-    ({ node, getPos, editor }) => {
-      const latex = String(node.attrs.latex ?? '')
-      const dom: HTMLElement = document.createElement(display ? 'div' : 'span')
-      dom.className = 'tiptap-mathematics-render'
-      if (editor.isEditable)
-        dom.classList.add('tiptap-mathematics-render--editable')
-      dom.dataset.type = display ? 'block-math' : 'inline-math'
-      dom.setAttribute('data-latex', latex)
-      const target = display ? document.createElement('div') : dom
-      if (display) {
-        target.className = 'block-math-inner'
-        dom.append(target)
-      }
-      // Until then the expression stays readable; display spacing, or the
-      // height this formula last rendered at, limits the height change.
-      const pending = display ? document.createElement('span') : target
-      if (display) {
-        pending.className = 'katex-display'
-        target.append(pending)
-      }
-      pending.textContent = latex
-      const reserved = display ? formulas.height(latex) : undefined
-      if (reserved) dom.style.minHeight = `${reserved}px`
-      const click = (event: MouseEvent) => {
-        event.preventDefault()
-        event.stopPropagation()
-        const pos = getPos()
-        if (pos !== undefined) void edit(node, pos, display)
-      }
-      dom.addEventListener('click', click)
-      const cancel = formulas.schedule(dom, latex, display, (html) => {
-        if (reserved) dom.removeAttribute('style')
-        if (html !== null) {
-          // KaTeX builds this markup itself; trust: false admits no author HTML.
-          target.innerHTML = html
-          return
-        }
-        dom.textContent = latex
-        dom.classList.add(display ? 'block-math-error' : 'inline-math-error')
-      })
-      return {
-        dom,
-        destroy() {
-          cancel()
-          dom.removeEventListener('click', click)
-        },
-      }
-    }
   const renderers: MarkedExtension = {
     extensions: ['inlineMath', 'blockMath'].map((name) => ({
       name,
@@ -267,7 +165,6 @@ export function startMath(context: AddonContext) {
   )
   context.editor.registerFlavor({
     ...mathFlavor,
-    richExtensions: richMath ? richMath.mathNodes(view) : [],
     export: {
       extensions: [mathTokens, renderers],
       css: mathStyles,

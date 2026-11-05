@@ -1,0 +1,7 @@
+{
+  "{\"kind\":\"backspace\",\"source\":\"- -# abcd\"}": "-# abcd",
+  "{\"kind\":\"backspace\",\"source\":\"-# abcd\"}": "-# abcd",
+  "{\"kind\":\"backspace\",\"source\":\"-# before\\n\\n-# abcd\"}": "-# beforeabcd",
+  "{\"kind\":\"backspace\",\"source\":\"> -# abcd\"}": "-# abcd",
+  "{\"kind\":\"backspace\",\"source\":\"before\\n\\n-# abcd\"}": "beforeabcd"
+}

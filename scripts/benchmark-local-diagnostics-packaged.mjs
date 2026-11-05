@@ -7,12 +7,12 @@ import {
   mkdir,
   mkdtemp,
   readFile,
-  symlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { cloneProductionModules } from './production-modules.mjs'
 
 if (process.platform !== 'darwin' || process.arch !== 'arm64')
   throw new Error(
@@ -43,7 +43,7 @@ for (const variant of manifest.variants) {
     await cp(join(variant.directory, file), join(directory, file), {
       recursive: true,
     })
-  await cp('LICENSE', join(directory, 'LICENSE'))
+  await cp('LICENSE.md', join(directory, 'LICENSE.md'))
   await cp(
     'tests/fixtures/local-diagnostics-packaged-benchmark.mjs',
     join(directory, 'out/main/diagnostic-benchmark.mjs'),
@@ -52,7 +52,7 @@ for (const variant of manifest.variants) {
     join(directory, 'out/main/index.js'),
     '\nimport "./diagnostic-benchmark.mjs";\n',
   )
-  await symlink(resolve('node_modules'), join(directory, 'node_modules'), 'dir')
+  await cloneProductionModules(directory)
   const packaged = join(directory, 'package')
   await run(
     resolve('node_modules/.bin/electron-builder'),
@@ -63,6 +63,8 @@ for (const variant of manifest.variants) {
       `-c.directories.app=${directory}`,
       `-c.directories.output=${packaged}`,
       '-c.mac.identity=-',
+      // Ad-hoc code has no team, so the hardened runtime's library check refuses Electron's framework.
+      '-c.mac.hardenedRuntime=false',
     ],
     join(directory, 'build.log'),
   )

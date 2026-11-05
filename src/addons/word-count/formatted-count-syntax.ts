@@ -153,7 +153,9 @@ export function countMarkdownSyntax(
                 // without repeatedly scanning the accumulated definition body.
                 const prefix = `[^count]: x${indented ? '\n    x' : ''}${blank ? '\n' : ''}`
                 const probe = `${prefix}\n${next}`
-                if (footnote(probe)?.raw.length !== probe.length) break
+                // Marked leaves the spaces ending its last line out of the raw text.
+                if ((footnote(probe)?.raw.length ?? 0) < probe.trimEnd().length)
+                  break
                 if (!take()) break
                 indented = line.indent >= 4
                 blank = false

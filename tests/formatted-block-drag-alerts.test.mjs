@@ -31,9 +31,6 @@ before(
     page = await app.firstWindow()
     page.setDefaultTimeout(20000)
     await waitForDocumentEditor(app, page)
-    await page.evaluate(() =>
-      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-    )
     await page.reload()
     await waitForDocumentEditor(app, page)
     const session = await page.context().newCDPSession(page)
@@ -63,6 +60,11 @@ async function open(name, doc, token) {
   )
   await waitForDocumentEditor(app, page)
   await page.locator('.rich-pane .cm-line', { hasText: token }).waitFor()
+  // A note's text shows before the block drag addon adds its handle; a
+  // pointer already resting there gets no handle until it moves again.
+  await page
+    .locator('.rich-pane .block-drag-handle')
+    .waitFor({ state: 'attached' })
 }
 async function menu(token) {
   const line = page.locator('.rich-pane .cm-line', { hasText: token })

@@ -3,12 +3,9 @@ import test from 'node:test'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import {
   afterDocumentQuiet,
-  certifyVisualEcho,
   editorDocumentUpdates,
-  hasDocumentFootnotes,
   largeOpening,
   largeSource,
-  preferSourceOpening,
   sameDocumentShell,
   subscribeDocumentShell,
 } from '../src/renderer/src/document-shell.ts'
@@ -224,47 +221,7 @@ test('display detection cancels on canonical input while source props stay pinne
   runtime.dispose()
 })
 
-test('only certified visual echoes coalesce without delaying canonical operations', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
-  let canonical = 0
-  const runtime = new DocumentRuntime({
-    enqueue() {
-      canonical++
-    },
-    onError(error) {
-      throw error
-    },
-  })
-  const original = runtime.activate(document())
-  const updates = editorDocumentUpdates(runtime, false, true)
-  let notifications = 0
-  const stop = updates.subscribe(() => notifications++)
-  const session = runtime.session()
-  session.counters(true)
-  for (let key = 0; key < 20; key++) {
-    const at = session.snapshot().utf16Length
-    const accepted = session.beginEdit(
-      [{ from: at, to: at, insert: 's' }],
-      'visual',
-      'typing',
-    )
-    certifyVisualEcho(accepted.prepared.after)
-    accepted.finish()
-    t.mock.timers.tick(100)
-    assert.equal(updates.get(), original)
-  }
-  assert.equal(canonical, 20)
-  assert.equal(runtime.get().contentVersion, 20)
-  assert.equal(notifications, 0)
-  assert.equal(session.counters().materializations, 0)
-  t.mock.timers.tick(150)
-  assert.equal(notifications, 1)
-  assert.equal(updates.get(), runtime.get())
-  stop()
-  runtime.dispose()
-})
-
-test('visual configuration opt-out, unproved edits, undo and save remain immediate', (t) => {
+test('edits from every origin, undo and save reach visual subscribers immediately', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const runtime = new DocumentRuntime({
     enqueue() {},
@@ -274,37 +231,17 @@ test('visual configuration opt-out, unproved edits, undo and save remain immedia
   })
   runtime.activate(document())
   const session = runtime.session()
-  const guarded = editorDocumentUpdates(runtime, false)
-  const stopGuarded = guarded.subscribe(() => {})
-  const certified = (group) => {
-    const accepted = session.beginEdit(
-      [{ from: 0, to: 0, insert: 's' }],
-      'visual',
-      group,
-    )
-    certifyVisualEcho(accepted.prepared.after)
-    accepted.finish()
-  }
-  certified('unknown-protection')
-  assert.equal(guarded.get(), runtime.get())
-  stopGuarded()
-  const updates = editorDocumentUpdates(runtime, false, true)
+  const updates = editorDocumentUpdates(runtime, false)
   let notifications = 0
   const stop = updates.subscribe(() => notifications++)
-  certified('safe')
-  assert.notEqual(updates.get(), runtime.get())
-  // A view or grammar change creates a fresh subscription before using props.
-  assert.equal(editorDocumentUpdates(runtime, false).get(), runtime.get())
   for (const origin of ['source', 'addon', 'visual']) {
     session.edit([{ from: 0, to: 0, insert: 'x' }], origin, origin)
     assert.equal(updates.get(), runtime.get(), origin)
   }
   assert.equal(notifications, 3)
-  certified('undo-target')
   session.undo()
   assert.equal(updates.get(), runtime.get())
   assert.equal(notifications, 4)
-  certified('save-target')
   const token = runtime.beginSave()
   runtime.acknowledgeSave(
     {
@@ -334,8 +271,6 @@ test('opening mode stays fixed while edits cross the threshold, then refreshes o
     })
     runtime.activate(document({ markdown: initial, savedMarkdown: initial }))
     const before = largeOpening(runtime, runtime.get())
-    // The default CodeMirror view opens every note; Tiptap opens large ones in source.
-    assert.equal(preferSourceOpening(runtime, runtime.get()), false)
     const session = runtime.session()
     session.edit(
       [{ from: 0, to: initial.length, insert: inserted }],
@@ -351,7 +286,6 @@ test('opening mode stays fixed while edits cross the threshold, then refreshes o
     const next = { ...runtime.get(), revision: 2 }
     runtime.activate(next)
     assert.equal(largeOpening(runtime, runtime.get()), !before)
-    assert.equal(preferSourceOpening(runtime, runtime.get()), false)
     runtime.dispose()
   }
 })
@@ -375,26 +309,18 @@ test('large source opening policy reads only snapshot metrics and leaves small n
         assert.equal(value, state)
         return units
       },
-      sourceFor: (value) => {
-        assert.equal(value, state)
-        return { utf16Length: units }
-      },
     }
     assert.equal(largeOpening(runtime, state), units > 256 * 1024)
-    assert.equal(preferSourceOpening(runtime, state), false)
-    if (units > 256 * 1024)
-      assert.equal(hasDocumentFootnotes(runtime, state), false)
   }
-  for (const policy of [largeOpening, preferSourceOpening])
-    assert.equal(
-      policy(
-        {
-          openingLength() {
-            throw new Error('no document')
-          },
+  assert.equal(
+    largeOpening(
+      {
+        openingLength() {
+          throw new Error('no document')
         },
-        null,
-      ),
-      false,
-    )
+      },
+      null,
+    ),
+    false,
+  )
 })

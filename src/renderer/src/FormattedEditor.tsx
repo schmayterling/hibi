@@ -9,17 +9,24 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
-import type { FormattedExtension } from '../../addons/api'
+import type {
+  DocumentFormat,
+  FormattedExtension,
+  MarkdownExtension,
+  MarkdownFlavor,
+  SourceExtension,
+} from '../../addons/api'
 import { builtInFlavors } from '../../shared/built-in-grammar'
+import type { DocumentState } from '../../shared/desktop'
 import { sourceChange } from '../../shared/document-journal'
+import type { DocumentView } from '../../shared/document-types'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { headingAnchors } from '../../shared/heading-anchor'
 import { isMediaFile } from '../../shared/media'
 import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
 import { largeOpening, largeSource } from './document-shell'
-import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
-import { EditorCursor } from './EditorCursor'
+import { type CursorSettings, EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
 import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
@@ -31,7 +38,7 @@ import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
-import type { OutlineHeading } from './OutlineSidebar'
+import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
 import { SourceEditor, sourceAfter, sourceCurrent } from './SourceEditor'
 import { editorPosition, revealSourcePosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
@@ -56,10 +63,44 @@ const propertiesExtensions: readonly FormattedExtension[] = [
   },
 ]
 
-/**
- * Markdown notes on the CodeMirror formatted view, behind the temporary
- * `formatted-engine` switch. Both panes edit the same source session.
- */
+export type ViewMode = DocumentView
+export type MarkdownEditorProps = {
+  document: DocumentState
+  viewId?: string
+  focused?: boolean
+  autoFocus?: boolean
+  format: DocumentFormat | undefined
+  formatName: string
+  value: string
+  onChange: (value: string, historyGroup?: string) => void
+  mode: ViewMode
+  disabled: boolean
+  findOpen: boolean
+  onCloseFind: () => void
+  markdownExtensions: readonly MarkdownExtension[]
+  formattedExtensions: readonly FormattedExtension[]
+  sourceExtensions: readonly SourceExtension[]
+  cursorSettings: CursorSettings
+  showLineNumbers: boolean
+  spellCheck: boolean
+  showMarkdownMarkers: boolean
+  documentRevision: number
+  flavors: readonly MarkdownFlavor[]
+  onAttach: (
+    files: File[] | null,
+    prepare: import('./FormattingToolbar').PrepareMediaInsert,
+  ) => Promise<void>
+  onLink: (href: string) => void
+  onOutline: (headings: OutlineHeading[]) => void
+  onOutlineUnavailable?: (reason: string | null) => void
+  onActiveOutline: (id: string | null) => void
+  outlineTarget: OutlineRequest | null
+  /** A heading destination, such as `#setup`, from a link that opened this note. */
+  linkAnchor?: { anchor: string } | null
+  outlineActive: boolean
+}
+
+/** Markdown notes on the CodeMirror formatted view. Both panes edit the same source session. */
 export function MarkdownEditor({
   document: documentState,
   viewId = 'default',
@@ -87,8 +128,9 @@ export function MarkdownEditor({
   onOutlineUnavailable,
   onActiveOutline,
   outlineTarget,
+  linkAnchor,
   outlineActive,
-}: Parameters<typeof RichMarkdownEditor>[0]) {
+}: MarkdownEditorProps) {
   const markdownDocument = format?.editing === 'markdown'
   const showProperties =
     markdownDocument &&
@@ -161,9 +203,7 @@ export function MarkdownEditor({
     if (
       flavors.some(
         (flavor) =>
-          (flavor.export?.extensions?.length ||
-            flavor.richExtensions?.length) &&
-          !builtInFlavors.has(flavor.id),
+          !!flavor.export?.extensions?.length && !builtInFlavors.has(flavor.id),
       ) ||
       markdownExtensions.some(
         (extension) => extension.id !== 'frontmatter.metadata',
@@ -294,10 +334,14 @@ export function MarkdownEditor({
     },
     [onOutlineUnavailable],
   )
-  // Entries of a stopped outline would go stale with the next edit.
+  // Entries of a stopped outline would go stale with the next edit. A sidebar
+  // that closed drops them too, or it reopens with rows that the restarted
+  // outline replaces, taking keyboard focus with the row it held.
   useEffect(() => {
-    if (!outlineRead) reportOutline([])
-  }, [outlineRead, reportOutline])
+    if (outlineRead) return
+    reportOutline([])
+    onOutline([])
+  }, [outlineRead, reportOutline, onOutline])
   useEffect(() => {
     if (!outlineActive) return
     onOutline(outline.current.headings)
@@ -315,7 +359,6 @@ export function MarkdownEditor({
     flavors,
     markdownExtensions,
     referenceSyntax,
-    legacy: false,
     view: () => {
       const pane = (selector: string) => {
         const element = content.current?.querySelector<HTMLElement>(
@@ -371,6 +414,15 @@ export function MarkdownEditor({
     if (pendingAnchor.current !== null)
       setAnchor({ target: pendingAnchor.current })
   }
+  // A link to a heading through a note's file, this note's too, reopens the
+  // note, so the view the link shows moves to the heading.
+  const followedAnchor = useRef<typeof linkAnchor>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each link is followed once, when its note shows.
+  useEffect(() => {
+    if (!linkAnchor || followedAnchor.current === linkAnchor) return
+    followedAnchor.current = linkAnchor
+    followLink(linkAnchor.anchor)
+  }, [linkAnchor])
   const richView = () => {
     const element = content.current?.querySelector<HTMLElement>(
       '.rich-pane .cm-content',
@@ -443,7 +495,6 @@ export function MarkdownEditor({
   }, [sourceOutline, outlineTarget])
   const { attachSource, attachRich, attachFiles, editLink } =
     useFormattingToolbar(
-      null,
       paneMode,
       focusedPane,
       disabled || mode !== paneMode,
@@ -453,8 +504,8 @@ export function MarkdownEditor({
       format,
       focused,
     )
-  // Like the rich editor, a new view takes focus with the caret at the end,
-  // unless the user already moved focus or the caret elsewhere.
+  // A new view takes focus with the caret at the end of its last text, unless
+  // the user already moved focus or the caret elsewhere.
   const placed = useRef(false)
   useEffect(() => {
     if (!autoFocus || placed.current || !formattedReady) return

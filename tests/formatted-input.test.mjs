@@ -3,8 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
-import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -31,7 +34,7 @@ test('formatted multiline native input replaces one selection in one edit and pr
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  const rich = await waitForFormattedEditor(app, page)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   await rich.locator('.cm-line', { hasText: 'before MIDDLE after' }).click()

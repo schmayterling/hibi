@@ -6,8 +6,10 @@ import test from 'node:test'
 import { promisify } from 'node:util'
 
 test('native workspace headers reject entries access while explicit snapshots retain it', async (t) => {
-  await mkdir('out', { recursive: true })
-  const directory = await mkdtemp(resolve('out/workspace-types-'))
+  // Vite servers in suites running alongside watch out/ and reload on a new
+  // tsconfig.json there; they ignore test-results/.
+  await mkdir('test-results', { recursive: true })
+  const directory = await mkdtemp(resolve('test-results/workspace-types-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const source = join(directory, 'consumer.ts')
   await writeFile(

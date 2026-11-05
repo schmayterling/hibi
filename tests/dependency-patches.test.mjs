@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -47,6 +48,33 @@ const run = (file, env = {}) => {
     env: environment,
   })
 }
+
+test('dependency patches refuse chunks linked outside the project', (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'hibi-patch-chunks-')))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const project = join(root, 'worktree')
+  cpSync(resolve('scripts'), join(project, 'scripts'), { recursive: true })
+  const installed = join(project, 'node_modules', 'electron-vite')
+  cpSync(resolve('node_modules/electron-vite'), installed, {
+    recursive: true,
+    dereference: true,
+  })
+  const chunks = join(installed, 'dist', 'chunks')
+  const outside = join(root, 'chunks')
+  renameSync(chunks, outside)
+  symlinkSync(outside, chunks, 'junction')
+  const file = join(outside, 'lib-CLhLGLN3.js')
+  const patched = readFileSync(file, 'utf8')
+  const before = patched.replace(
+    '        let ps;\n        let restarting;\n',
+    '        let ps;\n',
+  )
+  assert.notEqual(before, patched)
+  writeFileSync(file, before)
+  const result = run(join(project, 'scripts', 'patch-electron-vite.mjs'))
+  assert.ok(readFileSync(file, 'utf8') === before, 'outside chunk was changed')
+  assert.equal(result.status, 1, result.stderr)
+})
 
 test('dependency patches never patch a copy above the project', (t) => {
   const root = realpathSync(

@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 import { resolveOwn } from './resolve-own.mjs'
 
 // Electron-vite 6 starts a replacement before the old app releases its lock.
@@ -134,7 +134,7 @@ const chunks = [
 
 const updates = []
 for (const [relativePath, replacements] of chunks) {
-  const path = fileURLToPath(new URL(relativePath, entry))
+  const path = resolveOwn(new URL(relativePath, entry).href)
   let source
   try {
     source = await readFile(path, 'utf8')

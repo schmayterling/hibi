@@ -482,3 +482,30 @@ test('a note whose save took long rests ten times as long before the next', {
   await page.clock.fastForward(6000)
   assert.equal(await saved('second'), true)
 })
+
+test('one key over a whole note reaches the file by itself, and the text it replaced stays reachable', {
+  timeout: 60000,
+}, async (t) => {
+  const original = 'a whole note, selected by accident'
+  const { app, page, rich, file } = await openNote(t, original)
+  await replaceRichText(page, rich, 'x')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), 'x')
+  // Saved versions hold it past a restart.
+  const kept = await page.evaluate(async () => {
+    const versions = await window.hibi.listVersions()
+    return Promise.all(versions.map(({ id }) => window.hibi.previewVersion(id)))
+  })
+  assert.ok(kept.includes(original), JSON.stringify(kept))
+  // And undo takes it straight back in this session.
+  await rich.focus()
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    original,
+  )
+})

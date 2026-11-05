@@ -166,7 +166,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // adds 958 (#866).
   // Keeping one likely-addon list across different errors adds 924 (#872).
   // Reading display blocks as Obsidian reads fenced math, including their
-  // closed state and syntax preferences, adds 746 (#731).
+  // closed state, preferences and shared list bounds, adds 894 (#731).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -207,7 +207,7 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         92 +
         958 +
         924 +
-        746,
+        894,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

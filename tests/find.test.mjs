@@ -202,6 +202,46 @@ test('find in document searches rich text and offscreen markdown without editing
   await waitForCount('1/1')
   await rich.locator('.cm-searchMatch-selected').waitFor()
   assert.equal(await rich.locator('.cm-searchMatch-selected').count(), 1)
+  // The formatted pane keeps this match while find moves to the source pane.
+  await source.focus()
+  await source.locator('.cm-searchMatch-selected').waitFor()
+  await pressShortcut(app, shortcut)
+  const waitForFocus = (label) =>
+    page.waitForFunction(
+      (name) => document.activeElement?.getAttribute('aria-label') === name,
+      label,
+    )
+  await waitForFocus('Find in document')
+  for (const stop of [
+    'Previous match',
+    'Next match',
+    'Close find',
+    'Document editor',
+  ]) {
+    await pressShortcut(app, 'Tab')
+    await waitForFocus(stop)
+  }
+  // Drawing the match moves the note's first text just after focus returns. Its
+  // selection must stay in the page too: the next frame reads it back, and typing
+  // goes where it is.
+  await rich.locator('.cm-searchMatch').waitFor()
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  )
+  assert.equal(
+    await page.evaluate(() => getSelection().toString()),
+    'last needle',
+  )
+  await waitForCount('1/1')
+  assert.equal(await rich.locator('.cm-searchMatch-selected').count(), 1)
+  await page.keyboard.insertText('x')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === 'x',
+  )
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
 

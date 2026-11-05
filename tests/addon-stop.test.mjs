@@ -53,7 +53,7 @@ test('native cleanup is awaited, bounded, and late rejection stays handled', asy
   assert.equal(timers.size, 0)
 })
 
-test('a failed native stop is reported and cannot cancel the quit', async (t) => {
+test('a failed native stop is reported and quit still waits for the icon', async (t) => {
   const index = await readFile(
     new URL('../src/main/index.ts', import.meta.url),
     'utf8',
@@ -65,6 +65,11 @@ test('a failed native stop is reported and cannot cancel the quit', async (t) =>
   let handler,
     attempts = 0,
     quits = 0
+  let releaseIcon
+  let flushing = false
+  const iconSaved = new Promise((resolve) => {
+    releaseIcon = resolve
+  })
   const failure = new Error('storage still open')
   const logs = []
   t.mock.method(console, 'error', (...args) => logs.push(args))
@@ -91,11 +96,18 @@ test('a failed native stop is reported and cannot cancel the quit', async (t) =>
       attempts++
       throw failure
     },
-    async () => {},
+    () => {
+      flushing = true
+      return iconSaved
+    },
     { clear() {} },
     { dispose() {} },
   )
   handler(event)
+  await new Promise(setImmediate)
+  assert.equal(flushing, true)
+  assert.equal(quits, 0)
+  releaseIcon()
   await pending()
   await new Promise(setImmediate)
   // Every window is already closed at will-quit; nothing is left to request a retry.

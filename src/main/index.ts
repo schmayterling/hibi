@@ -710,8 +710,9 @@ app.on('will-quit', (event) => {
   if (!nativeStopped) {
     event.preventDefault()
     if (nativeStopping) return
-    nativeStopping = Promise.all([stopNativeAddons(), flushAppIcon()])
-      .then(() => {})
+    nativeStopping = stopNativeAddons()
+      .catch(console.error)
+      .then(flushAppIcon)
       .catch(console.error)
       .finally(() => {
         nativeStopped = true

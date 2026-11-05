@@ -162,6 +162,18 @@ test('damage is never offered and the damaged file stays for a rescue by hand', 
   assert.deepEqual(await files(root), [name])
 })
 
+test('a damaged header is never trusted: the path it names may be wrong', async (t) => {
+  const root = await profile(t)
+  await leftBehind(root, 'text', { path: join('/notes', 'abc.md') })
+  const [name] = await files(root)
+  const path = join(folder(root), name)
+  const bytes = await fs.readFile(path)
+  bytes[bytes.indexOf('abc.md')] ^= 1
+  await fs.writeFile(path, bytes)
+  const next = await main(root)
+  assert.deepEqual((await next.waitingRecovery()).copies, [])
+})
+
 test('a copy from a newer format stays, unread and counted', async (t) => {
   const root = await profile(t)
   await fs.mkdir(folder(root))
@@ -510,8 +522,10 @@ test('lowering a limit names what will go, then removes only that; an open note 
 
 test('the size limit takes the oldest waiting copy first and never an open tab', async (t) => {
   const root = await profile(t)
-  const notes = [note(1, 'a'.repeat(60 * mib)), note(2, 'b'.repeat(60 * mib))]
+  const notes = [note(1, 'a'.repeat(60 * mib))]
   const first = await main(root, { notes })
+  await turn(first)
+  notes.push(note(2, 'b'.repeat(60 * mib)))
   await turn(first)
   await fs.writeFile(
     join(root, 'recovery-settings.json'),
@@ -530,6 +544,7 @@ test('the size limit takes the oldest waiting copy first and never an open tab',
   const names = await files(root)
   assert.equal(names.length, 2)
   assert.ok(names.some((name) => name.startsWith(tab(3))))
+  assert.ok(names.some((name) => name.startsWith(tab(2))))
   assert.equal(next.said.length, 1)
   assert.match(next.said[0], /older recovery cop/)
 })

@@ -978,7 +978,9 @@ class TableView {
       : doc.lineAt(this.range().from).number
     const index = doc.lineAt(snapshot).number - first
     const line = Math.max(0, Math.min(this.lines - 1, index === 1 ? 0 : index))
-    const { from, text } = this.current ? widget.line(line) : doc.line(first + line)
+    const { from, text } = this.current
+      ? widget.line(line)
+      : doc.line(first + line)
     const start = widget.rowStart(line, text)
     const row = this.current
       ? widget.row(line)
@@ -1008,7 +1010,9 @@ class TableView {
   /** A cell's text between its delimiters now; null while stale or its row ends before it. */
   private span({ line, column }: Cell) {
     if (!this.current)
-      return this.known ? this.cellIn(this.view.state.doc, { line, column }) : null
+      return this.known
+        ? this.cellIn(this.view.state.doc, { line, column })
+        : null
     const { text, from } = this.widget.line(line)
     const span = cellSpan(this.widget.row(line), column, text.length)
     if (!span) return null
@@ -1703,25 +1707,31 @@ class TableView {
       page.removeAllRanges()
     editing.editor.destroy()
     // The cell renders statically again unless its table is being removed.
-    if (redraw && editing.line < this.lines && editing.element.isConnected) {
-      let line = this.widget.line(editing.line),
-        cell = this.widget.row(editing.line).cells[editing.column]
-      // Edits the old snapshot lacks show until the table draws again.
-      if (place) {
-        const now = this.view.state.doc.lineAt(place.from)
-        const { start, end } = padding(
-          now.text.slice(place.from - now.from, place.to - now.from),
-        )
-        line = { from: now.from - this.now(0), text: now.text }
-        cell = {
-          from: place.from - now.from + start,
-          to: place.from - now.from + end,
-        }
-      }
+    if (redraw && editing.line < this.lines && editing.element.isConnected)
       editing.element.replaceWith(
-        this.cell(editing.line ? 'td' : 'th', line, cell, editing.column),
+        place
+          ? this.cellNow(editing, place)
+          : this.cell(
+              editing.line ? 'td' : 'th',
+              this.widget.line(editing.line),
+              this.widget.row(editing.line).cells[editing.column],
+              editing.column,
+            ),
       )
-    }
+  }
+
+  /** A cell drawn from its text now, which the old snapshot lacks until the table draws again. */
+  private cellNow({ line, column }: Cell, place: { from: number; to: number }) {
+    const now = this.view.state.doc.lineAt(place.from)
+    const { start, end } = padding(
+      now.text.slice(place.from - now.from, place.to - now.from),
+    )
+    return this.cell(
+      line ? 'td' : 'th',
+      { from: now.from - this.now(0), text: now.text },
+      { from: place.from - now.from + start, to: place.from - now.from + end },
+      column,
+    )
   }
 
   /** Follow the edited row through the formatted view's changes; where it was when they deleted it. */
@@ -1730,11 +1740,22 @@ class TableView {
       this.widget.doc === before ||
       this.shaped === before ||
       !!this.editing?.editor.keeps
-    this.shaped =
-      known && this.cellsOnly(changes, before) ? this.view.state.doc : null
+    const cells = known ? this.cellsOnly(changes, before) : null
+    this.shaped = cells && this.view.state.doc
     this.track(changes)
     this.handOver(changes)
     const editing = this.editing
+    // Other cells show their text now too.
+    for (const cell of cells ?? []) {
+      if (cell.line === editing?.line && cell.column === editing.column)
+        continue
+      const row = cell.line
+        ? this.rendered.get(cell.line - 2)?.element
+        : this.head
+      const element = row?.cells[cell.column]
+      const place = this.cellIn(this.view.state.doc, cell)
+      if (element && place) element.replaceWith(this.cellNow(cell, place))
+    }
     if (!editing) return null
     editing.editor.changed(changes)
     // A change in another cell, as undo of typing there, leaves this one
@@ -1757,15 +1778,16 @@ class TableView {
   }
 
   /**
-   * Whether changes from `before` only edit cells' text and leave each one
+   * The cells changes from `before` edited, when they only edit cells' text and leave each one
    * cell, so the table keeps its rows and columns: each within a line of a
    * header or body row, between the same pipes, after the row's first pipe
    * (text before it starts the line, where it could start another block).
    */
-  private cellsOnly(changes: ChangeDesc, before: Text) {
+  private cellsOnly(changes: ChangeDesc, before: Text): Cell[] | null {
     const { doc } = this.view.state
-    if (!this.dom.isConnected || doc.lines !== before.lines) return false
+    if (!this.dom.isConnected || doc.lines !== before.lines) return null
     const first = before.lineAt(this.range().from).number
+    const cells: Cell[] = []
     let only = true
     changes.iterChangedRanges((fromA, toA, fromB, toB) => {
       if (!only) return
@@ -1793,8 +1815,9 @@ class TableView {
         !!cell &&
         row.pipes[0]! < fromB - now.from &&
         !cellFixes(now.text.slice(cell.from, cell.to), cell.closed).length
+      cells.push({ line: index, column })
     })
-    return only
+    return only ? cells : null
   }
 
   /** Offer this table's size state to the view that shows the table after a change. */

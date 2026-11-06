@@ -3534,7 +3534,9 @@ export const contribution: FormattedContribution = {
             // CodeMirror takes declined text as typed over its next DOM
             // read of the selection: that read must find no new pick.
             if (view.state.field(pickedTable)) recordPageSelection(view)
-            return false
+            // The page applies no untrusted text, which CodeMirror's next
+            // read must not apply either.
+            return !event.isTrusted
           }
           event.preventDefault()
           type(view, event.data)

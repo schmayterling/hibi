@@ -53,7 +53,7 @@ test('closing find returns focus to its own source pane', {
   await splitTab(app, page, opened[0].tabId)
   for (const side of ['left', 'right']) {
     const pane = page.locator(`.editor-page[data-side="${side}"]`)
-    await pane.locator('.rich-pane .cm-content').focus()
+    await pane.locator('.rich-pane .cm-content[contenteditable="true"]').focus()
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
     await pane
       .locator(

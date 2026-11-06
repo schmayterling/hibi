@@ -814,6 +814,204 @@ test('native table picks retain multiline caret positions, scalar boundaries and
     }
 })
 
+// Deleting, breaking a line or composing over a pick edits it as typing over
+// it does: text outside the pick stays, and so does the table. A modifier
+// pressed first must not shrink the pick to the table's edge.
+const pickEditOutcomes = {
+  'into a table': {
+    deleted: {
+      markdown: 'a\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['a', ''],
+    },
+    broken: {
+      markdown: 'a\n\n\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['', ''],
+    },
+    composed: {
+      markdown: 'a日本\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['a日本', ''],
+    },
+  },
+  cells: {
+    deleted: {
+      markdown: '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   |    |\n',
+      caret: ['', ''],
+    },
+    broken: {
+      markdown:
+        '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   | <br>   |\n',
+      caret: ['', ''],
+    },
+    composed: {
+      markdown:
+        '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   | 日本   |\n',
+      caret: ['日本', ''],
+    },
+  },
+}
+
+test('keys and compositions over a native table pick keep the text outside it and the table', {
+  timeout: 120000,
+}, async (t) => {
+  const edits = [
+    ['Backspace', 'deleted'],
+    ['Delete', 'deleted'],
+    ['Alt+Backspace', 'deleted'],
+    ['Enter', 'broken'],
+    ['Shift+Enter', 'broken'],
+    ['composition', 'composed'],
+    ['Shift, then composition', 'composed'],
+  ]
+  for (const what of ['into a table', 'cells'])
+    for (const [edit, outcome] of edits)
+      await t.test(what + ': ' + edit, async (t) => {
+        const oracle = inputFixture('multiline', what)
+        const { app, page, rich } = await openInputFixture(oracle.source)
+        await rich.focus()
+        await selectNativeInputTable(t, page, rich, what, oracle)
+        const before = await acceptedInput(page)
+        if (edit.endsWith('composition')) {
+          if (edit.startsWith('Shift')) await page.keyboard.press('Shift')
+          const cdp = await page.context().newCDPSession(page)
+          // An IME takes the key that starts a composition: keyCode 229.
+          await cdp.send('Input.dispatchKeyEvent', {
+            type: 'rawKeyDown',
+            key: 'n',
+            code: 'KeyN',
+            windowsVirtualKeyCode: 229,
+            nativeVirtualKeyCode: 229,
+          })
+          for (const text of ['に', '日本'])
+            await cdp.send('Input.imeSetComposition', {
+              text,
+              selectionStart: text.length,
+              selectionEnd: text.length,
+            })
+          await cdp.send('Input.insertText', { text: '日本' })
+          await cdp.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: 'n',
+            code: 'KeyN',
+            windowsVirtualKeyCode: 229,
+          })
+          await cdp.detach()
+        } else await page.keyboard.press(edit)
+        const expected = pickEditOutcomes[what][outcome]
+        const actual = await acceptedInput(page)
+        assert.deepEqual(
+          inputOutcome(actual.markdown),
+          inputOutcome(expected.markdown),
+        )
+        assert.deepEqual(await cmCaretText(rich), expected.caret)
+        await pressShortcut(
+          app,
+          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+        )
+        await waitForInputSource(page, before.markdown)
+      })
+})
+
+test('partial native table picks keep unselected cell text and one-step history', {
+  timeout: 60000,
+}, async (t) => {
+  const table = '| hh | ii |\n| --- | --- |\n| abc | def |\n| ghi | jkl |'
+  for (const [what, source, a, b, edits] of [
+    [
+      'rows',
+      table,
+      ['abc', 1, true],
+      ['jkl', 2, true],
+      ['Backspace', 'Enter', 'composition'],
+    ],
+    ['row', table, ['abc', 1, true], ['def', 2, true], ['Enter']],
+    [
+      'out',
+      table + '\n\nafter',
+      ['abc', 1, true],
+      ['after', 3, false],
+      ['Backspace'],
+    ],
+    [
+      'tables',
+      table + '\n\nmiddle\n\n| mm | nn |\n| --- | --- |\n| mno | pqr |',
+      ['abc', 1, true],
+      ['mno', 2, true],
+      ['composition'],
+    ],
+  ])
+    for (const reverse of [false, true])
+      for (const edit of edits)
+        await t.test(
+          what + ': ' + edit + (reverse ? ' backward' : ''),
+          async (t) => {
+            const from = source.indexOf(a[0]) + a[1]
+            const to = source.indexOf(b[0]) + b[1]
+            const { app, page, rich } = await openInputFixture(source)
+            await selectNativeInputTable(
+              t,
+              page,
+              rich,
+              'cells',
+              {
+                source,
+                from,
+                to,
+                pick: [a, b],
+                cell: from,
+                text: source.slice(from, to).replace(/[|\s-]/g, ''),
+              },
+              reverse,
+            )
+            if (edit === 'composition') {
+              const cdp = await page.context().newCDPSession(page)
+              await cdp.send('Input.dispatchKeyEvent', {
+                type: 'rawKeyDown',
+                key: 'n',
+                code: 'KeyN',
+                windowsVirtualKeyCode: 229,
+                nativeVirtualKeyCode: 229,
+              })
+              await cdp.send('Input.imeSetComposition', {
+                text: '日本',
+                selectionStart: 2,
+                selectionEnd: 2,
+              })
+              await cdp.send('Input.insertText', { text: '日本' })
+              await cdp.send('Input.dispatchKeyEvent', {
+                type: 'keyUp',
+                key: 'n',
+                code: 'KeyN',
+                windowsVirtualKeyCode: 229,
+              })
+              await cdp.detach()
+            } else await page.keyboard.press(edit)
+            const actual = (await acceptedInput(page)).markdown
+            assert.ok(
+              actual.startsWith(source.slice(0, from)),
+              'text before the pick stays',
+            )
+            assert.ok(
+              actual.endsWith(source.slice(to)),
+              'text after the pick stays',
+            )
+            await pressShortcut(
+              app,
+              process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+            )
+            assert.equal((await acceptedInput(page)).markdown, source)
+          },
+        )
+})
+
+test('native table input keeps the caret before an escaped literal tail', async (t) => {
+  const oracle = inputFixture('multiline', 'cells')
+  const { page, rich } = await openInputFixture(oracle.source)
+  await selectNativeInputTable(t, page, rich, 'cells', oracle)
+  // Several native breaks put the entire escaped entity after the caret.
+  await page.keyboard.insertText('a\n\n\n\n\n&amp;')
+  assert.deepEqual(await cmCaretText(rich), ['', '&amp;'])
+})
+
 test('a native table pick keeps the shared input guards', {
   timeout: 60000,
 }, async (t) => {
@@ -899,34 +1097,49 @@ test('a native table pick keeps the shared input guards', {
         assert.equal(setup.ranges.length, guard === 'multiple ranges' ? 2 : 1)
         const before = await acceptedInput(page)
         await inputWorkProbe(rich)
-        const composing = await rich.evaluate(
-          async (element, { guard, kind }) => {
-            const target =
-              guard === 'foreign target'
-                ? element.querySelector('.cm-line')
-                : element
-            const init = {
-              bubbles: true,
-              cancelable: true,
-              isComposing: guard === 'composing event',
-            }
-            const event =
-              kind === 'beforeinput'
-                ? new InputEvent(kind, {
-                    ...init,
-                    inputType: 'insertText',
-                    data: 'Q',
-                  })
-                : new KeyboardEvent(kind, { ...init, key: 'Q' })
-            target.dispatchEvent(event)
-            // The view's next measure reads the page's selection, which the
-            // pick shows, even in the moment after text input it did not take.
-            element.cmTile.root.view.requestMeasure()
-            await new Promise(requestAnimationFrame)
-            return event.isComposing
-          },
-          { guard, kind },
-        )
+        const input = (echo) =>
+          rich.evaluate(
+            async (element, { guard, kind, echo }) => {
+              const target =
+                guard === 'foreign target'
+                  ? element.querySelector('.cm-line')
+                  : element
+              const init = {
+                bubbles: true,
+                cancelable: true,
+                isComposing: guard === 'composing event',
+              }
+              const event =
+                kind === 'beforeinput'
+                  ? new InputEvent(kind, {
+                      ...init,
+                      inputType: 'insertText',
+                      data: 'Q',
+                    })
+                  : new KeyboardEvent(kind, { ...init, key: 'Q' })
+              target.dispatchEvent(event)
+              // The same native range can echo back in the other direction
+              // before CodeMirror's next measure. No text in the page has changed.
+              if (echo) {
+                const selection = getSelection()
+                const { anchorNode, anchorOffset, focusNode, focusOffset } =
+                  selection
+                selection.setBaseAndExtent(
+                  focusNode,
+                  focusOffset,
+                  anchorNode,
+                  anchorOffset,
+                )
+              }
+              // The view's next measure reads the page's selection, which the
+              // pick shows, even in the moment after text input it did not take.
+              element.cmTile.root.view.requestMeasure()
+              await new Promise(requestAnimationFrame)
+              return event.isComposing
+            },
+            { guard, kind, echo },
+          )
+        const composing = await input(false)
         assert.equal(composing, guard === 'composing event')
         const after = await acceptedInput(page)
         if (
@@ -960,6 +1173,13 @@ test('a native table pick keeps the shared input guards', {
           ),
           setup.ranges,
         )
+        // Declined text must not arm CodeMirror's next DOM read either.
+        if (kind === 'beforeinput') {
+          await withHeldClock(page, () => input(true))
+          const echoed = await acceptedInput(page)
+          assert.equal(echoed.markdown, before.markdown)
+          assert.equal(echoed.contentVersion, before.contentVersion)
+        }
         const work = await page.evaluate(() => window.cmInputWork)
         assert.equal(work.changes, 0)
         assert.deepEqual(work.inputs, [])
@@ -1536,7 +1756,18 @@ const formattedInputOutcomes = {
   'nested list end': { markdown: '- x\n  - ya\n- b' },
 }
 
-async function selectNativeInputTable(t, page, rich, what, oracle) {
+async function selectNativeInputTable(
+  t,
+  page,
+  rich,
+  what,
+  oracle,
+  reverse = false,
+) {
+  const points = oracle.pick ?? [
+    [what === 'cells' ? 'a' : 'ab', what === 'cells' ? 0 : 1, what === 'cells'],
+    [what === 'cells' ? 'd' : 'cd', 1, true],
+  ]
   // The shipped table widget owns a real cell editor. Let its normal selection bridge focus it.
   await rich.evaluate(
     (element, head) =>
@@ -1544,7 +1775,7 @@ async function selectNativeInputTable(t, page, rich, what, oracle) {
         selection: { anchor: head },
         scrollIntoView: true,
       }),
-    what === 'cell' ? oracle.from : oracle.to,
+    oracle.cell ?? (what === 'cell' ? oracle.from : oracle.to),
   )
   await page.getByRole('textbox', { name: 'Table cell', exact: true }).waitFor()
   await page.waitForFunction(
@@ -1556,35 +1787,32 @@ async function selectNativeInputTable(t, page, rich, what, oracle) {
 
   // Native browser selection crosses the rendered cells, or the paragraph and active cell.
   // Do not replace it with a raw Markdown splice when this selection is unsupported.
-  const rendered = await rich.evaluate((element, what) => {
-    const cell = element.querySelector('.hibi-lp-cell-editor .cm-content')
-    const find = (root, word, inCell) => {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-      while (walker.nextNode()) {
-        const node = walker.currentNode
-        if (
-          node.data.trim() === word &&
-          Boolean(node.parentElement.closest('td, th')) === inCell
-        )
-          return { node, offset: node.data.indexOf(word) }
+  const rendered = await rich.evaluate(
+    (element, { points, reverse }) => {
+      const find = ([word, offset, inCell]) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode()) {
+          const node = walker.currentNode
+          if (
+            node.data.trim() === word &&
+            Boolean(node.parentElement.closest('td, th')) === inCell
+          )
+            return [node, node.data.indexOf(word) + offset]
+        }
+        return null
       }
-      return null
-    }
-    const anchor = find(
-      element,
-      what === 'cells' ? 'a' : 'ab',
-      what === 'cells',
-    )
-    const head = cell && find(cell, what === 'cells' ? 'd' : 'cd', true)
-    if (!anchor || !head) return false
-    getSelection().setBaseAndExtent(
-      anchor.node,
-      anchor.offset + (what === 'cells' ? 0 : 1),
-      head.node,
-      head.offset + 1,
-    )
-    return true
-  }, what)
+      const anchor = find(points[0]),
+        head = find(points[1])
+      if (!anchor || !head) return false
+      getSelection().setBaseAndExtent(
+        ...(reverse ? head : anchor),
+        ...(reverse ? anchor : head),
+      )
+      document.dispatchEvent(new Event('selectionchange'))
+      return true
+    },
+    { points, reverse },
+  )
   await t.test(
     'native table selection retains both historical source endpoints',
     async () => {
@@ -1596,9 +1824,9 @@ async function selectNativeInputTable(t, page, rich, what, oracle) {
       const expected = {
         from: oracle.from,
         to: oracle.to,
-        text: what === 'cells' ? 'abcd' : 'bc',
-        anchorInCell: what === 'cells',
-        focusInCell: true,
+        text: oracle.text ?? (what === 'cells' ? 'abcd' : 'bc'),
+        anchorInCell: points[reverse ? 1 : 0][2],
+        focusInCell: points[reverse ? 0 : 1][2],
       }
       const snapshot = (element) => {
         const { from, to } = element.cmTile.root.view.state.selection.main

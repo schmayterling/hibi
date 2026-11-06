@@ -509,8 +509,15 @@ class TableView {
    * from the text now.
    */
   private get known() {
-    return this.current || this.editing?.editor.placed !== undefined
+    return (
+      this.current ||
+      this.shaped === this.view.state.doc ||
+      this.editing?.editor.placed !== undefined
+    )
   }
+
+  /** A document other than the snapshot's in which the table has the snapshot's rows and columns: only its cells' text changed. */
+  private shaped: Text | null = null
 
   get windowed() {
     return this.heights !== null
@@ -961,13 +968,21 @@ class TableView {
 
   /** The cell at a position of the formatted view's document, with the offset in its text. */
   locate(pos: number): (Cell & { offset: number | 'end' }) | null {
-    if (!this.current) return null
+    if (!this.known) return null
     const { widget } = this
-    const snapshot = pos - this.range().from + widget.from
-    const index = widget.doc.lineAt(snapshot).number - widget.first
+    // While only cells' text changed, the lines are the snapshot's, read now.
+    const doc = this.current ? widget.doc : this.view.state.doc
+    const snapshot = this.current ? pos - this.range().from + widget.from : pos
+    const first = this.current
+      ? widget.first
+      : doc.lineAt(this.range().from).number
+    const index = doc.lineAt(snapshot).number - first
     const line = Math.max(0, Math.min(this.lines - 1, index === 1 ? 0 : index))
-    const { from, text } = widget.line(line)
-    const row = widget.row(line)
+    const { from, text } = this.current ? widget.line(line) : doc.line(first + line)
+    const start = widget.rowStart(line, text)
+    const row = this.current
+      ? widget.row(line)
+      : parseRow(text.slice(start), start)
     const count = Math.min(row.cells.length, this.aligned.length)
     for (let column = 0; column < count; column++) {
       const span = cellSpan(row, column, text.length)!
@@ -992,7 +1007,8 @@ class TableView {
 
   /** A cell's text between its delimiters now; null while stale or its row ends before it. */
   private span({ line, column }: Cell) {
-    if (!this.current) return null
+    if (!this.current)
+      return this.known ? this.cellIn(this.view.state.doc, { line, column }) : null
     const { text, from } = this.widget.line(line)
     const span = cellSpan(this.widget.row(line), column, text.length)
     if (!span) return null
@@ -1709,17 +1725,76 @@ class TableView {
   }
 
   /** Follow the edited row through the formatted view's changes; where it was when they deleted it. */
-  map(changes: ChangeDesc): Lost | null {
+  map(changes: ChangeDesc, before: Text): Lost | null {
+    const known =
+      this.widget.doc === before ||
+      this.shaped === before ||
+      !!this.editing?.editor.keeps
+    this.shaped =
+      known && this.cellsOnly(changes, before) ? this.view.state.doc : null
     this.track(changes)
     this.handOver(changes)
     const editing = this.editing
     if (!editing) return null
     editing.editor.changed(changes)
+    // A change in another cell, as undo of typing there, leaves this one
+    // where its row has it now.
+    if (
+      this.shaped &&
+      !editing.editor.view.composing &&
+      editing.editor.placed === undefined
+    ) {
+      const span = this.cellIn(this.shaped, editing)
+      editing.editor.keep(span)
+      if (span)
+        editing.editor.sync(this.shaped.sliceString(span.from, span.to), span)
+    }
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from
       ? null
       : { at: editing.from, column: editing.column }
+  }
+
+  /**
+   * Whether changes from `before` only edit cells' text and leave each one
+   * cell, so the table keeps its rows and columns: each within a line of a
+   * header or body row, between the same pipes, after the row's first pipe
+   * (text before it starts the line, where it could start another block).
+   */
+  private cellsOnly(changes: ChangeDesc, before: Text) {
+    const { doc } = this.view.state
+    if (!this.dom.isConnected || doc.lines !== before.lines) return false
+    const first = before.lineAt(this.range().from).number
+    let only = true
+    changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+      if (!only) return
+      const old = before.lineAt(fromA),
+        now = doc.lineAt(fromB)
+      const index = old.number - first
+      const start = this.widget.rowStart(index, old.text)
+      const was = parseRow(old.text.slice(start), start),
+        row = parseRow(now.text.slice(start), start)
+      const column = row.cells.findIndex((_, column) => {
+        const span = cellSpan(row, column, now.text.length)!
+        return span.from <= fromB - now.from && toB - now.from <= span.to
+      })
+      const cell = cellSpan(row, column, now.text.length)
+      only =
+        toA <= old.to &&
+        toB <= now.to &&
+        now.number === old.number &&
+        index >= 0 &&
+        index < this.lines &&
+        index !== 1 &&
+        this.widget.rowStart(index, now.text) === start &&
+        was.pipes.length === row.pipes.length &&
+        was.cells.length === row.cells.length &&
+        !!cell &&
+        row.pipes[0]! < fromB - now.from &&
+        !cellFixes(now.text.slice(cell.from, cell.to), cell.closed).length
+    })
+    return only
   }
 
   /** Offer this table's size state to the view that shows the table after a change. */
@@ -1991,7 +2066,7 @@ class TableView {
       refocus(view)
       return true
     }
-    if (!this.current) return false
+    if (!this.known) return false
     const { anchor, head } = this.view.state.selection.main
     const span = editing && this.span(editing)
     if (
@@ -3634,7 +3709,9 @@ const tableEditing = ViewPlugin.fromClass(
       for (const table of tables) {
         const focused = table.focused
         // Before tables redraw: the edited rows where they are now.
-        const lost = update.docChanged ? table.map(update.changes) : null
+        const lost = update.docChanged
+          ? table.map(update.changes, update.startState.doc)
+          : null
         if (focused && (selected || lost))
           this.following.push({ table, lost: selected ? null : lost })
       }

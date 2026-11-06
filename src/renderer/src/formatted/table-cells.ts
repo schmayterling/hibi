@@ -1062,6 +1062,11 @@ export class CellEditor {
     this.kept = place
   }
 
+  /** Whether the editor knows its cell's place, so its table's rows and columns are the snapshot's. */
+  get keeps() {
+    return this.kept !== undefined
+  }
+
   /**
    * The formatted view's document changed; this editor's own change sets its
    * place again once sent. A change from elsewhere only in the cell's text,

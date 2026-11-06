@@ -1,4 +1,9 @@
-import { contextBridge, ipcRenderer as transport, webUtils } from 'electron'
+import {
+  contextBridge,
+  ipcRenderer as transport,
+  webFrame,
+  webUtils,
+} from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS } from '../shared/about'
 import { ADDON_HOTKEY_CHANNELS } from '../shared/addon-hotkeys'
@@ -62,6 +67,14 @@ import {
 } from './local-diagnostics'
 
 if (process.isMainFrame) {
+  // A trusted native cut is a user gesture even after page activation expires.
+  ;(globalThis as unknown as EventTarget).addEventListener(
+    'cut',
+    (event) => {
+      if (event.isTrusted) void webFrame.executeJavaScript('void 0', true)
+    },
+    true,
+  )
   try {
     const diagnostics = new DiagnosticProducer((operation, token, body) =>
       transport.invoke(DIAGNOSTIC_CHANNEL, operation, token, body),

@@ -6,6 +6,7 @@ import test from 'node:test'
 const evaluate = new Function(
   'require',
   'process',
+  'globalThis',
   await readFile(new URL('../out/preload/index.cjs', import.meta.url), 'utf8'),
 )
 
@@ -32,6 +33,7 @@ test('garden startup requests survive an immediately disposed subscription', asy
       contextBridge: { exposeInMainWorld: exposed.set.bind(exposed) },
     }),
     { isMainFrame: true },
+    new EventTarget(),
   )
   const api = exposed.get('hibiTransport')
   const discarded = [],
@@ -75,6 +77,7 @@ for (const [method, channel, arity = 1] of [
         contextBridge: { exposeInMainWorld: exposed.set.bind(exposed) },
       }),
       { isMainFrame: true },
+      new EventTarget(),
     )
     const api =
       method === 'onStates'

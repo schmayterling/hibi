@@ -19,7 +19,7 @@ test('a failed pre-entry observer preserves the normal renderer diagnostics brid
     define: { 'import.meta.env.DEV': 'false' },
     write: false,
   })
-  new Function('require', 'process', outputFiles[0].text)(
+  new Function('require', 'process', 'globalThis', outputFiles[0].text)(
     (id) => {
       assert.equal(id, 'electron')
       return {
@@ -40,6 +40,7 @@ test('a failed pre-entry observer preserves the normal renderer diagnostics brid
       }
     },
     { isMainFrame: true },
+    new EventTarget(),
   )
   try {
     assert.ok(exposed.hibiTransport, 'document bridge remains available')

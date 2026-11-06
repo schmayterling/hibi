@@ -2861,6 +2861,223 @@ test('cell editors move with tab and arrows and leave with escape', {
   assert.match((await state()).doc, /\| e \|\n\| {2}\| {2}\|\n\nafter/)
 })
 
+test('tab in the last cell edits the added row once a slow parse draws it', {
+  timeout: 30000,
+}, async () => {
+  // Each parse runs out of time, as on a slow machine: the table draws its
+  // new row in a later slice, and typing still goes to the row's first cell.
+  await harness.evaluate(() =>
+    window.tables.mount(
+      'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter',
+      { width: 1000, height: 800 },
+      { editable: true, slice: 0 },
+    ),
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+  await harness.keyboard.press('Tab')
+  await harness.keyboard.type('x')
+  await harness.waitForFunction(() => !window.tables.settling())
+  const { doc, cell } = await state()
+  assert.equal(cell, '3:0')
+  assert.equal(
+    doc,
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n| x |  |\n\nafter',
+  )
+})
+
+test('table actions take early text in their target cell while parsing', {
+  timeout: 60000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n| e | f |\n\nafter'
+  const header = '| a | b |\n| - | - |'
+  const cases = [
+    ['row-before', `${header}\n| x\\|<br>y |  |\n| c | d |\n| e | f |`, '2:0'],
+    ['row-after', `${header}\n| c | d |\n| x\\|<br>y |  |\n| e | f |`, '3:0'],
+    ['row-delete', `${header}\n| x\\|<br>ye | f |`, '2:0'],
+    [
+      'column-before',
+      '| a |  | b |\n| - | --- | - |\n| c | x\\|<br>y | d |\n| e |  | f |',
+      '2:1',
+    ],
+    [
+      'column-after',
+      '| a | b |  |\n| - | - | --- |\n| c | d | x\\|<br>y |\n| e | f |  |',
+      '2:2',
+    ],
+    ['column-delete', '| a |\n| - |\n| x\\|<br>yc |\n| e |', '2:0'],
+  ]
+  for (const [action, source, cell] of cases)
+    await t.test(action, async () => {
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true, slice: 0 },
+          ),
+        doc,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.locator('.hibi-lp-table td', { hasText: /^d$/ }).click()
+      assert.equal(
+        await harness.evaluate(
+          (id) => window.tables.runTableAction(id),
+          action,
+        ),
+        true,
+      )
+      // Pipes and line breaks must remain cell text during the parse gap.
+      await harness.keyboard.insertText('x|\ny')
+      await harness.waitForFunction(() => !window.tables.settling())
+      const current = await state()
+      assert.equal(current.cell, cell)
+      assert.equal(current.doc, `before\n\n${source}\n\nafter`)
+    })
+})
+
+test('a column action gives an implicit target cell a source span before parsing', {
+  timeout: 30000,
+}, async () => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c |\n\nafter'
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    doc,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td').nth(1).click()
+  assert.equal(
+    await harness.evaluate(() => window.tables.runTableAction('column-after')),
+    true,
+  )
+  await harness.keyboard.insertText('x|')
+  await harness.waitForFunction(() => !window.tables.settling())
+  const current = await state()
+  assert.equal(current.cell, '2:2')
+  assert.equal(
+    current.doc,
+    'before\n\n| a | b |  |\n| - | - | --- |\n| c |  | x\\| |\n\nafter',
+  )
+  await harness.keyboard.press(undoKey)
+  await harness.waitForFunction(() => !window.tables.settling())
+  assert.equal(
+    (await state()).doc,
+    'before\n\n| a | b |  |\n| - | - | --- |\n| c |  |  |\n\nafter',
+  )
+  await harness.keyboard.press(undoKey)
+  await harness.waitForFunction(() => !window.tables.settling())
+  assert.equal((await state()).doc, doc)
+})
+
+test('edit keys stay in a table action cell while its parse is pending', {
+  timeout: 60000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  const group = process.platform === 'darwin' ? 'Alt' : 'Control'
+  const keys = [
+    'Enter',
+    'Shift+Enter',
+    'Backspace',
+    'Shift+Backspace',
+    'Delete',
+    `${group}+Backspace`,
+    `${group}+Delete`,
+    ...(process.platform === 'darwin'
+      ? ['Meta+Backspace', 'Meta+Delete', 'Control+h', 'Control+d']
+      : []),
+  ]
+  for (const key of keys)
+    for (const kind of ['new', 'existing'])
+      await t.test(`${key}: ${kind}`, async () => {
+        const existing = kind === 'existing'
+        await harness.evaluate(
+          (doc) =>
+            window.tables.mount(
+              doc,
+              { width: 1000, height: 800 },
+              { editable: true, slice: 0 },
+            ),
+          doc,
+        )
+        await harness.waitForFunction(() => !window.tables.settling())
+        await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+        if (existing)
+          await harness.evaluate(() =>
+            window.tables.runTableAction('column-delete'),
+          )
+        else await harness.keyboard.press('Tab')
+        await harness.keyboard.press(key)
+        await harness.waitForFunction(() => !window.tables.settling())
+        await harness.keyboard.type('x')
+        await harness.waitForFunction(() => !window.tables.settling())
+        const br = key.includes('Enter') ? '<br>' : ''
+        const deleted = key.includes('Delete') || key.endsWith('+d')
+        const expected = existing
+          ? `before\n\n| a |\n| - |\n| ${br}x${deleted ? '' : 'c'} |\n\nafter`
+          : doc.replace('\n\nafter', `\n| ${br}x |  |\n\nafter`)
+        // Native deletion can remove padding if the cell opens before the key.
+        const content = (text) => text.replace(/[ \t]*\|[ \t]*/g, '|')
+        assert.equal(content((await state()).doc), content(expected))
+        assert.equal((await state()).cell, existing ? '2:0' : '3:0')
+      })
+})
+
+test('document commands leave an undrawn action cell intact and focused', {
+  timeout: 30000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  for (const key of [
+    { key: 'Tab' },
+    { key: 'Tab', shiftKey: true },
+    { key: 'ArrowUp', altKey: true },
+    { key: 'ArrowUp', altKey: true, shiftKey: true },
+    ...(process.platform === 'darwin' ? [{ key: 'o', ctrlKey: true }] : []),
+  ])
+    await t.test(JSON.stringify(key), async () => {
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true, slice: 0 },
+          ),
+        doc,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+      // Dispatch in the action's turn, before its parser can draw the cell.
+      const result = await harness.evaluate((key) => {
+        const view = window.tables.view()
+        const done = window.tables.runTableAction('row-after')
+        const before = view.state.doc
+        const event = new KeyboardEvent('keydown', {
+          ...key,
+          bubbles: true,
+          cancelable: true,
+        })
+        view.contentDOM.dispatchEvent(event)
+        return {
+          done,
+          prevented: event.defaultPrevented,
+          unchanged: view.state.doc === before,
+          focused: view.hasFocus,
+        }
+      }, key)
+      assert.deepEqual(result, {
+        done: true,
+        prevented: true,
+        unchanged: true,
+        focused: true,
+      })
+      await harness.waitForFunction(() => !window.tables.settling())
+    })
+})
+
 /** The text of the cell that holds the page selection's head, and the selected text. */
 const tabbed = (target) =>
   target.evaluate(async () => {
@@ -6372,4 +6589,89 @@ test('a caret moved in a cell while its table is stale reaches the formatted vie
     }
   })
   assert.deepEqual([heads.editor, heads.main], [2, heads.cell])
+})
+
+test('in the app, text typed before an added row draws reaches its cell', {
+  timeout: 60000,
+}, async () => {
+  await openFormatted()
+  const doc = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
+    { length: 80 },
+    (_, row) => `| r${row} | v${row} |`,
+  ).join('\n')}\n`
+  const file = join(folder, 'slow-tab.md')
+  await writeFile(file, doc)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [file],
+    })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(
+    () => document.activeElement?.closest('td')?.textContent.trim() === 'v79',
+  )
+  // No user setting forces a parse to miss its slice. Exhaust its deadline
+  // during Tab and hold idle work until the early key has arrived.
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance)
+    const idle = requestIdleCallback.bind(window)
+    const cancel = cancelIdleCallback.bind(window)
+    const pending = new Map()
+    let late = 0
+    let held = true
+    const slow = (event) => {
+      if (event.key !== 'Tab') return
+      document.removeEventListener('keydown', slow, true)
+      performance.now = () => {
+        late += 10
+        return now() + late
+      }
+      window.requestIdleCallback = (callback, options) => {
+        const id = idle((deadline) => {
+          if (held) pending.set(id, () => callback(deadline))
+          else callback(deadline)
+        }, options)
+        return id
+      }
+      window.cancelIdleCallback = (id) => {
+        pending.delete(id)
+        cancel(id)
+      }
+    }
+    document.addEventListener('keydown', slow, true)
+    window.releaseTableParse = () => {
+      held = false
+      document.removeEventListener('keydown', slow, true)
+      performance.now = () => now() + late
+      window.requestIdleCallback = idle
+      window.cancelIdleCallback = cancel
+      for (const resume of pending.values()) resume()
+    }
+  })
+  try {
+    await page.keyboard.press('Tab')
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.getAttribute('aria-label'),
+      ),
+      'Document editor',
+    )
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('x')
+  } finally {
+    await page.evaluate(() => window.releaseTableParse())
+  }
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.closest('td')?.parentElement.dataset.line ===
+      '82',
+  )
+  await page.keyboard.type('y')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    `${doc}| <br>xy |  |\n`,
+  )
 })

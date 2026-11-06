@@ -996,8 +996,10 @@ export class CellEditor {
       const isolate = transaction.annotation(isolateHistory)
       const from = start
       if (from !== null) this.unsent = false
+      const sent = this.host.main.state.changes(changes)
+      const expected = sent.apply(this.host.main.state.doc)
       this.host.main.dispatch({
-        changes,
+        changes: sent,
         ...(from === null
           ? {}
           : {
@@ -1014,8 +1016,8 @@ export class CellEditor {
           ...(isolate ? [isolateHistory.of(isolate)] : []),
         ],
       })
-      // The cell's text is now where this change put it.
-      if (from !== null)
+      // an empty cell matches any place: the parent must take this exact edit.
+      if (from !== null && this.host.main.state.doc.eq(expected))
         this.kept = {
           from,
           to: from + transaction.newDoc.length,

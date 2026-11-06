@@ -3187,6 +3187,27 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
     'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
     '\n\nparagraph'.repeat(2000)
   const short = doc.replace('| c | d |', '| c |')
+  const compact = doc.replace('| c | d |', '|c|d|')
+  const filter = (kind) => () =>
+    harness.evaluate((kind) => {
+      const view = window.tables.view()
+      let first = true
+      window.tables.extend(
+        view.state.constructor.transactionFilter.of((transaction) => {
+          if (!first || !transaction.docChanged) return transaction
+          first = false
+          return kind === 'move'
+            ? [
+                transaction,
+                {
+                  changes: { from: 0, insert: 'prefix\n\n' },
+                  sequential: true,
+                },
+              ]
+            : []
+        }),
+      )
+    }, kind)
   // Another change while the table waits.
   const edit = (find, insert) => () =>
     harness.evaluate(
@@ -3223,8 +3244,39 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
       keys: ['x', edit('dx |', 'dx | e |'), 'y'],
       row: 'dx | e',
     },
+    {
+      name: 'normalized parent change',
+      note: doc,
+      cell: 1,
+      keys: [filter('move'), 'x', 'y'],
+      row: 'dx',
+      saved: 'prefix\n\n' + doc.replace('| c | d |', '| c | dx |'),
+    },
+    {
+      name: 'emptied cell',
+      note: compact,
+      cell: 1,
+      keys: ['Home', 'Shift+End', 'Backspace', 'x', 'y'],
+      row: 'xy',
+      saved: compact.replace('|c|d|', '|c|xy|'),
+    },
+    {
+      name: 'normalized empty cell',
+      note: compact,
+      cell: 1,
+      keys: [filter('move'), 'Home', 'Shift+End', 'Backspace', 'y'],
+      row: '',
+      saved: 'prefix\n\n' + compact.replace('|c|d|', '|c||'),
+    },
+    {
+      name: 'refused parent change',
+      note: doc,
+      cell: 1,
+      keys: ['x', filter('reject'), 'y', 'z'],
+      row: 'dx',
+    },
   ]
-  for (const { name, note, cell, keys, row } of cases)
+  for (const { name, note, cell, keys, row, saved } of cases)
     await t.test(name, async () => {
       await harness.evaluate(
         (doc) =>
@@ -3262,7 +3314,10 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
       await harness.evaluate(() => window.releaseIdle())
       await harness.waitForFunction(() => !window.tables.settling())
       const now = await state()
-      assert.equal(now.doc, note.replace(/\| c \|.*\n/, `| c | ${row} |\n`))
+      assert.equal(
+        now.doc,
+        saved ?? note.replace(/\| c \|.*\n/, `| c | ${row} |\n`),
+      )
       assert.equal(now.cell, '2:1')
       // The cell's editor holds the same text; a break draws as a widget.
       if (!row.includes('<br>')) assert.equal(now.editor, row.split(' | ')[0])

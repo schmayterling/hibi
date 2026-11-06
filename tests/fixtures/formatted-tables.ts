@@ -3,6 +3,7 @@ import {
   Compartment,
   EditorState,
   type Extension,
+  Prec,
   StateEffect,
   StateField,
   Transaction,
@@ -21,6 +22,7 @@ import {
 } from '../../src/renderer/src/chunked-markdown'
 import * as formattedTables from '../../src/renderer/src/formatted/tables'
 import {
+  formattedBlockParser,
   formattedDocument,
   showMarkdownMarkers,
 } from '../../src/renderer/src/formatted-contributions'
@@ -212,6 +214,25 @@ Object.assign(window, {
       await settle()
     },
     view: () => view,
+    /** Count real block-proof work without a clock or replacing the grammar. */
+    watchBlockProofs() {
+      const current = view!
+      const grammar = current.state.facet(formattedBlockParser)(current.state)
+      const work = { calls: 0, units: 0 }
+      const measured = Object.assign(Object.create(grammar), {
+        parse(text: string) {
+          work.calls++
+          work.units += text.length
+          return grammar.parse(text)
+        },
+      })
+      current.dispatch({
+        effects: StateEffect.appendConfig.of(
+          Prec.highest(formattedBlockParser.of(() => measured)),
+        ),
+      })
+      return work
+    },
     /** install source extensions, as a format addon does. */
     extend(extension: Extension) {
       view?.dispatch({ effects: StateEffect.appendConfig.of(extension) })

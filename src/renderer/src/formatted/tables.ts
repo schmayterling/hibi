@@ -516,13 +516,13 @@ class TableView {
   private get known() {
     return (
       this.current ||
-      this.shaped === this.view.state.doc ||
+      this.shaped?.doc === this.view.state.doc ||
       this.editing?.editor.placed !== undefined
     )
   }
 
-  /** A document other than the snapshot's in which the table has the snapshot's rows and columns: only its cells' text changed. */
-  private shaped: Text | null = null
+  /** A state in which the table has the snapshot's rows and columns: only its cells' text changed. */
+  private shaped: EditorState | null = null
 
   get windowed() {
     return this.heights !== null
@@ -1771,10 +1771,10 @@ class TableView {
     const kept = editing?.editor.keptPlace
     const known =
       this.widget.doc === before ||
-      this.shaped === before ||
+      this.shaped?.doc === before ||
       (kept !== undefined && this.valid(kept, before))
     const cells = known ? this.cellsOnly(changes, before) : null
-    this.shaped = cells && this.view.state.doc
+    this.shaped = cells && this.view.state
     this.track(changes)
     this.handOver(changes)
     // Other cells show their text now too.
@@ -1797,10 +1797,13 @@ class TableView {
       !editing.editor.view.composing &&
       editing.editor.placed === undefined
     ) {
-      const span = this.cellIn(this.shaped, editing)
+      const span = this.cellIn(this.shaped.doc, editing)
       editing.editor.keep(span)
       if (span)
-        editing.editor.sync(this.shaped.sliceString(span.from, span.to), span)
+        editing.editor.sync(
+          this.shaped.doc.sliceString(span.from, span.to),
+          span,
+        )
     }
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
@@ -1827,8 +1830,8 @@ class TableView {
         now = doc.lineAt(fromB)
       const index = old.number - first
       const start = this.widget.rowStart(index, old.text)
-      const was = parseRow(old.text.slice(start), start),
-        row = parseRow(now.text.slice(start), start)
+      const was = this.rowIn(before, old, index),
+        row = this.rowIn(doc, now, index)
       const column = row.cells.findIndex((_, column) => {
         const span = cellSpan(row, column, now.text.length)!
         return span.from <= fromB - now.from && toB - now.from <= span.to
@@ -2375,18 +2378,38 @@ class TableView {
     return true
   }
 
+  /** The last row read from a document, shared by shape checks and cell lookups. */
+  private parsedRow:
+    | {
+        doc: Text
+        from: number
+        start: number
+        row: ReturnType<typeof parseRow>
+      }
+    | undefined
+
+  private rowIn(doc: Text, source: Line, index: number) {
+    const start = this.widget.rowStart(index, source.text)
+    const cached = this.parsedRow
+    if (
+      cached?.doc === doc &&
+      cached.from === source.from &&
+      cached.start === start
+    )
+      return cached.row
+    const row = parseRow(source.text.slice(start), start)
+    this.parsedRow = { doc, from: source.from, start, row }
+    return row
+  }
+
   /** A cell's span in the document with this table changed. */
   private cellIn(doc: Text, { line, column }: Cell) {
     const index = line === 1 ? 0 : line
     const number = this.view.state.doc.lineAt(this.range().from).number + index
     if (number > doc.lines) return null
-    const { from, text } = doc.line(number)
-    const start = this.widget.rowStart(index, text)
-    const span = cellSpan(
-      parseRow(text.slice(start), start),
-      column,
-      text.length,
-    )
+    const source = doc.line(number)
+    const { from, text } = source
+    const span = cellSpan(this.rowIn(doc, source, index), column, text.length)
     return span
       ? { from: from + span.from, to: from + span.to, closed: span.closed }
       : null
@@ -2402,7 +2425,12 @@ class TableView {
     const span = this.cellIn(doc, editing)
     if (!place || !span) return place === span
     if (place.from !== span.from || place.to !== span.to) return false
-    if (editing.column) return true
+    // cellsOnly already proved every changed row in this document.
+    if (
+      editing.column ||
+      (this.shaped === this.view.state && this.shaped.doc === doc)
+    )
+      return true
     const first = doc.lineAt(this.range().from).number
     return this.rowIsTable(doc, first, editing.line)
   }

@@ -7,7 +7,6 @@ import { CustomWordDatabase } from '../src/addons/dictionary/custom-word-databas
 import {
   crashAndReload,
   electron,
-  waitForDocumentEditor,
   waitForElectronShutdown,
 } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
@@ -49,7 +48,6 @@ async function fixture(t) {
       })
       const page = await app.firstWindow()
       page.setDefaultTimeout(APP_STATE_TIMEOUT)
-      await waitForDocumentEditor(app, page)
       return { app, child, page }
     },
     close,

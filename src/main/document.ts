@@ -1128,7 +1128,8 @@ export async function saveDocument(
   path = destination
   pendingPath = null
   saved = saving
-  refreshDirtyIndicator(window)
+  // Edits made during the write were compared with the old baseline.
+  updateDocumentEdited(window)
   const recorded = await recordSaveHistory(
     window,
     destination,
@@ -1196,7 +1197,8 @@ export async function autosaveDocument(
     if (retained?.source === draft.source) retained.saved = saving
   }
   storeTab()
-  refreshDirtyIndicator(window)
+  if (id === activeTab) updateDocumentEdited(window)
+  else refreshDirtyIndicator(window)
   const recorded = await recordSaveHistory(
     window,
     destination,

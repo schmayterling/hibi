@@ -419,7 +419,13 @@ type Found = Pick<Continuation, 'leaf' | 'key' | 'retype' | 'frontier'> & {
 
 type Work =
   | { kind: 'scan'; from: number; span: number; parse: PartialParse }
-  | { kind: 'parse'; from: number; to: number; parse: PartialParse }
+  | {
+      kind: 'parse'
+      from: number
+      to: number
+      parse: PartialParse
+      audit?: true
+    }
   | {
       kind: 'continue'
       block: Continuation
@@ -1280,14 +1286,15 @@ class ChunkedParse implements ChunkedPartialParse {
     const size = this.parser.chunkSize
     // A wanted rest of the note within one chunk, with no old chunk boundary
     // ahead, is parsed as one chunk: it ends at the note's end, a known safe
-    // end, and a scan would only find that chunk.
+    // end, and a scan would only find that chunk. Read-ahead decisions still
+    // need the scan (see continueWork).
     const length = this.input.length
     if (
       length - this.pos <= size &&
       this.wanted(this.pos, length) &&
       !this.hints(this.pos, length).size
     ) {
-      this.startParse(this.pos, length)
+      this.startParse(this.pos, length, true)
       return true
     }
     // Boundary scans keep replay points for later leaf proofs. A finite
@@ -1315,7 +1322,7 @@ class ChunkedParse implements ChunkedPartialParse {
     this.work = { kind: 'scan', from: this.pos, span, parse }
   }
 
-  private startParse(from: number, to: number) {
+  private startParse(from: number, to: number, audit = false) {
     this.pos = from
     // Before a block that is not after blank lines, the chunk's input ends
     // with its last line's text: that block's line closes everything open,
@@ -1331,7 +1338,7 @@ class ChunkedParse implements ChunkedPartialParse {
       [],
       ranges,
     )
-    this.work = { kind: 'parse', from, to, parse }
+    this.work = { kind: 'parse', from, to, parse, ...(audit && { audit }) }
   }
 
   /** Advance the active inner parse; true when it finished. */
@@ -1367,8 +1374,21 @@ class ChunkedParse implements ChunkedPartialParse {
     if (!tree) return false
     this.work = null
     if (work.kind === 'scan') this.scanned(work.from, work.span, tree)
-    else if (work.kind === 'parse') this.parsed(work.from, work.to, tree)
-    else if (work.kind === 'continue') this.continued(work, tree)
+    else if (work.kind === 'parse') {
+      const probe = this.parser.options.probe
+      if (probe) {
+        probe.parsedChunks++
+        probe.parsedUnits += work.to - work.from
+      }
+      // A mixed parse, as with parseCode, reports position 0 while its markdown
+      // parse runs, so its read-ahead decisions are stamped there. A rest with
+      // decisions is scanned, which stamps them at their lines, then parsed
+      // again rather than kept: syntax removed meanwhile restarts only parses
+      // that still advance.
+      if (work.audit && this.reads.size)
+        this.startScan(2 * this.parser.chunkSize)
+      else this.parsed(work.from, work.to, tree)
+    } else if (work.kind === 'continue') this.continued(work, tree)
     else this.windowed(work, tree)
     return true
   }
@@ -2572,11 +2592,6 @@ class ChunkedParse implements ChunkedPartialParse {
   }
 
   private parsed(from: number, to: number, tree: Tree) {
-    const probe = this.parser.options.probe
-    if (probe) {
-      probe.parsedChunks++
-      probe.parsedUnits += to - from
-    }
     this.addChunk(
       new Tree(NodeType.none, tree.children, tree.positions, to - from, [
         [chunkInfo, { kind: 'parsed' }],

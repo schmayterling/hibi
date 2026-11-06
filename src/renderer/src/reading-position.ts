@@ -384,7 +384,13 @@ function holdTop(view: EditorView) {
 function restore(view: EditorView, position: Reading) {
   // Asking runs a pending measure first: its own correction for new heights
   // above would come on top of this one, and it can move the line gaps.
-  view.coordsAtPos(position.pos, 1)
+  // Its draw can kill the view before the coordinate read returns.
+  try {
+    view.coordsAtPos(position.pos, 1)
+  } catch (error) {
+    if (!isViewDead(view)) throw error
+  }
+  if (isViewDead(view)) return false
   // Text the editor doesn't draw now: a widget's position keeps its own
   // coordinates, without a scroll command for each correction.
   if (position.text && !drawnText(view, position.pos)) {

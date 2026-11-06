@@ -366,6 +366,8 @@ const handoffs = new WeakMap<
 const tableViews = new WeakMap<HTMLElement, TableView>()
 /** Mounted tables per editor, for row windows, entering tables and table actions. */
 const mounted = new WeakMap<EditorView, Set<TableView>>()
+/** Paragraph source reached by leave(), also when its dispatch replaces the widget. */
+const leftGaps = new WeakMap<EditorView, { from: number; to: number }>()
 
 type Rendered = { element: HTMLTableRowElement; text: string }
 
@@ -1625,12 +1627,19 @@ class TableView {
       insert = null
       anchor = Math.max(0, Math.min(anchor, doc.length))
     }
+    const sent = this.view.state.changes(insert ?? [])
+    const expected = sent.apply(doc)
     this.view.dispatch({
-      ...(insert ? { changes: insert } : {}),
+      changes: sent,
       selection: { anchor },
       scrollIntoView: true,
       userEvent: insert ? 'input' : 'select',
     })
+    if (this.view.state.doc.eq(expected))
+      leftGaps.set(
+        this.view,
+        after ? { from: anchor, to: expected.length } : { from: 0, to: anchor },
+      )
     this.view.focus()
   }
 
@@ -2870,6 +2879,13 @@ const deleteWaiting =
   (forward: boolean, by?: 'group' | 'line') => (view: EditorView) =>
     waitingTable(view)?.deleteWaiting(forward, by) ?? false
 
+/** Whether the selection stays in the paragraph source reached by leave(). */
+function leftGap(view: EditorView) {
+  const gap = leftGaps.get(view)
+  const { from, to } = view.state.selection.main
+  return !!gap && from >= gap.from && to <= gap.to
+}
+
 /** Whether the caret's DOM still belongs to an old table snapshot. */
 function staleTable(view: EditorView) {
   const tables = [...(mounted.get(view) ?? [])].filter(
@@ -2877,10 +2893,13 @@ function staleTable(view: EditorView) {
   )
   if (!tables.length) return false
   const { node, offset } = view.domAtPos(view.state.selection.main.head)
-  return tables.some(
-    (table) =>
-      node.childNodes[offset] === table.dom ||
-      node.childNodes[offset - 1] === table.dom,
+  return (
+    !leftGap(view) &&
+    tables.some(
+      (table) =>
+        node.childNodes[offset] === table.dom ||
+        node.childNodes[offset - 1] === table.dom,
+    )
   )
 }
 const pauseTableCommand = (view: EditorView) =>
@@ -2961,7 +2980,7 @@ const tableInput = (event: InputStart, view: EditorView) =>
   takesInput(event, view) &&
   (view.state.field(pickedTable) ||
     overTable(event, view) ||
-    (event.isTrusted && !!waitingTable(view)))
+    (event.isTrusted && (!!waitingTable(view) || leftGap(view))))
 
 /**
  * Edits `from`–`to`, a selection ending in a table, as `text` input there,
@@ -3472,6 +3491,7 @@ const tableEditing = ViewPlugin.fromClass(
         ?.setBaseAndExtent(anchor.node, anchor.offset, head.node, head.offset)
     }
     destroy() {
+      leftGaps.delete(this.view)
       this.releasePick()
       this.view.dom.ownerDocument.removeEventListener(
         'selectionchange',
@@ -3492,10 +3512,25 @@ const tableEditing = ViewPlugin.fromClass(
       )
     }
     update(update: ViewUpdate) {
+      const gap = leftGaps.get(this.view)
+      if (gap && update.docChanged) {
+        let inside = true
+        update.changes.iterChangedRanges((from, to) => {
+          inside &&= from >= gap.from && to <= gap.to
+        })
+        if (inside)
+          leftGaps.set(this.view, {
+            from: update.changes.mapPos(gap.from, -1),
+            to: update.changes.mapPos(gap.to, 1),
+          })
+        else leftGaps.delete(this.view)
+      }
       if (update.docChanged && update.state.field(pickedTable))
         this.picked = true
       if (this.picked) queueMicrotask(this.restorePick)
       const tables = mounted.get(this.view) ?? []
+      if (gap && [...tables].every((table) => table.current))
+        leftGaps.delete(this.view)
       // Undo and keyboard navigation move a focused cell editor; ignore
       // DOM selection echoes from the unfocused formatted view.
       const selected = update.transactions.some(

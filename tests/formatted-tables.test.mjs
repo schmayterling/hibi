@@ -3339,6 +3339,8 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   const doc = `before\n\n| a | b |\n| - | - |\n| c | d |\n| e |\n\nafter${tail}`
   const full = doc.replace('| e |', '| e | f |')
   const last = `before\n\n| a | b |\n| - | - |\n| c | d |${tail}`
+  const endRows = '| u | v |\n'.repeat(2000)
+  const atEnd = `| a | b |\n| - | - |\n${endRows}| c | d`
   // A change from elsewhere, as another pane's, replacing text in the note.
   const edit = (find, insert) => () =>
     harness.evaluate(
@@ -3385,6 +3387,17 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       note,
     )
     await harness.waitForFunction(() => !window.tables.settling())
+    // The last row is virtualized; a source selection brings it into view.
+    if (note === atEnd)
+      await harness.evaluate(() => {
+        const view = window.tables.view()
+        view.focus()
+        view.dispatch({
+          selection: {
+            anchor: view.state.doc.toString().lastIndexOf('| c |') + 2,
+          },
+        })
+      })
     await harness
       .locator('.hibi-lp-table :is(th, td)', {
         hasText: new RegExp(`^${start}$`),
@@ -3410,7 +3423,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     const { doc, cell, editor, head } = await state()
     // The note's tail only slows the parse.
     return {
-      doc: doc.replace(tail, ''),
+      doc: doc.replace(tail, '').replace(endRows, ''),
       cell,
       editor,
       head,
@@ -3433,6 +3446,20 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     ['ArrowDown out of the table', full, 'f', ['x', 'ArrowDown', 'y']],
     ['Escape after a deletion', full, 'f', ['Backspace', 'Escape', 'y']],
     ['Mod+Enter', last, 'd', ['x', 'ControlOrMeta+Enter', 'y']],
+    [
+      'before a table at the start',
+      doc.replace('before\n\n', ''),
+      'a',
+      ['x', 'ArrowUp', 'y', 'z'],
+    ],
+    ['Escape at document end', atEnd, 'd', ['x', 'Escape', 'y', 'z']],
+    [
+      'Mod+Enter at document end',
+      atEnd,
+      'd',
+      ['x', 'ControlOrMeta+Enter', 'y', 'z'],
+    ],
+    ['leave before the first edit', atEnd, 'd', ['Escape', 'y', 'z']],
     // Undo, redo and other changes inside the cell's text keep its place.
     ['undo', doc, 'd', ['x', 'y', 'ControlOrMeta+z', 'z']],
     ['redo', doc, 'd', ['x', 'ControlOrMeta+z', redoKey, 'z']],
@@ -3502,6 +3529,25 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       assert.equal(now, unpiped.replace(tail, '').replace('c | d', '~~~cx | d'))
     },
   )
+  await t.test(
+    'a change outside the left paragraph clears its place',
+    async () => {
+      const { doc: now } = await run(
+        atEnd,
+        'd',
+        ['x', 'Escape', edit('| a |', '| A |'), 'y'],
+        true,
+        false,
+      )
+      assert.equal(
+        now,
+        atEnd
+          .replace(endRows, '')
+          .replace('| a |', '| A |')
+          .replace('| c | d', '| c | dx') + '\n\n',
+      )
+    },
+  )
   cases.push(
     ['unpiped body', unpiped, 'c', ['x', 'Tab', 'y']],
     ['unpiped header', unpiped, 'a', ['x', 'Tab', 'y']],
@@ -3511,7 +3557,10 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       const settled = await run(note, start, keys, false)
       // The row Tab adds in the last cell draws with the table, and a
       // line break in a cell draws as one then too.
-      const drawn = name !== 'Tab in the last cell' && name !== 'Mod+Enter'
+      const drawn =
+        name !== 'Tab in the last cell' &&
+        name !== 'Mod+Enter' &&
+        name !== 'before a table at the start'
       assert.deepEqual(await run(note, start, keys, true, drawn), settled)
     })
 })

@@ -1171,6 +1171,40 @@ for (const [presentation, headings, lateReading] of [
           for (const task of tasks) task()
         }
       })
+    // Where each frame the rebuilt views paint formatted shows the line: a
+    // resize observer runs after layout, before the paint. A rebuilt view
+    // first paints its lines unformatted, which is not this.
+    if (presentation === 'formatted')
+      await context.page.evaluate((pane) => {
+        const painted = []
+        window.paintedLine = painted
+        const failed = document.querySelector(`${pane} .cm-content`)
+        const pulse = document.createElement('div')
+        pulse.style.cssText =
+          'position: fixed; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none'
+        document.body.append(pulse)
+        new ResizeObserver(() => {
+          const content = document.querySelector(`${pane} .cm-content`)
+          if (!content || content === failed) return
+          const lines = [...content.querySelectorAll('.cm-line')]
+          const line = lines.find((each) =>
+            each.textContent.startsWith('line 300'),
+          )
+          if (
+            line &&
+            lines.every(
+              (each) =>
+                each.textContent || each.classList.contains('hibi-lp-gap'),
+            )
+          )
+            painted.push(line.getBoundingClientRect().top)
+        }).observe(pulse)
+        const frame = () => {
+          pulse.style.width = pulse.style.width === '1px' ? '2px' : '1px'
+          if (!window.paintedDone) requestAnimationFrame(frame)
+        }
+        requestAnimationFrame(frame)
+      }, context.pane)
     await context.page.keyboard.insertText('Q')
     await named(context, 'bad-ext.bad: decorations boom')
     await editorReady(context)
@@ -1199,4 +1233,15 @@ for (const [presentation, headings, lateReading] of [
       )
     t.diagnostic(`line moved ${before} to ${after}`)
     assert.ok(Math.abs(after - before) < 60, `line moved ${before} to ${after}`)
+    if (presentation === 'formatted') {
+      await context.page.waitForFunction(() => window.paintedLine.length > 0)
+      const painted = await context.page.evaluate(() => {
+        window.paintedDone = true
+        return window.paintedLine
+      })
+      assert.ok(
+        painted.every((top) => Math.abs(top - before) < 60),
+        `line painted ${before} at ${painted.join(', ')}`,
+      )
+    }
   })

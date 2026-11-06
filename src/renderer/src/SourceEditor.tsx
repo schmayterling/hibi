@@ -418,7 +418,8 @@ function keptPlaceScroll(top: number, margin: number) {
             if (Math.abs(scrollerOf(view).scrollTop - held) > 1) return stop()
             state = 'aligning'
             moved = false
-            queueMicrotask(() => view.requestMeasure(align))
+            // In this measure, before the moved line paints.
+            view.requestMeasure(align)
           } else queueMicrotask(() => begin(view))
         },
       }

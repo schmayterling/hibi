@@ -1026,6 +1026,22 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
     ['document start', table + '\n\nafter', ['abc', 1], ['after', 3]],
     ['document end', 'before\n\n' + table, ['before', 3], ['jkl', 2]],
   ]
+  // The page's selection from word end `ends[0]` to `ends[1]`, as a pick shows it.
+  const showPick = (rich, ends) =>
+    rich.evaluate((element, ends) => {
+      const find = ([word, offset]) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        while (walker.nextNode())
+          if (walker.currentNode.data.trim() === word)
+            return [
+              walker.currentNode,
+              walker.currentNode.data.indexOf(word) + offset,
+            ]
+        throw new Error('no text ' + word)
+      }
+      getSelection().setBaseAndExtent(...find(ends[0]), ...find(ends[1]))
+      document.dispatchEvent(new Event('selectionchange'))
+    }, ends)
   const pick = async (page, rich, source, a, b, reverse) => {
     const cell = [a, b].find(
       ([word]) => !word.startsWith('before') && word !== 'after',
@@ -1041,26 +1057,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
     await page
       .getByRole('textbox', { name: 'Table cell', exact: true })
       .waitFor()
-    await rich.evaluate(
-      (element, ends) => {
-        const find = ([word, offset]) => {
-          const walker = document.createTreeWalker(
-            element,
-            NodeFilter.SHOW_TEXT,
-          )
-          while (walker.nextNode())
-            if (walker.currentNode.data.trim() === word)
-              return [
-                walker.currentNode,
-                walker.currentNode.data.indexOf(word) + offset,
-              ]
-          throw new Error('no text ' + word)
-        }
-        getSelection().setBaseAndExtent(...find(ends[0]), ...find(ends[1]))
-        document.dispatchEvent(new Event('selectionchange'))
-      },
-      reverse ? [b, a] : [a, b],
-    )
+    await showPick(rich, reverse ? [b, a] : [a, b])
     const range = [source.indexOf(a[0]) + a[1], source.indexOf(b[0]) + b[1]]
     await page.waitForFunction((range) => {
       const { main } = document.querySelector(
@@ -1311,25 +1308,197 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
             ),
           })
         })
-        // A read-only view draws its own selection over the page's pick
-        // after a key; copy and cut both see that.
+        // Copy while the page shows the pick in the cells, before a key
+        // draws the view's own selection over it, and after: both are the
+        // pick's Markdown.
+        await showPick(rich, reverse ? [b, a] : [a, b])
+        const first = await clipboardAfter(app, page, 'c')
+        assert.equal(first.text, source.slice(...picked(source, a, b)))
         await page.keyboard.press('Shift')
-        await page.waitForFunction(() => {
-          const selection = getSelection()
-          return [selection.anchorNode, selection.focusNode].every(
-            (node) =>
-              !(node instanceof Element ? node : node?.parentElement)?.closest(
-                'td, th',
-              ),
-          )
-        })
         const copied = await clipboardAfter(app, page, 'c')
-        assert.ok(copied.text.includes(token), 'copy contains this pick')
+        assert.deepEqual(copied, first)
         assert.deepEqual(await clipboardAfter(app, page, 'x'), copied)
         assert.equal((await acceptedInput(page)).markdown, source)
       })
+      // Pasting a pick's copy where Delete or cut left the caret puts the
+      // pick back as it was, the table's structure included.
+      for (const route of ['copy, Delete', 'cut'])
+        await t.test(name + ', ' + route + ', paste back', async () => {
+          const { app, page, rich } = await openInputFixture(source)
+          await pick(page, rich, source, a, b, reverse)
+          const held = await clipboardAfter(
+            app,
+            page,
+            route === 'cut' ? 'x' : 'c',
+          )
+          assert.equal(held.text, source.slice(...picked(source, a, b)))
+          if (route !== 'cut') await page.keyboard.press('Delete')
+          await waitForAsync(
+            page,
+            async (source) => {
+              await window.hibi.flushDocumentChanges()
+              return (await window.hibi.getDocument()).markdown !== source
+            },
+            source,
+          )
+          const deleted = (await acceptedInput(page)).markdown
+          await pasteHeld(app, page, held, route === 'cut')
+          await waitForAsync(
+            page,
+            async (deleted) => {
+              await window.hibi.flushDocumentChanges()
+              return (await window.hibi.getDocument()).markdown !== deleted
+            },
+            deleted,
+          )
+          assert.equal((await acceptedInput(page)).markdown, source)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, deleted)
+          await page.keyboard.press('ControlOrMeta+Shift+z')
+          await waitForInputSource(page, source)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, deleted)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, source)
+        })
     }
+  for (const guard of ['foreign html', 'multiple carets'])
+    await t.test('paste guard: ' + guard, async () => {
+      const source = note.replace('before', 'before' + crypto.randomUUID())
+      const a = [source.slice(0, source.indexOf('\n')), 3]
+      const b = ['abc', 1]
+      const { app, page, rich } = await openInputFixture(source)
+      await pick(page, rich, source, a, b, false)
+      const held = await clipboardAfter(app, page, 'c')
+      await page.keyboard.press('Delete')
+      const deleted = (await acceptedInput(page)).markdown
+      const caret = await rich.evaluate((element, multiple) => {
+        const view = element.cmTile.root.view
+        const caret = view.state.selection.main.head
+        if (multiple) {
+          // No app command enables multiple selections; configure the fixture.
+          const [compartment, access] = [
+            ...view.state.config.compartments,
+          ].find(
+            ([, value]) =>
+              Array.isArray(value) &&
+              value.length === 2 &&
+              value.every(
+                (part) => part.facet && typeof part.value === 'boolean',
+              ),
+          )
+          view.dispatch({
+            effects: compartment.reconfigure([
+              ...access,
+              view.state.constructor.allowMultipleSelections.of(true),
+            ]),
+          })
+          const selection = view.state.selection.constructor
+          view.dispatch({
+            selection: selection.create([
+              selection.cursor(caret),
+              selection.cursor(view.state.doc.length),
+            ]),
+          })
+          view.focus()
+        }
+        return caret
+      }, guard === 'multiple carets')
+      const insert =
+        guard === 'foreign html'
+          ? '**foreign-' + crypto.randomUUID() + '**'
+          : held.text
+      await pasteHeld(
+        app,
+        page,
+        {
+          text: held.text,
+          html:
+            guard === 'foreign html'
+              ? '<strong>' + insert.slice(2, -2) + '</strong>'
+              : null,
+        },
+        false,
+      )
+      await waitForAsync(
+        page,
+        async (deleted) => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown !== deleted
+        },
+        deleted,
+      )
+      assert.equal(
+        (await acceptedInput(page)).markdown,
+        deleted.slice(0, caret) +
+          insert +
+          deleted.slice(caret) +
+          (guard === 'multiple carets' ? insert : ''),
+      )
+    })
+  // Away from where the pick was, or once the note changed, a pick's copy
+  // pastes as its Markdown.
+  for (const what of ['rows', 'into'])
+    await t.test(what + ', pasted elsewhere', async () => {
+      const [, original, start, end] = shapes.find(([name]) => name === what)
+      const source = original.replace(start[0], start[0] + crypto.randomUUID())
+      const a = [source.match(new RegExp(start[0] + '[\\w-]*'))[0], start[1]]
+      const { app, page, rich } = await openInputFixture(source)
+      await pick(page, rich, source, a, end, false)
+      const held = await clipboardAfter(app, page, 'c')
+      await page.keyboard.press('Delete')
+      await waitForAsync(
+        page,
+        async (source) => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown !== source
+        },
+        source,
+      )
+      const deleted = (await acceptedInput(page)).markdown
+      // rows: the caret moves to the note's end; into: text is added there.
+      await rich.evaluate((element, moved) => {
+        const view = element.cmTile.root.view
+        const end = view.state.doc.length
+        view.dispatch(
+          moved
+            ? { selection: { anchor: end } }
+            : { changes: { from: end, insert: '!' } },
+        )
+      }, what === 'rows')
+      await pasteHeld(app, page, held, false)
+      const from = picked(source, a, end)[0]
+      await waitForInputSource(
+        page,
+        what === 'rows'
+          ? deleted + held.text
+          : deleted.slice(0, from) + held.text + deleted.slice(from) + '!',
+      )
+    })
 })
+
+/** The source range a pick from word end `a` to `b` selects. */
+const picked = (source, a, b) => [
+  source.indexOf(a[0]) + a[1],
+  source.indexOf(b[0]) + b[1],
+]
+
+/** Puts a held copy back on the shared clipboard and pastes it right away. */
+async function pasteHeld(app, page, held, menu) {
+  await app.evaluate(async ({ clipboard, ClipboardItem }, held) => {
+    const formats = {
+      'text/plain': new Blob([held.text], { type: 'text/plain' }),
+    }
+    if (held.html)
+      formats['text/html'] = new Blob([held.html], { type: 'text/html' })
+    await clipboard.write([new ClipboardItem(formats)])
+  }, held)
+  if (menu)
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.paste(),
+    )
+  else await page.keyboard.press('ControlOrMeta+v')
+}
 
 test('native table input keeps the caret before an escaped literal tail', async (t) => {
   const oracle = inputFixture('multiline', 'cells')

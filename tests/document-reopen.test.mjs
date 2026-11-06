@@ -114,6 +114,8 @@ async function setup(t) {
     return { tabId, markdown, dirty, ephemeral }
   }
   const type = async (text) => {
+    // A selected tab's editor takes input only once ready; until then focus stays on the tab.
+    await waitForDocumentEditor(app, page)
     await replaceRichText(
       page,
       page.locator('.rich-pane [aria-label="Document editor"]'),

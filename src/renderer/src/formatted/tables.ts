@@ -1947,13 +1947,21 @@ class TableView {
     const waiting = this.waiting!
     const { state } = this.view
     if (from < waiting.from || to > waiting.to) return false
-    const edit = this.inline(
-      state.sliceDoc(waiting.from, waiting.to),
-      from - waiting.from,
-      to - waiting.from,
-      text,
-      waiting.closed,
-    )
+    let edit: ReturnType<typeof this.inline>
+    try {
+      edit = this.inline(
+        state.sliceDoc(waiting.from, waiting.to),
+        from - waiting.from,
+        to - waiting.from,
+        text,
+        waiting.closed,
+      )
+    } catch (error) {
+      if (!(error instanceof Error) || error.cause !== formattedInputError)
+        throw error
+      this.view.dispatch({ annotations: rejectedInput.of(error) })
+      return true
+    }
     const tr = state.update({
       changes: { from: waiting.from, to: waiting.to, insert: edit.source },
       selection: { anchor: waiting.from + edit.head },

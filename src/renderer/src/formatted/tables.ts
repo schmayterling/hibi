@@ -2269,8 +2269,6 @@ class TableView {
     const text = row(editing.line)
     if (text.trimStart().startsWith('|')) return true
     const source = editing.line ? `| a |\n| - |\n${text}` : `${text}\n${row(1)}`
-    // ponytail: large unpiped first cells wait for the draw; use a bounded parser input to extend this limit.
-    if (source.length > 8192) return false
     const table = state.facet(formattedBlockParser)(state).parse(source)
       .topNode.firstChild
     return table?.name === 'Table' && table.to === source.length

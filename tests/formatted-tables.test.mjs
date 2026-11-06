@@ -3494,6 +3494,20 @@ test('cell keys and changes while a table waits for a reparse land where they wo
           )
         },
       )
+  await t.test('a large unpiped first cell keeps later keys', async () => {
+    const text = 'q'.repeat(9000)
+    const { doc: now } = await run(
+      unpiped,
+      'c',
+      ['Home', 'Shift+End', () => harness.keyboard.insertText(text), 'x'],
+      true,
+      false,
+    )
+    assert.equal(
+      now.replace(text, 'CELL'),
+      unpiped.replace(tail, '').replace('c | d', 'CELLx | d'),
+    )
+  })
   await t.test('an emptied first cell without an opening pipe', async () => {
     const keys = ['Home', 'Shift+End', 'Backspace', 'y']
     const { doc: now } = await run(unpiped, 'c', keys, true, false)

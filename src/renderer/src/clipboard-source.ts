@@ -47,6 +47,9 @@ export function observeClipboard(dom: HTMLElement) {
     const data =
       (event as ClipboardEvent).clipboardData ??
       (event as DragEvent).dataTransfer
+    // An empty canceled cut keeps the source recorded by its nested copy.
+    if (event.type === 'cut' && event.defaultPrevented && !data?.types.length)
+      return
     const html = clipboardHtml(data?.getData('text/html') ?? '')
     lastCopied = html
       ? { html, text: data?.getData('text/plain') ?? '', trusted: true }

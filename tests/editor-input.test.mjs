@@ -1156,6 +1156,36 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
             }
           },
         )
+  for (const menu of [false, true])
+    await t.test(
+      'cut Markdown pastes unchanged' + (menu ? ', Edit menu' : ''),
+      async () => {
+        const token = crypto.randomUUID()
+        const source = note.replace('before', 'before' + token)
+        let { app, page, rich } = await openInputFixture(source)
+        await pick(page, rich, source, ['before' + token, 3], ['abc', 1], false)
+        const held = await clipboardAfter(app, page, 'x', menu)
+        assert.ok(held.text.includes(token))
+        ;({ app, page } = await openInputFixture(''))
+        await app.evaluate(
+          async ({ BrowserWindow, clipboard, ClipboardItem }, held) => {
+            await clipboard.write([
+              new ClipboardItem({
+                'text/plain': new Blob([held.text], { type: 'text/plain' }),
+                'text/html': new Blob([held.html], { type: 'text/html' }),
+              }),
+            ])
+            BrowserWindow.getAllWindows()[0].webContents.paste()
+          },
+          held,
+        )
+        await waitForAsync(page, async () => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown.length > 0
+        })
+        assert.equal((await acceptedInput(page)).markdown, held.text)
+      },
+    )
   for (const [what, original, start, end] of shapes)
     for (const reverse of [false, true]) {
       const token = crypto.randomUUID()

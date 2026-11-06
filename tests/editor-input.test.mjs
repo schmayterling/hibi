@@ -1521,17 +1521,13 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
 })
 
 /**
- * The source range a pick from word end `a` to `b` selects. Words other than
- * the paragraph before the table are found from the table on: a random token
- * in that paragraph can spell a cell's word.
+ * The source range a pick from word end `a` to `b` selects. Words are found
+ * whole: a random token next to a word can spell another, as `abc…` can `def`.
  */
 const picked = (source, a, b) =>
   [a, b].map(
     ([word, offset]) =>
-      source.indexOf(
-        word,
-        word.startsWith('before') ? 0 : source.indexOf('|'),
-      ) + offset,
+      source.search(new RegExp(`(?<![\\w-])${word}(?![\\w-])`)) + offset,
   )
 
 /** Puts a held copy back on the shared clipboard and pastes it right away. */

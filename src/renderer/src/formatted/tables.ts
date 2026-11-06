@@ -438,12 +438,17 @@ class TableView {
   /** Header cells' text, part of the table's key in the size store. */
   private header: string[] = []
   /** Input at an action's new cell while its old widget waits for a redraw. */
-  private waiting: {
-    doc: Text
-    from: number
-    to: number
-    closed: boolean
-  } | null = null
+  private waiting:
+    | (Cell & {
+        doc: Text
+        from: number
+        to: number
+        closed: boolean
+        /** The table's lines and columns after the action. */
+        lines: number
+        columns: number
+      })
+    | null = null
   /** Column widths by index, 0 for automatic, and the heights of sized rows by index, counting the header. */
   private sizes: {
     key: string | null
@@ -1599,39 +1604,67 @@ class TableView {
 
   private move(move: CellMove): boolean {
     if (!this.editing) return false
-    const { line, column } = this.editing
-    // The last row to edit; a table of only a header has no body rows yet.
-    const last = this.lines > 2 ? this.lines - 1 : 0,
-      columns = this.aligned.length
-    const below = line === 0 ? 2 : line + 1,
-      above = line === 2 ? 0 : line - 1
-    // Tab selects the text of the cell it moves to, as in the rich editor.
-    const tab = move === 'next' || move === 'previous'
-    switch (move) {
-      case 'next':
-      case 'right':
-        if (column + 1 < columns)
-          return this.edit(line, column + 1, tab ? 'all' : 'start')
-        if (line < last) return this.edit(below, 0, tab ? 'all' : 'start')
-        // Tab in the last cell adds a row, as in the rich editor.
-        if (move === 'next' && this.run('row-after')) return true
-        this.leave(true)
-        return true
-      case 'previous':
-      case 'left':
-        if (column > 0) return this.edit(line, column - 1, tab ? 'all' : 'end')
-        if (line > 0) return this.edit(above, columns - 1, tab ? 'all' : 'end')
-        if (move === 'left') this.leave(false)
-        return true
-      case 'down':
-        if (line < last) return this.edit(below, column, 'end')
-        this.leave(true)
-        return true
-      case 'up':
-        if (line > 0) return this.edit(above, column, 'end')
-        this.leave(false)
-        return true
-    }
+    const to = step(move, this.editing, this.lines, this.aligned.length)
+    if (!to) return true
+    if ('at' in to) return this.edit(to.line, to.column, to.at)
+    // Tab in the last cell adds a row, as in the rich editor.
+    if (to.add && this.run('row-after')) return true
+    this.leave(to.after)
+    return true
+  }
+
+  /** Move from the action's cell as from an edited one, in the table the action left, before it draws. */
+  moveWaiting(move: CellMove) {
+    if (!this.waitingForInput) return false
+    const waiting = this.waiting!
+    const to = step(move, waiting, waiting.lines, waiting.columns)
+    // ponytail: leaving the table or adding a row waits for the draw; both need the new table's bounds.
+    if (!to || !('at' in to)) return true
+    const { doc } = this.view.state
+    const span = this.cellIn(doc, to)
+    // ponytail: a cell its row lacks waits for the draw too.
+    if (!span) return true
+    const { start, end } = padding(doc.sliceString(span.from, span.to))
+    const anchor = span.from + (to.at === 'end' ? end : start)
+    this.waiting = { ...waiting, ...span, line: to.line, column: to.column }
+    this.view.dispatch({
+      selection: { anchor, head: to.at === 'all' ? span.from + end : anchor },
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    return true
+  }
+
+  /** An arrow in the action's cell: the caret moves in its text, and from its content's edge to the next cell. */
+  arrowWaiting(move: 'left' | 'right' | 'up' | 'down') {
+    if (!this.waitingForInput) return false
+    const { from, to, head, empty } = this.view.state.selection.main
+    const waiting = this.waiting!
+    const { start, end } = padding(
+      this.view.state.sliceDoc(waiting.from, waiting.to),
+    )
+    const right = move === 'right'
+    let anchor: number
+    if (move === 'up' || move === 'down') return this.moveWaiting(move)
+    if (!empty) anchor = right ? to : from
+    else if (head <= waiting.from + start && !right)
+      return this.moveWaiting('left')
+    else if (head >= waiting.from + end && right)
+      return this.moveWaiting('right')
+    else
+      anchor =
+        waiting.from +
+        findClusterBreak(
+          this.view.state.sliceDoc(waiting.from, waiting.to),
+          head - waiting.from,
+          right,
+        )
+    this.view.dispatch({
+      selection: { anchor },
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    return true
   }
 
   /**
@@ -2306,6 +2339,13 @@ class TableView {
     // The caret moves to that cell with the change, so that redo brings it
     // back there, as the rich editor's history does.
     const target = next && this.cellIn(doc, next)
+    const first = this.view.state.doc.lineAt(this.range().from).number
+    const delimiter = doc.line(first + 1).text
+    const shape = {
+      lines: this.lines + doc.lines - this.view.state.doc.lines,
+      columns: alignments(delimiter.slice(this.widget.rowStart(1, delimiter)))
+        .length,
+    }
     const anchor =
       target &&
       target.from + padding(doc.sliceString(target.from, target.to)).start
@@ -2328,7 +2368,10 @@ class TableView {
       this.edit(next.line, next.column, 'start')
     )
       return true
-    this.waiting = target ? { ...target, doc: this.view.state.doc } : null
+    this.waiting =
+      next && target
+        ? { ...next, ...target, ...shape, doc: this.view.state.doc }
+        : null
     this.view.focus()
     return true
   }
@@ -2964,6 +3007,48 @@ class TableView {
 }
 
 /**
+ * Where a move from a cell goes in a table of `lines` lines and `columns`
+ * columns: a cell, with where the caret goes there, or out of the table,
+ * after a row Tab adds; null for nowhere.
+ */
+function step(
+  move: CellMove,
+  { line, column }: Cell,
+  lines: number,
+  columns: number,
+):
+  | (Cell & { at: 'all' | 'start' | 'end' })
+  | { after: boolean; add?: boolean }
+  | null {
+  // The last row to edit; a table of only a header has no body rows yet.
+  const last = lines > 2 ? lines - 1 : 0
+  const below = line === 0 ? 2 : line + 1,
+    above = line === 2 ? 0 : line - 1
+  // Tab selects the text of the cell it moves to, as in the rich editor.
+  const tab = move === 'next' || move === 'previous'
+  switch (move) {
+    case 'next':
+    case 'right':
+      if (column + 1 < columns)
+        return { line, column: column + 1, at: tab ? 'all' : 'start' }
+      if (line < last)
+        return { line: below, column: 0, at: tab ? 'all' : 'start' }
+      return { after: true, add: tab }
+    case 'previous':
+    case 'left':
+      if (column > 0)
+        return { line, column: column - 1, at: tab ? 'all' : 'end' }
+      if (line > 0)
+        return { line: above, column: columns - 1, at: tab ? 'all' : 'end' }
+      return tab ? null : { after: false }
+    case 'down':
+      return line < last ? { line: below, column, at: 'end' } : { after: true }
+    case 'up':
+      return line > 0 ? { line: above, column, at: 'end' } : { after: false }
+  }
+}
+
+/**
  * The mounted table containing a position of the formatted view's document.
  * `strict` leaves out its edges, apart from an end in its last cell's text.
  */
@@ -3015,6 +3100,11 @@ function staleTable(view: EditorView) {
 }
 const pauseTableCommand = (view: EditorView) =>
   !!waitingTable(view) || staleTable(view)
+const moveWaiting = (move: CellMove) => (view: EditorView) =>
+  waitingTable(view)?.moveWaiting(move) ?? staleTable(view)
+const arrowWaiting =
+  (move: 'left' | 'right' | 'up' | 'down') => (view: EditorView) =>
+    waitingTable(view)?.arrowWaiting(move) ?? staleTable(view)
 // ponytail: other native commands are declined until draw; replay would need a queue.
 const pendingCommandKeys = defaultKeymap.map((binding) => ({
   ...binding,
@@ -3968,7 +4058,11 @@ export const contribution: FormattedContribution = {
     { mac: 'Mod-Delete', run: deleteWaiting(true, 'line') },
     { mac: 'Ctrl-h', run: deleteWaiting(false) },
     { mac: 'Ctrl-d', run: deleteWaiting(true) },
-    { key: 'Tab', run: pauseTableCommand, shift: pauseTableCommand },
+    { key: 'Tab', run: moveWaiting('next'), shift: moveWaiting('previous') },
+    { key: 'ArrowLeft', run: arrowWaiting('left') },
+    { key: 'ArrowRight', run: arrowWaiting('right') },
+    { key: 'ArrowUp', run: arrowWaiting('up') },
+    { key: 'ArrowDown', run: arrowWaiting('down') },
     ...pendingCommandKeys,
     { key: 'ArrowDown', run: (view) => enterTable(view, 'down') },
     { key: 'ArrowUp', run: (view) => enterTable(view, 'up') },

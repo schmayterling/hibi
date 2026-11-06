@@ -1292,8 +1292,17 @@ class TableView {
     return null
   }
 
-  /** Native table input stays in its cells; a range entering a table keeps its structure. */
-  input(from: number, to: number, text: string): TransactionSpec | null {
+  /**
+   * Native table input stays in its cells; a range entering a table keeps its
+   * structure. A key's own edit (`key`) puts the caret right after its text;
+   * Chromium's text input counts each block break again in its caret.
+   */
+  input(
+    from: number,
+    to: number,
+    text: string,
+    key = false,
+  ): TransactionSpec | null {
     if (!this.current || from === to || !writable(this.view.state)) return null
     const range = this.range()
     if (to <= range.from || to > range.to) return null
@@ -1316,17 +1325,31 @@ class TableView {
       const content = this.widget.row(head.line).cells[head.column]
       if (!content) return null
       const start = this.now(line.from + content.from)
+      const stop = this.now(line.from + content.to)
+      const cleared = this.inline(
+        state.sliceDoc(start, stop),
+        Math.max(from, start) - start,
+        Math.min(to, stop) - start,
+        '',
+      )
       const insert = markdownLiteral(text)
         .replace(/\r\n?|\n/g, '<br>')
         .replace(/\|/g, '\\|')
       const caret =
         insert.length -
-        markdownLiteral(nativeTableTail(text))
+        markdownLiteral(key ? '' : nativeTableTail(text))
           .replace(/\n/g, '<br>')
           .replace(/\|/g, '\\|').length
       return {
-        changes: { from: start, to: this.now(line.from + content.to), insert },
-        selection: { anchor: start + caret },
+        changes: {
+          from: start,
+          to: stop,
+          insert:
+            cleared.source.slice(0, cleared.head) +
+            insert +
+            cleared.source.slice(cleared.head),
+        },
+        selection: { anchor: start + cleared.head + caret },
         userEvent: 'input.type',
         scrollIntoView: true,
       }
@@ -1382,7 +1405,9 @@ class TableView {
       }
     }
     const changes = transaction.changes
-    const after = markdownLiteral(nativeTableTail(text)).replace(/\n/g, '\n\n')
+    const after = key
+      ? ''
+      : markdownLiteral(nativeTableTail(text)).replace(/\n/g, '\n\n')
     return {
       changes: changes.compose(state.changes(cleared).map(changes)),
       ...(balanced ? { annotations: isolateHistory.of('full') } : {}),
@@ -1896,7 +1921,11 @@ class TableView {
       return
     }
     const span = this.span(editing)
-    if (span) editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+    if (span) {
+      editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+      // A local edit may have refreshed while this span was still stale.
+      editing.editor.refresh()
+    }
     editing.editor.resend()
   }
 
@@ -2678,6 +2707,32 @@ const tableInput = (event: InputStart, view: EditorView) =>
   takesInput(event, view) &&
   (view.state.field(pickedTable) || overTable(event, view))
 
+/**
+ * Edits `from`–`to`, a selection ending in a table, as `text` input there,
+ * with `spec` on top; false leaves it to other input. A refused edit is taken.
+ */
+function tableEdit(
+  view: EditorView,
+  from: number,
+  to: number,
+  text: string,
+  spec: TransactionSpec = {},
+  key = false,
+) {
+  let edit: TransactionSpec | null | undefined
+  try {
+    edit = tableAt(view, to)?.input(from, to, text, key)
+  } catch (error) {
+    if (!(error instanceof Error) || error.cause !== formattedInputError)
+      throw error
+    view.dispatch({ annotations: rejectedInput.of(error) })
+    return true
+  }
+  if (!edit) return false
+  view.dispatch({ ...edit, ...spec })
+  return true
+}
+
 /** Types text over the selection through the view's input handlers, then the default insert. */
 function type(view: EditorView, text: string) {
   const { from, to } = view.state.selection.main
@@ -2849,7 +2904,6 @@ function prepareComposition(event: InputStart, view: EditorView) {
   let spec: TransactionSpec
   const effects: StateEffect<unknown>[] = [composeStart.of(Symbol())]
   if (overTable(event, view)) {
-    spec = state.replaceSelection('')
     // Clearing from inside a table to past it keeps the table before the caret.
     const at = state.selection.main.from
     for (
@@ -2861,6 +2915,18 @@ function prepareComposition(event: InputStart, view: EditorView) {
         effects.push(revealTable.of({ from: node.from, to: at, stale: false }))
         break
       }
+    // A native pick clears as typing over it does, in the composition's step.
+    const { from, to } = state.selection.main
+    if (
+      state.field(pickedTable) &&
+      tableEdit(view, from, to, '', {
+        effects,
+        annotations: [],
+        userEvent: 'input.type.compose.start',
+      })
+    )
+      return
+    spec = state.replaceSelection('')
   } else if (belowTable(event, view)) spec = paragraphBelow(view)
   else return
   view.dispatch(spec, {
@@ -2915,6 +2981,36 @@ const pickedTable = StateField.define<boolean>({
       ]
     }),
 })
+
+/** Whether a selection only moves ends inside tables out to their widgets' edges, as a DOM read of a pick does. */
+function toTableEdges(tr: Transaction) {
+  const { doc } = tr.startState
+  const tree = formattedSyntaxTree(tr.startState)
+  const before = tr.startState.selection.main
+  const after = tr.newSelection.main
+  const moved = (
+    [
+      [before.anchor, after.anchor],
+      [before.head, after.head],
+    ] as const
+  ).filter(([was, now]) => was !== now)
+  return (
+    !!tree &&
+    moved.length > 0 &&
+    moved.every(([was, now]) => {
+      let node = tree.resolveInner(was, 1)
+      while (node.name !== 'Table' && node.parent) node = node.parent
+      return (
+        node.name === 'Table' &&
+        was > node.from &&
+        was < node.to &&
+        (now <= node.from || now >= node.to) &&
+        now >= doc.lineAt(node.from).from &&
+        now <= doc.lineAt(node.to).to
+      )
+    })
+  )
+}
 
 /**
  * Tables follow scrolling with their row windows, and a collapsed
@@ -3359,16 +3455,49 @@ export const contribution: FormattedContribution = {
   extension: [
     pickedTable,
     // CodeMirror reads a block widget as its bounds. A native pick already
-    // resolved those bounds to cell text; its DOM echo must keep that range.
+    // resolved those bounds to cell text; its DOM echo must keep that range,
+    // also when a key, even a modifier alone, has just been pressed.
     EditorState.transactionFilter.of((tr) =>
       tr.startState.field(pickedTable) &&
       tr.selection &&
       !tr.docChanged &&
       tr.annotation(Transaction.userEvent) === 'select' &&
-      !tr.scrollIntoView &&
+      (!tr.scrollIntoView || toTableEdges(tr)) &&
       !tr.annotation(cellInput)
         ? []
         : tr,
+    ),
+    // Before the view's keymaps, which edit a pick's source as text: deleting
+    // or breaking a line over it is input as typing is.
+    Prec.high(
+      EditorView.domEventHandlers({
+        keydown(event, view) {
+          const text =
+            event.key === 'Enter'
+              ? '\n'
+              : /^(Backspace|Delete)$/.test(event.key)
+                ? ''
+                : null
+          if (
+            text === null ||
+            (text && (event.metaKey || event.ctrlKey || event.altKey)) ||
+            !view.state.field(pickedTable) ||
+            !takesInput(event, view)
+          )
+            return false
+          const { from, to } = view.state.selection.main
+          return (
+            tableEdit(
+              view,
+              from,
+              to,
+              text,
+              text ? {} : { userEvent: 'delete.selection' },
+              true,
+            ) || type(view, text)
+          )
+        },
+      }),
     ),
     EditorView.domEventObservers({
       mousedown(_event, view) {
@@ -3531,7 +3660,9 @@ export const contribution: FormattedContribution = {
             // CodeMirror takes declined text as typed over its next DOM
             // read of the selection: that read must find no new pick.
             if (view.state.field(pickedTable)) recordPageSelection(view)
-            return false
+            // The page applies no untrusted text, which CodeMirror's next
+            // read must not apply either.
+            return !event.isTrusted
           }
           event.preventDefault()
           type(view, event.data)
@@ -3550,22 +3681,10 @@ export const contribution: FormattedContribution = {
       if (
         text &&
         !view.composing &&
-        (/[\r\n]/.test(text) || view.state.field(pickedTable))
-      ) {
-        let edit: TransactionSpec | null | undefined
-        try {
-          edit = tableAt(view, to)?.input(from, to, text)
-        } catch (error) {
-          if (!(error instanceof Error) || error.cause !== formattedInputError)
-            throw error
-          view.dispatch({ annotations: rejectedInput.of(error) })
-          return true
-        }
-        if (edit) {
-          view.dispatch(edit)
-          return true
-        }
-      }
+        (/[\r\n]/.test(text) || view.state.field(pickedTable)) &&
+        tableEdit(view, from, to, text)
+      )
+        return true
       // Mapped widget bounds are current even when its snapshot's length is old.
       const { node, offset } = view.domAtPos(view.state.selection.main.head)
       for (const table of mounted.get(view) ?? [])

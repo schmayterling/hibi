@@ -209,6 +209,20 @@ class TableWidget extends WidgetType {
   toDOM(view: EditorView) {
     return new TableView(view, this).dom
   }
+  // A pick's copy is its Markdown, as of any selection the view copies,
+  // also from the page's cells; a cell's editor copies its own text.
+  override ignoreEvent(event: Event) {
+    const target = event.target instanceof Node ? event.target : null
+    const editor = (
+      target instanceof Element ? target : target?.parentElement
+    )?.closest('.cm-editor')
+    return (
+      event.type !== 'copy' ||
+      !(editor instanceof HTMLElement) ||
+      editor.classList.contains('hibi-lp-cell-editor') ||
+      !EditorView.findFromDOM(editor)?.state.field(pickedTable, false)
+    )
+  }
   // A position in the table is where its cell shows it, not the table's edge.
   override coordsAt(dom: HTMLElement, pos: number) {
     const table = tableViews.get(dom)
@@ -2925,6 +2939,43 @@ function tableEdit(
   return true
 }
 
+/** A pick Delete or cut removed, while the note is as they left it: its Markdown and the changes that put it back. */
+const removedPicks = new WeakMap<
+  EditorView,
+  {
+    doc: Text
+    markdown: string
+    restore: ChangeSet
+    caret: number
+    end: number
+  }
+>()
+/** The changes of a pick being removed. */
+const removing = new WeakMap<EditorView, ChangeSet>()
+
+/** Deletes a pick as Delete does, keeping what puts it back. */
+function deletePick(view: EditorView, userEvent: string) {
+  const { state } = view
+  const { from, to } = state.selection.main
+  removing.set(view, ChangeSet.empty(state.doc.length))
+  let changes: ChangeSet | undefined
+  try {
+    if (!tableEdit(view, from, to, '', { userEvent }, true)) type(view, '')
+  } finally {
+    changes = removing.get(view)
+    removing.delete(view)
+  }
+  if (changes && !changes.empty)
+    removedPicks.set(view, {
+      doc: view.state.doc,
+      markdown: state.sliceDoc(from, to),
+      restore: changes.invert(state.doc),
+      caret: view.state.selection.main.head,
+      end: to,
+    })
+  return true
+}
+
 /** Types text over the selection through the view's input handlers, then the default insert. */
 function type(view: EditorView, text: string) {
   const { from, to } = view.state.selection.main
@@ -3226,6 +3277,7 @@ const tableEditing = ViewPlugin.fromClass(
       view.dom.addEventListener('focus', this.pick, true)
       view.dom.addEventListener('focusout', this.intent, true)
       view.dom.addEventListener('cut', this.cut, true)
+      view.dom.addEventListener('paste', this.paste, true)
       view.dom.ownerDocument.addEventListener('pointerdown', this.intent, true)
       view.dom.ownerDocument.defaultView?.addEventListener('blur', this.intent)
     }
@@ -3252,9 +3304,30 @@ const tableEditing = ViewPlugin.fromClass(
       } finally {
         doc.removeEventListener('copy', takeCopy)
       }
-      const { from, to } = view.state.selection.main
-      if (!tableEdit(view, from, to, '', { userEvent: 'delete.cut' }, true))
-        type(view, '')
+      deletePick(view, 'delete.cut')
+    }
+    /** Pasting a pick's copy where Delete or cut left the caret puts the pick back as it was. */
+    private paste = (event: ClipboardEvent) => {
+      const { view } = this
+      const removed = removedPicks.get(view)
+      const { main } = view.state.selection
+      if (
+        !removed ||
+        view.state.doc !== removed.doc ||
+        !main.empty ||
+        main.head !== removed.caret ||
+        !writable(view.state) ||
+        event.clipboardData?.getData('text/plain') !== removed.markdown
+      )
+        return
+      event.preventDefault()
+      event.stopPropagation()
+      view.dispatch({
+        changes: removed.restore,
+        selection: { anchor: removed.end },
+        userEvent: 'input.paste',
+        scrollIntoView: true,
+      })
     }
     private releasePick() {
       this.picked = false
@@ -3417,6 +3490,7 @@ const tableEditing = ViewPlugin.fromClass(
       this.view.dom.removeEventListener('focus', this.pick, true)
       this.view.dom.removeEventListener('focusout', this.intent, true)
       this.view.dom.removeEventListener('cut', this.cut, true)
+      this.view.dom.removeEventListener('paste', this.paste, true)
       this.view.dom.ownerDocument.removeEventListener(
         'pointerdown',
         this.intent,
@@ -3428,6 +3502,10 @@ const tableEditing = ViewPlugin.fromClass(
       )
     }
     update(update: ViewUpdate) {
+      const { view } = this
+      const removal = removing.get(view)
+      if (removal && update.docChanged)
+        removing.set(view, removal.compose(update.changes))
       if (update.docChanged && update.state.field(pickedTable))
         this.picked = true
       if (this.picked) queueMicrotask(this.restorePick)
@@ -3725,17 +3803,9 @@ export const contribution: FormattedContribution = {
             !takesInput(event, view)
           )
             return false
+          if (!text) return deletePick(view, 'delete.selection')
           const { from, to } = view.state.selection.main
-          return (
-            tableEdit(
-              view,
-              from,
-              to,
-              text,
-              text ? {} : { userEvent: 'delete.selection' },
-              true,
-            ) || type(view, text)
-          )
+          return tableEdit(view, from, to, text, {}, true) || type(view, text)
         },
       }),
     ),

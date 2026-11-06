@@ -245,7 +245,8 @@ for (const hook of ['decorate', 'layout', 'container']) {
         context.editor.registerFlavor({
           id: 'proof', name: 'Proof', kind: 'syntax', description: 'Proof', detect: () => true,
           syntax: { defineNodes: ['Proof', 'ProofMark'], parseInline: [{
-            name: 'Proof', parse(cx, next, pos) {
+            // Ahead of the built-in == highlight, which takes this text once it loads.
+            name: 'Proof', before: 'Escape', parse(cx, next, pos) {
               if (next !== 61 || cx.char(pos + 1) !== 61) return -1
               return cx.addDelimiter(delimiter, pos, pos + 2, true, true)
             }

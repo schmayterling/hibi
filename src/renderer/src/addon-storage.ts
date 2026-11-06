@@ -71,6 +71,13 @@ export function createAddonStorageScope(
     for (const handle of handles.values()) {
       if (handle.key !== change.key || !sameScope(handle.scope, change.scope))
         continue
+      // A write's own notice can arrive after its reply, which applied it.
+      if (
+        change.current.status === 'ready' &&
+        handle.current.status === 'ready' &&
+        change.current.revision === handle.current.revision
+      )
+        continue
       handle.changeCounter++
       handle.current =
         change.current.status === 'ready' &&

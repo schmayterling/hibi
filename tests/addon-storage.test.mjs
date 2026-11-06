@@ -616,3 +616,76 @@ test('deactivation waits for pending session writes and renderer subscriptions s
     ]),
   )
 })
+
+test('a renderer handle applies its own write once, however late its notice, and still takes newer and other-version changes', async (t) => {
+  const { storage } = await temporaryStorage(t)
+  const held = []
+  let reply = null
+  const scope = createAddonStorageScope('documentation', () => true, {
+    readAddonStorage: (request) => storage.read(request),
+    writeAddonStorage: async (request) => {
+      await reply?.promise
+      return storage.write(request)
+    },
+    onAddonStorageChanged(callback) {
+      // Notices arrive after the write's reply, as they can between processes.
+      return storage.subscribe((change) => held.push(() => callback(change)))
+    },
+  })
+  t.after(() => scope.dispose())
+  const handle = await scope.api.global('options', 1)
+  let notifications = 0
+  handle.subscribe(() => notifications++)
+  const deliver = () => {
+    for (const notice of held.splice(0)) notice()
+  }
+  const key = {
+    owner: 'documentation',
+    scope: { kind: 'global' },
+    key: 'options',
+  }
+  assert.equal((await handle.set({ size: 1 })).status, 'saved')
+  assert.equal(notifications, 1)
+  // The first write's late notice lands while the next write waits for its
+  // reply; that reply still applies before its own notice.
+  reply = Promise.withResolvers()
+  const second = handle.set({ size: 2 })
+  deliver()
+  assert.equal(notifications, 1)
+  reply.resolve()
+  reply = null
+  assert.equal((await second).status, 'saved')
+  assert.deepEqual(handle.snapshot(), {
+    status: 'ready',
+    revision: 2,
+    value: { size: 2 },
+  })
+  deliver()
+  assert.equal(notifications, 2)
+  // Another writer's equal value is still a newer revision.
+  await storage.write({
+    ...key,
+    version: 1,
+    baseRevision: 2,
+    value: { size: 2 },
+  })
+  deliver()
+  assert.equal(notifications, 3)
+  assert.equal(handle.snapshot().revision, 3)
+  // A newer schema's write is a mismatch, not this handle's write.
+  assert.equal(
+    (
+      await storage.write({
+        ...key,
+        version: 2,
+        migrateFromVersion: 1,
+        baseRevision: 3,
+        value: { size: 2 },
+      })
+    ).status,
+    'saved',
+  )
+  deliver()
+  assert.equal(notifications, 4)
+  assert.equal(handle.snapshot().status, 'version-mismatch')
+})

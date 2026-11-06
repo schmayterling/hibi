@@ -3616,12 +3616,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   cases.push(
     ['unpiped body', unpiped, 'c', ['x', 'Tab', 'y']],
     ['unpiped header', unpiped, 'a', ['x', 'Tab', 'y']],
-    [
-      'unpiped first cell changed',
-      unpiped,
-      'd',
-      ['x', edit('c ', 'cQ '), 'y'],
-    ],
+    ['unpiped first cell changed', unpiped, 'd', ['x', edit('c ', 'cQ '), 'y']],
   )
   for (const [name, note, start, keys] of cases)
     await t.test(name, async () => {

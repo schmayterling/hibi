@@ -1,8 +1,15 @@
-import { isolateHistory } from '@codemirror/commands'
+import {
+  defaultKeymap,
+  deleteGroupBackward,
+  deleteGroupForward,
+  isolateHistory,
+} from '@codemirror/commands'
 import {
   type ChangeDesc,
+  ChangeSet,
   EditorSelection,
   EditorState,
+  findClusterBreak,
   MapMode,
   Prec,
   StateEffect,
@@ -412,6 +419,13 @@ class TableView {
     | null = null
   /** Header cells' text, part of the table's key in the size store. */
   private header: string[] = []
+  /** Input at an action's new cell while its old widget waits for a redraw. */
+  private waiting: {
+    doc: Text
+    from: number
+    to: number
+    closed: boolean
+  } | null = null
   /** Column widths by index, 0 for automatic, and the heights of sized rows by index, counting the header. */
   private sizes: {
     key: string | null
@@ -987,6 +1001,7 @@ class TableView {
     const element = row?.cells[column]
     const paragraph = element?.firstElementChild
     if (!element || !(paragraph instanceof HTMLElement)) return false
+    this.waiting = null
     const span = this.span({ line, column })
     // A row that ends before the cell gets it on the first input.
     const text = span ? this.view.state.sliceDoc(span.from, span.to) : '  '
@@ -1191,7 +1206,13 @@ class TableView {
   }
 
   /** Edit one cell's inline source without normalizing its table's padding. */
-  private inline(source: string, from: number, to: number, text: string) {
+  private inline(
+    source: string,
+    from: number,
+    to: number,
+    text: string,
+    closed = true,
+  ) {
     const state = this.view.state
     const selected = EditorState.create({
       doc: source,
@@ -1205,7 +1226,7 @@ class TableView {
         selected.replaceSelection(typedLiteral(selected, text)),
     )
     const fixed = edit.state.update({
-      changes: cellFixes(edit.newDoc.toString(), true),
+      changes: cellFixes(edit.newDoc.toString(), closed),
     })
     return {
       source: fixed.newDoc.toString(),
@@ -1480,9 +1501,14 @@ class TableView {
   }
 
   /** The change that ends the edited row with its cell, holding `text`. */
-  private fill(text: string) {
-    const { line, column } = this.editing!
-    const source = this.source().line(line)
+  private fill(
+    text: string,
+    cell: Cell = this.editing!,
+    doc = this.view.state.doc,
+  ) {
+    const { line, column } = cell
+    const first = this.view.state.doc.lineAt(this.range().from).number
+    const source = doc.line(first + line)
     const start = this.widget.rowStart(line, source.text)
     const row = parseRow(source.text.slice(start), source.from + start)
     const last = row.pipes.at(-1)
@@ -1930,6 +1956,110 @@ class TableView {
     editing.editor.resend()
   }
 
+  get waitingForInput() {
+    const { state } = this.view
+    const { from, to } = state.selection.main
+    return (
+      !!this.waiting &&
+      this.waiting.doc === state.doc &&
+      from >= this.waiting.from &&
+      to <= this.waiting.to
+    )
+  }
+
+  /** Apply input to the action's cell using current source, never its stale DOM. */
+  typeWaiting(
+    from: number,
+    to: number,
+    text: string,
+    userEvent = 'input.type',
+  ) {
+    if (!this.waitingForInput || !writable(this.view.state)) return false
+    const waiting = this.waiting!
+    const { state } = this.view
+    if (from < waiting.from || to > waiting.to) return false
+    let edit: ReturnType<typeof this.inline>
+    try {
+      edit = this.inline(
+        state.sliceDoc(waiting.from, waiting.to),
+        from - waiting.from,
+        to - waiting.from,
+        text,
+        waiting.closed,
+      )
+    } catch (error) {
+      if (!(error instanceof Error) || error.cause !== formattedInputError)
+        throw error
+      this.view.dispatch({ annotations: rejectedInput.of(error) })
+      return true
+    }
+    const tr = state.update({
+      changes: { from: waiting.from, to: waiting.to, insert: edit.source },
+      selection: { anchor: waiting.from + edit.head },
+      userEvent,
+      scrollIntoView: true,
+    })
+    this.waiting = {
+      ...waiting,
+      doc: tr.newDoc,
+      to: waiting.from + edit.source.length,
+    }
+    this.view.dispatch(tr)
+    return true
+  }
+
+  /** Delete within the pending cell, without the outer widget's atomic bounds. */
+  deleteWaiting(forward: boolean, by?: 'group' | 'line') {
+    if (!this.waitingForInput || !writable(this.view.state)) return false
+    const waiting = this.waiting!
+    const { state } = this.view
+    const { from, to } = state.selection.main
+    const text = state.sliceDoc(waiting.from, waiting.to)
+    const { start, end } = padding(text)
+    let a = from - waiting.from,
+      b = to - waiting.from
+    if (a === b) {
+      if (by === 'line') {
+        // ponytail: undrawn cells use source-line bounds; visual-line commands resume on draw.
+        if (forward) b = end
+        else a = start
+      } else if (by === 'group') {
+        const selected = EditorState.create({
+          doc: text,
+          selection: { anchor: a },
+        })
+        const command = forward ? deleteGroupForward : deleteGroupBackward
+        command({
+          state: selected,
+          dispatch: (tr) =>
+            tr.changes.iterChanges((from, to) => {
+              a = from
+              b = to
+            }),
+        })
+      } else {
+        const at = findClusterBreak(text, a, forward)
+        a = Math.min(a, at)
+        b = Math.max(b, at)
+      }
+    }
+    a = Math.max(start, a)
+    b = Math.min(end, b)
+    return (
+      a >= b ||
+      this.typeWaiting(
+        waiting.from + a,
+        waiting.from + b,
+        '',
+        from !== to
+          ? 'delete.selection'
+          : forward
+            ? 'delete.forward'
+            : 'delete.backward',
+      )
+    )
+  }
+
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
   run(id: string, values?: InsertValues): boolean {
     if (!this.current || !writable(this.view.state)) return false
@@ -1994,11 +2124,22 @@ class TableView {
       column: result.cell.column,
     }
     this.stopEditing()
-    const changes = this.view.state.changes(result.changes)
+    let changes = this.view.state.changes(result.changes)
+    let doc = changes.apply(this.view.state.doc)
+    // An action can target a cell a short row only has implicitly. Give the
+    // caret its source span now, including while the row waits to redraw.
+    if (next && !this.cellIn(doc, next)) {
+      changes = changes.compose(
+        ChangeSet.of(this.fill('  ', next, doc), doc.length),
+      )
+      doc = changes.apply(this.view.state.doc)
+    }
     // The caret moves to that cell with the change, so that redo brings it
     // back there, as the rich editor's history does.
+    const target = next && this.cellIn(doc, next)
     const anchor =
-      next && this.cellStart(changes.apply(this.view.state.doc), next)
+      target &&
+      target.from + padding(doc.sliceString(target.from, target.to)).start
     this.view.dispatch({
       changes,
       ...(anchor === null || anchor === undefined
@@ -2009,14 +2150,22 @@ class TableView {
         isolateHistory.of('full'),
       ],
     })
-    // Editing goes on in the cell the action leaves the caret in.
-    if (next && this.dom.isConnected) this.edit(next.line, next.column, 'start')
-    else this.view.focus()
+    // Editing goes on in the cell the action leaves the caret in. Until a
+    // slow parse draws the table again, that cell may not be here yet: the
+    // view keeps focus at the caret and edits the cell once it is.
+    if (
+      next &&
+      this.dom.isConnected &&
+      this.edit(next.line, next.column, 'start')
+    )
+      return true
+    this.waiting = target ? { ...target, doc: this.view.state.doc } : null
+    this.view.focus()
     return true
   }
 
-  /** Where `edit` puts a caret at a cell's start in `doc`, the document with this table changed. */
-  private cellStart(doc: Text, { line, column }: Cell) {
+  /** A cell's span in the document with this table changed. */
+  private cellIn(doc: Text, { line, column }: Cell) {
     const index = line === 1 ? 0 : line
     const number = this.view.state.doc.lineAt(this.range().from).number + index
     if (number > doc.lines) return null
@@ -2028,7 +2177,7 @@ class TableView {
       text.length,
     )
     return span
-      ? from + span.from + padding(text.slice(span.from, span.to)).start
+      ? { from: from + span.from, to: from + span.to, closed: span.closed }
       : null
   }
 
@@ -2640,6 +2789,39 @@ function tableAt(view: EditorView, pos: number, strict = false) {
   return null
 }
 
+const waitingTable = (view: EditorView) =>
+  [...(mounted.get(view) ?? [])].find((table) => table.waitingForInput)
+const breakWaiting = (view: EditorView) => {
+  const { from, to } = view.state.selection.main
+  return waitingTable(view)?.typeWaiting(from, to, '\n', 'input') ?? false
+}
+const deleteWaiting =
+  (forward: boolean, by?: 'group' | 'line') => (view: EditorView) =>
+    waitingTable(view)?.deleteWaiting(forward, by) ?? false
+
+/** Whether the caret's DOM still belongs to an old table snapshot. */
+function staleTable(view: EditorView) {
+  const tables = [...(mounted.get(view) ?? [])].filter(
+    (table) => !table.current,
+  )
+  if (!tables.length) return false
+  const { node, offset } = view.domAtPos(view.state.selection.main.head)
+  return tables.some(
+    (table) =>
+      node.childNodes[offset] === table.dom ||
+      node.childNodes[offset - 1] === table.dom,
+  )
+}
+const pauseTableCommand = (view: EditorView) =>
+  !!waitingTable(view) || staleTable(view)
+// ponytail: other native commands are declined until draw; replay would need a queue.
+const pendingCommandKeys = defaultKeymap.map((binding) => ({
+  ...binding,
+  run: pauseTableCommand,
+  preventDefault: false,
+  ...(binding.shift ? { shift: pauseTableCommand } : {}),
+}))
+
 /** Whether a position of the formatted view is inside a table, whose cells show their text where a collapsed range shows none. */
 export const tableShows = (view: EditorView, pos: number) =>
   tableAt(view, pos, true) !== null
@@ -2706,7 +2888,9 @@ function overTable(event: InputStart, view: EditorView) {
 /** Native picks take the same input as selections across a table's edge. */
 const tableInput = (event: InputStart, view: EditorView) =>
   takesInput(event, view) &&
-  (view.state.field(pickedTable) || overTable(event, view))
+  (view.state.field(pickedTable) ||
+    overTable(event, view) ||
+    (event.isTrusted && !!waitingTable(view)))
 
 /**
  * Edits `from`–`to`, a selection ending in a table, as `text` input there,
@@ -3448,6 +3632,25 @@ export const contribution: FormattedContribution = {
     },
   ],
   keys: [
+    { key: 'Enter', run: breakWaiting, shift: breakWaiting },
+    {
+      key: 'Backspace',
+      run: deleteWaiting(false),
+      shift: deleteWaiting(false),
+    },
+    { key: 'Delete', run: deleteWaiting(true) },
+    {
+      key: 'Mod-Backspace',
+      mac: 'Alt-Backspace',
+      run: deleteWaiting(false, 'group'),
+    },
+    { key: 'Mod-Delete', mac: 'Alt-Delete', run: deleteWaiting(true, 'group') },
+    { mac: 'Mod-Backspace', run: deleteWaiting(false, 'line') },
+    { mac: 'Mod-Delete', run: deleteWaiting(true, 'line') },
+    { mac: 'Ctrl-h', run: deleteWaiting(false) },
+    { mac: 'Ctrl-d', run: deleteWaiting(true) },
+    { key: 'Tab', run: pauseTableCommand, shift: pauseTableCommand },
+    ...pendingCommandKeys,
     { key: 'ArrowDown', run: (view) => enterTable(view, 'down') },
     { key: 'ArrowUp', run: (view) => enterTable(view, 'up') },
     { key: 'ArrowRight', run: (view) => enterTable(view, 'right') },
@@ -3679,6 +3882,7 @@ export const contribution: FormattedContribution = {
       }),
     ),
     EditorView.inputHandler.of((view, from, to, text) => {
+      if (waitingTable(view)?.typeWaiting(from, to, text)) return true
       if (
         text &&
         !view.composing &&
@@ -3687,15 +3891,7 @@ export const contribution: FormattedContribution = {
       )
         return true
       // Mapped widget bounds are current even when its snapshot's length is old.
-      const { node, offset } = view.domAtPos(view.state.selection.main.head)
-      for (const table of mounted.get(view) ?? [])
-        if (
-          !table.current &&
-          (node.childNodes[offset] === table.dom ||
-            node.childNodes[offset - 1] === table.dom)
-        )
-          return true
-      return false
+      return staleTable(view)
     }),
     tableActions.of({
       active: (view) => !!tableAt(view, view.state.selection.main.head),

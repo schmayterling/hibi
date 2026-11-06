@@ -1,9 +1,14 @@
-import { isolateHistory } from '@codemirror/commands'
+import {
+  deleteGroupBackward,
+  deleteGroupForward,
+  isolateHistory,
+} from '@codemirror/commands'
 import {
   type ChangeDesc,
   ChangeSet,
   EditorSelection,
   EditorState,
+  findClusterBreak,
   MapMode,
   Prec,
   StateEffect,
@@ -1931,7 +1936,12 @@ class TableView {
   }
 
   /** Apply input to the action's cell using current source, never its stale DOM. */
-  typeWaiting(from: number, to: number, text: string) {
+  typeWaiting(
+    from: number,
+    to: number,
+    text: string,
+    userEvent = 'input.type',
+  ) {
     if (!this.waitingForInput || !writable(this.view.state)) return false
     const waiting = this.waiting!
     const { state } = this.view
@@ -1946,7 +1956,7 @@ class TableView {
     const tr = state.update({
       changes: { from: waiting.from, to: waiting.to, insert: edit.source },
       selection: { anchor: waiting.from + edit.head },
-      userEvent: 'input.type',
+      userEvent,
       scrollIntoView: true,
     })
     this.waiting = {
@@ -1956,6 +1966,57 @@ class TableView {
     }
     this.view.dispatch(tr)
     return true
+  }
+
+  /** Delete within the pending cell, without the outer widget's atomic bounds. */
+  deleteWaiting(forward: boolean, by?: 'group' | 'line') {
+    if (!this.waitingForInput || !writable(this.view.state)) return false
+    const waiting = this.waiting!
+    const { state } = this.view
+    const { from, to } = state.selection.main
+    const text = state.sliceDoc(waiting.from, waiting.to)
+    const { start, end } = padding(text)
+    let a = from - waiting.from,
+      b = to - waiting.from
+    if (a === b) {
+      if (by === 'line') {
+        if (forward) b = end
+        else a = start
+      } else if (by === 'group') {
+        const selected = EditorState.create({
+          doc: text,
+          selection: { anchor: a },
+        })
+        const command = forward ? deleteGroupForward : deleteGroupBackward
+        command({
+          state: selected,
+          dispatch: (tr) =>
+            tr.changes.iterChanges((from, to) => {
+              a = from
+              b = to
+            }),
+        })
+      } else {
+        const at = findClusterBreak(text, a, forward)
+        a = Math.min(a, at)
+        b = Math.max(b, at)
+      }
+    }
+    a = Math.max(start, a)
+    b = Math.min(end, b)
+    return (
+      a >= b ||
+      this.typeWaiting(
+        waiting.from + a,
+        waiting.from + b,
+        '',
+        from !== to
+          ? 'delete.selection'
+          : forward
+            ? 'delete.forward'
+            : 'delete.backward',
+      )
+    )
   }
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
@@ -2689,6 +2750,13 @@ function tableAt(view: EditorView, pos: number, strict = false) {
 
 const waitingTable = (view: EditorView) =>
   [...(mounted.get(view) ?? [])].find((table) => table.waitingForInput)
+const breakWaiting = (view: EditorView) => {
+  const { from, to } = view.state.selection.main
+  return waitingTable(view)?.typeWaiting(from, to, '\n', 'input') ?? false
+}
+const deleteWaiting =
+  (forward: boolean, by?: 'group' | 'line') => (view: EditorView) =>
+    waitingTable(view)?.deleteWaiting(forward, by) ?? false
 
 /** Whether a position of the formatted view is inside a table, whose cells show their text where a collapsed range shows none. */
 export const tableShows = (view: EditorView, pos: number) =>
@@ -3433,6 +3501,19 @@ export const contribution: FormattedContribution = {
     },
   ],
   keys: [
+    { key: 'Enter', run: breakWaiting, shift: breakWaiting },
+    { key: 'Backspace', run: deleteWaiting(false) },
+    { key: 'Delete', run: deleteWaiting(true) },
+    {
+      key: 'Mod-Backspace',
+      mac: 'Alt-Backspace',
+      run: deleteWaiting(false, 'group'),
+    },
+    { key: 'Mod-Delete', mac: 'Alt-Delete', run: deleteWaiting(true, 'group') },
+    { mac: 'Mod-Backspace', run: deleteWaiting(false, 'line') },
+    { mac: 'Mod-Delete', run: deleteWaiting(true, 'line') },
+    { mac: 'Ctrl-h', run: deleteWaiting(false) },
+    { mac: 'Ctrl-d', run: deleteWaiting(true) },
     { key: 'ArrowDown', run: (view) => enterTable(view, 'down') },
     { key: 'ArrowUp', run: (view) => enterTable(view, 'up') },
     { key: 'ArrowRight', run: (view) => enterTable(view, 'right') },

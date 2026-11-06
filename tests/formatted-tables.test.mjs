@@ -2916,6 +2916,56 @@ test('a column action gives an implicit target cell a source span before parsing
   assert.equal((await state()).doc, doc)
 })
 
+test('edit keys stay in a table action cell while its parse is pending', {
+  timeout: 60000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  const group = process.platform === 'darwin' ? 'Alt' : 'Control'
+  const keys = [
+    'Enter',
+    'Shift+Enter',
+    'Backspace',
+    'Delete',
+    `${group}+Backspace`,
+    `${group}+Delete`,
+    ...(process.platform === 'darwin'
+      ? ['Meta+Backspace', 'Meta+Delete', 'Control+h', 'Control+d']
+      : []),
+  ]
+  for (const key of keys)
+    for (const kind of ['new', 'existing'])
+      await t.test(`${key}: ${kind}`, async () => {
+        const existing = kind === 'existing'
+        await harness.evaluate(
+          (doc) =>
+            window.tables.mount(
+              doc,
+              { width: 1000, height: 800 },
+              { editable: true, slice: 0 },
+            ),
+          doc,
+        )
+        await harness.waitForFunction(() => !window.tables.settling())
+        await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+        if (existing)
+          await harness.evaluate(() =>
+            window.tables.runTableAction('column-delete'),
+          )
+        else await harness.keyboard.press('Tab')
+        await harness.keyboard.press(key)
+        await harness.waitForFunction(() => !window.tables.settling())
+        await harness.keyboard.type('x')
+        await harness.waitForFunction(() => !window.tables.settling())
+        const br = key.includes('Enter') ? '<br>' : ''
+        const deleted = key.includes('Delete') || key.endsWith('+d')
+        const expected = existing
+          ? `before\n\n| a |\n| - |\n| ${br}x${deleted ? '' : 'c'} |\n\nafter`
+          : doc.replace('\n\nafter', `\n| ${br}x |  |\n\nafter`)
+        assert.equal((await state()).doc, expected)
+        assert.equal((await state()).cell, existing ? '2:0' : '3:0')
+      })
+})
+
 /** The text of the cell that holds the page selection's head, and the selected text. */
 const tabbed = (target) =>
   target.evaluate(async () => {
@@ -6406,6 +6456,7 @@ test('in the app, text typed before an added row draws reaches its cell', {
       ),
       'Document editor',
     )
+    await page.keyboard.press('Enter')
     await page.keyboard.type('x')
   } finally {
     await page.evaluate(() => window.releaseTableParse())
@@ -6419,6 +6470,6 @@ test('in the app, text typed before an added row draws reaches its cell', {
   await waitForAsync(
     page,
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    `${doc}| xy |  |\n`,
+    `${doc}| <br>xy |  |\n`,
   )
 })

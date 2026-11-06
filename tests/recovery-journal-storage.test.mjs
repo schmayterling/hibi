@@ -18,19 +18,27 @@ const bundle = build({
   external: ['electron'],
   format: 'cjs',
 })
+/** App data of tests that ended: their launches' timers do nothing, as after a quit. */
+const quit = new Set()
 async function profile(t) {
   const root = await fs.mkdtemp(join(tmpdir(), 'hibi-recovery-'))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.after(() => {
+    quit.add(root)
+    return fs.rm(root, { recursive: true, force: true })
+  })
   return root
 }
 /** A fresh main process over the same app data; `io` stands in for node:fs/promises. */
 async function main(root, { io, notes = [] } = {}) {
   const module = { exports: {} }
   const require = createRequire(import.meta.url)
+  // A launch left running would retry a failed write every 30 s into later
+  // tests, landing in their mocked console.error.
   new Function(
     'require',
     'module',
     'exports',
+    'setTimeout',
     (await bundle).outputFiles[0].text,
   )(
     (id) =>
@@ -41,6 +49,8 @@ async function main(root, { io, notes = [] } = {}) {
           : require(id),
     module,
     module.exports,
+    (run, ...rest) =>
+      setTimeout((...args) => quit.has(root) || run(...args), ...rest),
   )
   const said = []
   module.exports.startRecoveryJournal(

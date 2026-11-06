@@ -18,7 +18,12 @@ import {
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
-import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  redoKey,
+  withHeldClock,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 // What the removed native editor did with table picks, recorded before its removal.
@@ -1283,7 +1288,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
           await waitForInputSource(page, source)
-          await page.keyboard.press('ControlOrMeta+Shift+z')
+          await page.keyboard.press(redoKey)
           await waitForInputSource(page, deleted)
           await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, source)
@@ -1355,7 +1360,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
           assert.equal((await acceptedInput(page)).markdown, source)
           await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, deleted)
-          await page.keyboard.press('ControlOrMeta+Shift+z')
+          await page.keyboard.press(redoKey)
           await waitForInputSource(page, source)
           await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, deleted)

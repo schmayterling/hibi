@@ -99,7 +99,13 @@ export function linkScroll(
     else return
     schedule()
   }
-  // CodeMirror panes report caret and focus changes as hibi:source-caret.
+  // CodeMirror panes report caret and text changes, and focus leaving, as
+  // hibi:editor-interactions-invalidate; only the focused view's report hands
+  // control. Focus counts when it comes: their reports of focus are a moment
+  // late, and the other pane scrolled in that moment keeps the lead.
+  const edited = (event: Event) => {
+    if ((event.target as Element).contains(document.activeElement)) selection()
+  }
   // Their selectionchange also fires when a view redraws an unchanged
   // selection, as after the other pane scrolls it, which hands no control.
   const nativeSelection = () => {
@@ -123,8 +129,11 @@ export function linkScroll(
     const sourceContent = second.querySelector('.cm-content')
     if (sourceContent) observer.observe(sourceContent)
     document.addEventListener('selectionchange', nativeSelection)
-    first.addEventListener('hibi:source-caret', selection)
-    second.addEventListener('hibi:source-caret', selection)
+    for (const pane of [first, second]) {
+      pane.addEventListener('focusin', selection)
+      // The report does not bubble.
+      pane.addEventListener('hibi:editor-interactions-invalidate', edited, true)
+    }
     first.addEventListener('hibi:source-layout', schedule)
   }
   first.addEventListener('scroll', scroll, { passive: true })
@@ -143,8 +152,14 @@ export function linkScroll(
       pane.removeEventListener('pointerdown', intent)
     }
     document.removeEventListener('selectionchange', nativeSelection)
-    first.removeEventListener('hibi:source-caret', selection)
-    second.removeEventListener('hibi:source-caret', selection)
+    for (const pane of [first, second]) {
+      pane.removeEventListener('focusin', selection)
+      pane.removeEventListener(
+        'hibi:editor-interactions-invalidate',
+        edited,
+        true,
+      )
+    }
     first.removeEventListener('hibi:source-layout', schedule)
     first.removeEventListener('scroll', scroll)
     second.removeEventListener('scroll', scroll)

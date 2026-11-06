@@ -33,6 +33,7 @@ import {
   type TableLayout,
   tableSizeChanges,
 } from '../../../shared/table-layout.ts'
+import { isCopiedHtml } from '../clipboard-source.ts'
 import { lineInput } from '../formatted-commands.ts'
 import {
   type FormattedContribution,
@@ -3310,14 +3311,18 @@ const tableEditing = ViewPlugin.fromClass(
     private paste = (event: ClipboardEvent) => {
       const { view } = this
       const removed = removedPicks.get(view)
-      const { main } = view.state.selection
+      const { main, ranges } = view.state.selection
+      const text = event.clipboardData?.getData('text/plain')
+      const html = event.clipboardData?.getData('text/html')
       if (
         !removed ||
+        ranges.length !== 1 ||
+        (html && !isCopiedHtml(html, text ?? '')) ||
         view.state.doc !== removed.doc ||
         !main.empty ||
         main.head !== removed.caret ||
         !writable(view.state) ||
-        event.clipboardData?.getData('text/plain') !== removed.markdown
+        text !== removed.markdown
       )
         return
       event.preventDefault()
@@ -3481,6 +3486,7 @@ const tableEditing = ViewPlugin.fromClass(
         ?.setBaseAndExtent(anchor.node, anchor.offset, head.node, head.offset)
     }
     destroy() {
+      removedPicks.delete(this.view)
       this.releasePick()
       this.view.dom.ownerDocument.removeEventListener(
         'selectionchange',
@@ -3504,8 +3510,10 @@ const tableEditing = ViewPlugin.fromClass(
     update(update: ViewUpdate) {
       const { view } = this
       const removal = removing.get(view)
-      if (removal && update.docChanged)
-        removing.set(view, removal.compose(update.changes))
+      if (update.docChanged) {
+        if (removal) removing.set(view, removal.compose(update.changes))
+        removedPicks.delete(view)
+      }
       if (update.docChanged && update.state.field(pickedTable))
         this.picked = true
       if (this.picked) queueMicrotask(this.restorePick)

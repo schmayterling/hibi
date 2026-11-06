@@ -1343,11 +1343,98 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
           )
           const deleted = (await acceptedInput(page)).markdown
           await pasteHeld(app, page, held, route === 'cut')
+          await waitForAsync(
+            page,
+            async (deleted) => {
+              await window.hibi.flushDocumentChanges()
+              return (await window.hibi.getDocument()).markdown !== deleted
+            },
+            deleted,
+          )
+          assert.equal((await acceptedInput(page)).markdown, source)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, deleted)
+          await page.keyboard.press('ControlOrMeta+Shift+z')
           await waitForInputSource(page, source)
           await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, deleted)
+          await page.keyboard.press('ControlOrMeta+z')
+          await waitForInputSource(page, source)
         })
     }
+  for (const guard of ['foreign html', 'multiple carets'])
+    await t.test('paste guard: ' + guard, async () => {
+      const source = note.replace('before', 'before' + crypto.randomUUID())
+      const a = [source.slice(0, source.indexOf('\n')), 3]
+      const b = ['abc', 1]
+      const { app, page, rich } = await openInputFixture(source)
+      await pick(page, rich, source, a, b, false)
+      const held = await clipboardAfter(app, page, 'c')
+      await page.keyboard.press('Delete')
+      const deleted = (await acceptedInput(page)).markdown
+      const caret = await rich.evaluate((element, multiple) => {
+        const view = element.cmTile.root.view
+        const caret = view.state.selection.main.head
+        if (multiple) {
+          const [compartment, access] = [
+            ...view.state.config.compartments,
+          ].find(
+            ([, value]) =>
+              Array.isArray(value) &&
+              value.length === 2 &&
+              value.every(
+                (part) => part.facet && typeof part.value === 'boolean',
+              ),
+          )
+          view.dispatch({
+            effects: compartment.reconfigure([
+              ...access,
+              view.state.constructor.allowMultipleSelections.of(true),
+            ]),
+          })
+          const selection = view.state.selection.constructor
+          view.dispatch({
+            selection: selection.create([
+              selection.cursor(caret),
+              selection.cursor(view.state.doc.length),
+            ]),
+          })
+          view.focus()
+        }
+        return caret
+      }, guard === 'multiple carets')
+      const insert =
+        guard === 'foreign html'
+          ? '**foreign-' + crypto.randomUUID() + '**'
+          : held.text
+      await pasteHeld(
+        app,
+        page,
+        {
+          text: held.text,
+          html:
+            guard === 'foreign html'
+              ? '<strong>' + insert.slice(2, -2) + '</strong>'
+              : null,
+        },
+        false,
+      )
+      await waitForAsync(
+        page,
+        async (deleted) => {
+          await window.hibi.flushDocumentChanges()
+          return (await window.hibi.getDocument()).markdown !== deleted
+        },
+        deleted,
+      )
+      assert.equal(
+        (await acceptedInput(page)).markdown,
+        deleted.slice(0, caret) +
+          insert +
+          deleted.slice(caret) +
+          (guard === 'multiple carets' ? insert : ''),
+      )
+    })
   // Away from where the pick was, or once the note changed, a pick's copy
   // pastes as its Markdown.
   for (const what of ['rows', 'into'])

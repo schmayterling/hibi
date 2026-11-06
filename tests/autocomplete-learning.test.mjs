@@ -117,6 +117,7 @@ async function fixture(t) {
     version: 1,
   }
   let hook
+  let held = null
   const scopes = []
   const gates = []
   const operations = new Set()
@@ -133,7 +134,10 @@ async function fixture(t) {
         )
         return operation
       },
-      onAddonStorageChanged: (callback) => storage.subscribe(callback),
+      onAddonStorageChanged: (callback) =>
+        storage.subscribe((change) =>
+          held ? held.push(() => callback(change)) : callback(change),
+        ),
     })
     scopes.push(scope)
     return scope.api.global('personal-model', 1)
@@ -156,6 +160,15 @@ async function fixture(t) {
     open,
     intercept: (next) => {
       hook = next
+    },
+    /** Change notifications wait, as when a write's reply arrives before them. */
+    holdChanges() {
+      held = []
+    },
+    releaseChanges() {
+      const waiting = held ?? []
+      held = null
+      for (const deliver of waiting) deliver()
     },
     gate() {
       const gate = deferred()
@@ -898,6 +911,21 @@ test('concurrent clears keep observations blocked until every clear finishes', a
   f.intercept(undefined)
   await f.learning.persist()
   assert.deepEqual((await f.disk()).entries, [])
+})
+
+test('own save notice arriving after its reply does not discard newer learning', async (t) => {
+  const f = await fixture(t)
+  f.holdChanges()
+  f.learning.observe(observation('first'))
+  await f.learning.persist()
+  f.learning.observe(observation('fresh'))
+  f.learning.flush()
+  f.releaseChanges()
+  await f.learning.persist()
+  assert.deepEqual(
+    new Set((await f.disk()).entries.map((row) => row.word)),
+    new Set(['first', 'fresh']),
+  )
 })
 
 test('own in-flight save does not discard newer idle aggregates', async (t) => {

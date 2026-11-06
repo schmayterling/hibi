@@ -3341,6 +3341,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   const last = `before\n\n| a | b |\n| - | - |\n| c | d |${tail}`
   const endRows = '| u | v |\n'.repeat(2000)
   const atEnd = `| a | b |\n| - | - |\n${endRows}| c | d`
+  const marked = doc.replace('| c | d |', '| c | **b**<br>e |')
   // A change from elsewhere, as another pane's, replacing text in the note.
   const edit = (find, insert) => () =>
     harness.evaluate(
@@ -3491,6 +3492,8 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     ['redo', doc, 'd', ['x', 'ControlOrMeta+z', redoKey, 'z']],
     ['undo, then Tab', doc, 'c', ['x', 'ControlOrMeta+z', 'Tab', 'y']],
     ['a change in the cell', doc, 'd', ['x', edit('dx', 'dQ'), 'y']],
+    // A cell opened before the draw shows its formatting and line breaks.
+    ['ArrowRight into formatting', marked, 'c', ['x', 'ArrowRight', 'y']],
     // So do changes inside other cells' text: the table keeps its shape.
     ['undo in another cell', doc, 'c', ['x', 'Tab', 'ControlOrMeta+z', 'w']],
     [

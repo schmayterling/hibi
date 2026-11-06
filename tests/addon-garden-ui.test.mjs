@@ -252,14 +252,18 @@ test('hibi garden tab, installs, and addon links', {
           assert.deepEqual(await geometry(), all, `at ${width}px`)
         }
       } finally {
-        await app.evaluate(
+        const restoredSize = await app.evaluate(
           ({ BrowserWindow }, [[width, height], visible, focused]) => {
             const window = BrowserWindow.getAllWindows()[0]
             window.setContentSize(width, height)
+            // The size this restore set, before macOS can fit the shown window
+            // into the screen's work area again.
+            const size = window.getContentSize()
             if (process.platform === 'darwin' && visible) {
               if (focused) window.show()
               else window.showInactive()
             }
+            return size
           },
           state,
         )
@@ -270,11 +274,25 @@ test('hibi garden tab, installs, and addon links', {
           state[2],
           { label: 'the window has its previous focus' },
         )
-        assert.deepEqual(
-          await windowState(),
-          state,
-          'the layout check restores the window',
-        )
+        if (process.platform === 'darwin' && state[1]) {
+          // Showing it again fits it to the work area, which a size read when
+          // the test began may not match.
+          assert.deepEqual(
+            restoredSize,
+            state[0],
+            'the layout check restores the window size',
+          )
+          assert.deepEqual(
+            (await windowState()).slice(1),
+            state.slice(1),
+            'the layout check restores the window',
+          )
+        } else
+          assert.deepEqual(
+            await windowState(),
+            state,
+            'the layout check restores the window',
+          )
         await page.evaluate(() =>
           document.getElementById('classic-scrollbar')?.remove(),
         )

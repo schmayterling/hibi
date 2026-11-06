@@ -1171,9 +1171,8 @@ for (const [presentation, headings, lateReading] of [
           for (const task of tasks) task()
         }
       })
-    // Where each frame the rebuilt views paint formatted shows the line: a
-    // resize observer runs after layout, before the paint. A rebuilt view
-    // first paints its lines unformatted, which is not this.
+    // Where each frame the rebuilt views paint shows the line, their first
+    // included: a resize observer runs after layout, before the paint.
     if (presentation === 'formatted')
       await context.page.evaluate((pane) => {
         const painted = []
@@ -1186,18 +1185,10 @@ for (const [presentation, headings, lateReading] of [
         new ResizeObserver(() => {
           const content = document.querySelector(`${pane} .cm-content`)
           if (!content || content === failed) return
-          const lines = [...content.querySelectorAll('.cm-line')]
-          const line = lines.find((each) =>
+          const line = [...content.querySelectorAll('.cm-line')].find((each) =>
             each.textContent.startsWith('line 300'),
           )
-          if (
-            line &&
-            lines.every(
-              (each) =>
-                each.textContent || each.classList.contains('hibi-lp-gap'),
-            )
-          )
-            painted.push(line.getBoundingClientRect().top)
+          if (line) painted.push(line.getBoundingClientRect().top)
         }).observe(pulse)
         const frame = () => {
           pulse.style.width = pulse.style.width === '1px' ? '2px' : '1px'

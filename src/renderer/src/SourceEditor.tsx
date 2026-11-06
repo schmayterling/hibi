@@ -144,7 +144,7 @@ import {
 import { formattedReferences } from './formatted-references'
 import { formattedSelectionPreview } from './formatted-selection-text'
 import { formattedLiteralEdits } from './formatted-source-edits'
-import { formattedSyntax } from './formatted-syntax'
+import { formattedSyntax, restoredOpening } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
@@ -1999,7 +1999,9 @@ export function SourceEditor({
               queueMicrotask(() => tryFeatures.current?.())
             }
           }),
-          restore ? restore.extension : [],
+          restore && place
+            ? [restore.extension, restoredOpening.of(place.top)]
+            : [],
           ViewPlugin.define((view) => ({
             destroy: observeClipboard(view.contentDOM),
           })),

@@ -2904,6 +2904,96 @@ test('enter, shift-enter and mod-enter break the line in a cell, as the rich edi
   assert.match(now.doc, /^\| <br>cell \| x<br><br><br> \|\n\nafter$/m)
 })
 
+test('keys typed in a cell while its table waits for a reparse all land, in order', {
+  timeout: 60000,
+}, async (t) => {
+  // Text after the table that one parsing step does not reach.
+  const doc =
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
+    '\n\nparagraph'.repeat(2000)
+  const short = doc.replace('| c | d |', '| c |')
+  // Another change while the table waits.
+  const edit = (find, insert) => () =>
+    harness.evaluate(
+      ({ find, insert }) => {
+        const view = window.tables.view()
+        const from = view.state.doc.toString().indexOf(find)
+        view.dispatch({ changes: { from, to: from + find.length, insert } })
+      },
+      { find, insert },
+    )
+  const cases = [
+    { name: 'x y z', note: doc, cell: 1, keys: ['x', 'y', 'z'], row: 'dxyz' },
+    {
+      name: 'Enter x',
+      note: doc,
+      cell: 1,
+      keys: ['Enter', 'x'],
+      row: 'd<br>x',
+    },
+    // The row ends before the cell: the first key adds it.
+    {
+      name: 'new cell',
+      note: short,
+      cell: 1,
+      keys: ['x', 'y', 'z'],
+      row: 'xyz',
+    },
+    // A change from elsewhere may remake the table: keys typed before it
+    // draws again go nowhere, not in at a place the table no longer has.
+    {
+      name: 'row changed',
+      note: doc,
+      cell: 1,
+      keys: ['x', edit('dx |', 'dx | e |'), 'y'],
+      row: 'dx | e',
+    },
+  ]
+  for (const { name, note, cell, keys, row } of cases)
+    await t.test(name, async () => {
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true, slice: 0 },
+          ),
+        note,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.locator('.hibi-lp-table td').nth(cell).click()
+      await harness.keyboard.press('End')
+      // Each key's reparse misses its slice, and idle time, where it goes on,
+      // waits until the keys are in: they come while the table still shows
+      // the text before the first.
+      await harness.evaluate(() => {
+        let held = []
+        const own = window.requestIdleCallback
+        window.requestIdleCallback = (callback, options) =>
+          own(
+            (deadline) => (held ? held.push(callback) : callback(deadline)),
+            options,
+          )
+        window.releaseIdle = () => {
+          window.requestIdleCallback = own
+          for (const callback of held)
+            callback({ didTimeout: false, timeRemaining: () => 50 })
+          held = null
+        }
+      })
+      for (const key of keys)
+        await (typeof key === 'string' ? harness.keyboard.press(key) : key())
+      assert.ok(await harness.evaluate(() => window.tables.settling()))
+      await harness.evaluate(() => window.releaseIdle())
+      await harness.waitForFunction(() => !window.tables.settling())
+      const now = await state()
+      assert.equal(now.doc, note.replace(/\| c \|.*\n/, `| c | ${row} |\n`))
+      assert.equal(now.cell, '2:1')
+      // The cell's editor holds the same text; a break draws as a widget.
+      if (!row.includes('<br>')) assert.equal(now.editor, row.split(' | ')[0])
+    })
+})
+
 test('a cell editor follows its row when rows are added or deleted around it', {
   timeout: 30000,
 }, async () => {

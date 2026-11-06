@@ -222,6 +222,42 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   await step('undo of typing in a cell', undoKey, table)
   await step('redo of typing in a cell', redoKey, typed)
 
+  // On a slow machine each key's parse runs out of its time, and the table
+  // draws the cell's text in a later slice: keys typed before it does all
+  // land in the cell, in order.
+  await open('table-slow-typing', table, '.rich-pane td')
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance)
+    const idle = window.requestIdleCallback
+    let held = []
+    let late = 0
+    performance.now = () => {
+      late += 10
+      return now() + late
+    }
+    // Idle work waits until the keys are in.
+    window.requestIdleCallback = (callback, options) =>
+      idle(
+        (deadline) => (held ? held.push(callback) : callback(deadline)),
+        options,
+      )
+    window.releaseParse = () => {
+      performance.now = () => now() + late
+      window.requestIdleCallback = idle
+      for (const callback of held)
+        callback({ didTimeout: false, timeRemaining: () => 50 })
+      held = null
+    }
+  })
+  await page.keyboard.type('x')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('yz')
+  await page.evaluate(async () => {
+    window.releaseParse()
+    await window.hibi.flushDocumentChanges()
+  })
+  assert.equal((await markdown()).split('\n').at(-2), '| r79 | v79x<br>yz |')
+
   // In the middle of the table, the table's edges, where the view scrolls to
   // for a place in it, do not show the cell.
   await open('table-middle', table, '.rich-pane td')

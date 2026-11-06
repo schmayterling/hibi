@@ -513,6 +513,8 @@ export type CellHost = {
   customBody(): boolean
   /** Whether the table's cell spans describe the current document. */
   current(): boolean
+  /** Whether a kept place still describes this cell without changing the table's shape. */
+  valid(place: { from: number; to: number; closed: boolean } | null): boolean
   /** The cell's text between its delimiters in the formatted view's document now; null while its row ends before it. */
   span(): { from: number; to: number; closed: boolean } | null
   /** The change that ends the cell's row with this cell, holding `text`. */
@@ -1043,9 +1045,9 @@ export class CellEditor {
   private place(doc: Text) {
     if (this.host.current()) return this.host.span()
     const kept = this.kept
+    if (kept === undefined || !this.host.valid(kept)) return undefined
     if (kept === null) return null
-    return kept &&
-      this.host.main.state.sliceDoc(kept.from, kept.to) === doc.toString()
+    return this.host.main.state.sliceDoc(kept.from, kept.to) === doc.toString()
       ? kept
       : undefined
   }

@@ -3449,6 +3449,63 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       `~~~\n${doc.replace('| c |', '| cx |').replace(tail, '')}`,
     )
   })
+  // Without an opening pipe, valid cell text can begin another block instead.
+  // Such edits must not keep the old table's place, including after own input.
+  const unpiped = `a | b\n--- | ---\nc | d\ne | f\n\nafter${tail}`
+  for (const start of ['a', 'c'])
+    for (const prefix of ['# ', '> ', '- ', '~~~'])
+      await t.test(
+        `block prefix in ${start}: ${JSON.stringify(prefix)}`,
+        async () => {
+          const keys = ['x', edit(`${start}x`, `${prefix}${start}x`), 'y']
+          const { doc: now } = await run(unpiped, start, keys, true, false)
+          assert.equal(
+            now,
+            unpiped
+              .replace(tail, '')
+              .replace(`${start} |`, `${prefix}${start}x |`),
+          )
+        },
+      )
+  await t.test('an emptied first cell without an opening pipe', async () => {
+    const keys = ['Home', 'Shift+End', 'Backspace', 'y']
+    const { doc: now } = await run(unpiped, 'c', keys, true, false)
+    assert.equal(now, unpiped.replace(tail, '').replace('c | d', ' | d'))
+  })
+  await t.test('a typed block prefix stops using the old cell', async () => {
+    const { doc: now } = await run(
+      unpiped,
+      'c',
+      ['Home', '#', 'Space', 'y'],
+      true,
+      false,
+    )
+    assert.equal(now, unpiped.replace(tail, '').replace('c | d', '# c | d'))
+  })
+  await t.test(
+    'a fence in a cell cannot delete the former table body',
+    async () => {
+      const remove = async () =>
+        assert.equal(
+          await harness.evaluate(() =>
+            window.tables.runTableAction('table-delete'),
+          ),
+          false,
+        )
+      const { doc: now } = await run(
+        unpiped,
+        'c',
+        ['x', edit('cx', '~~~cx'), remove, 'y'],
+        true,
+        false,
+      )
+      assert.equal(now, unpiped.replace(tail, '').replace('c | d', '~~~cx | d'))
+    },
+  )
+  cases.push(
+    ['unpiped body', unpiped, 'c', ['x', 'Tab', 'y']],
+    ['unpiped header', unpiped, 'a', ['x', 'Tab', 'y']],
+  )
   for (const [name, note, start, keys] of cases)
     await t.test(name, async () => {
       const settled = await run(note, start, keys, false)

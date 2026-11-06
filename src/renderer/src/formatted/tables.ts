@@ -38,6 +38,7 @@ import {
   type FormattedContribution,
   type FormattedNodeView,
   followsLink,
+  formattedBlockParser,
   formattedDocument,
   formattedFollowLink,
   formattedLiteral,
@@ -486,8 +487,9 @@ class TableView {
 
   /**
    * Whether the table's rows and columns are the snapshot's: it is current,
-   * or every change since was the edited cell's own, as when the reparse of
-   * typing missed its slice. Cells are then read from the text now.
+   * or every change since stayed inside a cell whose source still describes
+   * that cell, as when typing's reparse missed its slice. Cells are then read
+   * from the text now.
    */
   private get known() {
     return this.current || this.editing?.editor.placed !== undefined
@@ -1501,6 +1503,7 @@ class TableView {
       main: this.view,
       customBody: () => this.widget.config.customBody,
       current: () => this.current,
+      valid: (place) => this.valid(place),
       span: () => (this.editing ? this.span(this.editing) : null),
       fill: (text) => this.fill(text),
       move: (move) => this.move(move),
@@ -2223,6 +2226,30 @@ class TableView {
     return span
       ? { from: from + span.from, to: from + span.to, closed: span.closed }
       : null
+  }
+
+  /** Cell text without an opening pipe can instead start a heading, fence or container. */
+  private valid(place: { from: number; to: number; closed: boolean } | null) {
+    const editing = this.editing
+    if (!editing) return false
+    const { state } = this.view
+    const span = this.cellIn(state.doc, editing)
+    if (!place || !span) return place === span
+    if (place.from !== span.from || place.to !== span.to) return false
+    if (editing.column) return true
+    const first = state.doc.lineAt(this.range().from).number
+    const row = (index: number) => {
+      const { text } = state.doc.line(first + index)
+      return text.slice(this.widget.rowStart(index, text))
+    }
+    const text = row(editing.line)
+    if (text.trimStart().startsWith('|')) return true
+    const source = editing.line ? `| a |\n| - |\n${text}` : `${text}\n${row(1)}`
+    // ponytail: large unpiped first cells wait for the draw; use a bounded parser input to extend this limit.
+    if (source.length > 8192) return false
+    const table = state.facet(formattedBlockParser)(state).parse(source)
+      .topNode.firstChild
+    return table?.name === 'Table' && table.to === source.length
   }
 
   /** The source edit that deletes the table, with the blank line after it. */

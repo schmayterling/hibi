@@ -3589,6 +3589,12 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       `~~~\n${doc.replace('| c |', '| cx |').replace(tail, '')}`,
     )
   })
+  // So does one that leaves the table's text and the note's length as drawn.
+  await t.test('a change outside the table of the same length', async () => {
+    const keys = [edit('before', '~~~~~~'), 'y']
+    const { doc: now } = await run(doc, 'c', keys, true, false)
+    assert.equal(now, doc.replace('before', '~~~~~~').replace(tail, ''))
+  })
   // Without an opening pipe, valid cell text can begin another block instead.
   // Such edits must not keep the old table's place, including after own input.
   const unpiped = `a | b\n--- | ---\nc | d\ne | f\n\nafter${tail}`
@@ -3634,6 +3640,11 @@ test('cell keys and changes while a table waits for a reparse land where they wo
         )
       },
     )
+  await t.test('a block prefix of the same length in another cell', async () => {
+    const keys = [edit('c ', '# '), 'y']
+    const { doc: now } = await run(unpiped, 'd', keys, true, false)
+    assert.equal(now, unpiped.replace(tail, '').replace('c | d', '# | d'))
+  })
   await t.test('an emptied first cell without an opening pipe', async () => {
     const keys = ['Home', 'Shift+End', 'Backspace', 'y']
     const { doc: now } = await run(unpiped, 'c', keys, true, false)

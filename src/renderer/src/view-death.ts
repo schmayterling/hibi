@@ -7,3 +7,6 @@
  */
 export const deadViews = new WeakSet<object>()
 export const isViewDead = (view: object) => deadViews.has(view)
+// DIAGNOSTIC ONLY (never merged): the paint oracle reads which views are dead.
+;(globalThis as { __hibiIsViewDead?: (view: object) => boolean }).__hibiIsViewDead =
+  isViewDead

@@ -194,6 +194,25 @@ import {
 } from './source-view'
 import { textProjection } from './text-projection'
 
+// DIAGNOSTIC ONLY (never merged): reading-place trace, synchronous plain fields.
+const readTrace = (at: string, view: object | null, data: Record<string, unknown>) => {
+  const g = globalThis as {
+    __hibiReadTrace?: unknown[]
+    __hibiViewIds?: WeakMap<object, number>
+    __hibiViewCount?: number
+  }
+  const ids = (g.__hibiViewIds ??= new WeakMap())
+  let id: number | null = null
+  if (view) {
+    id = ids.get(view) ?? null
+    if (id === null) {
+      id = g.__hibiViewCount = (g.__hibiViewCount ?? 0) + 1
+      ids.set(view, id)
+    }
+  }
+  ;(g.__hibiReadTrace ??= []).push({ t: performance.now(), at, view: id, ...data })
+}
+
 /** Each mounted view's bridge to its document session. */
 const bridges = new WeakMap<
   EditorView,
@@ -295,7 +314,16 @@ function keptPlaceScroll(top: number, margin: number) {
     settling: ReturnType<typeof setTimeout> | null = null,
     // The first wait sets when waiting ends, whatever moves after it.
     deadline: number | null = null
-  const stop = () => {
+  const stop = (cause?: unknown) => {
+    readTrace('kept.stop', null, {
+      from: state,
+      cause:
+        typeof cause === 'string'
+          ? cause
+          : cause instanceof Event
+            ? `input:${cause.type}`
+            : 'unnamed',
+    })
     state = 'done'
     if (settling) clearTimeout(settling)
     settling = null
@@ -309,10 +337,16 @@ function keptPlaceScroll(top: number, margin: number) {
           view.lineBlockAt(top).top -
           scrollerOf(view).getBoundingClientRect().top,
     write: (offset: number | null, view: EditorView) => {
+      readTrace('kept.write', view, {
+        state,
+        offset,
+        moved,
+        scrollTop: scrollerOf(view).scrollTop,
+      })
       if (state !== 'aligning') return
       if (offset === null) {
         // Scroll there once, which lays it out; the measure after aligns it.
-        if (scrolled) return stop()
+        if (scrolled) return stop('write-unlaid-again')
         scrolled = scrolling = true
         state = 'waiting'
         queueMicrotask(() => {
@@ -362,11 +396,13 @@ function keptPlaceScroll(top: number, margin: number) {
     }
     state = 'aligning'
     moved = false
+    readTrace('kept.begin', view, { scrollTop: scrollerOf(view).scrollTop })
     view.requestMeasure(align)
   }
   const extension: Extension = [
     EditorView.scrollHandler.of((view, range, options) => {
-      if (range.head !== top || options.yMargin !== margin) stop()
+      if (range.head !== top || options.yMargin !== margin)
+        stop('scrollHandler-other-target')
       else {
         scrolling = false
         // On screen, this scroll lays the line out; the next measure aligns it.
@@ -381,8 +417,13 @@ function keptPlaceScroll(top: number, margin: number) {
         if (
           state === 'holding' &&
           Math.abs(scrollerOf(view).scrollTop - held) > 1
-        )
-          stop()
+        ) {
+          readTrace('kept.domScroll', view, {
+            scrollTop: scrollerOf(view).scrollTop,
+            held,
+          })
+          stop('dom-scroll')
+        }
       },
     }),
     ViewPlugin.define((view) => {
@@ -392,7 +433,7 @@ function keptPlaceScroll(top: number, margin: number) {
         scroller.addEventListener(type, stop, options)
       return {
         destroy() {
-          stop()
+          stop('destroy')
           for (const type of scrollInput)
             scroller.removeEventListener(type, stop, options)
         },
@@ -411,11 +452,23 @@ function keptPlaceScroll(top: number, margin: number) {
           )
             return
           const { view } = update
+          readTrace('kept.update', view, {
+            state,
+            heightChanged: update.heightChanged,
+            geometryChanged: update.geometryChanged,
+            viewportChanged: update.viewportChanged,
+            scrollTop: scrollerOf(view).scrollTop,
+            held,
+            moved,
+            hasFocus: view.hasFocus,
+            ownScroller: scrollerOf(view) === view.scrollDOM,
+          })
           if (state === 'holding') {
             // Anything that scrolled the view ends the hold. CodeMirror can
             // also move the kept line without scrolling, when it estimates
             // the lines above it again, and the line goes back.
-            if (Math.abs(scrollerOf(view).scrollTop - held) > 1) return stop()
+            if (Math.abs(scrollerOf(view).scrollTop - held) > 1)
+              return stop('update-scrolled')
             state = 'aligning'
             moved = false
             // CodeMirror holds its top line itself in its own scroller or
@@ -1910,6 +1963,13 @@ export function SourceEditor({
      */
     let placeBeforeRedraw: ReturnType<typeof placeOf> | null = null
     const rebuild = (view: EditorView, error: unknown) => {
+      readTrace('editor.rebuild', view, {
+        trying: tryingFeature.current?.feature.id ?? null,
+        blameFeatures: blameFeatures.current,
+        suspect: featuresSuspect.current,
+        scrollTop: scrollerOf(view).scrollTop,
+        error: String(error).slice(0, 80),
+      })
       restoreFocus.current ??= captureEditorFocus(view.contentDOM)
       // What is typed from here shows nowhere and is not in the note.
       view.contentDOM.contentEditable = 'false'
@@ -1932,8 +1992,16 @@ export function SourceEditor({
       tryingFeature.current = null
       featuresSuspect.current = true
       // The session takes no selection until the edit that got here returns.
+      readTrace('editor.retry-queued', view, {
+        blamed: blamed.map((part) => part.feature.id),
+      })
       queueMicrotask(() => {
         const place = placeBeforeRedraw ?? shownPlace.current
+        readTrace('editor.keepPlace', view, {
+          top: place?.top ?? null,
+          margin: place?.margin ?? null,
+          dead: isViewDead(view),
+        })
         if (place) bridge.keepPlace(view, place.top, place.margin)
         retryBridge((retry) => retry + 1)
       })
@@ -3105,9 +3173,11 @@ export function SourceEditor({
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
-    const created = sourceExtensions.map(async (feature) =>
-      feature.create(context),
-    )
+    const created = sourceExtensions.map(async (feature) => {
+      // DIAGNOSTIC ONLY (never merged): which view asks for which feature.
+      readTrace('feature.create', editor, { feature: feature.id })
+      return feature.create(context)
+    })
     // Each feature's outcome by index, absent while it is still being set up.
     const results: PromiseSettledResult<Extension>[] = []
     created.forEach((promise, index) => {
@@ -3128,6 +3198,12 @@ export function SourceEditor({
       triedForWidget.current = true
       const kept = parts.filter(({ feature }) => !feature.fail)
       const set = (shown: readonly InstalledFeature[]) => {
+        readTrace('features.set', editor, {
+          phase: 'before',
+          shown: shown.map(({ feature }) => feature.id),
+          trying: tryingFeature.current?.feature.id ?? null,
+          scrollTop: scrollerOf(editor).scrollTop,
+        })
         installed.current = [...shown]
         editor.dispatch(
           reconfiguration(
@@ -3138,6 +3214,11 @@ export function SourceEditor({
           ),
         )
         ;(editor as unknown as MeasuredView).measure()
+        readTrace('features.set', editor, {
+          phase: 'measured',
+          dead: isViewDead(editor),
+          scrollTop: scrollerOf(editor).scrollTop,
+        })
       }
       /** Draws these and says what failed in it, from CodeMirror's widgets. */
       const failureWith = (shown: readonly InstalledFeature[]) => {

@@ -57,6 +57,25 @@ import {
 } from './formatted-contributions.ts'
 import { keepRead, keepReading } from './reading-position.ts'
 
+// DIAGNOSTIC ONLY (never merged): reading-place trace, synchronous plain fields.
+const readTrace = (at: string, view: object | null, data: Record<string, unknown>) => {
+  const g = globalThis as {
+    __hibiReadTrace?: unknown[]
+    __hibiViewIds?: WeakMap<object, number>
+    __hibiViewCount?: number
+  }
+  const ids = (g.__hibiViewIds ??= new WeakMap())
+  let id: number | null = null
+  if (view) {
+    id = ids.get(view) ?? null
+    if (id === null) {
+      id = g.__hibiViewCount = (g.__hibiViewCount ?? 0) + 1
+      ids.set(view, id)
+    }
+  }
+  ;(g.__hibiReadTrace ??= []).push({ t: performance.now(), at, view: id, ...data })
+}
+
 /**
  * The formatted view owns its syntax tree. A transaction parses for at most
  * one slice and keeps the unfinished parse, which idle slices continue, so no
@@ -334,7 +353,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
     create(state) {
       const restored = state.facet(restoredOpening)
       const from = Math.min(restored ?? 0, state.doc.length)
-      return start(
+      const created = start(
         state,
         [],
         { from, to: Math.min(state.doc.length, from + 8192) },
@@ -346,6 +365,12 @@ function syntaxField(options: FormattedSyntaxOptions) {
           ? slice
           : Math.min(restoredFirstSlice, options.slice ?? restoredFirstSlice),
       )
+      readTrace('syntax.create', null, {
+        restored,
+        demand: [created.demand.from, created.demand.to],
+        complete: created.complete,
+      })
+      return created
     },
     update(value, transaction) {
       let demand = value.demand,
@@ -405,14 +430,14 @@ function syntaxField(options: FormattedSyntaxOptions) {
       transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
         ranges.push({ fromA, toA, fromB, toB })
       })
-      if (
-        state.facet(formattedMarkdown) !==
-          startState.facet(formattedMarkdown) ||
-        state.facet(formattedOpaque) !== startState.facet(formattedOpaque) ||
-        (prefix !== value.prefix &&
-          mappedPrefix(value.prefix, ranges) !== prefix)
-      )
-        return start(
+      const markdownChanged =
+        state.facet(formattedMarkdown) !== startState.facet(formattedMarkdown)
+      const opaqueChanged =
+        state.facet(formattedOpaque) !== startState.facet(formattedOpaque)
+      const prefixChanged =
+        prefix !== value.prefix && mappedPrefix(value.prefix, ranges) !== prefix
+      if (markdownChanged || opaqueChanged || prefixChanged) {
+        const restarted = start(
           transaction.state,
           [],
           transaction.docChanged
@@ -420,6 +445,16 @@ function syntaxField(options: FormattedSyntaxOptions) {
             : demand,
           false,
         )
+        readTrace('syntax.restart', null, {
+          markdownChanged,
+          opaqueChanged,
+          prefixChanged,
+          demand: [restarted.demand.from, restarted.demand.to],
+          complete: restarted.complete,
+          wasComplete: value.complete,
+        })
+        return restarted
+      }
       // Code whose language changed parses again, like edited text.
       if (code && !transaction.docChanged)
         for (const { from, to } of code)
@@ -576,6 +611,11 @@ function driver(
       private unsubscribe = codeLanguages.subscribe(() => this.queueCode())
       constructor(view: EditorView) {
         this.view = view
+        // DIAGNOSTIC ONLY (never merged): the test reads each view's completeness.
+        ;(
+          (globalThis as { __hibiSyntaxComplete?: WeakMap<object, () => boolean> })
+            .__hibiSyntaxComplete ??= new WeakMap()
+        ).set(view, () => view.state.field(field).complete)
         this.schedule(true)
         this.followBoundaries()
       }
@@ -760,6 +800,13 @@ function driver(
             ...(same ? [] : [setDemand.of({ from, to })]),
             resume.of(bounded),
           ],
+        })
+        const after = view.state.field(field)
+        readTrace('syntax.run', view, {
+          viewport: [from, to],
+          demand: [after.demand.from, after.demand.to],
+          complete: after.complete,
+          settling: after.settling,
         })
       }
       private scheduleNear() {

@@ -3679,27 +3679,32 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     })
 })
 
-test('typing in a waiting table proves each changed row only once', {
+test('typing in a table only proves rows while waiting for a redraw', {
   timeout: 120000,
 }, async (t) => {
-  for (const header of [false, true])
-    await t.test(header ? 'header' : 'body', async () => {
+  for (const [name, header, waiting] of [
+    ['current body', false, false],
+    ['current header', true, false],
+    ['waiting body', false, true],
+    ['waiting header', true, true],
+  ])
+    await t.test(name, async () => {
       const text = 'q'.repeat(50000)
       const row = text + ' | b |'
       const note =
         `before\n\n${header ? row : '| a | b |'}\n| - | - |\n${header ? '| c | d |' : row}\n\nafter` +
         '\n\nparagraph'.repeat(2000)
       await harness.evaluate(
-        (doc) =>
+        ({ doc, waiting }) =>
           window.tables.mount(
             doc,
             { width: 1000, height: 800 },
             {
               editable: true,
-              slice: 0,
+              slice: waiting ? 0 : 100000,
             },
           ),
-        note,
+        { doc: note, waiting },
       )
       await harness.waitForFunction(() => !window.tables.settling())
       await harness
@@ -3740,13 +3745,14 @@ test('typing in a waiting table proves each changed row only once', {
         }
       })
       try {
-        assert.equal(result.settling, true)
+        assert.equal(result.settling, waiting)
         assert.ok(
           result.doc === note.replace(text, `qxxxxx${text.slice(1)}`),
           'all five keys reach their cell',
         )
-        assert.ok(result.calls <= 5, `${result.calls} block proofs`)
-        assert.ok(result.units <= 5 * 50100, `${result.units} block units`)
+        const budget = waiting ? 5 : 0
+        assert.ok(result.calls <= budget, `${result.calls} block proofs`)
+        assert.ok(result.units <= budget * 50100, `${result.units} block units`)
       } finally {
         await harness.evaluate(() => window.releaseIdle())
       }

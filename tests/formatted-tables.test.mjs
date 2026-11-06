@@ -6585,3 +6585,65 @@ test('in the app, text typed before an added row draws reaches its cell', {
     `${doc}| <br>xy |  |\n`,
   )
 })
+
+test("a cell's paste that moves the viewport keeps the cell editor before the table's new layout comes", {
+  timeout: 60000,
+}, async () => {
+  const doc =
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
+    '\n\nparagraph'.repeat(2000)
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    doc,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: /^d$/ }).click()
+  await harness.keyboard.press('End')
+  const big = 'z'.repeat(30000)
+  // A slow machine has no idle time for the rest of the paste's reparse; the
+  // pasted text makes the table taller than the viewport and moves it.
+  const pasted = await harness.evaluate((big) => {
+    const held = []
+    const request = window.requestIdleCallback
+    window.requestIdleCallback = (callback) => held.push(callback)
+    window.letIdle = () => {
+      window.requestIdleCallback = request
+      for (const callback of held) request(callback)
+    }
+    window.pastedTable = document.querySelector('.hibi-lp-table')
+    const { viewport } = window.tables.view()
+    const data = new DataTransfer()
+    data.setData('text/plain', big)
+    document.activeElement.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true }),
+    )
+    return { settling: window.tables.settling(), viewport }
+  }, big)
+  try {
+    assert.ok(pasted.settling)
+    const shown = await harness.evaluate(async (before) => {
+      for (let i = 0; i < 3; i++) await window.tables.settle()
+      const { viewport } = window.tables.view()
+      return {
+        moved: viewport.from !== before.from || viewport.to !== before.to,
+        table: window.pastedTable.isConnected,
+        focused: !!document.activeElement?.closest('.hibi-lp-cell-editor'),
+      }
+    }, pasted.viewport)
+    assert.deepEqual(shown, { moved: true, table: true, focused: true })
+  } finally {
+    await harness.evaluate(() => window.letIdle())
+  }
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.evaluate(() => window.tables.settle())
+  await harness.keyboard.type('y')
+  assert.equal(
+    await harness.evaluate(() => window.tables.view().state.doc.toString()),
+    doc.replace('| c | d |', `| c | d${big}y |`),
+  )
+})

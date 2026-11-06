@@ -1325,16 +1325,20 @@ class TableView {
       const content = this.widget.row(head.line).cells[head.column]
       if (!content) return null
       const start = this.now(line.from + content.from)
-      const insert = markdownLiteral(text)
-        .replace(/\r\n?|\n/g, '<br>')
-        .replace(/\|/g, '\\|')
+      const stop = this.now(line.from + content.to)
+      const insert = this.inline(
+        state.sliceDoc(start, stop),
+        Math.max(from, start) - start,
+        Math.min(to, stop) - start,
+        text.replace(/\r\n?/g, '\n'),
+      )
       const caret =
-        insert.length -
+        insert.head -
         markdownLiteral(key ? '' : nativeTableTail(text))
           .replace(/\n/g, '<br>')
           .replace(/\|/g, '\\|').length
       return {
-        changes: { from: start, to: this.now(line.from + content.to), insert },
+        changes: { from: start, to: stop, insert: insert.source },
         selection: { anchor: start + caret },
         userEvent: 'input.type',
         scrollIntoView: true,
@@ -2885,6 +2889,17 @@ function prepareComposition(event: InputStart, view: EditorView) {
   let spec: TransactionSpec
   const effects: StateEffect<unknown>[] = [composeStart.of(Symbol())]
   if (overTable(event, view)) {
+    // Clearing from inside a table to past it keeps the table before the caret.
+    const at = state.selection.main.from
+    for (
+      let node = formattedSyntaxTree(state)?.resolveInner(at, -1) ?? null;
+      node;
+      node = node.parent
+    )
+      if (node.name === 'Table' && node.from < at) {
+        effects.push(revealTable.of({ from: node.from, to: at, stale: false }))
+        break
+      }
     // A native pick clears as typing over it does, in the composition's step.
     const { from, to } = state.selection.main
     if (
@@ -2897,17 +2912,6 @@ function prepareComposition(event: InputStart, view: EditorView) {
     )
       return
     spec = state.replaceSelection('')
-    // Clearing from inside a table to past it keeps the table before the caret.
-    const at = state.selection.main.from
-    for (
-      let node = formattedSyntaxTree(state)?.resolveInner(at, -1) ?? null;
-      node;
-      node = node.parent
-    )
-      if (node.name === 'Table' && node.from < at) {
-        effects.push(revealTable.of({ from: node.from, to: at, stale: false }))
-        break
-      }
   } else if (belowTable(event, view)) spec = paragraphBelow(view)
   else return
   view.dispatch(spec, {
@@ -3467,13 +3471,15 @@ export const contribution: FormattedContribution = {
           )
             return false
           const { from, to } = view.state.selection.main
-          return tableEdit(
-            view,
-            from,
-            to,
-            text,
-            text ? {} : { userEvent: 'delete.selection' },
-            true,
+          return (
+            tableEdit(
+              view,
+              from,
+              to,
+              text,
+              text ? {} : { userEvent: 'delete.selection' },
+              true,
+            ) || type(view, text)
           )
         },
       }),

@@ -3532,6 +3532,13 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       'c',
       ['x', action('row-after'), 'Tab', 'ArrowDown', 'y'],
     ],
+    // A toolbar action there acts on the table the last one left.
+    [
+      'an action in an added row',
+      doc,
+      'c',
+      ['x', action('row-before'), action('column-after'), 'y'],
+    ],
     // An undo that takes the note back to the text the table shows keeps it.
     [
       'fill a missing cell, Shift+Tab, then undo',
@@ -3748,6 +3755,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       const drawn =
         !name.startsWith('Tab in the last cell') &&
         !name.startsWith('Tab in an added row') &&
+        name !== 'an action in an added row' &&
         name !== 'Mod+Enter' &&
         name !== 'before a table at the start'
       assert.deepEqual(await run(note, start, keys, true, drawn), settled)

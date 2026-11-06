@@ -3225,8 +3225,36 @@ const tableEditing = ViewPlugin.fromClass(
       )
       view.dom.addEventListener('focus', this.pick, true)
       view.dom.addEventListener('focusout', this.intent, true)
+      view.dom.addEventListener('cut', this.cut, true)
       view.dom.ownerDocument.addEventListener('pointerdown', this.intent, true)
       view.dom.ownerDocument.defaultView?.addEventListener('blur', this.intent)
+    }
+    /**
+     * Cutting a pick copies what copying it does, the view's Markdown or the
+     * page's cells, then deletes it as Delete does; neither can delete cells.
+     */
+    private cut = (event: ClipboardEvent) => {
+      const { view } = this
+      if (!view.state.field(pickedTable)) return
+      event.preventDefault()
+      const doc = view.dom.ownerDocument
+      let copied = false
+      const takeCopy = (event: ClipboardEvent) => {
+        copied =
+          !event.defaultPrevented ||
+          !!event.clipboardData?.getData('text/plain') ||
+          !!event.clipboardData?.getData('text/html')
+      }
+      doc.addEventListener('copy', takeCopy)
+      try {
+        // A canceled copy can return true without putting anything on the clipboard.
+        if (!doc.execCommand('copy') || !copied || !writable(view.state)) return
+      } finally {
+        doc.removeEventListener('copy', takeCopy)
+      }
+      const { from, to } = view.state.selection.main
+      if (!tableEdit(view, from, to, '', { userEvent: 'delete.cut' }, true))
+        type(view, '')
     }
     private releasePick() {
       this.picked = false
@@ -3388,6 +3416,7 @@ const tableEditing = ViewPlugin.fromClass(
       )
       this.view.dom.removeEventListener('focus', this.pick, true)
       this.view.dom.removeEventListener('focusout', this.intent, true)
+      this.view.dom.removeEventListener('cut', this.cut, true)
       this.view.dom.ownerDocument.removeEventListener(
         'pointerdown',
         this.intent,

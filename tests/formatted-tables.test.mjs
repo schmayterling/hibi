@@ -3807,6 +3807,7 @@ test('typing in a table only proves rows while waiting for a redraw', {
       await harness.keyboard.press('ArrowRight')
       const result = await harness.evaluate(() => {
         const work = window.tables.watchBlockProofs()
+        const inline = window.tables.watchInlineParses()
         const own = window.requestIdleCallback
         let held = []
         window.requestIdleCallback = (callback, options) =>
@@ -3822,16 +3823,21 @@ test('typing in a table only proves rows while waiting for a redraw', {
         }
         const cell = document.querySelector('.hibi-lp-cell-editor .cm-content')
           .cmTile.root.view
-        for (let key = 0; key < 5; key++) {
-          const at = cell.state.selection.main.head
-          cell.dispatch({
-            changes: { from: at, insert: 'x' },
-            selection: { anchor: at + 1 },
-            userEvent: 'input.type',
-          })
+        try {
+          for (let key = 0; key < 5; key++) {
+            const at = cell.state.selection.main.head
+            cell.dispatch({
+              changes: { from: at, insert: 'x' },
+              selection: { anchor: at + 1 },
+              userEvent: 'input.type',
+            })
+          }
+        } finally {
+          inline.stop()
         }
         return {
           ...work,
+          inline: inline.work,
           doc: window.tables.view().state.doc.toString(),
           settling: window.tables.settling(),
         }
@@ -3841,6 +3847,20 @@ test('typing in a table only proves rows while waiting for a redraw', {
         assert.ok(
           result.doc === note.replace(text, `qxxxxx${text.slice(1)}`),
           'all five keys reach their cell',
+        )
+        // A drawn header also renders both cells for its table layout key.
+        const headerKey = header && !waiting
+        assert.ok(
+          result.inline.calls <= (headerKey ? 15 : 5),
+          `${result.inline.calls} inline parses`,
+        )
+        assert.ok(
+          result.inline.units <= (headerKey ? 10 : 5) * 50100,
+          `${result.inline.units} inline units`,
+        )
+        assert.ok(
+          result.inline.steps <= 100,
+          `${result.inline.steps} inline steps`,
         )
         const budget = waiting ? 5 : 0
         assert.ok(result.calls <= budget, `${result.calls} block proofs`)

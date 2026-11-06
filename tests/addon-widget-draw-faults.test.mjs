@@ -1085,12 +1085,13 @@ test('a source view that fails drawing what its own scroll brings in is named an
   await typingAndSavingWork(context, source, 'x')
 })
 
-for (const [presentation, headings] of [
+for (const [presentation, headings, lateReading] of [
   ['formatted', false],
   ['source', false],
   ['formatted', true],
+  ['formatted', false, true],
 ])
-  test(`the rebuilt ${presentation} editor keeps the place being read${headings ? ' in a note with headings' : ''}`, {
+  test(`the rebuilt ${presentation} editor keeps the place being read${headings ? ' in a note with headings' : ''}${lateReading ? ' before older reading work finishes' : ''}`, {
     timeout: 60000,
   }, async (t) => {
     const far = Array.from(
@@ -1110,14 +1111,15 @@ for (const [presentation, headings] of [
     const cpu = await context.page.context().newCDPSession(context.page)
     await cpu.send('Emulation.setCPUThrottlingRate', { rate: 6 })
     const at = source.indexOf('line 300')
-    const lineTop = () =>
+    const lineTop = (releaseReading = false) =>
       context.page.evaluate(
-        ({ pane, at }) => {
+        ({ pane, at, releaseReading }) => {
           const content = document.querySelector(`${pane} .cm-content`)
           const view = content.cmTile.root.view
+          if (releaseReading) window.releaseReadingWork()
           return view.coordsAtPos(at)?.top ?? null
         },
-        { pane: context.pane, at },
+        { pane: context.pane, at, releaseReading },
       )
     await context.page.evaluate(
       ({ pane, at }) => {
@@ -1146,6 +1148,29 @@ for (const [presentation, headings] of [
         ),
     )
     const before = await lineTop()
+    if (lateReading)
+      await context.page.evaluate(() => {
+        const queue = window.queueMicrotask
+        const held = { queue, tasks: [], released: 0 }
+        window.delayedReading = held
+        // A reading snapshot guards movement, composition and selection.
+        window.queueMicrotask = (task) => {
+          const body = task.toString()
+          if (
+            body.includes('.moved') &&
+            body.includes('.composing') &&
+            body.includes('.selection')
+          )
+            held.tasks.push(task)
+          else queue(task)
+        }
+        window.releaseReadingWork = () => {
+          window.queueMicrotask = held.queue
+          const tasks = held.tasks.splice(0)
+          held.released += tasks.length
+          for (const task of tasks) task()
+        }
+      })
     await context.page.keyboard.insertText('Q')
     await named(context, 'bad-ext.bad: decorations boom')
     await editorReady(context)
@@ -1158,7 +1183,20 @@ for (const [presentation, headings] of [
       { pane: context.pane, at },
       { timeout: 5000 },
     )
-    const after = await lineTop()
+    if (lateReading) {
+      // The bookmark finishes before the older reading work is delivered.
+      const aligned = await lineTop()
+      assert.ok(
+        Math.abs(aligned - before) < 60,
+        `bookmark moved ${before} to ${aligned}`,
+      )
+    }
+    const after = await lineTop(lateReading)
+    if (lateReading)
+      assert.ok(
+        await context.page.evaluate(() => window.delayedReading.released > 0),
+        'the delayed reading work ran',
+      )
     t.diagnostic(`line moved ${before} to ${after}`)
     assert.ok(Math.abs(after - before) < 60, `line moved ${before} to ${after}`)
   })

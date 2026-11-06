@@ -150,6 +150,7 @@ import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { mappedPositionAt } from './native-dom-selection'
+import { scrolledItself } from './reading-position'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -334,6 +335,7 @@ function keptPlaceScroll(top: number, margin: number) {
       if (Math.abs(offset - margin) >= 0.5)
         scrollerOf(view).scrollTop += offset - margin
       held = scrollerOf(view).scrollTop
+      scrolledItself(view)
     },
   }
   const begin = (view: EditorView) => {

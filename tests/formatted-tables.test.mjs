@@ -3030,7 +3030,11 @@ test('edit keys stay in a table action cell while its parse is pending', {
 test('document commands leave an undrawn action cell intact and focused', {
   timeout: 30000,
 }, async (t) => {
-  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  // Longer than one parse chunk: the action's reparse is still pending when
+  // the key comes, as in a long note.
+  const doc =
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter' +
+    '\n\nparagraph text'.repeat(450)
   for (const key of [
     { key: 'Tab' },
     { key: 'Tab', shiftKey: true },
@@ -3054,6 +3058,11 @@ test('document commands leave an undrawn action cell intact and focused', {
       const result = await harness.evaluate((key) => {
         const view = window.tables.view()
         const done = window.tables.runTableAction('row-after')
+        const waiting = {
+          pending: window.tables.settling(),
+          focused: view.hasFocus,
+          cell: !!document.activeElement?.closest('td, th'),
+        }
         const before = view.state.doc
         const event = new KeyboardEvent('keydown', {
           ...key,
@@ -3062,12 +3071,20 @@ test('document commands leave an undrawn action cell intact and focused', {
         })
         view.contentDOM.dispatchEvent(event)
         return {
+          waiting,
           done,
           prevented: event.defaultPrevented,
           unchanged: view.state.doc === before,
           focused: view.hasFocus,
         }
       }, key)
+      // The action's cell has not drawn yet when the key comes.
+      assert.deepEqual(result.waiting, {
+        pending: true,
+        focused: true,
+        cell: false,
+      })
+      delete result.waiting
       assert.deepEqual(result, {
         done: true,
         prevented: true,
@@ -7286,8 +7303,10 @@ test('in the app, text typed before an added row draws reaches its cell', {
   timeout: 60000,
 }, async () => {
   await openFormatted()
+  // A table longer than one parse chunk, so the added row's reparse is
+  // still pending when the next key comes.
   const doc = `${'line\n\n'.repeat(60)}| aa | bb |\n| -- | -- |\n${Array.from(
-    { length: 80 },
+    { length: 400 },
     (_, row) => `| r${row} | v${row} |`,
   ).join('\n')}\n`
   const file = join(folder, 'slow-tab.md')
@@ -7301,7 +7320,7 @@ test('in the app, text typed before an added row draws reaches its cell', {
   await clickMenu(app, 'Open…')
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(
-    () => document.activeElement?.closest('td')?.textContent.trim() === 'v79',
+    () => document.activeElement?.closest('td')?.textContent.trim() === 'v399',
   )
   // No user setting forces a parse to miss its slice. Exhaust its deadline
   // during Tab and hold idle work until the early key has arrived.
@@ -7357,7 +7376,7 @@ test('in the app, text typed before an added row draws reaches its cell', {
   await page.waitForFunction(
     () =>
       document.activeElement?.closest('td')?.parentElement.dataset.line ===
-      '82',
+      '402',
   )
   await page.keyboard.type('y')
   await waitForAsync(

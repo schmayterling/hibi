@@ -1059,3 +1059,83 @@ test('parsed chunks found by position are the parsed chunks touching that range'
     )
   }
 })
+
+// The rebuilt reading note: 400 short paragraphs, shorter than one chunk.
+const shortNote = `${Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')}end\n\n`
+
+test('a wanted rest within one chunk is parsed without a boundary scan first', () => {
+  const counts = probe()
+  const parse = new ChunkedMarkdownParser(full, base, {
+    probe: counts,
+  }).startChunkedParse(stringInput(shortNote), [], null)
+  let advances = 1
+  let tree = parse.advance()
+  for (; !tree; advances++) tree = parse.advance()
+  // Before, a scan read the whole rest and the parse after it read it again.
+  assert.equal(counts.scannedUnits, 0)
+  assert.ok(advances <= 2, `${advances} steps`)
+  same(nodes(tree), nodes(full.parse(shortNote)), shortNote, 'short rest')
+  // A rest longer than a chunk is still split into chunks.
+  const long = shortNote.repeat(3)
+  const longTree = finish(
+    new ChunkedMarkdownParser(full, base).startChunkedParse(
+      stringInput(long),
+      [],
+      null,
+    ),
+  )
+  assert.ok(parsedChunks(longTree).length > 1)
+  same(nodes(longTree), nodes(full.parse(long)), long, 'long rest')
+})
+
+test('a rest within one chunk with an old chunk ahead still reuses that chunk', () => {
+  const before = shortNote.repeat(3)
+  // A deletion that leaves the rest after the edit within one chunk, with an
+  // old chunk boundary inside it.
+  const from = 633,
+    removed = 3500
+  const text = before.slice(0, from) + before.slice(from + removed)
+  const old = finish(
+    new ChunkedMarkdownParser(full, base).startChunkedParse(
+      stringInput(before),
+      [],
+      null,
+    ),
+  )
+  const fragments = TreeFragment.applyChanges(TreeFragment.addTree(old), [
+    { fromA: from, toA: from + removed, fromB: from, toB: from },
+  ])
+  const counts = probe()
+  const tree = finish(
+    new ChunkedMarkdownParser(full, base, { probe: counts }).startChunkedParse(
+      stringInput(text),
+      fragments,
+      null,
+    ),
+  )
+  assert.ok(counts.reusedNodes > 0, JSON.stringify(counts))
+  same(nodes(tree), nodes(full.parse(text)), text, 'edited rest')
+})
+
+test('a rest within one chunk outside the demand stays pending', () => {
+  const text = shortNote.repeat(4)
+  const tree = finish(
+    new ChunkedMarkdownParser(full, base).startChunkedParse(
+      stringInput(text),
+      [],
+      { from: 0, to: 200 },
+    ),
+  )
+  assert.ok(uncovered(tree, text.length - 100, text.length))
+  // A boundary-only demand scans a short note without parsing it.
+  const counts = probe()
+  const boundaries = finish(
+    new ChunkedMarkdownParser(full, base, { probe: counts }).startChunkedParse(
+      stringInput(shortNote),
+      [],
+      { from: Number.POSITIVE_INFINITY, to: Number.POSITIVE_INFINITY },
+    ),
+  )
+  assert.equal(counts.scannedUnits, shortNote.length)
+  assert.ok(uncovered(boundaries, 0, shortNote.length))
+})

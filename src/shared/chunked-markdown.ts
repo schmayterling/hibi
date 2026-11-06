@@ -1277,9 +1277,21 @@ class ChunkedParse implements ChunkedPartialParse {
       this.addTail()
       return false
     }
+    const size = this.parser.chunkSize
+    // A wanted rest of the note within one chunk, with no old chunk boundary
+    // ahead, is parsed as one chunk: it ends at the note's end, a known safe
+    // end, and a scan would only find that chunk.
+    const length = this.input.length
+    if (
+      length - this.pos <= size &&
+      this.wanted(this.pos, length) &&
+      !this.hints(this.pos, length).size
+    ) {
+      this.startParse(this.pos, length)
+      return true
+    }
     // Boundary scans keep replay points for later leaf proofs. A finite
     // viewport can scan farther ahead, splitting its window into pending chunks.
-    const size = this.parser.chunkSize
     this.startScan(
       demand &&
         Number.isFinite(demand.from) &&

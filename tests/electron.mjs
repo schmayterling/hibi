@@ -508,7 +508,8 @@ export const electron = {
     }
     const report = (page) => {
       page.on('pageerror', (error) => {
-        const text = error.stack ?? String(error)
+        // Playwright leaves the stack empty when the error has no frames.
+        const text = error.stack || String(error)
         console.error('electron-renderer-uncaught', text)
         pageError(error.message, text)
       })

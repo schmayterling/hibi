@@ -1003,6 +1003,15 @@ test('partial native table picks keep unselected cell text and one-step history'
         )
 })
 
+test('native table input keeps the caret before an escaped literal tail', async (t) => {
+  const oracle = inputFixture('multiline', 'cells')
+  const { page, rich } = await openInputFixture(oracle.source)
+  await selectNativeInputTable(t, page, rich, 'cells', oracle)
+  // Several native breaks put the entire escaped entity after the caret.
+  await page.keyboard.insertText('a\n\n\n\n\n&amp;')
+  assert.deepEqual(await cmCaretText(rich), ['', '&amp;'])
+})
+
 test('a native table pick keeps the shared input guards', {
   timeout: 60000,
 }, async (t) => {

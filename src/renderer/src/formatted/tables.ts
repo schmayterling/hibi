@@ -1326,20 +1326,30 @@ class TableView {
       if (!content) return null
       const start = this.now(line.from + content.from)
       const stop = this.now(line.from + content.to)
-      const insert = this.inline(
+      const cleared = this.inline(
         state.sliceDoc(start, stop),
         Math.max(from, start) - start,
         Math.min(to, stop) - start,
-        text.replace(/\r\n?/g, '\n'),
+        '',
       )
+      const insert = markdownLiteral(text)
+        .replace(/\r\n?|\n/g, '<br>')
+        .replace(/\|/g, '\\|')
       const caret =
-        insert.head -
+        insert.length -
         markdownLiteral(key ? '' : nativeTableTail(text))
           .replace(/\n/g, '<br>')
           .replace(/\|/g, '\\|').length
       return {
-        changes: { from: start, to: stop, insert: insert.source },
-        selection: { anchor: start + caret },
+        changes: {
+          from: start,
+          to: stop,
+          insert:
+            cleared.source.slice(0, cleared.head) +
+            insert +
+            cleared.source.slice(cleared.head),
+        },
+        selection: { anchor: start + cleared.head + caret },
         userEvent: 'input.type',
         scrollIntoView: true,
       }

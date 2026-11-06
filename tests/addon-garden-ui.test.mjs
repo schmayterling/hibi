@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const entry = (id, name, fields = {}) => ({
@@ -166,18 +166,16 @@ test('hibi garden tab, installs, and addon links', {
   await t.test(
     'filtering keeps controls aligned with the sidebar',
     async () => {
-      const size = await app.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0].getContentSize(),
-      )
-      // Overlay scrollbars (macOS with a trackpad) take no space, so give
-      // the page the classic scrollbar Windows, Linux and mouse users see.
-      await page.evaluate(() => {
-        const style = document.createElement('style')
-        style.id = 'classic-scrollbar'
-        style.textContent =
-          '.settings-content { scrollbar-width: auto; scrollbar-color: auto } .settings-content::-webkit-scrollbar { width: 10px }'
-        document.head.append(style)
-      })
+      const windowState = () =>
+        app.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows()[0]
+          return [
+            window.getContentSize(),
+            window.isVisible(),
+            window.isFocused(),
+          ]
+        })
+      const state = await windowState()
       const filter = addons.getByRole('searchbox', { name: /filter addons/i })
       const geometry = () =>
         page.evaluate(() => {
@@ -197,6 +195,22 @@ test('hibi garden tab, installs, and addon links', {
           }
         })
       try {
+        // macOS keeps a shown window inside the screen's work area, which is
+        // shorter than 1000 px on hosted runners, so resize it hidden as local
+        // runs do.
+        await app.evaluate(({ BrowserWindow }) => {
+          if (process.platform === 'darwin')
+            BrowserWindow.getAllWindows()[0].hide()
+        })
+        // Overlay scrollbars (macOS with a trackpad) take no space, so give
+        // the page the classic scrollbar Windows, Linux and mouse users see.
+        await page.evaluate(() => {
+          const style = document.createElement('style')
+          style.id = 'classic-scrollbar'
+          style.textContent =
+            '.settings-content { scrollbar-width: auto; scrollbar-color: auto } .settings-content::-webkit-scrollbar { width: 10px }'
+          document.head.append(style)
+        })
         // Wide windows move the centered column, narrow ones resize it.
         for (const width of [1440, 800]) {
           await app.evaluate(({ BrowserWindow }, width) => {
@@ -205,6 +219,11 @@ test('hibi garden tab, installs, and addon links', {
           await page.waitForFunction(
             (width) => window.innerWidth === width,
             width,
+          )
+          assert.equal(
+            await page.evaluate(() => window.innerHeight),
+            1000,
+            'the window is as tall as asked',
           )
           const all = await geometry()
           assert.equal(all.scrolls, true, 'the full list needs a scrollbar')
@@ -233,13 +252,33 @@ test('hibi garden tab, installs, and addon links', {
           assert.deepEqual(await geometry(), all, `at ${width}px`)
         }
       } finally {
-        await filter.fill('')
-        await page.evaluate(() =>
-          document.getElementById('classic-scrollbar').remove(),
+        await app.evaluate(
+          ({ BrowserWindow }, [[width, height], visible, focused]) => {
+            const window = BrowserWindow.getAllWindows()[0]
+            window.setContentSize(width, height)
+            if (process.platform === 'darwin' && visible) {
+              if (focused) window.show()
+              else window.showInactive()
+            }
+          },
+          state,
         )
-        await app.evaluate(({ BrowserWindow }, [width, height]) => {
-          BrowserWindow.getAllWindows()[0].setContentSize(width, height)
-        }, size)
+        await waitForAsync(
+          app,
+          ({ BrowserWindow }, focused) =>
+            BrowserWindow.getAllWindows()[0].isFocused() === focused,
+          state[2],
+          { label: 'the window has its previous focus' },
+        )
+        assert.deepEqual(
+          await windowState(),
+          state,
+          'the layout check restores the window',
+        )
+        await page.evaluate(() =>
+          document.getElementById('classic-scrollbar')?.remove(),
+        )
+        await filter.fill('')
       }
     },
   )

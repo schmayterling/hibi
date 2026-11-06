@@ -31,10 +31,8 @@ jobs:
       - name: pick clipboard probe
         shell: bash
         run: |
-          run() { node --import ./tests/file-limit.mjs --test --test-reporter=tap --test-concurrency=1 --test-name-pattern='^cut over a native table pick' tests/zz-pick-html-probe.test.mjs; }
           if [ "$RUNNER_OS" = Linux ]; then
-            export -f run
-            dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' bash -c run
+            dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' bash probe/run.sh
           else
-            run
+            bash probe/run.sh
           fi

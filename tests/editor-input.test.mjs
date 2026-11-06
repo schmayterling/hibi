@@ -2397,14 +2397,21 @@ for (const hiddenSource of [false, true]) {
       await waitForDocumentEditor(app, page)
     }
     await rich.focus()
-    await page.evaluate(
-      () =>
-        new Promise((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve)),
-        ),
-    )
     await inputWorkProbe(rich)
-    const expectedChecks = await page.evaluate((hiddenSource) => {
+    const expectedChecks = await page.evaluate(async (hiddenSource) => {
+      // Two frames can still leave the toolbar's afterPaint message queued.
+      // Drain that queue before resetting counts and holding future frames.
+      await new Promise((resolve) => {
+        const drained = new MessageChannel()
+        drained.port1.onmessage = () => {
+          drained.port1.close()
+          drained.port2.close()
+          resolve()
+        }
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => drained.port2.postMessage(null)),
+        )
+      })
       window.countedFormatChecks = []
       window.hiddenInputUpdates = 0
       // Each toolbar refresh inspects every action in one task. A refresh
@@ -2463,10 +2470,13 @@ for (const hiddenSource of [false, true]) {
         window.requestAnimationFrame = request
         window.cancelAnimationFrame = cancel
         delete window.releaseInputFrames
-        request((time) => {
-          for (const callback of frames.values()) callback(time)
-          window.firstInputFrameChecks = window.countedFormatChecks.length
-        })
+        return new Promise((resolve) =>
+          request((time) => {
+            for (const callback of frames.values()) callback(time)
+            window.firstInputFrameChecks = window.countedFormatChecks.length
+            resolve()
+          }),
+        )
       }
       return [
         ...document.querySelectorAll(

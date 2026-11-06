@@ -587,27 +587,36 @@ export class CellEditor {
             this.outer = this.outer.map(update.changes)
             this.atomic = this.atomic.map(update.changes)
             this.runs = this.runs.map(update.changes)
-          } else if (
-            host.current() &&
-            (update.selectionSet ||
-              update.focusChanged ||
-              update.transactions.some((transaction) =>
-                transaction.effects.some((effect) =>
-                  effect.is(formattedRefresh),
-                ),
-              ))
+            return
+          }
+          if (
+            !update.selectionSet &&
+            !update.focusChanged &&
+            !update.transactions.some((transaction) =>
+              transaction.effects.some((effect) => effect.is(formattedRefresh)),
+            )
           )
-            ({
-              decorations: this.decorations,
-              outer: this.outer,
-              atomic: this.atomic,
-              runs: this.runs,
-            } = editorDecorations(
-              host.main.state,
-              update.view,
-              host.span()?.from,
-              host.customBody(),
-            ))
+            return
+          // Also while the table waits to draw again, where the cell's text is now.
+          const span = host.span()
+          if (
+            !host.current() &&
+            (!span ||
+              host.main.state.sliceDoc(span.from, span.to) !==
+                update.state.doc.toString())
+          )
+            return
+          ;({
+            decorations: this.decorations,
+            outer: this.outer,
+            atomic: this.atomic,
+            runs: this.runs,
+          } = editorDecorations(
+            host.main.state,
+            update.view,
+            span?.from,
+            host.customBody(),
+          ))
         }
       },
       {
@@ -1060,6 +1069,11 @@ export class CellEditor {
   /** Take the cell's place now, for an editor opened while its table waits to draw again. */
   keep(place: { from: number; to: number; closed: boolean } | null) {
     this.kept = place
+  }
+
+  /** The last kept place, still to be validated against its document before mapping a change. */
+  get keptPlace() {
+    return this.kept
   }
 
   /**

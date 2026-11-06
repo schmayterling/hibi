@@ -438,12 +438,17 @@ class TableView {
   /** Header cells' text, part of the table's key in the size store. */
   private header: string[] = []
   /** Input at an action's new cell while its old widget waits for a redraw. */
-  private waiting: {
-    doc: Text
-    from: number
-    to: number
-    closed: boolean
-  } | null = null
+  private waiting:
+    | (Cell & {
+        doc: Text
+        from: number
+        to: number
+        closed: boolean
+        /** The table's lines and columns after the action. */
+        lines: number
+        columns: number
+      })
+    | null = null
   /** Column widths by index, 0 for automatic, and the heights of sized rows by index, counting the header. */
   private sizes: {
     key: string | null
@@ -509,8 +514,15 @@ class TableView {
    * from the text now.
    */
   private get known() {
-    return this.current || this.editing?.editor.placed !== undefined
+    return (
+      this.current ||
+      this.shaped === this.view.state.doc ||
+      this.editing?.editor.placed !== undefined
+    )
   }
+
+  /** A document other than the snapshot's in which the table has the snapshot's rows and columns: only its cells' text changed. */
+  private shaped: Text | null = null
 
   get windowed() {
     return this.heights !== null
@@ -961,13 +973,23 @@ class TableView {
 
   /** The cell at a position of the formatted view's document, with the offset in its text. */
   locate(pos: number): (Cell & { offset: number | 'end' }) | null {
-    if (!this.current) return null
+    if (!this.known) return null
     const { widget } = this
-    const snapshot = pos - this.range().from + widget.from
-    const index = widget.doc.lineAt(snapshot).number - widget.first
+    // While only cells' text changed, the lines are the snapshot's, read now.
+    const doc = this.current ? widget.doc : this.view.state.doc
+    const snapshot = this.current ? pos - this.range().from + widget.from : pos
+    const first = this.current
+      ? widget.first
+      : doc.lineAt(this.range().from).number
+    const index = doc.lineAt(snapshot).number - first
     const line = Math.max(0, Math.min(this.lines - 1, index === 1 ? 0 : index))
-    const { from, text } = widget.line(line)
-    const row = widget.row(line)
+    const { from, text } = this.current
+      ? widget.line(line)
+      : doc.line(first + line)
+    const start = widget.rowStart(line, text)
+    const row = this.current
+      ? widget.row(line)
+      : parseRow(text.slice(start), start)
     const count = Math.min(row.cells.length, this.aligned.length)
     for (let column = 0; column < count; column++) {
       const span = cellSpan(row, column, text.length)!
@@ -992,7 +1014,10 @@ class TableView {
 
   /** A cell's text between its delimiters now; null while stale or its row ends before it. */
   private span({ line, column }: Cell) {
-    if (!this.current) return null
+    if (!this.current)
+      return this.known
+        ? this.cellIn(this.view.state.doc, { line, column })
+        : null
     const { text, from } = this.widget.line(line)
     const span = cellSpan(this.widget.row(line), column, text.length)
     if (!span) return null
@@ -1579,39 +1604,65 @@ class TableView {
 
   private move(move: CellMove): boolean {
     if (!this.editing) return false
-    const { line, column } = this.editing
-    // The last row to edit; a table of only a header has no body rows yet.
-    const last = this.lines > 2 ? this.lines - 1 : 0,
-      columns = this.aligned.length
-    const below = line === 0 ? 2 : line + 1,
-      above = line === 2 ? 0 : line - 1
-    // Tab selects the text of the cell it moves to, as in the rich editor.
-    const tab = move === 'next' || move === 'previous'
-    switch (move) {
-      case 'next':
-      case 'right':
-        if (column + 1 < columns)
-          return this.edit(line, column + 1, tab ? 'all' : 'start')
-        if (line < last) return this.edit(below, 0, tab ? 'all' : 'start')
-        // Tab in the last cell adds a row, as in the rich editor.
-        if (move === 'next' && this.run('row-after')) return true
-        this.leave(true)
-        return true
-      case 'previous':
-      case 'left':
-        if (column > 0) return this.edit(line, column - 1, tab ? 'all' : 'end')
-        if (line > 0) return this.edit(above, columns - 1, tab ? 'all' : 'end')
-        if (move === 'left') this.leave(false)
-        return true
-      case 'down':
-        if (line < last) return this.edit(below, column, 'end')
-        this.leave(true)
-        return true
-      case 'up':
-        if (line > 0) return this.edit(above, column, 'end')
-        this.leave(false)
-        return true
-    }
+    const to = step(move, this.editing, this.lines, this.aligned.length)
+    if (!to) return true
+    if ('at' in to) return this.edit(to.line, to.column, to.at)
+    // Tab in the last cell adds a row, as in the rich editor.
+    if (to.add && this.run('row-after')) return true
+    this.leave(to.after)
+    return true
+  }
+
+  /** Move from the action's cell as from an edited one, in the table the action left, before it draws. */
+  moveWaiting(move: CellMove) {
+    if (!this.waitingForInput) return false
+    const waiting = this.waiting!
+    const to = step(move, waiting, waiting.lines, waiting.columns)
+    // ponytail: leaving the table or adding a row waits for the draw; both need the new table's bounds.
+    if (!to || !('at' in to)) return true
+    const { doc } = this.view.state
+    const span = this.cellIn(doc, to)
+    // ponytail: a cell its row lacks waits for the draw too.
+    if (!span) return true
+    const { start, end } = padding(doc.sliceString(span.from, span.to))
+    const anchor = span.from + (to.at === 'end' ? end : start)
+    this.waiting = { ...waiting, ...span, line: to.line, column: to.column }
+    this.view.dispatch({
+      selection: { anchor, head: to.at === 'all' ? span.from + end : anchor },
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    return true
+  }
+
+  /** An arrow in the action's cell: the caret moves in its text, and from its content's edge to the next cell. */
+  arrowWaiting(move: 'left' | 'right' | 'up' | 'down') {
+    if (!this.waitingForInput) return false
+    const { from, to, head, empty } = this.view.state.selection.main
+    const waiting = this.waiting!
+    const { start, end } = padding(
+      this.view.state.sliceDoc(waiting.from, waiting.to),
+    )
+    const right = move === 'right'
+    let anchor: number
+    if (move === 'up' || move === 'down') return this.moveWaiting(move)
+    if (head <= waiting.from + start && !right) return this.moveWaiting('left')
+    if (head >= waiting.from + end && right) return this.moveWaiting('right')
+    if (!empty) anchor = right ? to : from
+    else
+      anchor =
+        waiting.from +
+        findClusterBreak(
+          this.view.state.sliceDoc(waiting.from, waiting.to),
+          head - waiting.from,
+          right,
+        )
+    this.view.dispatch({
+      selection: { anchor },
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    return true
   }
 
   /**
@@ -1687,39 +1738,118 @@ class TableView {
       page.removeAllRanges()
     editing.editor.destroy()
     // The cell renders statically again unless its table is being removed.
-    if (redraw && editing.line < this.lines && editing.element.isConnected) {
-      let line = this.widget.line(editing.line),
-        cell = this.widget.row(editing.line).cells[editing.column]
-      // Edits the old snapshot lacks show until the table draws again.
-      if (place) {
-        const now = this.view.state.doc.lineAt(place.from)
-        const { start, end } = padding(
-          now.text.slice(place.from - now.from, place.to - now.from),
-        )
-        line = { from: now.from - this.now(0), text: now.text }
-        cell = {
-          from: place.from - now.from + start,
-          to: place.from - now.from + end,
-        }
-      }
+    if (redraw && editing.line < this.lines && editing.element.isConnected)
       editing.element.replaceWith(
-        this.cell(editing.line ? 'td' : 'th', line, cell, editing.column),
+        place
+          ? this.cellNow(editing, place)
+          : this.cell(
+              editing.line ? 'td' : 'th',
+              this.widget.line(editing.line),
+              this.widget.row(editing.line).cells[editing.column],
+              editing.column,
+            ),
       )
-    }
+  }
+
+  /** A cell drawn from its text now, which the old snapshot lacks until the table draws again. */
+  private cellNow({ line, column }: Cell, place: { from: number; to: number }) {
+    const now = this.view.state.doc.lineAt(place.from)
+    const { start, end } = padding(
+      now.text.slice(place.from - now.from, place.to - now.from),
+    )
+    return this.cell(
+      line ? 'td' : 'th',
+      { from: now.from - this.now(0), text: now.text },
+      { from: place.from - now.from + start, to: place.from - now.from + end },
+      column,
+    )
   }
 
   /** Follow the edited row through the formatted view's changes; where it was when they deleted it. */
-  map(changes: ChangeDesc): Lost | null {
+  map(changes: ChangeDesc, before: Text): Lost | null {
+    const editing = this.editing
+    const kept = editing?.editor.keptPlace
+    const known =
+      this.widget.doc === before ||
+      this.shaped === before ||
+      (kept !== undefined && this.valid(kept, before))
+    const cells = known ? this.cellsOnly(changes, before) : null
+    this.shaped = cells && this.view.state.doc
     this.track(changes)
     this.handOver(changes)
-    const editing = this.editing
+    // Other cells show their text now too.
+    for (const cell of cells ?? []) {
+      if (cell.line === editing?.line && cell.column === editing.column)
+        continue
+      const row = cell.line
+        ? this.rendered.get(cell.line - 2)?.element
+        : this.head
+      const element = row?.cells[cell.column]
+      const place = this.cellIn(this.view.state.doc, cell)
+      if (element && place) element.replaceWith(this.cellNow(cell, place))
+    }
     if (!editing) return null
     editing.editor.changed(changes)
+    // A change in another cell, as undo of typing there, leaves this one
+    // where its row has it now.
+    if (
+      this.shaped &&
+      !editing.editor.view.composing &&
+      editing.editor.placed === undefined
+    ) {
+      const span = this.cellIn(this.shaped, editing)
+      editing.editor.keep(span)
+      if (span)
+        editing.editor.sync(this.shaped.sliceString(span.from, span.to), span)
+    }
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from
       ? null
       : { at: editing.from, column: editing.column }
+  }
+
+  /**
+   * The cells changes from `before` edited, when they only edit cells' text and leave each one
+   * cell, so the table keeps its rows and columns: each within a line of a
+   * header or body row, between the same pipes, in a row that still reads
+   * as one.
+   */
+  private cellsOnly(changes: ChangeDesc, before: Text): Cell[] | null {
+    const { doc } = this.view.state
+    if (!this.dom.isConnected || doc.lines !== before.lines) return null
+    const first = before.lineAt(this.range().from).number
+    const cells: Cell[] = []
+    let only = true
+    changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+      if (!only) return
+      const old = before.lineAt(fromA),
+        now = doc.lineAt(fromB)
+      const index = old.number - first
+      const start = this.widget.rowStart(index, old.text)
+      const was = parseRow(old.text.slice(start), start),
+        row = parseRow(now.text.slice(start), start)
+      const column = row.cells.findIndex((_, column) => {
+        const span = cellSpan(row, column, now.text.length)!
+        return span.from <= fromB - now.from && toB - now.from <= span.to
+      })
+      const cell = cellSpan(row, column, now.text.length)
+      only =
+        toA <= old.to &&
+        toB <= now.to &&
+        now.number === old.number &&
+        index >= 0 &&
+        index < this.lines &&
+        index !== 1 &&
+        this.widget.rowStart(index, now.text) === start &&
+        was.pipes.length === row.pipes.length &&
+        was.cells.length === row.cells.length &&
+        !!cell &&
+        !cellFixes(now.text.slice(cell.from, cell.to), cell.closed).length &&
+        (column > 0 || this.rowIsTable(doc, first, index))
+      cells.push({ line: index, column })
+    })
+    return only ? cells : null
   }
 
   /** Offer this table's size state to the view that shows the table after a change. */
@@ -1991,7 +2121,7 @@ class TableView {
       refocus(view)
       return true
     }
-    if (!this.current) return false
+    if (!this.known) return false
     const { anchor, head } = this.view.state.selection.main
     const span = editing && this.span(editing)
     if (
@@ -2208,6 +2338,13 @@ class TableView {
     // The caret moves to that cell with the change, so that redo brings it
     // back there, as the rich editor's history does.
     const target = next && this.cellIn(doc, next)
+    const first = this.view.state.doc.lineAt(this.range().from).number
+    const delimiter = next ? doc.line(first + 1).text : ''
+    const shape = {
+      lines: this.lines + doc.lines - this.view.state.doc.lines,
+      columns: alignments(delimiter.slice(this.widget.rowStart(1, delimiter)))
+        .length,
+    }
     const anchor =
       target &&
       target.from + padding(doc.sliceString(target.from, target.to)).start
@@ -2230,7 +2367,10 @@ class TableView {
       this.edit(next.line, next.column, 'start')
     )
       return true
-    this.waiting = target ? { ...target, doc: this.view.state.doc } : null
+    this.waiting =
+      next && target
+        ? { ...next, ...target, ...shape, doc: this.view.state.doc }
+        : null
     this.view.focus()
     return true
   }
@@ -2253,22 +2393,30 @@ class TableView {
   }
 
   /** Cell text without an opening pipe can instead start a heading, fence or container. */
-  private valid(place: { from: number; to: number; closed: boolean } | null) {
+  private valid(
+    place: { from: number; to: number; closed: boolean } | null,
+    doc = this.view.state.doc,
+  ) {
     const editing = this.editing
     if (!editing) return false
-    const { state } = this.view
-    const span = this.cellIn(state.doc, editing)
+    const span = this.cellIn(doc, editing)
     if (!place || !span) return place === span
     if (place.from !== span.from || place.to !== span.to) return false
     if (editing.column) return true
-    const first = state.doc.lineAt(this.range().from).number
+    const first = doc.lineAt(this.range().from).number
+    return this.rowIsTable(doc, first, editing.line)
+  }
+
+  /** Whether row `line` of the table starting on line `first` of `doc` still reads as a table row: first-cell text without an opening pipe can instead start a heading, fence or container. */
+  private rowIsTable(doc: Text, first: number, line: number) {
     const row = (index: number) => {
-      const { text } = state.doc.line(first + index)
+      const { text } = doc.line(first + index)
       return text.slice(this.widget.rowStart(index, text))
     }
-    const text = row(editing.line)
+    const text = row(line)
     if (text.trimStart().startsWith('|')) return true
-    const source = editing.line ? `| a |\n| - |\n${text}` : `${text}\n${row(1)}`
+    const source = line ? `| a |\n| - |\n${text}` : `${text}\n${row(1)}`
+    const { state } = this.view
     const table = state.facet(formattedBlockParser)(state).parse(source)
       .topNode.firstChild
     return table?.name === 'Table' && table.to === source.length
@@ -2866,6 +3014,48 @@ class TableView {
 }
 
 /**
+ * Where a move from a cell goes in a table of `lines` lines and `columns`
+ * columns: a cell, with where the caret goes there, or out of the table,
+ * after a row Tab adds; null for nowhere.
+ */
+function step(
+  move: CellMove,
+  { line, column }: Cell,
+  lines: number,
+  columns: number,
+):
+  | (Cell & { at: 'all' | 'start' | 'end' })
+  | { after: boolean; add?: boolean }
+  | null {
+  // The last row to edit; a table of only a header has no body rows yet.
+  const last = lines > 2 ? lines - 1 : 0
+  const below = line === 0 ? 2 : line + 1,
+    above = line === 2 ? 0 : line - 1
+  // Tab selects the text of the cell it moves to, as in the rich editor.
+  const tab = move === 'next' || move === 'previous'
+  switch (move) {
+    case 'next':
+    case 'right':
+      if (column + 1 < columns)
+        return { line, column: column + 1, at: tab ? 'all' : 'start' }
+      if (line < last)
+        return { line: below, column: 0, at: tab ? 'all' : 'start' }
+      return { after: true, add: tab }
+    case 'previous':
+    case 'left':
+      if (column > 0)
+        return { line, column: column - 1, at: tab ? 'all' : 'end' }
+      if (line > 0)
+        return { line: above, column: columns - 1, at: tab ? 'all' : 'end' }
+      return tab ? null : { after: false }
+    case 'down':
+      return line < last ? { line: below, column, at: 'end' } : { after: true }
+    case 'up':
+      return line > 0 ? { line: above, column, at: 'end' } : { after: false }
+  }
+}
+
+/**
  * The mounted table containing a position of the formatted view's document.
  * `strict` leaves out its edges, apart from an end in its last cell's text.
  */
@@ -2917,6 +3107,11 @@ function staleTable(view: EditorView) {
 }
 const pauseTableCommand = (view: EditorView) =>
   !!waitingTable(view) || staleTable(view)
+const moveWaiting = (move: CellMove) => (view: EditorView) =>
+  waitingTable(view)?.moveWaiting(move) ?? staleTable(view)
+const arrowWaiting =
+  (move: 'left' | 'right' | 'up' | 'down') => (view: EditorView) =>
+    waitingTable(view)?.arrowWaiting(move) ?? staleTable(view)
 // ponytail: other native commands are declined until draw; replay would need a queue.
 const pendingCommandKeys = defaultKeymap.map((binding) => ({
   ...binding,
@@ -3634,7 +3829,9 @@ const tableEditing = ViewPlugin.fromClass(
       for (const table of tables) {
         const focused = table.focused
         // Before tables redraw: the edited rows where they are now.
-        const lost = update.docChanged ? table.map(update.changes) : null
+        const lost = update.docChanged
+          ? table.map(update.changes, update.startState.doc)
+          : null
         if (focused && (selected || lost))
           this.following.push({ table, lost: selected ? null : lost })
       }
@@ -3868,7 +4065,11 @@ export const contribution: FormattedContribution = {
     { mac: 'Mod-Delete', run: deleteWaiting(true, 'line') },
     { mac: 'Ctrl-h', run: deleteWaiting(false) },
     { mac: 'Ctrl-d', run: deleteWaiting(true) },
-    { key: 'Tab', run: pauseTableCommand, shift: pauseTableCommand },
+    { key: 'Tab', run: moveWaiting('next'), shift: moveWaiting('previous') },
+    { key: 'ArrowLeft', run: arrowWaiting('left') },
+    { key: 'ArrowRight', run: arrowWaiting('right') },
+    { key: 'ArrowUp', run: arrowWaiting('up') },
+    { key: 'ArrowDown', run: arrowWaiting('down') },
     ...pendingCommandKeys,
     { key: 'ArrowDown', run: (view) => enterTable(view, 'down') },
     { key: 'ArrowUp', run: (view) => enterTable(view, 'up') },

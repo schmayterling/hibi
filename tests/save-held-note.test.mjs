@@ -306,7 +306,27 @@ test(
     const { app, page, file, edit, hold, notice } = await open(t)
     await edit('running save')
     const release = await hold()
+    // The first refused rename proves main owns the save before closing.
+    await app.evaluate((_electron, file) => {
+      const fsp = process.getBuiltinModule('node:fs/promises')
+      const rename = fsp.rename
+      globalThis.heldSaveStarted = false
+      fsp.rename = async (from, to) => {
+        try {
+          return await rename(from, to)
+        } catch (error) {
+          if (to === file) {
+            fsp.rename = rename
+            process.getBuiltinModule('node:module').syncBuiltinESMExports()
+            globalThis.heldSaveStarted = true
+          }
+          throw error
+        }
+      }
+      process.getBuiltinModule('node:module').syncBuiltinESMExports()
+    }, file)
     await pressShortcut(app, `${command}+s`)
+    await waitForAsync(app, () => globalThis.heldSaveStarted)
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0].close()
     })

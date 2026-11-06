@@ -444,6 +444,8 @@ class TableView {
         from: number
         to: number
         closed: boolean
+        /** The row ends before the cell: the first input adds it there. */
+        missing?: boolean
         /** The table's lines and columns after the action. */
         lines: number
         columns: number
@@ -961,13 +963,18 @@ class TableView {
     return { from, to: from + this.widget.to - this.widget.from }
   }
 
-  /** Where the table is now while its shape is known: only its cells' text changed since the snapshot. */
+  /** Where the table is now while its bounds are known: only it changed since the snapshot. */
   private bounds() {
     const { from, to } = this.range()
     return {
       from,
       to: to + this.view.state.doc.length - this.widget.doc.length,
     }
+  }
+
+  /** Whether the table's bounds are known: as its shape, or from an action's waiting cell. */
+  private get bounded() {
+    return this.known || this.waitingForInput
   }
 
   /** A position of the widget's text snapshot, where it is now. */
@@ -1039,7 +1046,7 @@ class TableView {
     const { doc } = this.view.state
     const first = doc.lineAt(this.range().from).number
     return {
-      lines: this.lines,
+      lines: this.waitingForInput ? this.waiting!.lines : this.lines,
       line: (index) => doc.line(first + index),
       start: this.widget.start,
       quotes: this.widget.quotes,
@@ -1556,12 +1563,7 @@ class TableView {
       fill: (text) => this.fill(text),
       move: (move) => this.move(move),
       leave: (after) => this.leave(after),
-      exit: () => {
-        if (!this.known || !writable(this.view.state) || !this.ends())
-          return false
-        this.leave(true)
-        return true
-      },
+      exit: () => this.exit(),
       place: () => {
         if (this.editing && this.editing.line > 1)
           this.drawInPlace(this.editing.line - 2)
@@ -1624,17 +1626,27 @@ class TableView {
     if (!this.waitingForInput) return false
     const waiting = this.waiting!
     const to = step(move, waiting, waiting.lines, waiting.columns)
-    // ponytail: leaving the table or adding a row waits for the draw; both need the new table's bounds.
-    if (!to || !('at' in to)) return true
+    if (!to) return true
+    if (!('at' in to)) {
+      if (!to.add || !this.run('row-after')) this.leave(to.after)
+      return true
+    }
     const { doc } = this.view.state
-    const span = this.cellIn(doc, to)
-    // ponytail: a cell its row lacks waits for the draw too.
-    if (!span) return true
-    const { start, end } = padding(doc.sliceString(span.from, span.to))
-    const anchor = span.from + (to.at === 'end' ? end : start)
-    this.waiting = { ...waiting, ...span, line: to.line, column: to.column }
+    const found = this.cellIn(doc, to)
+    // A cell its row lacks waits at the row's end, where the first input adds it.
+    const end = doc.line(doc.lineAt(this.range().from).number + to.line).to
+    const span = found ?? { from: end, to: end, closed: true }
+    const { start, end: stop } = padding(doc.sliceString(span.from, span.to))
+    const anchor = span.from + (to.at === 'end' ? stop : start)
+    this.waiting = {
+      ...waiting,
+      ...span,
+      line: to.line,
+      column: to.column,
+      missing: !found,
+    }
     this.view.dispatch({
-      selection: { anchor, head: to.at === 'all' ? span.from + end : anchor },
+      selection: { anchor, head: to.at === 'all' ? span.from + stop : anchor },
       scrollIntoView: true,
       userEvent: 'select',
     })
@@ -1677,7 +1689,7 @@ class TableView {
    * text on the line right after a table would be one of its rows.
    */
   leave(after: boolean) {
-    if (!this.known) return
+    if (!this.bounded) return
     const { doc } = this.view.state
     const { from, to } = this.bounds()
     this.stopEditing()
@@ -1701,6 +1713,7 @@ class TableView {
     }
     const sent = this.view.state.changes(insert ?? [])
     const expected = sent.apply(doc)
+    this.waiting = null
     this.view.dispatch({
       changes: sent,
       selection: { anchor },
@@ -1713,6 +1726,14 @@ class TableView {
         after ? { from: anchor, to: expected.length } : { from: 0, to: anchor },
       )
     this.view.focus()
+  }
+
+  /** Leave for a paragraph below a table that ends the note, as Mod-Enter does after a final block; false elsewhere. */
+  exit() {
+    if (!this.bounded || !writable(this.view.state) || !this.ends())
+      return false
+    this.leave(true)
+    return true
   }
 
   /** Whether only blank lines follow the table. */
@@ -1783,7 +1804,10 @@ class TableView {
     this.shape = () => {
       this.shape = null
       const cells =
-        !this.current && known ? this.cellsOnly(changes, before, first) : null
+        !this.current && known
+          ? (this.cellsOnly(changes, before, first) ??
+            this.restored(changes, before))
+          : null
       this.shaped = cells && this.view.state
       // Other cells show their text now too.
       for (const cell of cells ?? []) {
@@ -1794,7 +1818,17 @@ class TableView {
           : this.head
         const element = row?.cells[cell.column]
         const place = this.cellIn(this.view.state.doc, cell)
-        if (element && place) element.replaceWith(this.cellNow(cell, place))
+        if (element)
+          element.replaceWith(
+            place
+              ? this.cellNow(cell, place)
+              : this.cell(
+                  cell.line ? 'td' : 'th',
+                  this.widget.line(cell.line),
+                  undefined,
+                  cell.column,
+                ),
+          )
       }
       // A change in another cell, as undo of typing there, leaves this one
       // where its row has it now.
@@ -1868,6 +1902,35 @@ class TableView {
       cells.push({ line: index, column })
     })
     return only ? cells : null
+  }
+
+  /**
+   * The cells of the rows a change in the table took back to the
+   * snapshot's text, as undo of filling a cell its row lacked does, once the
+   * whole table is the snapshot's again; null otherwise. While its shape
+   * was known only cells changed, so the note around it is the snapshot's.
+   */
+  private restored(changes: ChangeDesc, before: Text): Cell[] | null {
+    const { doc } = this.view.state
+    const { from, to } = this.widget
+    const end = to + before.length - this.widget.doc.length
+    let inside = this.dom.isConnected && doc.length === this.widget.doc.length
+    changes.iterChangedRanges((fromA, toA) => {
+      inside &&= fromA >= from && toA <= end
+    })
+    if (
+      !inside ||
+      doc.sliceString(from, to) !== this.widget.doc.sliceString(from, to)
+    )
+      return null
+    const first = doc.lineAt(from).number
+    const cells: Cell[] = []
+    changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+      for (let n = doc.lineAt(fromB).number; n <= doc.lineAt(toB).number; n++)
+        for (const column of this.aligned.keys())
+          cells.push({ line: n - first, column })
+    })
+    return cells
   }
 
   /** Offer this table's size state to the view that shows the table after a change. */
@@ -2197,12 +2260,14 @@ class TableView {
     const waiting = this.waiting!
     const { state } = this.view
     if (from < waiting.from || to > waiting.to) return false
+    // A cell its row lacks starts as the padding a cell editor gives it.
+    const at = waiting.missing ? 1 : 0
     let edit: ReturnType<typeof this.inline>
     try {
       edit = this.inline(
-        state.sliceDoc(waiting.from, waiting.to),
-        from - waiting.from,
-        to - waiting.from,
+        waiting.missing ? '  ' : state.sliceDoc(waiting.from, waiting.to),
+        from - waiting.from + at,
+        to - waiting.from + at,
         text,
         waiting.closed,
       )
@@ -2212,16 +2277,27 @@ class TableView {
       this.view.dispatch({ annotations: rejectedInput.of(error) })
       return true
     }
+    const fill = waiting.missing ? this.fill(edit.source, waiting) : null
+    // The filled cell's text ends the inserted cells, before their closing pipe.
+    const start = fill
+      ? fill.from + fill.insert.length - edit.source.length - 1
+      : waiting.from
     const tr = state.update({
-      changes: { from: waiting.from, to: waiting.to, insert: edit.source },
-      selection: { anchor: waiting.from + edit.head },
+      changes: fill ?? {
+        from: waiting.from,
+        to: waiting.to,
+        insert: edit.source,
+      },
+      selection: { anchor: start + edit.head },
       userEvent,
       scrollIntoView: true,
     })
     this.waiting = {
       ...waiting,
       doc: tr.newDoc,
-      to: waiting.from + edit.source.length,
+      from: start,
+      to: start + edit.source.length,
+      missing: false,
     }
     this.view.dispatch(tr)
     return true
@@ -2281,9 +2357,12 @@ class TableView {
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
   run(id: string, values?: InsertValues): boolean {
-    if (!this.known || !writable(this.view.state)) return false
+    if (!this.bounded || !writable(this.view.state)) return false
     const cell =
-      this.editing ?? this.locate(this.view.state.selection.main.head)
+      this.editing ??
+      (this.waitingForInput
+        ? this.waiting
+        : this.locate(this.view.state.selection.main.head))
     if (!cell) return false
     if (
       [
@@ -2359,7 +2438,7 @@ class TableView {
     const first = this.view.state.doc.lineAt(this.range().from).number
     const delimiter = next ? doc.line(first + 1).text : ''
     const shape = {
-      lines: this.lines + doc.lines - this.view.state.doc.lines,
+      lines: source.lines + doc.lines - this.view.state.doc.lines,
       columns: alignments(delimiter.slice(this.widget.rowStart(1, delimiter)))
         .length,
     }
@@ -3104,6 +3183,9 @@ function step(
  */
 function tableAt(view: EditorView, pos: number, strict = false) {
   for (const table of mounted.get(view) ?? []) {
+    // An action's waiting cell may be past the old widget's end.
+    if (table.waitingForInput && pos === view.state.selection.main.head)
+      return table
     const { from, to } = table.range()
     if (
       strict
@@ -3124,6 +3206,16 @@ const breakWaiting = (view: EditorView) => {
 const deleteWaiting =
   (forward: boolean, by?: 'group' | 'line') => (view: EditorView) =>
     waitingTable(view)?.deleteWaiting(forward, by) ?? false
+/** Escape and Mod-Enter in the action's cell, as in a cell editor. */
+const leaveWaiting = (view: EditorView) => {
+  const table = waitingTable(view)
+  table?.leave(true)
+  return !!table
+}
+const exitWaiting = (view: EditorView) => {
+  const table = waitingTable(view)
+  return !!table && (table.exit() || breakWaiting(view))
+}
 
 /** Whether the selection stays in the paragraph source reached by leave(). */
 function leftGap(view: EditorView) {
@@ -4109,6 +4201,8 @@ export const contribution: FormattedContribution = {
     { mac: 'Ctrl-h', run: deleteWaiting(false) },
     { mac: 'Ctrl-d', run: deleteWaiting(true) },
     { key: 'Tab', run: moveWaiting('next'), shift: moveWaiting('previous') },
+    { key: 'Escape', run: leaveWaiting },
+    { key: 'Mod-Enter', run: exitWaiting },
     { key: 'ArrowLeft', run: arrowWaiting('left') },
     { key: 'ArrowRight', run: arrowWaiting('right') },
     { key: 'ArrowUp', run: arrowWaiting('up') },

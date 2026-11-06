@@ -418,8 +418,12 @@ function keptPlaceScroll(top: number, margin: number) {
             if (Math.abs(scrollerOf(view).scrollTop - held) > 1) return stop()
             state = 'aligning'
             moved = false
-            // In this measure, before the moved line paints.
-            view.requestMeasure(align)
+            // CodeMirror holds its top line itself in its own scroller or
+            // while focused, after this measure's writes: aligning in it too
+            // would move the line twice. Otherwise align before it paints.
+            if (scrollerOf(view) === view.scrollDOM || view.hasFocus)
+              queueMicrotask(() => view.requestMeasure(align))
+            else view.requestMeasure(align)
           } else queueMicrotask(() => begin(view))
         },
       }

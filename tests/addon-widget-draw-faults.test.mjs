@@ -1245,3 +1245,100 @@ for (const [presentation, headings, lateReading] of [
       )
     }
   })
+
+test('a focused rebuilt formatted editor keeps its place when lines change height', {
+  timeout: 60000,
+}, async (t) => {
+  const source = `${Array.from({ length: 400 }, (_, i) => `line ${i}\n\n`).join('')}end\n\n`
+  const context = await open(t, {
+    source,
+    presentation: 'formatted',
+    code: decorationsAddon('formatted'),
+  })
+  await context.page.setViewportSize({ width: 1000, height: 720 })
+  await opened(context, source)
+  const cdp = await context.page.context().newCDPSession(context.page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const at = source.indexOf('line 300')
+  await context.page.evaluate(
+    ({ pane, at }) => {
+      const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+        .view
+      view.focus()
+      view.dispatch({
+        selection: { anchor: at + 8 },
+        effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+      })
+    },
+    { pane: context.pane, at },
+  )
+  await context.page.keyboard.insertText('Q')
+  await named(context, 'bad-ext.bad: decorations boom')
+  await editorReady(context)
+  // The rebuilt view holds its place until input; here it has focus, so
+  // CodeMirror holds its top line itself when line heights change.
+  await context.page.waitForFunction((pane) => {
+    const lines = [...document.querySelectorAll(`${pane} .cm-line`)]
+    return (
+      lines.length > 0 &&
+      lines.every(
+        (line) => line.textContent || line.classList.contains('hibi-lp-gap'),
+      )
+    )
+  }, context.pane)
+  assert.equal(
+    await context.page.evaluate((pane) => {
+      const view = document.querySelector(`${pane} .cm-content`).cmTile.root
+        .view
+      view.focus()
+      return view.hasFocus
+    }, context.pane),
+    true,
+  )
+  const frames = () =>
+    context.page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+  await frames()
+  // The line at the pane's top, which the view holds.
+  const kept = await context.page.evaluate((pane) => {
+    const scroller = document.querySelector(pane)
+    const top = scroller.getBoundingClientRect().top
+    const line = [...scroller.querySelectorAll('.cm-line')].find(
+      (each) => each.getBoundingClientRect().bottom > top,
+    )
+    return {
+      text: line.textContent,
+      top: line.getBoundingClientRect().top - top,
+      scroll: scroller.scrollTop,
+    }
+  }, context.pane)
+  await context.page.addStyleTag({
+    content: `${context.pane} .cm-line { padding-bottom: 0.25px !important }`,
+  })
+  await context.page.waitForFunction(
+    ({ pane, scroll }) => document.querySelector(pane).scrollTop !== scroll,
+    { pane: context.pane, scroll: kept.scroll },
+  )
+  await frames()
+  await frames()
+  const after = await context.page.evaluate(
+    ({ pane, text }) => {
+      const scroller = document.querySelector(pane)
+      const line = [...scroller.querySelectorAll('.cm-line')].find(
+        (each) => each.textContent === text,
+      )
+      return (
+        line.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      )
+    },
+    { pane: context.pane, text: kept.text },
+  )
+  assert.ok(
+    Math.abs(after - kept.top) < 1,
+    `${kept.text} moved ${kept.top} to ${after}`,
+  )
+})

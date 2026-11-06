@@ -1376,6 +1376,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
         const view = element.cmTile.root.view
         const caret = view.state.selection.main.head
         if (multiple) {
+          // No app command enables multiple selections; configure the fixture.
           const [compartment, access] = [
             ...view.state.config.compartments,
           ].find(

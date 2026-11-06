@@ -3647,11 +3647,14 @@ test('cell keys and changes while a table waits for a reparse land where they wo
         )
       },
     )
-  await t.test('a block prefix of the same length in another cell', async () => {
-    const keys = [edit('c ', '# '), 'y']
-    const { doc: now } = await run(unpiped, 'd', keys, true, false)
-    assert.equal(now, unpiped.replace(tail, '').replace('c | d', '# | d'))
-  })
+  await t.test(
+    'a block prefix of the same length in another cell',
+    async () => {
+      const keys = [edit('c ', '# '), 'y']
+      const { doc: now } = await run(unpiped, 'd', keys, true, false)
+      assert.equal(now, unpiped.replace(tail, '').replace('c | d', '# | d'))
+    },
+  )
   await t.test('an emptied first cell without an opening pipe', async () => {
     const keys = ['Home', 'Shift+End', 'Backspace', 'y']
     const { doc: now } = await run(unpiped, 'c', keys, true, false)

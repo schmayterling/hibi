@@ -123,35 +123,66 @@ export class EditorViewRegistry {
         selection: AdapterSelection
       }
     | Failure {
-    if (!validView(value))
+    // DIAGNOSTIC ONLY (never merged): record why a selection read fails.
+    const why = (reason: string, extra?: unknown) =>
+      (globalThis as { __hibiDictTrace?: unknown[] }).__hibiDictTrace?.push({
+        t: performance.now(),
+        at: 'registry.current',
+        reason,
+        value,
+        extra,
+      })
+    if (!validView(value)) {
+      why('invalid')
       return failure('conflict', 'Invalid editor view target.')
+    }
     const target = this.#runtime.captureView(value.viewId)
     if (
       !target ||
       target.viewGeneration !== value.viewGeneration ||
       target.documentId !== value.documentId ||
       target.documentGeneration !== value.documentGeneration
-    )
+    ) {
+      why('target-stale', target)
       return stale()
+    }
     const editor = this.#active.get(target.viewId)
-    if (!editor) return unavailable()
+    if (!editor) {
+      why('no-active-editor', target)
+      return unavailable()
+    }
     const entry = this.#adapters.get(target.viewId)?.[editor]
     if (
       !entry ||
       entry.document.documentId !== target.documentId ||
       entry.document.documentGeneration !== target.documentGeneration
-    )
+    ) {
+      why('no-entry-or-doc', {
+        has: !!entry,
+        doc: entry?.document,
+        target,
+        editor,
+      })
       return unavailable()
+    }
     let selection: AdapterSelection | null
     try {
       selection = entry.adapter.read()
-    } catch {
+    } catch (error) {
+      why('read-threw', String(error))
       return unavailable()
     }
-    if (!selection) return unavailable()
+    if (!selection) {
+      why('read-null', editor)
+      return unavailable()
+    }
     const session = this.#runtime.resolveDocument(target)
-    if (!session || session.snapshot().version !== selection.contentVersion)
+    const version = session?.snapshot().version
+    if (!session || version !== selection.contentVersion) {
+      why('version-stale', { session: !!session, version, selection })
       return stale()
+    }
+    why('ok', { editor, selection })
     return { target, editor, entry, selection }
   }
   getSelection(view: ViewTarget): OperationResult<EditorViewSelection> {

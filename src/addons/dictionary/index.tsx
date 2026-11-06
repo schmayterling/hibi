@@ -41,6 +41,14 @@ import { SideView } from './SideView'
 import { languageNames, readPreferences } from './settings'
 import sideCss from './side-view.css?inline'
 
+// DIAGNOSTIC ONLY (never merged): records the define path when a test opts in.
+const dictTrace = (at: string, data: Record<string, unknown>) =>
+  (globalThis as { __hibiDictTrace?: unknown[] }).__hibiDictTrace?.push({
+    t: performance.now(),
+    at,
+    ...data,
+  })
+
 const failures = {
   offline: {
     icon: <WifiOff size={28} />,
@@ -331,8 +339,14 @@ export default defineAddon({
     async function target(invocation: CommandExecutionContext) {
       // Palette and shortcut invocations capture the view but not its selection.
       const view = invocation.view ?? context.editorViews.getActive()
+      dictTrace('target.view', {
+        invocationView: invocation.view ?? null,
+        invocationSelection: invocation.selection ?? null,
+        view,
+      })
       if (!view) return null
       const active = context.editorViews.getSelection(view)
+      dictTrace('target.selection', { active })
       const selection =
         invocation.selection ?? (active.ok ? active.value : null)
       if (!selection) return null
@@ -348,17 +362,25 @@ export default defineAddon({
       // editor. Their selections are read after the module loads.
       const views = selection.editor === 'rich' ? formattedViews : sourceViews
       const source = views.size ? await import('./source') : null
-      const codeMirror = [...views].find(([editor, viewId]) =>
-        at(
-          viewId,
-          editor.state.selection.main.anchor,
-          editor.state.selection.main.head,
-        ),
-      )?.[0]
+      const checked: unknown[] = []
+      const codeMirror = [...views].find(([editor, viewId]) => {
+        const anchor = editor.state.selection.main.anchor
+        const head = editor.state.selection.main.head
+        const match = at(viewId, anchor, head)
+        checked.push({ viewId, anchor, head, match })
+        return match
+      })?.[0]
+      dictTrace('target.views', {
+        editor: selection.editor,
+        size: views.size,
+        loaded: !!source,
+        checked,
+      })
       if (source && codeMirror) {
         found = source.sourceTarget(codeMirror, from, to)
         inView = () => views.get(codeMirror) === view.viewId
       }
+      dictTrace('target.found', { word: found?.word ?? null })
       if (!found) return null
       const { editable, replace } = found
       return {
@@ -389,20 +411,23 @@ export default defineAddon({
       invocation: CommandExecutionContext,
       kind: 'define' | 'synonyms',
     ) {
+      dictTrace('lookUp.start', { kind })
       const found = await target(invocation)
       if (!found) {
+        dictTrace('lookUp.noWord', { kind })
         context.notify(notices.noWord.message)
         return
       }
       const { word } = found
       const langs = detectLangs(word, readPreferences())
+      dictTrace('lookUp.langs', { word, langs })
       if (!langs.length) {
         context.notify(notices.unsupported.message)
         found.focus()
         return
       }
       const load = (signal: AbortSignal): Promise<Outcome> =>
-        kind === 'define'
+        (kind === 'define'
           ? gather(registry, langs, 'lookup', (provider, lang, cachedOnly) =>
               provider.lookup(word, lang, signal, cachedOnly),
             )
@@ -415,6 +440,23 @@ export default defineAddon({
                   ? null
                   : (provider.related?.(word, lang, signal) ?? null),
             )
+        ).then(
+          (outcome) => {
+            dictTrace('load.outcome', {
+              word,
+              aborted: signal.aborted,
+              found: outcome.found.map(({ lang }) => lang),
+              installable: outcome.installable,
+              failure: outcome.failure ?? null,
+            })
+            return outcome
+          },
+          (error) => {
+            dictTrace('load.threw', { word, error: String(error) })
+            throw error
+          },
+        )
+      dictTrace('lookUp.dialog', { word })
       const choice = await context.dialogs.open<string>({
         title:
           kind === 'define' ? `Define “${word}”` : `Synonyms for “${word}”`,

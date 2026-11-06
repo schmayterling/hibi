@@ -1,3 +1,11 @@
+// DIAGNOSTIC ONLY (never merged): records the define path when a test opts in.
+const dictTrace = (at: string, data: Record<string, unknown>) =>
+  (globalThis as { __hibiDictTrace?: unknown[] }).__hibiDictTrace?.push({
+    t: performance.now(),
+    at,
+    ...data,
+  })
+
 /** Lookup languages. `zh` covers simplified and traditional Mandarin; `yue` is Cantonese. */
 export type Lang = 'en' | 'zh' | 'yue' | 'ja' | 'tl' | 'fr' | 'de'
 export const LANGS: readonly Lang[] = [
@@ -151,6 +159,11 @@ export async function gather<T>(
   for (const lang of langs) {
     try {
       const providers = await registry.providers(lang, need)
+      dictTrace('gather.providers', {
+        lang,
+        need,
+        providers: providers.map((provider) => provider.kind),
+      })
       if (!providers.length && (await registry.installable(lang)))
         result.installable.push(lang)
       candidates.push({ lang, providers })
@@ -166,11 +179,18 @@ export async function gather<T>(
         if (provider.kind !== kind) continue
         try {
           const value = await ask(provider, lang, cachedOnly)
+          dictTrace('gather.value', {
+            lang,
+            kind,
+            cachedOnly,
+            empty: value === null || (Array.isArray(value) && !value.length),
+          })
           if (value === null || (Array.isArray(value) && !value.length))
             continue
           result.found.push({ lang, value })
           break
         } catch (error) {
+          dictTrace('gather.threw', { lang, kind, error: String(error) })
           fail(error)
         }
       }

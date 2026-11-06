@@ -8,6 +8,14 @@ import type { ViewId } from '../../shared/foundation-contracts'
 import { type LookupTarget, wordAt } from './lookup.ts'
 import { readPreferences } from './settings.ts'
 
+// DIAGNOSTIC ONLY (never merged): records the define path when a test opts in.
+const dictTrace = (at: string, data: Record<string, unknown>) =>
+  (globalThis as { __hibiDictTrace?: unknown[] }).__hibiDictTrace?.push({
+    t: performance.now(),
+    at,
+    ...data,
+  })
+
 export const trackSourceViews = (
   views: Map<EditorView, ViewId>,
   viewId: ViewId,
@@ -59,8 +67,13 @@ function wordEdit(state: EditorState, from: number, to: number) {
     caret: text.length,
   })
   const tree = formattedSyntaxTree(state)
-  if (!tree) return inPlace
-  if (uncovered(tree, from, to)) return null
+  if (!tree) {
+    dictTrace('wordEdit', { from, to, tree: null })
+    return inPlace
+  }
+  const gap = uncovered(tree, from, to)
+  dictTrace('wordEdit', { from, to, tree: tree.length, uncovered: gap })
+  if (gap) return null
   let target = null as SyntaxNode | null
   const shown = (node: SyntaxNode) => {
     if (
@@ -79,13 +92,19 @@ function wordEdit(state: EditorState, from: number, to: number) {
   // start in it; a link's other children are not read.
   const cursor = tree.cursorAt(from, 1)
   for (let node: SyntaxNode | null = cursor.node; node; node = node.parent)
-    if (!shown(node)) return null
+    if (!shown(node)) {
+      dictTrace('wordEdit.unshown', { node: node.name })
+      return null
+    }
   for (
     let more = cursor.childAfter(from) || cursor.next(false);
     more && cursor.from < to;
     more = cursor.next()
   )
-    if (!shown(cursor.node)) return null
+    if (!shown(cursor.node)) {
+      dictTrace('wordEdit.unshown', { node: cursor.node.name })
+      return null
+    }
   if (!target) return inPlace
   const { from: start, to: end } = target
   let table: SyntaxNode | null = target
@@ -110,6 +129,7 @@ export function sourceTarget(
 ): LookupTarget | null {
   const { doc } = view.state
   const line = doc.lineAt(from)
+  dictTrace('sourceTarget', { from, to, line: [line.from, line.to] })
   if (to > line.to) return null
   const found = wordAt(
     line.text,
@@ -117,12 +137,14 @@ export function sourceTarget(
     to - line.from,
     readPreferences(),
   )
+  dictTrace('sourceTarget.word', { found })
   if (!found) return null
   const edit = wordEdit(
     view.state,
     line.from + found.from,
     line.from + found.to,
   )
+  dictTrace('sourceTarget.edit', { edit: !!edit })
   if (!edit) return null
   return {
     word: found.word,

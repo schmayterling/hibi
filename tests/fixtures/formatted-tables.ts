@@ -2,6 +2,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import {
   Compartment,
   EditorState,
+  type Extension,
   StateEffect,
   StateField,
   Transaction,
@@ -211,6 +212,10 @@ Object.assign(window, {
       await settle()
     },
     view: () => view,
+    /** install source extensions, as a format addon does. */
+    extend(extension: Extension) {
+      view?.dispatch({ effects: StateEffect.appendConfig.of(extension) })
+    },
     /** Apply another view's edit without recording it in this view's history. */
     echo(insert: string) {
       if (!view) return

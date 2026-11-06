@@ -47,7 +47,7 @@ import {
   recordPageSelection,
   registerDOMPositions,
 } from '../native-dom-selection.ts'
-import { placedSelection } from '../reading-position.ts'
+import { placedSelection, scrolledItself } from '../reading-position.ts'
 import { type InsertValues, tableActions } from '../source-formatting.ts'
 import {
   formattedInputError,
@@ -1025,8 +1025,10 @@ class TableView {
         annotations: cellInput.of(true),
       })
     // A note opening in its last cell still opens at its top.
-    if (!this.view.state.facet(placedSelection))
+    if (!this.view.state.facet(placedSelection)) {
       element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      scrolledItself(this.view)
+    }
     return true
   }
 

@@ -215,6 +215,31 @@ test('codemirror: undo and redo scroll to the selection they restore', {
   await step('undo of an added row', undoKey, table, '.rich-pane', [81, 1])
   await step('redo of an added row', redoKey, added, '.rich-pane', [82, 0])
   await step('undo after a redo', undoKey, table, '.rich-pane', [81, 1])
+  // On a slow machine the step's parse runs out of its time: the new row
+  // shows as text below the table, where the view scrolls, and the table
+  // draws it in a later slice. Its cell, taller than that text, still shows.
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance)
+    let late = 0
+    const modifier = (event) =>
+      ['Control', 'Meta', 'Shift', 'Alt'].includes(event.key)
+    const key = (event) => {
+      if (modifier(event)) return
+      document.removeEventListener('keydown', key, true)
+      performance.now = () => {
+        late += 10
+        return now() + late
+      }
+    }
+    const done = (event) => {
+      if (modifier(event)) return
+      document.removeEventListener('keydown', done)
+      performance.now = () => now() + late
+    }
+    document.addEventListener('keydown', key, true)
+    document.addEventListener('keydown', done)
+  })
+  await step('slow redo of an added row', redoKey, added, '.rich-pane', [82, 0])
 
   await open('table-typing', table, '.rich-pane td')
   await page.keyboard.type('x')

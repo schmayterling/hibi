@@ -31,6 +31,7 @@ import {
 } from '../../shared/source-projection.ts'
 import type { SourceSelection } from '../../shared/source-selection.ts'
 import { bindSourceText } from './source-whitespace.ts'
+import { deadViews, isViewDead } from './view-death.ts'
 
 export const sourceOperationEcho = Annotation.define<string>()
 /** View state restored alongside the session's text and selection history. */
@@ -203,7 +204,6 @@ const editorSelection = (
  * failure of an update made for its edit, so whoever dispatched never hears of
  * it: a listener does.
  */
-const deadViews = new WeakSet<object>()
 const deathListeners = new WeakMap<object, (error: unknown) => void>()
 export const onViewDeath = (view: object, listener: (error: unknown) => void) =>
   deathListeners.set(view, listener)
@@ -211,7 +211,7 @@ export const onViewDeath = (view: object, listener: (error: unknown) => void) =>
 const redrawListeners = new WeakMap<object, () => void>()
 export const onRedraw = (view: object, listener: () => void) =>
   redrawListeners.set(view, listener)
-export const isViewDead = (view: object) => deadViews.has(view)
+export { isViewDead }
 export function viewDied(view: object, error: unknown) {
   if (deadViews.has(view)) return
   deadViews.add(view)

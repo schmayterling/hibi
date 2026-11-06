@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -645,6 +649,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   )
   await page.getByRole('button', { name: 'Close split' }).click()
   await page.locator('.editor-page[data-side]').waitFor({ state: 'detached' })
+  await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
     window.viewsFixture.handles.slow = window.viewsFixture.slow.open()
   })

@@ -3437,6 +3437,32 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     ['Tab to the next row', doc, 'd', ['x', 'Tab', 'y']],
     ['Tab to a cell its row lacks', doc, 'e', ['x', 'Tab', 'y']],
     ['Tab in the last cell', last, 'd', ['x', 'Tab', 'y']],
+    // Keys in the row Tab adds move as in a drawn one.
+    ['Tab in the last cell, then Tab', last, 'd', ['x', 'Tab', 'Tab', 'y']],
+    [
+      'Tab in the last cell, then Shift+Tab',
+      last,
+      'd',
+      ['x', 'Tab', 'Shift+Tab', 'y'],
+    ],
+    [
+      'Tab in the last cell, then ArrowUp',
+      last,
+      'd',
+      ['x', 'Tab', 'ArrowUp', 'y'],
+    ],
+    [
+      'Tab in the last cell, then ArrowRight',
+      last,
+      'd',
+      ['x', 'Tab', 'y', 'ArrowRight', 'z'],
+    ],
+    [
+      'Tab in the last cell, then ArrowLeft',
+      last,
+      'd',
+      ['x', 'Tab', 'y', 'ArrowLeft', 'z'],
+    ],
     ['Shift+Tab', doc, 'c', ['x', 'Shift+Tab', 'y']],
     ['ArrowDown', doc, 'c', ['x', 'ArrowDown', 'y']],
     ['ArrowUp', doc, 'c', ['x', 'ArrowUp', 'y']],
@@ -3581,7 +3607,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       // The row Tab adds in the last cell draws with the table, and a
       // line break in a cell draws as one then too.
       const drawn =
-        name !== 'Tab in the last cell' &&
+        !name.startsWith('Tab in the last cell') &&
         name !== 'Mod+Enter' &&
         name !== 'before a table at the start'
       assert.deepEqual(await run(note, start, keys, true, drawn), settled)

@@ -1071,9 +1071,9 @@ export class CellEditor {
     this.kept = place
   }
 
-  /** Whether the editor knows its cell's place, so its table's rows and columns are the snapshot's. */
-  get keeps() {
-    return this.kept !== undefined
+  /** The last kept place, still to be validated against its document before mapping a change. */
+  get keptPlace() {
+    return this.kept
   }
 
   /**

@@ -1646,11 +1646,9 @@ class TableView {
     const right = move === 'right'
     let anchor: number
     if (move === 'up' || move === 'down') return this.moveWaiting(move)
+    if (head <= waiting.from + start && !right) return this.moveWaiting('left')
+    if (head >= waiting.from + end && right) return this.moveWaiting('right')
     if (!empty) anchor = right ? to : from
-    else if (head <= waiting.from + start && !right)
-      return this.moveWaiting('left')
-    else if (head >= waiting.from + end && right)
-      return this.moveWaiting('right')
     else
       anchor =
         waiting.from +
@@ -1769,15 +1767,16 @@ class TableView {
 
   /** Follow the edited row through the formatted view's changes; where it was when they deleted it. */
   map(changes: ChangeDesc, before: Text): Lost | null {
+    const editing = this.editing
+    const kept = editing?.editor.keptPlace
     const known =
       this.widget.doc === before ||
       this.shaped === before ||
-      !!this.editing?.editor.keeps
+      (kept !== undefined && this.valid(kept, before))
     const cells = known ? this.cellsOnly(changes, before) : null
     this.shaped = cells && this.view.state.doc
     this.track(changes)
     this.handOver(changes)
-    const editing = this.editing
     // Other cells show their text now too.
     for (const cell of cells ?? []) {
       if (cell.line === editing?.line && cell.column === editing.column)
@@ -2340,7 +2339,7 @@ class TableView {
     // back there, as the rich editor's history does.
     const target = next && this.cellIn(doc, next)
     const first = this.view.state.doc.lineAt(this.range().from).number
-    const delimiter = doc.line(first + 1).text
+    const delimiter = next ? doc.line(first + 1).text : ''
     const shape = {
       lines: this.lines + doc.lines - this.view.state.doc.lines,
       columns: alignments(delimiter.slice(this.widget.rowStart(1, delimiter)))
@@ -2394,16 +2393,18 @@ class TableView {
   }
 
   /** Cell text without an opening pipe can instead start a heading, fence or container. */
-  private valid(place: { from: number; to: number; closed: boolean } | null) {
+  private valid(
+    place: { from: number; to: number; closed: boolean } | null,
+    doc = this.view.state.doc,
+  ) {
     const editing = this.editing
     if (!editing) return false
-    const { state } = this.view
-    const span = this.cellIn(state.doc, editing)
+    const span = this.cellIn(doc, editing)
     if (!place || !span) return place === span
     if (place.from !== span.from || place.to !== span.to) return false
     if (editing.column) return true
-    const first = state.doc.lineAt(this.range().from).number
-    return this.rowIsTable(state.doc, first, editing.line)
+    const first = doc.lineAt(this.range().from).number
+    return this.rowIsTable(doc, first, editing.line)
   }
 
   /** Whether row `line` of the table starting on line `first` of `doc` still reads as a table row: first-cell text without an opening pipe can instead start a heading, fence or container. */

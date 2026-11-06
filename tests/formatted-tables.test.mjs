@@ -3437,6 +3437,12 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     ['Tab twice', full, 'c', ['x', 'Tab', 'y', 'Tab', 'z']],
     ['Tab to the next row', doc, 'd', ['x', 'Tab', 'y']],
     ['Tab to a cell its row lacks', doc, 'e', ['x', 'Tab', 'y']],
+    [
+      'fill a missing cell, then a sibling change',
+      doc,
+      'e',
+      ['x', 'Tab', 'y', edit('c', 'cat'), 'z'],
+    ],
     ['Tab in the last cell', last, 'd', ['x', 'Tab', 'y']],
     // Keys in the row Tab adds move as in a drawn one.
     ['Tab in the last cell, then Tab', last, 'd', ['x', 'Tab', 'Tab', 'y']],
@@ -3463,6 +3469,12 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       last,
       'd',
       ['x', 'Tab', 'y', 'ArrowLeft', 'z'],
+    ],
+    [
+      'Tab in the last cell, then an arrow from a selected cell edge',
+      last,
+      'd',
+      ['x', 'Tab', 'ArrowUp', 'Shift+Tab', 'ArrowRight', 'y'],
     ],
     ['Shift+Tab', doc, 'c', ['x', 'Shift+Tab', 'y']],
     ['ArrowDown', doc, 'c', ['x', 'ArrowDown', 'y']],
@@ -3613,6 +3625,42 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       )
     },
   )
+
+  // A kept span is not proof that an earlier edit left its row a table.
+  for (const start of ['a', 'c'])
+    for (const prefix of ['# ', '> ', '- ', '~~~'])
+      await t.test(
+        `a broken ${start} row stays unknown after a sibling edit: ${JSON.stringify(prefix)}`,
+        async () => {
+          const remove = async () =>
+            assert.equal(
+              await harness.evaluate(() =>
+                window.tables.runTableAction('table-delete'),
+              ),
+              false,
+            )
+          const { doc: now } = await run(
+            unpiped,
+            start,
+            [
+              'x',
+              edit(`${start}x`, `${prefix}${start}x`),
+              edit('d', 'dQ'),
+              remove,
+              'y',
+            ],
+            true,
+            false,
+          )
+          assert.equal(
+            now,
+            unpiped
+              .replace(tail, '')
+              .replace(`${start} |`, `${prefix}${start}x |`)
+              .replace(' | d\n', ' | dQ\n'),
+          )
+        },
+      )
   cases.push(
     ['unpiped body', unpiped, 'c', ['x', 'Tab', 'y']],
     ['unpiped header', unpiped, 'a', ['x', 'Tab', 'y']],
@@ -3628,6 +3676,35 @@ test('cell keys and changes while a table waits for a reparse land where they wo
         name !== 'Mod+Enter' &&
         name !== 'before a table at the start'
       assert.deepEqual(await run(note, start, keys, true, drawn), settled)
+    })
+})
+
+test('deleting a table at document end needs no waiting-cell shape', async (t) => {
+  for (const [name, doc, action] of [
+    ['table only', '| a | b |\n| - | - |\n| c | d |', 'table-delete'],
+    [
+      'after a paragraph',
+      'before\n\n| a | b |\n| - | - |\n| c | d |',
+      'table-delete',
+    ],
+    ['last column', '| a |\n| - |\n| c |', 'column-delete'],
+    ['last header row', '| a |\n| - |', 'row-delete'],
+  ])
+    await t.test(name, async () => {
+      await mount(doc)
+      await harness.locator('.hibi-lp-table th').first().click()
+      assert.equal(
+        await harness.evaluate(
+          (action) => window.tables.runTableAction(action),
+          action,
+        ),
+        true,
+      )
+      await harness.evaluate(() => window.tables.settle())
+      assert.equal(
+        (await state()).doc,
+        doc.startsWith('before') ? 'before\n\n' : '',
+      )
     })
 })
 

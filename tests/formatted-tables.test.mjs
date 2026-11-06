@@ -3244,6 +3244,14 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
       keys: ['x', edit('dx |', 'dx | e |'), 'y'],
       row: 'dx | e',
     },
+    // A pipe added in the cell's text makes another cell.
+    {
+      name: 'pipe added in the cell',
+      note: doc,
+      cell: 1,
+      keys: ['x', edit('dx', 'dx | e'), 'y'],
+      row: 'dx | e',
+    },
     {
       name: 'normalized parent change',
       note: doc,
@@ -3321,6 +3329,253 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
       assert.equal(now.cell, '2:1')
       // The cell's editor holds the same text; a break draws as a widget.
       if (!row.includes('<br>')) assert.equal(now.editor, row.split(' | ')[0])
+    })
+})
+
+test('cell keys and changes while a table waits for a reparse land where they would after it', {
+  timeout: 120000,
+}, async (t) => {
+  const tail = '\n\nparagraph'.repeat(2000)
+  const doc = `before\n\n| a | b |\n| - | - |\n| c | d |\n| e |\n\nafter${tail}`
+  const full = doc.replace('| e |', '| e | f |')
+  const last = `before\n\n| a | b |\n| - | - |\n| c | d |${tail}`
+  const endRows = '| u | v |\n'.repeat(2000)
+  const atEnd = `| a | b |\n| - | - |\n${endRows}| c | d`
+  // A change from elsewhere, as another pane's, replacing text in the note.
+  const edit = (find, insert) => () =>
+    harness.evaluate(
+      ({ find, insert }) => {
+        const view = window.tables.view()
+        const from = view.state.doc.toString().indexOf(find)
+        view.dispatch({ changes: { from, to: from + find.length, insert } })
+      },
+      { find, insert },
+    )
+  // Holds idle time, where a missed reparse goes on, until released.
+  const hold = () =>
+    harness.evaluate(() => {
+      let held = []
+      const own = window.requestIdleCallback
+      window.requestIdleCallback = (callback, options) =>
+        own(
+          (deadline) => (held ? held.push(callback) : callback(deadline)),
+          options,
+        )
+      window.releaseIdle = () => {
+        window.requestIdleCallback = own
+        for (const callback of held)
+          callback({ didTimeout: false, timeRemaining: () => 50 })
+        held = null
+      }
+    })
+  const shown = () =>
+    harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table :is(th, td)')].map(
+        (cell) => cell.textContent,
+      ),
+    )
+  // Stale: whether the table shows the keys' text before it draws again.
+  const run = async (note, start, keys, stale, drawn) => {
+    let cells = null
+    await harness.evaluate(
+      (doc) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 800 },
+          { editable: true, slice: 0 },
+        ),
+      note,
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    // The last row is virtualized; a source selection brings it into view.
+    if (note === atEnd)
+      await harness.evaluate(() => {
+        const view = window.tables.view()
+        view.focus()
+        view.dispatch({
+          selection: {
+            anchor: view.state.doc.toString().lastIndexOf('| c |') + 2,
+          },
+        })
+      })
+    await harness
+      .locator('.hibi-lp-table :is(th, td)', {
+        hasText: new RegExp(`^${start}$`),
+      })
+      .click()
+    await harness.keyboard.press('End')
+    if (stale) await hold()
+    try {
+      for (const key of keys) {
+        await (typeof key === 'string' ? harness.keyboard.press(key) : key())
+        if (!stale)
+          await harness.waitForFunction(() => !window.tables.settling())
+      }
+      // Every key came while the table still showed the text before the first.
+      if (stale)
+        assert.ok(await harness.evaluate(() => window.tables.settling()))
+      if (stale && drawn) cells = await shown()
+    } finally {
+      if (stale) await harness.evaluate(() => window.releaseIdle())
+    }
+    await harness.waitForFunction(() => !window.tables.settling())
+    await harness.evaluate(() => window.tables.settle())
+    const { doc, cell, editor, head } = await state()
+    // The note's tail only slows the parse.
+    return {
+      doc: doc.replace(tail, '').replace(endRows, ''),
+      cell,
+      editor,
+      head,
+      cells: cells ?? (await shown()),
+    }
+  }
+  const cases = [
+    ['Tab', doc, 'c', ['x', 'Tab', 'y']],
+    ['Tab with nothing after', doc, 'c', ['x', 'Tab']],
+    ['Tab twice', full, 'c', ['x', 'Tab', 'y', 'Tab', 'z']],
+    ['Tab to the next row', doc, 'd', ['x', 'Tab', 'y']],
+    ['Tab to a cell its row lacks', doc, 'e', ['x', 'Tab', 'y']],
+    ['Tab in the last cell', last, 'd', ['x', 'Tab', 'y']],
+    ['Shift+Tab', doc, 'c', ['x', 'Shift+Tab', 'y']],
+    ['ArrowDown', doc, 'c', ['x', 'ArrowDown', 'y']],
+    ['ArrowUp', doc, 'c', ['x', 'ArrowUp', 'y']],
+    ['ArrowRight', doc, 'c', ['x', 'ArrowRight', 'y']],
+    ['ArrowLeft', doc, 'd', ['Home', 'x', 'ArrowLeft', 'ArrowLeft', 'y']],
+    ['Escape', doc, 'c', ['x', 'Escape', 'y']],
+    ['ArrowDown out of the table', full, 'f', ['x', 'ArrowDown', 'y']],
+    ['Escape after a deletion', full, 'f', ['Backspace', 'Escape', 'y']],
+    ['Mod+Enter', last, 'd', ['x', 'ControlOrMeta+Enter', 'y']],
+    [
+      'before a table at the start',
+      doc.replace('before\n\n', ''),
+      'a',
+      ['x', 'ArrowUp', 'y', 'z'],
+    ],
+    ['Escape at document end', atEnd, 'd', ['x', 'Escape', 'y', 'z']],
+    [
+      'Mod+Enter at document end',
+      atEnd,
+      'd',
+      ['x', 'ControlOrMeta+Enter', 'y', 'z'],
+    ],
+    ['leave before the first edit', atEnd, 'd', ['Escape', 'y', 'z']],
+    // Undo, redo and other changes inside the cell's text keep its place.
+    ['undo', doc, 'd', ['x', 'y', 'ControlOrMeta+z', 'z']],
+    ['redo', doc, 'd', ['x', 'ControlOrMeta+z', redoKey, 'z']],
+    ['undo, then Tab', doc, 'c', ['x', 'ControlOrMeta+z', 'Tab', 'y']],
+    ['a change in the cell', doc, 'd', ['x', edit('dx', 'dQ'), 'y']],
+  ]
+  // A change elsewhere may remake the table, as an open fence above it
+  // does: the cell takes no keys with its old spans.
+  await t.test('a change outside the cell', async () => {
+    const keys = ['x', edit('before', '~~~\nbefore'), 'y']
+    const { doc: now } = await run(doc, 'c', keys, true, false)
+    assert.equal(
+      now,
+      `~~~\n${doc.replace('| c |', '| cx |').replace(tail, '')}`,
+    )
+  })
+  // Without an opening pipe, valid cell text can begin another block instead.
+  // Such edits must not keep the old table's place, including after own input.
+  const unpiped = `a | b\n--- | ---\nc | d\ne | f\n\nafter${tail}`
+  for (const start of ['a', 'c'])
+    for (const prefix of ['# ', '> ', '- ', '~~~'])
+      await t.test(
+        `block prefix in ${start}: ${JSON.stringify(prefix)}`,
+        async () => {
+          const keys = ['x', edit(`${start}x`, `${prefix}${start}x`), 'y']
+          const { doc: now } = await run(unpiped, start, keys, true, false)
+          assert.equal(
+            now,
+            unpiped
+              .replace(tail, '')
+              .replace(`${start} |`, `${prefix}${start}x |`),
+          )
+        },
+      )
+  await t.test('a large unpiped first cell keeps later keys', async () => {
+    const text = 'q'.repeat(9000)
+    const { doc: now } = await run(
+      unpiped,
+      'c',
+      ['Home', 'Shift+End', () => harness.keyboard.insertText(text), 'x'],
+      true,
+      false,
+    )
+    assert.equal(
+      now.replace(text, 'CELL'),
+      unpiped.replace(tail, '').replace('c | d', 'CELLx | d'),
+    )
+  })
+  await t.test('an emptied first cell without an opening pipe', async () => {
+    const keys = ['Home', 'Shift+End', 'Backspace', 'y']
+    const { doc: now } = await run(unpiped, 'c', keys, true, false)
+    assert.equal(now, unpiped.replace(tail, '').replace('c | d', ' | d'))
+  })
+  await t.test('a typed block prefix stops using the old cell', async () => {
+    const { doc: now } = await run(
+      unpiped,
+      'c',
+      ['Home', '#', 'Space', 'y'],
+      true,
+      false,
+    )
+    assert.equal(now, unpiped.replace(tail, '').replace('c | d', '# c | d'))
+  })
+  await t.test(
+    'a fence in a cell cannot delete the former table body',
+    async () => {
+      const remove = async () =>
+        assert.equal(
+          await harness.evaluate(() =>
+            window.tables.runTableAction('table-delete'),
+          ),
+          false,
+        )
+      const { doc: now } = await run(
+        unpiped,
+        'c',
+        ['x', edit('cx', '~~~cx'), remove, 'y'],
+        true,
+        false,
+      )
+      assert.equal(now, unpiped.replace(tail, '').replace('c | d', '~~~cx | d'))
+    },
+  )
+  await t.test(
+    'a change outside the left paragraph clears its place',
+    async () => {
+      const { doc: now } = await run(
+        atEnd,
+        'd',
+        ['x', 'Escape', edit('| a |', '| A |'), 'y'],
+        true,
+        false,
+      )
+      assert.equal(
+        now,
+        atEnd
+          .replace(endRows, '')
+          .replace('| a |', '| A |')
+          .replace('| c | d', '| c | dx') + '\n\n',
+      )
+    },
+  )
+  cases.push(
+    ['unpiped body', unpiped, 'c', ['x', 'Tab', 'y']],
+    ['unpiped header', unpiped, 'a', ['x', 'Tab', 'y']],
+  )
+  for (const [name, note, start, keys] of cases)
+    await t.test(name, async () => {
+      const settled = await run(note, start, keys, false)
+      // The row Tab adds in the last cell draws with the table, and a
+      // line break in a cell draws as one then too.
+      const drawn =
+        name !== 'Tab in the last cell' &&
+        name !== 'Mod+Enter' &&
+        name !== 'before a table at the start'
+      assert.deepEqual(await run(note, start, keys, true, drawn), settled)
     })
 })
 

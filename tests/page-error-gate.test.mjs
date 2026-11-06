@@ -21,6 +21,7 @@ const run = (scenario) => {
 
 for (const [scenario, message] of [
   ['unexpected', /unexpected renderer errors:[\s\S]*gate boom/],
+  ['stackless', /unexpected renderer errors:\n.*gate boom/],
   ['other allowed', /unexpected renderer errors:[\s\S]*gate boom/],
   ['never thrown', /no renderer error matched \/never thrown\//],
   ['widget', /unexpected renderer errors:[\s\S]*widget:.*gate boom/],

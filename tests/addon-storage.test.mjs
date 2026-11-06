@@ -689,3 +689,110 @@ test('a renderer handle applies its own write once, however late its notice, and
   assert.equal(notifications, 4)
   assert.equal(handle.snapshot().status, 'version-mismatch')
 })
+
+test('a renderer handle keeps a newer schema it learned from a refused write when the older notice arrives late', async (t) => {
+  const { storage } = await temporaryStorage(t)
+  const held = []
+  const scope = createAddonStorageScope('documentation', () => true, {
+    readAddonStorage: (request) => storage.read(request),
+    writeAddonStorage: (request) => storage.write(request),
+    onAddonStorageChanged(callback) {
+      return storage.subscribe((change) => held.push(() => callback(change)))
+    },
+  })
+  t.after(() => scope.dispose())
+  const handle = await scope.api.global('options', 1)
+  assert.equal((await handle.set({ schema: 'first' })).status, 'saved')
+  assert.equal(
+    (
+      await storage.write({
+        owner: 'documentation',
+        scope: { kind: 'global' },
+        key: 'options',
+        version: 2,
+        migrateFromVersion: 1,
+        baseRevision: 1,
+        value: { schema: 'second' },
+      })
+    ).status,
+    'saved',
+  )
+  // This writer's next write is refused and reports the newer schema.
+  assert.equal((await handle.set({ schema: 'stale' })).status, 'conflict')
+  const newer = {
+    status: 'version-mismatch',
+    revision: 2,
+    storedVersion: 2,
+    value: { schema: 'second' },
+  }
+  assert.deepEqual(handle.snapshot(), newer)
+  // The first write's notice, then the migration's, arrive only now.
+  const [first, migration] = held.splice(0)
+  first()
+  assert.deepEqual(handle.snapshot(), newer)
+  migration()
+  assert.deepEqual(handle.snapshot(), newer)
+  // A later write in the newer schema still reaches this handle.
+  assert.equal(
+    (
+      await storage.write({
+        owner: 'documentation',
+        scope: { kind: 'global' },
+        key: 'options',
+        version: 2,
+        baseRevision: 2,
+        value: { schema: 'third' },
+      })
+    ).status,
+    'saved',
+  )
+  for (const notice of held.splice(0)) notice()
+  assert.deepEqual(handle.snapshot(), {
+    status: 'version-mismatch',
+    revision: 3,
+    storedVersion: 2,
+    value: { schema: 'third' },
+  })
+})
+
+test('a renderer handle takes a cleared session and the first write after it', async (t) => {
+  const { storage } = await temporaryStorage(t)
+  const held = []
+  const scope = createAddonStorageScope('documentation', () => true, {
+    readAddonStorage: (request) => storage.read(request),
+    writeAddonStorage: (request) => storage.write(request),
+    onAddonStorageChanged(callback) {
+      return storage.subscribe((change) => held.push(() => callback(change)))
+    },
+  })
+  t.after(() => scope.dispose())
+  const handle = await scope.api.session('draft', 1)
+  const deliver = () => {
+    for (const notice of held.splice(0)) notice()
+  }
+  assert.equal((await handle.set('before')).status, 'saved')
+  deliver()
+  await storage.clearSession('documentation')
+  deliver()
+  assert.deepEqual(handle.snapshot(), { status: 'missing', revision: 0 })
+  // Another writer starts the session again at its first revision.
+  assert.equal(
+    (
+      await storage.write({
+        owner: 'documentation',
+        scope: { kind: 'session' },
+        key: 'draft',
+        version: 1,
+        baseRevision: 0,
+        value: 'after',
+      })
+    ).status,
+    'saved',
+  )
+  deliver()
+  assert.deepEqual(handle.snapshot(), {
+    status: 'ready',
+    revision: 1,
+    value: 'after',
+  })
+})

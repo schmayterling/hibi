@@ -913,6 +913,25 @@ test('concurrent clears keep observations blocked until every clear finishes', a
   assert.deepEqual((await f.disk()).entries, [])
 })
 
+test('older save notices arriving after two saves keep the newer data and fresh learning', async (t) => {
+  const f = await fixture(t)
+  f.holdChanges()
+  f.learning.observe(observation('first'))
+  await f.learning.persist()
+  f.learning.observe(observation('second'))
+  await f.learning.persist()
+  assert.equal(f.handle.snapshot().revision, 2)
+  f.learning.observe(observation('fresh'))
+  f.learning.flush()
+  f.releaseChanges()
+  assert.equal(f.handle.snapshot().revision, 2)
+  await f.learning.persist()
+  assert.deepEqual(
+    new Set((await f.disk()).entries.map((row) => row.word)),
+    new Set(['first', 'second', 'fresh']),
+  )
+})
+
 test('own save notice arriving after its reply does not discard newer learning', async (t) => {
   const f = await fixture(t)
   f.holdChanges()

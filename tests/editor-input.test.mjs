@@ -2399,8 +2399,18 @@ for (const hiddenSource of [false, true]) {
     await rich.focus()
     await inputWorkProbe(rich)
     const expectedChecks = await page.evaluate(async (hiddenSource) => {
-      // Two frames can still leave the toolbar's afterPaint message queued.
-      // Drain that queue before resetting counts and holding future frames.
+      const frames = new Map()
+      let next = 0
+      const request = window.requestAnimationFrame.bind(window)
+      const cancel = window.cancelAnimationFrame.bind(window)
+      window.requestAnimationFrame = (callback) => {
+        frames.set(--next, callback)
+        return next
+      }
+      window.cancelAnimationFrame = (id) =>
+        id < 0 ? frames.delete(id) : cancel(id)
+      // Hold new frames before draining those already scheduled, so a setup
+      // update cannot post another toolbar inspection behind the drain.
       await new Promise((resolve) => {
         const drained = new MessageChannel()
         drained.port1.onmessage = () => {
@@ -2408,9 +2418,7 @@ for (const hiddenSource of [false, true]) {
           drained.port2.close()
           resolve()
         }
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => drained.port2.postMessage(null)),
-        )
+        request(() => drained.port2.postMessage(null))
       })
       window.countedFormatChecks = []
       window.hiddenInputUpdates = 0
@@ -2452,19 +2460,9 @@ for (const hiddenSource of [false, true]) {
           return update(transactions)
         }
       }
-      const frames = new Map()
-      let next = 0
-      const request = window.requestAnimationFrame.bind(window)
-      const cancel = window.cancelAnimationFrame.bind(window)
       const now = Date.now,
         typingTime = now()
       Date.now = () => typingTime
-      window.requestAnimationFrame = (callback) => {
-        frames.set(--next, callback)
-        return next
-      }
-      window.cancelAnimationFrame = (id) =>
-        id < 0 ? frames.delete(id) : cancel(id)
       window.releaseInputFrames = () => {
         Date.now = now
         window.requestAnimationFrame = request

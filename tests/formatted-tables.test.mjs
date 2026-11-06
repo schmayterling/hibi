@@ -3244,6 +3244,14 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
       keys: ['x', edit('dx |', 'dx | e |'), 'y'],
       row: 'dx | e',
     },
+    // A pipe added in the cell's text makes another cell.
+    {
+      name: 'pipe added in the cell',
+      note: doc,
+      cell: 1,
+      keys: ['x', edit('dx', 'dx | e'), 'y'],
+      row: 'dx | e',
+    },
     {
       name: 'normalized parent change',
       note: doc,
@@ -3321,6 +3329,122 @@ test('keys typed in a cell while its table waits for a reparse all land, in orde
       assert.equal(now.cell, '2:1')
       // The cell's editor holds the same text; a break draws as a widget.
       if (!row.includes('<br>')) assert.equal(now.editor, row.split(' | ')[0])
+    })
+})
+
+test('cell keys and changes while a table waits for a reparse land where they would after it', {
+  timeout: 120000,
+}, async (t) => {
+  const tail = '\n\nparagraph'.repeat(2000)
+  const doc = `before\n\n| a | b |\n| - | - |\n| c | d |\n| e |\n\nafter${tail}`
+  const full = doc.replace('| e |', '| e | f |')
+  const last = `before\n\n| a | b |\n| - | - |\n| c | d |${tail}`
+  // A change from elsewhere, as another pane's, replacing text in the note.
+  const edit = (find, insert) => () =>
+    harness.evaluate(
+      ({ find, insert }) => {
+        const view = window.tables.view()
+        const from = view.state.doc.toString().indexOf(find)
+        view.dispatch({ changes: { from, to: from + find.length, insert } })
+      },
+      { find, insert },
+    )
+  // Holds idle time, where a missed reparse goes on, until released.
+  const hold = () =>
+    harness.evaluate(() => {
+      let held = []
+      const own = window.requestIdleCallback
+      window.requestIdleCallback = (callback, options) =>
+        own(
+          (deadline) => (held ? held.push(callback) : callback(deadline)),
+          options,
+        )
+      window.releaseIdle = () => {
+        window.requestIdleCallback = own
+        for (const callback of held)
+          callback({ didTimeout: false, timeRemaining: () => 50 })
+        held = null
+      }
+    })
+  const shown = () =>
+    harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table :is(th, td)')].map(
+        (cell) => cell.textContent,
+      ),
+    )
+  // Stale: whether the table shows the keys' text before it draws again.
+  const run = async (note, start, keys, stale, drawn) => {
+    let cells = null
+    await harness.evaluate(
+      (doc) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 800 },
+          { editable: true, slice: 0 },
+        ),
+      note,
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    await harness
+      .locator('.hibi-lp-table :is(th, td)', {
+        hasText: new RegExp(`^${start}$`),
+      })
+      .click()
+    await harness.keyboard.press('End')
+    if (stale) await hold()
+    try {
+      for (const key of keys) {
+        await (typeof key === 'string' ? harness.keyboard.press(key) : key())
+        if (!stale)
+          await harness.waitForFunction(() => !window.tables.settling())
+      }
+      // Every key came while the table still showed the text before the first.
+      if (stale)
+        assert.ok(await harness.evaluate(() => window.tables.settling()))
+      if (stale && drawn) cells = await shown()
+    } finally {
+      if (stale) await harness.evaluate(() => window.releaseIdle())
+    }
+    await harness.waitForFunction(() => !window.tables.settling())
+    await harness.evaluate(() => window.tables.settle())
+    const { doc, cell, editor, head } = await state()
+    // The note's tail only slows the parse.
+    return {
+      doc: doc.replace(tail, ''),
+      cell,
+      editor,
+      head,
+      cells: cells ?? (await shown()),
+    }
+  }
+  const cases = [
+    ['Tab', doc, 'c', ['x', 'Tab', 'y']],
+    ['Tab twice', full, 'c', ['x', 'Tab', 'y', 'Tab', 'z']],
+    ['Tab to the next row', doc, 'd', ['x', 'Tab', 'y']],
+    ['Tab to a cell its row lacks', doc, 'e', ['x', 'Tab', 'y']],
+    ['Tab in the last cell', last, 'd', ['x', 'Tab', 'y']],
+    ['Shift+Tab', doc, 'c', ['x', 'Shift+Tab', 'y']],
+    ['ArrowDown', doc, 'c', ['x', 'ArrowDown', 'y']],
+    ['ArrowUp', doc, 'c', ['x', 'ArrowUp', 'y']],
+    ['ArrowRight', doc, 'c', ['x', 'ArrowRight', 'y']],
+    ['ArrowLeft', doc, 'd', ['Home', 'x', 'ArrowLeft', 'ArrowLeft', 'y']],
+    ['Escape', doc, 'c', ['x', 'Escape', 'y']],
+    ['ArrowDown out of the table', full, 'f', ['x', 'ArrowDown', 'y']],
+    ['Escape after a deletion', full, 'f', ['Backspace', 'Escape', 'y']],
+    ['Mod+Enter', last, 'd', ['x', 'ControlOrMeta+Enter', 'y']],
+    // Undo, redo and other changes inside the cell's text keep its place.
+    ['undo', doc, 'd', ['x', 'y', 'ControlOrMeta+z', 'z']],
+    ['redo', doc, 'd', ['x', 'ControlOrMeta+z', redoKey, 'z']],
+    ['undo, then Tab', doc, 'c', ['x', 'ControlOrMeta+z', 'Tab', 'y']],
+    ['a change in the cell', doc, 'd', ['x', edit('dx', 'dQ'), 'y']],
+  ]
+  for (const [name, note, start, keys] of cases)
+    await t.test(name, async () => {
+      const settled = await run(note, start, keys, false)
+      // The row Tab adds in the last cell draws with the table, and a
+      // line break in a cell draws as one then too.
+      const drawn = name !== 'Tab in the last cell' && name !== 'Mod+Enter'
+      assert.deepEqual(await run(note, start, keys, true, drawn), settled)
     })
 })
 

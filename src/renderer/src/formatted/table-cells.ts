@@ -1,6 +1,7 @@
 import { defaultKeymap, isolateHistory } from '@codemirror/commands'
 import {
   Annotation,
+  type ChangeDesc,
   type ChangeSpec,
   Compartment,
   EditorSelection,
@@ -541,8 +542,10 @@ export class CellEditor {
   private remote = false
   /** The caret moved while the table's spans were old, so the formatted view's selection waits for them. */
   private unsent = false
-  /** Where the cell's text is in the formatted view after this editor's last change, until another changes the view. */
-  private kept: { from: number; to: number; closed: boolean } | null = null
+  /** Where the cell's text is in the formatted view after this editor's last change, until another changes the view; null while its row lacks the cell. */
+  private kept: { from: number; to: number; closed: boolean } | null | undefined
+  /** This editor's change is being sent to the formatted view. */
+  private sending = false
   private access = new Compartment()
 
   private host: CellHost
@@ -998,6 +1001,7 @@ export class CellEditor {
       if (from !== null) this.unsent = false
       const sent = this.host.main.state.changes(changes)
       const expected = sent.apply(this.host.main.state.doc)
+      this.sending = true
       this.host.main.dispatch({
         changes: sent,
         ...(from === null
@@ -1016,6 +1020,7 @@ export class CellEditor {
           ...(isolate ? [isolateHistory.of(isolate)] : []),
         ],
       })
+      this.sending = false
       // an empty cell matches any place: the parent must take this exact edit.
       if (from !== null && this.host.main.state.doc.eq(expected))
         this.kept = {
@@ -1042,15 +1047,47 @@ export class CellEditor {
   private place(doc: Text) {
     if (this.host.current()) return this.host.span()
     const kept = this.kept
+    if (kept === null) return null
     return kept &&
       this.host.main.state.sliceDoc(kept.from, kept.to) === doc.toString()
       ? kept
       : undefined
   }
 
-  /** The formatted view's document changed; this editor's own change sets its place again once sent. */
-  changed() {
-    this.kept = null
+  /** Where the cell's text is in the formatted view now; undefined when unknown until its table draws again. */
+  get placed() {
+    return this.place(this.view.state.doc)
+  }
+
+  /** Take the cell's place now, for an editor opened while its table waits to draw again. */
+  keep(place: { from: number; to: number; closed: boolean } | null) {
+    this.kept = place
+  }
+
+  /**
+   * The formatted view's document changed; this editor's own change sets its
+   * place again once sent. A change from elsewhere only in the cell's text,
+   * as undo of typing in it, leaves text the cell could have been given:
+   * the editor shows it and keeps its place.
+   */
+  changed(changes: ChangeDesc) {
+    const kept = this.kept
+    this.kept = undefined
+    if (!kept || this.sending || this.view.composing) return
+    let inside = true
+    changes.iterChangedRanges((from, to) => {
+      inside &&= from >= kept.from && to <= kept.to
+    })
+    if (!inside) return
+    const place = {
+      from: changes.mapPos(kept.from, -1),
+      to: changes.mapPos(kept.to, 1),
+      closed: kept.closed,
+    }
+    const text = this.host.main.state.sliceDoc(place.from, place.to)
+    if (cellFixes(text, place.closed).length) return
+    this.kept = place
+    this.sync(text, place)
   }
 
   /** Redraw inline syntax after the formatted view's render inputs change. */
@@ -1084,7 +1121,7 @@ export class CellEditor {
   }
 
   /** Show the cell's text after the formatted view changed it. */
-  sync(text: string) {
+  sync(text: string, span = this.host.span()) {
     const doc = this.view.state.doc.toString()
     if (doc === text) return
     let start = 0,
@@ -1101,7 +1138,6 @@ export class CellEditor {
       doc[doc.length - 1 - end] === text[text.length - 1 - end]
     )
       end++
-    const span = this.host.span()
     const selected = this.host.main.state.selection.main
     const selection =
       !this.unsent &&
@@ -1130,8 +1166,7 @@ export class CellEditor {
   }
 
   /** Put the formatted view's selection where the editor's is. */
-  mirror() {
-    const span = this.host.span()
+  mirror(span = this.host.span()) {
     if (!span) return
     const { anchor, head } = this.view.state.selection.main
     this.unsent = false

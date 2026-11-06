@@ -484,6 +484,15 @@ class TableView {
     return this.widget.doc === this.view.state.doc
   }
 
+  /**
+   * Whether the table's rows and columns are the snapshot's: it is current,
+   * or every change since was the edited cell's own, as when the reparse of
+   * typing missed its slice. Cells are then read from the text now.
+   */
+  private get known() {
+    return this.current || this.editing?.editor.placed !== undefined
+  }
+
   get windowed() {
     return this.heights !== null
   }
@@ -915,6 +924,15 @@ class TableView {
     return { from, to: from + this.widget.to - this.widget.from }
   }
 
+  /** Where the table is now while its shape is known: only its cells' text changed since the snapshot. */
+  private bounds() {
+    const { from, to } = this.range()
+    return {
+      from,
+      to: to + this.view.state.doc.length - this.widget.doc.length,
+    }
+  }
+
   /** A position of the widget's text snapshot, where it is now. */
   private now(snapshot: number) {
     return this.dom.isConnected
@@ -990,7 +1008,7 @@ class TableView {
       line < 0 ||
       line >= this.lines ||
       !this.aligned.length ||
-      !this.current ||
+      !this.known ||
       !writable(this.view.state)
     )
       return false
@@ -1002,7 +1020,10 @@ class TableView {
     const paragraph = element?.firstElementChild
     if (!element || !(paragraph instanceof HTMLElement)) return false
     this.waiting = null
-    const span = this.span({ line, column })
+    const { doc } = this.view.state
+    const span = this.current
+      ? this.span({ line, column })
+      : this.cellIn(doc, { line, column })
     // A row that ends before the cell gets it on the first input.
     const text = span ? this.view.state.sliceDoc(span.from, span.to) : '  '
     // The caret goes in the content, not the padding around it.
@@ -1018,20 +1039,25 @@ class TableView {
       anchor,
       at === 'all' ? end : head === undefined ? anchor : clamp(head),
     )
-    const source = this.widget.line(line)
+    const source = this.current
+      ? this.widget.line(line)
+      : doc.line(doc.lineAt(this.range().from).number + line)
+    const from = this.current ? this.now(source.from) : source.from
     this.editing = {
       line,
       column,
       editor,
       element,
-      from: this.now(source.from),
-      to: this.now(source.from + source.text.length),
+      from,
+      to: from + source.text.length,
     }
+    // Until the table draws again, the cell is where it is now.
+    if (!this.current) editor.keep(span)
     editor.focus()
     // The editor was built before it was the edited cell, without the cell's
     // Markdown; CodeMirror's focus update, which draws it, waits for a timer.
     editor.refresh()
-    editor.mirror()
+    editor.mirror(span)
     // A cell its row lacks has no text to mirror yet: the caret waits at the
     // row's end, where the first input adds the cell, so undo comes back here.
     if (!span)
@@ -1480,7 +1506,7 @@ class TableView {
       move: (move) => this.move(move),
       leave: (after) => this.leave(after),
       exit: () => {
-        if (!this.current || !writable(this.view.state) || !this.ends())
+        if (!this.known || !writable(this.view.state) || !this.ends())
           return false
         this.leave(true)
         return true
@@ -1574,9 +1600,9 @@ class TableView {
    * text on the line right after a table would be one of its rows.
    */
   leave(after: boolean) {
-    if (!this.current) return
+    if (!this.known) return
     const { doc } = this.view.state
-    const { from, to } = this.range()
+    const { from, to } = this.bounds()
     this.stopEditing()
     const before = doc.lineAt(from).from,
       end = doc.lineAt(to).to
@@ -1608,7 +1634,7 @@ class TableView {
   /** Whether only blank lines follow the table. */
   private ends() {
     const { doc } = this.view.state
-    for (let pos = doc.lineAt(this.range().to).to; pos < doc.length; ) {
+    for (let pos = doc.lineAt(this.bounds().to).to; pos < doc.length; ) {
       const line = doc.lineAt(pos + 1)
       if (line.text.trim()) return false
       pos = line.to
@@ -1619,6 +1645,7 @@ class TableView {
   stopEditing(redraw = true) {
     const editing = this.editing
     if (!editing) return
+    const place = this.current ? null : editing.editor.placed
     this.editing = null
     // The page selection of an editor that lost focus would fall back to
     // before the table, which the formatted view reads as its caret while it
@@ -1633,15 +1660,25 @@ class TableView {
       page.removeAllRanges()
     editing.editor.destroy()
     // The cell renders statically again unless its table is being removed.
-    if (redraw && editing.line < this.lines && editing.element.isConnected)
+    if (redraw && editing.line < this.lines && editing.element.isConnected) {
+      let line = this.widget.line(editing.line),
+        cell = this.widget.row(editing.line).cells[editing.column]
+      // Edits the old snapshot lacks show until the table draws again.
+      if (place) {
+        const now = this.view.state.doc.lineAt(place.from)
+        const { start, end } = padding(
+          now.text.slice(place.from - now.from, place.to - now.from),
+        )
+        line = { from: now.from - this.now(0), text: now.text }
+        cell = {
+          from: place.from - now.from + start,
+          to: place.from - now.from + end,
+        }
+      }
       editing.element.replaceWith(
-        this.cell(
-          editing.line ? 'td' : 'th',
-          this.widget.line(editing.line),
-          this.widget.row(editing.line).cells[editing.column],
-          editing.column,
-        ),
+        this.cell(editing.line ? 'td' : 'th', line, cell, editing.column),
       )
+    }
   }
 
   /** Follow the edited row through the formatted view's changes; where it was when they deleted it. */
@@ -1650,7 +1687,7 @@ class TableView {
     this.handOver(changes)
     const editing = this.editing
     if (!editing) return null
-    editing.editor.changed()
+    editing.editor.changed(changes)
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from
@@ -2069,7 +2106,7 @@ class TableView {
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
   run(id: string, values?: InsertValues): boolean {
-    if (!this.current || !writable(this.view.state)) return false
+    if (!this.known || !writable(this.view.state)) return false
     const cell =
       this.editing ?? this.locate(this.view.state.selection.main.head)
     if (!cell) return false
@@ -2191,7 +2228,7 @@ class TableView {
   /** The source edit that deletes the table, with the blank line after it. */
   private removal(): TableEdit {
     const { doc } = this.view.state
-    let { from, to } = this.range()
+    let { from, to } = this.bounds()
     if (!this.widget.inline) {
       from = doc.lineAt(from).from
       to = doc.lineAt(to).to

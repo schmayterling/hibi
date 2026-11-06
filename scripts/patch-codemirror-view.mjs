@@ -231,6 +231,15 @@ function fallbackRect(tile) {`,
             view.docView.updateSelection();
             return false;`,
   ],
+  // A quiet pass after a viewport change still has to anchor the heights
+  // measured in the preceding pass. Stopping before that scroll correction
+  // briefly moves a restored source view by the newly drawn lines' height.
+  [
+    `                if (!changed && !this.measureRequests.length && this.viewState.scrollTarget == null)
+                    break;`,
+    `                if (!changed && !updated && !this.measureRequests.length && this.viewState.scrollTarget == null)
+                    break;`,
+  ],
 ]
 
 let source = await readFile(path, 'utf8')

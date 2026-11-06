@@ -343,8 +343,64 @@ test("with reduced motion, a large note's source view returns to the same line a
   )
   await scrollInto(page, 20000)
   const before = await scrolled(page)
+  // A later measure must keep the restored line in place, before the next
+  // frame's source bookmark correction can hide a jump.
+  await page.evaluate((before) => {
+    const places = []
+    window.returnedSourcePlaces = places
+    const seen = new WeakSet()
+    seen.add(
+      document.querySelector('.source-pane .cm-content').cmTile.root.view,
+    )
+    const watch = () => {
+      const view = document.querySelector('.source-pane .cm-content')?.cmTile
+        ?.root?.view
+      if (!view || seen.has(view) || view.state.doc.length <= before.top) return
+      seen.add(view)
+      let restored = false
+      // An extra measure request would hide the loop's quiet exit.
+      const measure = view.measure.bind(view)
+      view.measure = (...args) => {
+        const top = view.viewState.lineBlockAt(before.top).top
+        const result = measure(...args)
+        if (!view.inView || !view.dom.closest('.mode-markdown')) return result
+        const moved = view.viewState.lineBlockAt(before.top).top !== top
+        if (restored && !moved) return result
+        const height =
+          view.scrollDOM.getBoundingClientRect().top - view.documentTop
+        const line = view.viewState.lineBlockAtHeight(height)
+        const place = { top: line.from, offset: height - line.top }
+        const atPlace =
+          place.top === before.top && Math.abs(place.offset - before.offset) < 1
+        if (restored && moved) {
+          const node = view.domAtPos(before.top).node
+          const element =
+            node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement
+          const line = element.closest('.cm-line')
+          place.drawn =
+            view.scrollDOM.getBoundingClientRect().top -
+            line.getBoundingClientRect().top
+          places.push(place)
+        } else if (!restored && atPlace) places.push(place)
+        if (atPlace) restored = true
+        return result
+      }
+    }
+    new MutationObserver(watch).observe(document, {
+      childList: true,
+      subtree: true,
+    })
+  }, before)
   const places = await returns(page, view, 256 * 1024, 4)
-  samePlace(places, before)
+  const during = await page.evaluate(() => window.returnedSourcePlaces)
+  assert.ok(during.length >= 4, 'restored source measurements were sampled')
+  samePlace([...places, ...during], before)
+  for (const place of during)
+    if (place.drawn !== undefined)
+      assert.ok(
+        Math.abs(place.drawn - before.offset) < 1,
+        JSON.stringify({ before, place }),
+      )
 })
 
 test('a source view left during a pending scroll keeps the place being shown', {

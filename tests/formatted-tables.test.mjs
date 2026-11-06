@@ -3551,7 +3551,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     await t.test(
       `block prefix in another cell: ${JSON.stringify(prefix)}`,
       async () => {
-        const keys = ['x', edit('c | dx', `${prefix}c | dx`), 'y']
+        const keys = ['x', edit('c ', `${prefix}c `), 'y']
         const { doc: now } = await run(unpiped, 'd', keys, true, false)
         assert.equal(
           now,
@@ -3620,7 +3620,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       'unpiped first cell changed',
       unpiped,
       'd',
-      ['x', edit('c | dx', 'cQ | dx'), 'y'],
+      ['x', edit('c ', 'cQ '), 'y'],
     ],
   )
   for (const [name, note, start, keys] of cases)

@@ -3872,6 +3872,54 @@ test('typing in a table only proves rows while waiting for a redraw', {
     })
 })
 
+test('typing formats a cell while its table waits for a reparse', async () => {
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    `before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter${'\n\nparagraph'.repeat(2000)}`,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness
+    .locator('.hibi-lp-table td')
+    .first()
+    .click({ position: { x: 10, y: 10 } })
+  await harness.keyboard.press('End')
+  await harness.evaluate(() => {
+    const own = window.requestIdleCallback
+    let held = []
+    window.requestIdleCallback = (callback, options) =>
+      own(
+        (deadline) => (held ? held.push(callback) : callback(deadline)),
+        options,
+      )
+    window.releaseIdle = () => {
+      window.requestIdleCallback = own
+      for (const callback of held)
+        callback({ didTimeout: false, timeRemaining: () => 50 })
+      held = null
+    }
+  })
+  try {
+    await harness.keyboard.type(' **b** `e`')
+    const cell = await harness.evaluate(() => {
+      const content = document.querySelector('.hibi-lp-cell-editor .cm-content')
+      return {
+        settling: window.tables.settling(),
+        strong: content.querySelector('.hibi-lp-strong')?.textContent,
+        code: content.querySelector('.hibi-lp-code')?.textContent,
+      }
+    })
+    assert.deepEqual(cell, { settling: true, strong: '**b**', code: 'e' })
+  } finally {
+    await harness.evaluate(() => window.releaseIdle())
+  }
+  await harness.waitForFunction(() => !window.tables.settling())
+})
+
 test('deleting a table at document end needs no waiting-cell shape', async (t) => {
   for (const [name, doc, action] of [
     ['table only', '| a | b |\n| - | - |\n| c | d |', 'table-delete'],

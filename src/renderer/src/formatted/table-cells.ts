@@ -963,7 +963,6 @@ export class CellEditor {
 
   /** Apply the editor's transactions, and send each change and selection to the formatted view. */
   private dispatch(transactions: readonly Transaction[], view: EditorView) {
-    const before = this.host.main.state.doc
     // Rejected input leaves the cell as it was, for CodeMirror to redraw.
     for (const transaction of transactions) {
       const error = transaction.annotation(rejectedInput)
@@ -972,6 +971,7 @@ export class CellEditor {
         return
       }
     }
+    const before = this.host.main.state.doc
     view.update(transactions)
     if (this.remote) {
       if (transactions.some((transaction) => transaction.docChanged))

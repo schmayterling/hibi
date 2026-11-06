@@ -7,8 +7,8 @@ const { outputFiles } = await build({
     contents: `
       export { registerFormattedFlavor } from './src/renderer/src/formatted-flavor.ts'
       export { formattedRegistry } from './src/renderer/src/formatted-registry.ts'
-      export { renderInline } from './src/renderer/src/formatted/table-cells.ts'
-      export { formattedViews } from './src/renderer/src/formatted-contributions.ts'
+      export { cellParser, renderInline } from './src/renderer/src/formatted/table-cells.ts'
+      export { formattedMarkdown, formattedViews } from './src/renderer/src/formatted-contributions.ts'
       export { cellContent } from './src/renderer/src/formatted/table-source.ts'
       export { EditorState, StateField } from '@codemirror/state'
       export { WidgetType } from '@codemirror/view'
@@ -23,7 +23,9 @@ const { outputFiles } = await build({
 const {
   registerFormattedFlavor,
   formattedRegistry,
+  cellParser,
   renderInline,
+  formattedMarkdown,
   formattedViews,
   cellContent,
   EditorState,
@@ -32,6 +34,30 @@ const {
 } = await import(
   `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`
 )
+
+test('cell parsers retain contributed syntax starting with a letter', () => {
+  const state = EditorState.create({
+    extensions: formattedMarkdown.of({
+      defineNodes: ['CellLetter'],
+      parseInline: [
+        {
+          name: 'CellLetter',
+          parse: (cx, next, at) =>
+            next === 97 ? cx.addElement(cx.elt('CellLetter', at, at + 1)) : -1,
+        },
+      ],
+    }),
+  })
+  const ranges = []
+  cellParser(state)
+    .parse('abc')
+    .iterate({
+      enter(node) {
+        if (node.name === 'CellLetter') ranges.push([node.from, node.to])
+      },
+    })
+  assert.deepEqual(ranges, [[0, 1]])
+})
 
 test('cell renderers retain the owner state and canonical source positions', async () => {
   const original = globalThis.document

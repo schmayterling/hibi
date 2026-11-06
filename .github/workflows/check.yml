@@ -1,33 +1,16 @@
-name: check
+name: huge-line reading diagnostic
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      clean:
-        description: Ignore caches and run a full build and all checks
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.ref }}
-  # A pull request's newest push replaces its run. Main's runs verify what pull
-  # requests skip, so each finishes, and only the newest waiting push runs next.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: diagnose-huge-line-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  desktop:
-    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
-    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-        shard: ['0/4', '1/4', '2/4', '3/4']
-        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
-    runs-on: ${{ matrix.os }}
+  # Isolated original file, not the full shard; passes do not exclude shard effects.
+  huge-line-reading:
+    runs-on: macos-latest
+    timeout-minutes: 40
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
@@ -36,15 +19,36 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/ci
-        id: ci
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || '' }}
-          full: ${{ github.event_name != 'pull_request' }}
-          shard: ${{ matrix.shard }}
-      - run: npx electron-builder --dir --config.mac.identity=-
-        shell: bash
-        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install as in CI
+        run: node .github/actions/ci/install.mjs
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          electron_config_cache: ${{ github.workspace }}/.cache/electron
+      - name: Build instrumented app
+        run: npm run build:app
+      - name: Up to eight fresh-profile runs; stop on first failure
+        shell: bash
+        env:
+          CI_FILE_LIMIT_MS: '360000'
+        run: |
+          mkdir -p diag
+          for run in 1 2 3 4 5 6 7 8; do
+            export HIBI_READING_TRACE="diag/run-$run.json"
+            printf '{"status":"trace not completed; inspect TAP"}\n' > "$HIBI_READING_TRACE"
+            if node --import ./tests/file-limit.mjs --test --test-reporter=tap --test-concurrency=1 --test-name-pattern='^the reading place deep inside a huge line holds through second changes, shrinks and splits$' tests/formatted-tables.test.mjs > "diag/run-$run.tap" 2>&1; then
+              echo "run $run passed"
+            else
+              diag_status=$?
+              echo "run $run failed (exit $diag_status); no further runs"
+              exit "$diag_status"
+            fi
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: huge-line-reading-${{ github.run_id }}
+          path: diag/
+          if-no-files-found: warn

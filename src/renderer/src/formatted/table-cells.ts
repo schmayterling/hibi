@@ -544,8 +544,6 @@ export class CellEditor {
   private unsent = false
   /** Where the cell's text is in the formatted view after this editor's last change, until another changes the view; null while its row lacks the cell. */
   private kept: { from: number; to: number; closed: boolean } | null | undefined
-  /** This editor's change is being sent to the formatted view. */
-  private sending = false
   private access = new Compartment()
 
   private host: CellHost
@@ -1001,7 +999,6 @@ export class CellEditor {
       if (from !== null) this.unsent = false
       const sent = this.host.main.state.changes(changes)
       const expected = sent.apply(this.host.main.state.doc)
-      this.sending = true
       this.host.main.dispatch({
         changes: sent,
         ...(from === null
@@ -1020,7 +1017,6 @@ export class CellEditor {
           ...(isolate ? [isolateHistory.of(isolate)] : []),
         ],
       })
-      this.sending = false
       // an empty cell matches any place: the parent must take this exact edit.
       if (from !== null && this.host.main.state.doc.eq(expected))
         this.kept = {
@@ -1073,7 +1069,7 @@ export class CellEditor {
   changed(changes: ChangeDesc) {
     const kept = this.kept
     this.kept = undefined
-    if (!kept || this.sending || this.view.composing) return
+    if (!kept || this.view.composing) return
     let inside = true
     changes.iterChangedRanges((from, to) => {
       inside &&= from >= kept.from && to <= kept.to

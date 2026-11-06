@@ -3419,6 +3419,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   }
   const cases = [
     ['Tab', doc, 'c', ['x', 'Tab', 'y']],
+    ['Tab with nothing after', doc, 'c', ['x', 'Tab']],
     ['Tab twice', full, 'c', ['x', 'Tab', 'y', 'Tab', 'z']],
     ['Tab to the next row', doc, 'd', ['x', 'Tab', 'y']],
     ['Tab to a cell its row lacks', doc, 'e', ['x', 'Tab', 'y']],
@@ -3438,6 +3439,16 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     ['undo, then Tab', doc, 'c', ['x', 'ControlOrMeta+z', 'Tab', 'y']],
     ['a change in the cell', doc, 'd', ['x', edit('dx', 'dQ'), 'y']],
   ]
+  // A change elsewhere may remake the table, as an open fence above it
+  // does: the cell takes no keys with its old spans.
+  await t.test('a change outside the cell', async () => {
+    const keys = ['x', edit('before', '~~~\nbefore'), 'y']
+    const { doc: now } = await run(doc, 'c', keys, true, false)
+    assert.equal(
+      now,
+      `~~~\n${doc.replace('| c |', '| cx |').replace(tail, '')}`,
+    )
+  })
   for (const [name, note, start, keys] of cases)
     await t.test(name, async () => {
       const settled = await run(note, start, keys, false)

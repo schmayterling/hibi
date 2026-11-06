@@ -8,7 +8,7 @@ permissions:
 jobs:
   dictionary-define:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
@@ -30,6 +30,7 @@ jobs:
         shell: bash
         env:
           HIBI_DICT_OUT: ${{ github.workspace }}/diag
+          CI_FILE_LIMIT_MS: '120000'
         run: |
           mkdir -p diag
           failed=0

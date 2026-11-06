@@ -324,7 +324,11 @@ test('installed flavor state stays current in static and editable table cells', 
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-cell-state-'))
   const profile = join(folder, 'profile')
   const file = join(folder, 'note.md')
-  const source = '# Title\n\n**body**\n\n| **head** |\n| --- |\n| **a\\|b** |\n'
+  // A note ending in a table opens editing its last cell, once its font has
+  // loaded, which can be after the caret moves below. The paragraph after it
+  // keeps the cells static until the test edits one.
+  const source =
+    '# Title\n\n**body**\n\n| **head** |\n| --- |\n| **a\\|b** |\n\ntail\n'
   await writeFile(file, source)
   await install(
     profile,

@@ -47,7 +47,7 @@ import {
   recordPageSelection,
   registerDOMPositions,
 } from '../native-dom-selection.ts'
-import { placedSelection } from '../reading-position.ts'
+import { placedSelection, scrolledItself } from '../reading-position.ts'
 import { type InsertValues, tableActions } from '../source-formatting.ts'
 import {
   formattedInputError,
@@ -1025,8 +1025,10 @@ class TableView {
         annotations: cellInput.of(true),
       })
     // A note opening in its last cell still opens at its top.
-    if (!this.view.state.facet(placedSelection))
+    if (!this.view.state.facet(placedSelection)) {
       element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+      scrolledItself(this.view)
+    }
     return true
   }
 
@@ -1920,7 +1922,11 @@ class TableView {
       return
     }
     const span = this.span(editing)
-    if (span) editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+    if (span) {
+      editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+      // A local edit may have refreshed while this span was still stale.
+      editing.editor.refresh()
+    }
     editing.editor.resend()
   }
 
@@ -3672,7 +3678,9 @@ export const contribution: FormattedContribution = {
             // CodeMirror takes declined text as typed over its next DOM
             // read of the selection: that read must find no new pick.
             if (view.state.field(pickedTable)) recordPageSelection(view)
-            return false
+            // The page applies no untrusted text, which CodeMirror's next
+            // read must not apply either.
+            return !event.isTrusted
           }
           event.preventDefault()
           type(view, event.data)

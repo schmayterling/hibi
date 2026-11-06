@@ -575,17 +575,21 @@ export class CellEditor {
         update(update: ViewUpdate) {
           // Local input reaches the parent after view.update. Keep mapped
           // decorations until dispatch refreshes against that committed state.
+          // Stale table spans cannot yet place the cell's inline syntax.
           if (update.docChanged) {
             this.decorations = this.decorations.map(update.changes)
             this.outer = this.outer.map(update.changes)
             this.atomic = this.atomic.map(update.changes)
             this.runs = this.runs.map(update.changes)
           } else if (
-            update.selectionSet ||
-            update.focusChanged ||
-            update.transactions.some((transaction) =>
-              transaction.effects.some((effect) => effect.is(formattedRefresh)),
-            )
+            host.current() &&
+            (update.selectionSet ||
+              update.focusChanged ||
+              update.transactions.some((transaction) =>
+                transaction.effects.some((effect) =>
+                  effect.is(formattedRefresh),
+                ),
+              ))
           )
             ({
               decorations: this.decorations,

@@ -1978,9 +1978,16 @@ class TableView {
         isolateHistory.of('full'),
       ],
     })
-    // Editing goes on in the cell the action leaves the caret in.
-    if (next && this.dom.isConnected) this.edit(next.line, next.column, 'start')
-    else this.view.focus()
+    // Editing goes on in the cell the action leaves the caret in. Until a
+    // slow parse draws the table again, that cell may not be here yet: the
+    // view keeps focus at the caret and edits the cell once it is.
+    if (
+      next &&
+      this.dom.isConnected &&
+      this.edit(next.line, next.column, 'start')
+    )
+      return true
+    this.view.focus()
     return true
   }
 

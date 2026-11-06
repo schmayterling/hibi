@@ -2803,6 +2803,31 @@ test('cell editors move with tab and arrows and leave with escape', {
   assert.match((await state()).doc, /\| e \|\n\| {2}\| {2}\|\n\nafter/)
 })
 
+test('tab in the last cell edits the added row once a slow parse draws it', {
+  timeout: 30000,
+}, async () => {
+  // Each parse runs out of time, as on a slow machine: the table draws its
+  // new row in a later slice, and typing still goes to the row's first cell.
+  await harness.evaluate(() =>
+    window.tables.mount(
+      'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter',
+      { width: 1000, height: 800 },
+      { editable: true, slice: 0 },
+    ),
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+  await harness.keyboard.press('Tab')
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness.keyboard.type('x')
+  const { doc, cell } = await state()
+  assert.equal(cell, '3:0')
+  assert.equal(
+    doc,
+    'before\n\n| a | b |\n| - | - |\n| c | d |\n| x |  |\n\nafter',
+  )
+})
+
 /** The text of the cell that holds the page selection's head, and the selected text. */
 const tabbed = (target) =>
   target.evaluate(async () => {

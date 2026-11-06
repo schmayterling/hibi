@@ -30,6 +30,7 @@ import {
 } from '../../../shared/formatted-custom-body.ts'
 import { formattedInlineParser } from '../../../shared/formatted-markdown.ts'
 import { markdownLiteral } from '../../../shared/markdown-literal.ts'
+import { createPlainTextRunExtension } from '../../../shared/markdown-plain-text-runs.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   blockMarkedNodes,
@@ -46,6 +47,7 @@ import {
   formattedRefresh,
   formattedSyntaxTree,
   formattedTree,
+  inlineStops,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import { drawReference, referenceLink } from '../formatted-references.ts'
@@ -76,6 +78,15 @@ export function cellParser(state: EditorState) {
   let found = cellParsers.get(contributed)
   if (!found) {
     found = formattedInlineParser(contributed)
+    if (
+      contributed.every(
+        (config) => !config.parseInline?.length || inlineStops(config),
+      )
+    ) {
+      const runs = createPlainTextRunExtension()
+      found = found.configure(runs.extension)
+      runs.allow(found)
+    }
     cellParsers.set(contributed, found)
   }
   return found
@@ -960,6 +971,7 @@ export class CellEditor {
         return
       }
     }
+    const before = this.host.main.state.doc
     view.update(transactions)
     if (this.remote) {
       if (transactions.some((transaction) => transaction.docChanged))
@@ -1038,7 +1050,9 @@ export class CellEditor {
     }
     if (
       transactions.some((transaction) => transaction.docChanged) &&
-      view.dom.isConnected
+      view.dom.isConnected &&
+      // A current table already refreshed the editor while redrawing this edit.
+      (!this.host.current() || before === this.host.main.state.doc)
     )
       this.refresh()
   }

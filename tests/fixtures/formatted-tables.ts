@@ -15,11 +15,13 @@ import {
   keymap,
   WidgetType,
 } from '@codemirror/view'
+import { InlineContext } from '@lezer/markdown'
 import '../../src/renderer/src/styles.css'
 import {
   type ChunkedMarkdownProbe,
   uncovered,
 } from '../../src/renderer/src/chunked-markdown'
+import { cellParser } from '../../src/renderer/src/formatted/table-cells'
 import * as formattedTables from '../../src/renderer/src/formatted/tables'
 import {
   formattedBlockParser,
@@ -232,6 +234,32 @@ Object.assign(window, {
         ),
       })
       return work
+    },
+    /** Count real inline parsing; restore the shared grammar after each measurement. */
+    watchInlineParses() {
+      const grammar = cellParser(view!.state)
+      const parse = grammar.parse
+      const char = InlineContext.prototype.char
+      const work = { calls: 0, units: 0, steps: 0 }
+      grammar.parse = (...args) => {
+        work.calls++
+        work.units += args[0].length
+        InlineContext.prototype.char = function (position) {
+          work.steps++
+          return char.call(this, position)
+        }
+        try {
+          return parse.apply(grammar, args)
+        } finally {
+          InlineContext.prototype.char = char
+        }
+      }
+      return {
+        work,
+        stop: () => {
+          grammar.parse = parse
+        },
+      }
     },
     /** install source extensions, as a format addon does. */
     extend(extension: Extension) {

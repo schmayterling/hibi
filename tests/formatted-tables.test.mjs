@@ -3771,27 +3771,32 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     })
 })
 
-test('typing in a waiting table proves each changed row only once', {
+test('typing in a table only proves rows while waiting for a redraw', {
   timeout: 120000,
 }, async (t) => {
-  for (const header of [false, true])
-    await t.test(header ? 'header' : 'body', async () => {
+  for (const [name, header, waiting] of [
+    ['current body', false, false],
+    ['current header', true, false],
+    ['waiting body', false, true],
+    ['waiting header', true, true],
+  ])
+    await t.test(name, async () => {
       const text = 'q'.repeat(50000)
       const row = text + ' | b |'
       const note =
         `before\n\n${header ? row : '| a | b |'}\n| - | - |\n${header ? '| c | d |' : row}\n\nafter` +
         '\n\nparagraph'.repeat(2000)
       await harness.evaluate(
-        (doc) =>
+        ({ doc, waiting }) =>
           window.tables.mount(
             doc,
             { width: 1000, height: 800 },
             {
               editable: true,
-              slice: 0,
+              slice: waiting ? 0 : 100000,
             },
           ),
-        note,
+        { doc: note, waiting },
       )
       await harness.waitForFunction(() => !window.tables.settling())
       await harness
@@ -3802,6 +3807,7 @@ test('typing in a waiting table proves each changed row only once', {
       await harness.keyboard.press('ArrowRight')
       const result = await harness.evaluate(() => {
         const work = window.tables.watchBlockProofs()
+        const inline = window.tables.watchInlineParses()
         const own = window.requestIdleCallback
         let held = []
         window.requestIdleCallback = (callback, options) =>
@@ -3817,33 +3823,101 @@ test('typing in a waiting table proves each changed row only once', {
         }
         const cell = document.querySelector('.hibi-lp-cell-editor .cm-content')
           .cmTile.root.view
-        for (let key = 0; key < 5; key++) {
-          const at = cell.state.selection.main.head
-          cell.dispatch({
-            changes: { from: at, insert: 'x' },
-            selection: { anchor: at + 1 },
-            userEvent: 'input.type',
-          })
+        try {
+          for (let key = 0; key < 5; key++) {
+            const at = cell.state.selection.main.head
+            cell.dispatch({
+              changes: { from: at, insert: 'x' },
+              selection: { anchor: at + 1 },
+              userEvent: 'input.type',
+            })
+          }
+        } finally {
+          inline.stop()
         }
         return {
           ...work,
+          inline: inline.work,
           doc: window.tables.view().state.doc.toString(),
           settling: window.tables.settling(),
         }
       })
       try {
-        assert.equal(result.settling, true)
+        assert.equal(result.settling, waiting)
         assert.ok(
           result.doc === note.replace(text, `qxxxxx${text.slice(1)}`),
           'all five keys reach their cell',
         )
-        assert.ok(result.calls <= 5, `${result.calls} block proofs`)
-        assert.ok(result.units <= 5 * 50100, `${result.units} block units`)
+        // A drawn header also renders both cells for its table layout key.
+        const headerKey = header && !waiting
+        assert.ok(
+          result.inline.calls <= (headerKey ? 15 : 5),
+          `${result.inline.calls} inline parses`,
+        )
+        assert.ok(
+          result.inline.units <= (headerKey ? 10 : 5) * 50100,
+          `${result.inline.units} inline units`,
+        )
+        assert.ok(
+          result.inline.steps <= 100,
+          `${result.inline.steps} inline steps`,
+        )
+        const budget = waiting ? 5 : 0
+        assert.ok(result.calls <= budget, `${result.calls} block proofs`)
+        assert.ok(result.units <= budget * 50100, `${result.units} block units`)
       } finally {
         await harness.evaluate(() => window.releaseIdle())
       }
       await harness.waitForFunction(() => !window.tables.settling())
     })
+})
+
+test('typing formats a cell while its table waits for a reparse', async () => {
+  await harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, slice: 0 },
+      ),
+    `before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter${'\n\nparagraph'.repeat(2000)}`,
+  )
+  await harness.waitForFunction(() => !window.tables.settling())
+  await harness
+    .locator('.hibi-lp-table td')
+    .first()
+    .click({ position: { x: 10, y: 10 } })
+  await harness.keyboard.press('End')
+  await harness.evaluate(() => {
+    const own = window.requestIdleCallback
+    let held = []
+    window.requestIdleCallback = (callback, options) =>
+      own(
+        (deadline) => (held ? held.push(callback) : callback(deadline)),
+        options,
+      )
+    window.releaseIdle = () => {
+      window.requestIdleCallback = own
+      for (const callback of held)
+        callback({ didTimeout: false, timeRemaining: () => 50 })
+      held = null
+    }
+  })
+  try {
+    await harness.keyboard.type(' **b** `e`')
+    const cell = await harness.evaluate(() => {
+      const content = document.querySelector('.hibi-lp-cell-editor .cm-content')
+      return {
+        settling: window.tables.settling(),
+        strong: content.querySelector('.hibi-lp-strong')?.textContent,
+        code: content.querySelector('.hibi-lp-code')?.textContent,
+      }
+    })
+    assert.deepEqual(cell, { settling: true, strong: '**b**', code: 'e' })
+  } finally {
+    await harness.evaluate(() => window.releaseIdle())
+  }
+  await harness.waitForFunction(() => !window.tables.settling())
 })
 
 test('deleting a table at document end needs no waiting-cell shape', async (t) => {

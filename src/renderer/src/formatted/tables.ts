@@ -525,6 +525,12 @@ class TableView {
 
   /** A state in which the table has the snapshot's rows and columns: only its cells' text changed. */
   private shaped: EditorState | null = null
+  /** Shape work waits until redraw: a current snapshot already proves its cells. */
+  private shape: (() => void) | null = null
+
+  mapped() {
+    this.shape?.()
+  }
 
   get windowed() {
     return this.heights !== null
@@ -1794,50 +1800,57 @@ class TableView {
       this.widget.doc === before ||
       this.shaped?.doc === before ||
       (kept !== undefined && this.valid(kept, before))
-    const cells = known
-      ? (this.cellsOnly(changes, before) ?? this.restored(changes, before))
-      : null
-    this.shaped = cells && this.view.state
+    const first = before.lineAt(this.range().from).number
+    this.shape = () => {
+      this.shape = null
+      const cells =
+        !this.current && known
+          ? (this.cellsOnly(changes, before, first) ??
+            this.restored(changes, before))
+          : null
+      this.shaped = cells && this.view.state
+      // Other cells show their text now too.
+      for (const cell of cells ?? []) {
+        if (cell.line === editing?.line && cell.column === editing.column)
+          continue
+        const row = cell.line
+          ? this.rendered.get(cell.line - 2)?.element
+          : this.head
+        const element = row?.cells[cell.column]
+        const place = this.cellIn(this.view.state.doc, cell)
+        if (element)
+          element.replaceWith(
+            place
+              ? this.cellNow(cell, place)
+              : this.cell(
+                  cell.line ? 'td' : 'th',
+                  this.widget.line(cell.line),
+                  undefined,
+                  cell.column,
+                ),
+          )
+      }
+      // A change in another cell, as undo of typing there, leaves this one
+      // where its row has it now.
+      if (
+        this.shaped &&
+        editing &&
+        !editing.editor.view.composing &&
+        editing.editor.placed === undefined
+      ) {
+        const span = this.cellIn(this.shaped.doc, editing)
+        editing.editor.keep(span)
+        if (span)
+          editing.editor.sync(
+            this.shaped.doc.sliceString(span.from, span.to),
+            span,
+          )
+      }
+    }
     this.track(changes)
     this.handOver(changes)
-    // Other cells show their text now too.
-    for (const cell of cells ?? []) {
-      if (cell.line === editing?.line && cell.column === editing.column)
-        continue
-      const row = cell.line
-        ? this.rendered.get(cell.line - 2)?.element
-        : this.head
-      const element = row?.cells[cell.column]
-      const place = this.cellIn(this.view.state.doc, cell)
-      if (element)
-        element.replaceWith(
-          place
-            ? this.cellNow(cell, place)
-            : this.cell(
-                cell.line ? 'td' : 'th',
-                this.widget.line(cell.line),
-                undefined,
-                cell.column,
-              ),
-        )
-    }
     if (!editing) return null
     editing.editor.changed(changes)
-    // A change in another cell, as undo of typing there, leaves this one
-    // where its row has it now.
-    if (
-      this.shaped &&
-      !editing.editor.view.composing &&
-      editing.editor.placed === undefined
-    ) {
-      const span = this.cellIn(this.shaped.doc, editing)
-      editing.editor.keep(span)
-      if (span)
-        editing.editor.sync(
-          this.shaped.doc.sliceString(span.from, span.to),
-          span,
-        )
-    }
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from
@@ -1851,10 +1864,13 @@ class TableView {
    * header or body row, between the same pipes, in a row that still reads
    * as one.
    */
-  private cellsOnly(changes: ChangeDesc, before: Text): Cell[] | null {
+  private cellsOnly(
+    changes: ChangeDesc,
+    before: Text,
+    first: number,
+  ): Cell[] | null {
     const { doc } = this.view.state
     if (!this.dom.isConnected || doc.lines !== before.lines) return null
-    const first = before.lineAt(this.range().from).number
     const cells: Cell[] = []
     let only = true
     changes.iterChangedRanges((fromA, toA, fromB, toB) => {
@@ -4270,6 +4286,9 @@ export const contribution: FormattedContribution = {
       },
     }),
     tableEditing,
+    EditorView.updateListener.of(({ view }) => {
+      for (const table of mounted.get(view) ?? []) table.mapped()
+    }),
     // CodeMirror scrolls to a block widget's bounds, which for a table is all
     // of it: scrolling to a caret in a table, as after undo, shows its cell.
     // Other scrolls go where the table's coordsAt puts the position, once

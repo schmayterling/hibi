@@ -1591,6 +1591,7 @@ class TableView {
     this.handOver(changes)
     const editing = this.editing
     if (!editing) return null
+    editing.editor.changed()
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from

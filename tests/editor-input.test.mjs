@@ -1063,7 +1063,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
       .getByRole('textbox', { name: 'Table cell', exact: true })
       .waitFor()
     await showPick(rich, reverse ? [b, a] : [a, b])
-    const range = [source.indexOf(a[0]) + a[1], source.indexOf(b[0]) + b[1]]
+    const range = picked(source, a, b)
     await page.waitForFunction((range) => {
       const { main } = document.querySelector(
         '.rich-pane [aria-label="Document editor"]',
@@ -1483,11 +1483,19 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
     })
 })
 
-/** The source range a pick from word end `a` to `b` selects. */
-const picked = (source, a, b) => [
-  source.indexOf(a[0]) + a[1],
-  source.indexOf(b[0]) + b[1],
-]
+/**
+ * The source range a pick from word end `a` to `b` selects. Words other than
+ * the paragraph before the table are found from the table on: a random token
+ * in that paragraph can spell a cell's word.
+ */
+const picked = (source, a, b) =>
+  [a, b].map(
+    ([word, offset]) =>
+      source.indexOf(
+        word,
+        word.startsWith('before') ? 0 : source.indexOf('|'),
+      ) + offset,
+  )
 
 /** Puts a held copy back on the shared clipboard and pastes it right away. */
 async function pasteHeld(app, page, held, menu) {

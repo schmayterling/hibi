@@ -2962,9 +2962,62 @@ test('edit keys stay in a table action cell while its parse is pending', {
         const expected = existing
           ? `before\n\n| a |\n| - |\n| ${br}x${deleted ? '' : 'c'} |\n\nafter`
           : doc.replace('\n\nafter', `\n| ${br}x |  |\n\nafter`)
-        assert.equal((await state()).doc, expected)
+        // Native deletion can remove padding if the cell opens before the key.
+        const content = (text) => text.replace(/[ \t]*\|[ \t]*/g, '|')
+        assert.equal(content((await state()).doc), content(expected))
         assert.equal((await state()).cell, existing ? '2:0' : '3:0')
       })
+})
+
+test('document commands leave an undrawn action cell intact and focused', {
+  timeout: 30000,
+}, async (t) => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  for (const key of [
+    { key: 'Tab' },
+    { key: 'Tab', shiftKey: true },
+    { key: 'ArrowUp', altKey: true },
+    { key: 'ArrowUp', altKey: true, shiftKey: true },
+    ...(process.platform === 'darwin' ? [{ key: 'o', ctrlKey: true }] : []),
+  ])
+    await t.test(JSON.stringify(key), async () => {
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            { editable: true, slice: 0 },
+          ),
+        doc,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness.locator('.hibi-lp-table td', { hasText: 'd' }).click()
+      // Dispatch in the action's turn, before its parser can draw the cell.
+      const result = await harness.evaluate((key) => {
+        const view = window.tables.view()
+        const done = window.tables.runTableAction('row-after')
+        const before = view.state.doc
+        const event = new KeyboardEvent('keydown', {
+          ...key,
+          bubbles: true,
+          cancelable: true,
+        })
+        view.contentDOM.dispatchEvent(event)
+        return {
+          done,
+          prevented: event.defaultPrevented,
+          unchanged: view.state.doc === before,
+          focused: view.hasFocus,
+        }
+      }, key)
+      assert.deepEqual(result, {
+        done: true,
+        prevented: true,
+        unchanged: true,
+        focused: true,
+      })
+      await harness.waitForFunction(() => !window.tables.settling())
+    })
 })
 
 /** The text of the cell that holds the page selection's head, and the selected text. */

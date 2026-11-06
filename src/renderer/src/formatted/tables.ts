@@ -1,4 +1,5 @@
 import {
+  defaultKeymap,
   deleteGroupBackward,
   deleteGroupForward,
   isolateHistory,
@@ -2759,6 +2760,33 @@ const deleteWaiting =
   (forward: boolean, by?: 'group' | 'line') => (view: EditorView) =>
     waitingTable(view)?.deleteWaiting(forward, by) ?? false
 
+/** Whether the caret's DOM still belongs to an old table snapshot. */
+function staleTable(view: EditorView) {
+  const tables = [...(mounted.get(view) ?? [])].filter(
+    (table) => !table.current,
+  )
+  if (!tables.length) return false
+  const { node, offset } = view.domAtPos(view.state.selection.main.head)
+  return tables.some(
+    (table) =>
+      node.childNodes[offset] === table.dom ||
+      node.childNodes[offset - 1] === table.dom,
+  )
+}
+const pauseTableCommand = (view: EditorView) =>
+  !!waitingTable(view) || staleTable(view)
+// ponytail: other native commands are declined until draw; replay would need a queue.
+const pendingCommandKeys = defaultKeymap.map(
+  ({ key, mac, win, linux, shift }) => ({
+    key,
+    mac,
+    win,
+    linux,
+    run: pauseTableCommand,
+    shift: shift ? pauseTableCommand : undefined,
+  }),
+)
+
 /** Whether a position of the formatted view is inside a table, whose cells show their text where a collapsed range shows none. */
 export const tableShows = (view: EditorView, pos: number) =>
   tableAt(view, pos, true) !== null
@@ -3519,6 +3547,8 @@ export const contribution: FormattedContribution = {
     { mac: 'Mod-Delete', run: deleteWaiting(true, 'line') },
     { mac: 'Ctrl-h', run: deleteWaiting(false) },
     { mac: 'Ctrl-d', run: deleteWaiting(true) },
+    { key: 'Tab', run: pauseTableCommand, shift: pauseTableCommand },
+    ...pendingCommandKeys,
     { key: 'ArrowDown', run: (view) => enterTable(view, 'down') },
     { key: 'ArrowUp', run: (view) => enterTable(view, 'up') },
     { key: 'ArrowRight', run: (view) => enterTable(view, 'right') },
@@ -3736,15 +3766,7 @@ export const contribution: FormattedContribution = {
         }
       }
       // Mapped widget bounds are current even when its snapshot's length is old.
-      const { node, offset } = view.domAtPos(view.state.selection.main.head)
-      for (const table of mounted.get(view) ?? [])
-        if (
-          !table.current &&
-          (node.childNodes[offset] === table.dom ||
-            node.childNodes[offset - 1] === table.dom)
-        )
-          return true
-      return false
+      return staleTable(view)
     }),
     tableActions.of({
       active: (view) => !!tableAt(view, view.state.selection.main.head),

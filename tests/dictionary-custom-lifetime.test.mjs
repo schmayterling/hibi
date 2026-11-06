@@ -48,6 +48,7 @@ async function fixture(t) {
       })
       const page = await app.firstWindow()
       page.setDefaultTimeout(APP_STATE_TIMEOUT)
+      await waitForAsync(page, () => !!window.hibi?.invokeAddonProfile)
       return { app, child, page }
     },
     close,

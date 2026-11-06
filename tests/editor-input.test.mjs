@@ -1103,6 +1103,76 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
     assert.notEqual(held.text, sentinel, 'copy puts the pick on the clipboard')
     return held
   }
+  const expireActivation = async (app) => {
+    const active = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+        `new Promise(resolve => {
+          const end = Date.now() + 15000
+          const check = () => {
+            if (!navigator.userActivation.isActive || Date.now() > end)
+              resolve(navigator.userActivation.isActive)
+            else setTimeout(check, 30)
+          }
+          check()
+        })`,
+        false,
+      ),
+    )
+    assert.equal(active, false, 'native menu caller has no activation')
+  }
+  for (const what of ['into', 'rows'])
+    await t.test(what + ', menu without activation', async () => {
+      const [, original, start, end] = shapes.find(([name]) => name === what)
+      const token = crypto.randomUUID()
+      const a = [start[0] + token, start[1]]
+      const source = original.replace(start[0], a[0])
+      let { app, page, rich } = await openInputFixture(source)
+      await pick(page, rich, source, a, end, false)
+      const copied = await clipboardAfter(app, page, 'c')
+      await page.keyboard.press('Delete')
+      const deleted = (await acceptedInput(page)).markdown
+      ;({ app, page, rich } = await openInputFixture(source))
+      await pick(page, rich, source, a, end, false)
+      await expireActivation(app)
+      assert.deepEqual(await clipboardAfter(app, page, 'x', true), copied)
+      assert.equal((await acceptedInput(page)).markdown, deleted)
+      await page.keyboard.press('ControlOrMeta+z')
+      await waitForInputSource(page, source)
+    })
+  await t.test('synthetic cut does not create user activation', async () => {
+    const source = note.replace('before', 'before' + crypto.randomUUID())
+    const { app, page, rich } = await openInputFixture(source)
+    await pick(
+      page,
+      rich,
+      source,
+      [source.slice(0, source.indexOf('\n')), 3],
+      ['abc', 1],
+      false,
+    )
+    const sentinel = 'hibi-cut-untrusted-' + crypto.randomUUID()
+    await app.evaluate(
+      ({ clipboard }, sentinel) => clipboard.writeText(sentinel),
+      sentinel,
+    )
+    await expireActivation(app)
+    const active = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+        `document.querySelector('.rich-pane [aria-label="Document editor"]')
+          .cmTile.root.view.contentDOM.dispatchEvent(new ClipboardEvent('cut', {
+            bubbles: true, cancelable: true, clipboardData: new DataTransfer()
+          }));
+        navigator.userActivation.isActive`,
+        false,
+      ),
+    )
+    assert.equal(active, false)
+    assert.equal(
+      await app.evaluate(({ clipboard }) => clipboard.readText()),
+      sentinel,
+    )
+    assert.equal((await acceptedInput(page)).markdown, source)
+  })
   for (const mode of ['blocked', 'empty'])
     for (const what of ['into', 'rows'])
       for (const menu of [false, true])

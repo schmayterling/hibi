@@ -85,6 +85,7 @@ import {
   referenceLink,
   referenceLinks,
 } from './formatted-references'
+import { previewBudget } from './formatted-selection-text'
 import type { FormattedSyntax } from './formatted-syntax'
 import { atomBlockAt, blockSelected, openSelection } from './formatted-text-end'
 import { nativeDOMSelection, shiftDoubleClick } from './native-dom-selection'
@@ -2810,10 +2811,25 @@ export function livePreview(
     }),
     EditorView.inputHandler.of((view, from, to, text) => {
       if (view.composing) return false
-      const tree = syntax.tree(view.state)
+      const { state } = view
+      const tree = syntax.tree(state)
+      // Select-all keeps the note's first block, so it reads that block even
+      // when the parse has not reached it yet, as in a large note just opened.
+      // ponytail: a first block the preview's 128K source units cannot finish,
+      // such as a giant unclosed fence, may keep the default raw insertion
+      // until the background parse reaches it.
+      const lines = /[\r\n]/.test(text)
+      const start =
+        lines &&
+        from === 0 &&
+        to === state.doc.length &&
+        to > 0 &&
+        uncovered(tree, 0, 1)
+          ? syntax.selectionTree(state, 0, 1, previewBudget(state))
+          : null
       const spec =
-        (/[\r\n]/.test(text) && lineInput(view.state, tree, from, to, text)) ||
-        gapInput(view.state, tree, from, to, text)
+        (lines && lineInput(state, start ?? tree, from, to, text)) ||
+        gapInput(state, tree, from, to, text)
       if (!spec) return false
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))
       return true

@@ -514,7 +514,6 @@ class TableView {
    * from the text now.
    */
   private get known() {
-    if (!this.current) this.shape?.()
     return (
       this.current ||
       this.shaped?.doc === this.view.state.doc ||
@@ -2436,7 +2435,6 @@ class TableView {
     place: { from: number; to: number; closed: boolean } | null,
     doc = this.view.state.doc,
   ) {
-    if (doc === this.view.state.doc && !this.current) this.shape?.()
     const editing = this.editing
     if (!editing) return false
     const span = this.cellIn(doc, editing)

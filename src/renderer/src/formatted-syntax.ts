@@ -954,9 +954,12 @@ export function formattedSyntax(
   return {
     extension: [
       field,
+      // Replacing parseInline itself deoptimizes Lezer's shared table parser.
       formattedBlockParser.of((state) =>
-        Object.assign(syntax.chunkedFor(state).scan.configure({}), {
-          parseInline: () => [],
+        syntax.chunkedFor(state).scan.configure({
+          parseInline: [
+            { name: 'HibiBlockText', parse: (context) => context.end },
+          ],
         }),
       ),
       driver(syntax, options),

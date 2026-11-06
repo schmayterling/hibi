@@ -1319,6 +1319,14 @@ test('a focused rebuilt formatted editor keeps its place when lines change heigh
   await context.page.addStyleTag({
     content: `${context.pane} .cm-line { padding-bottom: 0.25px !important }`,
   })
+  // Notify CodeMirror of the manually injected style change.
+  await context.page.evaluate(
+    (pane) =>
+      document
+        .querySelector(`${pane} .cm-content`)
+        .cmTile.root.view.requestMeasure(),
+    context.pane,
+  )
   await context.page.waitForFunction(
     ({ pane, scroll }) => document.querySelector(pane).scrollTop !== scroll,
     { pane: context.pane, scroll: kept.scroll },

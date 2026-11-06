@@ -303,13 +303,13 @@ export function stopElectronTree(child) {
 export const showTestWindows =
   (process.env.GITHUB_ACTIONS === 'true' && !!process.env.GITHUB_RUN_ID) ||
   process.env.HIBI_TEST_SHOW_WINDOWS === '1'
+// Cold native GPU startup on Xvfb can outlive main and hold its stdio open.
+export const electronGpuArgs =
+  showTestWindows && process.platform === 'linux'
+    ? ['--use-gl=angle', '--use-angle=swiftshader']
+    : []
 export const electron = {
   async launch({ diagnostics = true, ...options }) {
-    // Cold Xvfb runners can lose the default GPU process before first paint.
-    const gpuArgs =
-      showTestWindows && process.platform === 'linux'
-        ? ['--use-gl=angle', '--use-angle=swiftshader']
-        : []
     const application = await _electron.launch({
       ...options,
       env: {
@@ -319,7 +319,7 @@ export const electron = {
         ).href,
         ...(options.env ?? process.env),
       },
-      args: [...options.args, '--hibi-test', ...gpuArgs],
+      args: [...options.args, '--hibi-test', ...electronGpuArgs],
     })
     const observeStartup = (page) => {
       if (page.hibiStartupTrace) return

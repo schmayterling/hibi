@@ -10,7 +10,7 @@ import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import electronPath from 'electron'
-import { electron, stopElectronTree } from './electron.mjs'
+import { electron, electronGpuArgs, stopElectronTree } from './electron.mjs'
 
 function recordStartupDialogs(
   { app, BrowserWindow, dialog, ipcMain },
@@ -357,6 +357,7 @@ async function spawnFailedStartup(t, { block = false } = {}) {
       resolve('.'),
       `--user-data-dir=${profile}`,
       '--hibi-test',
+      ...electronGpuArgs,
     ],
     { env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] },
   )

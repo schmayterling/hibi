@@ -10,7 +10,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
 async function launch(profile, bytes) {
@@ -79,6 +79,88 @@ const lookup = (page) =>
       word: '猫',
     }),
   )
+const within = (promise, message) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(message)), APP_STATE_TIMEOUT).unref(),
+    ),
+  ])
+/** Holds the dictionary's lookup code, as a busy window loads it late, until `release`. */
+async function holdLookupCode(page) {
+  const bundle = JSON.parse(
+    await readFile(resolve('out/renderer/startup-bundle.json'), 'utf8'),
+  )
+  const chunks = Object.values(bundle).filter((entry) =>
+    entry.modules.includes('src/addons/dictionary/source.ts'),
+  )
+  assert.equal(chunks.length, 1)
+  const path = `/${chunks[0].file}`
+  let open
+  const gate = new Promise((resolve) => {
+    open = resolve
+  })
+  let requests = 0
+  const waiting = new Set()
+  const continued = []
+  let released
+  await page.route(
+    (url) => url.pathname === path,
+    (route) => {
+      requests++
+      for (const wake of waiting) wake()
+      const done = gate.then(() => route.continue())
+      continued.push(done)
+      return done
+    },
+  )
+  return {
+    get requests() {
+      return requests
+    },
+    /** Resolves once the code is asked for after `count` requests. */
+    askedAfter(count) {
+      return new Promise((resolve) => {
+        const wake = () => {
+          if (requests <= count) return
+          waiting.delete(wake)
+          resolve()
+        }
+        waiting.add(wake)
+        wake()
+      })
+    },
+    release() {
+      // Once: a later call may come after its window has closed.
+      released ??= (async () => {
+        open()
+        await Promise.all(continued)
+        await page.unrouteAll({ behavior: 'wait' })
+      })()
+      return released
+    },
+  }
+}
+/** Reloads the window with the lookup code held, and waits for its editor. */
+async function reloadHeld(app, page) {
+  const held = await holdLookupCode(page)
+  try {
+    await page.reload({ waitUntil: 'commit' })
+    await waitForDocumentEditor(app, page)
+    await page.locator('.rich-pane .hibi-formatted .cm-content').waitFor()
+  } catch (error) {
+    await held.release()
+    throw error
+  }
+  return held
+}
+const noWord = (page) =>
+  page
+    .locator('.toast')
+    .getByText('Place the cursor in a word or select one word.', {
+      exact: true,
+    })
+const home = process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home'
 
 test('pack dialog install, offline definition, profile restart, path rejection and uninstall', {}, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-packs-'))
@@ -87,7 +169,9 @@ test('pack dialog install, offline definition, profile restart, path rejection a
     JSON.stringify({ dictionary: true }),
   )
   let app
+  let held
   t.after(async () => {
+    await held?.release()
     await app?.close()
     await rm(profile, { recursive: true, force: true })
   })
@@ -179,6 +263,9 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, note)
+  // Editing does not wait for the lookup code, so it can arrive after a
+  // lookup asks for it.
+  held = await reloadHeld(app, page)
   await clickMenu(app, 'Open…')
   await waitForAsync(
     page,
@@ -191,9 +278,7 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   })
   await rich.click()
   await rich.focus()
-  await rich.press(
-    process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
-  )
+  await rich.press(home)
   await t.test(
     'offline definition preserves reading, license, privacy and source',
     async () => {
@@ -201,7 +286,17 @@ test('pack dialog install, offline definition, profile restart, path rejection a
       await page
         .getByRole('combobox', { name: /search commands/i })
         .fill('Define word')
+      const asked = held.requests
       await page.getByRole('option', { name: /Define word/i }).click()
+      try {
+        // The lookup asks for its code and waits for it, or gives up without it.
+        await within(
+          Promise.race([held.askedAfter(asked), noWord(page).waitFor()]),
+          'the lookup neither asked for its code nor gave up',
+        )
+      } finally {
+        await held.release()
+      }
       const definition = page.getByRole('dialog', { name: 'Define “猫”' })
       await definition
         .getByText(entries[0].meanings[0].definitions[0].definition, {
@@ -225,6 +320,56 @@ test('pack dialog install, offline definition, profile restart, path rejection a
       )
       await page.keyboard.press('Escape')
       await definition.waitFor({ state: 'detached' })
+    },
+  )
+  await t.test(
+    'a lookup waiting for its code does not look up text edited meanwhile',
+    async () => {
+      held = await reloadHeld(app, page)
+      await app.evaluate(({ ipcMain }) => {
+        globalThis.dictionaryLateQueries = []
+        const handler = ipcMain._invokeHandlers.get('addons:query')
+        ipcMain.removeHandler('addons:query')
+        ipcMain.handle('addons:query', (event, id, method, input) => {
+          if (id === 'dictionary')
+            globalThis.dictionaryLateQueries.push({ method, input })
+          return handler(event, id, method, input)
+        })
+      })
+      await rich.click()
+      await rich.press(home)
+      await clickMenu(app, 'Command palette')
+      await page
+        .getByRole('combobox', { name: /search commands/i })
+        .fill('Define word')
+      const asked = held.requests
+      await page.getByRole('option', { name: /Define word/i }).click()
+      try {
+        await within(
+          held.askedAfter(asked),
+          'the lookup code was not requested',
+        )
+        await page
+          .getByRole('dialog', { name: /^command palette$/i })
+          .waitFor({ state: 'detached' })
+        // Another word at the same place, while the lookup waits.
+        await replaceRichText(page, rich, '狗')
+        await rich.press(home)
+        await waitForAsync(
+          page,
+          async () => (await window.hibi.getDocument()).markdown === '狗',
+        )
+      } finally {
+        await held.release()
+      }
+      const lookedUp = page.getByRole('dialog', { name: /^Define/ })
+      await noWord(page).or(lookedUp).waitFor()
+      assert.deepEqual(
+        await app.evaluate(() => globalThis.dictionaryLateQueries),
+        [],
+      )
+      assert.equal(await lookedUp.count(), 0)
+      await noWord(page).waitFor()
     },
   )
   const openDefinition = page.getByRole('dialog', { name: 'Define “猫”' })

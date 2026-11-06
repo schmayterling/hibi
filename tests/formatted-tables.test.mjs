@@ -3771,6 +3771,81 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     })
 })
 
+test('typing in a waiting table proves each changed row only once', {
+  timeout: 120000,
+}, async (t) => {
+  for (const header of [false, true])
+    await t.test(header ? 'header' : 'body', async () => {
+      const text = 'q'.repeat(50000)
+      const row = text + ' | b |'
+      const note =
+        `before\n\n${header ? row : '| a | b |'}\n| - | - |\n${header ? '| c | d |' : row}\n\nafter` +
+        '\n\nparagraph'.repeat(2000)
+      await harness.evaluate(
+        (doc) =>
+          window.tables.mount(
+            doc,
+            { width: 1000, height: 800 },
+            {
+              editable: true,
+              slice: 0,
+            },
+          ),
+        note,
+      )
+      await harness.waitForFunction(() => !window.tables.settling())
+      await harness
+        .locator(header ? '.hibi-lp-table th' : '.hibi-lp-table td')
+        .first()
+        .click({ position: { x: 20, y: 15 } })
+      await harness.keyboard.press('Home')
+      await harness.keyboard.press('ArrowRight')
+      const result = await harness.evaluate(() => {
+        const work = window.tables.watchBlockProofs()
+        const own = window.requestIdleCallback
+        let held = []
+        window.requestIdleCallback = (callback, options) =>
+          own(
+            (deadline) => (held ? held.push(callback) : callback(deadline)),
+            options,
+          )
+        window.releaseIdle = () => {
+          window.requestIdleCallback = own
+          for (const callback of held)
+            callback({ didTimeout: false, timeRemaining: () => 50 })
+          held = null
+        }
+        const cell = document.querySelector('.hibi-lp-cell-editor .cm-content')
+          .cmTile.root.view
+        for (let key = 0; key < 5; key++) {
+          const at = cell.state.selection.main.head
+          cell.dispatch({
+            changes: { from: at, insert: 'x' },
+            selection: { anchor: at + 1 },
+            userEvent: 'input.type',
+          })
+        }
+        return {
+          ...work,
+          doc: window.tables.view().state.doc.toString(),
+          settling: window.tables.settling(),
+        }
+      })
+      try {
+        assert.equal(result.settling, true)
+        assert.ok(
+          result.doc === note.replace(text, `qxxxxx${text.slice(1)}`),
+          'all five keys reach their cell',
+        )
+        assert.ok(result.calls <= 5, `${result.calls} block proofs`)
+        assert.ok(result.units <= 5 * 50100, `${result.units} block units`)
+      } finally {
+        await harness.evaluate(() => window.releaseIdle())
+      }
+      await harness.waitForFunction(() => !window.tables.settling())
+    })
+})
+
 test('deleting a table at document end needs no waiting-cell shape', async (t) => {
   for (const [name, doc, action] of [
     ['table only', '| a | b |\n| - | - |\n| c | d |', 'table-delete'],

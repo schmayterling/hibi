@@ -957,15 +957,13 @@ class TableView {
     return { from, to: from + this.widget.to - this.widget.from }
   }
 
-  /** Where the table is now while its shape is known: only its cells' text changed since the snapshot, or an action left its lines. */
+  /** Where the table is now while its bounds are known: only it changed since the snapshot. */
   private bounds() {
     const { from, to } = this.range()
-    const { doc } = this.view.state
-    if (this.waitingForInput) {
-      const first = doc.lineAt(from).number
-      return { from, to: doc.line(first + this.waiting!.lines - 1).to }
+    return {
+      from,
+      to: to + this.view.state.doc.length - this.widget.doc.length,
     }
-    return { from, to: to + doc.length - this.widget.doc.length }
   }
 
   /** Whether the table's bounds are known: as its shape, or from an action's waiting cell. */

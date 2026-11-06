@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { TreeFragment } from '@lezer/common'
-import { GFM, parser, Table } from '@lezer/markdown'
+import { GFM, parseCode, parser, Table } from '@lezer/markdown'
 import {
   ChunkedMarkdownParser,
   listWindow,
   parsedChunks,
   readAhead,
+  readAheadFrom,
   uncovered,
 } from '../src/renderer/src/chunked-markdown.ts'
+import {
+  guardMarkdownSyntax,
+  protectMarkdownParser,
+} from '../src/shared/markdown-flavor-guard.ts'
+import { readAheadBlock } from './read-ahead-block.mjs'
 
 const base = parser.configure(GFM)
 
@@ -1138,4 +1144,163 @@ test('a rest within one chunk outside the demand stays pending', () => {
   )
   assert.equal(counts.scannedUnits, shortNote.length)
   assert.ok(uncovered(boundaries, 0, shortNote.length))
+})
+
+// The block-drag note: the decision at `%% q` depends on the later `m %% x` line.
+const readAheadNote = 'a1\na2\n%% q\na4\na5\n\nm %% x\n\nz %%\n'
+const readAheadBase = parser.configure([GFM, readAheadBlock])
+// As in the formatted view, code parsing makes the full parse a mixed parse,
+// which reports position 0 while its markdown parse runs.
+const readAheadFull = readAheadBase.configure(
+  parseCode({ codeParser: () => null }),
+)
+/** Advance to the end in at most `limit` steps, so a parse that never ends fails. */
+const counted = (parse, limit = 10) => {
+  let advances = 1
+  let tree = parse.advance()
+  for (; !tree && advances < limit; advances++) tree = parse.advance()
+  assert.ok(tree, `unfinished after ${advances} steps`)
+  return { tree, advances }
+}
+/** Advance until the first full parse is counted, in at most two steps. */
+const firstParse = (parse, counts) => {
+  let tree = null
+  for (let steps = 0; !tree && !counts.parsedChunks && steps < 2; steps++)
+    tree = parse.advance()
+  assert.equal(tree, null)
+  assert.equal(counts.parsedChunks, 1)
+}
+
+test('a short rest with read-ahead decisions records them at their lines', () => {
+  const counts = probe()
+  const { tree, advances } = counted(
+    new ChunkedMarkdownParser(readAheadFull, readAheadBase, {
+      probe: counts,
+    }).startChunkedParse(stringInput(readAheadNote), [], null),
+  )
+  const line = readAheadNote.indexOf('%% q')
+  // It reads through `m %% x` and the blank line after it.
+  for (const at of [
+    line,
+    readAheadNote.indexOf('a4'),
+    readAheadNote.indexOf('m %%'),
+  ])
+    assert.ok(readAheadFrom(tree, at)?.includes(line), `${at}`)
+  assert.deepEqual(readAheadFrom(tree, readAheadNote.indexOf('z %%')), [])
+  // The direct parse, a scan for the decision lines, and a fresh parse.
+  assert.deepEqual(counts, {
+    parsedChunks: 2,
+    parsedUnits: 2 * readAheadNote.length,
+    scannedUnits: readAheadNote.length,
+    reusedNodes: 0,
+    builtGroups: 1,
+  })
+  assert.ok(advances <= 3, `${advances} steps`)
+  same(
+    nodes(tree),
+    nodes(readAheadFull.parse(readAheadNote)),
+    readAheadNote,
+    'read-ahead rest',
+  )
+  // A rest without decisions is still parsed once, with no scan.
+  const plain = probe()
+  const once = counted(
+    new ChunkedMarkdownParser(readAheadFull, readAheadBase, {
+      probe: plain,
+    }).startChunkedParse(stringInput(shortNote), [], null),
+  )
+  assert.equal(plain.parsedChunks, 1)
+  assert.equal(plain.scannedUnits, 0)
+  assert.ok(once.advances <= 2, `${once.advances} steps`)
+})
+
+test('a read-ahead rest after reused chunks keeps its decision line', () => {
+  const before = shortNote.repeat(3)
+  const text = before + readAheadNote
+  const { tree: old } = counted(
+    new ChunkedMarkdownParser(readAheadFull, readAheadBase).startChunkedParse(
+      stringInput(before),
+      [],
+      null,
+    ),
+    20,
+  )
+  const fragments = TreeFragment.applyChanges(TreeFragment.addTree(old), [
+    {
+      fromA: before.length,
+      toA: before.length,
+      fromB: before.length,
+      toB: text.length,
+    },
+  ])
+  const counts = probe()
+  const { tree } = counted(
+    new ChunkedMarkdownParser(readAheadFull, readAheadBase, {
+      probe: counts,
+    }).startChunkedParse(stringInput(text), fragments, null),
+  )
+  assert.ok(counts.reusedNodes > 0, JSON.stringify(counts))
+  const line = before.length + readAheadNote.indexOf('%% q')
+  assert.ok(
+    readAheadFrom(tree, before.length + readAheadNote.indexOf('a4'))?.includes(
+      line,
+    ),
+  )
+  same(nodes(tree), nodes(readAheadFull.parse(text)), text, 'appended rest')
+})
+
+test('syntax removed while a read-ahead rest is scanned is not published', () => {
+  const text = 'intro\n\n%% a\nb\n%%\n\nend\n'
+  let active = true
+  const owned = guardMarkdownSyntax(
+    readAheadBlock,
+    () => active,
+    () => {
+      active = false
+    },
+  )
+  const ownedBase = protectMarkdownParser(parser, [owned])
+  const ownedFull = ownedBase.configure(parseCode({ codeParser: () => null }))
+  assert.ok(
+    nodes(ownedFull.parse(text)).some((n) => n.startsWith('ReadAheadBlock')),
+  )
+  const counts = probe()
+  const parse = new ChunkedMarkdownParser(ownedFull, ownedBase, {
+    probe: counts,
+  }).startChunkedParse(stringInput(text), [], null)
+  // The first full parse is done, but its tree is not published.
+  firstParse(parse, counts)
+  assert.ok(uncovered(parse.snapshot(), 0, text.length))
+  active = false
+  let tree = null,
+    advances = 0
+  for (; !tree && advances < 10; advances++) {
+    if (counts.parsedChunks < 2)
+      assert.ok(uncovered(parse.snapshot(), 0, text.length))
+    tree = parse.advance()
+  }
+  assert.ok(tree, `unfinished after ${advances} steps`)
+  same(nodes(tree), nodes(parser.parse(text)), text, 'removed syntax')
+  assert.equal(counts.parsedChunks, 2)
+})
+
+test('a read-ahead rest no longer wanted after its first parse stays pending', () => {
+  const counts = probe()
+  const parse = new ChunkedMarkdownParser(readAheadFull, readAheadBase, {
+    probe: counts,
+  }).startChunkedParse(stringInput(readAheadNote), [], {
+    from: 0,
+    to: readAheadNote.length,
+  })
+  firstParse(parse, counts)
+  parse.setDemand({
+    from: Number.POSITIVE_INFINITY,
+    to: Number.POSITIVE_INFINITY,
+  })
+  const { tree } = counted(parse)
+  assert.ok(uncovered(tree, 0, readAheadNote.length))
+  assert.deepEqual(
+    [counts.parsedChunks, counts.parsedUnits, counts.scannedUnits],
+    [1, readAheadNote.length, readAheadNote.length],
+  )
 })

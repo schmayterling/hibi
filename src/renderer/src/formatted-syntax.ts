@@ -416,12 +416,13 @@ function syntaxField(options: FormattedSyntaxOptions) {
       if (demand === value.demand && !resumed) return value
       if (value.parse) {
         value.parse.setDemand(demand)
-        // A new viewport shows chunks as they are parsed.
+        // An edit's reparse still lacks the edited chunks on a new viewport:
+        // the layout stays mapped, or a table's open cell editor would go.
         return run(
           value.parse,
           demand,
           value.prefix,
-          value.settling && !moved,
+          value.settling,
           value.retained,
           oneStep,
         )

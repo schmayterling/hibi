@@ -3352,6 +3352,9 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       },
       { find, insert },
     )
+  // A toolbar table action at the caret.
+  const action = (id) => () =>
+    harness.evaluate((id) => window.tables.runTableAction(id), id)
   // Holds idle time, where a missed reparse goes on, until released.
   const hold = () =>
     harness.evaluate(() => {
@@ -3428,7 +3431,10 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       cell,
       editor,
       head,
-      cells: cells ?? (await shown()),
+      // Which of its rows a long table shows depends on where it scrolled.
+      cells: (cells ?? (await shown())).filter(
+        (text) => note !== atEnd || (text !== 'u' && text !== 'v'),
+      ),
     }
   }
   const cases = [
@@ -3475,6 +3481,63 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       last,
       'd',
       ['x', 'Tab', 'ArrowUp', 'Shift+Tab', 'ArrowRight', 'y'],
+    ],
+    // Leaving the table or adding a row from it goes as from a drawn row.
+    [
+      'Tab in the last cell, then Escape',
+      last,
+      'd',
+      ['x', 'Tab', 'Escape', 'y'],
+    ],
+    [
+      'Tab in the last cell, then ArrowDown',
+      last,
+      'd',
+      ['x', 'Tab', 'y', 'ArrowDown', 'z'],
+    ],
+    [
+      'Tab in the last cell, then ArrowRight out',
+      last,
+      'd',
+      ['x', 'Tab', 'Tab', 'y', 'ArrowRight', 'z'],
+    ],
+    [
+      'Tab in the last cell, then Mod+Enter',
+      last,
+      'd',
+      ['x', 'Tab', 'ControlOrMeta+Enter', 'y'],
+    ],
+    [
+      'Tab in the last cell, then Tab in the added row',
+      last,
+      'd',
+      ['x', 'Tab', 'Tab', 'Tab', 'y'],
+    ],
+    [
+      'Tab in the last cell at document end, then Escape',
+      atEnd,
+      'd',
+      ['x', 'Tab', 'y', 'Escape', 'z'],
+    ],
+    [
+      'Tab in the last cell at document end, then Mod+Enter',
+      atEnd,
+      'd',
+      ['x', 'Tab', 'ControlOrMeta+Enter', 'y'],
+    ],
+    // So does a move to a cell its row lacks.
+    [
+      'Tab in an added row, then down to a cell its row lacks',
+      doc,
+      'c',
+      ['x', action('row-after'), 'Tab', 'ArrowDown', 'y'],
+    ],
+    // An undo that takes the note back to the text the table shows keeps it.
+    [
+      'fill a missing cell, Shift+Tab, then undo',
+      doc,
+      'e',
+      ['Tab', 'y', 'Shift+Tab', 'ControlOrMeta+z', 'z'],
     ],
     ['Shift+Tab', doc, 'c', ['x', 'Shift+Tab', 'y']],
     ['ArrowDown', doc, 'c', ['x', 'ArrowDown', 'y']],
@@ -3673,6 +3736,7 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       // line break in a cell draws as one then too.
       const drawn =
         !name.startsWith('Tab in the last cell') &&
+        !name.startsWith('Tab in an added row') &&
         name !== 'Mod+Enter' &&
         name !== 'before a table at the start'
       assert.deepEqual(await run(note, start, keys, true, drawn), settled)

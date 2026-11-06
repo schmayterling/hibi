@@ -1027,7 +1027,9 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
     ['document end', 'before\n\n' + table, ['before', 3], ['jkl', 2]],
   ]
   const pick = async (page, rich, source, a, b, reverse) => {
-    const cell = [a, b].find(([word]) => /^[a-z]{3}$/.test(word)) ?? ['abc']
+    const cell = [a, b].find(
+      ([word]) => !word.startsWith('before') && word !== 'after',
+    ) ?? [source.match(/abc[\w-]*/)[0]]
     await rich.evaluate(
       (element, at) =>
         element.cmTile.root.view.dispatch({
@@ -1067,10 +1069,14 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
       return main.from === range[0] && main.to === range[1]
     }, range)
   }
-  // What the clipboard holds after a shortcut or the Edit menu's call, which
-  // gives the page no user activation, or the sentinel if nothing.
+  // Snapshot both formats immediately after a shortcut or the Edit menu's call.
+  // A unique sentinel distinguishes an unchanged clipboard from another lane's.
   const clipboardAfter = async (app, page, key, menu = false) => {
-    await app.evaluate(({ clipboard }) => clipboard.writeText('sentinel'))
+    const sentinel = 'hibi-cut-' + crypto.randomUUID()
+    await app.evaluate(
+      ({ clipboard }, sentinel) => clipboard.writeText(sentinel),
+      sentinel,
+    )
     if (menu)
       await app.evaluate(
         ({ BrowserWindow }, key) =>
@@ -1082,7 +1088,9 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
       app.evaluate(async ({ clipboard }) => {
         const [item] = await clipboard.read()
         return {
-          text: await clipboard.readText(),
+          text: item?.types.includes('text/plain')
+            ? await (await item.getType('text/plain')).text()
+            : '',
           html: item?.types.includes('text/html')
             ? await (await item.getType('text/html')).text()
             : null,
@@ -1090,32 +1098,81 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
       })
     const deadline = performance.now() + 3000
     let held = await read()
-    while (held.text === 'sentinel' && performance.now() < deadline)
+    while (held.text === sentinel && performance.now() < deadline)
       held = await read()
+    assert.notEqual(held.text, sentinel, 'copy puts the pick on the clipboard')
     return held
   }
-  const saved = await (await openInputFixture('')).app.evaluate(
-    ({ clipboard }) => clipboard.readText(),
-  )
-  t.after(() =>
-    sharedInputApp.app.evaluate(
-      ({ clipboard }, saved) => clipboard.writeText(saved),
-      saved,
-    ),
-  )
-  for (const [what, source, a, b] of shapes)
+  for (const mode of ['blocked', 'empty'])
+    for (const what of ['into', 'rows'])
+      for (const menu of [false, true])
+        await t.test(
+          what + ', ' + mode + ' copy' + (menu ? ', Edit menu' : ''),
+          async () => {
+            const [, source, a, b] = shapes.find(([name]) => name === what)
+            const { app, page, rich } = await openInputFixture(source)
+            await pick(page, rich, source, a, b, false)
+            const sentinel = 'hibi-cut-denied-' + crypto.randomUUID()
+            await app.evaluate(
+              ({ clipboard }, sentinel) => clipboard.writeText(sentinel),
+              sentinel,
+            )
+            await page.evaluate((mode) => {
+              const exec = document.execCommand
+              window.deniedCopySeen = false
+              if (mode === 'blocked')
+                document.execCommand = function (...args) {
+                  if (args[0] !== 'copy') return exec.apply(this, args)
+                  window.deniedCopySeen = true
+                  return false
+                }
+              else
+                document.addEventListener(
+                  'copy',
+                  (event) => {
+                    window.deniedCopySeen = true
+                    event.preventDefault()
+                  },
+                  { once: true, capture: true },
+                )
+              window.restoreCopy = () => {
+                document.execCommand = exec
+              }
+            }, mode)
+            try {
+              if (menu)
+                await app.evaluate(({ BrowserWindow }) =>
+                  BrowserWindow.getAllWindows()[0].webContents.cut(),
+                )
+              else await page.keyboard.press('ControlOrMeta+x')
+              await page.waitForFunction(() => window.deniedCopySeen)
+              assert.equal(
+                await app.evaluate(({ clipboard }) => clipboard.readText()),
+                sentinel,
+              )
+              assert.equal((await acceptedInput(page)).markdown, source)
+            } finally {
+              await page.evaluate(() => window.restoreCopy())
+            }
+          },
+        )
+  for (const [what, original, start, end] of shapes)
     for (const reverse of [false, true]) {
+      const token = crypto.randomUUID()
+      const unique = (word) =>
+        word === 'abc' || word === 'before' ? word + token : word
+      const source = original
+        .replaceAll('abc', unique('abc'))
+        .replaceAll('before', unique('before'))
+      const a = [unique(start[0]), start[1]],
+        b = [unique(end[0]), end[1]]
       const name = what + (reverse ? ' backward' : '')
       for (const menu of [false, true])
         await t.test(name + (menu ? ', Edit menu' : ''), async () => {
           let { app, page, rich } = await openInputFixture(source)
           await pick(page, rich, source, a, b, reverse)
           const copied = await clipboardAfter(app, page, 'c')
-          assert.notEqual(
-            copied.text,
-            'sentinel',
-            'copy puts the pick on the clipboard',
-          )
+          assert.ok(copied.text.includes(token), 'copy contains this pick')
           await page.keyboard.press('Delete')
           const deleted = (await acceptedInput(page)).markdown
           assert.notEqual(deleted, source)
@@ -1127,6 +1184,10 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
             app,
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
+          await waitForInputSource(page, source)
+          await page.keyboard.press('ControlOrMeta+Shift+z')
+          await waitForInputSource(page, deleted)
+          await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, source)
         })
       await t.test(name + ', read-only', async () => {
@@ -1163,11 +1224,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
           )
         })
         const copied = await clipboardAfter(app, page, 'c')
-        assert.notEqual(
-          copied.text,
-          'sentinel',
-          'copy puts the pick on the clipboard',
-        )
+        assert.ok(copied.text.includes(token), 'copy contains this pick')
         assert.deepEqual(await clipboardAfter(app, page, 'x'), copied)
         assert.equal((await acceptedInput(page)).markdown, source)
       })

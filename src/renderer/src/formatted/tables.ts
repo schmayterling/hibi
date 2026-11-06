@@ -3046,9 +3046,21 @@ const tableEditing = ViewPlugin.fromClass(
       const { view } = this
       if (!view.state.field(pickedTable)) return
       event.preventDefault()
-      // Nothing is deleted that the clipboard did not take.
-      if (!view.dom.ownerDocument.execCommand('copy') || !writable(view.state))
-        return
+      const doc = view.dom.ownerDocument
+      let copied = false
+      const takeCopy = (event: ClipboardEvent) => {
+        copied =
+          !event.defaultPrevented ||
+          !!event.clipboardData?.getData('text/plain') ||
+          !!event.clipboardData?.getData('text/html')
+      }
+      doc.addEventListener('copy', takeCopy)
+      try {
+        // A canceled copy can return true without putting anything on the clipboard.
+        if (!doc.execCommand('copy') || !copied || !writable(view.state)) return
+      } finally {
+        doc.removeEventListener('copy', takeCopy)
+      }
       const { from, to } = view.state.selection.main
       if (!tableEdit(view, from, to, '', { userEvent: 'delete.cut' }, true))
         type(view, '')

@@ -1813,8 +1813,8 @@ class TableView {
   /**
    * The cells changes from `before` edited, when they only edit cells' text and leave each one
    * cell, so the table keeps its rows and columns: each within a line of a
-   * header or body row, between the same pipes, after the row's first pipe
-   * (text before it starts the line, where it could start another block).
+   * header or body row, between the same pipes, in a row that still reads
+   * as one.
    */
   private cellsOnly(changes: ChangeDesc, before: Text): Cell[] | null {
     const { doc } = this.view.state
@@ -1846,8 +1846,8 @@ class TableView {
         was.pipes.length === row.pipes.length &&
         was.cells.length === row.cells.length &&
         !!cell &&
-        row.pipes[0]! < fromB - now.from &&
-        !cellFixes(now.text.slice(cell.from, cell.to), cell.closed).length
+        !cellFixes(now.text.slice(cell.from, cell.to), cell.closed).length &&
+        (column > 0 || this.rowIsTable(doc, first, index))
       cells.push({ line: index, column })
     })
     return only ? cells : null
@@ -2403,13 +2403,19 @@ class TableView {
     if (place.from !== span.from || place.to !== span.to) return false
     if (editing.column) return true
     const first = state.doc.lineAt(this.range().from).number
+    return this.rowIsTable(state.doc, first, editing.line)
+  }
+
+  /** Whether row `line` of the table starting on line `first` of `doc` still reads as a table row: first-cell text without an opening pipe can instead start a heading, fence or container. */
+  private rowIsTable(doc: Text, first: number, line: number) {
     const row = (index: number) => {
-      const { text } = state.doc.line(first + index)
+      const { text } = doc.line(first + index)
       return text.slice(this.widget.rowStart(index, text))
     }
-    const text = row(editing.line)
+    const text = row(line)
     if (text.trimStart().startsWith('|')) return true
-    const source = editing.line ? `| a |\n| - |\n${text}` : `${text}\n${row(1)}`
+    const source = line ? `| a |\n| - |\n${text}` : `${text}\n${row(1)}`
+    const { state } = this.view
     const table = state.facet(formattedBlockParser)(state).parse(source)
       .topNode.firstChild
     return table?.name === 'Table' && table.to === source.length

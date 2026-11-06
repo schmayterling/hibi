@@ -305,6 +305,57 @@ test('a widget that fails when scrolling draws it leaves the note working', {
   await typingAndSavingWork(context, source, 'x')
 })
 
+test('a resize restore stops when its pending draw kills the view', {
+  timeout: 60000,
+}, async (t) => {
+  const source = `# Title\n\n${'word '.repeat(200)}Q ${'word '.repeat(8000)}\n\nend\n\n`
+  const context = await open(t, {
+    source,
+    code: featureAddon(
+      'formatted',
+      `
+      // Keep the real observer and draw; invoke its resize before the next
+      // animation frame can drain the pending measure.
+      const NativeResizeObserver = window.ResizeObserver
+      window.ResizeObserver = class extends NativeResizeObserver {
+        constructor(callback) { super(callback); this.callback = callback }
+        observe(target, options) {
+          if (target.matches('.rich-pane'))
+            window.resizeRestore = () => this.callback([], this)
+          super.observe(target, options)
+        }
+      }
+      const extension = EditorView.decorations.of(() => {
+        if (window.resizeDrawFault) throw new Error('resize decorations boom')
+        return Decoration.none
+      })
+    `,
+    ),
+  })
+  await context.page.setViewportSize({ width: 1000, height: 720 })
+  await opened(context, source)
+  await context.page.evaluate(() => {
+    document.querySelector('.rich-pane').scrollTop = 250
+  })
+  await context.page.waitForFunction(() => !!window.resizeRestore)
+  const scroll = await context.page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    const view = pane.querySelector('.cm-content').cmTile.root.view
+    window.resizeDrawFault = true
+    pane.style.maxWidth = '480px'
+    pane.getBoundingClientRect()
+    view.requestMeasure()
+    const before = pane.scrollTop
+    window.resizeRestore()
+    return { before, after: pane.scrollTop }
+  })
+  assert.equal(scroll.after, scroll.before, JSON.stringify(scroll))
+  await named(context, 'bad-ext.bad: resize decorations boom')
+  await editorReady(context)
+  await type(context, 'x')
+  await typingAndSavingWork(context, source, 'x')
+})
+
 /** A widget drawn fine, one of whose other methods fails. */
 const otherMethods = {
   'updateDOM on a redraw': `${healthy}

@@ -141,6 +141,41 @@ test('a live view holds text at the pane top through a resize', (t) => {
   assert.equal(pane.scrollTop, 540)
 })
 
+for (const [queued, throws] of [
+  [false, false],
+  [true, false],
+  [false, true],
+])
+  test(`a view that dies in its ${queued ? 'queued' : 'resize'} restore measure${throws ? ' and throws' : ''} is not read or scrolled`, async (t) => {
+    const { view, pane, box, scroll, resize, shift } = queued
+      ? reader(t)
+      : topReader(t)
+    if (queued) keepReading(view)
+    else scroll()
+    shift(40)
+    const coords = view.coordsAtPos
+    view.coordsAtPos = () => {
+      view.coordsAtPos = coords
+      viewDied(view, new Error('widget boom'))
+      if (throws) throw new Error('discarded tiles')
+      return box()
+    }
+    if (queued) await Promise.resolve()
+    else resize()
+    assert.equal(view.deadReads, 0)
+    assert.equal(pane.scrollTop, 500)
+  })
+
+test('a live view still reports an error from its resize restore measure', (t) => {
+  const { view, scroll, resize } = topReader(t)
+  scroll()
+  const error = new Error('layout boom')
+  view.coordsAtPos = () => {
+    throw error
+  }
+  assert.throws(resize, (thrown) => thrown === error)
+})
+
 test('a dead view is not read by its scroll observer', (t) => {
   const { view, pane, scroll } = topReader(t)
   viewDied(view, new Error('decorations boom'))

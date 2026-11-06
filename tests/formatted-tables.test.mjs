@@ -3465,6 +3465,15 @@ test('cell keys and changes while a table waits for a reparse land where they wo
     ['redo', doc, 'd', ['x', 'ControlOrMeta+z', redoKey, 'z']],
     ['undo, then Tab', doc, 'c', ['x', 'ControlOrMeta+z', 'Tab', 'y']],
     ['a change in the cell', doc, 'd', ['x', edit('dx', 'dQ'), 'y']],
+    // So do changes inside other cells' text: the table keeps its shape.
+    ['undo in another cell', doc, 'c', ['x', 'Tab', 'ControlOrMeta+z', 'w']],
+    [
+      'undo in another cell, then Tab',
+      doc,
+      'c',
+      ['x', 'Tab', 'ControlOrMeta+z', 'Tab', 'w'],
+    ],
+    ['a change in another cell', doc, 'c', ['x', 'Tab', edit('cx', 'cQ'), 'y']],
   ]
   // A change elsewhere may remake the table, as an open fence above it
   // does: the cell takes no keys with its old spans.

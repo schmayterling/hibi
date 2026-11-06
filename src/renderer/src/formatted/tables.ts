@@ -1119,6 +1119,12 @@ class TableView {
     const index = this.undrawn(pos)
     const heights = this.heights
     if (index === null || !heights) return null
+    // A row mounted out of its place, as the edited row, has its own height
+    // now: a narrower pane can wrap it before the window measures again, and
+    // the view drops a resize that lands right after one of its updates.
+    for (const [row, { element }] of this.rendered)
+      if (this.outside(row))
+        heights.set(row, element.getBoundingClientRect().height)
     const after = index >= this.end
     // Rows before the window start below the header, where `read` measures
     // from, and rows after it where its last row ends: a spacer hides while

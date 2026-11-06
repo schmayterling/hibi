@@ -5006,8 +5006,13 @@ test("a long table keeps its height and its rows' places while the edited row is
           for (let i = 0; i < 4; i++) await preview.settle()
         }
         const tall = row(1803).getBoundingClientRect().height
+        let early
         if (narrow) {
           document.querySelector('.editor-panes').style.width = '420px'
+          // The pane's own resize observers, as the reading place's, read
+          // places before the view measures again; a view that has just
+          // updated, as a slow parse's slices do, drops the resize.
+          early = far.map(shows)
           for (let i = 0; i < 6; i++) await preview.settle()
         }
         const away = {
@@ -5020,6 +5025,7 @@ test("a long table keeps its height and its rows' places while the edited row is
           height: Math.round(table.getBoundingClientRect().height),
           kept: shows(1803),
           far: far.map(shows),
+          early,
         }
         view.dispatch({
           effects: view.constructor.scrollIntoView(
@@ -5042,6 +5048,11 @@ test("a long table keeps its height and its rows' places while the edited row is
     assert.ok(away.out && placed.in, `${form}: ${JSON.stringify(result)}`)
     if (near) assert.ok(away.beside, `${form}: ${JSON.stringify(result)}`)
     if (narrow) assert.ok(away.grew > 30, `${form}: ${JSON.stringify(result)}`)
+    for (const [index, value] of (away.early ?? []).entries())
+      assert.ok(
+        Math.abs(value - placed.far[index]) <= 1,
+        `${form}, early: ${JSON.stringify(result)}`,
+      )
     // Out of its place, the table is as tall as with the row in it, and the
     // row and the far ones estimate where they show once drawn.
     for (const key of ['height', 'kept', 'far']) {

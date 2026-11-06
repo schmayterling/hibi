@@ -3525,6 +3525,12 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       'd',
       ['x', 'Tab', 'ControlOrMeta+Enter', 'y'],
     ],
+    [
+      'Tab in the last cell, then toolbar actions',
+      last,
+      'd',
+      ['x', 'Tab', action('column-after'), action('row-delete'), 'y'],
+    ],
     // So does a move to a cell its row lacks.
     [
       'Tab in an added row, then down to a cell its row lacks',

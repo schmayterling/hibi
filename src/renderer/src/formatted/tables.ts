@@ -3139,6 +3139,9 @@ function step(
  */
 function tableAt(view: EditorView, pos: number, strict = false) {
   for (const table of mounted.get(view) ?? []) {
+    // An action's waiting cell may be past the old widget's end.
+    if (table.waitingForInput && pos === view.state.selection.main.head)
+      return table
     const { from, to } = table.range()
     if (
       strict

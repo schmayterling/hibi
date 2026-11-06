@@ -2784,16 +2784,12 @@ function staleTable(view: EditorView) {
 const pauseTableCommand = (view: EditorView) =>
   !!waitingTable(view) || staleTable(view)
 // ponytail: other native commands are declined until draw; replay would need a queue.
-const pendingCommandKeys = defaultKeymap.map(
-  ({ key, mac, win, linux, shift }) => ({
-    key,
-    mac,
-    win,
-    linux,
-    run: pauseTableCommand,
-    shift: shift ? pauseTableCommand : undefined,
-  }),
-)
+const pendingCommandKeys = defaultKeymap.map((binding) => ({
+  ...binding,
+  run: pauseTableCommand,
+  preventDefault: false,
+  ...(binding.shift ? { shift: pauseTableCommand } : {}),
+}))
 
 /** Whether a position of the formatted view is inside a table, whose cells show their text where a collapsed range shows none. */
 export const tableShows = (view: EditorView, pos: number) =>

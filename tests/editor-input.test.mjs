@@ -1052,7 +1052,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
           selection: { anchor: at },
           scrollIntoView: true,
         }),
-      source.indexOf(cell[0]) + 1,
+      source.indexOf(cell[0], source.indexOf('|')) + 1,
     )
     await page
       .getByRole('textbox', { name: 'Table cell', exact: true })
@@ -1255,7 +1255,8 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
     )
   for (const [what, original, start, end] of shapes)
     for (const reverse of [false, true]) {
-      const token = crypto.randomUUID()
+      // Cell text can also occur in the token before the table.
+      const token = 'abc' + crypto.randomUUID()
       const unique = (word) =>
         word === 'abc' || word === 'before' ? word + token : word
       const source = original

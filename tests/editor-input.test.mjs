@@ -814,6 +814,103 @@ test('native table picks retain multiline caret positions, scalar boundaries and
     }
 })
 
+// Deleting, breaking a line or composing over a pick edits it as typing over
+// it does: text outside the pick stays, and so does the table. A modifier
+// pressed first must not shrink the pick to the table's edge.
+const pickEditOutcomes = {
+  'into a table': {
+    deleted: {
+      markdown: 'a\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['a', ''],
+    },
+    broken: {
+      markdown: 'a\n\n\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['', ''],
+    },
+    composed: {
+      markdown: 'a日本\n\n\n|     |\n| --- |\n| d  |\n',
+      caret: ['a日本', ''],
+    },
+  },
+  cells: {
+    deleted: {
+      markdown: '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   |    |\n',
+      caret: ['', ''],
+    },
+    broken: {
+      markdown:
+        '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   | <br>   |\n',
+      caret: ['', ''],
+    },
+    composed: {
+      markdown:
+        '\n|     |     |\n| --- | --- |\n| a   | b   |\n| c   | 日本   |\n',
+      caret: ['日本', ''],
+    },
+  },
+}
+
+test('keys and compositions over a native table pick keep the text outside it and the table', {
+  timeout: 120000,
+}, async (t) => {
+  const edits = [
+    ['Backspace', 'deleted'],
+    ['Delete', 'deleted'],
+    ['Alt+Backspace', 'deleted'],
+    ['Enter', 'broken'],
+    ['Shift+Enter', 'broken'],
+    ['composition', 'composed'],
+    ['Shift, then composition', 'composed'],
+  ]
+  for (const what of ['into a table', 'cells'])
+    for (const [edit, outcome] of edits)
+      await t.test(what + ': ' + edit, async (t) => {
+        const oracle = inputFixture('multiline', what)
+        const { app, page, rich } = await openInputFixture(oracle.source)
+        await rich.focus()
+        await selectNativeInputTable(t, page, rich, what, oracle)
+        const before = await acceptedInput(page)
+        if (edit.endsWith('composition')) {
+          if (edit.startsWith('Shift')) await page.keyboard.press('Shift')
+          const cdp = await page.context().newCDPSession(page)
+          // An IME takes the key that starts a composition: keyCode 229.
+          await cdp.send('Input.dispatchKeyEvent', {
+            type: 'rawKeyDown',
+            key: 'n',
+            code: 'KeyN',
+            windowsVirtualKeyCode: 229,
+            nativeVirtualKeyCode: 229,
+          })
+          for (const text of ['に', '日本'])
+            await cdp.send('Input.imeSetComposition', {
+              text,
+              selectionStart: text.length,
+              selectionEnd: text.length,
+            })
+          await cdp.send('Input.insertText', { text: '日本' })
+          await cdp.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: 'n',
+            code: 'KeyN',
+            windowsVirtualKeyCode: 229,
+          })
+          await cdp.detach()
+        } else await page.keyboard.press(edit)
+        const expected = pickEditOutcomes[what][outcome]
+        const actual = await acceptedInput(page)
+        assert.deepEqual(
+          inputOutcome(actual.markdown),
+          inputOutcome(expected.markdown),
+        )
+        assert.deepEqual(await cmCaretText(rich), expected.caret)
+        await pressShortcut(
+          app,
+          process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+        )
+        await waitForInputSource(page, before.markdown)
+      })
+})
+
 test('a native table pick keeps the shared input guards', {
   timeout: 60000,
 }, async (t) => {

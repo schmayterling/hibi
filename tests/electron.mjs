@@ -1144,9 +1144,10 @@ export async function waitForAsync(
   let attempts = 0
   let deadlineTimer
   let pollTimer
+  let unsynced = ''
   const timedOut = () =>
     new Error(
-      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}`,
+      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}${unsynced}`,
     )
   const expired = new Promise((_, reject) => {
     deadlineTimer = setTimeout(() => reject(timedOut()), timeout)
@@ -1155,7 +1156,16 @@ export async function waitForAsync(
     for (;;) {
       if (performance.now() >= deadline) throw timedOut()
       attempts++
-      const ready = await Promise.race([page.evaluate(predicate, arg), expired])
+      const ready = await Promise.race([
+        page.evaluate(predicate, arg).catch((error) => {
+          // A read raced the renderer's newer edits to main; the next check sees them.
+          if (!/local edits waiting to synchronize/.test(error?.message))
+            throw error
+          unsynced = ` (last check: ${error.message})`
+          return false
+        }),
+        expired,
+      ])
       if (performance.now() >= deadline) throw timedOut()
       if (ready) return
       await Promise.race([

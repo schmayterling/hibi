@@ -18,7 +18,12 @@ import {
 } from './electron.mjs'
 import { recordEvents, reportFailure } from './failure-state.mjs'
 import { frozenOracle } from './frozen-oracle.mjs'
-import { clickMenu, pressShortcut, withHeldClock } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  redoKey,
+  withHeldClock,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 // What the removed native editor did with table picks, recorded before its removal.
@@ -1058,7 +1063,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
       .getByRole('textbox', { name: 'Table cell', exact: true })
       .waitFor()
     await showPick(rich, reverse ? [b, a] : [a, b])
-    const range = [source.indexOf(a[0]) + a[1], source.indexOf(b[0]) + b[1]]
+    const range = picked(source, a, b)
     await page.waitForFunction((range) => {
       const { main } = document.querySelector(
         '.rich-pane [aria-label="Document editor"]',
@@ -1070,8 +1075,28 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
   // A unique sentinel distinguishes an unchanged clipboard from another lane's.
   const clipboardAfter = async (app, page, key, menu = false) => {
     const sentinel = 'hibi-cut-' + crypto.randomUUID()
+    // The formats the page's copy wrote, watched from main: a page call would
+    // give the page the activation some cases take away.
     await app.evaluate(
-      ({ clipboard }, sentinel) => clipboard.writeText(sentinel),
+      ({ BrowserWindow, clipboard }, sentinel) =>
+        Promise.all([
+          clipboard.writeText(sentinel),
+          BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+            `window.copiedTypes = null
+            if (!window.watchingCopies) {
+              window.watchingCopies = true
+              // A pick's cut is canceled empty around the copy it runs.
+              const watch = (event) => {
+                const { types } = event.clipboardData
+                if (!event.defaultPrevented) window.copiedTypes = ['text/plain']
+                else if (types.length) window.copiedTypes = [...types]
+              }
+              addEventListener('copy', watch)
+              addEventListener('cut', watch)
+            }`,
+            false,
+          ),
+        ]),
       sentinel,
     )
     if (menu)
@@ -1081,6 +1106,19 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
         key === 'x' ? 'cut' : 'copy',
       )
     else await page.keyboard.press('ControlOrMeta+' + key)
+    const deadline = performance.now() + 3000
+    const types = await app.evaluate(async ({ BrowserWindow }, end) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents
+      while (Date.now() < end) {
+        const types = await contents.executeJavaScript(
+          'window.copiedTypes',
+          false,
+        )
+        if (types) return types
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }, Date.now() + 3000)
+    assert.ok(types?.length, 'the page wrote a copy')
     const read = () =>
       app.evaluate(async ({ clipboard }) => {
         const [item] = await clipboard.read()
@@ -1093,11 +1131,15 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
             : null,
         }
       })
-    const deadline = performance.now() + 3000
+    // Windows shows a copy's text before its HTML: wait for every format.
+    const partial = (held) =>
+      held.text === sentinel ||
+      (types.includes('text/plain') && !held.text) ||
+      (types.includes('text/html') && held.html === null)
     let held = await read()
-    while (held.text === sentinel && performance.now() < deadline)
-      held = await read()
+    while (partial(held) && performance.now() < deadline) held = await read()
     assert.notEqual(held.text, sentinel, 'copy puts the pick on the clipboard')
+    assert.ok(!partial(held), 'every format the page wrote is on the clipboard')
     return held
   }
   const expireActivation = async (app) => {
@@ -1283,7 +1325,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
           await waitForInputSource(page, source)
-          await page.keyboard.press('ControlOrMeta+Shift+z')
+          await page.keyboard.press(redoKey)
           await waitForInputSource(page, deleted)
           await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, source)
@@ -1355,7 +1397,7 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
           assert.equal((await acceptedInput(page)).markdown, source)
           await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, deleted)
-          await page.keyboard.press('ControlOrMeta+Shift+z')
+          await page.keyboard.press(redoKey)
           await waitForInputSource(page, source)
           await page.keyboard.press('ControlOrMeta+z')
           await waitForInputSource(page, deleted)
@@ -1478,11 +1520,15 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
     })
 })
 
-/** The source range a pick from word end `a` to `b` selects. */
-const picked = (source, a, b) => [
-  source.indexOf(a[0]) + a[1],
-  source.indexOf(b[0]) + b[1],
-]
+/**
+ * The source range a pick from word end `a` to `b` selects. Words are found
+ * whole: a random token next to a word can spell another, as `abc…` can `def`.
+ */
+const picked = (source, a, b) =>
+  [a, b].map(
+    ([word, offset]) =>
+      source.search(new RegExp(`(?<![\\w-])${word}(?![\\w-])`)) + offset,
+  )
 
 /** Puts a held copy back on the shared clipboard and pastes it right away. */
 async function pasteHeld(app, page, held, menu) {

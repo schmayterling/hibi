@@ -166,16 +166,42 @@ test('hibi garden tab, installs, and addon links', {
   await t.test(
     'filtering keeps controls aligned with the sidebar',
     async () => {
-      const windowState = () =>
-        app.evaluate(({ BrowserWindow }) => {
+      // DIAGNOSTIC: with a label, the trace snapshot is taken in the same
+      // call, after the state is read, adding no extra turn.
+      const windowState = (label) =>
+        app.evaluate(({ BrowserWindow }, label) => {
           const window = BrowserWindow.getAllWindows()[0]
-          return [
+          const state = [
             window.getContentSize(),
             window.isVisible(),
             window.isFocused(),
           ]
-        })
-      const state = await windowState()
+          if (label) globalThis.__geoTrace?.push(globalThis.__geoSnap?.(label))
+          return state
+        }, label)
+      // DIAGNOSTIC ONLY: record native geometry at each step.
+      const mark = (label) =>
+        app.evaluate(
+          (_electron, label) => globalThis.__geoTrace?.push(globalThis.__geoSnap?.(label)),
+          label,
+        )
+      // Snapshots every 50 ms until five in a row agree, at most 2 s.
+      const settle = (label) =>
+        app.evaluate(async (_electron, label) => {
+          const key = (s) => JSON.stringify([s.bounds, s.contentSize, s.visible])
+          let last = null
+          let same = 0
+          const started = performance.now()
+          while (same < 5 && performance.now() - started < 2000) {
+            await new Promise((resolve) => setTimeout(resolve, 50))
+            const snap = globalThis.__geoSnap?.(label)
+            if (!snap) return
+            same = last && key(last) === key(snap) ? same + 1 : 0
+            last = snap
+          }
+          globalThis.__geoTrace?.push({ ...last, label: `${label} settled`, settledMs: Math.round(performance.now() - started), stable: same >= 5 })
+        }, label)
+      const state = await windowState('test-start')
       const filter = addons.getByRole('searchbox', { name: /filter addons/i })
       const geometry = () =>
         page.evaluate(() => {
@@ -202,6 +228,7 @@ test('hibi garden tab, installs, and addon links', {
           if (process.platform === 'darwin')
             BrowserWindow.getAllWindows()[0].hide()
         })
+        await mark('after-hide')
         // Overlay scrollbars (macOS with a trackpad) take no space, so give
         // the page the classic scrollbar Windows, Linux and mouse users see.
         await page.evaluate(() => {
@@ -220,6 +247,7 @@ test('hibi garden tab, installs, and addon links', {
             (width) => window.innerWidth === width,
             width,
           )
+          await mark(`hidden-${width}`)
           assert.equal(
             await page.evaluate(() => window.innerHeight),
             1000,
@@ -256,10 +284,12 @@ test('hibi garden tab, installs, and addon links', {
           ({ BrowserWindow }, [[width, height], visible, focused]) => {
             const window = BrowserWindow.getAllWindows()[0]
             window.setContentSize(width, height)
+            globalThis.__geoTrace?.push(globalThis.__geoSnap?.('restore-hidden'))
             if (process.platform === 'darwin' && visible) {
               if (focused) window.show()
               else window.showInactive()
             }
+            globalThis.__geoTrace?.push(globalThis.__geoSnap?.('after-show'))
           },
           state,
         )
@@ -270,8 +300,57 @@ test('hibi garden tab, installs, and addon links', {
           state[2],
           { label: 'the window has its previous focus' },
         )
+        // The value the test asserts, read exactly where it always was.
+        const restored = await windowState('after-focus-wait (asserted)')
+        await settle('after-restore')
+        // Round trips on the same window, to tell an OS work-area clamp at
+        // show from late settling: each records right after the call, then
+        // once settled.
+        const [[width, height]] = state
+        const trips = [
+          // (a) the test's own restore again: content size while hidden, then
+          // show() if the window had focus, else showInactive().
+          ['a hidden setContentSize then show as restored', (w, [width, height], _bounds, focused) => { w.hide(); w.setContentSize(width, height); if (focused) w.show(); else w.showInactive() }],
+          // (b) the test-start frame, x and y included, while hidden, then
+          // shown as the test restores it.
+          ['b hidden setBounds to test-start bounds then show as restored', (w, _size, bounds, focused) => { w.hide(); w.setBounds(bounds); if (focused) w.show(); else w.showInactive() }],
+          // (c) content size asked for after the window is shown.
+          ['c shown setContentSize', (w, [width, height]) => w.setContentSize(width, height)],
+          // (d) the launch path in CI: a 720 frame while hidden, then the test
+          // helper's show() and focus() (tests/electron.mjs).
+          ['d hidden setSize 720 then show and focus', (w, [width]) => { w.hide(); w.setSize(width, 720); w.show(); w.focus() }],
+        ]
+        const start = (await app.evaluate(() => globalThis.__geoTrace?.find((s) => s?.label === 'test-start')))?.bounds
+        for (const [label, trip] of trips) {
+          await app.evaluate(({ BrowserWindow }, [label, source, size, bounds, focused]) => {
+            const window = BrowserWindow.getAllWindows()[0]
+            globalThis.__geoTrace?.push(globalThis.__geoSnap?.(`${label} before`))
+            // eslint-disable-next-line no-new-func
+            new Function('w', 'size', 'bounds', 'focused', `(${source})(w, size, bounds, focused)`)(window, size, bounds, focused)
+            globalThis.__geoTrace?.push(globalThis.__geoSnap?.(`${label} after call`))
+          }, [label, trip.toString(), [width, height], start, state[2]])
+          await settle(label)
+        }
+        if (process.env.HIBI_GEO_OUT) {
+          const { writeFile } = await import('node:fs/promises')
+          await writeFile(
+            process.env.HIBI_GEO_OUT,
+            JSON.stringify({ state, restored, trace: await app.evaluate(() => globalThis.__geoTrace) }, null, 1),
+          )
+        }
+        t.diagnostic(`GEO state ${JSON.stringify(state)} restored ${JSON.stringify(restored)}`)
+        // Put the window back as the test left it before asserting.
+        await app.evaluate(({ BrowserWindow }, [[width, height], visible, focused]) => {
+          const window = BrowserWindow.getAllWindows()[0]
+          window.hide()
+          window.setContentSize(width, height)
+          if (visible) {
+            if (focused) window.show()
+            else window.showInactive()
+          }
+        }, restored)
         assert.deepEqual(
-          await windowState(),
+          restored,
           state,
           'the layout check restores the window',
         )

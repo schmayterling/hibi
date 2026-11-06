@@ -16,6 +16,7 @@ import {
   net,
   protocol,
   safeStorage,
+  screen,
   session,
   shell,
   systemPreferences,
@@ -1052,6 +1053,48 @@ function createWindow(): void {
     },
   })
   startupMark('window-created')
+  // DIAGNOSTIC ONLY (may/diagnose-garden-window-1107, never merged): the
+  // window's native geometry from creation, for the hosted macOS garden red.
+  if (process.env.HIBI_GEO_TRACE) {
+    const trace: unknown[] = []
+    const snap = (label: string) => {
+      const bounds = window.getBounds()
+      const display = screen.getDisplayMatching(bounds)
+      return {
+        t: Math.round(performance.now() * 10) / 10,
+        label,
+        bounds,
+        contentBounds: window.getContentBounds(),
+        contentSize: window.getContentSize(),
+        size: window.getSize(),
+        visible: window.isVisible(),
+        focused: window.isFocused(),
+        display: {
+          id: display.id,
+          bounds: display.bounds,
+          workArea: display.workArea,
+          scaleFactor: display.scaleFactor,
+        },
+        primary: screen.getPrimaryDisplay().workArea,
+        displays: screen.getAllDisplays().length,
+      }
+    }
+    Object.assign(globalThis, { __geoTrace: trace, __geoSnap: snap })
+    trace.push(snap('created'))
+    for (const event of [
+      'ready-to-show',
+      'show',
+      'hide',
+      'will-resize',
+      'resize',
+      'resized',
+      'move',
+      'moved',
+      'focus',
+      'blur',
+    ] as const)
+      window.on(event as 'show', () => trace.push(snap(event)))
+  }
   mainWindow = window
   const stopRecording = () => {
     recordingHotkey = false

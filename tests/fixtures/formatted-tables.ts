@@ -223,9 +223,8 @@ Object.assign(window, {
     },
     settling: () => view && syntax?.settling(view.state),
     /**
-     * Whether the text in view is parsed. A viewport that moves during an
-     * edit's reparse ends its settling first: the view then shows the text it
-     * has not reached yet unparsed.
+     * Whether the text in view has its current parsed layout, including
+     * after a viewport move during an edit's unfinished reparse.
      */
     parsed: () =>
       !!view &&

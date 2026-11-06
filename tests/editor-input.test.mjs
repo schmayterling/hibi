@@ -1075,8 +1075,28 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
   // A unique sentinel distinguishes an unchanged clipboard from another lane's.
   const clipboardAfter = async (app, page, key, menu = false) => {
     const sentinel = 'hibi-cut-' + crypto.randomUUID()
+    // The formats the page's copy wrote, watched from main: a page call would
+    // give the page the activation some cases take away.
     await app.evaluate(
-      ({ clipboard }, sentinel) => clipboard.writeText(sentinel),
+      ({ BrowserWindow, clipboard }, sentinel) =>
+        Promise.all([
+          clipboard.writeText(sentinel),
+          BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(
+            `window.copiedTypes = null
+            if (!window.watchingCopies) {
+              window.watchingCopies = true
+              // A pick's cut is canceled empty around the copy it runs.
+              const watch = (event) => {
+                const { types } = event.clipboardData
+                if (!event.defaultPrevented) window.copiedTypes = ['text/plain']
+                else if (types.length) window.copiedTypes = [...types]
+              }
+              addEventListener('copy', watch)
+              addEventListener('cut', watch)
+            }`,
+            false,
+          ),
+        ]),
       sentinel,
     )
     if (menu)
@@ -1086,6 +1106,19 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
         key === 'x' ? 'cut' : 'copy',
       )
     else await page.keyboard.press('ControlOrMeta+' + key)
+    const deadline = performance.now() + 3000
+    const types = await app.evaluate(async ({ BrowserWindow }, end) => {
+      const contents = BrowserWindow.getAllWindows()[0].webContents
+      while (Date.now() < end) {
+        const types = await contents.executeJavaScript(
+          'window.copiedTypes',
+          false,
+        )
+        if (types) return types
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }, Date.now() + 3000)
+    assert.ok(types?.length, 'the page wrote a copy')
     const read = () =>
       app.evaluate(async ({ clipboard }) => {
         const [item] = await clipboard.read()
@@ -1098,11 +1131,15 @@ test('cut over a native table pick copies as copy does and deletes as Delete doe
             : null,
         }
       })
-    const deadline = performance.now() + 3000
+    // Windows shows a copy's text before its HTML: wait for every format.
+    const partial = (held) =>
+      held.text === sentinel ||
+      (types.includes('text/plain') && !held.text) ||
+      (types.includes('text/html') && held.html === null)
     let held = await read()
-    while (held.text === sentinel && performance.now() < deadline)
-      held = await read()
+    while (partial(held) && performance.now() < deadline) held = await read()
     assert.notEqual(held.text, sentinel, 'copy puts the pick on the clipboard')
+    assert.ok(!partial(held), 'every format the page wrote is on the clipboard')
     return held
   }
   const expireActivation = async (app) => {

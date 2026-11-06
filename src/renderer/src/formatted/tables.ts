@@ -1980,6 +1980,7 @@ class TableView {
       b = to - waiting.from
     if (a === b) {
       if (by === 'line') {
+        // ponytail: undrawn cells use source-line bounds; visual-line commands resume on draw.
         if (forward) b = end
         else a = start
       } else if (by === 'group') {
@@ -3502,7 +3503,11 @@ export const contribution: FormattedContribution = {
   ],
   keys: [
     { key: 'Enter', run: breakWaiting, shift: breakWaiting },
-    { key: 'Backspace', run: deleteWaiting(false) },
+    {
+      key: 'Backspace',
+      run: deleteWaiting(false),
+      shift: deleteWaiting(false),
+    },
     { key: 'Delete', run: deleteWaiting(true) },
     {
       key: 'Mod-Backspace',

@@ -2925,6 +2925,7 @@ test('edit keys stay in a table action cell while its parse is pending', {
     'Enter',
     'Shift+Enter',
     'Backspace',
+    'Shift+Backspace',
     'Delete',
     `${group}+Backspace`,
     `${group}+Delete`,

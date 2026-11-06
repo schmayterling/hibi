@@ -303,13 +303,13 @@ export function stopElectronTree(child) {
 export const showTestWindows =
   (process.env.GITHUB_ACTIONS === 'true' && !!process.env.GITHUB_RUN_ID) ||
   process.env.HIBI_TEST_SHOW_WINDOWS === '1'
+// Cold native GPU startup on Xvfb can outlive main and hold its stdio open.
+export const electronGpuArgs =
+  showTestWindows && process.platform === 'linux'
+    ? ['--use-gl=angle', '--use-angle=swiftshader']
+    : []
 export const electron = {
   async launch({ diagnostics = true, ...options }) {
-    // Cold Xvfb runners can lose the default GPU process before first paint.
-    const gpuArgs =
-      showTestWindows && process.platform === 'linux'
-        ? ['--use-gl=angle', '--use-angle=swiftshader']
-        : []
     const application = await _electron.launch({
       ...options,
       env: {
@@ -319,7 +319,7 @@ export const electron = {
         ).href,
         ...(options.env ?? process.env),
       },
-      args: [...options.args, '--hibi-test', ...gpuArgs],
+      args: [...options.args, '--hibi-test', ...electronGpuArgs],
     })
     const observeStartup = (page) => {
       if (page.hibiStartupTrace) return
@@ -508,7 +508,8 @@ export const electron = {
     }
     const report = (page) => {
       page.on('pageerror', (error) => {
-        const text = error.stack ?? String(error)
+        // Playwright leaves the stack empty when the error has no frames.
+        const text = error.stack || String(error)
         console.error('electron-renderer-uncaught', text)
         pageError(error.message, text)
       })
@@ -1144,9 +1145,10 @@ export async function waitForAsync(
   let attempts = 0
   let deadlineTimer
   let pollTimer
+  let unsynced = ''
   const timedOut = () =>
     new Error(
-      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}`,
+      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${label}${unsynced}`,
     )
   const expired = new Promise((_, reject) => {
     deadlineTimer = setTimeout(() => reject(timedOut()), timeout)
@@ -1155,7 +1157,16 @@ export async function waitForAsync(
     for (;;) {
       if (performance.now() >= deadline) throw timedOut()
       attempts++
-      const ready = await Promise.race([page.evaluate(predicate, arg), expired])
+      const ready = await Promise.race([
+        page.evaluate(predicate, arg).catch((error) => {
+          // A read raced the renderer's newer edits to main; the next check sees them.
+          if (!/local edits waiting to synchronize/.test(error?.message))
+            throw error
+          unsynced = ` (last check: ${error.message})`
+          return false
+        }),
+        expired,
+      ])
       if (performance.now() >= deadline) throw timedOut()
       if (ready) return
       await Promise.race([

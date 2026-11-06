@@ -2251,8 +2251,10 @@ export function livePreview(
               },
             ]),
           )
-        // An edit's unfinished reparse keeps what was drawn, mapped through it.
+        // An edit's unfinished reparse keeps what was drawn, mapped through it;
+        // its parse steps and viewport moves change nothing to map.
         if (syntax.settling(update.state)) {
+          if (!update.docChanged) return
           this.decorations = mapLines(this.decorations, update)
           this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)

@@ -801,6 +801,7 @@ button:disabled {
   min-width: 0;
   padding: 72px 28px 36px;
   overflow: auto;
+  scrollbar-gutter: stable;
   container: settings / inline-size;
 }
 .settings-content section {

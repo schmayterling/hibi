@@ -450,6 +450,99 @@ test('formatted split lines up a source line in a row a long table has not drawn
   await source(page, text)
 })
 
+// CodeMirror reports a view's focus a moment after it moves, as when the
+// split opens with the formatted pane focused. A pane scrolled in that moment
+// keeps the lead: the report is of a focus from before the scroll.
+test('formatted split keeps the lead of a pane scrolled just after the other pane takes focus', {
+  timeout: 90000,
+}, async (t) => {
+  const lines = 'line\n\n'.repeat(30)
+  const text = `${lines}${table(80)}${lines}`
+  const { page } = await open(t, text)
+  // The formatted pane loses its focus, and CodeMirror reports that.
+  const blurred = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const content = document.querySelector('.rich-pane .cm-content')
+        if (document.activeElement !== content) return resolve(false)
+        content.addEventListener('hibi:source-caret', () => resolve(true), {
+          once: true,
+        })
+        content.blur()
+      }),
+  )
+  assert.ok(blurred, 'the split opens with the formatted pane focused')
+  // It takes focus back just before the source pane is scrolled.
+  await page.evaluate(
+    `document.querySelector('.rich-pane .cm-content').focus();
+    (${lead})(${text.indexOf('| r20 |')})`,
+  )
+  await staysLinedUp(page, linedUp)
+  // Moving its caret still gives the formatted pane the lead.
+  await page.keyboard.press(`${mod}+Home`)
+  await waitForAsync(
+    page,
+    () => document.querySelector('.source-pane .cm-scroller').scrollTop < 50,
+  )
+  // So does focus moving to the source pane, for the scroll right after it.
+  await page.evaluate((at) => {
+    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+      .view
+    view.focus()
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+  }, text.indexOf('| r20 |'))
+  await staysLinedUp(page, linedUp)
+  // Focus leaving the formatted pane, also reported a moment late, leaves
+  // the lead with the formatted pane scrolled after it.
+  const refocused = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const content = document.querySelector('.rich-pane .cm-content')
+        content.addEventListener(
+          'hibi:source-caret',
+          () => resolve(document.activeElement === content),
+          { once: true },
+        )
+        content.focus()
+      }),
+  )
+  assert.ok(refocused, 'the formatted pane takes focus')
+  // Focus moves to the source pane just before the formatted pane's wheel,
+  // whose scrolling goes on after the report of that focus leaving.
+  await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const pane = document.querySelector('.rich-pane')
+        pane
+          .querySelector('.cm-content')
+          .addEventListener('hibi:source-caret', resolve, { once: true })
+        document.querySelector('.source-pane .cm-content').focus()
+        pane.dispatchEvent(new WheelEvent('wheel'))
+      }),
+  )
+  await page.evaluate((at) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      effects: view.constructor.scrollIntoView(at, { y: 'center' }),
+    })
+  }, text.indexOf('| r60 |') + 3)
+  await staysLinedUp(page, sourceLinedUp, false)
+  const middle = await page.evaluate(() => {
+    const pane = document.querySelector('.rich-pane')
+    const bounds = pane.getBoundingClientRect()
+    const y = bounds.top + bounds.height / 2
+    return [...pane.querySelectorAll('tr[data-line]')].find((row) => {
+      const box = row.getBoundingClientRect()
+      return box.top <= y && box.bottom > y
+    })?.dataset.line
+  })
+  assert.equal(middle, '62', 'the scrolled formatted pane keeps the lead')
+  await source(page, text)
+})
+
 // Rows without outer pipes start with their first cell's text: with that cell
 // edited, the source line's start is in the cell editor's text, and the row's
 // place still answers for it while the row is out of its place.
@@ -479,7 +572,41 @@ for (const pipes of [true, false])
       .nth(pipes ? 1 : 0)
       .click()
     await page.keyboard.press('End')
+    // Hold the new snapshot until scrolling has used the pending row bounds.
+    await page.evaluate(() => {
+      const table = document.querySelector('.rich-pane .hibi-lp-table')
+      const prototype = Object.getPrototypeOf(table.cmTile.widget)
+      const update = prototype.updateDOM
+      let pending
+      window.tableLayoutEvents = 0
+      table.addEventListener(
+        'hibi:source-layout',
+        () => window.tableLayoutEvents++,
+      )
+      prototype.updateDOM = function (dom, view) {
+        if (dom !== table) return update.call(this, dom, view)
+        pending = () => update.call(this, dom, view)
+        return true
+      }
+      window.tableLayoutPending = () => !!pending
+      window.releaseTableLayout = () => {
+        prototype.updateDOM = update
+        const height = table.getBoundingClientRect().height
+        const observer = new MutationObserver(() => {})
+        observer.observe(table, { childList: true, subtree: true })
+        pending()
+        // Reusing the same ready snapshot needs no second notification.
+        pending()
+        const mutations = observer.takeRecords().length
+        observer.disconnect()
+        return {
+          mutations,
+          height: table.getBoundingClientRect().height - height,
+        }
+      }
+    })
     await page.keyboard.type('Z')
+    await waitForAsync(page, () => window.tableLayoutPending())
     // Led to the table's top rows, the window draws them and keeps the edited
     // row mounted after them, out of its place.
     await page.evaluate(near, start(20) + 3)
@@ -494,7 +621,29 @@ for (const pipes of [true, false])
     // The source pane leads straight back to the row's line, as a drag of its
     // scrollbar does, while the cell editor keeps the focus.
     await page.evaluate(lead, start(600))
+    await waitForAsync(page, () => {
+      const row = document.querySelector('.rich-pane tr[data-line="602"]')
+      return row?.previousElementSibling?.dataset.line === '601'
+    })
+    await frames(page)
+    const sourceTop = await page
+      .locator('.source-pane .cm-scroller')
+      .evaluate((node) => node.scrollTop)
+    assert.deepEqual(
+      await page.evaluate(() => window.releaseTableLayout()),
+      { mutations: 0, height: 0 },
+      'the current snapshot arrives without changing the table DOM or height',
+    )
     await staysLinedUp(page, linedUp)
+    assert.ok(
+      Math.abs(
+        (await page
+          .locator('.source-pane .cm-scroller')
+          .evaluate((node) => node.scrollTop)) - sourceTop,
+      ) < 1,
+      'the source pane keeps control while the table snapshot becomes current',
+    )
+    assert.equal(await page.evaluate(() => window.tableLayoutEvents), 1)
     assert.ok(
       await page.evaluate(() => {
         const row = document.querySelector('.rich-pane tr[data-line="602"]')

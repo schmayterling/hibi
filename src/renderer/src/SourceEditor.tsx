@@ -144,12 +144,13 @@ import {
 import { formattedReferences } from './formatted-references'
 import { formattedSelectionPreview } from './formatted-selection-text'
 import { formattedLiteralEdits } from './formatted-source-edits'
-import { formattedSyntax } from './formatted-syntax'
+import { formattedSyntax, restoredOpening } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { mappedPositionAt } from './native-dom-selection'
+import { scrolledItself } from './reading-position'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -205,6 +206,10 @@ export const sourceAfter = (view: EditorView, changes: readonly RawEdit[]) =>
 export const sourceCurrent = (view: EditorView) =>
   bridges.get(view)?.isCurrent() ?? false
 
+/** The formatted view scrolls with its pane. */
+const scrollerOf = (view: EditorView) =>
+  view.scrollDOM.closest('.rich-pane') ?? view.scrollDOM
+
 /** The line at a view's top, and where its block starts relative to the top. */
 /**
  * The place of a view whose drawing failed. A redraw forgets its measured
@@ -214,8 +219,7 @@ function placeWithoutDrawing(view: EditorView) {
   const { viewState } = view as unknown as {
     viewState: { paddingTop: number } & Pick<EditorView, 'lineBlockAtHeight'>
   }
-  // The formatted view scrolls with its pane.
-  const scroller = view.scrollDOM.closest('.rich-pane') ?? view.scrollDOM
+  const scroller = scrollerOf(view)
   const height =
     scroller.getBoundingClientRect().top -
     view.contentDOM.getBoundingClientRect().top -
@@ -225,7 +229,9 @@ function placeWithoutDrawing(view: EditorView) {
 }
 
 function placeOf(view: EditorView) {
-  const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
+  // Pending layout can move the scroller; measure before reading its offset.
+  view.lineBlockAtHeight(0)
+  const height = scrollerOf(view).getBoundingClientRect().top - view.documentTop
   const line = view.lineBlockAtHeight(height)
   return { top: line.from, margin: line.top - height }
 }
@@ -301,7 +307,7 @@ function keptPlaceScroll(top: number, margin: number) {
         ? null
         : view.documentTop +
           view.lineBlockAt(top).top -
-          view.scrollDOM.getBoundingClientRect().top,
+          scrollerOf(view).getBoundingClientRect().top,
     write: (offset: number | null, view: EditorView) => {
       if (state !== 'aligning') return
       if (offset === null) {
@@ -327,8 +333,9 @@ function keptPlaceScroll(top: number, margin: number) {
       }
       state = 'holding'
       if (Math.abs(offset - margin) >= 0.5)
-        view.scrollDOM.scrollTop += offset - margin
-      held = view.scrollDOM.scrollTop
+        scrollerOf(view).scrollTop += offset - margin
+      held = scrollerOf(view).scrollTop
+      scrolledItself(view)
     },
   }
   const begin = (view: EditorView) => {
@@ -373,20 +380,21 @@ function keptPlaceScroll(top: number, margin: number) {
       scroll: (_event, view) => {
         if (
           state === 'holding' &&
-          Math.abs(view.scrollDOM.scrollTop - held) > 1
+          Math.abs(scrollerOf(view).scrollTop - held) > 1
         )
           stop()
       },
     }),
     ViewPlugin.define((view) => {
+      const scroller = scrollerOf(view)
       const options = { capture: true, passive: true }
       for (const type of scrollInput)
-        view.scrollDOM.addEventListener(type, stop, options)
+        scroller.addEventListener(type, stop, options)
       return {
         destroy() {
           stop()
           for (const type of scrollInput)
-            view.scrollDOM.removeEventListener(type, stop, options)
+            scroller.removeEventListener(type, stop, options)
         },
         update(update) {
           if (update.docChanged) top = update.changes.mapPos(top, 1)
@@ -407,10 +415,15 @@ function keptPlaceScroll(top: number, margin: number) {
             // Anything that scrolled the view ends the hold. CodeMirror can
             // also move the kept line without scrolling, when it estimates
             // the lines above it again, and the line goes back.
-            if (Math.abs(view.scrollDOM.scrollTop - held) > 1) return stop()
+            if (Math.abs(scrollerOf(view).scrollTop - held) > 1) return stop()
             state = 'aligning'
             moved = false
-            queueMicrotask(() => view.requestMeasure(align))
+            // CodeMirror holds its top line itself in its own scroller or
+            // while focused, after this measure's writes: aligning in it too
+            // would move the line twice. Otherwise align before it paints.
+            if (scrollerOf(view) === view.scrollDOM || view.hasFocus)
+              queueMicrotask(() => view.requestMeasure(align))
+            else view.requestMeasure(align)
           } else queueMicrotask(() => begin(view))
         },
       }
@@ -1986,7 +1999,9 @@ export function SourceEditor({
               queueMicrotask(() => tryFeatures.current?.())
             }
           }),
-          restore ? restore.extension : [],
+          restore && place
+            ? [restore.extension, restoredOpening.of(place.top)]
+            : [],
           ViewPlugin.define((view) => ({
             destroy: observeClipboard(view.contentDOM),
           })),

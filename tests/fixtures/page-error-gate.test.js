@@ -13,11 +13,14 @@ const scenario = process.env.PAGE_ERROR_CASE
 let close, page
 const throwInPage = async () => {
   const thrown = page.waitForEvent('pageerror')
-  await page.evaluate(() => {
+  await page.evaluate((stackless) => {
     setTimeout(() => {
-      throw new Error('gate boom')
+      const error = new Error('gate boom')
+      // As an error copied across the context bridge: no frames.
+      if (stackless) error.stack = 'Error: gate boom'
+      throw error
     })
-  })
+  }, scenario === 'stackless')
   await thrown
 }
 // Runs after the harness's root hook, as a file's shared app closes.

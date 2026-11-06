@@ -6,6 +6,7 @@ import {
 } from '../src/addons/dictionary/offline.ts'
 import { packIds } from '../src/addons/dictionary/packs.ts'
 import { createRegistry, gather } from '../src/addons/dictionary/providers.ts'
+import { lookUpSide } from '../src/addons/dictionary/side.ts'
 
 const entry = {
   word: '猫',
@@ -218,4 +219,70 @@ test('pack completions keep one native batch live and only the latest waiting', 
   assert.equal(calls.at(-1).input.prefix, 'kili')
   calls[3].resolve([{ id: 'tl', words: ['kilig'] }])
   assert.deepEqual(await next, [{ lang: 'tl', words: ['kilig'] }])
+})
+
+test('packs that cannot be reached fail the lookup with a reason', async () => {
+  // Quitting or stopping the addon closes the packs, even mid-lookup.
+  let closed = () => true
+  const native = {
+    query: async (method, input) => {
+      if (closed(input?.id ?? input))
+        throw new Error(
+          "Error invoking remote method 'addons:query': Error: Dictionary packs are closed.",
+        )
+      if (method === 'packInstalled') return false
+      throw new Error(`unexpected ${method}`)
+    },
+  }
+  const registry = createRegistry()
+  for (const provider of createOfflineProviders(native))
+    registry.register(provider)
+  const entry = {
+    term: 'cats',
+    lang: 'en',
+    senses: [{ gloss: 'cat' }],
+    source: { name: 'Online', license: 'test' },
+  }
+  registry.register({
+    id: 'online',
+    label: 'Online',
+    kind: 'online',
+    languages: ['en', 'ja'],
+    lookup: async () => [entry],
+    related: async () => {
+      closed = () => true
+      return null
+    },
+  })
+  const signal = new AbortController().signal
+  const ask = (provider, lang) => provider.lookup('cats', lang, signal)
+  const related = (provider, lang) => provider.related?.('cats', lang, signal)
+  const closedResult = { found: [], failure: 'unavailable', installable: [] }
+  assert.deepEqual(await gather(registry, ['en'], 'lookup', ask), closedResult)
+  assert.deepEqual(
+    await gather(registry, ['en'], 'related', related),
+    closedResult,
+  )
+  assert.deepEqual(await lookUpSide(registry, 'cats', ['en'], true, signal), {
+    definitions: closedResult,
+    thesaurus: closedResult,
+  })
+  // Another language still answers.
+  closed = (id) => id === 'en'
+  assert.deepEqual(await gather(registry, ['en', 'ja'], 'lookup', ask), {
+    found: [{ lang: 'ja', value: [entry] }],
+    installable: [],
+  })
+  // Closed between listing a language's packs and offering one.
+  let asked = 0
+  closed = (id) => id === 'zh' && asked++ > 0
+  assert.deepEqual(await gather(registry, ['zh'], 'lookup', ask), closedResult)
+  // Closed after both lookups listed their packs: only the offer is unknown.
+  closed = () => false
+  const side = await lookUpSide(registry, 'cats', ['en'], true, signal)
+  assert.deepEqual(side.definitions, {
+    found: [{ lang: 'en', value: [entry] }],
+    installable: [],
+  })
+  assert.deepEqual(side.thesaurus, { found: [], installable: [] })
 })

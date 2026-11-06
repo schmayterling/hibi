@@ -2,6 +2,8 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import {
   Compartment,
   EditorState,
+  type Extension,
+  Prec,
   StateEffect,
   StateField,
   Transaction,
@@ -13,13 +15,16 @@ import {
   keymap,
   WidgetType,
 } from '@codemirror/view'
+import { InlineContext } from '@lezer/markdown'
 import '../../src/renderer/src/styles.css'
 import {
   type ChunkedMarkdownProbe,
   uncovered,
 } from '../../src/renderer/src/chunked-markdown'
+import { cellParser } from '../../src/renderer/src/formatted/table-cells'
 import * as formattedTables from '../../src/renderer/src/formatted/tables'
 import {
+  formattedBlockParser,
   formattedDocument,
   showMarkdownMarkers,
 } from '../../src/renderer/src/formatted-contributions'
@@ -211,6 +216,55 @@ Object.assign(window, {
       await settle()
     },
     view: () => view,
+    /** Count real block-proof work without a clock or replacing the grammar. */
+    watchBlockProofs() {
+      const current = view!
+      const grammar = current.state.facet(formattedBlockParser)(current.state)
+      const work = { calls: 0, units: 0 }
+      const measured = Object.assign(Object.create(grammar), {
+        parse(text: string) {
+          work.calls++
+          work.units += text.length
+          return grammar.parse(text)
+        },
+      })
+      current.dispatch({
+        effects: StateEffect.appendConfig.of(
+          Prec.highest(formattedBlockParser.of(() => measured)),
+        ),
+      })
+      return work
+    },
+    /** Count real inline parsing; restore the shared grammar after each measurement. */
+    watchInlineParses() {
+      const grammar = cellParser(view!.state)
+      const parse = grammar.parse
+      const char = InlineContext.prototype.char
+      const work = { calls: 0, units: 0, steps: 0 }
+      grammar.parse = (...args) => {
+        work.calls++
+        work.units += args[0].length
+        InlineContext.prototype.char = function (position) {
+          work.steps++
+          return char.call(this, position)
+        }
+        try {
+          return parse.apply(grammar, args)
+        } finally {
+          InlineContext.prototype.char = char
+        }
+      }
+      return {
+        work,
+        stop: () => {
+          grammar.parse = parse
+        },
+      }
+    },
+    /** install source extensions, as a format addon does. */
+    extend(extension: Extension) {
+      view?.dispatch({ effects: StateEffect.appendConfig.of(extension) })
+    },
     /** Apply another view's edit without recording it in this view's history. */
     echo(insert: string) {
       if (!view) return
@@ -223,9 +277,8 @@ Object.assign(window, {
     },
     settling: () => view && syntax?.settling(view.state),
     /**
-     * Whether the text in view is parsed. A viewport that moves during an
-     * edit's reparse ends its settling first: the view then shows the text it
-     * has not reached yet unparsed.
+     * Whether the text in view has its current parsed layout, including
+     * after a viewport move during an edit's unfinished reparse.
      */
     parsed: () =>
       !!view &&

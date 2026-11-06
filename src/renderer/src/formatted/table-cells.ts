@@ -1,12 +1,14 @@
 import { defaultKeymap, isolateHistory } from '@codemirror/commands'
 import {
   Annotation,
+  type ChangeDesc,
   type ChangeSpec,
   Compartment,
   EditorSelection,
   EditorState,
   Prec,
   type Range,
+  type Text,
   Transaction,
 } from '@codemirror/state'
 import {
@@ -28,6 +30,7 @@ import {
 } from '../../../shared/formatted-custom-body.ts'
 import { formattedInlineParser } from '../../../shared/formatted-markdown.ts'
 import { markdownLiteral } from '../../../shared/markdown-literal.ts'
+import { createPlainTextRunExtension } from '../../../shared/markdown-plain-text-runs.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   blockMarkedNodes,
@@ -44,6 +47,7 @@ import {
   formattedRefresh,
   formattedSyntaxTree,
   formattedTree,
+  inlineStops,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import { drawReference, referenceLink } from '../formatted-references.ts'
@@ -74,6 +78,15 @@ export function cellParser(state: EditorState) {
   let found = cellParsers.get(contributed)
   if (!found) {
     found = formattedInlineParser(contributed)
+    if (
+      contributed.every(
+        (config) => !config.parseInline?.length || inlineStops(config),
+      )
+    ) {
+      const runs = createPlainTextRunExtension()
+      found = found.configure(runs.extension)
+      runs.allow(found)
+    }
     cellParsers.set(contributed, found)
   }
   return found
@@ -511,6 +524,8 @@ export type CellHost = {
   customBody(): boolean
   /** Whether the table's cell spans describe the current document. */
   current(): boolean
+  /** Whether a kept place still describes this cell without changing the table's shape. */
+  valid(place: { from: number; to: number; closed: boolean } | null): boolean
   /** The cell's text between its delimiters in the formatted view's document now; null while its row ends before it. */
   span(): { from: number; to: number; closed: boolean } | null
   /** The change that ends the cell's row with this cell, holding `text`. */
@@ -540,6 +555,8 @@ export class CellEditor {
   private remote = false
   /** The caret moved while the table's spans were old, so the formatted view's selection waits for them. */
   private unsent = false
+  /** Where the cell's text is in the formatted view after this editor's last change, until another changes the view; null while its row lacks the cell. */
+  private kept: { from: number; to: number; closed: boolean } | null | undefined
   private access = new Compartment()
 
   private host: CellHost
@@ -575,29 +592,42 @@ export class CellEditor {
         update(update: ViewUpdate) {
           // Local input reaches the parent after view.update. Keep mapped
           // decorations until dispatch refreshes against that committed state.
+          // Stale table spans cannot yet place the cell's inline syntax.
           if (update.docChanged) {
             this.decorations = this.decorations.map(update.changes)
             this.outer = this.outer.map(update.changes)
             this.atomic = this.atomic.map(update.changes)
             this.runs = this.runs.map(update.changes)
-          } else if (
-            update.selectionSet ||
-            update.focusChanged ||
-            update.transactions.some((transaction) =>
+            return
+          }
+          if (
+            !update.selectionSet &&
+            !update.focusChanged &&
+            !update.transactions.some((transaction) =>
               transaction.effects.some((effect) => effect.is(formattedRefresh)),
             )
           )
-            ({
-              decorations: this.decorations,
-              outer: this.outer,
-              atomic: this.atomic,
-              runs: this.runs,
-            } = editorDecorations(
-              host.main.state,
-              update.view,
-              host.span()?.from,
-              host.customBody(),
-            ))
+            return
+          // Also while the table waits to draw again, where the cell's text is now.
+          const span = host.span()
+          if (
+            !host.current() &&
+            (!span ||
+              host.main.state.sliceDoc(span.from, span.to) !==
+                update.state.doc.toString())
+          )
+            return
+          ;({
+            decorations: this.decorations,
+            outer: this.outer,
+            atomic: this.atomic,
+            runs: this.runs,
+          } = editorDecorations(
+            host.main.state,
+            update.view,
+            span?.from,
+            host.customBody(),
+          ))
         }
       },
       {
@@ -702,11 +732,12 @@ export class CellEditor {
             .map((extension) => extension(host.main)),
           this.access.of(access(main)),
           EditorState.transactionFilter.of((transaction) => {
-            // Nothing writes while the host takes no input or has old spans.
+            // Nothing writes while the host takes no input or the cell's place is unknown.
             if (
               transaction.docChanged &&
               !this.remote &&
-              (!writable(host.main.state) || !host.current())
+              (!writable(host.main.state) ||
+                this.place(transaction.startState.doc) === undefined)
             )
               return []
             // The caret moves within the content, not into the padding.
@@ -743,7 +774,7 @@ export class CellEditor {
             if (!transaction.docChanged || this.remote) return transaction
             const fixes = cellFixes(
               transaction.newDoc.toString(),
-              host.span()?.closed ?? true,
+              this.place(transaction.startState.doc)?.closed ?? true,
             )
             return fixes.length
               ? [transaction, { changes: fixes, sequential: true }]
@@ -871,7 +902,7 @@ export class CellEditor {
                   !event.isComposing &&
                   !view.composing &&
                   writable(host.main.state) &&
-                  host.current()
+                  this.place(view.state.doc) !== undefined
                 ) {
                   event.preventDefault()
                   const { from, to } = view.state.selection.main
@@ -940,6 +971,7 @@ export class CellEditor {
         return
       }
     }
+    const before = this.host.main.state.doc
     view.update(transactions)
     if (this.remote) {
       if (transactions.some((transaction) => transaction.docChanged))
@@ -948,11 +980,11 @@ export class CellEditor {
     }
     for (const transaction of transactions) {
       if (!view.dom.isConnected) return
-      if (!this.host.current()) {
+      const span = this.place(transaction.startState.doc)
+      if (span === undefined) {
         this.unsent ||= transactions.some((tr) => tr.selection !== undefined)
         return
       }
-      const span = this.host.span()
       // Where the cell's text starts in the formatted view after the change.
       let start = span ? span.from : null
       const changes: ChangeSpec[] = []
@@ -988,8 +1020,10 @@ export class CellEditor {
       const isolate = transaction.annotation(isolateHistory)
       const from = start
       if (from !== null) this.unsent = false
+      const sent = this.host.main.state.changes(changes)
+      const expected = sent.apply(this.host.main.state.doc)
       this.host.main.dispatch({
-        changes,
+        changes: sent,
         ...(from === null
           ? {}
           : {
@@ -1006,12 +1040,80 @@ export class CellEditor {
           ...(isolate ? [isolateHistory.of(isolate)] : []),
         ],
       })
+      // an empty cell matches any place: the parent must take this exact edit.
+      if (from !== null && this.host.main.state.doc.eq(expected))
+        this.kept = {
+          from,
+          to: from + transaction.newDoc.length,
+          closed: span?.closed ?? true,
+        }
     }
     if (
       transactions.some((transaction) => transaction.docChanged) &&
-      view.dom.isConnected
+      view.dom.isConnected &&
+      // A current table already refreshed the editor while redrawing this edit.
+      (!this.host.current() || before === this.host.main.state.doc)
     )
       this.refresh()
+  }
+
+  /**
+   * Where the cell's text, `doc` in this editor, is in the formatted view:
+   * the table's span, null while its row ends before the cell. While the
+   * table's spans are old, as when an edit's reparse misses its slice, the
+   * place this editor's own last change left it in, if the view took that
+   * change as sent; undefined otherwise, as after a change from elsewhere,
+   * which may have moved or remade the table.
+   */
+  private place(doc: Text) {
+    if (this.host.current()) return this.host.span()
+    const kept = this.kept
+    if (kept === undefined || !this.host.valid(kept)) return undefined
+    if (kept === null) return null
+    return this.host.main.state.sliceDoc(kept.from, kept.to) === doc.toString()
+      ? kept
+      : undefined
+  }
+
+  /** Where the cell's text is in the formatted view now; undefined when unknown until its table draws again. */
+  get placed() {
+    return this.place(this.view.state.doc)
+  }
+
+  /** Take the cell's place now, for an editor opened while its table waits to draw again. */
+  keep(place: { from: number; to: number; closed: boolean } | null) {
+    this.kept = place
+  }
+
+  /** The last kept place, still to be validated against its document before mapping a change. */
+  get keptPlace() {
+    return this.kept
+  }
+
+  /**
+   * The formatted view's document changed; this editor's own change sets its
+   * place again once sent. A change from elsewhere only in the cell's text,
+   * as undo of typing in it, leaves text the cell could have been given:
+   * the editor shows it and keeps its place.
+   */
+  changed(changes: ChangeDesc) {
+    const kept = this.kept
+    this.kept = undefined
+    if (!kept || this.view.composing) return
+    let inside = true
+    changes.iterChangedRanges((from, to) => {
+      inside &&= from >= kept.from && to <= kept.to
+    })
+    if (!inside) return
+    const place = {
+      from: changes.mapPos(kept.from, -1),
+      to: changes.mapPos(kept.to, 1),
+      closed: kept.closed,
+    }
+    const text = this.host.main.state.sliceDoc(place.from, place.to)
+    if (cellFixes(text, place.closed).length) return
+    this.kept = place
+    this.sync(text, place)
   }
 
   /** Redraw inline syntax after the formatted view's render inputs change. */
@@ -1045,7 +1147,7 @@ export class CellEditor {
   }
 
   /** Show the cell's text after the formatted view changed it. */
-  sync(text: string) {
+  sync(text: string, span = this.host.span()) {
     const doc = this.view.state.doc.toString()
     if (doc === text) return
     let start = 0,
@@ -1062,7 +1164,6 @@ export class CellEditor {
       doc[doc.length - 1 - end] === text[text.length - 1 - end]
     )
       end++
-    const span = this.host.span()
     const selected = this.host.main.state.selection.main
     const selection =
       !this.unsent &&
@@ -1091,8 +1192,7 @@ export class CellEditor {
   }
 
   /** Put the formatted view's selection where the editor's is. */
-  mirror() {
-    const span = this.host.span()
+  mirror(span = this.host.span()) {
     if (!span) return
     const { anchor, head } = this.view.state.selection.main
     this.unsent = false

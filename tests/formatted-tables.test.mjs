@@ -3546,6 +3546,19 @@ test('cell keys and changes while a table waits for a reparse land where they wo
       unpiped.replace(tail, '').replace('c | d', 'CELLx | d'),
     )
   })
+  // So must such an edit of another cell while this one is edited.
+  for (const prefix of ['# ', '> ', '- ', '~~~'])
+    await t.test(
+      `block prefix in another cell: ${JSON.stringify(prefix)}`,
+      async () => {
+        const keys = ['x', edit('c | dx', `${prefix}c | dx`), 'y']
+        const { doc: now } = await run(unpiped, 'd', keys, true, false)
+        assert.equal(
+          now,
+          unpiped.replace(tail, '').replace('c | d', `${prefix}c | dx`),
+        )
+      },
+    )
   await t.test('an emptied first cell without an opening pipe', async () => {
     const keys = ['Home', 'Shift+End', 'Backspace', 'y']
     const { doc: now } = await run(unpiped, 'c', keys, true, false)
@@ -3603,6 +3616,12 @@ test('cell keys and changes while a table waits for a reparse land where they wo
   cases.push(
     ['unpiped body', unpiped, 'c', ['x', 'Tab', 'y']],
     ['unpiped header', unpiped, 'a', ['x', 'Tab', 'y']],
+    [
+      'unpiped first cell changed',
+      unpiped,
+      'd',
+      ['x', edit('c | dx', 'cQ | dx'), 'y'],
+    ],
   )
   for (const [name, note, start, keys] of cases)
     await t.test(name, async () => {

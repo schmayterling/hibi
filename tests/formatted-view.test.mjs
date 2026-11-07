@@ -240,6 +240,7 @@ test('behind the switch, completions get prose context past the first 16 KiB', {
   }, file)
   await pressShortcut(app, `${mod}+o`)
   await page.waitForFunction(() => window.completionProbe?.ready)
+  await waitForDocumentEditor(app, page)
   const formatted = page.locator('.rich-pane .cm-content')
   await formatted.waitFor()
   await formatted.focus()

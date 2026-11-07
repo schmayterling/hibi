@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -24,6 +26,161 @@ import {
   withHeldClock,
 } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+
+// DIAG NEVER MERGE. The remote action keeps its original TAP stream; the
+// post-completion collector must fetch that stream, not certify its stub.
+const readingTracePath = process.env.HIBI_READING_TRACE
+const cmTraceHash =
+  '602f8203c6f39d8ba8a9b8a6a10c6e28f93537c07244b2d6d28aefb88fe8db91'
+const sha256 = (text) => createHash('sha256').update(text).digest('hex')
+let cmTraceReceipt, fixtureBundle
+const pinFixture = (phase) => {
+  if (!readingTracePath) return
+  execFileSync(
+    'python3',
+    [
+      join(resolve(readingTracePath, '..'), 'pins.py'),
+      phase,
+      fixtureBundle,
+      'tables',
+    ],
+    {
+      stdio: 'inherit',
+    },
+  )
+}
+
+// Every replacement is an INSERTION. Removing the marked insertions must
+// reconstruct the exact installed dependency, byte for byte.
+function tracedCodeMirror(code) {
+  assert.equal(sha256(code), cmTraceHash, 'unexpected codemirror source')
+  const insertions = [
+    [
+      'measure(flush = true) {',
+      "hrTrace('cm-measure-enter', this, { flush });",
+    ],
+    [
+      'let { scrollAnchorPos, scrollAnchorHeight, scaleY: scrollScale } = this.viewState;',
+      "hrTrace('cm-anchor-before', this, { scrollOffset, scrollAnchorPos, scrollAnchorHeight, scrollScale, pane: scroll });",
+    ],
+    [
+      'let changed = this.viewState.measure();',
+      "hrTrace('cm-measure-read', this, { changed, iteration: i });",
+    ],
+    [
+      'let measured = measuring.map(m => {',
+      "hrTrace('cm-request-read', this, { request: m });",
+    ],
+    [
+      'let m = measuring[i];',
+      "hrTrace('cm-request-write', this, { request: m, willWrite: !!m.write });",
+    ],
+    [
+      'let update = ViewUpdate.create(this, this.state, []), redrawn = false;',
+      "hrTrace('cm-measure-write-enter', this, { changed, requests: measuring.length });",
+    ],
+    [
+      'this.docView.scrollIntoView(this.viewState.scrollTarget);',
+      "hrTrace('cm-target-executed', this, { head: this.viewState.scrollTarget?.range.head });",
+    ],
+    [
+      'scrollOffset = scrollOffset + diff;',
+      "hrTrace('cm-anchor-write', this, { diff, scrollOffset, scrollAnchorPos, scrollAnchorHeight, scrollScale, newAnchorHeight, scaleY: this.viewState.scaleY, pane: scroll });",
+      true,
+    ],
+    [
+      'this.measureScheduled = -1;\n        }\n        if (updated && !updated.empty)',
+      null,
+    ],
+    [
+      'let start = cur.scrollTop;',
+      "hrTrace('cm-rect-write', null, { pane: cur, start, moveY, scaleY });",
+    ],
+    [
+      'movedY = (cur.scrollTop - start) * scaleY;',
+      "hrTrace('cm-rect-written', null, { pane: cur, start, movedY, scaleY });",
+    ],
+    [
+      'win.scrollBy(moveX, moveY);',
+      "hrTrace('cm-window-written', null, { moveX, moveY });",
+    ],
+    [
+      'let ref = this.view.viewState.lineBlockAt(target.range.head);',
+      "hrTrace('cm-snapshot-write', this.view, { head: target.range.head, top: ref.top, yMargin: target.yMargin });",
+    ],
+    [
+      'domAtPos(pos, side) {\n        let { tile, offset } = this.tile.resolveBlock(pos, side);',
+      "hrTrace('cm-dom-at', this.view, { pos, side, offset, tile, dom: tile.dom, gap: tile.widget instanceof LineGapWidget ? 'line' : tile.widget instanceof BlockGapWidget ? 'block' : null });",
+    ],
+    [
+      'let start = tile.posAtStart;',
+      "hrTrace('cm-pos-from-dom', this.view, { start, node, offset, tile, gap: tile.widget instanceof LineGapWidget ? 'line' : tile.widget instanceof BlockGapWidget ? 'block' : null });",
+    ],
+  ]
+  const start = '/*HIBI_READING_TRACE_BEGIN*/'
+  const end = '/*HIBI_READING_TRACE_END*/'
+  const marked = (text) => start + text + end
+  let transformed = code
+  const counts = []
+  for (const [anchor, statement, before] of insertions) {
+    const count = transformed.split(anchor).length - 1
+    assert.equal(count, 1, 'codemirror trace anchor: ' + anchor)
+    counts.push(count)
+    // Insert before the original if, outside the existing finally.
+    const replacement =
+      statement === null
+        ? anchor.replace(
+            '        if (updated',
+            marked(
+              "hrTrace('cm-measure-exit', this, { updated: !!updated });",
+            ) + '        if (updated',
+          )
+        : before
+          ? marked(statement) + anchor
+          : anchor + marked(statement)
+    transformed = transformed.replace(anchor, replacement)
+  }
+  transformed =
+    marked(`function hrTrace(event, view, fields) {
+    const sink = globalThis.__hugeReadingTrace;
+    if (!sink) return;
+    try { sink.add(event, view, fields); } catch { sink.faults++; }
+  }`) + transformed
+  const stripped = transformed.replace(
+    /\/\*HIBI_READING_TRACE_BEGIN\*\/[\s\S]*?\/\*HIBI_READING_TRACE_END\*\//g,
+    '',
+  )
+  assert.equal(stripped, code, 'logging insertions changed codemirror source')
+  return {
+    code: transformed,
+    receipt: {
+      original: sha256(code),
+      stripped: sha256(stripped),
+      instrumented: sha256(transformed),
+      insertions: counts.length + 1,
+      counts,
+    },
+  }
+}
+
+function readingTracePlugin() {
+  let matched = 0
+  return {
+    name: 'never-merge-reading-trace',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.replaceAll('\\', '/').endsWith('/@codemirror/view/dist/index.js'))
+        return
+      assert.equal(++matched, 1, 'duplicate codemirror module')
+      const result = tracedCodeMirror(code)
+      cmTraceReceipt = result.receipt
+      return { code: result.code, map: null }
+    },
+    buildEnd(error) {
+      if (!error) assert.equal(matched, 1, 'missing codemirror module')
+    },
+  }
+}
 
 const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)
 const note = `# Formatted tables
@@ -100,6 +257,7 @@ before(
       configFile: false,
       logLevel: 'silent',
       define: { 'process.env.NODE_ENV': '"production"' },
+      plugins: [readingTracePlugin()],
       build: {
         outDir: bundle,
         assetsInlineLimit: 0,
@@ -112,11 +270,18 @@ before(
         },
       },
     })
+    fixtureBundle = bundle
     const html = join(bundle, 'index.html')
     await writeFile(
       html,
       '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
+    pinFixture('fixture-before')
+    if (readingTracePath)
+      await writeFile(
+        join(resolve(readingTracePath, '..'), 'cm-transform.json'),
+        JSON.stringify(cmTraceReceipt, null, 2),
+      )
     await mkdir(join(folder, 'notes'))
     const file = join(folder, 'notes', 'tables.md')
     await writeFile(file, note)
@@ -186,8 +351,15 @@ afterEach(async (t) => {
 
 after(
   async () => {
-    await app?.close()
-    if (folder) await rm(folder, { recursive: true, force: true })
+    try {
+      if (fixtureBundle) pinFixture('fixture-after')
+    } finally {
+      try {
+        await app?.close()
+      } finally {
+        if (folder) await rm(folder, { recursive: true, force: true })
+      }
+    }
   },
   { timeout: 30000 },
 )
@@ -961,248 +1133,508 @@ const hugeParagraph = `${hugeParagraphs}\n\n${hugeLines}\n\nAfter.\n${hugeMore}`
 test('the reading place deep inside a huge line holds through second changes, shrinks and splits', {
   timeout: 300000,
 }, async (t) => {
-  // A clipped 800 px pane chooses different line gaps and misses the join.
-  await harness.setViewportSize({ width: 1500, height: 900 })
-  t.after(() => harness.setViewportSize({ width: 1000, height: 720 }))
-  // Lines so long the view draws only the part near the screen: elsewhere
-  // a position's coordinates are the edge of the space standing in for the
-  // rest. The view starts the line's rows again after the part it draws, so
-  // the text can land one row off.
-  const line = [hugeLine, 'word25000 ', 30]
-  // A row off there is 28 px from where the aim left the text, which can
-  // already be a px or two off.
-  const paragraph = [hugeParagraph, 'line 15000 of', 40]
-  // Steps: a space of a height at a position (0 removes it), `frame` to go
-  // on a frame later instead of once the text holds, `scroll` for the
-  // reader's scrolling before the view draws again, `aim` to put the text at
-  // the pane's top again, `top` to measure the text at the pane's top instead,
-  // `read` for the reader's scrolling once the text holds, `join` for that to a
-  // row that starts at a join of lines, `cut` to delete the text and all after
-  // it, `shift` to move the pane down the page. A run's fourth item is its width.
-  const runs = [
-    [
-      'a second change a frame after the first',
-      line,
-      [{ grow: 5000, frame: true }, { grow: 10000 }],
-    ],
-    ['a shrink', line, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
-    ['a shrink', paragraph, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
-    ['a split below the screen', paragraph, [{ grow: 5000, below: 4000 }]],
-    // The reader's scrolling stands, from where the text is put back.
-    [
-      'a scroll before the view draws again',
-      line,
-      [{ grow: 5000, scroll: 300 }],
-    ],
-    [
-      'a scroll before the view draws again',
-      paragraph,
-      [{ grow: 5000, scroll: 300 }],
-    ],
-    // A row there that starts at a join of lines, between elements. Wrapping
-    // decides where one is: a width has one or doesn't.
-    ...[1048, 1000, 1052, 1044, 1060].map((width) => [
-      'a scroll from a row at a join before the view draws again',
-      paragraph,
-      [{ join: true }, { grow: 5000, scroll: 300 }],
-      width,
-    ]),
-    ['a large change', line, [{ grow: 150000 }]],
-    ['a large change', paragraph, [{ grow: 150000 }]],
-    // The place held for one change isn't the reader's for the next, when
-    // the reader, an edit or the page moved on after it.
-    [
-      'a change after scrolling on',
-      paragraph,
-      [{ grow: 5000 }, { read: 300 }, { grow: 5000, top: true }],
-    ],
-    // Back at the same scroll, the heights under it are new: the text there
-    // is other text.
-    [
-      'a change after scrolling away and back',
-      line,
-      [
-        { grow: 5000 },
-        { read: -1000 },
-        { read: 1000 },
-        { grow: 5000, top: true },
-      ],
-    ],
-    [
-      'a change after the text is cut',
-      paragraph,
-      [{ grow: 5000 }, { cut: true }, { grow: 5000, top: true }],
-    ],
-    [
-      'a change after the pane moves',
-      paragraph,
-      [{ grow: 5000 }, { shift: 80 }, { grow: 5000, top: true }],
-    ],
-  ]
   const results = []
-  // A slower machine runs more parsing slices during each sequence, and a
-  // place read again per slice would lose a row in each: in the paragraph,
-  // where the misses were.
-  const slowed = runs.filter(
-    ([, doc, steps]) =>
-      doc === paragraph &&
-      !steps.some((step) => step.top || step.read || step.join),
-  )
-  const cpu = await harness.context().newCDPSession(harness)
-  // The harness is shared: the tests after this one run at full speed.
-  t.after(async () => {
-    await cpu.send('Emulation.setCPUThrottlingRate', { rate: 1 })
-    await cpu.detach()
-  })
-  const sequences = [
-    ...runs.map((run) => [1, run]),
-    ...slowed.map((run) => [2, run]),
-    ...slowed.map((run) => [4, run]),
-  ]
-  for (const [rate, [name, [doc, target, slack], steps, width]] of sequences) {
-    await cpu.send('Emulation.setCPUThrottlingRate', { rate })
-    const result = await harness.evaluate(
-      async ({ doc, target, steps, width }) => {
-        const preview = window.tables
-        await preview.mount(
-          doc,
-          { width: width ?? 1000, height: 800 },
-          { editable: true },
-        )
-        const view = preview.view()
-        const pane = document.querySelector('.rich-pane')
-        const frame = () => new Promise(requestAnimationFrame)
-        const at = doc.indexOf(target)
-        // A character's box reads what is drawn without running a pending
-        // measure, which can move the reveal ahead of the reader's task.
-        const where = (pos = at) => {
-          if (
-            !view.visibleRanges.some(
-              (range) => range.from <= pos && pos < range.to,
-            )
-          )
-            return null
-          for (const at of [pos, pos + 1]) {
-            const { node, offset } = view.domAtPos(at, 1)
-            if (node.nodeType !== Node.TEXT_NODE || offset >= node.length)
-              continue
-            const range = document.createRange()
-            range.setStart(node, offset)
-            range.setEnd(node, offset + 1)
-            return Math.round(
-              range.getClientRects()[0].top - pane.getBoundingClientRect().top,
-            )
-          }
-          return null
-        }
-        const still = async (pos = at) => {
-          let last
-          for (let i = 0, same = 0; i < 300 && same < 6; i++) {
-            await frame()
-            const now = where(pos)
-            same = now === last ? same + 1 : 0
-            last = now
-          }
-          return last
-        }
-        const aim = async () => {
-          for (let i = 0; i < 60; i++) {
-            view.dispatch({
-              effects: view.constructor.scrollIntoView(at, {
-                y: 'start',
-                yMargin: 0,
-              }),
-            })
-            for (let frames = 0; frames < 4; frames++) await frame()
-            if (Math.abs(where() ?? 99) < 1) break
-          }
-          return still()
-        }
-        // The position at the start of the content's row at `y` in the pane.
-        const rowAt = (y) => {
-          const content = view.contentDOM.getBoundingClientRect()
-          const caret = document.caretPositionFromPoint(
-            content.left +
-              Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
-              1,
-            pane.getBoundingClientRect().top + y,
-          )
-          return view.posAtDOM(caret.offsetNode, caret.offset)
-        }
-        // How far to scroll, past a px, to have the first row on screen that
-        // starts at a join of lines at the pane's top: wrapping decides where
-        // one is.
-        const toJoin = () => {
-          for (let y = 20; y < 700; y += view.defaultLineHeight)
-            if (view.domAtPos(rowAt(y + 1), 1).node.nodeType !== Node.TEXT_NODE)
-              return y
-          return null
-        }
-        const tops = [await aim()]
-        for (const step of steps) {
-          if (step.aim) tops.push(await aim())
-          else if (step.read || step.join || step.cut || step.shift) {
-            const read = step.join ? toJoin() : step.read
-            if (step.join && read === null) return 'no row at a join'
-            if (read) pane.scrollTop += read
-            if (step.cut)
-              view.dispatch({
-                changes: { from: at - 50, to: view.state.doc.length },
-              })
-            if (step.shift) pane.style.marginTop = `${step.shift}px`
-            for (let frames = 0; frames < 6; frames++) await frame()
-          } else {
-            // A scroll leaves the text above the screen, maybe undrawn: the
-            // text it brings to the pane's top, read before, is measured.
-            let mark = at
-            let expect = 0
-            if (step.scroll || step.top) {
-              mark = rowAt((step.scroll ?? 0) + 1)
-              expect = where(mark) - (step.scroll ?? 0)
-            }
-            preview.growAt(
-              step.below === undefined ? 0 : at + step.below,
-              step.grow,
-            )
-            if (step.scroll) {
-              // The reader's next chance, once the slice is over: a task, and
-              // often the same frame.
-              await new Promise((done) => {
-                const channel = new MessageChannel()
-                channel.port1.onmessage = () => {
-                  channel.port1.close()
-                  channel.port2.close()
-                  done()
-                }
-                channel.port2.postMessage(0)
-              })
-              pane.scrollTop += step.scroll
-            }
-            if (step.frame) await frame()
-            else tops.push((await still(mark)) - expect)
-          }
-        }
-        pane.style.marginTop = ''
-        return tops
-      },
-      { doc, target, steps, width },
+  let originalError,
+    diagnosticError,
+    originalPassed = false
+  try {
+    // A clipped 800 px pane chooses different line gaps and misses the join.
+    await harness.setViewportSize({ width: 1500, height: 900 })
+    t.after(() => harness.setViewportSize({ width: 1000, height: 720 }))
+    // Lines so long the view draws only the part near the screen: elsewhere
+    // a position's coordinates are the edge of the space standing in for the
+    // rest. The view starts the line's rows again after the part it draws, so
+    // the text can land one row off.
+    const line = [hugeLine, 'word25000 ', 30]
+    // A row off there is 28 px from where the aim left the text, which can
+    // already be a px or two off.
+    const paragraph = [hugeParagraph, 'line 15000 of', 40]
+    // Steps: a space of a height at a position (0 removes it), `frame` to go
+    // on a frame later instead of once the text holds, `scroll` for the
+    // reader's scrolling before the view draws again, `aim` to put the text at
+    // the pane's top again, `top` to measure the text at the pane's top instead,
+    // `read` for the reader's scrolling once the text holds, `join` for that to a
+    // row that starts at a join of lines, `cut` to delete the text and all after
+    // it, `shift` to move the pane down the page. A run's fourth item is its width.
+    const runs = [
+      [
+        'a second change a frame after the first',
+        line,
+        [{ grow: 5000, frame: true }, { grow: 10000 }],
+      ],
+      ['a shrink', line, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
+      ['a shrink', paragraph, [{ grow: 5000 }, { aim: true }, { grow: 0 }]],
+      ['a split below the screen', paragraph, [{ grow: 5000, below: 4000 }]],
+      // The reader's scrolling stands, from where the text is put back.
+      [
+        'a scroll before the view draws again',
+        line,
+        [{ grow: 5000, scroll: 300 }],
+      ],
+      [
+        'a scroll before the view draws again',
+        paragraph,
+        [{ grow: 5000, scroll: 300 }],
+      ],
+      // A row there that starts at a join of lines, between elements. Wrapping
+      // decides where one is: a width has one or doesn't.
+      ...[1048, 1000, 1052, 1044, 1060].map((width) => [
+        'a scroll from a row at a join before the view draws again',
+        paragraph,
+        [{ join: true }, { grow: 5000, scroll: 300 }],
+        width,
+      ]),
+      ['a large change', line, [{ grow: 150000 }]],
+      ['a large change', paragraph, [{ grow: 150000 }]],
+      // The place held for one change isn't the reader's for the next, when
+      // the reader, an edit or the page moved on after it.
+      [
+        'a change after scrolling on',
+        paragraph,
+        [{ grow: 5000 }, { read: 300 }, { grow: 5000, top: true }],
+      ],
+      // Back at the same scroll, the heights under it are new: the text there
+      // is other text.
+      [
+        'a change after scrolling away and back',
+        line,
+        [
+          { grow: 5000 },
+          { read: -1000 },
+          { read: 1000 },
+          { grow: 5000, top: true },
+        ],
+      ],
+      [
+        'a change after the text is cut',
+        paragraph,
+        [{ grow: 5000 }, { cut: true }, { grow: 5000, top: true }],
+      ],
+      [
+        'a change after the pane moves',
+        paragraph,
+        [{ grow: 5000 }, { shift: 80 }, { grow: 5000, top: true }],
+      ],
+    ]
+    // A slower machine runs more parsing slices during each sequence, and a
+    // place read again per slice would lose a row in each: in the paragraph,
+    // where the misses were.
+    const slowed = runs.filter(
+      ([, doc, steps]) =>
+        doc === paragraph &&
+        !steps.some((step) => step.top || step.read || step.join),
     )
-    results.push({ name, rate, target, slack, width, tops: result })
+    const cpu = await harness.context().newCDPSession(harness)
+    // The harness is shared: the tests after this one run at full speed.
+    t.after(async () => {
+      await cpu.send('Emulation.setCPUThrottlingRate', { rate: 1 })
+      await cpu.detach()
+    })
+    const sequences = [
+      ...runs.map((run) => [1, run]),
+      ...slowed.map((run) => [2, run]),
+      ...slowed.map((run) => [4, run]),
+    ]
+    let traceScenario = 0
+    for (const [
+      rate,
+      [name, [doc, target, slack], steps, width],
+    ] of sequences) {
+      await cpu.send('Emulation.setCPUThrottlingRate', { rate })
+      const result = await harness.evaluate(
+        async ({ doc, target, steps, width, id, rate }) => {
+          // DIAG: installed/reset in the existing first scenario RPC, before mount.
+          if (id === 0) {
+            const ids = new WeakMap()
+            let serial = 0
+            const identity = (value) => {
+              if (
+                !value ||
+                (typeof value !== 'object' && typeof value !== 'function')
+              )
+                return null
+              if (!ids.has(value)) ids.set(value, ++serial)
+              return ids.get(value)
+            }
+            const nodeInfo = (node) => {
+              if (!node) return null
+              const tile = node.cmTile
+              return {
+                id: identity(node),
+                type: node.nodeType,
+                name: node.nodeName,
+                length:
+                  node.nodeType === Node.TEXT_NODE
+                    ? node.length
+                    : node.childNodes.length,
+                connected: node.isConnected,
+                parent: identity(node.parentNode),
+                className:
+                  typeof node.className === 'string' ? node.className : null,
+                tile: identity(tile),
+                tileType: tile?.constructor.name,
+                tileLength: tile?.length,
+                flags: tile?.flags,
+                widget: identity(tile?.widget),
+                widgetType: tile?.widget?.constructor.name,
+              }
+            }
+            const sink = {
+              rows: [],
+              cap: 50000,
+              dropped: 0,
+              faults: 0,
+              resets: 1,
+              timeOrigin: performance.timeOrigin,
+              palette: { ...document.documentElement.dataset },
+              fonts: [...document.fonts].map((font) => ({
+                family: font.family,
+                status: font.status,
+                style: font.style,
+                weight: font.weight,
+              })),
+              fontStatus: document.fonts.status,
+              scenario: null,
+              id: identity,
+              node: nodeInfo,
+              add(event, view, fields = {}) {
+                try {
+                  if (this.scenario?.width !== 1048 && event !== 'scenario')
+                    return
+                  if (this.rows.length >= this.cap) {
+                    this.dropped++
+                    return
+                  }
+                  const safe = Object.fromEntries(
+                    Object.entries(fields).map(([key, value]) => [
+                      key,
+                      value instanceof Node
+                        ? nodeInfo(value)
+                        : key === 'tile'
+                          ? {
+                              id: identity(value),
+                              type: value?.constructor.name,
+                              length: value?.length,
+                              flags: value?.flags,
+                              widget: identity(value?.widget),
+                              widgetType: value?.widget?.constructor.name,
+                            }
+                          : key === 'request' && typeof value === 'object'
+                            ? identity(value)
+                            : value,
+                    ]),
+                  )
+                  this.rows.push({
+                    ...safe,
+                    scenario: this.scenario?.id,
+                    event,
+                    view: identity(view),
+                    doc: identity(view?.state.doc),
+                    pendingMeasure: view?.measureScheduled,
+                    updateState: view?.updateState,
+                    measureRequests: view?.measureRequests?.length,
+                    scrollTarget: view?.viewState?.scrollTarget?.range.head,
+                    stampMs: performance.now(),
+                  })
+                } catch {
+                  this.faults++
+                }
+              },
+            }
+            globalThis.__hugeReadingTrace = sink
+          }
+          const diagnostic = globalThis.__hugeReadingTrace
+          diagnostic.scenario = { id, rate, width: width ?? 1000 }
+          diagnostic.add('scenario', null, { rate, width: width ?? 1000 })
+          const note = (event, fields) => diagnostic.add(event, view, fields)
+
+          const preview = window.tables
+          await preview.mount(
+            doc,
+            { width: width ?? 1000, height: 800 },
+            { editable: true },
+          )
+          const view = preview.view()
+          const pane = document.querySelector('.rich-pane')
+          const frame = () => new Promise(requestAnimationFrame)
+          const at = doc.indexOf(target)
+          // A character's box reads what is drawn without running a pending
+          // measure, which can move the reveal ahead of the reader's task.
+          const where = (pos = at) => {
+            if (
+              !view.visibleRanges.some(
+                (range) => range.from <= pos && pos < range.to,
+              )
+            )
+              return null
+            for (const at of [pos, pos + 1]) {
+              const { node, offset } = view.domAtPos(at, 1)
+              if (node.nodeType !== Node.TEXT_NODE || offset >= node.length)
+                continue
+              const range = document.createRange()
+              range.setStart(node, offset)
+              range.setEnd(node, offset + 1)
+              const box = range.getClientRects()[0]
+              const paneBox = pane.getBoundingClientRect()
+              const top = Math.round(box.top - paneBox.top)
+              note('oracle-box', {
+                pos,
+                at,
+                offset,
+                node: diagnostic.node(node),
+                top,
+                boxTop: box.top,
+                boxHeight: box.height,
+                paneTop: paneBox.top,
+                paneWidth: paneBox.width,
+                paneHeight: paneBox.height,
+              })
+              return top
+            }
+            return null
+          }
+          const still = async (pos = at) => {
+            let last
+            for (let i = 0, same = 0; i < 300 && same < 6; i++) {
+              await frame()
+              const now = where(pos)
+              same = now === last ? same + 1 : 0
+              last = now
+            }
+            note('oracle-still', { pos, top: last })
+            return last
+          }
+          const aim = async () => {
+            for (let i = 0; i < 60; i++) {
+              view.dispatch({
+                effects: view.constructor.scrollIntoView(at, {
+                  y: 'start',
+                  yMargin: 0,
+                }),
+              })
+              for (let frames = 0; frames < 4; frames++) await frame()
+              if (Math.abs(where() ?? 99) < 1) break
+            }
+            return still()
+          }
+          // The position at the start of the content's row at `y` in the pane.
+          const rowAt = (y) => {
+            const content = view.contentDOM.getBoundingClientRect()
+            const caret = document.caretPositionFromPoint(
+              content.left +
+                Number.parseFloat(
+                  getComputedStyle(view.contentDOM).paddingLeft,
+                ) +
+                1,
+              pane.getBoundingClientRect().top + y,
+            )
+            const pos = view.posAtDOM(caret.offsetNode, caret.offset)
+            note('oracle-row', {
+              y,
+              pos,
+              node: diagnostic.node(caret.offsetNode),
+              offset: caret.offset,
+              lf: view.state.doc.sliceString(pos, pos + 1) === '\n',
+              contentWidth: content.width,
+              contentHeight: content.height,
+            })
+            return pos
+          }
+          // How far to scroll, past a px, to have the first row on screen that
+          // starts at a join of lines at the pane's top: wrapping decides where
+          // one is.
+          const toJoin = () => {
+            for (let y = 20; y < 700; y += view.defaultLineHeight) {
+              const pos = rowAt(y + 1)
+              const found = view.domAtPos(pos, 1)
+              note('oracle-join-scan', {
+                y,
+                pos,
+                offset: found.offset,
+                node: diagnostic.node(found.node),
+                next: diagnostic.node(found.node.childNodes[found.offset]),
+              })
+              if (found.node.nodeType !== Node.TEXT_NODE) {
+                note('oracle-join', { y, pos })
+                return y
+              }
+            }
+            note('oracle-join', { y: null })
+            return null
+          }
+          const tops = [await aim()]
+          for (const step of steps) {
+            if (step.aim) tops.push(await aim())
+            else if (step.read || step.join || step.cut || step.shift) {
+              const read = step.join ? toJoin() : step.read
+              if (step.join && read === null) return 'no row at a join'
+              if (read) {
+                const before = pane.scrollTop
+                note('oracle-read-write', { before, delta: read })
+                pane.scrollTop = before + read
+              }
+              if (step.cut)
+                view.dispatch({
+                  changes: { from: at - 50, to: view.state.doc.length },
+                })
+              if (step.shift) pane.style.marginTop = `${step.shift}px`
+              for (let frames = 0; frames < 6; frames++) await frame()
+            } else {
+              // A scroll leaves the text above the screen, maybe undrawn: the
+              // text it brings to the pane's top, read before, is measured.
+              let mark = at
+              let expect = 0
+              if (step.scroll || step.top) {
+                mark = rowAt((step.scroll ?? 0) + 1)
+                expect = where(mark) - (step.scroll ?? 0)
+              }
+              note('oracle-grow', {
+                mark,
+                expect,
+                grow: step.grow,
+                below: step.below,
+              })
+              preview.growAt(
+                step.below === undefined ? 0 : at + step.below,
+                step.grow,
+              )
+              if (step.scroll) {
+                // The reader's next chance, once the slice is over: a task, and
+                // often the same frame.
+                await new Promise((done) => {
+                  const channel = new MessageChannel()
+                  channel.port1.onmessage = () => {
+                    channel.port1.close()
+                    channel.port2.close()
+                    done()
+                  }
+                  channel.port2.postMessage(0)
+                })
+                const before = pane.scrollTop
+                note('oracle-scroll-write', { before, delta: step.scroll })
+                pane.scrollTop = before + step.scroll
+              }
+              if (step.frame) await frame()
+              else tops.push((await still(mark)) - expect)
+            }
+          }
+          pane.style.marginTop = ''
+          return tops
+        },
+        { doc, target, steps, width, id: traceScenario++, rate },
+      )
+      results.push({ name, rate, target, slack, width, tops: result })
+    }
+    const report = JSON.stringify(results)
+    const measured = results.filter(({ tops }) => Array.isArray(tops))
+    // The widths tried have a row at a join on every platform's text metrics.
+    assert.ok(
+      measured.some(({ name }) => name.includes('at a join')),
+      report,
+    )
+    for (const { name, tops, slack } of measured) {
+      for (const top of tops)
+        assert.ok(top !== null && Math.abs(top) <= slack, report)
+      // Nothing lays out a row again here: the reader's scrolling stands exactly.
+      if (name.includes('at a join'))
+        assert.ok(Math.abs(tops.at(-1)) <= 2, report)
+    }
+    originalPassed = true
+  } catch (error) {
+    originalError = error
+    throw error
+  } finally {
+    try {
+      // First extra RPC is AFTER every original target oracle, or its failure.
+      const captured = await harness.evaluate(() => {
+        const sink = globalThis.__hugeReadingTrace
+        if (!sink) return { missing: true }
+        delete globalThis.__hugeReadingTrace
+        const {
+          rows,
+          cap,
+          dropped,
+          faults,
+          resets,
+          timeOrigin,
+          palette,
+          fonts,
+          fontStatus,
+        } = sink
+        return {
+          rows,
+          cap,
+          dropped,
+          faults,
+          resets,
+          timeOrigin,
+          palette,
+          fonts,
+          fontStatus,
+        }
+      })
+      const width1048 = captured.rows?.find(
+        (row) => row.event === 'scenario' && row.width === 1048,
+      )?.scenario
+      const reached =
+        captured.rows?.some(
+          (row) =>
+            row.scenario === width1048 &&
+            row.event === 'oracle-join' &&
+            Number.isFinite(row.y),
+        ) === true
+      const quality =
+        !captured.missing &&
+        captured.resets === 1 &&
+        captured.dropped === 0 &&
+        captured.faults === 0 &&
+        results.length === 25 &&
+        captured.rows.filter((row) => row.event === 'scenario').length === 25 &&
+        ['cm-measure-enter', 'cm-dom-at', 'oracle-join'].every((event) =>
+          captured.rows.some((row) => row.event === event),
+        )
+      const receipt = {
+        ...captured,
+        results,
+        originalPassed,
+        originalError: originalError && {
+          name: originalError.name,
+          message: originalError.message,
+          stack: originalError.stack,
+        },
+        condition1048: reached ? 'reached' : 'miss',
+        quality,
+        cm: cmTraceReceipt,
+      }
+      const destination = readingTracePath ?? join(folder, 'reading-trace.json')
+      await writeFile(
+        destination,
+        JSON.stringify(
+          receipt,
+          (_, value) =>
+            typeof value === 'number' && !Number.isFinite(value)
+              ? String(value)
+              : value,
+          2,
+        ),
+      )
+      t.diagnostic(
+        JSON.stringify({
+          trace: destination,
+          rows: captured.rows?.length,
+          dropped: captured.dropped,
+          faults: captured.faults,
+          condition1048: receipt.condition1048,
+          originalPassed,
+        }),
+      )
+      // The collector classifies a miss independently of the original TAP result.
+    } catch (error) {
+      diagnosticError = error
+      t.diagnostic(`diagnostic dump failed: ${error.message}`)
+    }
   }
-  const report = JSON.stringify(results)
-  const measured = results.filter(({ tops }) => Array.isArray(tops))
-  // The widths tried have a row at a join on every platform's text metrics.
-  assert.ok(
-    measured.some(({ name }) => name.includes('at a join')),
-    report,
-  )
-  for (const { name, tops, slack } of measured) {
-    for (const top of tops)
-      assert.ok(top !== null && Math.abs(top) <= slack, report)
-    // Nothing lays out a row again here: the reader's scrolling stands exactly.
-    if (name.includes('at a join'))
-      assert.ok(Math.abs(tops.at(-1)) <= 2, report)
-  }
+  if (diagnosticError) throw diagnosticError
 })
 
 for (const [layout, doc, target] of [

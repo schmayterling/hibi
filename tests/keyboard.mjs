@@ -1,3 +1,5 @@
+import { waitForAsync } from './poll.mjs'
+
 /** The formatted view is a CodeMirror editor, so its text is replaced like source. */
 export const replaceRichText = replaceSourceText
 
@@ -48,21 +50,42 @@ export async function splitTab(app, page, id) {
 export const redoKey =
   process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+Z'
 
-export async function pressShortcut(app, shortcut) {
+// Opt into delivery only for renderer-handled keys; main may consume app keys.
+export async function pressShortcut(app, shortcut, { delivered = false } = {}) {
   const parts = shortcut.split('+')
   const keyCode = parts.pop().toUpperCase()
   const modifiers = parts.map(
     (part) =>
       ({ Meta: 'meta', Control: 'control', Shift: 'shift', Alt: 'alt' })[part],
   )
-  await app.evaluate(
-    ({ BrowserWindow }, input) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents
-      contents.sendInputEvent({ type: 'keyDown', ...input })
-      contents.sendInputEvent({ type: 'keyUp', ...input })
-    },
-    { keyCode, modifiers },
-  )
+  const receipt = delivered
+    ? await (await app.firstWindow()).evaluateHandle((keyCode) => {
+        const seen = { done: false }
+        const keyup = (event) => {
+          if (event.key.toUpperCase() === keyCode) seen.done = true
+        }
+        window.addEventListener('keyup', keyup)
+        return { seen, keyup }
+      }, keyCode)
+    : null
+  try {
+    await app.evaluate(
+      ({ BrowserWindow }, input) => {
+        const contents = BrowserWindow.getAllWindows()[0].webContents
+        contents.sendInputEvent({ type: 'keyDown', ...input })
+        contents.sendInputEvent({ type: 'keyUp', ...input })
+      },
+      { keyCode, modifiers },
+    )
+    if (receipt) await waitForAsync(receipt, ({ seen }) => seen.done)
+  } finally {
+    if (receipt) {
+      await receipt.evaluate(({ keyup }) =>
+        window.removeEventListener('keyup', keyup),
+      )
+      await receipt.dispose()
+    }
+  }
 }
 
 // CodeMirror ignores Tab and Enter on a completion list for its

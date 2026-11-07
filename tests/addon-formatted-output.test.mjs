@@ -248,11 +248,16 @@ test('layout output beyond its node is reported with its owner and later blocks 
   )
   await caretAtEnd(page)
   await type(page, ['1', '2', '3'])
+  const expected = source.replace('end', 'end12')
   await pressShortcut(app, 'Backspace')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    expected,
+  )
   await frame(page)
   const after = await state(page)
   t.diagnostic(JSON.stringify({ after, errors }))
-  const expected = source.replace('end', 'end12')
   assert.equal(after.canonical, expected)
   assert.equal(after.view, expected)
   assert.match(after.text, /\bend12\n/)

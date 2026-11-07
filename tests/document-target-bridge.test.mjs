@@ -17,6 +17,13 @@ import {
 } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
+const waitForMarkdown = (page, markdown) =>
+  waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    markdown,
+  )
+
 async function launchTargetProbe(t) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-target-bridge-'))
   const folder = join(profile, 'installed-addons', 'target-probe')
@@ -207,6 +214,7 @@ test('inactive addon target edits save exact source without changing active inpu
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
+  await waitForMarkdown(page, '# two')
   assert.equal(await acceptedMarkdown(page), '# two')
   assert.equal(await readFile(first, 'utf8'), '# ONE')
   await page.getByRole('tab', { name: 'first.md', exact: true }).click()
@@ -262,6 +270,7 @@ test('active formatted addon target edits keep canonical source and native histo
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
+  await waitForMarkdown(page, '# One')
   assert.equal(await acceptedMarkdown(page), '# One')
 })
 
@@ -296,6 +305,7 @@ test('active source addon target edits keep the native source and its history', 
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
+  await waitForMarkdown(page, '# ONE')
   assert.equal(await acceptedMarkdown(page), '# ONE')
 })
 
@@ -533,5 +543,6 @@ test('split-focused target edits retain native focus in the editable formatted p
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
+  await waitForMarkdown(page, '# ONE')
   assert.equal(await acceptedMarkdown(page), '# ONE')
 })

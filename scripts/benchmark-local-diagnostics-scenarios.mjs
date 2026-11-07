@@ -68,6 +68,12 @@ try {
               ? shortcut
               : shortcut.replace('Meta', 'Control'),
           )
+          const layout = {
+            rich: 'normal',
+            source: 'markdown',
+            split: 'side-by-side',
+          }[mode]
+          await page.locator(`.editor-panes.mode-${layout}`).waitFor()
           const selector =
             mode === 'rich'
               ? '.rich-pane .cm-content[contenteditable="true"]'

@@ -636,6 +636,21 @@ unit(
       // Select all still stops at the body: the frontmatter, and the header
       // the adapter owns, stay outside it.
       await pressShortcut(app, `${mod}+a`)
+      await page.waitForFunction(
+        (prefix) => {
+          const { state } = document.querySelector('.rich-pane .cm-content')
+            .cmTile.root.view
+          return (
+            state
+              .sliceDoc(0, state.selection.main.from)
+              .replace(/^\uFEFF/, '') === prefix &&
+            state.selection.main.to === state.doc.length
+          )
+        },
+        expected
+          .slice(1, expected.indexOf('A paragraph'))
+          .replaceAll('\r\n', '\n'),
+      )
       assert.equal(
         await page.locator('.rich-pane .cm-content').evaluate(({ cmTile }) => {
           const { state } = cmTile.root.view

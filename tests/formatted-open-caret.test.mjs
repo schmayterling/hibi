@@ -395,7 +395,8 @@ test(`a note opens with the caret at the end of its last text`, {
           .catch(() => {})
         check(name, await page.evaluate(shown, null), enabled)
       }
-      if (action.includes('+')) await pressShortcut(app, action)
+      if (action.includes('+'))
+        await pressShortcut(app, action, { delivered: true })
       else
         await page
           .locator(`.editor-toolbar [data-toolbar-id="format.${action}"]`)
@@ -418,6 +419,12 @@ test(`a note opens with the caret at the end of its last text`, {
         : action === 'divider'
           ? `${kept}\n\n---\n\n\n`
           : notes[name]
+      await waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        changed,
+      )
       check(
         name,
         { name, action, after: await markdown() },

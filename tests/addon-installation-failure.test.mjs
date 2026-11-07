@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('a failed source feature is reported, the formatted view stays editable, and disabling the addon restores editing', {
   timeout: 30000,
@@ -85,6 +86,10 @@ test('a failed source feature is reported, the formatted view stays editable, an
     await pressShortcut(
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+    )
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === '',
     )
     await page.evaluate(() => window.hibi.flushDocumentChanges())
     assert.equal(
@@ -193,6 +198,10 @@ test('a failed source feature is reported, the formatted view stays editable, an
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === '',
   )
   await page.evaluate(() => window.hibi.flushDocumentChanges())
   assert.equal(

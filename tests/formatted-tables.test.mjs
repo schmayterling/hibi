@@ -6756,9 +6756,16 @@ const openFormatted = async () => {
   })
   await page.reload()
   await waitForDocumentEditor(app, page)
-  await pressShortcut(
-    app,
-    process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await clickMenu(app, 'Open…')
+  await waitForAsync(
+    page,
+    async (revision) => {
+      const current = await window.hibi.getDocument()
+      return current.name === 'tables.md' && current.revision > revision
+    },
+    revision,
   )
   await page.locator('.rich-pane .hibi-lp-table').first().waitFor()
   // Hidden windows have no focus; editors need a focused page.

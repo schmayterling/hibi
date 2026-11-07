@@ -239,6 +239,10 @@ test('behind the switch, completions get prose context past the first 16 KiB', {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'long.md',
+  )
   await page.waitForFunction(() => window.completionProbe?.ready)
   await waitForDocumentEditor(app, page)
   const formatted = page.locator('.rich-pane .cm-content')

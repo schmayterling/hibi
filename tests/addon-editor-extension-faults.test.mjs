@@ -1561,7 +1561,17 @@ test('a startup failure of an addon formatted feature stays reported when anothe
   const message = 'Bad ext could not start its formatted editor feature.'
   await reported(page, message)
   // Opening a note clears the last document error, not an addon's failure.
+  const revision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
   await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async ({ revision, plain }) => {
+      const current = await window.hibi.getDocument()
+      return current.revision > revision && current.markdown === plain
+    },
+    { revision, plain },
+  )
   await page.locator('.app[aria-busy="false"]').waitFor()
   await frame(page)
   assert.equal(

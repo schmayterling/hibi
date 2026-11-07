@@ -33,6 +33,12 @@ const expected = (text) => label(countText(richText(text, syntax).slice(1)))
 let app, page, folder
 const errors = []
 const status = () => page.locator('[data-status-id="word-count.total"]')
+const saved = (text) =>
+  waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    text,
+  )
 const sourceText = () =>
   page.evaluate(async () => (await window.hibi.getDocument()).markdown)
 const counts = (text) =>
@@ -238,6 +244,7 @@ for (const [language, name, text] of [
     )
     await counts(native)
     await pressShortcut(app, mod + '+z')
+    await saved(text)
     assert.equal(await sourceText(), text)
     await counts(native)
     const closing = text.lastIndexOf('```') + 3
@@ -256,12 +263,15 @@ for (const [language, name, text] of [
     await counts(tabCount)
     assert.equal(await sourceText(), tabbed)
     await pressShortcut(app, mod + '+z')
+    await saved(text)
     await counts(native)
     assert.equal(await sourceText(), text)
     await pressShortcut(app, mod + '+Shift+z')
+    await saved(tabbed)
     await counts(tabCount)
     assert.equal(await sourceText(), tabbed)
     await pressShortcut(app, mod + '+z')
+    await saved(text)
     await counts(native)
     assert.equal(await sourceText(), text)
     for (const [tab, selector, visible] of [

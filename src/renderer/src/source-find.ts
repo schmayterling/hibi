@@ -148,7 +148,14 @@ export function formattedFindViewport(view: EditorView): FindRange {
     const visible = visibleRange(view.contentDOM, (node, offset) =>
       view.posAtDOM(node, offset),
     )
-    shown = visible ? findWindow(visible, view.state.doc.length) : view.viewport
+    // Off screen, as while its pane slides in, the view draws the text near
+    // its scroll; its viewport can be a whole long line.
+    const drawn = view.visibleRanges
+    shown = visible
+      ? findWindow(visible, view.state.doc.length)
+      : drawn.length
+        ? { from: drawn[0]!.from, to: drawn.at(-1)!.to }
+        : view.viewport
   }
   // Layout can still describe the previous document during an edit.
   const length = view.state.doc.length

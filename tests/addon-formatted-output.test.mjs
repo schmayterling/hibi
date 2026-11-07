@@ -8,7 +8,7 @@ import {
   expectPageError,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, withHeldClock } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -293,7 +293,7 @@ test('a view update that throws while drawing resynchronizes the formatted view 
   await page.evaluate(() => {
     window.failOnce = true
   })
-  await type(page, ['1', '2', '3'])
+  await withHeldClock(page, () => type(page, ['1', '2', '3']))
   const after = await state(page)
   t.diagnostic(JSON.stringify({ after, errors }))
   const expected = source.replace('end', 'end123')

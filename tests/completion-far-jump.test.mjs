@@ -79,6 +79,7 @@ for (const [label, tail, before] of [
     }, file)
     await pressShortcut(app, `${mod}+o`)
     await page.waitForFunction(() => window.completionProbe?.ready)
+    await waitForDocumentEditor(app, page)
     const formatted = page.locator('.rich-pane .cm-content')
     await formatted.waitFor()
     await formatted.focus()

@@ -12,6 +12,7 @@ import {
 import { join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
 import { sameFileIdentity } from '../shared/file-identity.ts'
+import type { NoteHeading } from '../shared/note-metadata.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
 import {
   parseWorkspaceMetadata,
@@ -48,6 +49,10 @@ let results: AsyncGenerator<RecordSlice> | undefined
 const cacheDirectory = workerData.cacheDirectory as string | undefined
 const buildIdentity = workerData.buildIdentity as string | undefined
 const schema = 5
+// A note's few headings stay in its record. Separate heading files would
+// triple the cache's files, and pruning reads a record for each of them.
+const inlineHeadingCount = 64
+const inlineHeadingLength = 4096
 const headingDirectory = workerData.headingDirectory as string
 const headingLocations = new Map<
   string,
@@ -66,6 +71,7 @@ type CacheRecord = {
   fingerprint: string
   page: WorkspaceMetadataPage
   headings?: HeadingStoreRecord
+  inlineHeadings?: NoteHeading[]
 }
 const idPattern = /^[a-f0-9]{64}$/
 const recordPattern = /^[a-f0-9]{64}\.json$/
@@ -136,6 +142,30 @@ function valid(page: WorkspaceMetadataPage): boolean {
     Number.isSafeInteger(metadata.headings.count) &&
     (metadata.headings.count ?? -1) >= 0
   )
+}
+
+function validInlineHeadings(
+  headings: unknown,
+  count: number | undefined,
+): boolean {
+  if (
+    !Array.isArray(headings) ||
+    headings.length !== count ||
+    headings.length > inlineHeadingCount
+  )
+    return false
+  let length = 0
+  for (const heading of headings) {
+    if (
+      !Number.isInteger(heading?.depth) ||
+      heading.depth < 1 ||
+      heading.depth > 6 ||
+      typeof heading.text !== 'string'
+    )
+      return false
+    length += heading.text.length
+  }
+  return length <= inlineHeadingLength
 }
 
 async function cacheAvailable(): Promise<boolean> {
@@ -231,7 +261,15 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
                 version: page.version,
                 fingerprint: value.fingerprint,
               }))) &&
-        (page.metadata.headings.count === 0 || !!value.headings)
+        (!value.inlineHeadings ||
+          (!value.headings &&
+            validInlineHeadings(
+              value.inlineHeadings,
+              page.metadata.headings.count,
+            ))) &&
+        (page.metadata.headings.count === 0 ||
+          !!value.headings ||
+          !!value.inlineHeadings)
         ? value
         : null
     } finally {
@@ -290,6 +328,17 @@ async function readHeadings(
     return null
   const complete =
     record.page.metadata.headings.complete && record.page.syntax.complete
+  if (record.inlineHeadings) {
+    // Inline lists are far below a heading page's byte bound.
+    const items = record.inlineHeadings.slice(offset, offset + limit)
+    const nextOffset = offset + items.length
+    return {
+      items,
+      nextOffset,
+      hasMore: nextOffset < record.inlineHeadings.length,
+      complete,
+    }
+  }
   if (!record.headings)
     return { items: [], nextOffset: offset, hasMore: false, complete }
   return readHeadingStore(
@@ -340,6 +389,7 @@ async function remember(
   page: WorkspaceMetadataPage,
   fingerprint: string,
   headings?: HeadingStoreRecord,
+  inlineHeadings?: NoteHeading[],
 ): Promise<boolean> {
   if (
     !cacheDirectory ||
@@ -362,6 +412,7 @@ async function remember(
         fingerprint,
         page,
         headings,
+        inlineHeadings,
       })
       const write = async (slice: RecordToken[]) => {
         const buffer = Buffer.from(`${JSON.stringify(slice)}\n`)
@@ -563,14 +614,32 @@ async function derive(
   }
   if (!(await headingDirectoryAvailable(directory))) return null
   let writer: HeadingStoreWriter | undefined
-  const onHeading = (heading: Parameters<HeadingStoreWriter['add']>[0]) => {
-    writer ??= new HeadingStoreWriter(
-      directory,
+  const store = (into: string) =>
+    new HeadingStoreWriter(
+      into,
       idPattern.test(input.id)
         ? input.id
         : createHash('sha256').update(input.path).digest('hex'),
       headingIdentity(input),
     )
+  // Only a saved record keeps headings inline; anything else pages from files.
+  const inline: NoteHeading[] = []
+  let inlineLength = 0
+  const onHeading = (heading: NoteHeading) => {
+    if (
+      !writer &&
+      directory === cacheDirectory &&
+      inline.length < inlineHeadingCount &&
+      inlineLength + heading.text.length <= inlineHeadingLength
+    ) {
+      inline.push(heading)
+      inlineLength += heading.text.length
+      return
+    }
+    if (!writer) {
+      writer = store(directory)
+      for (const earlier of inline.splice(0)) writer.add(earlier)
+    }
     writer.add(heading)
   }
   let page: WorkspaceMetadataPage
@@ -596,6 +665,8 @@ async function derive(
       } catch (error) {
         writer?.abort()
         writer = undefined
+        inline.length = 0
+        inlineLength = 0
         if (readFailure(error)) throw error
         page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
       }
@@ -604,7 +675,7 @@ async function derive(
     page.metadata.headings = {
       items: [],
       complete: page.metadata.headings.complete,
-      count: headings?.count ?? 0,
+      count: headings?.count ?? inline.length,
       paged: true,
     }
     if (!(await headingDirectoryAvailable(directory)) || !(await current())) {
@@ -612,14 +683,15 @@ async function derive(
       return null
     }
     const previous = headingLocations.get(input.id)
-    headingLocations.set(input.id, {
+    const location = {
       version: input.version,
       fingerprint: input.fingerprint,
       path: input.path,
       directory,
       store: headings,
       complete: page.metadata.headings.complete && page.syntax.complete,
-    })
+    }
+    headingLocations.set(input.id, location)
     if (previous?.store && previous.directory === headingDirectory)
       for (const suffix of ['hidx', 'hdat'])
         await unlink(
@@ -627,8 +699,26 @@ async function derive(
         ).catch(() => {})
     parentPort?.postMessage({ parsed: true })
     if (directory === cacheDirectory || !headings) {
-      if (await remember(page, input.fingerprint, headings))
+      if (
+        await remember(
+          page,
+          input.fingerprint,
+          headings,
+          inline.length ? inline : undefined,
+        )
+      )
         headingLocations.delete(input.id)
+      else if (inline.length) {
+        // An unsaved record's headings wait in a temporary file, as a draft's do.
+        headingLocations.delete(input.id)
+        writer = store(headingDirectory)
+        for (const heading of inline) writer.add(heading)
+        headingLocations.set(input.id, {
+          ...location,
+          directory: headingDirectory,
+          store: writer.finish(),
+        })
+      }
     }
     return page
   } catch (error) {

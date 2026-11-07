@@ -93,6 +93,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
     page.evaluate(() => window.hibi.getWorkspaceIndex()),
     /legacy workspace index exceeds the 20 MiB message limit/,
   )
+  assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 0)
 
   await app.evaluate(() => {
     globalThis.scaleSourceReads = 0

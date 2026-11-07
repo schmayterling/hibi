@@ -4320,6 +4320,7 @@ test('unfinished syntax never resolves or writes cells with old spans', {
   }
   // A settled parse may reuse its tree; its mapped widgets still need a new snapshot.
   await mount(doc)
+  await harness.waitForFunction(() => window.tables.parsed())
   await harness.evaluate(() => {
     const view = window.tables.view()
     view.focus()

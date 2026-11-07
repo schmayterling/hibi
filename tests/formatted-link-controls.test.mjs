@@ -14,7 +14,7 @@ import { clickMenu, pressShortcut } from './keyboard.mjs'
 const note =
   'See [docs](https://old.example "Keep title") here. Bare https://bare.example/path.\n\n| name |\n| --- |\n| [&amp;](https://cell.example) |\n'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-async function open(t, addons) {
+async function open(t, addons, { clock = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-link-controls-'))
   const file = join(root, 'note.md')
   await writeFile(file, note)
@@ -51,6 +51,12 @@ async function open(t, addons) {
   }, file)
   page.setDefaultTimeout(8000)
   const editor = await waitForFormattedEditor(app, page)
+  // A clock installed in a running page cannot clear the timers already set.
+  if (clock) {
+    await page.clock.install()
+    await page.reload()
+    await waitForFormattedEditor(app, page)
+  }
   // Its manifest binds the shortcut and lists its menu items before it starts.
   if (addons?.dictionary)
     await waitForAddonShortcut(page, 'dictionary.synonyms')
@@ -194,7 +200,7 @@ test('codemirror link hover offers URL, edit, open, copy and remove', {
 test('codemirror link actions stay up while the pointer crosses to them', {
   timeout: 60000,
 }, async (t) => {
-  const { page, editor, panel } = await open(t)
+  const { page, editor, panel } = await open(t, undefined, { clock: true })
   const link = page.getByRole('link', { name: 'docs', exact: true })
   for (const focused of [false, true]) {
     // Unfocused, or with the caret outside links, the panel shows for the
@@ -215,10 +221,20 @@ test('codemirror link actions stay up while the pointer crosses to them', {
     const to = await panel
       .getByRole('button', { name: 'Copy link', exact: true })
       .boundingBox()
-    // Real pointers pass over the text between the link and the panel.
-    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
-      steps: 12,
-    })
+    // Real pointers pass over the text between the link and the panel. The
+    // panel's delay counts a pointer at rest, and a step late from the host is
+    // not one, so the page's time stands still, at no jump, while they arrive.
+    const crossing = Date.now()
+    await page.clock.setFixedTime(crossing)
+    await page.clock.pauseAt(crossing)
+    try {
+      await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
+        steps: 12,
+      })
+    } finally {
+      await page.clock.resume()
+      await page.clock.setSystemTime(crossing)
+    }
     await new Promise((resolve) => setTimeout(resolve, 300))
     assert.equal(await panel.isVisible(), true, `focused: ${focused}`)
     assert.equal(

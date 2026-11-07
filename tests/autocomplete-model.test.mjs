@@ -793,6 +793,11 @@ test('personal model ranks from the maximum-size snapshot', async (t) => {
     words(model, request),
     [99, 249, 399, 549, 699, 849, 999, 1149].map((i) => entry(i).word),
   )
+  // A narrower prefix reaches rows past 4096 across all three contexts.
+  assert.deepEqual(
+    words(model, { ...request, prefix: 'prefixaa' }),
+    [6084, 2028, 7436, 3380, 4732, 676, 8112, 5408].map((i) => entry(i).word),
+  )
   await t.test(
     'stress: common-prefix ranking stays below 5ms',
     {

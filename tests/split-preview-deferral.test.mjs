@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { finishTrace, traced } from './hidden-preview-diagnostic.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -17,6 +18,11 @@ const addons = [
   'slash-commands',
   'tags',
 ]
+
+// Never merge: set for one test only, so every other test keeps its own RPCs.
+let diagnostic = null
+const read = (stage, callback) =>
+  diagnostic ? traced(`${diagnostic.phase}:${stage}`, callback) : callback
 
 async function openSplit(t, original) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-split-deferral-'))
@@ -117,15 +123,17 @@ async function cmSplit(t, original) {
   const rich = page.locator('.rich-pane .cm-content')
   const source = page.locator('.source-pane .cm-content')
   const selection = () =>
-    rich.evaluate((element) => {
-      const view = element.cmTile.root.view,
-        range = view.state.selection.main
-      return {
-        anchor: range.anchor,
-        head: range.head,
-        text: view.state.doc.sliceString(range.from, range.to),
-      }
-    })
+    rich.evaluate(
+      read('selection', (element) => {
+        const view = element.cmTile.root.view,
+          range = view.state.selection.main
+        return {
+          anchor: range.anchor,
+          head: range.head,
+          text: view.state.doc.sliceString(range.from, range.to),
+        }
+      }),
+    )
   const select = async (from, to = from) =>
     rich.evaluate(
       (element, { from, to }) => {
@@ -158,14 +166,32 @@ async function cmSplit(t, original) {
     }
     for (const editor of editors)
       assert.equal(
-        await editor.evaluate((element) =>
-          element.cmTile.root.view.state.doc.toString(),
+        await editor.evaluate(
+          read('doc', (element) =>
+            element.cmTile.root.view.state.doc.toString(),
+          ),
         ),
         canonical.replace(/\r\n?/g, '\n'),
       )
     if (!sourceMode) {
-      const tail = canonical.match(/^omega[^\n]*$/m)?.[0]
-      if (tail) assert.ok((await rich.innerText()).includes(tail), tail)
+      const match = canonical.match(/^omega[^\n]*$/m)
+      const tail = match?.[0]
+      if (tail)
+        diagnostic?.places.push({
+          phase: diagnostic.phase,
+          from: match.index,
+          to: match.index + tail.length,
+          lineOneEnd: canonical.indexOf('\n'),
+          length: canonical.length,
+        })
+      if (tail)
+        assert.ok(
+          (diagnostic
+            ? await rich.evaluate(read('tail', (element) => element.innerText))
+            : await rich.innerText()
+          ).includes(tail),
+          tail,
+        )
       if (
         !released &&
         (await source.evaluate((element) => document.activeElement === element))
@@ -616,46 +642,61 @@ test('hidden preview edits copy only current input and retain selection', {
   timeout: 90000,
 }, async (t) => {
   const original = `alpha $x^2$ beta ${'a '.repeat(1200)}gamma\n\nomega`
-  const { page, source, beta, edit, selection, exact, normal } = await cmSplit(
-    t,
-    original,
-  )
-  const before = await beta()
-  await page.getByRole('button', { name: 'Source view', exact: true }).click()
-  await edit({ from: 0, insert: '!' })
-  await edit({
-    from: (await exact()).length,
-    insert: `\n\n${'b'.repeat(900000)}`,
-  })
-  await source.focus()
-  const copied = await source.evaluate((element) => {
-    const view = element.cmTile.root.view
-    const clone = window.structuredClone
-    let units = 0
-    window.structuredClone = (value, ...rest) => {
-      if (typeof value === 'string') units += value.length
-      return clone(value, ...rest)
-    }
-    try {
-      window.structuredClone('probe')
-      if (units !== 5)
-        throw new Error('clone counter must observe the positive control')
-      units = 0
-      for (let index = 0; index < 30; index++)
-        view.dispatch({
-          changes: { from: view.state.doc.line(1).to, insert: '?' },
-          userEvent: 'input.type',
-        })
-    } finally {
-      window.structuredClone = clone
-    }
-    return units
-  })
-  assert.ok(copied < 30 * 1000, String(copied))
-  await normal()
-  assert.equal((await selection()).text, 'beta')
-  assert.equal((await selection()).anchor, before.anchor + 1)
-  await exact()
+  let diagnosticPage, originalError
+  const places = []
+  diagnostic = { phase: 'split', places }
+  try {
+    const { page, source, beta, edit, selection, exact, normal } =
+      await cmSplit(t, original)
+    diagnosticPage = page
+    const before = await beta()
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    diagnostic.phase = 'hidden'
+    await edit({ from: 0, insert: '!' })
+    await edit({
+      from: (await exact()).length,
+      insert: `\n\n${'b'.repeat(900000)}`,
+    })
+    await source.focus()
+    const copied = await source.evaluate(
+      read('edits', (element) => {
+        const view = element.cmTile.root.view
+        const clone = window.structuredClone
+        let units = 0
+        window.structuredClone = (value, ...rest) => {
+          if (typeof value === 'string') units += value.length
+          return clone(value, ...rest)
+        }
+        try {
+          window.structuredClone('probe')
+          if (units !== 5)
+            throw new Error('clone counter must observe the positive control')
+          units = 0
+          for (let index = 0; index < 30; index++)
+            view.dispatch({
+              changes: { from: view.state.doc.line(1).to, insert: '?' },
+              userEvent: 'input.type',
+            })
+        } finally {
+          window.structuredClone = clone
+        }
+        return units
+      }),
+    )
+    assert.ok(copied < 30 * 1000, String(copied))
+    diagnostic.phase = 'shown'
+    await normal()
+    assert.equal((await selection()).text, 'beta')
+    assert.equal((await selection()).anchor, before.anchor + 1)
+    await exact()
+  } catch (error) {
+    originalError = error
+    throw error
+  } finally {
+    const { phase } = diagnostic
+    diagnostic = null
+    await finishTrace(t, diagnosticPage, originalError, phase, places)
+  }
 })
 
 test('a hidden preview maps selections through more than 1,024 edits', {

@@ -8,6 +8,7 @@ import {
 } from './scripts/addon-development'
 import { addonCatalog } from './scripts/addon-packages'
 import { analysisBundles, sandboxPreloads } from './scripts/analysis-bundles'
+import { resizeLog } from './scripts/hidden-preview-resize-log'
 import { writeLicenses } from './scripts/licenses'
 import {
   diagnosticsBuild,
@@ -142,6 +143,7 @@ export default defineConfig({
   },
   renderer: {
     plugins: [
+      resizeLog(),
       addonCatalog('renderer'),
       addonDevelopmentStyles(),
       react(),

@@ -40,7 +40,7 @@ const stable = (value) =>
         )
       : value
 
-test('all 41 compiled manifests retain their frozen normalized metadata', async () => {
+test('all 42 compiled manifests retain their frozen normalized metadata', async () => {
   const expected = JSON.parse(
     await readFile(
       fileURLToPath(
@@ -49,7 +49,7 @@ test('all 41 compiled manifests retain their frozen normalized metadata', async 
       'utf8',
     ),
   )
-  assert.equal(builtins.length, 41)
+  assert.equal(builtins.length, 42)
   for (const { manifest, directory } of builtins) {
     assert.equal(basename(directory), manifest.id)
     assert.equal(
@@ -68,9 +68,11 @@ test('all builtin author records retain shared identifiers, order, and port role
     const expected =
       manifest.id === 'vim'
         ? [authors.may, authors.angelo]
-        : manifest.id === 'keybeats'
-          ? [{ ...authors.may, role: 'Hibi port' }]
-          : [authors.may]
+        : manifest.id === 'editor-width'
+          ? [authors.enocla]
+          : manifest.id === 'keybeats'
+            ? [{ ...authors.may, role: 'Hibi port' }]
+            : [authors.may]
     assert.deepEqual(manifest.authors, expected, manifest.id)
   }
 })
@@ -223,6 +225,7 @@ test('settings, flavors, and analysis retain their existing discovery rules', ()
       'diagnostics',
       'dictionary',
       'discord-presence',
+      'editor-width',
       'frontmatter',
       'graph',
       'keybeats',

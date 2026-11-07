@@ -1,4 +1,5 @@
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
+import { placedSelection } from './reading-position'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
 /** Markdown follows text positions; other preview formats keep proportional scrolling. */
@@ -102,9 +103,16 @@ export function linkScroll(
   // CodeMirror panes report caret and text changes, and focus leaving, as
   // hibi:editor-interactions-invalidate; only the focused view's report hands
   // control. Focus counts when it comes: their reports of focus are a moment
-  // late, and the other pane scrolled in that moment keeps the lead.
+  // late, and the other pane scrolled in that moment keeps the lead. Nor does
+  // a caret the view placed itself, as a long note's opening caret moves
+  // once the formatted view parses its end.
   const edited = (event: Event) => {
-    if ((event.target as Element).contains(document.activeElement)) selection()
+    const target = event.target as Element
+    if (
+      target.contains(document.activeElement) &&
+      !sourceView(target)?.state.facet(placedSelection)
+    )
+      selection()
   }
   // Their selectionchange also fires when a view redraws an unchanged
   // selection, as after the other pane scrolls it, which hands no control.

@@ -9,7 +9,7 @@ import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-async function open(t, text) {
+async function open(t, text, beforeSplit) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-formatted-split-'))
   const file = join(root, 'note.md')
   await writeFile(file, text)
@@ -44,6 +44,7 @@ async function open(t, text) {
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     text,
   )
+  if (beforeSplit) await page.evaluate(beforeSplit)
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
@@ -446,6 +447,52 @@ test('formatted split lines up a source line in a row a long table has not drawn
   // The formatted pane draws only the rows near the ones it shows.
   assert.equal(await page.locator('.rich-pane tr[data-line="602"]').count(), 0)
   await page.evaluate(lead, text.indexOf('| r600 |'))
+  await staysLinedUp(page, linedUp)
+  await source(page, text)
+})
+
+// A long note opens with its caret at the source end until the formatted
+// view parses that far, and then moves it where the rich editor puts it. That
+// move is not the reader's: a pane scrolled just before it keeps the lead.
+test('formatted split keeps the lead of a pane scrolled just before the formatted view places its opening caret', {
+  timeout: 90000,
+}, async (t) => {
+  const lines = 'line\n\n'.repeat(30)
+  const text = `${lines}${table(1000)}${lines}`
+  const { page } = await open(t, text, () => {
+    const now = performance.now.bind(performance)
+    const idle = window.requestIdleCallback
+    let held = []
+    let late = 0
+    performance.now = () => {
+      late += 10
+      return now() + late
+    }
+    // The formatted view's parse waits for idle time, held here.
+    window.requestIdleCallback = (callback, options) =>
+      idle(
+        (deadline) => (held ? held.push(callback) : callback(deadline)),
+        options,
+      )
+    window.releaseParse = () => {
+      performance.now = () => now() + late
+      window.requestIdleCallback = (callback) => held.push(callback)
+      for (let i = 0; i < 1000 && held.length; i++)
+        held.shift()({ didTimeout: false, timeRemaining: () => 50 })
+      window.requestIdleCallback = idle
+      held = null
+    }
+  })
+  const opening = () =>
+    document.querySelector('.rich-pane .cm-content').cmTile.root.view.state
+      .selection.main.head
+  // The note's end is not parsed: the caret is at the source end.
+  assert.equal(await page.evaluate(opening), text.trimEnd().length)
+  await page.evaluate(
+    `(${lead})(${text.indexOf('| r600 |')}); window.releaseParse()`,
+  )
+  // Now the caret is on the empty paragraph after the last blank line.
+  assert.equal(await page.evaluate(opening), text.length)
   await staysLinedUp(page, linedUp)
   await source(page, text)
 })

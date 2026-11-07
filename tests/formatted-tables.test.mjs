@@ -3403,7 +3403,9 @@ test('cell keys and changes while a table waits for a reparse land where they wo
         window.tables.mount(
           doc,
           { width: 1000, height: 800 },
-          { editable: true, slice: 0 },
+          // The settled run waits after each key and the other doesn't. Undo
+          // steps follow the same policy in both, whatever a machine's pace.
+          { editable: true, slice: 0, historyGroupDelay: 3600000 },
         ),
       note,
     )

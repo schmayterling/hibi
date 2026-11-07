@@ -408,9 +408,6 @@ function App() {
           return pane && !documentFormats.isMarkdown(pane.name)
         })
       ))
-  const DocumentEditor = markdownDocument
-    ? richEditor.Component
-    : formatEditor.Component
   useLayoutEffect(() => {
     startupMark('app-layout-effect')
     editorDocument.publish(documentRuntime.get() ?? document)
@@ -642,14 +639,11 @@ function App() {
     if (pendingSave.current) void pendingSave.current.finally(runWaiting)
     else if (!busyRef.current) runWhenIdle.current?.()
   }
-  useEffect(() => {
-    const side = focusSplitSide.current
-    if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
-    focusSplitSide.current = null
-    if (window.document.activeElement?.matches('.document-tabs [role="tab"]'))
-      return
-    focusEditor({ preventScroll: true })
-  }, [busy, DocumentEditor, splitTabs?.active])
+  const splitWasBusy = useRef(busy)
+  // Child layout effects read the previous committed busy state first.
+  useLayoutEffect(() => {
+    splitWasBusy.current = busy
+  }, [busy])
   const autosaveStatus = useAutosave(document, busy, toasts)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('default-view')
@@ -3009,7 +3003,9 @@ function App() {
           <Suspense fallback={<LoadingScreen />}>
             <PaneAdapter
               Component={PaneEditor}
-              {...(splitTabs ? { viewId: side } : {})}
+              splitWasBusy={splitWasBusy}
+              busy={busy}
+              {...(splitTabs ? { viewId: side, focusSplitSide } : {})}
               focused={active}
               autoFocus={!splitTabs}
               markdown={paneMarkdown}

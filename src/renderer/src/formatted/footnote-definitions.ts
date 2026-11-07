@@ -670,7 +670,8 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
   let { groups, read, stale, pending } = index
   const { start } = index
   const doc = state.doc
-  let offset = 0
+  let offset = 0,
+    past = false
   for (const { fromA, toA, fromB, toB } of changes) {
     const size = toB - fromB - (toA - fromA)
     // A block read on past windows holds while edits come after its last read line.
@@ -684,9 +685,15 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
       if (stale.to >= to) stale = { ...stale, to: stale.to + size }
     }
     offset += size
+    // Edits come in order, so once one is past the read text, the rest are
+    // too; a Tab over 16k lines would look each line up.
+    if (past) continue
     // Blocks can join across the two lines above an edit.
     const near = doc.line(Math.max(1, doc.lineAt(fromB).number - 2)).from
-    if (near >= read) continue
+    if (near >= read) {
+      past = true
+      continue
+    }
     if (to > read) {
       // An edit past the read text: read again from the stretch before it.
       const cut = locate(groups, start, Math.max(start, near))?.from ?? start

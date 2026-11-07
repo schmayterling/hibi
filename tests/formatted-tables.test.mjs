@@ -143,12 +143,28 @@ before(
     await page
       .locator('.rich-pane .hibi-lp-h1', { hasText: 'Formatted tables' })
       .waitFor()
-    const size = await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].getContentSize(),
-    )
+    const size = await app.evaluate(({ BrowserWindow, screen }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      const size = window.getContentSize()
+      const bounds = window.getBounds()
+      const display = screen.getDisplayMatching(bounds)
+      globalThis.__readingNativeSetup = {
+        main: {
+          size,
+          bounds,
+          contentBounds: window.getContentBounds(),
+          visible: window.isVisible(),
+          display: {
+            workArea: display.workArea,
+            scaleFactor: display.scaleFactor,
+          },
+        },
+      }
+      return size
+    })
     const next = app.waitForEvent('window')
     await app.evaluate(
-      ({ BrowserWindow }, { path, size }) => {
+      ({ BrowserWindow, screen }, { path, size }) => {
         const window = new BrowserWindow({
           width: size[0],
           height: size[1],
@@ -160,6 +176,26 @@ before(
             nodeIntegration: false,
             backgroundThrottling: false,
           },
+        })
+        const metrics = () => {
+          const bounds = window.getBounds()
+          const display = screen.getDisplayMatching(bounds)
+          return {
+            time: performance.now(),
+            size: window.getContentSize(),
+            bounds,
+            contentBounds: window.getContentBounds(),
+            visible: window.isVisible(),
+            display: {
+              workArea: display.workArea,
+              scaleFactor: display.scaleFactor,
+            },
+          }
+        }
+        globalThis.__readingNativeSetup.harness = { created: metrics() }
+        // The normal CI ready-to-show listener still controls presentation.
+        window.once('ready-to-show', () => {
+          globalThis.__readingNativeSetup.harness.ready = metrics()
         })
         void window.loadFile(path)
       },
@@ -1059,149 +1095,245 @@ test('the reading place deep inside a huge line holds through second changes, sh
     ...slowed.map((run) => [2, run]),
     ...slowed.map((run) => [4, run]),
   ]
-  for (const [rate, [name, [doc, target, slack], steps, width]] of sequences) {
-    await cpu.send('Emulation.setCPUThrottlingRate', { rate })
-    const result = await harness.evaluate(
-      async ({ doc, target, steps, width }) => {
-        const preview = window.tables
-        await preview.mount(
-          doc,
-          { width: width ?? 1000, height: 800 },
-          { editable: true },
-        )
-        const view = preview.view()
-        const pane = document.querySelector('.rich-pane')
-        const frame = () => new Promise(requestAnimationFrame)
-        const at = doc.indexOf(target)
-        // A character's box reads what is drawn without running a pending
-        // measure, which can move the reveal ahead of the reader's task.
-        const where = (pos = at) => {
-          if (
-            !view.visibleRanges.some(
-              (range) => range.from <= pos && pos < range.to,
-            )
+  // DIAG (never merge): one trace dump after the outcome.
+  try {
+    for (const [
+      id,
+      [rate, [name, [doc, target, slack], steps, width]],
+    ] of sequences.entries()) {
+      await cpu.send('Emulation.setCPUThrottlingRate', { rate })
+      const result = await harness.evaluate(
+        async ({ doc, target, steps, width, id, rate }) => {
+          if (id === 0) {
+            globalThis.__readingTrace = []
+            globalThis.__readingTraceDropped = 0
+          }
+          const note = (event, fields = {}) => {
+            const log = (globalThis.__readingTrace ??= [])
+            if (log.length < 20000)
+              log.push({ time: performance.now(), event, ...fields })
+            else
+              globalThis.__readingTraceDropped =
+                (globalThis.__readingTraceDropped ?? 0) + 1
+          }
+          note('test-scenario', {
+            id,
+            rate,
+            width: width ?? 1000,
+            steps: steps.length,
+          })
+          const preview = window.tables
+          await preview.mount(
+            doc,
+            { width: width ?? 1000, height: 800 },
+            { editable: true },
           )
+          const view = preview.view()
+          const pane = document.querySelector('.rich-pane')
+          const frame = () => new Promise(requestAnimationFrame)
+          const at = doc.indexOf(target)
+          // A character's box reads what is drawn without running a pending
+          // measure, which can move the reveal ahead of the reader's task.
+          const where = (pos = at) => {
+            if (
+              !view.visibleRanges.some(
+                (range) => range.from <= pos && pos < range.to,
+              )
+            )
+              return null
+            for (const at of [pos, pos + 1]) {
+              const { node, offset } = view.domAtPos(at, 1)
+              if (node.nodeType !== Node.TEXT_NODE || offset >= node.length)
+                continue
+              const range = document.createRange()
+              range.setStart(node, offset)
+              range.setEnd(node, offset + 1)
+              const box = range.getClientRects()[0]
+              const paneBox = pane.getBoundingClientRect()
+              const top = Math.round(box.top - paneBox.top)
+              note('test-box', {
+                pos,
+                at,
+                offset,
+                top,
+                boxTop: box.top,
+                boxHeight: box.height,
+                paneTop: paneBox.top,
+                paneHeight: paneBox.height,
+                paneWidth: paneBox.width,
+                innerWidth: window.innerWidth,
+                innerHeight: window.innerHeight,
+                dpr: window.devicePixelRatio,
+              })
+              return top
+            }
             return null
-          for (const at of [pos, pos + 1]) {
-            const { node, offset } = view.domAtPos(at, 1)
-            if (node.nodeType !== Node.TEXT_NODE || offset >= node.length)
-              continue
-            const range = document.createRange()
-            range.setStart(node, offset)
-            range.setEnd(node, offset + 1)
-            return Math.round(
-              range.getClientRects()[0].top - pane.getBoundingClientRect().top,
-            )
           }
-          return null
-        }
-        const still = async (pos = at) => {
-          let last
-          for (let i = 0, same = 0; i < 300 && same < 6; i++) {
-            await frame()
-            const now = where(pos)
-            same = now === last ? same + 1 : 0
-            last = now
+          const still = async (pos = at) => {
+            let last
+            for (let i = 0, same = 0; i < 300 && same < 6; i++) {
+              await frame()
+              const now = where(pos)
+              same = now === last ? same + 1 : 0
+              last = now
+            }
+            return last
           }
-          return last
-        }
-        const aim = async () => {
-          for (let i = 0; i < 60; i++) {
-            view.dispatch({
-              effects: view.constructor.scrollIntoView(at, {
-                y: 'start',
-                yMargin: 0,
-              }),
-            })
-            for (let frames = 0; frames < 4; frames++) await frame()
-            if (Math.abs(where() ?? 99) < 1) break
-          }
-          return still()
-        }
-        // The position at the start of the content's row at `y` in the pane.
-        const rowAt = (y) => {
-          const content = view.contentDOM.getBoundingClientRect()
-          const caret = document.caretPositionFromPoint(
-            content.left +
-              Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) +
-              1,
-            pane.getBoundingClientRect().top + y,
-          )
-          return view.posAtDOM(caret.offsetNode, caret.offset)
-        }
-        // How far to scroll, past a px, to have the first row on screen that
-        // starts at a join of lines at the pane's top: wrapping decides where
-        // one is.
-        const toJoin = () => {
-          for (let y = 20; y < 700; y += view.defaultLineHeight)
-            if (view.domAtPos(rowAt(y + 1), 1).node.nodeType !== Node.TEXT_NODE)
-              return y
-          return null
-        }
-        const tops = [await aim()]
-        for (const step of steps) {
-          if (step.aim) tops.push(await aim())
-          else if (step.read || step.join || step.cut || step.shift) {
-            const read = step.join ? toJoin() : step.read
-            if (step.join && read === null) return 'no row at a join'
-            if (read) pane.scrollTop += read
-            if (step.cut)
+          const aim = async () => {
+            for (let i = 0; i < 60; i++) {
               view.dispatch({
-                changes: { from: at - 50, to: view.state.doc.length },
+                effects: view.constructor.scrollIntoView(at, {
+                  y: 'start',
+                  yMargin: 0,
+                }),
               })
-            if (step.shift) pane.style.marginTop = `${step.shift}px`
-            for (let frames = 0; frames < 6; frames++) await frame()
-          } else {
-            // A scroll leaves the text above the screen, maybe undrawn: the
-            // text it brings to the pane's top, read before, is measured.
-            let mark = at
-            let expect = 0
-            if (step.scroll || step.top) {
-              mark = rowAt((step.scroll ?? 0) + 1)
-              expect = where(mark) - (step.scroll ?? 0)
+              for (let frames = 0; frames < 4; frames++) await frame()
+              if (Math.abs(where() ?? 99) < 1) break
             }
-            preview.growAt(
-              step.below === undefined ? 0 : at + step.below,
-              step.grow,
-            )
-            if (step.scroll) {
-              // The reader's next chance, once the slice is over: a task, and
-              // often the same frame.
-              await new Promise((done) => {
-                const channel = new MessageChannel()
-                channel.port1.onmessage = () => {
-                  channel.port1.close()
-                  channel.port2.close()
-                  done()
-                }
-                channel.port2.postMessage(0)
-              })
-              pane.scrollTop += step.scroll
-            }
-            if (step.frame) await frame()
-            else tops.push((await still(mark)) - expect)
+            return still()
           }
-        }
-        pane.style.marginTop = ''
-        return tops
-      },
-      { doc, target, steps, width },
+          // The position at the start of the content's row at `y` in the pane.
+          const rowAt = (y) => {
+            const content = view.contentDOM.getBoundingClientRect()
+            const style = getComputedStyle(view.contentDOM)
+            const left = content.left + Number.parseFloat(style.paddingLeft) + 1
+            const paneBox = pane.getBoundingClientRect()
+            const caret = document.caretPositionFromPoint(left, paneBox.top + y)
+            const pos = view.posAtDOM(caret.offsetNode, caret.offset)
+            note('test-row-at', {
+              y,
+              node: caret.offsetNode.nodeType,
+              offset: caret.offset,
+              pos,
+              contentWidth: content.width,
+              contentHeight: content.height,
+              paneWidth: paneBox.width,
+              paneHeight: paneBox.height,
+              // Raw box difference, not a claim about scrollbar gutter size.
+              paneMinusContentWidth: paneBox.width - content.width,
+              fontFamily: style.fontFamily,
+              fontSize: style.fontSize,
+              lineHeight: style.lineHeight,
+              paddingLeft: style.paddingLeft,
+              paddingRight: style.paddingRight,
+            })
+            return pos
+          }
+          // How far to scroll, past a px, to have the first row on screen that
+          // starts at a join of lines at the pane's top: wrapping decides where
+          // one is.
+          const toJoin = () => {
+            for (let y = 20; y < 700; y += view.defaultLineHeight)
+              if (
+                view.domAtPos(rowAt(y + 1), 1).node.nodeType !== Node.TEXT_NODE
+              ) {
+                note('test-join', { y })
+                return y
+              }
+            note('test-join', { y: null })
+            return null
+          }
+          const tops = [await aim()]
+          note('test-aim', { top: tops[0] })
+          for (const step of steps) {
+            if (step.aim) tops.push(await aim())
+            else if (step.read || step.join || step.cut || step.shift) {
+              const read = step.join ? toJoin() : step.read
+              if (step.join && read === null) return 'no row at a join'
+              if (read) {
+                const before = pane.scrollTop
+                pane.scrollTop = before + read
+                note('test-read', { read, before })
+              }
+              if (step.cut)
+                view.dispatch({
+                  changes: { from: at - 50, to: view.state.doc.length },
+                })
+              if (step.shift) pane.style.marginTop = `${step.shift}px`
+              for (let frames = 0; frames < 6; frames++) await frame()
+            } else {
+              // A scroll leaves the text above the screen, maybe undrawn: the
+              // text it brings to the pane's top, read before, is measured.
+              let mark = at
+              let expect = 0
+              if (step.scroll || step.top) {
+                mark = rowAt((step.scroll ?? 0) + 1)
+                const pre = where(mark)
+                expect = pre - (step.scroll ?? 0)
+                note('test-mark', { mark, pre, expect })
+              }
+              note('test-grow', {
+                at: step.below === undefined ? 0 : at + step.below,
+                grow: step.grow,
+              })
+              preview.growAt(
+                step.below === undefined ? 0 : at + step.below,
+                step.grow,
+              )
+              if (step.scroll) {
+                // The reader's next chance, once the slice is over: a task, and
+                // often the same frame.
+                await new Promise((done) => {
+                  const channel = new MessageChannel()
+                  channel.port1.onmessage = () => {
+                    channel.port1.close()
+                    channel.port2.close()
+                    done()
+                  }
+                  channel.port2.postMessage(0)
+                })
+                const before = pane.scrollTop
+                pane.scrollTop = before + step.scroll
+                note('test-scroll', { scroll: step.scroll, before })
+              }
+              if (step.frame) await frame()
+              else {
+                const final = await still(mark)
+                note('test-still', { mark, final, top: final - expect })
+                tops.push(final - expect)
+              }
+            }
+          }
+          pane.style.marginTop = ''
+          return tops
+        },
+        { doc, target, steps, width, id, rate },
+      )
+      results.push({ id, name, rate, target, slack, width, tops: result })
+    }
+    const report = JSON.stringify(results)
+    const measured = results.filter(({ tops }) => Array.isArray(tops))
+    // The widths tried have a row at a join on every platform's text metrics.
+    assert.ok(
+      measured.some(({ name }) => name.includes('at a join')),
+      report,
     )
-    results.push({ name, rate, target, slack, width, tops: result })
-  }
-  const report = JSON.stringify(results)
-  const measured = results.filter(({ tops }) => Array.isArray(tops))
-  // The widths tried have a row at a join on every platform's text metrics.
-  assert.ok(
-    measured.some(({ name }) => name.includes('at a join')),
-    report,
-  )
-  for (const { name, tops, slack } of measured) {
-    for (const top of tops)
-      assert.ok(top !== null && Math.abs(top) <= slack, report)
-    // Nothing lays out a row again here: the reader's scrolling stands exactly.
-    if (name.includes('at a join'))
-      assert.ok(Math.abs(tops.at(-1)) <= 2, report)
+    for (const { name, tops, slack } of measured) {
+      for (const top of tops)
+        assert.ok(top !== null && Math.abs(top) <= slack, report)
+      // Nothing lays out a row again here: the reader's scrolling stands exactly.
+      if (name.includes('at a join'))
+        assert.ok(Math.abs(tops.at(-1)) <= 2, report)
+    }
+  } finally {
+    const dump = await harness.evaluate(() => ({
+      log: globalThis.__readingTrace ?? [],
+      dropped: globalThis.__readingTraceDropped ?? 0,
+    }))
+    const native = await app.evaluate(({ BrowserWindow }) => ({
+      setup: globalThis.__readingNativeSetup,
+      final: BrowserWindow.getAllWindows().map((window) => ({
+        size: window.getContentSize(),
+        bounds: window.getBounds(),
+        contentBounds: window.getContentBounds(),
+        visible: window.isVisible(),
+      })),
+    }))
+    await writeFile(
+      process.env.HIBI_READING_TRACE ??
+        join(tmpdir(), 'hibi-reading-trace.json'),
+      JSON.stringify({ results, native, ...dump }),
+    )
   }
 })
 

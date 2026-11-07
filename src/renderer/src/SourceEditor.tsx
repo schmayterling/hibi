@@ -194,6 +194,17 @@ import {
 } from './source-view'
 import { textProjection } from './text-projection'
 
+/** Never merge: metadata only, no callback evaluation while unarmed. */
+function growthTrace(event: string, read: () => Record<string, unknown>) {
+  ;(
+    window as unknown as {
+      __hiddenGrowth?: {
+        record: (event: string, read: () => Record<string, unknown>) => void
+      }
+    }
+  ).__hiddenGrowth?.record(event, read)
+}
+
 /** Each mounted view's bridge to its document session. */
 const bridges = new WeakMap<
   EditorView,
@@ -1133,26 +1144,49 @@ export function SourceEditor({
   )
   repeatFind.current = requestFind
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: diagnostic reads must not change the original effect schedule.
   useEffect(() => {
     const controller = new AbortController()
     setPreparedText(null)
     const current = () =>
       documentRuntime.session(document.tabId) === session &&
       session.ownsCurrentSnapshot(bridge.snapshot())
-    void sourceEditorTextCooperatively(bridge.snapshot(), {
+    const preparingSource = bridge.snapshot()
+    growthTrace('prepare-begin', () => ({
+      bridge,
+      source: preparingSource,
+      version: preparingSource.version,
+      length: preparingSource.utf16Length,
+      formatted,
+      host: host.current,
+    }))
+    void sourceEditorTextCooperatively(preparingSource, {
       signal: controller.signal,
       isCurrent: current,
     })
       .then((text) => {
+        growthTrace('prepare-return', () => ({
+          bridge,
+          formatted,
+          aborted: controller.signal.aborted,
+          length: text?.length ?? null,
+        }))
         if (
           controller.signal.aborted ||
           documentRuntime.session(document.tabId) !== session
         )
           return
         if (!text || !current()) {
+          growthTrace('prepare-stale', () => ({ bridge, formatted }))
           retryBridge((retry) => retry + 1)
           return
         }
+        growthTrace('prepare-publish', () => ({
+          bridge,
+          formatted,
+          doc: text,
+          length: text.length,
+        }))
         setPreparedText({ bridge, text })
       })
       .catch((error: unknown) => {
@@ -1177,6 +1211,11 @@ export function SourceEditor({
       retryBridge((retry) => retry + 1)
       return
     }
+    growthTrace('mount-begin', () => ({
+      bridge,
+      formatted,
+      doc: preparedText.text,
+    }))
     const language = new Compartment()
     // The formatted view owns its syntax tree, kept across language reconfigurations.
     const syntax = formattedSyntax(
@@ -1938,6 +1977,11 @@ export function SourceEditor({
         retryBridge((retry) => retry + 1)
       })
     }
+    growthTrace('view-create-begin', () => ({
+      bridge,
+      formatted,
+      doc: preparedText.text,
+    }))
     const editor = new EditorView({
       parent: host.current,
       ...(place
@@ -2469,6 +2513,12 @@ export function SourceEditor({
         ],
       }),
     })
+    growthTrace('view-create-end', () => ({
+      bridge,
+      formatted,
+      view: editor,
+      doc: editor.state.doc,
+    }))
     // A filter or extender may also fail while a transaction is made, before
     // dispatch: from specs here, and from typing CodeMirror reads in the
     // DOM observer (internal to CodeMirror). That input is rejected too.
@@ -2525,6 +2575,7 @@ export function SourceEditor({
     onViewDeath(editor, (error) => rebuild(editor, error))
     view.current = editor
     setMountedView(editor)
+    growthTrace('attach-begin', () => ({ bridge, formatted, view: editor }))
     const detachSession = bridge.attach(editor, (error) => {
       if (isViewDead(editor)) return
       setFailedEcho({
@@ -2532,6 +2583,7 @@ export function SourceEditor({
         message: errorMessage(error) || 'The source editor is synchronizing.',
       })
     })
+    growthTrace('attach-end', () => ({ bridge, formatted, view: editor }))
     // Kept undo steps can reach the session after the toolbar looked, with no
     // editor update to make it look again.
     let undoable = session.state()
@@ -2908,6 +2960,11 @@ export function SourceEditor({
       },
     )
     configureParser.current = () => {
+      growthTrace('parser-config-begin', () => ({
+        bridge,
+        formatted,
+        view: editor,
+      }))
       const id = parserOptions.current.codeLanguage
       const enabled = () =>
         codeLanguages
@@ -2931,6 +2988,17 @@ export function SourceEditor({
             setLanguageError(`Could not load the ${id} editor language.`)
         })
       editor.dispatch({ effects: language.reconfigure(markdown()) })
+      growthTrace('parser-config-end', () => ({
+        bridge,
+        formatted,
+        view: editor,
+      }))
+      growthTrace('formatting-begin', () => ({
+        bridge,
+        formatted,
+        view: editor,
+        doc: editor.state.doc,
+      }))
       formatting.current = sourceFormatting(
         editor,
         parserOptions.current.sourceFormat ??
@@ -2938,7 +3006,18 @@ export function SourceEditor({
         parserOptions.current.supportsMedia,
         { undo: bridge.undo, redo: bridge.redo, state: session.state },
       )
+      growthTrace('formatting-end', () => ({
+        bridge,
+        formatted,
+        view: editor,
+        doc: editor.state.doc,
+      }))
       reportFormatting.current(formatting.current)
+      growthTrace('formatting-reported', () => ({
+        bridge,
+        formatted,
+        view: editor,
+      }))
     }
     // The formatted view parses changed code languages again in its own syntax.
     const unsubscribe = formatted
@@ -2987,14 +3066,29 @@ export function SourceEditor({
     }
     measure()
     const finishFont = () => {
+      growthTrace('font-complete', () => ({
+        bridge,
+        formatted,
+        view: editor,
+        doc: editor.state.doc,
+        disposed,
+      }))
       if (disposed) return
       editor.requestMeasure({
         read: () => null,
         write: () => {
+          growthTrace('font-measure-write', () => ({
+            bridge,
+            formatted,
+            view: editor,
+            doc: editor.state.doc,
+            disposed,
+          }))
           if (!disposed) setFontReadyBridge(bridge)
         },
       })
     }
+    growthTrace('font-load-begin', () => ({ bridge, formatted, view: editor }))
     void window.document.fonts
       .load(formatted ? '16px "Geist"' : '13px "Geist Mono"')
       .then(finishFont, finishFont)
@@ -3105,17 +3199,46 @@ export function SourceEditor({
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
-    const created = sourceExtensions.map(async (feature) =>
-      feature.create(context),
-    )
+    growthTrace('features-begin', () => ({
+      bridge,
+      formatted,
+      view: editor,
+      features: sourceExtensions.map((feature) => ({
+        id: feature.id,
+        background: !!feature.background,
+      })),
+    }))
+    const created = sourceExtensions.map(async (feature) => {
+      growthTrace('feature-create', () => ({
+        bridge,
+        formatted,
+        featureId: feature.id,
+        background: !!feature.background,
+      }))
+      return feature.create(context)
+    })
     // Each feature's outcome by index, absent while it is still being set up.
     const results: PromiseSettledResult<Extension>[] = []
     created.forEach((promise, index) => {
       void promise.then(
         (value) => {
+          growthTrace('feature-return', () => ({
+            bridge,
+            formatted,
+            featureId: sourceExtensions[index].id,
+            index,
+            status: 'fulfilled',
+          }))
           results[index] = { status: 'fulfilled', value }
         },
         (reason) => {
+          growthTrace('feature-return', () => ({
+            bridge,
+            formatted,
+            featureId: sourceExtensions[index].id,
+            index,
+            status: 'rejected',
+          }))
           results[index] = { status: 'rejected', reason }
         },
       )
@@ -3173,6 +3296,13 @@ export function SourceEditor({
       set(kept)
     }
     const install = () => {
+      growthTrace('install-begin', () => ({
+        bridge,
+        formatted,
+        view: editor,
+        canceled,
+        settled: results.map((result) => result?.status ?? 'pending'),
+      }))
       if (canceled) return
       const errors: unknown[] = []
       let parts: InstalledFeature[] = []
@@ -3212,7 +3342,22 @@ export function SourceEditor({
       if (isViewDead(editor)) return
       tryFeatures.current = () => oneAtATime(installed.current)
       if (errors.length) setExtensionError(String(errors[0]))
-      else setInstalledExtensions({ bridge, extensions: sourceExtensions })
+      else {
+        growthTrace('install-publish', () => ({
+          bridge,
+          formatted,
+          view: editor,
+          installed: parts.map((part) => part.feature.id),
+          wanted: sourceExtensions.map((feature) => feature.id),
+        }))
+        setInstalledExtensions({ bridge, extensions: sourceExtensions })
+      }
+      growthTrace('install-end', () => ({
+        bridge,
+        formatted,
+        view: editor,
+        errors: errors.length,
+      }))
     }
     // Background features set up at the same moment join in one install.
     let joining = false
@@ -3290,6 +3435,7 @@ export function SourceEditor({
     })
   }, [mountedView, disabled, inputReady, echoError])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: diagnostic reads must not change the original effect schedule.
   useEffect(() => {
     // Publish readiness after CodeMirror configures input, before its next frame.
     const status =
@@ -3298,6 +3444,33 @@ export function SourceEditor({
         : inputReady && (!waitForFont || fontReadyBridge === bridge)
           ? 'ready'
           : 'loading'
+    growthTrace('ready', () => ({
+      bridge,
+      formatted,
+      view: mountedView,
+      doc: mountedView?.state.doc,
+      status,
+      inputReady,
+      installedBridgeMatches: installedExtensions?.bridge === bridge,
+      membershipMatches:
+        !!installedExtensions &&
+        installedFor(
+          installedExtensions.extensions,
+          sourceExtensions,
+          failedFeatures.current,
+        ),
+      installedFeatures:
+        installedExtensions?.extensions.map((feature) => feature.id) ?? null,
+      wantedFeatures: sourceExtensions.map((feature) => feature.id),
+      waitForFont,
+      fontMatches: fontReadyBridge === bridge,
+      disabled,
+      prepared: preparedText?.bridge === bridge,
+      languageReady,
+      extensionError: !!extensionError,
+      languageError: !!languageError,
+      echoError: !!echoError,
+    }))
     ready.current(status)
     if (status === 'ready' && !disabled) {
       const restore = restoreFocus.current

@@ -174,6 +174,8 @@ Object.assign(window, {
         tabId?: string
         add?: boolean
         slice?: number
+        /** History's `newGroupDelay`, for runs that must not depend on their pace. */
+        historyGroupDelay?: number
       } = {},
     ) {
       if (size)
@@ -198,7 +200,10 @@ Object.assign(window, {
           extensions: [
             livePreview(syntax),
             options.editable
-              ? [history(), keymap.of([...defaultKeymap, ...historyKeymap])]
+              ? [
+                  history({ newGroupDelay: options.historyGroupDelay }),
+                  keymap.of([...defaultKeymap, ...historyKeymap]),
+                ]
               : [],
             editable.of(access(!!options.editable)),
             above,

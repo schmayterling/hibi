@@ -545,33 +545,37 @@ test('saved records reject inline headings that disagree with their page or boun
   await write(original)
   assert.deepEqual(await parser.request(request, current), page)
   const one = original.inlineHeadings[0]
-  for (const inlineHeadings of [
-    [one],
-    [one, { ...one, depth: 0 }],
-    [one, { ...one, depth: 7 }],
-    [one, { ...one, depth: 1.5 }],
-    [one, { depth: 1, text: ['two'] }],
-    [one, { depth: 1, text: 'x'.repeat(inlineHeadingLength) }],
-    'one',
-  ]) {
-    await write({ ...original, inlineHeadings })
-    assert.equal(await parser.request(request, current), null)
-  }
   const many = Array.from({ length: inlineHeadingCount + 1 }, () => one)
-  await write({
-    ...original,
-    page: {
-      ...original.page,
-      metadata: {
-        ...original.page.metadata,
-        headings: { ...original.page.metadata.headings, count: many.length },
+  for (const record of [
+    ...[
+      [one],
+      [one, { ...one, depth: 0 }],
+      [one, { ...one, depth: 7 }],
+      [one, { ...one, depth: 1.5 }],
+      [one, { depth: 1, text: ['two'] }],
+      [one, { depth: 1, text: 'x'.repeat(inlineHeadingLength) }],
+      // A heading page would carry this field past its byte bound.
+      [one, { depth: 2, text: 'two', extra: 'x'.repeat(65536) }],
+      [one, null],
+      'one',
+      undefined,
+    ].map((inlineHeadings) => ({ ...original, inlineHeadings })),
+    {
+      ...original,
+      page: {
+        ...original.page,
+        metadata: {
+          ...original.page.metadata,
+          headings: { ...original.page.metadata.headings, count: many.length },
+        },
       },
+      inlineHeadings: many,
     },
-    inlineHeadings: many,
-  })
-  assert.equal(await parser.request(request, current), null)
-  await write({ ...original, inlineHeadings: undefined })
-  assert.equal(await parser.request(request, current), null)
+  ]) {
+    await write(record)
+    assert.equal(await parser.request(request, current), null)
+    assert.equal(await parser.readHeadings(request, 0, 5, current), null)
+  }
 })
 
 test('a record that cannot be saved keeps its few headings in a temporary heading file', async (t) => {

@@ -154,8 +154,10 @@ function validInlineHeadings(
     return false
   let length = 0
   for (const heading of headings) {
+    // Heading pages return these objects as stored, so nothing else may ride along.
     if (
-      !Number.isInteger(heading?.depth) ||
+      Object.keys(heading).length !== 2 ||
+      !Number.isInteger(heading.depth) ||
       heading.depth < 1 ||
       heading.depth > 6 ||
       typeof heading.text !== 'string'

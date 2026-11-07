@@ -6,10 +6,14 @@ import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+import {
+  alignmentDocumentMatches,
+  finishAlignmentTrace,
+} from './split-alignment-diagnostic.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-async function open(t, text) {
+async function open(t, text, trace = false) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-formatted-split-'))
   const file = join(root, 'note.md')
   await writeFile(file, text)
@@ -41,7 +45,10 @@ async function open(t, text) {
   await pressShortcut(app, `${mod}+o`)
   await waitForAsync(
     page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    trace
+      ? alignmentDocumentMatches
+      : async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
     text,
   )
   await page
@@ -357,6 +364,13 @@ function lead(at) {
     block.top +
     block.height / 2 -
     (bounds.top + bounds.height / 2)
+  window.__splitAlign?.record('lead', () => ({
+    at,
+    view,
+    target: scroller,
+    block,
+    bounds,
+  }))
 }
 
 // Whether the formatted pane shows the text of the table row at the source
@@ -370,7 +384,16 @@ function linedUp() {
     x: content.getBoundingClientRect().left + 8,
     y: bounds.top + bounds.height / 2,
   })
-  if (at === null) return false
+  if (at === null) {
+    window.__splitAlign?.record('oracle', () => ({
+      view,
+      content,
+      at,
+      bounds,
+      result: false,
+    }))
+    return false
+  }
   const line = view.state.doc.lineAt(at)
   // Rows with or without outer pipes, their first cell maybe typed in.
   const row = /^(?:\| )?r(\d+)Z? \|/.exec(line.text)
@@ -384,12 +407,25 @@ function linedUp() {
   const text = cell && document.createRange()
   text?.selectNodeContents(cell.querySelector('p') ?? cell)
   const drawn = text?.getBoundingClientRect()
-  return (
+  const result =
     !!point &&
     !!drawn &&
     Math.abs((point.top + point.bottom) / 2 - (drawn.top + drawn.bottom) / 2) <
       6
-  )
+  window.__splitAlign?.record('oracle', () => ({
+    view,
+    content,
+    at,
+    lineNumber: line.number,
+    lineFrom: line.from,
+    row: row ? Number(row[1]) : null,
+    point,
+    cell,
+    drawn,
+    bounds,
+    result,
+  }))
+  return result
 }
 
 // A line-up check that holds, and keeps holding for the next 10 frames: a
@@ -442,12 +478,29 @@ test('formatted split lines up a source line in a row a long table has not drawn
 }, async (t) => {
   const lines = 'line\n\n'.repeat(30)
   const text = `${lines}${table(1000)}${lines}`
-  const { page } = await open(t, text)
-  // The formatted pane draws only the rows near the ones it shows.
-  assert.equal(await page.locator('.rich-pane tr[data-line="602"]').count(), 0)
-  await page.evaluate(lead, text.indexOf('| r600 |'))
-  await staysLinedUp(page, linedUp)
-  await source(page, text)
+  let page, originalError
+  let phase = 'open'
+  try {
+    ;({ page } = await open(t, text, true))
+    phase = 'undrawn-precondition'
+    // The formatted pane draws only the rows near the ones it shows.
+    assert.equal(
+      await page.locator('.rich-pane tr[data-line="602"]').count(),
+      0,
+    )
+    phase = 'lead'
+    await page.evaluate(lead, text.indexOf('| r600 |'))
+    phase = 'alignment'
+    await staysLinedUp(page, linedUp)
+    phase = 'source-equality'
+    await source(page, text)
+    phase = 'complete'
+  } catch (error) {
+    originalError = error
+    throw error
+  } finally {
+    await finishAlignmentTrace(t, page, originalError, phase)
+  }
 })
 
 // CodeMirror reports a view's focus a moment after it moves, as when the

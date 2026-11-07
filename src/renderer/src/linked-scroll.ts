@@ -1,6 +1,17 @@
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
+// Never-merge diagnostic: unarmed paths evaluate no metadata callback.
+function trace(event: string, read: () => Record<string, unknown>) {
+  ;(
+    globalThis as typeof globalThis & {
+      __splitAlign?: {
+        record: (event: string, read: () => Record<string, unknown>) => void
+      }
+    }
+  ).__splitAlign?.record(event, read)
+}
+
 /** Markdown follows text positions; other preview formats keep proportional scrolling. */
 export function linkScroll(
   first: HTMLElement,
@@ -12,16 +23,19 @@ export function linkScroll(
   let frame = 0
   let refinements = 0
   const sourcePane = second.closest('.source-pane')
+  trace('bind', () => ({ first, second, leader, markdown: !!markdown }))
   function sourceTop(target: HTMLElement): number | null {
     const fromContent = leader.querySelector('.cm-content')
     const toContent = target.querySelector('.cm-content')
     const from = fromContent && sourceView(fromContent)
     const to = toContent && sourceView(toContent)
+    trace('views', () => ({ leader, target, from, to }))
     if (!from || !to) return null
     const bounds = leader.getBoundingClientRect()
     let position = from.state.selection.main.head
     // A table cell's editor, inside the view, has the formatted view's caret.
     let point = focusedEditor(from) ? from.coordsAtPos(position) : null
+    trace('caret-point', () => ({ from, to, position, point, bounds }))
     if (!point || point.top < bounds.top || point.bottom > bounds.bottom) {
       const content = from.contentDOM.getBoundingClientRect()
       const y = bounds.top + bounds.height / 2
@@ -45,16 +59,30 @@ export function linkScroll(
         from.posAtCoords({ x: content.left + 8, y }) ??
         position
       point = from.coordsAtPos(position)
+      trace('center-point', () => ({ from, to, position, point, bounds }))
     }
     const at = editorPosition(to, sourcePosition(from, position))
+    trace('mapped', () => ({ from, to, position, at, point }))
     if (!point || at === null) return null
     const block = to.lineBlockAt(at)
+    trace('block', () => ({ from, to, at, block }))
     if (!block.height) return null
     const destination = to.coordsAtPos(at)
     const y = destination
       ? (destination.top + destination.bottom) / 2
       : to.documentTop + block.top + to.defaultLineHeight / 2
-    return target.scrollTop + y - (point.top + point.bottom) / 2
+    const top = target.scrollTop + y - (point.top + point.bottom) / 2
+    trace('computed', () => ({
+      from,
+      to,
+      target,
+      at,
+      destination,
+      y,
+      point,
+      top,
+    }))
+    return top
   }
   const sync = () => {
     frame = 0
@@ -68,16 +96,20 @@ export function linkScroll(
         Math.max(0, Math.min(1, position)) *
         Math.max(0, target.scrollHeight - target.clientHeight)
     }
+    trace('sync', () => ({ first, second, leader, target, top, refinements }))
     if (top === null) return
     const clamped = Math.max(
       0,
       Math.min(top, target.scrollHeight - target.clientHeight),
     )
+    trace('clamped', () => ({ leader, target, top, clamped, refinements }))
     if (Math.abs(target.scrollTop - clamped) < 1) return
     target.scrollTop = clamped
+    trace('write', () => ({ leader, target, clamped, refinements }))
     if (markdown && refinements++ < 3) frame = requestAnimationFrame(sync)
   }
   const schedule = () => {
+    trace('schedule', () => ({ leader, frame, refinements }))
     cancelAnimationFrame(frame)
     refinements = 0
     frame = requestAnimationFrame(sync)
@@ -86,17 +118,24 @@ export function linkScroll(
     const origin = event.currentTarget as HTMLElement
     // Virtualized source layout can emit several delayed scroll events. Only
     // direct input or focus changes may hand control to the other pane.
+    trace('scroll', () => ({
+      target: origin,
+      leader,
+      follows: origin === leader,
+    }))
     if (origin !== leader) return
     schedule()
   }
   const intent = (event: Event) => {
     leader = event.currentTarget as HTMLElement
+    trace('intent', () => ({ leader, type: event.type }))
   }
   const selection = () => {
     const focused = document.activeElement
     if (first.contains(focused)) leader = first
     else if (second.contains(focused)) leader = second
     else return
+    trace('selection', () => ({ leader }))
     schedule()
   }
   // CodeMirror panes report caret and text changes, and focus leaving, as
@@ -144,6 +183,7 @@ export function linkScroll(
   sourcePane?.addEventListener('transitionend', settled)
   schedule()
   return () => {
+    trace('cleanup', () => ({ first, second, leader, frame }))
     cancelAnimationFrame(frame)
     observer.disconnect()
     drawn.disconnect()

@@ -1,50 +1,50 @@
-name: check
+---
+name: link crossing diagnostic
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-    inputs:
-      clean:
-        description: Ignore caches and run a full build and all checks
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.ref }}
-  # A pull request's newest push replaces its run. Main's runs verify what pull
-  # requests skip, so each finishes, and only the newest waiting push runs next.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: diagnose-link-crossing-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  desktop:
-    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
-    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest]
-        shard: ['0/4', '1/4', '2/4', '3/4']
-        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
-    runs-on: ${{ matrix.os }}
+  # The release's own check: clean, full, one app at a time, the whole shard.
+  checks:
+    timeout-minutes: 85
+    runs-on: ubuntu-24.04-arm
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/ci
+      # Outside the checkout, so the shard sees the same tree as the release.
+      - name: Choose the trace directory
+        run: echo "HIBI_RELEASE_TRACE_DIR=$RUNNER_TEMP/diag" >> "$GITHUB_ENV"
+      - name: Prepare stubs and source pins
+        run: node scripts/link-crossing-diagnostic.mjs prepare
+      - name: Full required checks
         id: ci
+        timeout-minutes: 75
+        continue-on-error: true
+        uses: ./.github/actions/ci
         with:
-          clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || '' }}
-          full: ${{ github.event_name != 'pull_request' }}
-          shard: ${{ matrix.shard }}
-      - run: npx electron-builder --dir --config.mac.identity=-
-        shell: bash
-        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
+          clean: true
+          shard: 3/4
+      - name: Record outcome and pins
+        if: always()
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CHECKS_RESULT: ${{ steps.ci.outcome }}
+        run: node scripts/link-crossing-diagnostic.mjs finish
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: link-crossing-${{ github.run_id }}
+          path: ${{ runner.temp }}/diag/
+          if-no-files-found: error
+          retention-days: 1

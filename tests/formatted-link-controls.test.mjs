@@ -11,6 +11,8 @@ import {
 } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
+import { finishTrace, withTrace } from './release-reds-diagnostic.mjs'
+
 const note =
   'See [docs](https://old.example "Keep title") here. Bare https://bare.example/path.\n\n| name |\n| --- |\n| [&amp;](https://cell.example) |\n'
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
@@ -194,39 +196,63 @@ test('codemirror link hover offers URL, edit, open, copy and remove', {
 test('codemirror link actions stay up while the pointer crosses to them', {
   timeout: 60000,
 }, async (t) => {
-  const { page, editor, panel } = await open(t)
-  const link = page.getByRole('link', { name: 'docs', exact: true })
-  for (const focused of [false, true]) {
-    // Unfocused, or with the caret outside links, the panel shows for the
-    // hovered link only. Opening the note leaves the caret at its table
-    // link's end, which has its own panel.
-    await editor.evaluate(
-      (element, { focused, anchor }) => {
-        const view = element.cmTile.root.view
-        if (!focused) return element.ownerDocument.activeElement?.blur()
-        view.focus()
-        view.dispatch({ selection: { anchor } })
-      },
-      { focused, anchor: note.indexOf('here') },
-    )
-    const from = await link.boundingBox()
-    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
-    await panel.waitFor()
-    const to = await panel
-      .getByRole('button', { name: 'Copy link', exact: true })
-      .boundingBox()
-    // Real pointers pass over the text between the link and the panel.
-    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
-      steps: 12,
+  let diagnosticPage,
+    originalError,
+    phase = 'setup'
+  const crossings = []
+  try {
+    const { page, editor, panel } = await open(t)
+    diagnosticPage = page
+    const link = page.getByRole('link', { name: 'docs', exact: true })
+    for (const focused of [false, true]) {
+      phase = { focused, action: 'cross' }
+      // Unfocused, or with the caret outside links, the panel shows for the
+      // hovered link only. Opening the note leaves the caret at its table
+      // link's end, which has its own panel.
+      await editor.evaluate(
+        withTrace('link', (element, { focused, anchor }) => {
+          const view = element.cmTile.root.view
+          window.__releaseTrace.phase = { focused }
+          window.__releaseTrace.add(
+            'iteration',
+            window.__releaseTrace.view(view),
+          )
+          if (!focused) return element.ownerDocument.activeElement?.blur()
+          view.focus()
+          view.dispatch({ selection: { anchor } })
+        }),
+        { focused, anchor: note.indexOf('here') },
+      )
+      const from = await link.boundingBox()
+      crossings.push({ focused, from })
+      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+      await panel.waitFor()
+      const to = await panel
+        .getByRole('button', { name: 'Copy link', exact: true })
+        .boundingBox()
+      crossings.at(-1).to = to
+      // Real pointers pass over the text between the link and the panel.
+      await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, {
+        steps: 12,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      assert.equal(await panel.isVisible(), true, `focused: ${focused}`)
+      assert.equal(
+        await panel.locator('.hibi-link-destination').textContent(),
+        'https://old.example',
+      )
+      await page.mouse.move(4, 4)
+      await panel.waitFor({ state: 'hidden' })
+    }
+    phase = 'complete'
+  } catch (error) {
+    originalError = error
+    throw error
+  } finally {
+    await finishTrace(t, diagnosticPage, 'link', originalError, {
+      phase,
+      crossings,
     })
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    assert.equal(await panel.isVisible(), true, `focused: ${focused}`)
-    assert.equal(
-      await panel.locator('.hibi-link-destination').textContent(),
-      'https://old.example',
-    )
-    await page.mouse.move(4, 4)
-    await panel.waitFor({ state: 'hidden' })
   }
 })
 

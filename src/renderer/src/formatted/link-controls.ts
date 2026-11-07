@@ -47,6 +47,29 @@ export function linkControls(callbacks: Callbacks) {
       focusPending = false
       leave: ReturnType<typeof setTimeout> | undefined
 
+      /** Never-merge diagnostic: cached fields only; no DOM/layout reads. */
+      trace(event: string, data: Record<string, unknown> = {}) {
+        const sink = (
+          window as unknown as {
+            __releaseLinkTrace?: (
+              event: string,
+              data: Record<string, unknown>,
+              view: EditorView,
+            ) => void
+          }
+        ).__releaseLinkTrace
+        sink?.(
+          event,
+          {
+            generation: this.generation,
+            target: !!this.target,
+            caretMoved: this.caretMoved,
+            focusPending: this.focusPending,
+            ...data,
+          },
+          this.view,
+        )
+      }
       constructor(readonly view: EditorView) {
         this.panel.className = 'hibi-link-actions'
         this.panel.popover = 'manual'
@@ -97,6 +120,7 @@ export function linkControls(callbacks: Callbacks) {
         window.addEventListener('blur', this.hide)
       }
       keep = () => {
+        this.trace('keep')
         clearTimeout(this.leave)
       }
       /** Drops the shown link; a shown panel stays until caret() replaces or hides it. */
@@ -105,7 +129,10 @@ export function linkControls(callbacks: Callbacks) {
         this.target = null
         this.focusPending = false
       }
-      hide = () => {
+      hide = (reason: string | Event = 'unspecified') => {
+        this.trace('hide', {
+          reason: typeof reason === 'string' ? reason : reason.type,
+        })
         this.keep()
         this.forget()
         if (this.panel.matches(':popover-open')) this.panel.hidePopover()
@@ -113,7 +140,7 @@ export function linkControls(callbacks: Callbacks) {
       /** Hides the shown link's actions until the caret leaves it or a pointer comes back. */
       dismiss() {
         this.dismissed = this.range(this.target?.capture)
-        this.hide()
+        this.hide('dismiss')
       }
       /** The link of `capture`, which its dismissed actions stay scoped to. */
       range(capture: Capture | null | undefined) {
@@ -160,15 +187,19 @@ export function linkControls(callbacks: Callbacks) {
         }
       }
       delayHide = () => {
+        this.trace('delay-hide')
         this.keep()
-        this.leave = setTimeout(() => this.caret(), 160)
+        this.leave = setTimeout(() => {
+          this.trace('timer-caret')
+          this.caret()
+        }, 160)
       }
       scroll = (event: Event) => {
         if (
           !(event.target instanceof Node) ||
           !this.panel.contains(event.target)
         )
-          this.hide()
+          this.hide('scroll')
       }
       outside = (event: PointerEvent) => {
         const target = event.target instanceof Node ? event.target : null
@@ -176,7 +207,7 @@ export function linkControls(callbacks: Callbacks) {
         if (target && this.view.dom.contains(target)) {
           this.dismissed = null
           this.caretMoved = true
-        } else if (!target || !this.panel.contains(target)) this.hide()
+        } else if (!target || !this.panel.contains(target)) this.hide('outside')
       }
       point(x: number, y: number) {
         const range = document.caretRangeFromPoint(x, y)
@@ -189,8 +220,14 @@ export function linkControls(callbacks: Callbacks) {
         const link =
           event.target instanceof Element &&
           event.target.closest('.hibi-lp-link')
+        this.trace('move', {
+          x: event.clientX,
+          y: event.clientY,
+          buttons: event.buttons,
+          link: !!link,
+        })
         if (event.buttons) {
-          this.hide()
+          this.hide('buttons')
           return
         }
         if (!link) {
@@ -205,6 +242,7 @@ export function linkControls(callbacks: Callbacks) {
         if (at !== null) this.show(at, link.getBoundingClientRect())
       }
       show(at: number, rect: { left: number; bottom: number }) {
+        this.trace('show', { at, left: rect.left, bottom: rect.bottom })
         const current = this.target
         if (
           current?.doc === this.view.state.doc &&
@@ -228,7 +266,7 @@ export function linkControls(callbacks: Callbacks) {
           menus.snapshot() ||
           otherPopupOpen(this.view.contentDOM)
         ) {
-          this.hide()
+          this.hide('show-rejected')
           return
         }
         const generation = ++this.generation
@@ -245,9 +283,10 @@ export function linkControls(callbacks: Callbacks) {
             )
               return
             if (!href) {
-              this.hide()
+              this.hide('empty-href')
               return
             }
+            this.trace('resolved')
             this.target = { capture, href, doc }
             this.preview.textContent = href
             this.enable()
@@ -265,12 +304,13 @@ export function linkControls(callbacks: Callbacks) {
           .catch(callbacks.error)
       }
       caret() {
+        this.trace('caret')
         if (this.panel.contains(document.activeElement)) return
         if (
           !this.view.dom.contains(document.activeElement) ||
           !this.view.state.selection.main.empty
         ) {
-          this.hide()
+          this.hide('caret-focus-or-selection')
           return
         }
         const at = this.view.state.selection.main.head
@@ -283,7 +323,7 @@ export function linkControls(callbacks: Callbacks) {
           selection?.anchorNode?.parentElement?.closest('.hibi-lp-link')
         const rect = link?.getBoundingClientRect() ?? this.view.coordsAtPos(at)
         if (rect) this.show(at, rect)
-        else this.hide()
+        else this.hide('caret-no-rect')
       }
       edit(capture: Capture) {
         this.dismissed = this.range(capture)
@@ -316,7 +356,7 @@ export function linkControls(callbacks: Callbacks) {
       openMenu(at: number, x: number, y: number) {
         const capture = this.linkAt(at)
         if (!capture?.link) return false
-        this.hide()
+        this.hide('menu')
         // The menu offers every action, for keyboards where Tab indents.
         const run = (id: Action) => () =>
           Promise.resolve(capture.href).then((href) => {
@@ -421,7 +461,15 @@ export function linkControls(callbacks: Callbacks) {
           update.geometryChanged &&
           !focused &&
           this.panel.matches(':popover-open')
-        if (update.docChanged && focused) this.hide()
+        this.trace('update', {
+          focused,
+          moved,
+          docChanged: update.docChanged,
+          selectionSet: update.selectionSet,
+          geometryChanged: update.geometryChanged,
+          focusChanged: update.focusChanged,
+        })
+        if (update.docChanged && focused) this.hide('update-doc-focused')
         else if (update.docChanged || moved) this.forget()
         // A note's opening caret is placed before the editor has focus; the
         // moves made with it are the user's.
@@ -457,12 +505,13 @@ export function linkControls(callbacks: Callbacks) {
           update.focusChanged
         ) {
           queueMicrotask(() => {
+            this.trace('queued-caret-run')
             if (this.view.dom.isConnected) this.caret()
           })
         }
       }
       destroy() {
-        this.hide()
+        this.hide('destroy')
         this.scope.dispose()
         this.panel.remove()
         this.view.dom.removeEventListener('pointermove', this.move)

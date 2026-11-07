@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAsync, waitForFormattedEditor } from './electron.mjs'
+import {
+  electron,
+  waitForAsync,
+  waitForDocumentEditor,
+  waitForFormattedEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 // Preserve casing, spacing, CRLF, and trailing whitespace across view-only folds.
@@ -37,6 +42,104 @@ const note = [
 ].join('\r\n')
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+
+test('a fold control reached before the note is ready keeps the focus', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-callout-focus-'))
+  const file = join(folder, 'folds.md')
+  await writeFile(file, note)
+  const addon = join(folder, 'profile', 'installed-addons', 'late-feature')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'late-feature',
+      name: 'Late feature',
+      description: 'A feature the opened note waits for',
+      kind: 'extension',
+      apiVersion: 3,
+      version: '1.0.0',
+      capabilities: ['formatted'],
+      authors: [{ displayName: 'Test' }],
+      entry: 'index.js',
+    }),
+  )
+  // The opened note's view is not ready until the reader is at a control.
+  await writeFile(
+    join(addon, 'index.js'),
+    `export default () => ({ start(context) {
+      let views = 0
+      context.editor.registerFormatted({ id: 'late', create() {
+        if (++views === 1) return []
+        return new Promise((done) => {
+          const focused = ({ target }) => {
+            if (!target.matches('.github-alert-toggle')) return
+            window.removeEventListener('focusin', focused)
+            window.focusedBeforeReady =
+              target.closest('.cm-content').contentEditable === 'false' &&
+              target.closest('[data-source-ready]').dataset.sourceReady === 'false'
+            done([])
+          }
+          window.addEventListener('focusin', focused)
+        })
+      } })
+    } })`,
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['index.js', 'hibi-addon.json'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(folder, 'profile', 'addons.json'),
+    JSON.stringify({ 'late-feature': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForFormattedEditor(app, page)
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  const pane = page.locator('.rich-pane')
+  const closed = pane.getByRole('button', {
+    name: /callout: Closed title$/,
+  })
+  await closed.focus()
+  await waitForDocumentEditor(app, page)
+  // Opening puts the caret at the end only for a reader who has not moved.
+  assert.deepEqual(
+    await closed.evaluate((element) => ({
+      beforeReady: window.focusedBeforeReady,
+      focused: element === document.activeElement,
+      head: element.closest('.cm-content').cmTile.root.view.state.selection.main
+        .head,
+    })),
+    { beforeReady: true, focused: true, head: 0 },
+  )
+  await page.keyboard.press('Tab')
+  assert.equal(
+    await pane
+      .getByRole('button', { name: /callout: Open title$/ })
+      .evaluate((element) => element === document.activeElement),
+    true,
+  )
+})
 
 test('callouts fold with pointer and keyboard without changing markdown', {
   timeout: 150000,

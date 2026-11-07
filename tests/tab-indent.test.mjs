@@ -70,6 +70,29 @@ test('source indentation walks unindented lines without repeated tree lookups', 
   }
 })
 
+test('source indentation bounds iterator steps to edited lines', (t) => {
+  const state = EditorState.create({
+    doc: Text.of(Array(200000).fill('plain')),
+    extensions: sourceIndent,
+  })
+  assert.equal(state.field(sourceIndent), null)
+  // Initial detection may scan the document; a keystroke may not.
+  let steps = 0
+  const iterLines = Text.prototype.iterLines
+  t.mock.method(Text.prototype, 'iterLines', function (...args) {
+    const lines = iterLines.apply(this, args)
+    const next = lines.next.bind(lines)
+    lines.next = (...args) => {
+      steps++
+      return next(...args)
+    }
+    return lines
+  })
+  const edited = state.update({ changes: { from: 1, insert: 'x' } }).state
+  assert.equal(edited.field(sourceIndent), null)
+  assert.ok(steps > 0 && steps <= 3, `${steps} iterator steps for one edit`)
+})
+
 test('Tab preserves paragraph, code, list, table, focus and source behavior', {
   timeout: 90000,
 }, async (t) => {

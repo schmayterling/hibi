@@ -15,6 +15,8 @@ import {
 import { frozenSnapshot, overlayScrollbars } from './frozen-oracle.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
+import { finishTrace, withTrace } from './release-reds-diagnostic.mjs'
+
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 // What the formatted view drew while it matched the removed rich view.
 const check = frozenSnapshot('formatted-math')
@@ -47,6 +49,7 @@ Broken $\\frac{1$ formula.
 const editNote = 'Text $a+b$ end.\n\n$$\nc^2\n$$\n\nlast line\n'
 
 let app, folder, page
+let diagnosticActive = false, carriedTrace
 
 const palette = (id) => {
   const scheme = bundledColorschemes.find((entry) => entry.id === id)
@@ -92,10 +95,14 @@ async function open(name) {
 
 /** Reload the window with the marker setting. */
 async function markers(shown) {
-  await page.evaluate(
-    (shown) => localStorage.setItem('markdown-markers', String(shown)),
-    shown,
+  const trace = await page.evaluate(
+    ({ shown, diagnostic }) => {
+      localStorage.setItem('markdown-markers', String(shown))
+      if (diagnostic) return window.__releaseTrace?.snapshot()
+    },
+    { shown, diagnostic: diagnosticActive },
   )
+  if (diagnosticActive && trace) carriedTrace = trace
   await page.reload()
   await waitForDocumentEditor(app, page)
 }
@@ -583,7 +590,11 @@ test('display math across lines, blank or holding dollars draws as display math,
 
 test('display blocks read to their closing line and end with their list item, as in Obsidian', {
   timeout: 90000,
-}, async () => {
+}, async (t) => {
+  let originalError, phase = 'setup'
+  diagnosticActive = true
+  carriedTrace = undefined
+  try {
   // Obsidian 1.13.7 reads block math like a fence: an unclosed block is still
   // a formula, and a list item keeps an under-indented line, so the closing
   // line there opens nothing and the next item stays a list item.
@@ -665,14 +676,18 @@ test('display blocks read to their closing line and end with their list item, as
   ]) {
     // Hidden source has no text caret target: place exact source positions,
     // then exercise the real key or native clipboard command.
+    phase = { action: 'input', key, from, to, expectedLength: expected.length }
     await page.evaluate(
-      ({ from, to }) => {
+      withTrace('math', ({ key, from, to }) => {
         const view = document.querySelector('.rich-pane .cm-content').cmTile
           .root.view
+        window.__releaseTrace.phase = { key, from, to }
+        window.__releaseTrace.add('before-selection', window.__releaseTrace.view(view))
         view.dispatch({ selection: { anchor: from, head: to } })
         view.focus()
-      },
-      { from, to },
+        window.__releaseTrace.add('after-focus', window.__releaseTrace.view(view))
+      }),
+      { key, from, to },
     )
     if (key === 'Cut')
       await app.evaluate(({ BrowserWindow }) =>
@@ -685,6 +700,7 @@ test('display blocks read to their closing line and end with their list item, as
       source,
     )
     assert.equal(await documentText(), expected, key)
+    phase = { action: 'undo', key, from, to }
     await pressShortcut(app, `${mod}+z`)
     await waitForAsync(
       page,
@@ -693,6 +709,12 @@ test('display blocks read to their closing line and end with their list item, as
     )
   }
   await markers(true)
+  phase = 'complete'
+  } catch (error) { originalError = error; throw error }
+  finally {
+    diagnosticActive = false
+    await finishTrace(t, page, 'math', originalError, phase, carriedTrace)
+  }
 })
 
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {

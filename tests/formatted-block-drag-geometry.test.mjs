@@ -12,8 +12,11 @@ import {
 } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
+import { finishTrace, withTrace } from './release-reds-diagnostic.mjs'
+
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 let app, page, folder
+let diagnosticActive = false, requestedDocument, postFailureProbeError
 before(
   async () => {
     folder = await mkdtemp(join(tmpdir(), 'hibi-drag-structure-'))
@@ -47,6 +50,7 @@ after(
 )
 
 async function open(name, doc, token) {
+  if (diagnosticActive) requestedDocument = { name, doc }
   const file = join(folder, name)
   await writeFile(file, doc)
   await app.evaluate(({ dialog }, path) => {
@@ -66,10 +70,43 @@ async function hover(token) {
     hasText: token,
   })
   const top = await line.evaluate(
-    (line) => Number.parseFloat(line.style.paddingTop) || 0,
+    diagnosticActive ? withTrace('heading', (line, expected) => {
+      const top = Number.parseFloat(line.style.paddingTop) || 0
+      const view = line.closest('.cm-editor')?.querySelector('.cm-content')?.cmTile?.root?.view
+      window.__releaseTrace.phase = { expected: expected.name }
+      window.__releaseTrace.add('cached-padding', {
+        ...window.__releaseTrace.view(view), expected: expected.name,
+        expectedLength: expected.doc.length,
+        matchesExpected: view?.state.doc.toString() === expected.doc,
+        padding: top, offset: { x: 90, y: top + 14 },
+      })
+      return top
+    }) : (line) => Number.parseFloat(line.style.paddingTop) || 0,
+    requestedDocument,
   )
   await page.mouse.move(0, 0)
-  await line.hover({ position: { x: 90, y: top + 14 } })
+  try {
+    await line.hover({ position: { x: 90, y: top + 14 } })
+  } catch (error) {
+    if (diagnosticActive) {
+      try {
+        await line.evaluate(async (line, top) => {
+          const rect = line.getBoundingClientRect()
+          const point = { x: rect.left + line.clientLeft + 90, y: rect.top + line.clientTop + top + 14 }
+          window.__releaseTrace.add('post-hover-failure', {
+            cachedPadding: top, currentPadding: Number.parseFloat(line.style.paddingTop) || 0,
+            rect: rect.toJSON(), point,
+            hits: document.elementsFromPoint(point.x, point.y).slice(0, 8).map(element => ({ tag: element.tagName, class: element.className })),
+          })
+          const current = await window.hibi.getDocument()
+          window.__releaseTrace.add('post-hover-document-receipt', {
+            currentName: current.name, length: current.markdown.length,
+          })
+        }, top)
+      } catch (probeError) { postFailureProbeError = probeError.name }
+    }
+    throw error
+  }
   await page.waitForFunction(() => {
     const handle = document.querySelector(
       '.rich-pane:not([inert]) .block-drag-handle',
@@ -150,7 +187,10 @@ test('alert and footnote handles follow the actual content offset', {
 
 test('nested heading handles follow the rendered text line', {
   timeout: 60000,
-}, async () => {
+}, async (t) => {
+  let originalError
+  diagnosticActive = true
+  try {
   for (const [name, doc] of [
     ['quoted-heading', '> # nested heading\n'],
     ['item-heading', '- first\n\n  # nested heading\n'],
@@ -167,6 +207,11 @@ test('nested heading handles follow the rendered text line', {
       Math.abs(handle.x + handle.width - box.x) <= 1,
       JSON.stringify({ name, handle, box }),
     )
+  }
+  } catch (error) { originalError = error; throw error }
+  finally {
+    diagnosticActive = false
+    await finishTrace(t, page, 'heading', originalError, { requested: requestedDocument?.name, postFailureProbeError })
   }
 })
 

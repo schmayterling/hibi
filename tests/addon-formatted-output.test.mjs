@@ -11,6 +11,8 @@ import {
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
+import { finishTrace, installTrace } from './release-reds-diagnostic.mjs'
+
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const owner = 'output-proof.probe:'
 
@@ -263,14 +265,26 @@ test('layout output beyond its node is reported with its owner and later blocks 
 test('a view update that throws while drawing resynchronizes the formatted view with the accepted text', {
   timeout: 120000,
 }, async (t) => {
+  let diagnosticPage, originalError
+  let phase = 'setup'
+  try {
   expectPageError(t, /^widget: Error: transient draw failure/)
   const source = '# Title\n\n**strong** text\n\nend\n'
   const { app, page, errors } = await open(
     t,
     source,
     `export default sdk => ({ start(context) {
+      (${installTrace.toString()})('addon');
       const { Decoration, EditorView, WidgetType } = sdk.codeMirror.view
-      const { StateField } = sdk.codeMirror.state
+      const { StateField, Transaction } = sdk.codeMirror.state
+      const { undoDepth, redoDepth } = sdk.codeMirror.commands
+      const diagnostic = EditorView.updateListener.of(update => {
+        const trace = window.__releaseTrace
+        for (const transaction of update.transactions) {
+          const ranges = []; transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => ranges.push([fromA, toA, fromB, toB]))
+          trace.add('transaction', { ...trace.view(update.view), time: transaction.annotation(Transaction.time), userEvent: transaction.annotation(Transaction.userEvent), selectionSet: !!transaction.selection, scrollIntoView: transaction.scrollIntoView, ranges, undo: undoDepth(update.state), redo: redoDepth(update.state) })
+        }
+      })
       // Draws fail once, as when a renderer rejects one input.
       class Length extends WidgetType {
         constructor(length) { super(); this.length = length }
@@ -281,13 +295,15 @@ test('a view update that throws while drawing resynchronizes the formatted view 
         }
       }
       const widgets = (state) => Decoration.set([Decoration.widget({ widget: new Length(state.doc.length), side: 1 }).range(state.doc.line(1).to)])
-      context.editor.registerFormatted({ id: 'resync', create: () => StateField.define({
+      context.editor.registerFormatted({ id: 'resync', create: () => [StateField.define({
         create: widgets,
         update: (value, transaction) => transaction.docChanged ? widgets(transaction.state) : value,
         provide: (field) => EditorView.decorations.from(field),
-      }) })
+      }), diagnostic] })
     } })`,
   )
+  diagnosticPage = page
+  phase = 'draw'
   await page.locator('.rich-pane .resync-widget').waitFor()
   await caretAtEnd(page)
   await page.evaluate(() => {
@@ -309,24 +325,37 @@ test('a view update that throws while drawing resynchronizes the formatted view 
     await page.locator('.rich-pane .resync-widget').textContent(),
     String(expected.length),
   )
+  phase = 'undo'
   await pressShortcut(app, `${mod}+z`)
   await waitForAsync(
     page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    async (expected) => {
+      const actual = await window.hibi.getDocument()
+      window.__releaseTrace.add('undo-oracle', { expectedLength: expected.length, actualLength: actual.markdown.length, equal: actual.markdown === expected })
+      return actual.markdown === expected
+    },
     source,
   )
   assert.equal((await state(page)).view, source)
+  phase = 'redo'
   await pressShortcut(
     app,
     process.platform === 'win32' ? 'Control+y' : `${mod}+Shift+z`,
   )
   await waitForAsync(
     page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    async (expected) => {
+      const actual = await window.hibi.getDocument()
+      window.__releaseTrace.add('redo-oracle', { expectedLength: expected.length, actualLength: actual.markdown.length, equal: actual.markdown === expected })
+      return actual.markdown === expected
+    },
     expected,
   )
   const redone = await state(page)
   assert.equal(redone.view, expected)
   assert.match(redone.text, /\bend123\n/)
   assert.deepEqual(errors, [])
+  phase = 'complete'
+  } catch (error) { originalError = error; throw error }
+  finally { await finishTrace(t, diagnosticPage, 'addon', originalError, phase) }
 })

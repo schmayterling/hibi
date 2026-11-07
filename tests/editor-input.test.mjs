@@ -798,13 +798,13 @@ test('native table picks retain multiline caret positions, scalar boundaries and
             app,
             process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
           )
-          assert.equal((await acceptedInput(page)).markdown, before.markdown)
+          await waitForInputSource(page, before.markdown)
           await pressShortcut(
             app,
             process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
           )
+          await waitForInputSource(page, actual.markdown)
           const redone = await acceptedInput(page)
-          assert.equal(redone.markdown, actual.markdown)
           assert.deepEqual(await cmCaretText(rich), result.caret)
           await page.keyboard.insertText('Q')
           const continued = await acceptedInput(page)
@@ -1003,7 +1003,7 @@ test('partial native table picks keep unselected cell text and one-step history'
               app,
               process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
             )
-            assert.equal((await acceptedInput(page)).markdown, source)
+            await waitForInputSource(page, source)
           },
         )
 })
@@ -2593,7 +2593,7 @@ test('native multiline input at the only empty list item retains the following p
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
     )
-    assert.equal((await acceptedInput(page)).markdown, oracle.source)
+    await waitForInputSource(page, oracle.source)
   })
 })
 
@@ -2757,12 +2757,12 @@ for (const hiddenSource of [false, true]) {
         app,
         process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
       )
-      assert.equal((await acceptedInput(page)).markdown, '')
+      await waitForInputSource(page, '')
       await pressShortcut(
         app,
         process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
       )
-      assert.equal((await acceptedInput(page)).markdown, 'hello')
+      await waitForInputSource(page, 'hello')
     })
     if (hiddenSource) {
       await page
@@ -3019,7 +3019,7 @@ for (const spaces of [1, 2]) {
       app,
       process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
     )
-    assert.equal((await acceptedInput(page)).markdown, '')
+    await waitForInputSource(page, '')
   })
 }
 
@@ -3058,12 +3058,12 @@ test('the original 200–256 KiB HTML/reference note stays natively editable thr
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
-  assert.equal((await acceptedInput(page)).markdown, original)
+  await waitForInputSource(page, original)
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
   )
-  assert.equal((await acceptedInput(page)).markdown, edited)
+  await waitForInputSource(page, edited)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await page.getByRole('button', { name: 'normal', exact: true }).click()
@@ -3432,13 +3432,13 @@ test('a separately typed cell space retains its caret and next word', {
       )
       const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
       await pressShortcut(app, mod + '+z')
-      assert.equal((await acceptedInput(page)).markdown, source)
+      await waitForInputSource(page, source)
       await pressShortcut(
         app,
         process.platform === 'win32' ? 'Control+y' : mod + '+Shift+z',
       )
+      await waitForInputSource(page, typed.markdown)
       const redone = await acceptedInput(page)
-      assert.equal(redone.markdown, typed.markdown)
       await checkCaret(end + ' border'.length)
       const receipt = await page.evaluate(() => window.hibi.saveDocument(false))
       assert.equal(receipt.saveReceipt, true)

@@ -184,9 +184,11 @@ export class SourceChunk {
       throw new Error('Invalid source chunk range.')
   }
 
-  #prefix(to: number) {
-    const index = Math.floor(to / this.#stride),
-      start = index * this.#stride
+  /** Sums up to `to` from its stride's start, or from `from` on, from zero. */
+  #prefix(to: number, from?: number) {
+    // Index 0 holds no units.
+    const index = from === undefined ? Math.floor(to / this.#stride) : 0,
+      start = from ?? index * this.#stride
     let normalized = this.#normalized[index]!,
       bytes = this.#bytes[index]!,
       breaks = this.#breaks[index]!,
@@ -208,8 +210,11 @@ export class SourceChunk {
   metrics(from: number, to: number): TextMetrics {
     this.#range(from, to)
     if (from === to) return emptyMetrics
-    const a = this.#prefix(from),
-      b = this.#prefix(to)
+    // A range shorter than its two prefix reads is summed alone; a Tab over
+    // 16k lines writes 16k one-unit pieces.
+    const alone = to - from <= (from % this.#stride) + (to % this.#stride)
+    const a = this.#prefix(alone ? 0 : from),
+      b = this.#prefix(to, alone ? from : undefined)
     const firstUnit = this.#unit(from),
       previous = this.#unit(from - 1)
     const crlf = Number(previous === 13 && firstUnit === 10)

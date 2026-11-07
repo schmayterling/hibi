@@ -650,6 +650,7 @@ test('display blocks read to their closing line and end with their list item, as
     source,
   )
   await page.locator('.rich-pane [data-type="block-math"]').waitFor()
+  await waitForDocumentEditor(app, page)
   const start = source.indexOf('$$'),
     end = source.length - 1
   for (const [key, from, to, expected] of [

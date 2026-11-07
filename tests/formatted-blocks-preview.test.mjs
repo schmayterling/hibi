@@ -495,14 +495,24 @@ test("a 50 MiB note reads no footnote definitions until a reference is in view, 
 }, async () => {
   const counts = await harness.evaluate(async () => {
     const { footnoteScan } = window.formattedBlocks
-    const held = []
+    const held = new Map()
     const idle = window.requestIdleCallback
+    const cancel = window.cancelIdleCallback
+    let next = 0
     // Idle callbacks run only when released, with a set time remaining.
-    window.requestIdleCallback = (callback) => held.push(callback)
+    window.requestIdleCallback = (callback) => {
+      held.set(--next, callback)
+      return next
+    }
+    // Negative handles never meet a native one, which still cancels itself.
+    window.cancelIdleCallback = (id) => {
+      if (!held.delete(id)) cancel(id)
+    }
     const release = async (remaining) => {
       const parsed = footnoteScan.parsed
-      for (const callback of held.splice(0))
-        callback({ didTimeout: false, timeRemaining: () => remaining })
+      for (const [id, callback] of [...held])
+        if (held.delete(id))
+          callback({ didTimeout: false, timeRemaining: () => remaining })
       await new Promise(requestAnimationFrame)
       return footnoteScan.parsed - parsed
     }
@@ -522,6 +532,7 @@ test("a 50 MiB note reads no footnote definitions until a reference is in view, 
       return { plain, opened, slices, rate, slice, size }
     } finally {
       window.requestIdleCallback = idle
+      window.cancelIdleCallback = cancel
     }
   })
   // Before, opening read the first 1 MiB and idle slices read 1 MiB each,
@@ -544,6 +555,40 @@ test("a 50 MiB note reads no footnote definitions until a reference is in view, 
       read > 0 && read <= counts.slice + counts.size,
       JSON.stringify(counts),
     )
+})
+
+test('a view destroyed with an idle parse pending cancels it', {
+  timeout: 60000,
+}, async () => {
+  const { pending, left } = await harness.evaluate(async () => {
+    const held = new Map()
+    const idle = window.requestIdleCallback
+    const cancel = window.cancelIdleCallback
+    let next = 0
+    window.requestIdleCallback = (callback) => {
+      held.set(--next, callback)
+      return next
+    }
+    window.cancelIdleCallback = (id) => {
+      if (!held.delete(id)) cancel(id)
+    }
+    try {
+      // Longer than one parse step, so its rest waits for an idle slice.
+      await window.livePreview.mount(
+        '- one\n\n> quote\n\n'.repeat(2000),
+        { width: 800, height: 600 },
+        { slice: 0 },
+      )
+      const pending = [...held.keys()]
+      await window.livePreview.mount('after', { width: 800, height: 600 })
+      return { pending, left: pending.filter((id) => held.has(id)) }
+    } finally {
+      window.requestIdleCallback = idle
+      window.cancelIdleCallback = cancel
+    }
+  })
+  assert.ok(pending.length, 'MISS: no idle work was pending to cancel')
+  assert.deepEqual(left, [])
 })
 
 test('a footnote reference in a table cell resolves once its definition is read, in the cell and its editor', {

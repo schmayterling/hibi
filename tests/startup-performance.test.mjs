@@ -173,6 +173,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // made autocomplete forget words typed after a save, adds 97 (#936).
   // Not taking an older storage notice over a newer commit, or over a newer
   // schema learned from a refused write, adds 40 (#937).
+  // Applying an edit at every line of a large selection, such as Tab over a
+  // megabyte of code, in one pass over the source tree adds 1,207 (#964).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
     bytes <=
@@ -216,7 +218,8 @@ test('startup catalog stays within the main byte budget and leaves notices and a
         528 +
         894 +
         97 +
-        40,
+        40 +
+        1207,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

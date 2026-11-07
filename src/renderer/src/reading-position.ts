@@ -397,6 +397,11 @@ function holdTop(view: EditorView) {
     clamped(held.position, held.scroll)
   )
     return
+  // The reader's scroll, which no update reports when nothing else changed.
+  if (held && !stayed(view, held.position, held.scroll))
+    held.scroll = Number.POSITIVE_INFINITY
+  const keep = kept.get(view)
+  if (keep && !stayed(view, keep, keep.scroll)) kept.delete(view)
   if (held?.position.isTop) {
     if (held.position.pane === pane && stayed(view, held.position, held.scroll))
       return

@@ -300,6 +300,28 @@ test('a pane that hides is not read as clamped', (t) => {
   assert.equal(pane.scrollTop, 0)
 })
 
+for (const kept of [true, false])
+  test(`a scroll no update reported ends a ${kept ? 'kept' : 'held'} place before a clamp`, async (t) => {
+    const reading = topReader(t)
+    const { view, pane, scroll } = reading
+    // A line that fits the pane: the scroll holds no new place at its top.
+    view.lineBlockAt = () => ({ from: 50, top: 600, height: 16 })
+    view.lineBlockAtHeight = view.lineBlockAt
+    pane.scrollTop = 3000
+    keepReading(view)
+    await Promise.resolve()
+    if (!kept) for (let update = 0; update < 8; update++) measured(view)
+    pane.scrollTop = 2970
+    scroll()
+    clamp(reading)
+    if (kept) measured(view)
+    else {
+      keepReading(view)
+      await Promise.resolve()
+    }
+    assert.equal(pane.scrollTop, 1900)
+  })
+
 test('a place given up stays given up once the pane is at the end', (t) => {
   const { view, pane, scroll, resize, shift } = topReader(t)
   scroll()

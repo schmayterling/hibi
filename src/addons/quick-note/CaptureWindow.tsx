@@ -320,8 +320,9 @@ export function CaptureWindow({ Editor, native, close }: AddonWindowProps) {
           label="Note"
           defaultValue={initial}
           onChange={(value) => {
-            // An editor from a previous note may report once more while it unmounts.
-            if (session !== sessionRef.current) return
+            // Ignore an old editor or an unchanged initial report.
+            if (session !== sessionRef.current || value === markdown.current)
+              return
             markdown.current = value
             scheduleDraft()
           }}

@@ -206,11 +206,13 @@ export const formattedFindWindow = [
     })
     window.addEventListener('resize', schedule)
     // A pane sliding in, as from the source view's side, changes no size or
-    // scroll: what it shows is measured once it is in place.
+    // scroll: what it shows is measured once it is in place, or snaps there
+    // when its slide is cancelled, as when motion is reduced.
     const slid = (event: Event) => {
       if ((event.target as Node).contains(view.dom)) schedule()
     }
     document.addEventListener('transitionend', slid, true)
+    document.addEventListener('transitioncancel', slid, true)
     return {
       update(update) {
         if (update.docChanged || update.selectionSet || update.viewportChanged)
@@ -222,6 +224,7 @@ export const formattedFindWindow = [
         document.removeEventListener('scroll', schedule, { capture: true })
         window.removeEventListener('resize', schedule)
         document.removeEventListener('transitionend', slid, true)
+        document.removeEventListener('transitioncancel', slid, true)
       },
     }
   }),

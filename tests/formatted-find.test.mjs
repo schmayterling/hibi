@@ -1216,18 +1216,26 @@ function unmarkedOnScreen() {
 }
 
 // A match found while the formatted pane slides in, off screen, is shown
-// with the matches around it once the pane is in place; one near the text the
-// pane drew already is, as the pane comes in.
-for (const [key, expected, halfway] of [
-  ['Enter', '2/10000', true],
-  ['Shift+Enter', '10000/10000', false],
+// with the matches around it once the pane is in place, or snaps there when
+// motion is reduced; one near the text the pane drew already is, as the pane
+// comes in.
+for (const [key, expected, halfway, reduced] of [
+  ['Enter', '2/10000', true, false],
+  ['Shift+Enter', '10000/10000', false, false],
+  ['Shift+Enter', '10000/10000', false, true],
 ])
-  test(`formatted find highlights what the formatted pane shows once it slides in after ${key}`, {
+  test(`formatted find highlights what the formatted pane shows once it ${reduced ? 'snaps' : 'slides'} in after ${key}`, {
     timeout: 60000,
   }, async (t) => {
     const { page, rich, input, count } = await countedDenseFind(t, true)
     await input.press(key)
     await count(expected)
+    // The jump settles while the pane is still off screen.
+    await page.evaluate(async () => {
+      for (let frame = 0; frame < 30; frame++)
+        await new Promise(requestAnimationFrame)
+    })
+    if (reduced) await page.emulateMedia({ reducedMotion: 'reduce' })
     for (const end of halfway ? [false, true] : [true]) {
       // Highlights that follow the pane are there within its next frames.
       const shown = await page.evaluate(

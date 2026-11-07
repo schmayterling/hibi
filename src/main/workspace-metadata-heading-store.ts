@@ -31,6 +31,10 @@ const entryBytes = 24
 export const headingStoreBufferBytes = 64 * 1024
 export const headingPageBytes = 32 * 1024
 export const headingPageLimit = 1000
+// A note's few headings stay in its record. Separate heading files would
+// triple the cache's files, and pruning reads a record for each of them.
+export const inlineHeadingCount = 64
+export const inlineHeadingLength = 4096
 
 export function validHeadingStore(value: HeadingStoreRecord): boolean {
   return !!(

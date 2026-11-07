@@ -61,11 +61,12 @@ export async function pressShortcut(app, shortcut, { delivered = false } = {}) {
   const receipt = delivered
     ? await (await app.firstWindow()).evaluateHandle((keyCode) => {
         const seen = { done: false }
-        const keyup = (event) => {
+        const keydown = (event) => {
           if (event.key.toUpperCase() === keyCode) seen.done = true
         }
-        window.addEventListener('keyup', keyup)
-        return { seen, keyup }
+        // Recorders stop propagation, so listen in capture.
+        window.addEventListener('keydown', keydown, true)
+        return { seen, keydown }
       }, keyCode)
     : null
   try {
@@ -80,8 +81,8 @@ export async function pressShortcut(app, shortcut, { delivered = false } = {}) {
     if (receipt) await waitForAsync(receipt, ({ seen }) => seen.done)
   } finally {
     if (receipt) {
-      await receipt.evaluate(({ keyup }) =>
-        window.removeEventListener('keyup', keyup),
+      await receipt.evaluate(({ keydown }) =>
+        window.removeEventListener('keydown', keydown, true),
       )
       await receipt.dispose()
     }

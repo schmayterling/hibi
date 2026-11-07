@@ -23,7 +23,9 @@ import {
   redoKey,
   withHeldClock,
 } from './keyboard.mjs'
-import { waitForAsync } from './poll.mjs'
+import { waitForAsync } from './poll.mjs'/* pwdiag:start */
+import { tracePath, paragraphTracePlugin, pinFixture, saveTrace, finishTraceIO } from './paragraph-width-trace.mjs'
+/* pwdiag:end */
 
 const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)
 const note = `# Formatted tables
@@ -98,7 +100,9 @@ before(
     const bundle = join(folder, 'bundle')
     await build({
       configFile: false,
-      logLevel: 'silent',
+      logLevel: 'silent',/* pwdiag:start */
+      plugins: tracePath ? [paragraphTracePlugin()] : [],
+/* pwdiag:end */
       define: { 'process.env.NODE_ENV': '"production"' },
       build: {
         outDir: bundle,
@@ -117,7 +121,8 @@ before(
       html,
       '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
-    await mkdir(join(folder, 'notes'))
+/* pwdiag:start */    await pinFixture('fixture-before', bundle)
+/* pwdiag:end */    await mkdir(join(folder, 'notes'))
     const file = join(folder, 'notes', 'tables.md')
     await writeFile(file, note)
     app = await electron.launch({
@@ -186,7 +191,14 @@ afterEach(async (t) => {
 
 after(
   async () => {
-    await app?.close()
+/* pwdiag:start */    try {
+      await pinFixture('fixture-after')
+    } catch {
+      try { process.stderr.write('paragraph diagnostic I/O failure fixture-after\n') } catch {}
+    }
+ /* pwdiag:end */    await app?.close()/* pwdiag:start */
+    await finishTraceIO()
+/* pwdiag:end */
     if (folder) await rm(folder, { recursive: true, force: true })
   },
   { timeout: 30000 },
@@ -1211,9 +1223,26 @@ for (const [layout, doc, target] of [
 ])
   test(`the text at the pane's top in a huge ${layout} holds through wheel steps and new widths`, {
     timeout: 120000,
-  }, async () => {
+  }, async (/* pwdiag:start */t/* pwdiag:end */) => {/* pwdiag:start */
+    let receipt, oracle, originalError, originalPassed = false
+    if (tracePath && layout === 'paragraph')
+      t.after(async () => {
+        try {
+          await saveTrace({ receipt, oracle, originalPassed, originalError, aborted: t.signal.aborted })
+        } catch (error) {
+          try {
+            t.diagnostic('paragraph trace unavailable: ' + error.message)
+          } catch {
+            try { process.stderr.write('paragraph diagnostic I/O failure\n') } catch {}
+          }
+        }
+      })
+    try {
+/* pwdiag:end */
     await harness.evaluate(
-      async ({ doc, target }) => {
+      async ({ doc, target/* pwdiag:start */, diagnostic/* pwdiag:end */ }) => {/* pwdiag:start */
+        if (diagnostic) globalThis.__paragraphWidthArm()
+/* pwdiag:end */
         await window.tables.mount(
           doc,
           { width: 1400, height: 800 },
@@ -1222,7 +1251,9 @@ for (const [layout, doc, target] of [
         const view = window.tables.view()
         const pane = document.querySelector('.rich-pane')
         const frame = () => new Promise(requestAnimationFrame)
-        const at = doc.indexOf(target)
+        const at = doc.indexOf(target)/* pwdiag:start */
+        const tape = globalThis.__paragraphWidthTrace
+/* pwdiag:end */
         // The row the page draws the text in: at a row that starts at a join
         // of lines, coordsAtPos gives the row above.
         const where = (pos) => {
@@ -1233,15 +1264,19 @@ for (const [layout, doc, target] of [
           )
             return null
           for (const at of [pos, pos + 1]) {
-            const { node, offset } = view.domAtPos(at, 1)
+            const { node, offset } = view.domAtPos(at, 1)/* pwdiag:start */
+            tape?.add('oracle-dom', view, { pos, at, node, offset })
+/* pwdiag:end */
             if (node.nodeType === Node.TEXT_NODE && offset < node.length) {
-              const range = document.createRange()
+/* pwdiag:start */              tape?.add('oracle-range', view, { pos, at, node, offset })
+/* pwdiag:end */              const range = document.createRange()
               range.setStart(node, offset)
               range.setEnd(node, offset + 1)
               return range.getClientRects()[0].top
             }
           }
-          return view.coordsAtPos(pos, 1).top
+/* pwdiag:start */          tape?.add('oracle-coords', view, { pos })
+/* pwdiag:end */          return view.coordsAtPos(pos, 1).top
         }
         for (let i = 0; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) {
           view.dispatch({
@@ -1266,11 +1301,12 @@ for (const [layout, doc, target] of [
                 1,
               pane.getBoundingClientRect().top + y,
             )
-            return view.posAtDOM(caret.offsetNode, caret.offset)
+/* pwdiag:start */            tape?.add('oracle-caret', view, { y, node: caret.offsetNode, offset: caret.offset })
+/* pwdiag:end */            return view.posAtDOM(caret.offsetNode, caret.offset)
           },
         }
       },
-      { doc, target },
+      { doc, target/* pwdiag:start */, diagnostic: layout === 'paragraph' && !!tracePath/* pwdiag:end */ },
     )
     await harness.mouse.move(500, 400)
     // A wheel step moves the text by the step: when the editor moves its line
@@ -1292,7 +1328,10 @@ for (const [layout, doc, target] of [
         steps.push(after === null ? null : after - before.top + delta)
       }
     // A new width wraps the text at once, the editor's estimates follow later.
-    const widths = await harness.evaluate(async () => {
+    const widths = await harness.evaluate(async () => {/* pwdiag:start */
+      const tape = globalThis.__paragraphWidthTrace
+      if (tape) { tape.phase = 'widths-setup'; tape.stage = null }
+/* pwdiag:end */
       const { rowAtTop, where, frame, panes } = window.reading
       for (let frames = 0; frames < 30; frames++) await frame()
       // A command already inside the pane moves nothing and keeps the place.
@@ -1302,21 +1341,44 @@ for (const [layout, doc, target] of [
       })
       for (let frames = 0; frames < 3; frames++) await frame()
       const pos = rowAtTop()
-      const start = where(pos)
+      const start = where(pos)/* pwdiag:start */
+      tape?.add('widths-baseline', view, { pos, start })
+/* pwdiag:end */
       const offs = []
-      for (const width of [1100, 900, 1400]) {
+      for (const width of [1100, 900, 1400]) {/* pwdiag:start */
+        if (tape) {
+          tape.phase = 'width'; tape.width = width; tape.stage = 'assign'
+          tape.add('width-assignment', view, { pos, start })
+        }
+/* pwdiag:end */
         panes.style.width = `${width}px`
         // What the frame paints: this task runs after it.
         await frame()
         await new Promise((done) => setTimeout(done))
-        const painted = where(pos)
+/* pwdiag:start */        if (tape) tape.stage = 'first'
+/* pwdiag:end */        const painted = where(pos)/* pwdiag:start */
+        tape?.add('width-oracle', view, { pos, start, top: painted })
+        if (tape) tape.stage = 'settling'
+/* pwdiag:end */
         for (let frames = 0; frames < 30; frames++) await frame()
-        const settled = where(pos)
+/* pwdiag:start */        if (tape) tape.stage = 'settled'
+/* pwdiag:end */        const settled = where(pos)/* pwdiag:start */
+        tape?.add('width-oracle', view, { pos, start, top: settled })
+/* pwdiag:end */
         for (const top of [painted, settled])
           offs.push(top === null ? null : top - start)
       }
-      return offs
-    })
+/* pwdiag:start */      if (tape) offs.push(tape.finish())
+/* pwdiag:end */      return offs
+    })/* pwdiag:start */
+    if (tracePath && layout === 'paragraph') {
+      receipt = widths.pop()
+      oracle = Object.freeze({
+        steps: Object.freeze(steps.slice()),
+        widths: Object.freeze(widths.slice()),
+      })
+    }
+/* pwdiag:end */
     // A row's start is the test's mark, not the text held, which can be further
     // along the row: rows half as long break it up to two rows away.
     const rowsHeld = (off) => off !== null && Math.abs(off) <= 60
@@ -1429,7 +1491,13 @@ for (const [layout, doc, target] of [
         asked: off(asked, pane.getBoundingClientRect().top),
       }
     })
-    assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))
+    assert.ok(Object.values(since).every(rowsHeld), JSON.stringify(since))/* pwdiag:start */
+    originalPassed = true
+    } catch (error) {
+      originalError = Object.freeze({ name: error.name, message: error.message, stack: error.stack })
+      throw error
+    }
+/* pwdiag:end */
   })
 
 /** Mount `doc` in the editable harness. */

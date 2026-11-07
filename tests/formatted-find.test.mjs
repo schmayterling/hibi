@@ -9,6 +9,7 @@ import {
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
+import { findWorkDiagnostic } from './find-work-diagnostic.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -180,8 +181,17 @@ async function scrollFormatted(rich, fraction) {
   throw new Error('the formatted view kept moving after scrolling')
 }
 
-async function installFindWorkProbe(page) {
-  await page.addInitScript(() => {
+async function installFindWorkProbe(page, diagnostic) {
+  await page.addInitScript((traceSource) => {
+    let trace = null
+    if (traceSource) {
+      try {
+        trace = new Function('return (' + traceSource + ')')()('renderer')
+      } catch {}
+    }
+    window.findTrace = trace
+    let physical = 0,
+      ticket = 0
     window.findWork = {
       hold: true,
       held: [],
@@ -210,8 +220,19 @@ async function installFindWorkProbe(page) {
         const worker = Reflect.construct(target, args)
         if (String(args[0]).includes('document.worker')) {
           const post = worker.postMessage.bind(worker)
+          const physicalWorker = ++physical
+          trace?.record('construct', null, { physicalWorker })
+          if (trace)
+            worker.addEventListener('message', ({ data }) => {
+              trace.record('reply', data, { physicalWorker })
+            })
           worker.postMessage = (message, ...rest) => {
             const request = message.message ?? message
+            const sendTicket = trace ? ++ticket : 0
+            trace?.record('enqueue', message, {
+              physicalWorker,
+              ticket: sendTicket,
+            })
             if (request.type === 'find') {
               window.findWork.requests.push({
                 owner: message.owner ?? request.epoch,
@@ -229,19 +250,37 @@ async function installFindWorkProbe(page) {
               (request.type === 'find' || window.findWork.blocked.has(owner))
             ) {
               window.findWork.blocked.add(owner)
-              window.findWork.held.push(() => post(message, ...rest))
+              trace?.record('hold', message, {
+                physicalWorker,
+                ticket: sendTicket,
+              })
+              window.findWork.held.push(() => {
+                trace?.record('hold-release', message, {
+                  physicalWorker,
+                  ticket: sendTicket,
+                })
+                trace?.record('send', message, {
+                  physicalWorker,
+                  ticket: sendTicket,
+                })
+                return post(message, ...rest)
+              })
               return
             }
+            trace?.record('send', message, {
+              physicalWorker,
+              ticket: sendTicket,
+            })
             return post(message, ...rest)
           }
         }
         return worker
       },
     })
-  })
+  }, diagnostic?.source ?? null)
 }
 
-async function findWorkers(page) {
+async function findWorkers(page, diagnostic) {
   const workers = page
     .workers()
     .filter((worker) => worker.url().includes('document.worker'))
@@ -249,33 +288,72 @@ async function findWorkers(page) {
     workers.length > 0,
     'measure established document workers, including shared owners',
   )
+  diagnostic?.expectWorkers(workers.length)
   for (const worker of workers)
-    await worker.evaluate(() => {
-      globalThis.findFoldWork = { lower: 0, normalized: 0 }
-      const lower = String.prototype.toLowerCase,
-        normalize = String.prototype.normalize
-      String.prototype.toLowerCase = function (...args) {
-        globalThis.findFoldWork.lower += this.length
-        return lower.apply(this, args)
-      }
-      String.prototype.normalize = function (...args) {
-        globalThis.findFoldWork.normalized += this.length
-        return normalize.apply(this, args)
-      }
-    })
+    await worker.evaluate(
+      ({ traceSource, domain }) => {
+        globalThis.findFoldWork = { lower: 0, normalized: 0 }
+        if (traceSource) {
+          try {
+            const trace = new Function('return (' + traceSource + ')')()(domain)
+            globalThis.findFoldTrace = trace
+            trace.record('install', null)
+            globalThis.addEventListener('message', ({ data }) => {
+              trace.record('receive-after-service-handler', data)
+            })
+            const post = globalThis.postMessage
+            globalThis.postMessage = function (message, ...rest) {
+              trace.record('reply', message)
+              return post.call(this, message, ...rest)
+            }
+          } catch {
+            globalThis.findFoldTrace?.fault()
+          }
+        }
+        const lower = String.prototype.toLowerCase,
+          normalize = String.prototype.normalize
+        String.prototype.toLowerCase = function (...args) {
+          globalThis.findFoldWork.lower += this.length
+          return lower.apply(this, args)
+        }
+        String.prototype.normalize = function (...args) {
+          globalThis.findFoldWork.normalized += this.length
+          return normalize.apply(this, args)
+        }
+      },
+      {
+        traceSource: diagnostic?.source ?? null,
+        domain: 'worker-' + workers.indexOf(worker),
+      },
+    )
   return workers
 }
 
-async function foldWork(workers, reset = false) {
+async function foldWork(workers, reset = false, diagnostic) {
   const values = []
-  for (const worker of workers)
+  for (const worker of workers) {
     values.push(
       await worker.evaluate((reset) => {
         const result = { ...globalThis.findFoldWork }
+        const trace = globalThis.findFoldTrace
+        trace?.record(reset ? 'reset-before' : 'snapshot', null)
         if (reset) globalThis.findFoldWork = { lower: 0, normalized: 0 }
-        return result
+        if (reset && trace) {
+          trace.reset()
+          trace.record('reset-after', null)
+        }
+        return trace ? { result, trace: trace.snapshot() } : result
       }, reset),
     )
+    diagnostic?.capture(
+      reset ? 'worker-reset' : 'worker-read',
+      values.at(-1).trace,
+    )
+  }
+  if (diagnostic) {
+    for (let i = 0; i < values.length; i++)
+      values[i] = values[i].result ?? values[i]
+  }
   return values.reduce(
     (sum, value) => ({
       lower: sum.lower + value.lower,
@@ -290,6 +368,7 @@ async function openFind(
   markdown,
   instrument = false,
   renderedProbe = false,
+  diagnostic,
 ) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-find-'))
   const app = await electron.launch({
@@ -306,7 +385,7 @@ async function openFind(
   page.setDefaultTimeout(7000)
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  if (instrument) await installFindWorkProbe(page)
+  if (instrument) await installFindWorkProbe(page, diagnostic)
   if (renderedProbe)
     await page.addInitScript((length) => {
       window.renderedFindReplies = []
@@ -1088,15 +1167,15 @@ for (const kind of ['code', 'wrapped', 'wide code start']) {
   })
 }
 
-async function countedDenseFind(t) {
+async function countedDenseFind(t, diagnostic) {
   const dense = 'needle word '.repeat(10000).trimEnd()
-  const fixture = await openFind(t, dense, true)
+  const fixture = await openFind(t, dense, true, false, diagnostic)
   await fixture.input.fill('NEEDLE')
   await fixture.page.waitForFunction(() => window.findWork.held.length > 0)
-  const workers = await findWorkers(fixture.page)
+  const workers = await findWorkers(fixture.page, diagnostic)
   await fixture.page.evaluate(() => window.findWork.release())
   await fixture.count('1/10000')
-  const initial = await foldWork(workers, true)
+  const initial = await foldWork(workers, true, diagnostic)
   assert.ok(
     initial.lower >= dense.length && initial.normalized >= dense.length,
     'positive control measures a complete source scan in established document workers',
@@ -1119,47 +1198,71 @@ async function countedDenseFind(t) {
 test('formatted find selection-only moves reuse worker search work and keep renderer folding bounded', {
   timeout: 60000,
 }, async (t) => {
-  const { page, rich, input, count, dense, workers, owners } =
-    await countedDenseFind(t)
-  await page.evaluate(() => {
-    window.findWork.lower = window.findWork.normalized = 0
-    window.findWork.measuring = true
-  })
-  for (const [key, expected] of [
-    ['Enter', '2/10000'],
-    ['Shift+Enter', '1/10000'],
-    ['Shift+Enter', '10000/10000'],
-    ['Enter', '1/10000'],
-  ]) {
-    await input.press(key)
-    await count(expected)
-  }
-  const measured = await foldWork(workers)
-  const main = await page.evaluate(() => {
-    window.findWork.measuring = false
-    return {
-      lower: window.findWork.lower,
-      normalized: window.findWork.normalized,
-      requests: window.findWork.requests,
+  const diagnostic = findWorkDiagnostic()
+  let originalPassed = false
+  try {
+    const { page, rich, input, count, dense, workers, owners } =
+      await countedDenseFind(t, diagnostic)
+    diagnostic.capture(
+      'renderer-start',
+      await page.evaluate(() => {
+        window.findTrace?.record('renderer-reset-before', null)
+        window.findWork.lower = window.findWork.normalized = 0
+        window.findWork.measuring = true
+        window.findTrace?.reset()
+        window.findTrace?.record('renderer-reset-after', null)
+        return window.findTrace?.snapshot()
+      }),
+    )
+    for (const [key, expected] of [
+      ['Enter', '2/10000'],
+      ['Shift+Enter', '1/10000'],
+      ['Shift+Enter', '10000/10000'],
+      ['Enter', '1/10000'],
+    ]) {
+      diagnostic.key(key, expected)
+      await input.press(key)
+      await count(expected)
     }
-  })
-  assert.ok(measured.lower < dense.length, JSON.stringify({ measured, owners }))
-  assert.ok(
-    measured.normalized < dense.length,
-    JSON.stringify({ measured, owners }),
-  )
-  assert.ok(
-    main.lower < dense.length && main.normalized < dense.length,
-    JSON.stringify(main),
-  )
-  assert.equal(
-    await rich.locator('.cm-searchMatch-selected').textContent(),
-    'needle',
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    dense,
-  )
+    const measured = await foldWork(workers, false, diagnostic)
+    const mainReceipt = await page.evaluate(() => {
+      window.findWork.measuring = false
+      window.findTrace?.record('renderer-stop', null)
+      return {
+        value: {
+          lower: window.findWork.lower,
+          normalized: window.findWork.normalized,
+          requests: window.findWork.requests,
+        },
+        trace: window.findTrace?.snapshot(),
+      }
+    })
+    diagnostic.capture('renderer-stop', mainReceipt.trace)
+    const main = mainReceipt.value
+    assert.ok(
+      measured.lower < dense.length,
+      JSON.stringify({ measured, owners }),
+    )
+    assert.ok(
+      measured.normalized < dense.length,
+      JSON.stringify({ measured, owners }),
+    )
+    assert.ok(
+      main.lower < dense.length && main.normalized < dense.length,
+      JSON.stringify(main),
+    )
+    assert.equal(
+      await rich.locator('.cm-searchMatch-selected').textContent(),
+      'needle',
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      dense,
+    )
+    originalPassed = true
+  } finally {
+    await diagnostic.finish(originalPassed, (marker) => t.diagnostic(marker))
+  }
 })
 
 test('formatted find moving to an adjacent match restyles highlights without rewriting rendered text', {

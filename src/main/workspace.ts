@@ -1299,6 +1299,7 @@ async function runIndexRequest(
   const source = (draft: IndexDraft) => ({
     id: createHash('sha256').update(draft.file).digest('hex'),
     version: `draft:${draft.tabId}:${draft.contentVersion}`,
+    minimumBytes: draft.source.utf16Length,
     read: (maximumBytes: number) => {
       checkLegacyIndexBytes(draft.source.utf16Length, maximumBytes)
       return draft.source.materialize()
@@ -1326,6 +1327,7 @@ async function runIndexRequest(
       return {
         id: createHash('sha256').update(file).digest('hex'),
         version: diskIndexVersion(info),
+        minimumBytes: Number(info.size),
         read: (maximumBytes: number) => {
           checkLegacyIndexBytes(Number(info.size), maximumBytes)
           return readMarkdown(file, maximumBytes)

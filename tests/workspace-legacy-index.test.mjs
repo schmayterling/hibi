@@ -42,6 +42,7 @@ function fixture(count = 1) {
       return {
         id: `id:${path}`,
         version: source.version,
+        minimumBytes: Buffer.byteLength(source.text),
         read: () => {
           counters.reads++
           return source.text
@@ -175,6 +176,7 @@ test('20 MiB includes complete header/tree/pages and refreshed warm header', asy
   options.key = 'full'
   const full = await index.read(options)
   assert.equal(bytes(full), MAX_LEGACY_INDEX_BYTES)
+  assert.strictEqual((await index.read(options)).pages, full.pages)
   const before = counters.reads
   options.workspace.name += 'a'
   await assert.rejects(
@@ -213,13 +215,107 @@ test('oversized reply stops before reading the rest and retains no partial new k
   const { index, options, disk, counters } = fixture(30)
   for (const source of disk.values()) source.text = 'x'.repeat(1024 * 1024)
   await assert.rejects(index.read(options), /20 MiB message limit/)
-  assert.equal(counters.reads, 20)
+  assert.equal(counters.reads, 0)
   assert.equal(counters.stats, 20)
   disk.get('0.md').text = 'small'
   options.entries = [file('0.md')]
   const result = await index.read(options)
   assert.equal(result.pages[0].markdown, 'small')
-  assert.equal(counters.reads, 21)
+  assert.equal(counters.reads, 1)
+})
+
+test('preflight includes page envelopes before reading any text and clears the old cache', async () => {
+  const { index, options, disk, counters } = fixture(2)
+  const small = await index.read(options)
+  const overhead =
+    bytes(small) -
+    small.pages.reduce((n, page) => n + Buffer.byteLength(page.markdown), 0)
+  disk.set('0.md', {
+    version: 'large',
+    text: 'x'.repeat(MAX_LEGACY_INDEX_BYTES - overhead + 1),
+  })
+  disk.set('1.md', { version: 'empty', text: '' })
+  options.key = 'large'
+  counters.reads = 0
+  counters.stats = 0
+  await assert.rejects(index.read(options), /20 MiB message limit/)
+  assert.deepEqual(counters, { stats: 2, reads: 0 })
+  assert.equal(index.cached, undefined)
+  options.key = 'small-again'
+  disk.set('0.md', { version: 'small-again', text: 'small' })
+  const result = await index.read(options)
+  assert.deepEqual(
+    result.pages.map((page) => page.markdown),
+    ['small', ''],
+  )
+  assert.equal(counters.reads, 2)
+})
+
+test('draft lower bounds refuse before materialization and replace disk sizes', async () => {
+  const { index, options, counters } = fixture(2)
+  const large = 'x'.repeat(11 * 1024 * 1024)
+  let materialized = 0
+  for (const path of ['0.md', '1.md'])
+    options.drafts.set(path, {
+      id: path,
+      version: 'draft:1',
+      minimumBytes: large.length,
+      read: () => {
+        materialized++
+        return large
+      },
+    })
+  await assert.rejects(index.read(options), /20 MiB message limit/)
+  assert.equal(materialized, 0)
+  assert.deepEqual(counters, { stats: 0, reads: 0 })
+  options.key = 'small-drafts'
+  for (const path of ['0.md', '1.md'])
+    options.drafts.set(path, {
+      id: path,
+      version: 'draft:2',
+      minimumBytes: 1,
+      read: () => {
+        materialized++
+        return '雪'
+      },
+    })
+  const result = await index.read(options)
+  assert.deepEqual(
+    result.pages.map((page) => page.markdown),
+    ['雪', '雪'],
+  )
+  assert.equal(materialized, 2)
+  assert.deepEqual(counters, { stats: 0, reads: 0 })
+})
+
+test('cancellation at the last stat still starts zero text reads', async () => {
+  const { index, options, counters } = fixture(3)
+  options.current = () => counters.stats < 3
+  assert.equal(await index.read(options), null)
+  assert.deepEqual(counters, { stats: 3, reads: 0 })
+})
+
+test('a file removed after preflight is skipped while its tree row remains', async () => {
+  const { index, options, counters } = fixture(3)
+  const resolve = options.resolve
+  options.resolve = async (path) => {
+    const source = await resolve(path)
+    return {
+      ...source,
+      read: () => {
+        if (path === '1.md')
+          throw Object.assign(new Error('Gone'), { code: 'ENOENT' })
+        return source.read()
+      },
+    }
+  }
+  const result = await index.read(options)
+  assert.deepEqual(
+    result.pages.map((page) => page.path),
+    ['0.md', '2.md'],
+  )
+  assert.equal(result.workspace.entries.length, 3)
+  assert.deepEqual(counters, { stats: 3, reads: 2 })
 })
 
 test('remaining reply budget rejects oversized source before materialization', async () => {

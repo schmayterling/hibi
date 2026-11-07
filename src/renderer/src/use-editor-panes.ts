@@ -7,6 +7,17 @@ import {
 } from 'react'
 import type { DocumentView } from '../../shared/document-types'
 
+/** Never merge: metadata only, no callback evaluation while unarmed. */
+function growthTrace(event: string, read: () => Record<string, unknown>) {
+  ;(
+    window as unknown as {
+      __hiddenGrowth?: {
+        record: (event: string, read: () => Record<string, unknown>) => void
+      }
+    }
+  ).__hiddenGrowth?.record(event, read)
+}
+
 /**
  * Keep source focus and pane transitions identical across editor surfaces.
  * With `releaseSource`, leaving the source view unmounts it, so a large
@@ -105,7 +116,19 @@ export function useEditorPanes(
       },
     )
   }, [paneMode])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sample the original effect; do not add diagnostic dependencies.
   useEffect(() => {
+    growthTrace('panes', () => ({
+      mode,
+      initialMode,
+      paneMode,
+      sourceSettled,
+      sourceReady,
+      sourceMounted,
+      releaseSource,
+      sourceFirst,
+      host: content.current,
+    }))
     if (mode !== 'normal') setSourceMounted(true)
     else if (releaseSource && paneMode === 'normal') {
       setSourceMounted(false)

@@ -194,6 +194,17 @@ import {
 } from './source-view'
 import { textProjection } from './text-projection'
 
+/** Never merge: metadata only, no callback evaluation while unarmed. */
+function growthTrace(event: string, read: () => Record<string, unknown>) {
+  ;(
+    window as unknown as {
+      __hiddenGrowth?: {
+        record: (event: string, read: () => Record<string, unknown>) => void
+      }
+    }
+  ).__hiddenGrowth?.record(event, read)
+}
+
 /** Each mounted view's bridge to its document session. */
 const bridges = new WeakMap<
   EditorView,
@@ -1133,26 +1144,49 @@ export function SourceEditor({
   )
   repeatFind.current = requestFind
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: diagnostic reads must not change the original effect schedule.
   useEffect(() => {
     const controller = new AbortController()
     setPreparedText(null)
     const current = () =>
       documentRuntime.session(document.tabId) === session &&
       session.ownsCurrentSnapshot(bridge.snapshot())
-    void sourceEditorTextCooperatively(bridge.snapshot(), {
+    const preparingSource = bridge.snapshot()
+    growthTrace('prepare-begin', () => ({
+      bridge,
+      source: preparingSource,
+      version: preparingSource.version,
+      length: preparingSource.utf16Length,
+      formatted,
+      host: host.current,
+    }))
+    void sourceEditorTextCooperatively(preparingSource, {
       signal: controller.signal,
       isCurrent: current,
     })
       .then((text) => {
+        growthTrace('prepare-return', () => ({
+          bridge,
+          formatted,
+          aborted: controller.signal.aborted,
+          length: text?.length ?? null,
+        }))
         if (
           controller.signal.aborted ||
           documentRuntime.session(document.tabId) !== session
         )
           return
         if (!text || !current()) {
+          growthTrace('prepare-stale', () => ({ bridge, formatted }))
           retryBridge((retry) => retry + 1)
           return
         }
+        growthTrace('prepare-publish', () => ({
+          bridge,
+          formatted,
+          doc: text,
+          length: text.length,
+        }))
         setPreparedText({ bridge, text })
       })
       .catch((error: unknown) => {
@@ -2987,10 +3021,24 @@ export function SourceEditor({
     }
     measure()
     const finishFont = () => {
+      growthTrace('font-complete', () => ({
+        bridge,
+        formatted,
+        view: editor,
+        doc: editor.state.doc,
+        disposed,
+      }))
       if (disposed) return
       editor.requestMeasure({
         read: () => null,
         write: () => {
+          growthTrace('font-measure-write', () => ({
+            bridge,
+            formatted,
+            view: editor,
+            doc: editor.state.doc,
+            disposed,
+          }))
           if (!disposed) setFontReadyBridge(bridge)
         },
       })
@@ -3290,6 +3338,7 @@ export function SourceEditor({
     })
   }, [mountedView, disabled, inputReady, echoError])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: diagnostic reads must not change the original effect schedule.
   useEffect(() => {
     // Publish readiness after CodeMirror configures input, before its next frame.
     const status =
@@ -3298,6 +3347,22 @@ export function SourceEditor({
         : inputReady && (!waitForFont || fontReadyBridge === bridge)
           ? 'ready'
           : 'loading'
+    growthTrace('ready', () => ({
+      bridge,
+      formatted,
+      view: mountedView,
+      doc: mountedView?.state.doc,
+      status,
+      inputReady,
+      waitForFont,
+      fontMatches: fontReadyBridge === bridge,
+      disabled,
+      prepared: preparedText?.bridge === bridge,
+      languageReady,
+      extensionError: !!extensionError,
+      languageError: !!languageError,
+      echoError: !!echoError,
+    }))
     ready.current(status)
     if (status === 'ready' && !disabled) {
       const restore = restoreFocus.current

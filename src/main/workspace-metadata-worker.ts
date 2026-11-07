@@ -1,4 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { round, trace } from './index-trace'
+const derived = { parseMs: 0, recordMs: 0, mkdirMs: 0, mkdirCalls: 0, writeMs: 0, writes: 0 }
+const sums: Record<string, number> = {}
+const counts: Record<string, number> = {}
+let parseEnds = 0
+const report = (name: string) => trace(name, { parseEnds, ...Object.fromEntries(Object.entries(derived).map(([kind, n]) => [kind, round(n)])), sums: Object.fromEntries(Object.entries(sums).map(([kind, n]) => [kind, round(n)])), counts })
 import { constants, type Dir } from 'node:fs'
 import {
   type FileHandle,
@@ -384,7 +390,12 @@ async function resultChunk(): Promise<RecordSlice> {
   return next.value
 }
 
-async function remember(
+async function remember(...args: Parameters<typeof rememberUntimed>): Promise<boolean> {
+  const started = performance.now()
+  try { return await rememberUntimed(...args) }
+  finally { derived.recordMs += performance.now() - started }
+}
+async function rememberUntimed(
   page: WorkspaceMetadataPage,
   fingerprint: string,
   headings?: HeadingStoreRecord,
@@ -400,7 +411,10 @@ async function remember(
     return false
   const temporary = join(cacheDirectory, `.${page.id}-${randomUUID()}.tmp`)
   try {
+    const mkdirStarted = performance.now()
     await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
+    derived.mkdirMs += performance.now() - mkdirStarted
+    derived.mkdirCalls++
     if (!(await cacheAvailable())) return false
     const file = await open(temporary, 'wx', 0o600)
     try {
@@ -416,11 +430,14 @@ async function remember(
       const write = async (slice: RecordToken[]) => {
         const buffer = Buffer.from(`${JSON.stringify(slice)}\n`)
         for (let offset = 0; offset < buffer.length; ) {
+          const writeStarted = performance.now()
           const { bytesWritten } = await file.write(
             buffer,
             offset,
             buffer.length - offset,
           )
+          derived.writeMs += performance.now() - writeStarted
+          derived.writes++
           if (!bytesWritten) throw new Error('Invalid metadata cache write')
           offset += bytesWritten
         }
@@ -640,6 +657,7 @@ async function derive(
     writer.add(heading)
   }
   let page: WorkspaceMetadataPage
+  const parseStarted = performance.now()
   try {
     if (fallback)
       page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
@@ -668,6 +686,7 @@ async function derive(
         page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
       }
     }
+    derived.parseMs += performance.now() - parseStarted
     const headings = writer?.finish()
     page.metadata.headings = {
       items: [],
@@ -769,6 +788,15 @@ const startup = cleanupTemporaries()
 void startup.then(() => parentPort?.postMessage({ ready: true }))
 
 parentPort?.on('message', async (request: MetadataWorkerRequest) => {
+  const started = performance.now()
+  try { return await handleMessage(request) }
+  finally {
+    sums[request.kind] = (sums[request.kind] ?? 0) + performance.now() - started
+    counts[request.kind] = (counts[request.kind] ?? 0) + 1
+    if ((request.kind === 'parseEnd' && ++parseEnds % 256 === 0) || request.kind === 'finishBuild' || request.kind === 'beginBuild') report(`worker:${request.kind}`)
+  }
+})
+async function handleMessage(request: MetadataWorkerRequest) {
   try {
     await startup
     let value: unknown
@@ -864,4 +892,4 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
           },
     )
   }
-})
+}

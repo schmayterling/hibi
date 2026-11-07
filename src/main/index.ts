@@ -75,6 +75,7 @@ import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
+import { trace } from './index-trace'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
@@ -326,6 +327,7 @@ import {
 
 const localDiagnostics = new LocalDiagnostics()
 startupMark('main-entry')
+trace('main-entry')
 app.setName('hibi')
 // Let held Vim motions repeat instead of opening macOS's accent picker.
 if (process.platform === 'darwin')
@@ -1052,6 +1054,7 @@ function createWindow(): void {
     },
   })
   startupMark('window-created')
+trace('window-created')
   mainWindow = window
   const stopRecording = () => {
     recordingHotkey = false
@@ -1250,6 +1253,7 @@ function createWindow(): void {
   })
   window.once('ready-to-show', () => {
     startupMark('window-painted')
+trace('window-painted')
     if (testing) return
     if (!app.isPackaged && app.commandLine.hasSwitch('user-data-dir'))
       window.showInactive()
@@ -1552,6 +1556,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       startupMark('app-ready')
+trace('app-ready')
       void sweepSiteScratch(app.getPath('userData')).catch(console.error)
       const hotkeysReady = startupSpan('hotkeys', loadHotkeys)
       const addonsReady = startupSpan('addons', loadAddons)

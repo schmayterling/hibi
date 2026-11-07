@@ -1,50 +1,93 @@
-name: check
+name: intel scale margin diagnosis
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
     inputs:
-      clean:
-        description: Ignore caches and run a full build and all checks
+      base:
+        description: Optional traced baseline commit for same-runner paired comparison
+        required: false
+      passes:
+        description: Passes per side on each runner
+        default: '2'
+      untraced:
+        description: Disable trace output for timing confirmation
         type: boolean
         default: false
 permissions:
   contents: read
 concurrency:
-  group: check-${{ github.ref }}
-  # A pull request's newest push replaces its run. Main's runs verify what pull
-  # requests skip, so each finishes, and only the newest waiting push runs next.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: intel-scale-margin-${{ github.run_id }}
+  cancel-in-progress: false
 jobs:
-  desktop:
-    # Full runs of the whole suite take about 45 minutes on the slowest shard, and about 130 unsharded on macOS.
-    timeout-minutes: ${{ matrix.shard == '0/1' && 180 || 60 }}
+  index:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
-        shard: ['0/4', '1/4', '2/4', '3/4']
-        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
-    runs-on: ${{ matrix.os }}
+        rep: [1, 2, 3, 4]
+    runs-on: macos-15-intel
+    timeout-minutes: 40
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/ci
-        id: ci
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          clean: ${{ inputs.clean || false }}
-          base: ${{ github.event.pull_request.base.sha || '' }}
-          full: ${{ github.event_name != 'pull_request' }}
-          shard: ${{ matrix.shard }}
-      - run: npx electron-builder --dir --config.mac.identity=-
-        shell: bash
-        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
+          node-version-file: .nvmrc
+      - name: Install
+        run: node .github/actions/ci/install.mjs
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          electron_config_cache: ${{ github.workspace }}/.cache/electron
+      - name: Baseline checkout
+        if: inputs.base != ''
+        env:
+          BASE: ${{ inputs.base }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/base/node_modules"
+      - name: Build candidate
+        run: npm run build:app
+      - name: Build baseline
+        if: inputs.base != ''
+        working-directory: ${{ runner.temp }}/base
+        run: npm run build:app
+      - name: Original scale file
+        env:
+          BASE: ${{ inputs.base }}
+          PASSES: ${{ inputs.passes }}
+          UNTRACED: ${{ inputs.untraced }}
+        run: |
+          out="$RUNNER_TEMP/margin"
+          mkdir -p "$out"
+          { sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize; git rev-parse HEAD; uptime; } > "$out/machine.txt"
+          if [ -n "$BASE" ]; then
+            git -C "$RUNNER_TEMP/base" rev-parse HEAD >> "$out/machine.txt"
+            cmp tests/workspace-index-scale.test.mjs "$RUNNER_TEMP/base/tests/workspace-index-scale.test.mjs"
+            cmp src/main/index-trace.ts "$RUNNER_TEMP/base/src/main/index-trace.ts"
+          fi
+          for pass in $(seq 1 "$PASSES"); do
+            order="fix"
+            if [ -n "$BASE" ]; then
+              order="base fix"
+              [ $((pass % 2)) -eq 0 ] && order="fix base"
+            fi
+            for side in $order; do
+              dir="$GITHUB_WORKSPACE"
+              [ "$side" = base ] && dir="$RUNNER_TEMP/base"
+              trace="$out/$side-$pass.jsonl"
+              [ "$UNTRACED" = true ] && trace=""
+              ( cd "$dir" && HIBI_INDEX_TRACE="$trace" node --import ./tests/file-limit.mjs --test --test-reporter=tap --test-concurrency=1 tests/workspace-index-scale.test.mjs > "$out/$side-tap-$pass.txt" 2>&1 ) || echo "$side pass $pass exit $?" >> "$out/exits.txt"
+              echo "$side $pass $(grep -h -E '^(not )?ok|duration_ms: [0-9]{5}' "$out/$side-tap-$pass.txt" | tr '\n' ' ')" | tee -a "$out/summary.txt"
+            done
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: margin-intel-${{ matrix.rep }}
+          path: ${{ runner.temp }}/margin/
+          retention-days: 7

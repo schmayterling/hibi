@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { round, trace } from './index-trace'
 import { type BigIntStats, type FSWatcher, watch } from 'node:fs'
 import { lstat, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
@@ -1303,6 +1304,8 @@ async function runIndexRequest(
       return draft.source.materialize()
     },
   })
+  const legacyStarted = performance.now()
+  trace('legacy-start')
   const result = await legacyIndex.read({
     key: request.key,
     workspace,
@@ -1331,7 +1334,7 @@ async function runIndexRequest(
     },
     isDocument: (name) => isDocumentName(name, true),
     current: active,
-  })
+  }).finally(() => trace('legacy-end', { ms: round(performance.now() - legacyStarted) }))
   if (result && active()) legacyCachedRoot = selected
   return result
 }
@@ -1685,7 +1688,9 @@ export function workspaceMetadataPages(
       }
     }
     if (!active()) return
+    const pruneStarted = performance.now()
     if (building) await metadataParser.finishBuild(active)
+    trace('finish-build', { ms: round(performance.now() - pruneStarted), building })
     else {
       await metadataParser.close()
       if (!active()) return

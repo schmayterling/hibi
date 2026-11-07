@@ -2293,6 +2293,7 @@
   "fe199528850a": "Uninstall",
   "f981cf355235": "Uninstall {value1}",
   "7786cacd2ef2": "Uninstall {value1} pack",
+  "ffa7aa26add4": "Unknown admitted document change.",
   "b0291a853226": "Unknown document format.",
   "c57bf48df4b4": "Unknown document worker request.",
   "aee2eda9746d": "Unknown semantic source owner.",

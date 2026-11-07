@@ -757,7 +757,7 @@ test('rapid requests are synchronous, independent and cannot publish stale resul
   assert.deepEqual(words(model, { ...query, limit: 0 }), [])
 })
 
-test('personal model retains the maximum-size snapshot', async (t) => {
+test('personal model ranks from the maximum-size snapshot', async (t) => {
   const timer = clock()
   const entry = (i) => ({
     scope: 'notes',
@@ -782,18 +782,23 @@ test('personal model retains the maximum-size snapshot', async (t) => {
     },
   })
   assert.equal(model.snapshot().entries.length, 8192)
+  const request = {
+    ...session,
+    languages: ['en', 'tl', 'fr', 'ja', 'zh', 'yue'],
+    prefix: 'pre',
+    context: ['bro', 'that'],
+  }
+  // Rows with no context and count 50 lead in snapshot order.
+  assert.deepEqual(
+    words(model, request),
+    [99, 249, 399, 549, 699, 849, 999, 1149].map((i) => entry(i).word),
+  )
   await t.test(
     'stress: common-prefix ranking stays below 5ms',
     {
       skip: process.env.HIBI_STRESS !== '1' && 'opt in with HIBI_STRESS=1',
     },
     () => {
-      const request = {
-        ...session,
-        languages: ['en', 'tl', 'fr', 'ja', 'zh', 'yue'],
-        prefix: 'pre',
-        context: ['bro', 'that'],
-      }
       for (let i = 0; i < 100; i++) model.suggest(request)
       const timings = []
       for (let i = 0; i < 500; i++) {

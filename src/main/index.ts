@@ -75,6 +75,7 @@ import { RECOVERY_CHANNELS } from '../shared/recovery'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
+import { trace } from './index-trace'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UNDO_HISTORY_CHANNELS } from '../shared/undo-history'
@@ -326,6 +327,7 @@ import {
 
 const localDiagnostics = new LocalDiagnostics()
 startupMark('main-entry')
+trace('main-entry')
 app.setName('hibi')
 // Let held Vim motions repeat instead of opening macOS's accent picker.
 if (process.platform === 'darwin')
@@ -1052,6 +1054,7 @@ function createWindow(): void {
     },
   })
   startupMark('window-created')
+  trace('window-created')
   mainWindow = window
   const stopRecording = () => {
     recordingHotkey = false
@@ -1250,6 +1253,7 @@ function createWindow(): void {
   })
   window.once('ready-to-show', () => {
     startupMark('window-painted')
+    trace('window-painted')
     if (testing) return
     if (!app.isPackaged && app.commandLine.hasSwitch('user-data-dir'))
       window.showInactive()
@@ -1304,6 +1308,7 @@ function createWindow(): void {
       })
   })
   window.webContents.on('did-finish-load', () => {
+    trace('did-finish-load')
     rendererGone = false
   })
   localDiagnostics.observeWindow(window)
@@ -1552,6 +1557,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       startupMark('app-ready')
+      trace('app-ready')
       void sweepSiteScratch(app.getPath('userData')).catch(console.error)
       const hotkeysReady = startupSpan('hotkeys', loadHotkeys)
       const addonsReady = startupSpan('addons', loadAddons)
@@ -2514,9 +2520,13 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )
-      handle(WORKSPACE_CHANNELS.changeSnapshot, (event) =>
-        readAfterFileOperation(event, async () => workspaceChangeSnapshot()),
-      )
+      handle(WORKSPACE_CHANNELS.changeSnapshot, (event) => {
+        trace('snapshot-enter')
+        return readAfterFileOperation(event, async () => {
+          trace('snapshot-run')
+          return workspaceChangeSnapshot()
+        })
+      })
       handle(
         WORKSPACE_CHANNELS.listPage,
         (event, owner: unknown, request: unknown) => {
@@ -2669,20 +2679,26 @@ if (!app.requestSingleInstanceLock()) {
             ),
           ),
       )
-      handle(WORKSPACE_CHANNELS.index, (event, verifyAll: unknown) =>
-        readAfterFileOperation(event, () => indexWorkspace(verifyAll === true)),
-      )
-      handle(WORKSPACE_CHANNELS.queryReferences, (event, request: unknown) =>
-        readAfterFileOperation(event, () =>
-          import('./workspace-metadata-query').then((module) =>
+      handle(WORKSPACE_CHANNELS.index, (event, verifyAll: unknown) => {
+        trace('legacy-enter')
+        return readAfterFileOperation(event, () => {
+          trace('legacy-run')
+          return indexWorkspace(verifyAll === true)
+        }).finally(() => trace('legacy-exit'))
+      })
+      handle(WORKSPACE_CHANNELS.queryReferences, (event, request: unknown) => {
+        trace('query-ipc-enter')
+        return readAfterFileOperation(event, () => {
+          trace('query-ipc-run')
+          return import('./workspace-metadata-query').then((module) =>
             module.queryWorkspaceReferences(
               request,
               getOpenDocumentVersions,
               String(event.sender.id),
             ),
-          ),
-        ),
-      )
+          )
+        })
+      })
       const tableLayoutTarget = (tabId: unknown) => {
         if (typeof tabId !== 'string' || !tabId || tabId.length > 128)
           throw new Error('Invalid document identity.')

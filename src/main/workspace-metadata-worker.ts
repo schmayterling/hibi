@@ -1,4 +1,25 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { round, trace } from './index-trace'
+const sums: Record<string, number> = {}
+const counts: Record<string, number> = {}
+const derived = { parse: 0, remember: 0 }
+let parseEnds = 0
+let workerElu = performance.eventLoopUtilization()
+const report = (name: string) => {
+  const used = performance.eventLoopUtilization(workerElu)
+  workerElu = performance.eventLoopUtilization()
+  trace(name, {
+    parseEnds,
+    elu: round(used.utilization * 100),
+    parse: round(derived.parse),
+    remember: round(derived.remember),
+    ...Object.fromEntries(Object.entries(sums).map(([kind, ms]) => [kind, `${round(ms)}/${counts[kind]}`])),
+  })
+  for (const kind in sums) sums[kind] = 0
+  for (const kind in counts) counts[kind] = 0
+  derived.parse = 0
+  derived.remember = 0
+}
 import { constants, type Dir } from 'node:fs'
 import {
   type FileHandle,
@@ -337,6 +358,16 @@ async function resultChunk(): Promise<RecordSlice> {
 }
 
 async function remember(
+  ...args: Parameters<typeof rememberUntimed>
+): Promise<boolean> {
+  const rememberStart = performance.now()
+  try {
+    return await rememberUntimed(...args)
+  } finally {
+    derived.remember += performance.now() - rememberStart
+  }
+}
+async function rememberUntimed(
   page: WorkspaceMetadataPage,
   fingerprint: string,
   headings?: HeadingStoreRecord,
@@ -579,6 +610,7 @@ async function derive(
       page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
     else {
       try {
+        const parseStart = performance.now()
         const source = chunks.join('')
         const syntax = applySourceSyntax(input.syntax, source)
         page = {
@@ -593,6 +625,7 @@ async function derive(
             onHeading,
           ),
         }
+        derived.parse += performance.now() - parseStart
       } catch (error) {
         writer?.abort()
         writer = undefined
@@ -682,6 +715,17 @@ const startup = cleanupTemporaries()
 void startup.then(() => parentPort?.postMessage({ ready: true }))
 
 parentPort?.on('message', async (request: MetadataWorkerRequest) => {
+  const handled = performance.now()
+  try {
+    return await handleMessage(request)
+  } finally {
+    sums[request.kind] = (sums[request.kind] ?? 0) + performance.now() - handled
+    counts[request.kind] = (counts[request.kind] ?? 0) + 1
+    if (request.kind === 'parseEnd' && ++parseEnds % 64 === 0) report('worker')
+    if (request.kind === 'finishBuild' || request.kind === 'beginBuild') report(`worker-${request.kind}`)
+  }
+})
+async function handleMessage(request: MetadataWorkerRequest) {
   try {
     await startup
     let value: unknown
@@ -777,4 +821,4 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
           },
     )
   }
-})
+}

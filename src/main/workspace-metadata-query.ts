@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { round, trace } from './index-trace'
 import type {
   OperationResult,
   WorkspaceTarget,
@@ -112,6 +113,8 @@ export async function queryWorkspaceReferences(
   getOpenDocumentVersions: () => readonly OpenDocumentVersion[],
   owner = 'legacy',
 ): Promise<OperationResult<WorkspaceReferenceQueryResult, QueryFailure>> {
+  const queryStart = performance.now()
+  trace('query-enter', { kind: (input as { kind?: unknown })?.kind })
   if (!input || typeof input !== 'object')
     return failure('unsupported', 'Choose a workspace query.')
   const request = input as Record<string, unknown>
@@ -290,11 +293,13 @@ export async function queryWorkspaceReferences(
           : null
         if (!applied && active()) {
           const read = workspaceMetadataPages(syntax, active)
+          const applyStart = performance.now()
           applied = await references.applyMetadataCooperatively(
             target,
             read.pages,
             active,
           )
+          trace('apply-done', { ms: round(performance.now() - applyStart), applied: !!applied })
           commit = read.commit
         }
         if (!applied || !commit?.()) return false
@@ -307,7 +312,11 @@ export async function queryWorkspaceReferences(
         return true
       },
     }
-    if (!(await referenceJob.request(latestBuild)))
+    const buildStart = performance.now()
+    trace('build-request')
+    const built = await referenceJob.request(latestBuild)
+    trace('build-done', { ms: round(performance.now() - buildStart), built })
+    if (!built)
       return failure('stale', 'This workspace changed. Try again.')
   }
   const after = workspaceChangeCursor()
@@ -353,12 +362,14 @@ export async function queryWorkspaceReferences(
       },
     }
   if (kind === 'tag') {
+    const tagStart = performance.now()
     const result = await references.taggedCooperatively(
       (request.tag as string).normalize('NFC').toLowerCase(),
       offset,
       limit,
       cacheCurrent,
     )
+    trace('tag-done', { ms: round(performance.now() - tagStart), total: round(performance.now() - queryStart), ok: !!result, complete: base.complete })
     if (!result) return failure('stale', 'This workspace changed. Try again.')
     return {
       ok: true,

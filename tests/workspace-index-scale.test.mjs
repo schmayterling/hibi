@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { appendFileSync } from 'node:fs' // stage-stamp
+const stage = (name) => { try { if (process.env.HIBI_INDEX_TRACE) appendFileSync(process.env.HIBI_INDEX_TRACE, `${JSON.stringify({ wall: Math.round((performance.timeOrigin + performance.now()) * 10) / 10, pid: process.pid, name: `test:${name}` })}\n`) } catch {} } // stage-stamp
 
 const syntaxSnapshot = {
   version: 1,
@@ -24,6 +26,8 @@ const syntaxSnapshot = {
 test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from derived cache', {
   timeout: 60000,
 }, async (t) => {
+  stage('start')
+  let launches = 0
   const directory = await realpath(
     await mkdtemp(join(tmpdir(), 'hibi-index-scale-')),
   )
@@ -45,17 +49,26 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
     )
   }
   assert.ok(bytes > 20 * 1024 * 1024)
+  stage('notes-written')
   let app
   t.after(async () => {
+    stage('after-start')
     if (app) await app.close()
+    stage('after-closed')
     await rm(directory, { recursive: true, force: true })
+    stage('after-removed')
   })
   const launch = async () => {
+    const launched = ++launches
+    stage(`launch-${launched}-start`)
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`],
     })
+    stage(`launch-${launched}-launched`)
     const page = await app.firstWindow()
+    stage(`launch-${launched}-window`)
     await waitForDocumentEditor(app, page)
+    stage(`launch-${launched}-editor`)
     await app.evaluate(({ dialog }, notes) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -63,6 +76,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
       })
     }, notes)
     await page.evaluate(() => window.hibi.openWorkspace())
+    stage(`launch-${launched}-workspace`)
     await app.evaluate((_, notes) => {
       const fs = process.getBuiltinModule('node:fs/promises')
       const open = fs.open
@@ -86,6 +100,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
       }
       process.getBuiltinModule('node:module').syncBuiltinESMExports()
     }, notes)
+    stage(`launch-${launched}-hooks`)
     return page
   }
   let page = await launch()
@@ -93,10 +108,12 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
     page.evaluate(() => window.hibi.getWorkspaceIndex()),
     /legacy workspace index exceeds the 20 MiB message limit/,
   )
+  stage('legacy-rejected')
 
   await app.evaluate(() => {
     globalThis.scaleSourceReads = 0
   })
+  stage('reset-done')
   const tail = async () =>
     page.evaluate(async (syntaxSnapshot) => {
       const { target } = await window.hibi.getWorkspaceChangeSnapshot()
@@ -110,6 +127,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
       })
     }, syntaxSnapshot)
   let result = await tail()
+  stage('tail-1')
   assert.equal(result.ok, true)
   assert.equal(result.value.complete, true)
   assert.equal(result.value.items.length, 10)
@@ -117,14 +135,18 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
   assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 0)
   assert.equal(await app.evaluate(() => globalThis.scaleFileParses), 2110)
   assert.equal(await app.evaluate(() => globalThis.scaleCacheBatches), 33)
+  stage('asserts-1')
   await app.close()
+  stage('closed-1')
   app = null
   page = await launch()
   result = await tail()
+  stage('tail-2')
   assert.equal(result.ok, true)
   assert.equal(result.value.complete, true)
   assert.equal(result.value.items.length, 10)
   assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 0)
   assert.equal(await app.evaluate(() => globalThis.scaleFileParses), 0)
   assert.equal(await app.evaluate(() => globalThis.scaleCacheBatches), 33)
+  stage('end')
 })

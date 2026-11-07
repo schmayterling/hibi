@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { monitorEventLoopDelay } from 'node:perf_hooks'
+import { round, trace } from './index-trace'
+const batchTiming = { prepare: 0, begin: 0, cached: 0, parse: 0, parses: 0, markSeen: 0 }
 import { type BigIntStats, type FSWatcher, watch } from 'node:fs'
 import { lstat, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
@@ -1468,6 +1471,7 @@ async function readMetadataBatch(
 ): Promise<[string, CachedIndexPage<WorkspaceMetadataPage>][]> {
   const prepared: (PreparedMetadata | null)[] = paths.map(() => null)
   let offset = 0
+  let mark = performance.now()
   await Promise.all(
     Array.from({ length: Math.min(4, paths.length) }, async () => {
       while (current() && offset < paths.length) {
@@ -1515,7 +1519,12 @@ async function readMetadataBatch(
       }
     }),
   )
-  if (!current() || (begin && !(await begin()))) return []
+  batchTiming.prepare += performance.now() - mark
+  mark = performance.now()
+  const stopped = !current() || (begin && !(await begin()))
+  batchTiming.begin += performance.now() - mark
+  mark = performance.now()
+  if (stopped) return []
   const sources = prepared.filter(
     (item): item is Extract<PreparedMetadata, { kind: 'source' }> =>
       item?.kind === 'source' && !item.draft,
@@ -1532,6 +1541,7 @@ async function readMetadataBatch(
         current,
       )
     : []
+  batchTiming.cached += performance.now() - mark
   if (!current()) return []
   const cachedHits = new Map(
     sources.map((item, index) => [item.path, hits[index]]),
@@ -1555,6 +1565,7 @@ async function readMetadataBatch(
             fingerprint: syntax.fingerprint,
             syntax: syntax.page({ id: item.id, path: item.path, markdown: '' }),
           }
+          const parseStart = performance.now()
           const parsed = item.draft
             ? await metadataParser.parseSource(
                 input,
@@ -1569,6 +1580,8 @@ async function readMetadataBatch(
                 },
                 current,
               )
+          batchTiming.parse += performance.now() - parseStart
+          batchTiming.parses++
           if (!current()) return []
           cached = {
             version: item.key,
@@ -1588,11 +1601,13 @@ async function readMetadataBatch(
       started = performance.now()
     }
   }
+  mark = performance.now()
   if (begin && result.length)
     await metadataParser.markSeen(
       result.flatMap(([, cached]) => (cached.page.id ? [cached.page.id] : [])),
       current,
     )
+  batchTiming.markSeen += performance.now() - mark
   return current() ? result : []
 }
 
@@ -1648,6 +1663,41 @@ export function workspaceMetadataPages(
       for (const [path, draft] of drafts)
         if (draft.pending && !seen.has(path)) yield path
     }
+    const lag = monitorEventLoopDelay({ resolution: 5 })
+    lag.enable()
+    let elu = performance.eventLoopUtilization()
+    let batchNumber = 0
+    let consumer = 0
+    let batchStart = performance.now()
+    app.getAppMetrics()
+    const report = (n: number) => {
+      const used = performance.eventLoopUtilization(elu)
+      elu = performance.eventLoopUtilization()
+      trace('batch', {
+        i: batchNumber++,
+        n,
+        ms: round(performance.now() - batchStart),
+        prepare: round(batchTiming.prepare),
+        begin: round(batchTiming.begin),
+        cached: round(batchTiming.cached),
+        parse: round(batchTiming.parse),
+        parses: batchTiming.parses,
+        markSeen: round(batchTiming.markSeen),
+        consumer: round(consumer),
+        lagMax: round(lag.max / 1e6),
+        lagMean: round(lag.mean / 1e6),
+        lagP99: round(lag.percentile(99) / 1e6),
+        elu: round(used.utilization * 100),
+        cpu: app
+          .getAppMetrics()
+          .map((metric) => `${metric.type}:${round(metric.cpu.percentCPUUsage)}`)
+          .join(' '),
+      })
+      lag.reset()
+      consumer = 0
+      Object.assign(batchTiming, { prepare: 0, begin: 0, cached: 0, parse: 0, parses: 0, markSeen: 0 })
+      batchStart = performance.now()
+    }
     let batch: string[] = []
     for await (const path of allPaths()) {
       batch.push(path)
@@ -1664,8 +1714,11 @@ export function workspaceMetadataPages(
       if (!active()) return
       for (const [path, cached] of pages) {
         next.set(path, cached)
+        const yielded = performance.now()
         yield cached.page
+        consumer += performance.now() - yielded
       }
+      report(batch.length)
       batch = []
     }
     if (batch.length) {
@@ -1681,10 +1734,15 @@ export function workspaceMetadataPages(
       if (!active()) return
       for (const [path, cached] of pages) {
         next.set(path, cached)
+        const yielded = performance.now()
         yield cached.page
+        consumer += performance.now() - yielded
       }
+      report(batch.length)
     }
+    lag.disable()
     if (!active()) return
+    const finishStart = performance.now()
     if (building) await metadataParser.finishBuild(active)
     else {
       await metadataParser.close()
@@ -1695,6 +1753,7 @@ export function workspaceMetadataPages(
         force: true,
       }).catch(() => {})
     }
+    trace('finish-build', { ms: round(performance.now() - finishStart), building })
     if (!active()) return
     publish = () => {
       if (!active()) return false

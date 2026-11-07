@@ -55,7 +55,8 @@ jobs:
           if-no-files-found: error
   checks:
     needs: prepare
-    timeout-minutes: 35
+    # Match main's full-shard budget and leave time to report a timed-out check.
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +88,7 @@ jobs:
           persist-credentials: false
       - name: Full required checks
         id: ci
-        timeout-minutes: 25
+        timeout-minutes: 60
         continue-on-error: true
         uses: ./.github/actions/ci
         with:

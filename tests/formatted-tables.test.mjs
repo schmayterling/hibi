@@ -1217,6 +1217,62 @@ test('the reading place deep inside a huge line holds through second changes, sh
   }
 })
 
+for (const extra of ['line 15000 of', 'line 2000 of', 'line 6000 of', 'line 10000 of', 'line 13000 of', 'line 14500 of'])
+test(`probe extra aims ${extra}`, { timeout: 120000 }, async (t) => {
+  const out = await harness.evaluate(async ({ doc, target, extra }) => {
+    await window.tables.mount(doc, { width: 1400, height: 800 }, { editable: true })
+    const view = window.tables.view()
+    const pane = document.querySelector('.rich-pane')
+    const panes = document.querySelector('.editor-panes')
+    const frame = () => new Promise(requestAnimationFrame)
+    const at = doc.indexOf(target)
+    const where = (pos) => {
+      if (!view.visibleRanges.some((r) => r.from <= pos && pos < r.to)) return null
+      for (const a of [pos, pos + 1]) {
+        const { node, offset } = view.domAtPos(a, 1)
+        if (node.nodeType === Node.TEXT_NODE && offset < node.length) {
+          const range = document.createRange()
+          range.setStart(node, offset); range.setEnd(node, offset + 1)
+          return range.getClientRects()[0].top
+        }
+      }
+      return view.coordsAtPos(pos, 1).top
+    }
+    const aim = async () => {
+      view.dispatch({ effects: view.constructor.scrollIntoView(at, { y: 'start', yMargin: 0 }) })
+      for (let f = 0; f < 4; f++) await frame()
+    }
+    let i = 0
+    for (; i < 60 && Math.abs(where(at) ?? 999) >= 200; i++) await aim()
+    {
+      const pre = doc.indexOf(extra)
+      view.dispatch({ effects: view.constructor.scrollIntoView(pre, { y: 'start', yMargin: 0 }) })
+      for (let f = 0; f < 30; f++) await frame()
+      for (let k = 0; k < 60 && Math.abs(where(at) ?? 999) >= 200; k++) await aim()
+    }
+    for (let f = 0; f < 30; f++) await frame()
+    const gaps = view.viewState.lineGaps.map((g) => [g.from, g.to])
+    const rowAtTop = (y = 1) => {
+      const caret = document.caretPositionFromPoint(view.contentDOM.getBoundingClientRect().left + Number.parseFloat(getComputedStyle(view.contentDOM).paddingLeft) + 1, pane.getBoundingClientRect().top + y)
+      return view.posAtDOM(caret.offsetNode, caret.offset)
+    }
+    const pos = rowAtTop()
+    const start = where(pos)
+    const offs = []
+    for (const width of [1100, 900, 1400]) {
+      panes.style.width = `${width}px`
+      await frame()
+      await new Promise((done) => setTimeout(done))
+      const painted = where(pos)
+      for (let f = 0; f < 30; f++) await frame()
+      offs.push([painted === null ? null : painted - start, where(pos) - start])
+    }
+    panes.style.width = ''
+    return { aims: i, gaps, pos, offs }
+  }, { doc: hugeParagraph, target: 'line 15000 of', extra })
+  t.diagnostic('EXTRA ' + JSON.stringify(out))
+})
+
 for (const [layout, doc, target] of [
   ['line', hugeLine, 'word25000 '],
   ['paragraph', hugeParagraph, 'line 15000 of'],

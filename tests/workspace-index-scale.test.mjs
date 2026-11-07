@@ -1,10 +1,12 @@
 // ci: alone (indexes 2000 notes under a 60 s limit: 31, 46 and 61 s among four apps, 12 s alone)
 import assert from 'node:assert/strict'
+import { appendFileSync } from 'node:fs' // stage-stamp
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+const stage = (name) => { try { appendFileSync(process.env.HIBI_STAGE_LOG, `${JSON.stringify({ name, at: performance.now(), wall: Date.now() })}\n`) } catch { try { process.stderr.write('hibi-stage-stamp-fault\n') } catch {} } } // stage-stamp
 
 const syntaxSnapshot = {
   version: 1,
@@ -24,6 +26,8 @@ const syntaxSnapshot = {
 test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from derived cache', {
   timeout: 60000,
 }, async (t) => {
+  stage('start') // stage-stamp
+  let launches = 0 // stage-stamp
   const directory = await realpath(
     await mkdtemp(join(tmpdir(), 'hibi-index-scale-')),
   )
@@ -45,17 +49,25 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
     )
   }
   assert.ok(bytes > 20 * 1024 * 1024)
+  stage('notes-written') // stage-stamp
   let app
   t.after(async () => {
+    stage('after-start') // stage-stamp
     if (app) await app.close()
+    stage('after-closed') // stage-stamp
     await rm(directory, { recursive: true, force: true })
+    stage('after-removed') // stage-stamp
   })
   const launch = async () => {
+    const launched = ++launches // stage-stamp
+    stage(`launch-${launched}-start`) // stage-stamp
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`],
     })
     const page = await app.firstWindow()
+    stage(`launch-${launched}-window`) // stage-stamp
     await waitForDocumentEditor(app, page)
+    stage(`launch-${launched}-editor`) // stage-stamp
     await app.evaluate(({ dialog }, notes) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -63,6 +75,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
       })
     }, notes)
     await page.evaluate(() => window.hibi.openWorkspace())
+    stage(`launch-${launched}-workspace`) // stage-stamp
     await app.evaluate((_, notes) => {
       const fs = process.getBuiltinModule('node:fs/promises')
       const open = fs.open
@@ -86,6 +99,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
       }
       process.getBuiltinModule('node:module').syncBuiltinESMExports()
     }, notes)
+    stage(`launch-${launched}-hooks`) // stage-stamp
     return page
   }
   let page = await launch()
@@ -93,6 +107,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
     page.evaluate(() => window.hibi.getWorkspaceIndex()),
     /legacy workspace index exceeds the 20 MiB message limit/,
   )
+  stage('legacy-rejected') // stage-stamp
 
   await app.evaluate(() => {
     globalThis.scaleSourceReads = 0
@@ -110,6 +125,7 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
       })
     }, syntaxSnapshot)
   let result = await tail()
+  stage('tail-1') // stage-stamp
   assert.equal(result.ok, true)
   assert.equal(result.value.complete, true)
   assert.equal(result.value.items.length, 10)
@@ -117,14 +133,18 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
   assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 0)
   assert.equal(await app.evaluate(() => globalThis.scaleFileParses), 2110)
   assert.equal(await app.evaluate(() => globalThis.scaleCacheBatches), 33)
+  stage('checks-1') // stage-stamp
   await app.close()
   app = null
+  stage('closed') // stage-stamp
   page = await launch()
   result = await tail()
+  stage('tail-2') // stage-stamp
   assert.equal(result.ok, true)
   assert.equal(result.value.complete, true)
   assert.equal(result.value.items.length, 10)
   assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 0)
   assert.equal(await app.evaluate(() => globalThis.scaleFileParses), 0)
   assert.equal(await app.evaluate(() => globalThis.scaleCacheBatches), 33)
+  stage('end') // stage-stamp
 })

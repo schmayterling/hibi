@@ -32,6 +32,9 @@ jobs:
         run: node .github/actions/ci/install.mjs
         env:
           electron_config_cache: ${{ github.workspace }}/.cache/electron
+      - name: instrument native view construction
+        shell: bash
+        run: node scripts/intel-view-diagnostic.mjs
       - name: build fresh diagnostic app
         shell: bash
         run: npm run build

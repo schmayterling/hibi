@@ -205,6 +205,14 @@ function growthTrace(event: string, read: () => Record<string, unknown>) {
   ).__hiddenGrowth?.record(event, read)
 }
 
+/** Never merge: bracket the original state construction without another task. */
+function growthState(config: Parameters<typeof EditorState.create>[0]) {
+  growthTrace('state-create-begin', () => ({ doc: config?.doc }))
+  const state = EditorState.create(config)
+  growthTrace('state-create-end', () => ({ doc: state.doc }))
+  return state
+}
+
 /** Each mounted view's bridge to its document session. */
 const bridges = new WeakMap<
   EditorView,
@@ -2024,7 +2032,7 @@ export function SourceEditor({
           reject(editor, error, failed && [failed], failed?.startState)
         }
       },
-      state: EditorState.create({
+      state: growthState({
         doc: preparedText.text,
         ...(selection ? { selection } : {}),
         extensions: [

@@ -8,6 +8,10 @@ concurrency:
   cancel-in-progress: false
 jobs:
   diagnostic:
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 40
     env:
@@ -67,7 +71,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: find-worker-linux-arm64-${{ github.run_id }}
+          name: find-worker-linux-arm64-${{ github.run_id }}-${{ matrix.copy }}
           path: diag/
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7

@@ -3225,7 +3225,7 @@ export function SourceEditor({
           growthTrace('feature-return', () => ({
             bridge,
             formatted,
-            featureId: sourceExtensions[index].id,
+            featureId: sourceExtensions[index]?.id,
             index,
             status: 'fulfilled',
           }))
@@ -3235,7 +3235,7 @@ export function SourceEditor({
           growthTrace('feature-return', () => ({
             bridge,
             formatted,
-            featureId: sourceExtensions[index].id,
+            featureId: sourceExtensions[index]?.id,
             index,
             status: 'rejected',
           }))

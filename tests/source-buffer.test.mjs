@@ -379,8 +379,10 @@ test('an edit at every line of a megabyte rebuilds the tree once, and so does it
     `${n}`.padEnd(63, 'x'),
   ).join('\n')
   const store = new SourceStore(source, key)
+  let scanned = 0
   const copied = () => {
     const counters = store.counters(true)
+    scanned = counters.unitsScanned
     return counters.pieceDescriptorsCopied + counters.metricSlotsCopied
   }
   copied()
@@ -394,6 +396,8 @@ test('an edit at every line of a megabyte rebuilds the tree once, and so does it
   )
   // An edit at a time copied about 7 million pieces and metric slots.
   assert.ok(copied() < 4 * lines)
+  // Each one-unit tab piece read two stride prefixes, 32 units a line.
+  assert.ok(scanned < 3 * lines, `${scanned} units scanned`)
   assert.equal(store.snapshot().materialize(), source.replace(/^/gm, '\t'))
   apply(store, indent.inverse, 'undo')
   assert.ok(copied() < 4 * lines)

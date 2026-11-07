@@ -522,7 +522,9 @@ export function MarkdownEditor({
       view.state.selection.main.head !== 0 ||
       (active &&
         active !== window.document.body &&
-        !content.current?.contains(active))
+        !content.current?.contains(active)) ||
+      // A control in the note the reader reached before the view was ready.
+      (active !== view.contentDOM && view.contentDOM.contains(active))
     )
       return
     // As its Selection.atEnd: the end of the last text, or the last block

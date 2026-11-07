@@ -168,12 +168,20 @@ function validInlineHeadings(
   return length <= inlineHeadingLength
 }
 
-async function cacheAvailable(): Promise<boolean> {
+async function cacheAvailable(create = false): Promise<boolean> {
   if (!cacheDirectory || !buildIdentity) return false
   try {
     const info = await lstat(cacheDirectory)
     return info.isDirectory() && !info.isSymbolicLink()
-  } catch {
+  } catch (error) {
+    if (create && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      try {
+        await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
+      } catch {
+        return false
+      }
+      return cacheAvailable()
+    }
     return false
   }
 }
@@ -400,8 +408,7 @@ async function remember(
     return false
   const temporary = join(cacheDirectory, `.${page.id}-${randomUUID()}.tmp`)
   try {
-    await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
-    if (!(await cacheAvailable())) return false
+    if (!(await cacheAvailable(true))) return false
     const file = await open(temporary, 'wx', 0o600)
     try {
       const writer = new RecordWriter()
@@ -604,13 +611,10 @@ async function derive(
     cacheDirectory &&
     buildIdentity &&
     idPattern.test(input.id) &&
-    input.version.startsWith('disk:')
-  ) {
-    await mkdir(cacheDirectory, { recursive: true, mode: 0o700 }).catch(
-      () => {},
-    )
-    if (await cacheAvailable()) directory = cacheDirectory
-  }
+    input.version.startsWith('disk:') &&
+    (await cacheAvailable(true))
+  )
+    directory = cacheDirectory
   if (!(await headingDirectoryAvailable(directory))) return null
   let writer: HeadingStoreWriter | undefined
   const store = (into: string) =>

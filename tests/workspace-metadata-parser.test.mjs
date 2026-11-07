@@ -220,6 +220,83 @@ async function seed(parser, directory, paths) {
   return template
 }
 
+test('saved records create the cache directory only when missing, including after removal', async (t) => {
+  const { directory, create, close } = await fixture(t)
+  const cache = join(directory, 'cache')
+  const outside = await mkdtemp(join(directory, 'outside-'))
+  const swapFlag = join(directory, 'swap-cache')
+  const bundle = join(directory, 'count-cache-mkdir.mjs')
+  await writeFile(
+    bundle,
+    `
+import fs from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
+import { parentPort, workerData } from 'node:worker_threads'
+import { existsSync } from 'node:fs'
+const mkdir = fs.mkdir
+let cacheMkdirs = 0
+fs.mkdir = async (path, ...args) => {
+  if (String(path) === workerData.cacheDirectory) cacheMkdirs++
+  const result = await mkdir(path, ...args)
+  if (String(path) === workerData.cacheDirectory && existsSync(${JSON.stringify(swapFlag)})) {
+    await fs.unlink(${JSON.stringify(swapFlag)})
+    await fs.rm(path, { recursive: true })
+    await fs.symlink(${JSON.stringify(outside)}, path, 'dir')
+  }
+  return result
+}
+syncBuiltinESMExports()
+const post = parentPort.postMessage.bind(parentPort)
+parentPort.postMessage = (message) => post({ ...message, cacheMkdirs })
+await import(${JSON.stringify(entry.href)})
+`,
+  )
+  let parser = create({ entry: bundle, cacheDirectory: cache })
+  let cacheMkdirs
+  const observe = async () => {
+    await parser.beginBuild(current)
+    parser.worker.on('message', (message) => {
+      cacheMkdirs = message.cacheMkdirs
+    })
+  }
+  await observe()
+  for (const path of ['a.md', 'b.md', 'c.md']) {
+    const page = await parser.request(parseNote(path), current)
+    assert.deepEqual(page.metadata.tags, ['work'])
+    assert.deepEqual(await parser.request(descriptor(path), current), page)
+  }
+  assert.equal(cacheMkdirs, 1)
+  await rm(cache, { recursive: true })
+  const recovered = await parser.request(parseNote('recovered.md'), current)
+  assert.deepEqual(
+    await parser.request(descriptor('recovered.md'), current),
+    recovered,
+  )
+  assert.equal(cacheMkdirs, 2)
+  await close(parser)
+  parser = create({ entry: bundle, cacheDirectory: cache })
+  await observe()
+  assert.deepEqual(
+    await parser.request(descriptor('recovered.md'), current),
+    recovered,
+  )
+  await parser.request(parseNote('next.md'), current)
+  assert.equal(cacheMkdirs, 0)
+  await rm(cache, { recursive: true })
+  await writeFile(swapFlag, 'swap')
+  const transient = await parser.request(
+    parseNote('transient.md', '# transient'),
+    current,
+  )
+  assert.equal(await headingFrom(parser, transient), 'transient')
+  const linked = await parser.request(
+    parseNote('linked.md', '# linked'),
+    current,
+  )
+  assert.equal(await headingFrom(parser, linked), 'linked')
+  assert.deepEqual(await readdir(outside), [])
+})
+
 test('cache identity preserves file ids above the safe integer range', async (t) => {
   const { directory, create } = await fixture(t)
   const bundle = join(directory, 'large-file-id.mjs')

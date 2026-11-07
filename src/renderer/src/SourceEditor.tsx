@@ -150,7 +150,7 @@ import { LikelyAddonError } from './likely-addons'
 import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { mappedPositionAt } from './native-dom-selection'
-import { scrolledItself } from './reading-position'
+import { placedByView, scrolledItself } from './reading-position'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -2405,7 +2405,19 @@ export function SourceEditor({
                 ))
             )
               update.view.contentDOM.dispatchEvent(
-                new Event('hibi:editor-interactions-invalidate'),
+                new CustomEvent('hibi:editor-interactions-invalidate', {
+                  // Only the view moved the selection, as a note's opening caret.
+                  detail: {
+                    placed:
+                      update.selectionSet &&
+                      !update.docChanged &&
+                      update.transactions.every(
+                        (transaction) =>
+                          !transaction.selection ||
+                          transaction.annotation(placedByView),
+                      ),
+                  },
+                }),
               )
             if (
               update.docChanged ||

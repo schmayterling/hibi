@@ -11,6 +11,9 @@ export const placedSelection = Facet.define<boolean, boolean>({
   combine: (values) => values.some(Boolean),
 })
 
+/** A selection the view moved itself, which no reader did. */
+export const placedByView = Annotation.define<boolean>()
+
 const scrollRequests = new WeakMap<EditorView, number>()
 /**
  * Views with a scroll command they have not run: a measure can end without

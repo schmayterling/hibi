@@ -476,10 +476,9 @@ test('formatted split keeps the lead of a pane scrolled just before the formatte
       )
     window.releaseParse = () => {
       performance.now = () => now() + late
-      window.requestIdleCallback = (callback) => held.push(callback)
-      for (let i = 0; i < 1000 && held.length; i++)
-        held.shift()({ didTimeout: false, timeRemaining: () => 50 })
       window.requestIdleCallback = idle
+      for (const callback of held)
+        callback({ didTimeout: false, timeRemaining: () => 50 })
       held = null
     }
   })
@@ -488,12 +487,38 @@ test('formatted split keeps the lead of a pane scrolled just before the formatte
       .selection.main.head
   // The note's end is not parsed: the caret is at the source end.
   assert.equal(await page.evaluate(opening), text.trimEnd().length)
-  await page.evaluate(
-    `(${lead})(${text.indexOf('| r600 |')}); window.releaseParse()`,
+  // The source pane is scrolled, and the parse reaches the end before the
+  // next frame, when the formatted pane would follow.
+  const placed = await page.evaluate(
+    `(async () => {
+      const frame = window.requestAnimationFrame
+      const frames = []
+      window.requestAnimationFrame = (callback) => frames.push(callback)
+      ;(${lead})(${text.indexOf('| r600 |')})
+      window.releaseParse()
+      const opening = ${opening}
+      for (let i = 0; i < 500 && opening() !== ${text.length}; i++)
+        await new Promise((done) => setTimeout(done, 10))
+      window.requestAnimationFrame = frame
+      for (const callback of frames) frame(callback)
+      return opening()
+    })()`,
   )
   // Now the caret is on the empty paragraph after the last blank line.
-  assert.equal(await page.evaluate(opening), text.length)
+  assert.equal(placed, text.length)
   await staysLinedUp(page, linedUp)
+  // The reader's key to the end, where the caret already is, is the reader's:
+  // the formatted pane leads to its end and the source pane follows.
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+  )
+  await waitForAsync(page, () =>
+    ['.rich-pane', '.source-pane .cm-scroller'].every((selector) => {
+      const pane = document.querySelector(selector)
+      return pane.scrollHeight - pane.clientHeight - pane.scrollTop < 100
+    }),
+  )
+  assert.equal(await page.evaluate(opening), text.length)
   await source(page, text)
 })
 

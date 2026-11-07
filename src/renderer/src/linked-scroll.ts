@@ -1,5 +1,4 @@
 import { focusedEditor, mappedPositionAt } from './native-dom-selection'
-import { placedSelection } from './reading-position'
 import { editorPosition, sourcePosition, sourceView } from './source-view'
 
 /** Markdown follows text positions; other preview formats keep proportional scrolling. */
@@ -107,10 +106,9 @@ export function linkScroll(
   // a caret the view placed itself, as a long note's opening caret moves
   // once the formatted view parses its end.
   const edited = (event: Event) => {
-    const target = event.target as Element
     if (
-      target.contains(document.activeElement) &&
-      !sourceView(target)?.state.facet(placedSelection)
+      (event.target as Element).contains(document.activeElement) &&
+      !(event as CustomEvent<{ placed?: boolean }>).detail?.placed
     )
       selection()
   }

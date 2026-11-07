@@ -13,7 +13,7 @@ import { formattedMathAtom } from '../../shared/formatted-text-rules.ts'
 import { cellSpan, parseRow } from '../../shared/markdown-table-source.ts'
 import { uncovered } from './chunked-markdown.ts'
 import { prefixOf } from './formatted-commands.ts'
-import { placedSelection } from './reading-position.ts'
+import { placedByView, placedSelection } from './reading-position.ts'
 import { sourceHistoryEffects } from './source-session.ts'
 
 /** Blocks the rich editor reads; it drops link reference definitions. */
@@ -348,6 +348,7 @@ export function openAtEnd(view: EditorView, later = false) {
   view.dispatch({
     selection: at,
     effects: select.of({ ...at, opened: true, placed: true }),
+    annotations: placedByView.of(true),
   })
 }
 

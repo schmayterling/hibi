@@ -1189,6 +1189,72 @@ for (const [name, slide] of [
     )
   })
 
+// Matches on the formatted pane's screen that are not highlighted, read
+// where the screen's text is.
+function unmarkedOnScreen() {
+  const element = document.querySelector('.rich-pane .cm-content')
+  const view = element.cmTile.root.view
+  const box = element.getBoundingClientRect()
+  const clip = element.closest('.rich-pane').getBoundingClientRect()
+  const x =
+    box.left + Number.parseFloat(getComputedStyle(element).paddingLeft) + 1
+  const from = view.posAtCoords({ x, y: Math.max(box.top, clip.top) + 1 })
+  const to = view.posAtCoords({ x, y: Math.min(box.bottom, clip.bottom) - 1 })
+  const marked = new Set(
+    [...element.querySelectorAll('.cm-searchMatch')].map((mark) =>
+      view.posAtDOM(mark, 0),
+    ),
+  )
+  const matches = [...view.state.doc.toString().matchAll(/needle/g)]
+    .map((match) => match.index)
+    .filter((at) => at < to && at + 6 > from)
+  return {
+    left: box.left,
+    matches: matches.length,
+    unmarked: matches.filter((at) => !marked.has(at)).length,
+  }
+}
+
+// A match found while the formatted pane slides in, off screen, is shown
+// with the matches around it once the pane is in place; one near the text the
+// pane drew already is, as the pane comes in.
+for (const [key, expected, halfway] of [
+  ['Enter', '2/10000', true],
+  ['Shift+Enter', '10000/10000', false],
+])
+  test(`formatted find highlights what the formatted pane shows once it slides in after ${key}`, {
+    timeout: 60000,
+  }, async (t) => {
+    const { page, rich, input, count } = await countedDenseFind(t, true)
+    await input.press(key)
+    await count(expected)
+    for (const end of halfway ? [false, true] : [true]) {
+      // Highlights that follow the pane are there within its next frames.
+      const shown = await page.evaluate(
+        `(async () => {
+          for (const animation of document
+            .querySelector('.rich-pane')
+            .getAnimations())
+            if (${end}) animation.finish()
+            else {
+              animation.pause()
+              animation.currentTime =
+                animation.effect.getComputedTiming().duration / 2
+            }
+          for (let frame = 0; frame < 30; frame++)
+            await new Promise(requestAnimationFrame)
+          return (${unmarkedOnScreen})()
+        })()`,
+      )
+      assert.ok(shown.left < 900 && shown.matches > 0, JSON.stringify(shown))
+      assert.equal(shown.unmarked, 0, JSON.stringify({ end, ...shown }))
+    }
+    assert.equal(
+      await rich.locator('.cm-searchMatch-selected').textContent(),
+      'needle',
+    )
+  })
+
 test('formatted find moving to an adjacent match restyles highlights without rewriting rendered text', {
   timeout: 45000,
 }, async (t) => {

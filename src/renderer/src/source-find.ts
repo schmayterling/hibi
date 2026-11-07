@@ -205,6 +205,12 @@ export const formattedFindWindow = [
       passive: true,
     })
     window.addEventListener('resize', schedule)
+    // A pane sliding in, as from the source view's side, changes no size or
+    // scroll: what it shows is measured once it is in place.
+    const slid = (event: Event) => {
+      if ((event.target as Node).contains(view.dom)) schedule()
+    }
+    document.addEventListener('transitionend', slid, true)
     return {
       update(update) {
         if (update.docChanged || update.selectionSet || update.viewportChanged)
@@ -215,6 +221,7 @@ export const formattedFindWindow = [
         resize.disconnect()
         document.removeEventListener('scroll', schedule, { capture: true })
         window.removeEventListener('resize', schedule)
+        document.removeEventListener('transitionend', slid, true)
       },
     }
   }),

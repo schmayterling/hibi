@@ -777,6 +777,24 @@ test('opening a note reads none of it; idle slices read the rest', () => {
   }
 })
 
+test('edits past the read text look up no lines, as a Tab over every line of a megabyte of code', (t) => {
+  const lines = 16384
+  const code = Array.from({ length: lines }, (_, n) => `${n}`.padEnd(63, 'x'))
+  const state = create(`\`\`\`\n${code.join('\n')}\n\`\`\`\n\n[^a]: end`)
+  const transaction = state.update({
+    changes: code.map((_, n) => ({ from: 4 + n * 64, insert: '\t' })),
+  })
+  const lineAt = t.mock.method(
+    Object.getPrototypeOf(transaction.newDoc),
+    'lineAt',
+  )
+  const edited = transaction.state
+  // Each edit looked its line up although none can change what was read.
+  assert.ok(lineAt.mock.callCount() < 64, `${lineAt.mock.callCount()}`)
+  lineAt.mock.restore()
+  assert.deepEqual(indexed(settle(edited)), parsed(edited.doc.toString()))
+})
+
 test('properties keystrokes retain an 8 mib footnote index without reading its body', async () => {
   const { contribution: frontmatter } = await import(
     '../src/addons/frontmatter/formatted.ts'

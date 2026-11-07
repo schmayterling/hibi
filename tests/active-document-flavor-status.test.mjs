@@ -49,6 +49,7 @@ function hooks() {
       return get()
     },
   }
+  api.useLayoutEffect = api.useEffect
   return {
     api,
     render(Component, props) {
@@ -106,6 +107,8 @@ function fixture(t, origin, source = mixed) {
     timers.delete(id)
     clear(id)
   })
+  const focusEditor = () =>
+    assert.fail('flavor renders must not request editor focus')
   const imports = {
     react: renderer.api,
     'react/jsx-runtime': { jsx: (type, props) => ({ type, props }) },
@@ -125,6 +128,8 @@ function fixture(t, origin, source = mixed) {
         return shell.editorDocumentUpdates(...args)
       },
     },
+    './editor-focus': { focusEditor },
+    './editor-focus-restore': { focusEditor },
     './flavors': { flavorMatches: (flavor, body) => flavor.detect(body) },
     './markdown-projection': {
       projectMarkdown(source, adapters) {

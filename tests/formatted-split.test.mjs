@@ -13,7 +13,7 @@ import {
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-async function open(t, text, beforeSplit) {
+async function open(t, text, trace = false, beforeSplit) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-formatted-split-'))
   const file = join(root, 'note.md')
   await writeFile(file, text)
@@ -512,7 +512,7 @@ test('formatted split keeps the lead of a pane scrolled just before the formatte
 }, async (t) => {
   const lines = 'line\n\n'.repeat(30)
   const text = `${lines}${table(1000)}${lines}`
-  const { page } = await open(t, text, () => {
+  const { page } = await open(t, text, false, () => {
     const now = performance.now.bind(performance)
     const idle = window.requestIdleCallback
     let held = []

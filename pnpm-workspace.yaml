@@ -1,0 +1,4 @@
+nodeLinker: hoisted
+allowBuilds:
+  electron-winstaller: true
+  esbuild: true

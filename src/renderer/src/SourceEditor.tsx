@@ -194,6 +194,61 @@ import {
 } from './source-view'
 import { textProjection } from './text-projection'
 
+// diagnostic only; no additional geometry, focus, parse, or measurement reads.
+const hiddenSourceIds = new WeakMap<EditorView, number>()
+let hiddenSourceNext = 0
+const hiddenSourceTrace = {
+  events: [] as unknown[],
+  dropped: 0,
+  sample(view: EditorView, place: { top: number; offset: number }, reset = false) {
+    if (reset) {
+      hiddenSourceTrace.events.length = 0
+      hiddenSourceTrace.dropped = 0
+      hiddenSourceEvent(view, 'reset')
+    }
+    hiddenSourceEvent(view, 'oracle', place)
+  },
+}
+Object.assign(window, { __hibiHiddenSourceTrace: hiddenSourceTrace })
+function hiddenSourcePush(id: number, event: string, data: unknown) {
+  if (hiddenSourceTrace.events.length === 4096) {
+    hiddenSourceTrace.dropped++
+    return
+  }
+  hiddenSourceTrace.events.push({ at: performance.now(), id, event, data })
+}
+function hiddenSourceEvent(view: EditorView, event: string, data?: unknown) {
+  const id = hiddenSourceIds.get(view)
+  if (id === undefined) return
+  const cached = view as unknown as {
+    measureScheduled: number
+    measureRequests: unknown[]
+    inputState: { notifiedFocused: boolean }
+    viewState: {
+      inView: boolean
+      editorHeight: number
+      scrollOffset: number
+      scrollTarget: { range: { head: number }; yMargin: number } | null
+    }
+  }
+  hiddenSourcePush(id, event, {
+    data,
+    units: view.state.doc.length,
+    anchor: view.state.selection.main.anchor,
+    head: view.state.selection.main.head,
+    measuredFocus: cached.inputState.notifiedFocused,
+    inView: cached.viewState.inView,
+    editorHeight: cached.viewState.editorHeight,
+    scrollOffset: cached.viewState.scrollOffset,
+    measureScheduled: cached.measureScheduled,
+    measureRequests: cached.measureRequests.length,
+    scrollTarget: cached.viewState.scrollTarget && {
+      head: cached.viewState.scrollTarget.range.head,
+      margin: cached.viewState.scrollTarget.yMargin,
+    },
+  })
+}
+
 /** Each mounted view's bridge to its document session. */
 const bridges = new WeakMap<
   EditorView,
@@ -284,7 +339,11 @@ const scrollInput = ['keydown', 'pointerdown', 'touchstart', 'wheel'] as const
  * when heights change, CodeMirror moves the view to hold the line it anchored
  * before them. Input or any other scroll ends this.
  */
-function keptPlaceScroll(top: number, margin: number) {
+function keptPlaceScroll(
+  top: number,
+  margin: number,
+  trace: (event: string, data: unknown) => void,
+) {
   let state: 'waiting' | 'aligning' | 'holding' | 'done' = 'waiting',
     moved = false,
     // The scroll position the view was aligned at, while it holds the place.
@@ -295,7 +354,8 @@ function keptPlaceScroll(top: number, margin: number) {
     settling: ReturnType<typeof setTimeout> | null = null,
     // The first wait sets when waiting ends, whatever moves after it.
     deadline: number | null = null
-  const stop = () => {
+  const stop = (event?: Event) => {
+    trace('restore-stop', { state, type: event?.type ?? null })
     state = 'done'
     if (settling) clearTimeout(settling)
     settling = null
@@ -309,6 +369,7 @@ function keptPlaceScroll(top: number, margin: number) {
           view.lineBlockAt(top).top -
           scrollerOf(view).getBoundingClientRect().top,
     write: (offset: number | null, view: EditorView) => {
+      trace('align-write', { offset, state, moved, scrolled, top, margin })
       if (state !== 'aligning') return
       if (offset === null) {
         // Scroll there once, which lays it out; the measure after aligns it.
@@ -335,10 +396,12 @@ function keptPlaceScroll(top: number, margin: number) {
       if (Math.abs(offset - margin) >= 0.5)
         scrollerOf(view).scrollTop += offset - margin
       held = scrollerOf(view).scrollTop
+      trace('align-held', { held, top, margin })
       scrolledItself(view)
     },
   }
   const begin = (view: EditorView) => {
+    trace('restore-begin', { state, scrolling, settling: settling !== null })
     if (state !== 'waiting' || scrolling || settling) return
     // Its lines wrap again when the pane reaches its last width. The wait
     // ends with that motion, or at the latest when it was due to end, and
@@ -347,6 +410,7 @@ function keptPlaceScroll(top: number, margin: number) {
     const now = performance.now()
     if (left > 0) deadline ??= now + left
     const wait = deadline === null ? 0 : Math.min(left, deadline - now)
+    trace('restore-motion', { left, wait, deadline })
     if (wait > 0) {
       const owner = new WeakRef(view)
       const wake = () => {
@@ -366,6 +430,7 @@ function keptPlaceScroll(top: number, margin: number) {
   }
   const extension: Extension = [
     EditorView.scrollHandler.of((view, range, options) => {
+      trace('restore-scroll', { head: range.head, margin: options.yMargin, state })
       if (range.head !== top || options.yMargin !== margin) stop()
       else {
         scrolling = false
@@ -1271,14 +1336,24 @@ export function SourceEditor({
       ]
     }
     // A note that shrank since its view left still gets the place it kept.
+    const traceId = formatted ? 0 : ++hiddenSourceNext
+    const trace = (event: string, data: unknown) => {
+      if (traceId) hiddenSourcePush(traceId, event, data)
+    }
     const place = bridge.place()
     const selection = place?.selection ?? bridge.selection()
-    const restore = place && keptPlaceScroll(place.top, place.margin)
+    trace('consume', place && {
+      top: place.top, margin: place.margin,
+      anchor: place.selection.main.anchor, head: place.selection.main.head,
+    })
+    const restore = place && keptPlaceScroll(place.top, place.margin, trace)
     // Until it gets there, a restored view's place is the one it kept.
     shownPlace.current = place && { top: place.top, margin: place.margin }
     const record = (editor: EditorView) => {
-      if (shown.current && editor.inView && !restore?.pending())
+      if (shown.current && editor.inView && !restore?.pending()) {
         shownPlace.current = placeOf(editor)
+        trace('record', shownPlace.current && { ...shownPlace.current })
+      }
     }
     type PendingCompletion = {
       request: CompletionRequest
@@ -2188,6 +2263,7 @@ export function SourceEditor({
                 : bridge.redo()
             },
             focus(_event, view) {
+              hiddenSourceEvent(view, 'focus-event')
               // Focus CodeMirror did not give, such as a closing dialog's, leaves
               // the native selection outside the editor or at its start until
               // CodeMirror's next selectionchange or focus timer, and keys a busy
@@ -2204,6 +2280,7 @@ export function SourceEditor({
               return false
             },
             blur(_event, view) {
+              hiddenSourceEvent(view, 'blur-event')
               if (escaped) view.setTabFocusMode(false)
               escaped = false
               const selection = view.state.selection
@@ -2508,15 +2585,22 @@ export function SourceEditor({
     }
     // Drawing what scrolled into view fails outside any update. A redraw would
     // only scroll there and fail again, so this view is done.
+    if (traceId) {
+      hiddenSourceIds.set(editor, traceId)
+      hiddenSourceEvent(editor, 'constructed')
+    }
     const measured = editor as unknown as MeasuredView
     const drawMeasured = measured.measure.bind(editor)
     measured.measure = (flush) => {
       if (isViewDead(editor)) return
+      hiddenSourceEvent(editor, 'measure-enter', { flush })
       try {
         drawMeasured(flush)
       } catch (error) {
         placeBeforeRedraw = placeWithoutDrawing(editor)
         viewDied(editor, error)
+      } finally {
+        hiddenSourceEvent(editor, 'measure-exit')
       }
     }
     onRedraw(editor, () => {
@@ -3045,6 +3129,7 @@ export function SourceEditor({
       unregisterMountedEdits()
       unregisterProjection()
       removeAnnotations()
+      hiddenSourceEvent(editor, 'detach')
       detachSession()
       editor.destroy()
       view.current = null
@@ -3087,7 +3172,9 @@ export function SourceEditor({
       const editor = view.current
       if (!keepingPlace.current || !editor || isViewDead(editor)) return
       const { top, margin } = shownPlace.current ?? placeOf(editor)
+      hiddenSourceEvent(editor, 'keep', { top, margin })
       bridge.keepPlace(editor, top, margin)
+      hiddenSourceEvent(editor, 'kept')
     },
     [bridge],
   )

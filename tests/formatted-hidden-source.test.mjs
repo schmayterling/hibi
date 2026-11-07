@@ -215,15 +215,17 @@ test("a large note's source view comes back with its selection and scroll, mappe
 })
 
 /** The line at the source view's top and how far it is scrolled past, in pixels. */
-const scrolled = (page) =>
-  page.evaluate(() => {
+const scrolled = (page, reset = false) =>
+  page.evaluate((reset) => {
     const view = document.querySelector('.source-pane .cm-content').cmTile.root
       .view
     view.lineBlockAtHeight(0)
     const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
     const line = view.lineBlockAtHeight(height)
-    return { top: line.from, offset: height - line.top }
-  })
+    const place = { top: line.from, offset: height - line.top }
+    window.__hibiHiddenSourceTrace?.sample(view, place, reset)
+    return place
+  }, reset)
 
 /**
  * Leave and reopen the source view `count` times, returning where it shows
@@ -639,28 +641,60 @@ test("scrolling over a returning source view's gutter keeps the user's place", {
 test('a source view released as its note grows returns to the same line and pixel every time', {
   timeout: 240000,
 }, async (t) => {
-  const { page, view } = await open(t, 16)
-  await view('Source view')
-  await sourceShown(page, 16000)
-  await scrollInto(page, 9000)
-  const before = await scrolled(page)
-  assert.ok(before.top > 0 && before.offset > 0, JSON.stringify(before))
-  // Text after the place grows the note past the large-note size.
-  const grow = () =>
-    page.evaluate(async () => {
-      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
-        .view
-      view.dispatch({
-        changes: {
-          from: view.state.doc.length,
-          insert: '\n\nordinary growth words'.repeat(20000),
-        },
-        userEvent: 'input',
-      })
-      await window.hibi.flushDocumentChanges()
+  let page
+  let journeyFailed = false
+  try {
+    const { view } = await open(t, 16, undefined, {
+      before: (_app, openedPage) => { page = openedPage },
     })
-  const places = await returns(page, view, 256 * 1024, 4, grow)
-  samePlace(places, before)
+    await view('Source view')
+    await sourceShown(page, 16000)
+    await scrollInto(page, 9000)
+    const before = await scrolled(page, true)
+    assert.ok(before.top > 0 && before.offset > 0, JSON.stringify(before))
+    // Text after the place grows the note past the large-note size.
+    const grow = () =>
+      page.evaluate(async () => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+          .view
+        view.dispatch({
+          changes: {
+            from: view.state.doc.length,
+            insert: '\n\nordinary growth words'.repeat(20000),
+          },
+          userEvent: 'input',
+        })
+        await window.hibi.flushDocumentChanges()
+      })
+    const places = await returns(page, view, 256 * 1024, 4, grow)
+    samePlace(places, before)
+  } catch (error) {
+    journeyFailed = true
+    throw error
+  } finally {
+    // only after the original journey completes or throws; no new pre-oracle rpc.
+    try {
+      const trace = page
+        ? await page.evaluate(() => {
+            const trace = window.__hibiHiddenSourceTrace
+            return trace
+              ? { events: trace.events, dropped: trace.dropped, missing: 0 }
+              : { events: [], dropped: 0, missing: 1 }
+          })
+        : { events: [], dropped: 0, missing: 1 }
+      const resets = trace.events.filter((event) => event.event === 'reset').length
+      const oracles = trace.events.filter((event) => event.event === 'oracle').length
+      const complete = !trace.missing && !trace.dropped && resets === 1 && oracles === 5
+      const output = process.env.HIBI_HIDDEN_SOURCE_TRACE ??
+        join(await mkdtemp(join(tmpdir(), 'hibi-hidden-source-trace-')), 'trace.json')
+      await writeFile(output, JSON.stringify({ journeyFailed, complete, ...trace }, null, 2))
+      t.diagnostic(`hidden source trace: events=${trace.events.length} resets=${resets} oracles=${oracles} dropped=${trace.dropped} complete=${Number(complete)}`)
+      if (!complete) throw new Error('hidden source diagnostic incomplete')
+    } catch (error) {
+      t.diagnostic('hidden source trace: diagnostic_failures=1')
+      if (!journeyFailed) throw error
+    }
+  }
 })
 
 test("find shows its matches in a large note's source view that mounts again", {

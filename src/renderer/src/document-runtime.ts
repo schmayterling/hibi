@@ -800,23 +800,23 @@ const reportError = (error: unknown) => {
 }
 let undoHistory: Promise<typeof import('./undo-history.ts')> | undefined
 const keptHistory = () => (undoHistory ??= import('./undo-history.ts'))
-const admitted = new WeakMap<SourceOperation, number>()
+const admitted = new WeakMap<SourceOperation, number | undefined>()
 export const documentRuntime = new DocumentRuntime({
   admit: (operation) => {
     try {
-      const token = window.hibi.admitSourceOperation(operation)
-      if (token !== undefined) admitted.set(operation, token)
+      admitted.set(operation, window.hibi.admitSourceOperation(operation))
     } catch (error) {
       reportError(error)
       throw error
     }
   },
   enqueue: (operation) => {
-    const token = admitted.get(operation)
+    const { hibi } = window,
+      token = admitted.get(operation)
     void (
       token === undefined
-        ? window.hibi.appendSourceOperation(operation)
-        : window.hibi.appendAdmittedSourceOperation(token)
+        ? hibi.appendSourceOperation(operation)
+        : hibi.appendAdmittedSourceOperation(token)
     ).catch(reportError)
   },
   onError: reportError,

@@ -194,8 +194,13 @@ test('side-by-side panes keep their own undo steps and selections', {
       for (const group of [...item.groups].reverse()) {
         await pressShortcut(app, `${mod}+z`)
         const expected = before[group[0]],
-          pane = item.steps[group[0]][0],
-          now = await state()
+          pane = item.steps[group[0]][0]
+        await waitForAsync(
+          page,
+          async (text) => (await window.hibi.getDocument()).markdown === text,
+          expected.text,
+        )
+        const now = await state()
         assert.equal(now.text, expected.text, `undo ${group}`)
         assert.deepEqual(now[pane], expected[pane], `undo ${group} ${pane}`)
       }
@@ -203,8 +208,13 @@ test('side-by-side panes keep their own undo steps and selections', {
       for (const group of item.groups) {
         await pressShortcut(app, redo)
         const expected = after[group.at(-1)],
-          pane = item.steps[group.at(-1)][0],
-          now = await state()
+          pane = item.steps[group.at(-1)][0]
+        await waitForAsync(
+          page,
+          async (text) => (await window.hibi.getDocument()).markdown === text,
+          expected.text,
+        )
+        const now = await state()
         assert.equal(now.text, expected.text, `redo ${group}`)
         assert.deepEqual(now[pane], expected[pane], `redo ${group} ${pane}`)
       }

@@ -555,6 +555,7 @@ test('formatted find follows the active syntax configuration', {
       .getByRole('button', { name: /^back to app$/i, exact: true })
       .click()
     await pressShortcut(app, `${mod}+f`)
+    await waitForAsync(input, (element) => element === document.activeElement)
     const ranges = enabled
       ? [
           [0, 13],
@@ -787,6 +788,7 @@ test('formatted find reopens the existing query on a second shortcut without cha
   await count('1/3')
   await rich.click()
   await pressShortcut(app, mod + '+f')
+  await waitForAsync(input, (element) => element === document.activeElement)
   assert.equal(await input.inputValue(), 'hello world')
   assert.equal(
     await input.evaluate((element) => element === document.activeElement),

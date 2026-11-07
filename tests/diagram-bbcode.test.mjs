@@ -50,6 +50,12 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
       })
     }, path)
     await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
     if (label !== 'Markdown')
       await page
         .getByRole('textbox', { name: `${label} editor`, exact: true })
@@ -271,6 +277,11 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+  )
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    markdown,
   )
   return { app, page }
 }

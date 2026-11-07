@@ -78,6 +78,13 @@ test('blank-tail Enter preserves exact source bytes through typing, undo, redo a
       breaks: 1,
     },
   ]
+  const expectedSource = (source) =>
+    waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
   const rows = []
   for (const item of cases)
     await t.test(item.name, async () => {
@@ -126,12 +133,16 @@ test('blank-tail Enter preserves exact source bytes through typing, undo, redo a
       await page.keyboard.insertText('z')
       assert.equal(await current(), expected, 'typed source')
       await pressShortcut(app, modifier + '+z')
+      await expectedSource(entered)
       assert.equal(await current(), entered, 'undo typing')
       await pressShortcut(app, modifier + '+z')
+      await expectedSource(source)
       assert.equal(await current(), source, 'undo Enter')
       await pressShortcut(app, modifier + '+Shift+z')
+      await expectedSource(entered)
       assert.equal(await current(), entered, 'redo Enter')
       await pressShortcut(app, modifier + '+Shift+z')
+      await expectedSource(expected)
       assert.equal(await current(), expected, 'redo typing')
       await page.evaluate(() => window.hibi.saveDocument(false))
       await waitForAsync(

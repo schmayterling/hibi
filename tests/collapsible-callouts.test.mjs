@@ -276,7 +276,18 @@ test('callouts fold with pointer and keyboard without changing markdown', {
   await pressShortcut(app, `${mod}+Shift+[`)
   await pane.getByText('After callouts.', { exact: true }).waitFor()
   await unchanged()
+  await app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:save')
+    globalThis.shortcutSaveFinished = false
+    ipcMain._invokeHandlers.set('document:save', async (...args) => {
+      ipcMain._invokeHandlers.set('document:save', save)
+      const result = await save(...args)
+      globalThis.shortcutSaveFinished = true
+      return result
+    })
+  })
   await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(app, () => globalThis.shortcutSaveFinished)
   assert.equal(await readFile(file, 'utf8'), note)
 })
 

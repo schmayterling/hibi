@@ -13,6 +13,7 @@ import {
 import {
   electron,
   waitForAppState,
+  waitForAsync,
   waitForDocumentEditor,
   waitForFormattedEditor,
 } from './electron.mjs'
@@ -218,7 +219,7 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
     .filter({ hasText: /this shortcut closes tabs/i })
     .waitFor()
   assert.equal(app.windows().length, 1)
-  await pressShortcut(app, `${mod}+j`)
+  await pressShortcut(app, `${mod}+j`, { delivered: true })
   await binding.press('Enter')
   await page.waitForFunction(
     () => !document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
@@ -236,7 +237,7 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
   await page.waitForFunction(() =>
     document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
   )
-  await pressShortcut(app, `${mod}+Shift+d`)
+  await pressShortcut(app, `${mod}+Shift+d`, { delivered: true })
   await saveBinding.press('Enter')
   await page.waitForFunction(
     () => !document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
@@ -293,11 +294,12 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await rich.waitFor()
   await rich.focus()
-  await pressShortcut(app, `${mod}+k`)
+  await pressShortcut(app, `${mod}+k`, { delivered: true })
   assert.equal(await palette.count(), 0)
-  await pressShortcut(app, `${mod}+s`)
+  await pressShortcut(app, `${mod}+s`, { delivered: true })
   assert.equal(await app.evaluate(() => globalThis.saveCalls), 0)
   await pressShortcut(app, `${mod}+Shift+d`)
+  await waitForAsync(app, () => globalThis.saveCalls === 1)
   await page.waitForFunction(
     () =>
       document.querySelector('.titlebar')?.getAttribute('aria-busy') ===

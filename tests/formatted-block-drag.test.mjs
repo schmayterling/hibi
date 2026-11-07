@@ -475,6 +475,7 @@ test('the handle moves blocks with its menu, by dragging and from the keyboard, 
     return getComputedStyle(handle).visibility === 'hidden'
   })
   await pressShortcut(app, `${mod}+Shift+[`)
+  await page.locator('.editor-panes.mode-normal').waitFor()
   await page.locator('.rich-pane .hibi-lp-h1').waitFor()
 })
 

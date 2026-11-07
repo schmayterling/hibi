@@ -531,6 +531,10 @@ test('the history view lists as a point a text no saved version holds: after Sav
 
   // A note's first save has no earlier text to keep.
   await pressShortcut(app, `${mod}+n`)
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'untitled.md',
+  )
   await page.waitForFunction(
     () =>
       document.querySelector('[aria-label="Document editor"]')

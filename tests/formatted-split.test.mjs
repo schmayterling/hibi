@@ -922,7 +922,18 @@ test('large formatted split follows distant carets without whole-text geometry r
   await select(page, 'source', text.length + 1)
   await pressShortcut(app, `${mod}+z`)
   await source(page, text)
+  await app.evaluate(({ ipcMain }) => {
+    const save = ipcMain._invokeHandlers.get('document:save')
+    globalThis.shortcutSaveFinished = false
+    ipcMain._invokeHandlers.set('document:save', async (...args) => {
+      ipcMain._invokeHandlers.set('document:save', save)
+      const result = await save(...args)
+      globalThis.shortcutSaveFinished = true
+      return result
+    })
+  })
   await pressShortcut(app, `${mod}+s`)
+  await waitForAsync(app, () => globalThis.shortcutSaveFinished)
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.ok(
     (await readFile(file)).equals(Buffer.from(text)),

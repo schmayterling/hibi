@@ -132,6 +132,12 @@ test('right arrows exit final formatting, return inside and undo only plain inpu
         app,
         process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
       )
+      await waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        source,
+      )
       assert.equal(
         (await page.evaluate(() => window.hibi.getDocument())).markdown,
         source,

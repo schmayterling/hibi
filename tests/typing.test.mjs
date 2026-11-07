@@ -91,6 +91,7 @@ test('editor input, source formatting shortcuts, and sidebar shortcut', {
     async () => (await window.hibi.getDocument()).markdown === '**hello**',
   )
   await pressShortcut(app, `${mod}+Shift+\\`)
+  await page.locator('.editor-panes.mode-side-by-side').waitFor()
   await source.focus()
   await pressShortcut(app, `${mod}+i`)
   await waitForAsync(

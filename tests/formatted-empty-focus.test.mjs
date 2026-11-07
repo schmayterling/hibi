@@ -43,6 +43,10 @@ for (const action of ['backspace', 'cut', 'cut shortcut', 'type in empty']) {
     await pressShortcut(app, `${mod}+o`)
     await waitForAsync(
       page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
+    await waitForAsync(
+      page,
       async (expected) =>
         (await window.hibi.getDocument()).markdown === expected,
       text,

@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
@@ -78,6 +79,12 @@ for (const [label, tail, before] of [
       })
     }, file)
     await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
     await page.waitForFunction(() => window.completionProbe?.ready)
     await waitForDocumentEditor(app, page)
     const formatted = page.locator('.rich-pane .cm-content')

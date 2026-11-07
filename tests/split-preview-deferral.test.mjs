@@ -269,6 +269,11 @@ test('math split edits render current source, save exactly and share history wit
     app,
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    typed,
+  )
   assert.notEqual(await exact(), `${typed} later`)
   await select(
     (await exact()).indexOf('beta') + 1,

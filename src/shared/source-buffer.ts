@@ -129,7 +129,8 @@ class PieceTree {
     })
   }
 
-  leaf(entries: readonly Piece[]): Node {
+  /** Drops empty pieces and joins ones that continue each other in a chunk. */
+  merge(entries: readonly Piece[]) {
     const pieces: Piece[] = []
     for (const entry of entries) {
       if (entry.from === entry.to) continue
@@ -142,6 +143,11 @@ class PieceTree {
         )
       else pieces.push(entry)
     }
+    return pieces
+  }
+
+  leaf(entries: readonly Piece[]): Node {
+    const pieces = this.merge(entries)
     this.counters.pieceDescriptorsCopied += pieces.length
     return Object.freeze({
       kind: 'leaf',
@@ -294,7 +300,9 @@ class PieceTree {
       pieces: root.pieces,
     })
   }
-  fromPieces(pieces: readonly Piece[]): Node {
+  fromPieces(entries: readonly Piece[]): Node {
+    // Merged first, so every leaf is full.
+    const pieces = this.merge(entries)
     if (!pieces.length) return this.leaf([])
     let nodes = this.groups(pieces, this.config.leafCapacity).map((group) =>
       this.leaf(group),
@@ -307,7 +315,9 @@ class PieceTree {
   }
 
   insert(text: string): Node {
-    const pieces: Piece[] = []
+    return this.fromPieces(this.write(text, []))
+  }
+  write(text: string, pieces: Piece[]) {
     let from = 0
     while (from < text.length) {
       if (!this.#arena?.remaining()) {
@@ -323,7 +333,7 @@ class PieceTree {
       pieces.push(this.piece(this.#arena.chunk, range.from, range.to))
       from += length
     }
-    return this.fromPieces(pieces)
+    return pieces
   }
   sealArena() {
     this.#arena = null
@@ -446,6 +456,51 @@ class PieceTree {
     throw new Error('Source split is outside the tree.')
   }
 
+  /** Sorted, disjoint edits rebuilt from one pass over the tree's pieces. */
+  replaceAll(root: Node, edits: readonly RawEdit[]): Node {
+    const pieces: Piece[] = [],
+      leaves: Node[] = [root]
+    let leaf: Piece[] = [],
+      index = 0,
+      offset = 0,
+      at = 0
+    const keep = (to: number) => {
+      while (at < to) {
+        while (index === leaf.length) {
+          const node = leaves.pop()!
+          if (node.kind === 'branch')
+            leaves.push(...[...node.entries].reverse())
+          else {
+            leaf = node.entries as Piece[]
+            index = 0
+          }
+        }
+        const piece = leaf[index]!,
+          end = offset + piece.metrics.rawUnits
+        if (end <= at) {
+          offset = end
+          index++
+          continue
+        }
+        const a = at - offset,
+          b = Math.min(to, end) - offset
+        pieces.push(
+          a === 0 && b === piece.metrics.rawUnits
+            ? piece
+            : this.piece(piece.chunk, piece.from + a, piece.from + b),
+        )
+        at = offset + b
+      }
+    }
+    for (const edit of edits) {
+      keep(edit.from)
+      this.write(edit.insert, pieces)
+      at = edit.to
+    }
+    keep(root.metrics.rawUnits)
+    return this.fromPieces(pieces)
+  }
+
   replace(root: Node, edit: RawEdit): Node {
     const [before, tail] = this.split(root, edit.from)
     const after = tail ? this.split(tail, edit.to - edit.from)[1] : null
@@ -532,6 +587,25 @@ class PieceTree {
           this.counters.sourceUnitsRead += b - a
           yield piece.chunk.slice(piece.from + a, piece.from + b)
         } else yield* this.chunks(entry as Node, a, b)
+      }
+      if (end >= to) break
+      offset = end
+    }
+  }
+  /** `chunks` without a generator per level, for the many small reads edits make. */
+  slice(node: Node, from: number, to: number, parts: string[]) {
+    this.counters.nodeVisits++
+    let offset = 0
+    for (const entry of node.entries) {
+      const end = offset + entry.metrics.rawUnits
+      if (end > from && offset < to) {
+        const a = Math.max(0, from - offset),
+          b = Math.min(entry.metrics.rawUnits, to - offset)
+        if (node.kind === 'leaf') {
+          const piece = entry as Piece
+          this.counters.sourceUnitsRead += b - a
+          parts.push(piece.chunk.slice(piece.from + a, piece.from + b))
+        } else this.slice(entry as Node, a, b, parts)
       }
       if (end >= to) break
       offset = end
@@ -672,7 +746,10 @@ export class SourceSnapshot {
       this.#tree.counters.materializations++
       this.#tree.counters.materializedUnits += to
     }
-    return [...this.chunks(from, to)].join('')
+    if (from === to) return ''
+    const parts: string[] = []
+    this.#tree.slice(roots.get(this)!, from, to, parts)
+    return parts.join('')
   }
   materialize() {
     return this.sliceRaw(0, this.utf16Length)
@@ -695,6 +772,12 @@ export class SourceSnapshot {
   }
   isEditBoundary(position: number) {
     if (!safePosition(position) || position > this.utf16Length) return false
+    // ASCII text without CRLF has no seam to split.
+    if (
+      this.utf8Bytes === this.utf16Length &&
+      this.normalizedLength === this.utf16Length
+    )
+      return true
     const seam = this.#seam(position)
     return (
       seam !== '\r\n' &&
@@ -702,16 +785,15 @@ export class SourceSnapshot {
     )
   }
   rawToEditor(position: number): number | null {
-    if (
-      !safePosition(position) ||
-      position > this.utf16Length ||
-      this.#seam(position) === '\r\n'
-    )
-      return null
+    if (!safePosition(position) || position > this.utf16Length) return null
+    // Without CRLF, the two coordinates are the same.
+    if (this.utf16Length === this.normalizedLength) return position
+    if (this.#seam(position) === '\r\n') return null
     return this.#tree.prefix(roots.get(this)!, position).normalizedUnits
   }
   editorToRaw(position: number): number | null {
     if (!safePosition(position) || position > this.normalizedLength) return null
+    if (this.utf16Length === this.normalizedLength) return position
     const raw = this.#tree.seek(roots.get(this)!, 'normalizedUnits', position)
     return raw === null ? null : this.#seam(raw) === '\r\n' ? raw + 1 : raw
   }
@@ -1067,8 +1149,18 @@ export class SourceStore {
     )
       throw new Error('Edited source exceeds the document size limit.')
     let root = roots.get(before)!
-    for (let index = operation.changes.length - 1; index >= 0; index--)
-      root = this.#tree.replace(root, operation.changes[index]!)
+    const { changes } = operation
+    // Each replace copies at least a leaf's pieces, so once the edits'
+    // leaves cover the tree, one pass over its pieces costs less, as when
+    // Tab indents every line of a large selection.
+    if (
+      changes.length > 1 &&
+      changes.length * this.#tree.config.leafCapacity >= root.pieces
+    )
+      root = this.#tree.replaceAll(root, changes)
+    else
+      for (let index = changes.length - 1; index >= 0; index--)
+        root = this.#tree.replace(root, changes[index]!)
     if (
       this.#tree.config.maximumBytes !== undefined &&
       root.metrics.utf8Bytes > this.#tree.config.maximumBytes

@@ -856,7 +856,7 @@ export function sourceFormatting(
   },
 ) {
   const editable = () => !view.state.readOnly
-  let lastDocument: typeof view.state.doc | undefined,
+  let lastDocument: EditorState['doc'] | undefined,
     text = ''
   const selection = (values?: InsertValues): DocumentSelection => {
     if (lastDocument !== view.state.doc) {

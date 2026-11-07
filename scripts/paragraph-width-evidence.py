@@ -22,7 +22,7 @@ PREVIOUS = TITLE.replace("huge paragraph", "huge line")
 ROOT = Path(".cache/paragraph-width")
 COMMAND = ["node", "--import", "./tests/file-limit.mjs", "--test", "--test-reporter=tap", "--test-concurrency=1", TEST]
 FILE_LIMIT_MS = "1200000"
-BRANCH = "may/release-paragraph-width-diag"
+BRANCH = "may/nlr-paragraph-width-diag"
 ACTOR = 53419401
 TEST_STEP = "One original full formatted-tables file"
 EXPECTED_ROOTS, EXPECTED_TESTS = 143, 297

@@ -1195,6 +1195,45 @@ async function countedDenseFind(t, diagnostic) {
   return { ...fixture, dense, workers, initial, owners }
 }
 
+const probeRange = () => {
+  const view = document.querySelector('.rich-pane .cm-content').cmTile.root.view
+  const dom = view.contentDOM
+  const box = dom.getBoundingClientRect()
+  let top = Math.max(box.top, 0)
+  let bottom = Math.min(box.bottom, window.innerHeight)
+  const clips = []
+  for (let element = dom.parentElement; element; element = element.parentElement)
+    if (getComputedStyle(element).overflowY !== 'visible') {
+      const clip = element.getBoundingClientRect()
+      clips.push([element.className.slice(0, 30), clip.top, clip.bottom])
+      top = Math.max(top, clip.top)
+      bottom = Math.min(bottom, clip.bottom)
+    }
+  const left = box.left + Number.parseFloat(getComputedStyle(dom).paddingLeft) + 1
+  const tries = (y, step) => {
+    const out = []
+    for (let t = 0; t < 8 && y > top && y < bottom; t++) {
+      const caret = document.caretPositionFromPoint(left, y)
+      const inside = !!caret && dom.contains(caret.offsetNode)
+      let at = null
+      if (inside) try { at = view.posAtDOM(caret.offsetNode, caret.offset) } catch (e) { at = 'throw ' + e.message }
+      out.push([Math.round(y), caret?.offsetNode?.nodeName, caret?.offsetNode?.parentElement?.className?.slice(0, 40), caret?.offset, inside, at])
+      if (at !== null && inside) break
+      y += step
+    }
+    return out
+  }
+  return {
+    now: Math.round(performance.now()),
+    scrollTop: document.querySelector('.rich-pane').scrollTop,
+    box: [box.top, box.bottom, box.left], top, bottom, left, clips,
+    viewport: view.viewport, visible: view.visibleRanges,
+    from: tries(top + 1, 24), to: tries(bottom - 1, -24),
+    sel: [view.state.selection.main.from, view.state.selection.main.to],
+  }
+}
+
+
 test('formatted find selection-only moves reuse worker search work and keep renderer folding bounded', {
   timeout: 60000,
 }, async (t) => {
@@ -1213,6 +1252,9 @@ test('formatted find selection-only moves reuse worker search work and keep rend
         window.findTrace?.record('renderer-reset-after', null)
         return window.findTrace?.snapshot()
       }),
+    )
+    t.diagnostic(
+      'probe-window ' + JSON.stringify(await page.evaluate(probeRange)),
     )
     for (const [key, expected] of [
       ['Enter', '2/10000'],
